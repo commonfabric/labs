@@ -33,10 +33,7 @@ import {
   readState,
   selectRetirableEffectsInstances,
 } from "../v2/engine.ts";
-import {
-  acquireExecutionLease,
-  executionLeaseHolder,
-} from "../v2/execution-lease.ts";
+import { executionLeaseHolder } from "../v2/execution-lease.ts";
 import {
   type ClientCommit,
   type EffectIntentEntry,
@@ -69,7 +66,7 @@ const headSeqOf = (engine: Engine): number =>
 
 const withLiveLease = (engine: Engine): string => {
   const holder = executionLeaseHolder(SERVICE);
-  assert(acquireExecutionLease(engine, { space: SPACE, holder }));
+  assert(engine.executionLeases.acquire(SPACE, holder));
   return holder;
 };
 

@@ -15,8 +15,10 @@ export {
   type DurableRead,
   readConfirmed,
   readDurable,
+  speculationSettledFor,
 } from "./confirmed-read.ts";
 export { handlingCommittedBy } from "./handling-commit.ts";
+export { pullFromServer } from "./served-read.ts";
 export { ensureSESLockdown } from "./sandbox/ses-runtime.ts";
 export {
   fabricAuthorityMatchesSpaceHost,
@@ -414,7 +416,7 @@ export { deepEqual } from "@commonfabric/js-values/deep-equal";
 export { getValueAtPath, setValueAtPath } from "./path-utils.ts";
 export { schemaToTypeString } from "./schema-format.ts";
 export type { SchemaFormatOptions } from "./schema-format.ts";
-export { ACLManager } from "./acl-manager.ts";
+export { ACLManager, SpaceMembersRemainError } from "./acl-manager.ts";
 export {
   cellEntityIdString,
   type CellPath,

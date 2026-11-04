@@ -153,7 +153,7 @@ const SECTION_SYMBOL = "3-json-encoding.md section 3, `Symbol@1`";
 const SECTION_BIGINT = "3-json-encoding.md section 3, `BigInt@1`";
 const SECTION_BASE64 = "3-json-encoding.md section 3, base64url convention";
 const SECTION_UNKNOWN = "3-json-encoding.md section 8";
-const SECTION_TAG_SYNTAX = "3-json-encoding.md section 2";
+const SECTION_TAG_SYNTAX = "1-fabric-values.md section 2.5.1";
 const SECTION_RESERVATION = "3-json-encoding.md section 9";
 const SECTION_TYPES = "3-json-encoding.md section 3";
 const SECTION_TEMPORAL = "3-json-encoding.md section 3, temporal quantities";
@@ -585,6 +585,16 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: SECTION_UNKNOWN,
     text: 'fvj1:[{"/Abc123@1234":null}]',
   },
+  {
+    name: "unknown tag with prefixes",
+    section: SECTION_TAG_SYNTAX,
+    text: 'fvj1:{"/sys.beep.Boop@1":{"x":1}}',
+  },
+  {
+    name: "unknown tag with the prefix core",
+    section: SECTION_TAG_SYNTAX,
+    text: 'fvj1:{"/core.Thing@1":null}',
+  },
 
   // Decodes the spec refuses.
   { name: "text without the prefix", section: SECTION_PREFIX, text: "42" },
@@ -603,6 +613,13 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     "Bytes@1.0",
     " Bytes@1",
     "Bytes@1\n",
+    "Sys.Boop@1",
+    "sys..Boop@1",
+    ".Boop@1",
+    "sys.boop@1",
+    "sys_x.Boop@1",
+    "sys.Boop",
+    "sys.Boop@01",
   ].map((tag): Fvj1ConformanceCase => ({
     name: `malformed tag ${JSON.stringify(tag)}`,
     section: SECTION_TAG_SYNTAX,
@@ -701,6 +718,11 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "slash key that is a tag, over a literal",
     section: SECTION_ESCAPE_DISPATCH,
     make: () => ({ "/Bytes@1": "AQ" }),
+  },
+  {
+    name: "slash key that is a tag with a prefix, over a literal",
+    section: SECTION_ESCAPE_DISPATCH,
+    make: () => ({ "/sys.Boop@1": 1 }),
   },
   {
     name: "quote escape nested in an object escape",

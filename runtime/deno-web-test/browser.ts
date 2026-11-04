@@ -5,6 +5,7 @@ import {
 } from "@commonfabric/integration/browser-process";
 import { backtickQuote } from "@commonfabric/text/markdown";
 import { sleep } from "@commonfabric/async/sleep";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { DRIVER_BINDING, SETTLE_GLOBAL } from "./commands-protocol.ts";
 import { DEFAULT_TEST_TIMEOUT_MS, extractAstralConfig } from "./config.ts";
@@ -162,7 +163,7 @@ export class BrowserController extends EventTarget {
     try {
       await pressOn(page.keyboard, readKeyPress(parsed));
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      error = describeFailure(e);
     }
     let failure: string | undefined;
     try {
@@ -186,7 +187,7 @@ export class BrowserController extends EventTarget {
       }
     } catch (e) {
       // Celestial's send throws once the connection to the browser is closed.
-      failure = e instanceof Error ? e.message : String(e);
+      failure = describeFailure(e);
     }
     if (failure !== undefined) {
       this.#reportCommandFailure(

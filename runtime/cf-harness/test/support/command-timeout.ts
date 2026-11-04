@@ -6,6 +6,8 @@
  * and this one is not offered for that.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+
 /**
  * How a bounded run ended. `completed` carries the child's own exit status.
  * `timed-out` means the bound expired and the child took a `SIGKILL`;
@@ -35,14 +37,12 @@ export const commandStatusWithTimeout = async (
   if (timeoutId !== undefined) clearTimeout(timeoutId);
   if (result !== "timed-out") return { kind: "completed", status: result };
 
-  const describeError = (error: unknown): string =>
-    error instanceof Error ? error.message : String(error);
   const appendError = (
     existing: string | undefined,
     label: string,
     error: unknown,
   ): string => {
-    const message = `${label}: ${describeError(error)}`;
+    const message = `${label}: ${describeFailure(error)}`;
     return existing === undefined ? message : `${existing}; ${message}`;
   };
 
@@ -60,7 +60,7 @@ export const commandStatusWithTimeout = async (
   const cleanupResult = await Promise.race([
     statusPromise.then(() => "closed" as const).catch((error) => ({
       kind: "status-error" as const,
-      message: describeError(error),
+      message: describeFailure(error),
     })),
     cleanupTimeoutPromise,
   ]);

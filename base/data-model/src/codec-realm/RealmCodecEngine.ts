@@ -3,7 +3,7 @@ import { BaseCodecEngine } from "@/codec-common";
 import type { LiveEnvironment } from "@/codec-interface/interface.ts";
 import { RealmDecodeAct } from "./RealmDecodeAct.ts";
 import { RealmEncodeAct } from "./RealmEncodeAct.ts";
-import { type RealmCodecValue, type RealmEncodedValue } from "./interface.ts";
+import type { RealmCodecValue, RealmEncodedValue } from "./interface.ts";
 
 /**
  * Whole-value codec engine for the realm-crossing wire format: the form a
@@ -26,11 +26,12 @@ import { type RealmCodecValue, type RealmEncodedValue } from "./interface.ts";
  * refuses one it does not implement.
  *
  * **Cycles are refused and a shared reference survives exactly where nothing
- * beneath it needed encoding**, per Section 1.6 of the formal spec, which
- * requires an engine to say which of these it does. Section 4 of the realm spec
- * gives both, and the encode and decode sides of the ownership contract are
- * Section 5 -- the half a caller is likeliest to get wrong being that an
- * encoded tree shares structure with the value it came from and is not frozen.
+ * beneath it needed encoding**, per Section 1.6 of `1-fabric-values.md`, which
+ * requires an engine to say which of these it does. Section 4 of
+ * `4-realm-encoding.md` gives both, and the encode and decode sides of the
+ * ownership contract are its Section 5 -- the half a caller is likeliest to get
+ * wrong being that an encoded tree shares structure with the value it came from
+ * and is not frozen.
  *
  * TODO(danfuzz): A memo from each visited object to its encoded counterpart
  * closes cycles and sharing at once: a repeat visit yields the node already

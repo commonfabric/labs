@@ -8,6 +8,7 @@ import { parseArgs } from "@std/cli/parse-args";
 import { dirname, isAbsolute, join, relative, resolve } from "@std/path";
 import { normalize as normalizeSandboxPath } from "@std/path/posix";
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { HarnessRunState } from "./run-state.ts";
 import type { CfHarnessStructuredResultConfig } from "./contracts/structured-result.ts";
 import type {
@@ -46,7 +47,6 @@ import {
   resolveHarnessRunPaths,
 } from "./artifacts.ts";
 import { httpOriginOf } from "./tools/handle-values.ts";
-import { errorMessage } from "./error-message.ts";
 import {
   createCliPromptSlotBinding,
   type PromptSlotRole,
@@ -82,7 +82,7 @@ import type {
   HarnessTranscriptEvent,
   HarnessTranscriptMessage,
 } from "./contracts/transcript.ts";
-import { CfHarnessEngine } from "./engine.ts";
+import { CfHarnessEngine, type CreateHarnessEngineOptions } from "./engine.ts";
 import {
   assertContinuationOutputPaths,
   assertHarnessRootSource,
@@ -516,6 +516,9 @@ export interface RunCfHarnessCliDependencies
    */
   sandboxSelectionFlags?: boolean;
 
+  /** Host-owned opt-in progress return channel. */
+  reportProgress?: CreateHarnessEngineOptions["reportProgress"];
+
   writeTextFile?: (path: string, text: string) => Promise<void>;
 
   /** The structured-result validation verdict after a completed prompt loop. */
@@ -867,6 +870,7 @@ const CLI_PARENT_TOOL_IDS = [
   "delegate_task",
   "describe_handle",
   "finish_task",
+  "report_progress",
   "submit_result",
   "loom_compose",
   "loom_inspect",
@@ -1024,9 +1028,7 @@ const parseAllowedSkillScripts = (
     );
   } catch (error) {
     throw new Error(
-      `invalid --allow-skill-script: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `invalid --allow-skill-script: ${describeFailure(error)}`,
     );
   }
 };
@@ -1655,6 +1657,7 @@ export const parseCfHarnessCliArgs = async (
     | "sandboxRuntimeNamedBy"
     | "sandboxSelectionFlags"
     | "providerSettingsStore"
+    | "reportProgress"
   > = {},
 ): Promise<CfHarnessCliConfig | { help: true }> => {
   const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
@@ -2204,6 +2207,14 @@ export const parseCfHarnessCliArgs = async (
   if (indexTool !== undefined && patternIndex === undefined) {
     throw new Error(
       `--allow-tool ${indexTool} requires a pattern index; missing --pattern-index-url`,
+    );
+  }
+  if (
+    allowedToolIds?.includes("report_progress") === true &&
+    deps.reportProgress === undefined
+  ) {
+    throw new Error(
+      "--allow-tool report_progress requires a host progress publisher",
     );
   }
   if (
@@ -2924,7 +2935,7 @@ export const validateCfHarnessStructuredResult = async (
       schema_digest: schemaDigest,
       result_path: options.config.path,
       validation_error: `structured result did not match the schema: ${
-        errorMessage(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -3811,7 +3822,7 @@ export const runCfHarnessCli = async (
       } catch (error) {
         throw new HarnessControlError(
           "provider-mismatch",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         );
       }
     }
@@ -4053,6 +4064,7 @@ export const runCfHarnessCli = async (
               },
             }
             : {}),
+          reportProgress: deps.reportProgress,
           ...(deps.fabricSessionFactory !== undefined
             ? { fabricSessionFactory: deps.fabricSessionFactory }
             : {}),
@@ -4110,7 +4122,9 @@ export const runCfHarnessCli = async (
               engine: continuedEngine,
               config: parsed,
               onGrantsUnavailable: (error) =>
-                io.stderr(`fabric grants: unavailable (${String(error)})\n`),
+                io.stderr(
+                  `fabric grants: unavailable (${describeFailure(error)})\n`,
+                ),
             });
             return { messages, runState: continuedEngine.getRunState() };
           },
@@ -4246,6 +4260,7 @@ export const runCfHarnessCli = async (
       });
       const engine = new CfHarnessEngine({
         ...sessionOptions,
+        reportProgress: deps.reportProgress,
         modelProvider,
         credentialOwnerKey,
         ...(modelProvider === "openai-compatible-gateway"
@@ -4300,9 +4315,7 @@ export const runCfHarnessCli = async (
         config: parsed,
         onGrantsUnavailable: (error) =>
           io.stderr(
-            `fabric grants: unavailable (${
-              error instanceof Error ? error.message : String(error)
-            })\n`,
+            `fabric grants: unavailable (${describeFailure(error)})\n`,
           ),
       });
       // The classification decides how much orientation the run starts
@@ -4398,7 +4411,7 @@ export const runCfHarnessCli = async (
     io.stderr(
       deps.structuredHostFailures
         ? `${JSON.stringify(createCfHarnessHostFailure(hostError))}\n`
-        : `${error instanceof Error ? error.message : String(error)}\n`,
+        : `${describeFailure(error)}\n`,
     );
     return 1;
   } finally {

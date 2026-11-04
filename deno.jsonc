@@ -100,7 +100,7 @@
     "docs-links": "deno run --allow-read --allow-write ./scripts/docs-links.ts",
     "cf": "deno run --allow-run --allow-env --allow-read ./runtime/cli/launcher.ts",
     // The team's Topics board from the command line; see skills/topics.
-    "topics": "deno run --allow-net --allow-read --allow-write --allow-env --allow-run ./patterns/apps/topics/tools/topics.ts",
+    "topics": "deno run --unstable-lazy-dynamic-imports --allow-net --allow-read --allow-write --allow-env --allow-run ./patterns/apps/topics/tools/topics.ts",
     "agents-host": "deno run -A ./connectors/agents/host/main.ts",
     "github-host": "deno run -A ./connectors/github/host/main.ts",
     "test": "./tasks/test.ts",
@@ -113,6 +113,7 @@
     "test-records-key": "./tasks/test-records-key.ts",
     "test-records-compact": "./tasks/test-records-compact.ts",
     "test-selection": "./tasks/test-selection.ts",
+    "test-gap": "./tasks/test-gap.ts",
     "build-binaries": "./tasks/build-binaries.ts",
     "install-hooks": "./scripts/install-git-hooks.sh",
     "install-cf": "./scripts/install-cf.sh",

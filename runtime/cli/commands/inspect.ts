@@ -728,6 +728,12 @@ export const inspect = new Command()
       const sum = summarizeSpace(s);
       out(!!options.json, sum, () => {
         console.log(`space: ${sum.path}`);
+        if (sum.deletion !== undefined) {
+          console.log(
+            `deleted: by ${sum.deletion.by}, in the commit at seq ` +
+              sum.deletion.seq,
+          );
+        }
         console.log(
           `commits: ${sum.commits}` +
             (sum.commitSeqRange
@@ -812,6 +818,14 @@ export const inspect = new Command()
               ` integrated=${field.integrated.length}` +
               `${field.pagination.integratedTruncated ? "+" : ""}` +
               ` checkpoints=${field.checkpoints.length}`,
+          );
+          const anchorsDocument = field.consistency.anchorsDocumentMatches;
+          console.log(
+            `  anchors=${field.anchors.length}` +
+              ` anchors-document=${field.anchorsDocumentId}` +
+              ` anchors-document-matches=${
+                anchorsDocument === null ? "n/a" : anchorsDocument
+              }`,
           );
         }
         if (report.fieldsTruncated) {

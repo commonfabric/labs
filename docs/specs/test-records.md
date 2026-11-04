@@ -634,8 +634,8 @@ trusted the same way a same-repository branch's is, and what the flag
 still tells a consumer is that the run executed unmerged pull-request
 code. Consumers that feed decisions read `submissions/ci/` only, and
 take baselines from runs of the head of `main` — `event` `"push"`,
-`"schedule"` or `"workflow_dispatch"` on branch `main` — whose code the
-tree itself carries. A
+`"schedule"`, `"workflow_dispatch"` or `"workflow_run"` on branch `main` —
+whose code the tree itself carries. A
 `local/<username>/` prefix attributes records to the key's named holder
 under the trust of the repository's write-access group, since the minting
 workflow's username input lets any member mint for any username, with the

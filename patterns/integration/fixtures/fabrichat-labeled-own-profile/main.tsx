@@ -2,20 +2,25 @@
  * Stands in for a person's Home around FabriChat, in their home space, whose
  * FabriChat manager's profile is one whose inbox pointer carries the person's
  * `PersonalSpace` label, as a pointer can come to carry its inbox's label. The
- * profile lives in a space of its own, as a person's profile does. Fixture for
- * `fabrichat-labeled-own-profile-multi-runtime.test.ts`.
+ * profile lives in a space of its own, as a person's profile does, and is the
+ * person's own, as a Fabric profile is: its name's owner policy names them.
+ * Fixture for `fabrichat-labeled-own-profile-multi-runtime.test.ts`.
  */
 
 import {
+  type Cfc,
   type Confidential,
+  type CurrentPrincipal,
   Default,
   handler,
   NAME,
   pattern,
+  type RepresentsCurrentUser,
   type Stream,
   UI,
   type VNode,
   Writable,
+  type WriteAuthorizedBy,
 } from "commonfabric";
 import {
   FabriChatManagerCore,
@@ -43,30 +48,60 @@ type LabeledPointer = Confidential<
   readonly [typeof HOME_LABEL]
 >;
 
-/** What the profile stand-in holds. */
-interface LabeledProfileInput {
-  /** The person's display name. */
-  name: Default<string, "">;
+/** What setting the profile stand-in's name asks: the name. */
+interface SetNameEvent {
+  /** The name to set. */
+  name?: string;
 }
+
+/** Sets the profile stand-in's name, its one writer, as a profile's is. */
+const setName = handler<SetNameEvent, { name: Writable<string> }>(
+  (event, { name }) => {
+    name.set(event?.name ?? "");
+  },
+);
+
+/**
+ * The profile stand-in's name, written by `setName` alone and representing
+ * its owner, as a Fabric profile's name is.
+ */
+type OwnName = RepresentsCurrentUser<
+  Cfc<
+    WriteAuthorizedBy<string, typeof setName>,
+    { ownerPrincipal: CurrentPrincipal }
+  >
+>;
+
+/** What the profile stand-in holds. */
+type LabeledProfileInput = Record<never, never>;
 
 /** The profile stand-in's result. */
 interface LabeledProfileOutput {
   [NAME]: string;
 
   /** The person's display name. */
-  name: string;
+  name: OwnName;
 
   /** Where the person's offers are delivered, carrying their label. */
   inbox: LabeledPointer;
+
+  /** Sets the person's display name. */
+  setName: Stream<SetNameEvent>;
 }
 
 /** A profile whose inbox pointer carries the person's label. */
 const LabeledProfile = pattern<LabeledProfileInput, LabeledProfileOutput>(
-  ({ name }) => {
+  () => {
+    const name = new Writable<OwnName>("").for("name");
     const inbox = new Writable<LabeledPointer>(
       { piece: { offers: [] } } as LabeledPointer,
     ).for("inbox");
-    return { [NAME]: "Labeled profile", name, inbox };
+    return {
+      [NAME]: "Labeled profile",
+      name,
+      inbox,
+      setName: setName({ name }),
+    };
   },
 );
 
@@ -85,23 +120,20 @@ function asProfile(profile: unknown): unknown {
   return profile;
 }
 
-/** What creating a profile asks: the name to give it. */
-interface CreateProfileEvent {
-  /** The profile's name. */
-  name?: string;
-}
+/** What creating a profile asks: nothing. */
+type CreateProfileEvent = Record<never, never>;
 
 /** Creates one of the person's profiles, in a space of its own. */
 const createProfile = handler<
   CreateProfileEvent,
   { profiles: Writable<Profiles> }
->((event, { profiles }) => {
+>((_event, { profiles }) => {
   profiles.push(
     asProfile(
       LabeledProfile.inSpace(undefined, {
         grants: { "*": "WRITE" },
         root: true,
-      })({ name: event?.name ?? "Someone" }),
+      })({}),
     ),
   );
 });

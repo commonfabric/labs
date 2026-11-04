@@ -1,28 +1,30 @@
 import type {
   CellScope,
+  FabricPlainObject,
   FabricValue,
   SchemaPathSelector,
   TextChange,
 } from "@commonfabric/api";
 import type { DIDKey } from "@commonfabric/identity/did";
-import {
-  type ACL,
-  type AuthorizationError as IAuthorizationError,
-  type ConflictError as IConflictError,
-  type ConnectionError as IConnectionError,
-  type DID,
-  type MemorySpace,
-  type QueryError as IQueryError,
-  type Result,
-  type Revision,
-  type Signer,
-  type State,
-  type The as MediaType,
-  type TransactionError,
-  type Unit,
-  type URI,
-  type Variant,
+import type {
+  ACL,
+  AuthorizationError as IAuthorizationError,
+  ConflictError as IConflictError,
+  ConnectionError as IConnectionError,
+  DID,
+  MemorySpace,
+  QueryError as IQueryError,
+  Result,
+  Revision,
+  Signer,
+  State,
+  The as MediaType,
+  TransactionError,
+  Unit,
+  URI,
+  Variant,
 } from "@commonfabric/memory/interface";
+import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import type {
   ApplyOpOperation,
   ApplyOpResolution,
@@ -40,6 +42,7 @@ import type {
   OperationFieldQuery,
   OperationFieldSnapshot,
   PatchOp,
+  PatternLifecycleVerb,
   ReleaseOpFieldOperation,
   ScopeKey,
   ScopeKeyIdentity,
@@ -56,14 +59,16 @@ import type {
   ViewPlan,
 } from "@commonfabric/memory/v2";
 import type {
+  InviteAdministration,
   PresenceEvent,
   PresenceMembership,
 } from "@commonfabric/memory/v2/client";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Immutable } from "@commonfabric/js-values/types";
 
 import type { Cancel } from "../cancel.ts";
-import { Cell } from "../cell.ts";
+import type { Cell } from "../cell.ts";
 import type {
   CfcConfidentialityRelease,
   CfcConfidentialityReleaseInput,
@@ -75,6 +80,7 @@ import type {
   CfcDeclaredWideningExemption,
   CfcDecomposedEnvelopes,
   CfcDereferenceTrace,
+  CfcDocumentAddress,
   CfcEnforcementMode,
   CfcExternalContentObservation,
   CfcFlowLabelsMode,
@@ -97,7 +103,7 @@ import type { EntityId } from "../create-ref.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import { RAW_META_WRITE } from "../meta-seam.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
-import { BaseMemoryAddress } from "../traverse.ts";
+import type { BaseMemoryAddress } from "../traverse.ts";
 import type { MergeableOpDelta } from "./mergeable-ops.ts";
 import type {
   PendingCommitContext,
@@ -165,20 +171,8 @@ export class ReplicaLoadFailureError extends Error {
     readonly failure: ReplicaLoadFailure,
     cause: unknown,
   ) {
-    super(loadFailureMessage(cause), { cause });
+    super(describeFailure(cause), { cause });
   }
-}
-
-/**
- * Returns the message a load failure's cause carries. A pull reports its
- * failure as a plain result object rather than an `Error`, so the message is
- * read off any object that has one; a cause without one is stringified.
- */
-function loadFailureMessage(cause: unknown): string {
-  return typeof cause === "object" && cause !== null && "message" in cause &&
-      typeof cause.message === "string"
-    ? cause.message
-    : String(cause);
 }
 
 export const toReplicaLoadFailureError = (
@@ -400,6 +394,21 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   setSharedMemoryConnection?(enabled: boolean): void;
 
   /**
+   * Declares whether the runtime this manager serves names instances, so
+   * that every session it opens declares that mode in its signed
+   * `session.open` descriptor, and a server that does not record the
+   * instance-naming mark is refused (INV-16, 04-protocol.md §4.1.2). A
+   * `Runtime` calls this at construction. A manager no runtime has declared
+   * a mode to runs this build's default, and a manager without the method
+   * declares nothing, so its sessions are positional.
+   *
+   * @throws If another mode is already declared, or if a session is
+   * already open and the mode would change: the manager's sessions are its
+   * runtimes' alike, so they cannot serve two modes.
+   */
+  setInstanceNames?(enabled: boolean): void;
+
+  /**
    * Keeps session-scoped documents in the local replica when enabled.
    * Repeated configuration must agree across runtimes sharing this manager.
    * @throws If a different policy has already been configured.
@@ -532,6 +541,23 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Promise<MemoryProtocolFlags | null | undefined>;
 
   /**
+   * Redeems `invite` in `space` as this manager's principal, on a session of
+   * its own whose open carries the invitation, and returns the redemption's
+   * receipt: how a principal the space's access list does not name yet gains
+   * the grant the invitation confers. Optional: a manager whose sessions
+   * cannot carry an invitation omits it.
+   *
+   * @throws `SpaceInviteRefusal`, with the invitation service's code as
+   *   `.code`, when the redemption is refused, or with
+   *   `invite-service-unsupported` when the server does not redeem on
+   *   `session.open`.
+   */
+  redeemInvite?(
+    space: MemorySpace,
+    invite: { inviteId: string; code: string },
+  ): Promise<RedeemReceipt>;
+
+  /**
    * The serving manager's HOME space (a serving runtime's storage
    * manager declares it; undefined on every client manager). Consumers
    * use it to decide whether a write target is FOREIGN to the serving
@@ -620,7 +646,41 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   spaceAccessError?(space: MemorySpace): Error | undefined;
 
   /**
-   * Observes authoritative access loss synchronously. Transient connection
+   * Whether the memory server has answered for `space`: `true` once it has
+   * admitted this manager's session there or refused it, `false` while it has
+   * not, and `undefined` when no memory server answers for the space, as for
+   * one whose reads a store supplies. A reopen that replaces the session, such
+   * as a remount after a revocation, puts it back to `false` until the server
+   * answers the reopen, unless a refusal stays recorded for the space in the
+   * meantime. Opens nothing.
+   */
+  spaceAnswered?(space: MemorySpace): boolean | undefined;
+
+  /**
+   * Observes the memory server's answer to each open of a space's session,
+   * the first open and every reopen alike: called once the server has
+   * admitted the session or refused it for good, and the answer is what
+   * `spaceAnswered()` and `spaceAccessError()` report. A first answer that is
+   * a refusal also reaches `subscribeSpaceAccessChange()` observers. An open
+   * that ends with no answer, such as one whose connection never completes a
+   * handshake, does not emit.
+   */
+  subscribeSpaceAnswer?(observer: (space: MemorySpace) => void): Cancel;
+
+  /**
+   * Opens `space`'s session if none is open, and resolves once the memory
+   * server has answered for it, admitting it or refusing it, as
+   * `spaceAnswered()` reports. Resolves at once where that is already `true`
+   * or is `undefined`.
+   *
+   * @throws When the session's open ends with no answer, as when its
+   *   connection never completes a handshake.
+   */
+  awaitSpaceAnswer?(space: MemorySpace): Promise<void>;
+
+  /**
+   * Observes authoritative access loss synchronously, and a refusal of a space
+   * already refused that turns out to be its deletion. Transient connection
    * failures and normal closure do not emit; `spaceAccessError()` supplies
    * the current snapshot for subscriptions installed after a loss.
    */
@@ -629,9 +689,10 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Cancel;
 
   /**
-   * Observes authoritative denial and recovery after an authorized reopen.
-   * Read `spaceAccessError()` for the current verdict. Initial successful
-   * opens and transient connection failures do not emit.
+   * Observes authoritative denial and recovery after an authorized reopen,
+   * and a refusal of a space already refused that turns out to be its
+   * deletion. Read `spaceAccessError()` for the current verdict. Initial
+   * successful opens and transient connection failures do not emit.
    */
   subscribeSpaceAccessChange?(observer: (space: MemorySpace) => void): Cancel;
 
@@ -912,14 +973,41 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Promise<EventAttentionResolveResult>;
 
   /**
+   * Runs pattern-lifecycle verb `verb` with `body` in `space`, on this
+   * manager's memory session there and as its principal, and returns the
+   * verb's receipt. The memory server behind that session owns the space, so
+   * the verb runs where the space is served. Absent from a manager with no
+   * memory sessions; errors are the memory client's
+   * `runPatternLifecycle()`'s.
+   */
+  runPatternLifecycle?(
+    space: MemorySpace,
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject>;
+
+  /**
+   * Administers `space`'s invitations on this manager's memory session
+   * there, as its principal, and returns what the invitation service
+   * returns. Absent from a manager with no memory sessions; errors are the
+   * memory client's `administerInvites()`'s.
+   */
+  administerInvites?(
+    space: MemorySpace,
+    invite: InviteAdministration,
+  ): Promise<FabricValue>;
+
+  /**
    * One of THE SESSION REMOUNT's two triggers: an admitted commit touched
    * `space`'s ACL document. A space session this manager holds — revoked or
    * denied by an EARLIER ACL verdict — is dropped so the next load re-opens
    * it, because the ACL is the only input that decision has. Never widens
    * authority: a genuine de-authorization is refused again at `session.open`.
    * Implemented by the v2 StorageManager; the serving loop's host is its only
-   * caller. The other trigger is `retrySpaceAccess()`, for a host that sees no
-   * such commit.
+   * caller, for the commits its own memory server admits. The other trigger
+   * is `retrySpaceAccess()`, for a host that sees no such commit. A serving
+   * runtime's grant verdicts on another space's actors do not depend on it:
+   * its replica of that space watches the list over its own session.
    */
   noteSpaceAclChanged?(space: MemorySpace): void;
 
@@ -2717,11 +2805,28 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * Marks the values the runtime initializes in this transaction as
    * attributed to the acting principal (`CfcTxState.attributedInitialization`):
    * the runner marks the transaction of a handler run the principal invoked,
-   * and a start deferred from one. The mark takes the runtime's authorization,
-   * and a call without it does nothing.
+   * and a start deferred from one. With `piece`, the result document of a
+   * piece the transaction brings into being on the principal's behalf, the
+   * mark covers that piece's own documents alone
+   * (`CfcTxState.attributedPieces`). The mark takes the runtime's
+   * authorization, and a call without it does nothing.
    */
   markCfcAttributedInitialization(
     authorization: RuntimeWritePolicyAuthorization,
+    piece?: CfcDocumentAddress,
+  ): void;
+
+  /**
+   * Records that the runtime names `creator` as the creator of the piece
+   * whose result document is `piece` (`CfcTxState.pieceCreators`), so that
+   * preparation admits the transaction's write of the `creator` meta field
+   * there. The mark takes the runtime's authorization, and a call without it
+   * does nothing.
+   */
+  markCfcPieceCreator(
+    authorization: RuntimeWritePolicyAuthorization,
+    piece: CfcDocumentAddress,
+    creator: string,
   ): void;
 
   /**
@@ -2946,8 +3051,9 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * authenticated, and the document to sit in that principal's own space.
    * Removes every stored clause at the path that `input.keep` does not name,
    * from every component of the label there and from the stored schema, and
-   * writes the envelope inside the privileged system-write scope. Writes
-   * nothing when there is nothing to remove.
+   * writes the envelope inside the privileged system-write scope. A path
+   * holding a `*` segment reaches every position it matches at its depth.
+   * Writes nothing when there is nothing to remove.
    *
    * @throws On any of the requirements above, on an unreadable envelope, and
    *   on everything `planConfidentialityRelease()` refuses.
@@ -3807,6 +3913,15 @@ export interface ISpaceReplica extends ISpace {
     sidecarId: string,
     action: "retry" | "dismiss",
   ): Promise<EventAttentionResolveResult>;
+
+  /** Like `IStorageManager.runPatternLifecycle()`, for this replica's space. */
+  runPatternLifecycle?(
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject>;
+
+  /** Like `IStorageManager.administerInvites()`, for this replica's space. */
+  administerInvites?(invite: InviteAdministration): Promise<FabricValue>;
 
   /** Pending (undischarged) event intents — the offline event queue's
    * live content (speculation.md §5), bounded by pending-intent count. */

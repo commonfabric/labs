@@ -690,7 +690,7 @@ describe("prompt", () => {
           getCellValue: () => Promise.reject(thrown),
         });
         expect(produced(writes)[0]).toBe(
-          "The failure carries nothing that can be written as a message.",
+          "error could not be converted to text",
         );
       }
     });

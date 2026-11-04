@@ -52,6 +52,8 @@
     "./v2/schema-table-links": "./v2/schema-table-links.ts",
     "./v2/dump": "./v2/dump.ts",
     "./v2/compact": "./v2/compact.ts",
+    "./v2/reap": "./v2/reap.ts",
+    "./v2/acl-heads": "./v2/acl-heads.ts",
     "./sqlite": "./v2/sqlite/mod.ts",
     "./sqlite/columns": "./v2/sqlite/columns.ts",
     "./sqlite/guard": "./v2/sqlite/guard.ts",

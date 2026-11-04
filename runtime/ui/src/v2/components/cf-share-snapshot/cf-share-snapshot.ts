@@ -1,9 +1,6 @@
 /** Native host confirmation for sharing an exact, runtime-verified snapshot. */
 
-import {
-  type CellHandle,
-  type RuntimeClient,
-} from "@commonfabric/runtime-client";
+import type { CellHandle, RuntimeClient } from "@commonfabric/runtime-client";
 import { consume } from "@lit/context";
 import { css, html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";

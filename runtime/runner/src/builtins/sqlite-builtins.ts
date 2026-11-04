@@ -59,7 +59,7 @@ import { speculationRunContextOf } from "../speculation/overlay-destination.ts";
 import { parseCfLinkToSigil } from "./sqlite/cf-link.ts";
 import { type IFCLabel, mergeLabel } from "../cfc/label-view-core.ts";
 import { cfcLabelViewFromMetadata } from "../cfc/label-view-state.ts";
-import { readStoredCfcMetadata } from "../cfc/metadata.ts";
+import { cfcDeclaredLabelAt, readStoredCfcMetadata } from "../cfc/metadata.ts";
 import {
   cfcConfidentialityForObservationNode,
   joinCfcObservedConfidentiality,
@@ -87,6 +87,7 @@ import {
   sqliteRowToWire,
 } from "@commonfabric/memory/v2";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import {
   type Cell,
@@ -110,9 +111,6 @@ type SqliteDbRef = WireSqliteDbRef & {
   rev?: number;
 };
 type WireParams = SqliteParamsWire | undefined;
-
-const errMsg = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 /** The sink every sqlite query request is staged under. */
 export const SQLITE_QUERY_SINK = "sqliteQuery";
@@ -326,31 +324,6 @@ function staticConfidentialityOf(
 }
 
 /**
- * Returns the confidentiality a result store already declares on the
- * reference identity of its slots: the declared `followRef` entries at the
- * children of `resultPath`, whether one entry covers every slot or each slot
- * has its own. A declaration only grows, so a settle joins what stands with
- * what it brings.
- */
-function declaredSlotConfidentiality(
-  metadata: ReturnType<typeof readStoredCfcMetadata>,
-  resultPath: readonly string[],
-): CfcConfClause[] {
-  const out: CfcConfClause[] = [];
-  for (const entry of metadata?.labelMap.entries ?? []) {
-    if (
-      entry.origin === "declared" && entry.observes === "followRef" &&
-      entry.path.length === resultPath.length + 1 &&
-      resultPath.every((segment, i) => segment === entry.path[i])
-    ) {
-      const clauses = (entry.label.confidentiality ?? []) as CfcConfClause[];
-      for (const clause of clauses) out.push(clause);
-    }
-  }
-  return out;
-}
-
-/**
  * Returns `writeSchema` with `confidentiality` declared on every slot of
  * `result` as a `followRef` entry: a label on which reference sits at the
  * slot and not on what the reference leads to. A probe of the slot consumes
@@ -399,15 +372,53 @@ function withSlotIdentityLabel(
  */
 function asCellColumnsFromRowSchema(rowSchema: unknown): string[] {
   if (!rowSchema || typeof rowSchema !== "object") return [];
-  const props = (rowSchema as { properties?: Record<string, unknown> })
-    .properties;
+  const { properties: props, $defs } = rowSchema as {
+    properties?: Record<string, unknown>;
+    $defs?: Record<string, unknown>;
+  };
   if (!props || typeof props !== "object") return [];
   return Object.entries(props)
-    .filter(([, v]) =>
-      !!v && typeof v === "object" &&
-      Array.isArray((v as { asCell?: unknown }).asCell)
-    )
+    .filter(([, v]) => mayReadAsCell(v, $defs, new Set()))
     .map(([k]) => k);
+}
+
+/**
+ * Whether `schema` can read as a cell: it is marked `asCell`, or one of its
+ * `anyOf`, `oneOf`, or `allOf` branches is, so a `Cell<T> | null` column is a
+ * link column too. A `$ref` into the row schema's `$defs`, as a named type
+ * lowers to, is followed; `visiting` holds the refs being followed, so a cycle
+ * among them ends.
+ */
+function mayReadAsCell(
+  schema: unknown,
+  $defs: Record<string, unknown> | undefined,
+  visiting: Set<string>,
+): boolean {
+  if (!schema || typeof schema !== "object") return false;
+  const { asCell, anyOf, oneOf, allOf, $ref } = schema as {
+    asCell?: unknown;
+    anyOf?: unknown;
+    oneOf?: unknown;
+    allOf?: unknown;
+    $ref?: unknown;
+  };
+  if (Array.isArray(asCell)) return true;
+  if (
+    [anyOf, oneOf, allOf].some((branches) =>
+      Array.isArray(branches) &&
+      branches.some((branch) => mayReadAsCell(branch, $defs, visiting))
+    )
+  ) {
+    return true;
+  }
+  const name = typeof $ref === "string" && $ref.startsWith("#/$defs/")
+    ? $ref.slice("#/$defs/".length)
+    : undefined;
+  if (name === undefined || visiting.has(name)) return false;
+  visiting.add(name);
+  const found = mayReadAsCell($defs?.[name], $defs, visiting);
+  visiting.delete(name);
+  return found;
 }
 
 /** Replace each asCell column's stored sigil-link STRING with the parsed sigil
@@ -1177,7 +1188,7 @@ export function sqliteQuery(
     } catch (error) {
       result.withTx(tx).set({
         pending: false,
-        error: errMsg(error),
+        error: describeFailure(error),
         ...correlation,
       });
       return;
@@ -1189,7 +1200,7 @@ export function sqliteQuery(
     } catch (error) {
       result.withTx(tx).set({
         pending: false,
-        error: errMsg(error),
+        error: describeFailure(error),
         ...correlation,
       });
       return;
@@ -1920,10 +1931,12 @@ export function sqliteQuery(
                 // and the slot carries no row's label beyond the one the
                 // link written there carries for the document it names.
                 const slotIfcAtoms = joinCfcObservedConfidentiality([
-                  declaredSlotConfidentiality(storedMetadata, [
-                    ...base.path,
-                    "result",
-                  ]),
+                  cfcDeclaredLabelAt(
+                    storedMetadata,
+                    [...base.path, "result"],
+                    "followRef",
+                    "children",
+                  ).confidentiality,
                   requestLabel,
                 ]);
                 if (shapeIfcAtoms.length > 0) {
@@ -2047,7 +2060,7 @@ export function sqliteQuery(
               );
             }
           } catch (error) {
-            await failQuery(errMsg(error));
+            await failQuery(describeFailure(error));
           }
         } finally {
           inFlightIssues.delete(effectKey);

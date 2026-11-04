@@ -1,12 +1,12 @@
 /**
  * How a browser is stopped, which is what says when its profile directory can
- * go.
+ * go, and how it stops by itself once whatever spawned it has gone.
  *
- * The two exports covered here are the ones that can be driven without a
- * browser: a shell process tree stands in for Chrome's, and a shell script
- * stands in for a browser binary that never starts. What a real browser does
- * is covered by `browser.test.ts` here, and by the harness runs in
- * `deno-web-test`, each of which drives Chrome through `BrowserProcess`.
+ * The exports covered here are the ones that can be driven without a browser:
+ * a shell process tree stands in for Chrome's, and a shell script stands in for
+ * a browser binary that never starts. What a real browser does is covered by
+ * `browser.test.ts` here, and by the harness runs in `deno-web-test`, each of
+ * which drives Chrome through `BrowserProcess`.
  */
 
 import type { Browser as AstralBrowser } from "@astral/astral";
@@ -18,6 +18,7 @@ import {
   BOOT_FAILURE_MESSAGE,
   BrowserProcess,
   readToEnd,
+  spawnBrowserProcess,
   stopBrowserProcess,
 } from "../browser-process.ts";
 
@@ -282,9 +283,90 @@ describe("browser-process", () => {
     });
   });
 
+  describe("spawnBrowserProcess()", () => {
+    // Spawns `binary` the way a browser is spawned, and registers putting away
+    // what is left of it.
+    function spawnStandIn(binary: string, args: string[]): Deno.ChildProcess {
+      const child = spawnBrowserProcess(binary, args);
+      madeByTest.push(async () => {
+        try {
+          Deno.kill(-child.pid, "SIGKILL");
+        } catch {
+          // Already gone, which is where some of these tests leave it.
+        }
+        await child.stdin.close().catch(() => {});
+        await child.status;
+      });
+      return child;
+    }
+
+    it("ends every process in the group once its standard input closes", async () => {
+      // `sleep` outlives anything but a signal to the group, and it and the
+      // root both hold standard error, so that stream ending says both went.
+      const child = spawnStandIn("sh", [
+        "-c",
+        "sleep 100000 & echo started; wait",
+      ]);
+      const stdout = child.stdout.getReader();
+      const started = await stdout.read();
+      expect(new TextDecoder().decode(started.value).trim()).toBe("started");
+
+      await child.stdin.close();
+
+      await readToEnd(child.stderr);
+      expect((await stdout.read()).done).toBe(true);
+      expect((await child.status).signal).toBe("SIGKILL");
+    });
+
+    it("reports the exit status of the program it was given", async () => {
+      const child = spawnStandIn("sh", ["-c", "exit 7"]);
+
+      expect((await child.status).code).toBe(7);
+      await Promise.all([readToEnd(child.stdout), readToEnd(child.stderr)]);
+    });
+
+    it("ends both output streams with the program while its standard input stays open", async () => {
+      // A stream still held once the program has gone leaves this waiting.
+      const child = spawnStandIn("true", []);
+
+      await Promise.all([readToEnd(child.stdout), readToEnd(child.stderr)]);
+      expect((await child.status).code).toBe(0);
+    });
+
+    it("reports a program that cannot be run on standard error and in its exit status", async () => {
+      const child = spawnStandIn("/no/such/browser", []);
+
+      const [printed] = await Promise.all([
+        new Response(child.stderr).text(),
+        readToEnd(child.stdout),
+      ]);
+
+      expect(printed).toContain("/no/such/browser");
+      expect((await child.status).success).toBe(false);
+    });
+  });
+
   describe("BrowserProcess", () => {
     describe("instance members", () => {
       describe("close()", () => {
+        it("closes the standard input of the browser it stops, also when asked twice", async () => {
+          const child = shell("read line", { stdin: "piped" });
+          const browser = {
+            disconnect: () => Promise.resolve(),
+          } as unknown as AstralBrowser;
+          const process = new BrowserProcess(
+            child,
+            readToEnd(child.stderr),
+            browser,
+          );
+
+          await process.close();
+          await process.close();
+
+          await expect(child.stdin.getWriter().closed).resolves
+            .toBeUndefined();
+        });
+
         it("returns for a browser that no longer answers", async () => {
           const child = shell("read line", { stdin: "piped" });
           // A browser whose connection has gone takes every answer with it,

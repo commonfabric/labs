@@ -11,6 +11,7 @@
  * names tests, never the people who wrote or touched them.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type CalibrationHealth,
   type Manifest,
@@ -423,7 +424,7 @@ export async function testSelectionResponse(
   try {
     return livePageResponse(testSelectionPage(await read(), clock?.()));
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeFailure(error);
     console.error("test selection page:", message);
     return livePageResponse(
       testSelectionUnavailable(collectionSub(error)),

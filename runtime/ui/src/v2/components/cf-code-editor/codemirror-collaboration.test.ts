@@ -63,6 +63,7 @@ describe("CodeMirror operation collaboration", () => {
       cursor: { epoch: 1, version: 1 },
       baselineHash: "baseline",
       materialized: "aYbc",
+      anchors: [],
       operations: [{
         opId: "op:bob-1",
         cursor: { epoch: 1, version: 1 },
@@ -91,6 +92,7 @@ describe("CodeMirror operation collaboration", () => {
       ...remote,
       cursor: { epoch: 1, version: 2 },
       materialized,
+      anchors: [],
       operations: [{
         opId: "op:alice-1",
         cursor: { epoch: 1, version: 2 },
@@ -143,6 +145,7 @@ describe("CodeMirror operation collaboration", () => {
       cursor: { epoch: 1, version: 1 },
       baselineHash: "baseline:old",
       materialized: "new",
+      anchors: [],
       operations: [{
         opId: "op:alice:1",
         cursor: { epoch: 1, version: 1 },
@@ -206,6 +209,7 @@ describe("CodeMirror operation collaboration", () => {
       cursor: { epoch: 1, version: 2 },
       baselineHash: "baseline",
       materialized: "abc",
+      anchors: [],
       operations: [],
     };
     expect(() =>
@@ -226,6 +230,7 @@ describe("CodeMirror operation collaboration", () => {
       reset: true,
       baselineHash: "baseline",
       materialized: "canonical",
+      anchors: [],
       operations: [],
     };
 
@@ -245,6 +250,7 @@ describe("CodeMirror operation collaboration", () => {
       cursor: { epoch: 1, version: 1 },
       baselineHash: "baseline",
       materialized: "abc",
+      anchors: [],
       operations: [{
         opId: "op:already-integrated",
         cursor: { epoch: 1, version: 1 },
@@ -1327,6 +1333,7 @@ function inactiveSnapshot(materialized: string): OperationFieldSnapshot {
     cursor: null,
     baselineHash: `baseline:${materialized}`,
     materialized,
+    anchors: [],
     operations: [],
   };
 }
@@ -1397,6 +1404,7 @@ function activeSnapshot(
     cursor: resolution.to,
     baselineHash: "baseline:abc",
     materialized,
+    anchors: [],
     operations: [],
   };
 }
@@ -1417,6 +1425,7 @@ function activeSnapshotAt(
     cursor: { epoch: 1, version },
     baselineHash: "baseline:abc",
     materialized,
+    anchors: [],
     operations: [],
   };
 }

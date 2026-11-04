@@ -27,7 +27,12 @@ import type {
 import { flattenStructure } from "../../model.ts";
 import type { Highlighter } from "../language.ts";
 import { cpLen } from "../../ansi.ts";
-import { computeLineStarts, lineIndexOf } from "../../lines.ts";
+import {
+  codePointColumns,
+  type ColumnOf,
+  computeLineStarts,
+  lineIndexOf,
+} from "../../lines.ts";
 
 interface Token {
   readonly start: number;
@@ -340,7 +345,12 @@ function buildStructure(
 ): StructureNode[] {
   const lineStarts = computeLineStarts(text);
   const cur: Cursor = { toks: significantTokens(text), i: 0 };
-  const ctx = { text, lineStarts, definitions };
+  const ctx: StructCtx = {
+    text,
+    lineStarts,
+    columnOf: codePointColumns(text, lineStarts),
+    definitions,
+  };
   // Text with no significant tokens (empty, all whitespace, all comments) has no
   // first token, which `parseValue` reports as an empty value with no members.
   const root = parseValue(cur, 0, ctx);
@@ -355,6 +365,7 @@ function buildStructure(
 interface StructCtx {
   readonly text: string;
   readonly lineStarts: number[];
+  readonly columnOf: ColumnOf;
   readonly definitions: Map<string, Definition[]>;
 }
 
@@ -522,6 +533,5 @@ function makeNode(
 
 function posAt(ctx: StructCtx, offset: number): { line: number; col: number } {
   const line = lineIndexOf(ctx.lineStarts, offset);
-  const col = cpLen(ctx.text.slice(ctx.lineStarts[line], offset));
-  return { line, col };
+  return { line, col: ctx.columnOf(line, offset) };
 }

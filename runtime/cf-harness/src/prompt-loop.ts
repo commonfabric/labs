@@ -7,6 +7,7 @@ import {
   type IFCLabel,
 } from "@commonfabric/runner/cfc";
 import { maxOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -614,15 +615,11 @@ const transcriptTimelineEntry = (
     : {}),
 });
 
-const toErrorDetail = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /**
- * The host's answer to a turn that carried neither text nor a tool call, in a
- * run that returns through `submit_result`.
+ * Asks a run's completion tool for an answer after a turn with no text or call.
  */
-const EMPTY_TURN_NOTICE =
-  "Host completion check: the last turn carried no words and no tool call. Call submit_result with the answer, or with why it cannot be given.";
+const emptyTurnNotice = (tool: "submit_result" | "finish_task"): string =>
+  `Host completion check: the last turn carried no words and no tool call. Call ${tool} with the answer, or with why it cannot be given.`;
 
 const PROMPT_LOOP_MODEL_TURNS = Symbol("cf-harness.prompt-loop.model-turns");
 
@@ -3074,14 +3071,23 @@ const evaluateToolPolicy = (
         }),
       };
   }
-  if (descriptor.toolId === "submit_result") {
-    // The run's return, admitted at every mode and under every prompt-slot
-    // role. Its authority is the host's: the tool exists only in a run the
-    // host configured with a structured-result schema, and the call reaches
-    // nothing but that run's own result file. A run's final message, which
-    // no policy gates, returns in the same sense.
-    return { allowed: true, reasonCodes: ["structured_result_return"] };
+  if (
+    descriptor.toolId === "submit_result" ||
+    descriptor.toolId === "report_progress"
+  ) {
+    // The host configures the run's own return channels. Each validates its
+    // payload and reaches only the host-selected output destination; the
+    // Fabric writer applies observation labels and commit policy there.
+    return {
+      allowed: true,
+      reasonCodes: [
+        descriptor.toolId === "submit_result"
+          ? "structured_result_return"
+          : "progress_return",
+      ],
+    };
   }
+
   switch (cfcEnforcementMode) {
     case "disabled":
       return { allowed: true, reasonCodes: ["cfc_disabled"] };
@@ -3358,6 +3364,7 @@ export class CfHarnessPromptLoop {
       loomRetrievalAvailable: this.engine.config.loomRetrieval !== undefined,
       loomCommandsAvailable: this.engine.config.loomCommands !== undefined,
       structuredResultAvailable: this.engine.structuredResultAvailable,
+      progressAvailable: this.engine.progressAvailable,
       clientActionsAvailable: this.engine.clientActionsAvailable,
     };
   }
@@ -4302,15 +4309,33 @@ export class CfHarnessPromptLoop {
         }
         if (toolCalls.length === 0) {
           if (assistantMessage.content.trim().length === 0) {
-            // A run that returns through `submit_result` is asked once to
-            // submit rather than failed on its first blank turn, provided a
-            // turn that still offers tools follows; a second blank turn
-            // fails it.
+            if (response.emptyReply !== undefined) {
+              const attempt = modelAttempts.at(-1);
+              try {
+                await this.engine.artifactStore?.persistEmptyReply?.({
+                  modelTurn: modelTurns,
+                  ...(attempt?.modelTurn === modelTurns
+                    ? { modelAttemptSequence: attempt.sequence }
+                    : {}),
+                  diagnostic: response.emptyReply,
+                });
+              } catch {
+                // Diagnostic storage must not replace the empty-reply
+                // failure or prevent the completion notice.
+              }
+            }
+            // A completion notice needs a following turn that offers its
+            // tool. Each invocation gets one notice; a second blank fails.
+            const completionTool = this.#allowedToolIds.has("submit_result")
+              ? "submit_result"
+              : this.#allowedToolIds.has("finish_task")
+              ? "finish_task"
+              : undefined;
             const toolTurnFollows = modelTurns <
               maxModelTurns - (this.#finalizeOnTurnLimit ? 1 : 0);
             if (
               !toolTurnFollows || emptyTurnNudged ||
-              !this.#allowedToolIds.has("submit_result")
+              completionTool === undefined
             ) {
               throw new HarnessControlError(
                 "provider-unavailable",
@@ -4318,7 +4343,7 @@ export class CfHarnessPromptLoop {
               );
             }
             emptyTurnNudged = true;
-            await appendHostNotice(EMPTY_TURN_NOTICE);
+            await appendHostNotice(emptyTurnNotice(completionTool));
             continue;
           }
           if (!finalizing && this.#pieceOutputOwed()) {
@@ -4508,7 +4533,7 @@ export class CfHarnessPromptLoop {
       annotatePromptLoopError(error, modelTurns);
       try {
         if (options.signal?.aborted) {
-          await this.engine.cancelRun(toErrorDetail(options.signal.reason));
+          await this.engine.cancelRun(describeFailure(options.signal.reason));
         } else {
           await this.engine.failRun("prompt_loop_error", error);
         }
@@ -4588,7 +4613,7 @@ export class CfHarnessPromptLoop {
       toolId === "research" || toolId === "finish_task" ||
       toolId === "weaver_action" ||
       toolId === "loom_compose" || toolId === "run_command" ||
-      toolId === "submit_result"
+      toolId === "report_progress" || toolId === "submit_result"
     ) {
       return input;
     }
@@ -5445,7 +5470,7 @@ export class CfHarnessPromptLoop {
         toolInputSummary,
         ...optionalPolicyEventIndexes(policyEventIndexes),
         ...(result !== undefined ? { resultRef: result.resultRef } : {}),
-        errorDetail: toErrorDetail(error),
+        errorDetail: describeFailure(error),
       });
       // Reaching this catch ends the run: its owner canceled it, or a tool
       // failed in sandbox spawn/infra, CFC transport, artifact/run-state
@@ -6701,13 +6726,13 @@ export class CfHarnessPromptLoop {
       childModelTurns = promptLoopModelTurnsFromError(error) ?? childModelTurns;
       summary = subagentStatus === "canceled"
         ? "Subagent canceled by the parent run."
-        : `Subagent failed: ${toErrorDetail(error)}`;
+        : `Subagent failed: ${describeFailure(error)}`;
       // The child's loop writes the child's own outcome. A child that never
       // reached its loop — its model was unavailable, or its skill context
       // would not persist — has none yet, and gets one here.
       if (!isTerminalHarnessRunStatus(childEngine.getRunState().status)) {
         if (options.signal?.aborted) {
-          await childEngine.cancelRun(toErrorDetail(options.signal.reason));
+          await childEngine.cancelRun(describeFailure(options.signal.reason));
         } else {
           await childEngine.failRun("setup_error", error, {
             source: "run_error",

@@ -29,8 +29,9 @@ import {
   type RuntimeProgram,
   sourceDocKey,
 } from "@commonfabric/runner";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
-import { type HarnessPatternIndexClientFactory } from "./factory.ts";
+import type { HarnessPatternIndexClientFactory } from "./factory.ts";
 
 /**
  * The `RuntimeProgram` a published program compiles as. Every field the index
@@ -136,9 +137,6 @@ export class PatternCompositionError extends Error {
 const patternIndexErrorDetail = (error: unknown): string | undefined =>
   error instanceof PatternIndexError ? error.detail : undefined;
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 const quoteList = (ids: readonly string[]): string =>
   ids.map((id) => `"${id}"`).join(", ");
 
@@ -231,7 +229,7 @@ export const materializeComposedPatterns = async (
     client = await getClient();
   } catch (error) {
     throw new PatternCompositionError(
-      `pattern index unavailable: ${errorMessage(error)}`,
+      `pattern index unavailable: ${describeFailure(error)}`,
       patternIndexErrorDetail(error),
     );
   }
@@ -283,7 +281,7 @@ export const materializeComposedPatterns = async (
     } catch (error) {
       throw new PatternCompositionError(
         `the imported pattern "${patternId}" could not be read from the pattern index: ${
-          errorMessage(error)
+          describeFailure(error)
         }`,
         patternIndexErrorDetail(error),
       );
@@ -305,7 +303,7 @@ export const materializeComposedPatterns = async (
     } catch (error) {
       throw new PatternCompositionError(
         `the imported pattern "${patternId}" did not compile; the diagnostic is retained in the run artifact and withheld here, since it quotes source you did not author`,
-        errorMessage(error),
+        describeFailure(error),
       );
     }
     const identity = runtime.patternManager.getArtifactEntryRef(compiled)

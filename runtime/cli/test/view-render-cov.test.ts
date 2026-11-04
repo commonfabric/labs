@@ -372,22 +372,22 @@ Deno.test("renderStatus: the view hint names the alternate representation", () =
   assert(rendered.includes("V Source"), rendered);
 });
 
-Deno.test("renderStatus: e / C / # hints appear only where they apply", () => {
+Deno.test("renderStatus: e / c / # hints appear only where they apply", () => {
   const doc = parseDocument(SAMPLE);
   const line = (over: Partial<ViewState>) =>
     stripAnsi(
       renderFrame(doc, baseView({ color: false, width: 100, ...over }))
         .at(-1)!,
     );
-  // Editable + non-printables present: e and C both show. # always shows.
+  // Editable + non-printables present: e and c both show. # always shows.
   const both = line({ canEdit: true, hasNonPrintables: true });
   assert(both.includes("e Edit"), both);
-  assert(both.includes("C Chars"), both);
+  assert(both.includes("c Chars"), both);
   assert(both.includes("# Lines"), both);
-  // Read-only with only printable content: e and C are dropped, # stays.
+  // Read-only with only printable content: e and c are dropped, # stays.
   const neither = line({ canEdit: false, hasNonPrintables: false });
   assert(!neither.includes("e Edit"), neither);
-  assert(!neither.includes("C Chars"), neither);
+  assert(!neither.includes("c Chars"), neither);
   assert(neither.includes("\\ Hard wrap"), neither);
   assert(neither.includes("# Lines"), neither);
   const hardWrapped = line({ wrapMode: "hard" });

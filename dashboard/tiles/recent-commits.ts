@@ -37,6 +37,7 @@
  * reads nothing.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   runSource,
@@ -57,7 +58,6 @@ import {
   humanDuration,
   inParallel,
   landingHref,
-  messageOf,
   pullRequestLinks,
   runDurationMs,
 } from "../lib.ts";
@@ -463,7 +463,7 @@ export class OrganizationCommits {
         } catch (error) {
           console.error(
             `recent commits: could not read ${repo.name}'s commits:`,
-            messageOf(error),
+            describeFailure(error),
           );
           if (isRefusal(error)) {
             if (!this.#refused.has(repo.name)) changed = true;
@@ -701,7 +701,7 @@ export function createRecentCommits(
         if (changed || failedBefore !== undefined) collectAgain?.();
       },
       (error) => {
-        failure = messageOf(error);
+        failure = describeFailure(error);
         console.error(
           "recent commits: could not list the organization's repositories:",
           failure,

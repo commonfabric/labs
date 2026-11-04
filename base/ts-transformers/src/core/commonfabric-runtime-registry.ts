@@ -135,6 +135,13 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // A parse of its argument alone, returning a plain object or `undefined`
+  // rather than a reactive value.
+  {
+    exportName: "parseDID",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   // `assertCapture` records one operand of an `assert` body and returns it
   // unchanged. AssertDiagnosticsTransformer emits the calls; authored code
   // does not call it. It takes a resolved value and hands the same value back,
@@ -365,6 +372,13 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   // computation or handler that makes it.
   {
     exportName: "spaceOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // spaceDeleted(target) returns whether a space is deleted, or `undefined`.
+  // It builds no graph node either.
+  {
+    exportName: "spaceDeleted",
     category: "ignored",
     reactiveOrigin: false,
   },

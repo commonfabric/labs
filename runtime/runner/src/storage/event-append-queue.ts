@@ -50,13 +50,15 @@
 
 import { spliceAll } from "@commonfabric/collections/splice";
 import { getLogger } from "@commonfabric/logger";
-import {
-  type ClientCommit,
-  type EventAppendDecl,
-  type StreamEventEntry,
-  type StreamLinkRef,
+import type {
+  ClientCommit,
+  EventAppendDecl,
+  StreamEventEntry,
+  StreamLinkRef,
 } from "@commonfabric/memory/v2";
+import { isDeletedSpaceError } from "@commonfabric/memory/v2/client";
 import type { FabricValue, JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 const logger = getLogger("event-append-queue", {
   enabled: true,
@@ -527,7 +529,7 @@ export class EventAppendQueue {
         attempt = 0;
       } catch (error) {
         const name = (error as { name?: string })?.name ?? "";
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeFailure(error);
         if (name === "EventAppendDuplicateError") {
           // The first append landed; its consequences are (or will be)
           // the authoritative outcome (events.md §5).
@@ -542,10 +544,14 @@ export class EventAppendQueue {
         } | undefined;
         // A current ACL denial proves this append was not admitted. A
         // session challenge race remains retryable and carries no such basis.
-        const aclRefusal = name === "AuthorizationError" &&
-          verdict?.permanentEvidence === true &&
-          typeof verdict.aclRevision === "number" &&
-          verdict.retriable !== true;
+        // A deleted space admits nothing again, and the error a session
+        // revoked for the deletion closes with carries only `deleted`, so
+        // that marker alone is a refusal (INV-15).
+        const aclRefusal = isDeletedSpaceError(error) ||
+          (name === "AuthorizationError" &&
+            verdict?.permanentEvidence === true &&
+            typeof verdict.aclRevision === "number" &&
+            verdict.retriable !== true);
         if (REFUSED_ERROR_NAMES.has(name) || aclRefusal) {
           logger.warn("event-append-refused", () => [
             `event append ${next.eventId} refused deterministically; ` +

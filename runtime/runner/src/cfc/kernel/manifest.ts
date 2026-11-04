@@ -246,7 +246,8 @@ export const MANIFEST: readonly ManifestRow[] = [
       },
     ],
     note: "the stored clauses at a path are the payload label-map entries " +
-      "there and the stored schema's declaration; the home-space and " +
+      "there and the stored schema's declaration, a `*` segment of the " +
+      "path matching any segment at its depth; the home-space and " +
       "writer-identity checks sit in the transaction's " +
       "`releaseCfcConfidentiality()`, and `releaseCellConfidentiality` adds " +
       "the route's recommended refusal of a clause the path still shows " +
@@ -261,7 +262,7 @@ export const MANIFEST: readonly ManifestRow[] = [
       "defines `Label.join` and `Label.joinIntegrity` outside the matrix",
     relation: "missing",
     decidedToday: [
-      { file: PREPARE, symbol: "joinLabels" },
+      { file: "cfc/consumed-label.ts", symbol: "joinLabels" },
       { file: PREPARE, symbol: "mergeLabels" },
       { file: "cfc/label-view-core.ts", symbol: "mergeLabel" },
       {

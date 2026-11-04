@@ -200,9 +200,10 @@ export class CFResizableHandle extends BaseElement {
     );
     if (!panelGroup) return;
 
-    // The group's property, not its attribute: a renderer assigns
-    // `direction`, and nothing copies it to an attribute.
-    const isHorizontal = panelGroup.direction !== "vertical";
+    // The group's orientation, not its attribute: a renderer assigns
+    // `direction`, nothing copies it to an attribute, and a group narrower
+    // than its `stackBelow` lies vertically whatever its direction.
+    const isHorizontal = panelGroup.orientation !== "vertical";
 
     let handled = false;
 

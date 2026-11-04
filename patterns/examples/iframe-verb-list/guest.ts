@@ -9,6 +9,7 @@
  */
 
 import { connectFabric } from "@commonfabric/iframe-sandbox/guest";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import {
   type AddItemEvent,
@@ -61,7 +62,7 @@ let hydrated = false;
 let sending = false;
 
 function showError(cause: unknown): void {
-  error.textContent = cause instanceof Error ? cause.message : String(cause);
+  error.textContent = describeFailure(cause);
 }
 
 function rowFor(item: ListItem): HTMLLIElement {

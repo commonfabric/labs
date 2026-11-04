@@ -15,6 +15,7 @@ import {
   HARNESS_CHAT_PROTOCOL_VERSION,
   HARNESS_CHAT_REQUEST_TYPE,
 } from "../src/contracts/interactive-chat.ts";
+import type { BuiltinToolId } from "../src/contracts/tool-descriptor.ts";
 import type { HarnessInputCellSpec } from "../src/contracts/input-cells.ts";
 import type {
   HarnessPatternRef,
@@ -233,7 +234,7 @@ describe("interactive chat session context", () => {
     }
   });
 
-  it("supplies target-selection context to an unconfigured interactive turn", async () => {
+  it("omits empty-input targeting context from an unconfigured interactive turn", async () => {
     const seen: HarnessTranscriptMessage[][] = [];
     const service = await startedService(seen);
     await runTurn(
@@ -247,21 +248,21 @@ describe("interactive chat session context", () => {
     );
 
     const context = seen[0].map((message) => message.content).join("\n");
-    expect(context).toContain("No input cells are attached for this run");
-    expect(context).toContain("resolve_piece resolves a piece slug");
+    expect(context).not.toContain("No input cells are attached for this run");
+    expect(context).not.toContain("resolve_piece resolves a piece slug");
     expect(context).not.toContain("make zero registry reads");
     expect(seen[0].at(-1)?.content).toBe("add a total to this bills pane");
   });
 
-  it("supplies target-selection guidance without a seeded system prompt", async () => {
+  it("omits empty-input targeting guidance without a seeded system prompt", async () => {
     const seen: HarnessTranscriptMessage[][] = [];
     const service = await startedService(seen, { inputCells: [] });
 
     await runTurn(service, "turn-1", "add a total to this bills pane");
 
     const context = seen[0].map((message) => message.content).join("\n");
-    expect(context).toContain("No input cells are attached for this run");
-    expect(context).toContain("resolve_piece resolves a piece slug");
+    expect(context).not.toContain("No input cells are attached for this run");
+    expect(context).not.toContain("resolve_piece resolves a piece slug");
     expect(context).not.toContain("make zero registry reads");
     expect(seen[0].at(-1)?.content).toBe("add a total to this bills pane");
   });
@@ -464,4 +465,67 @@ describe("interactive chat session context", () => {
     // it does not run without it.
     expect(seen).toEqual([]);
   });
+});
+
+describe("grant context with an explicit tool allow-list", () => {
+  const cases: readonly {
+    name: string;
+    tools: readonly BuiltinToolId[];
+    grants: boolean;
+  }[] = [
+    { name: "empty", tools: [], grants: false },
+    { name: "bash only", tools: ["bash"], grants: false },
+    { name: "run_pattern only", tools: ["run_pattern"], grants: true },
+    { name: "describe_handle only", tools: ["describe_handle"], grants: true },
+    { name: "read_value only", tools: ["read_value"], grants: true },
+    { name: "call_verb only", tools: ["call_verb"], grants: true },
+    {
+      name: "both discovery tools",
+      tools: ["run_pattern", "describe_handle"],
+      grants: true,
+    },
+  ];
+  for (const { name, tools, grants } of cases) {
+    it(`establishes and announces grants when usable: ${name}`, async () => {
+      const seen: HarnessTranscriptMessage[][] = [];
+      const engine = stubEngine({ inputCells: [] });
+      let setups = 0;
+      engine.establishWellKnownGrants = () => {
+        setups += 1;
+        return Promise.resolve([{
+          name: "piece-registry",
+          token: "cfh:a:grant",
+          ref: "/of:fid1:registry",
+        }]);
+      };
+      const service = new HarnessInteractiveChatService({
+        basePromptLoopOptions: { engine },
+        createPromptLoop: recordingLoop(seen),
+      });
+      await service.startSession("req-session", {
+        sessionId: "session-1",
+        workspace: { hostPath: "/workspace" },
+        model: "gpt-test",
+        policy: {
+          type: "cf-harness.chat-policy",
+          toolMode: "workspace-write",
+          allowedToolIds: tools,
+          allowedSubagentProfiles: [],
+        },
+      });
+      await runTurn(service, "turn-1", "what is in this space?");
+      expect(setups).toBe(grants ? 1 : 0);
+      expect(seen).toHaveLength(1);
+      const grantMessages = seen[0].filter((message) =>
+        message.content.includes("cfh:a:grant")
+      );
+      expect(grantMessages).toHaveLength(grants ? 1 : 0);
+      expect(
+        grantMessages.some((message) =>
+          message.content.includes("Use describe_handle on a granted token")
+        ),
+      ).toBe(grants && tools.includes("describe_handle"));
+      expect(seen[0].at(-1)?.content).toBe("what is in this space?");
+    });
+  }
 });

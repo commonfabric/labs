@@ -32,7 +32,12 @@ import type {
 } from "../../model.ts";
 import { flattenStructure } from "../../model.ts";
 import { cpLen } from "../../ansi.ts";
-import { computeLineStarts, lineIndexOf } from "../../lines.ts";
+import {
+  codePointColumns,
+  type ColumnOf,
+  computeLineStarts,
+  lineIndexOf,
+} from "../../lines.ts";
 import type { Highlighter } from "../language.ts";
 import { plainTextDocument, plainTextLines } from "../plain-text/plain-text.ts";
 import {
@@ -175,7 +180,7 @@ function parseTypeScriptDocument(text: string, fileName: string): Document {
     text,
     schemaSet,
     lineOf,
-    lineStarts,
+    columnOf: codePointColumns(text, lineStarts),
     definitions,
   };
   const roots: StructureNode[] = [];
@@ -1187,7 +1192,7 @@ interface BuildCtx {
   text: string;
   schemaSet: Set<ts.Node>;
   lineOf: (offset: number) => number;
-  lineStarts: number[];
+  columnOf: ColumnOf;
   definitions: Map<string, Definition[]>;
 }
 
@@ -1245,8 +1250,8 @@ function buildNode(node: ts.Node, depth: number, ctx: BuildCtx): StructureNode {
     nameOffset: desc.nameOffset,
     startLine,
     endLine,
-    startCol: cpLen(ctx.text.slice(ctx.lineStarts[startLine], start)),
-    endCol: cpLen(ctx.text.slice(ctx.lineStarts[endLine], end)),
+    startCol: ctx.columnOf(startLine, start),
+    endCol: ctx.columnOf(endLine, end),
     startOffset: start,
     endOffset: end,
     depth,
@@ -1472,8 +1477,8 @@ function commentNode(
     label: firstLine(c.text.trim(), 56),
     startLine,
     endLine,
-    startCol: cpLen(ctx.text.slice(ctx.lineStarts[startLine], c.start)),
-    endCol: cpLen(ctx.text.slice(ctx.lineStarts[endLine], c.end)),
+    startCol: ctx.columnOf(startLine, c.start),
+    endCol: ctx.columnOf(endLine, c.end),
     startOffset: c.start,
     endOffset: c.end,
     depth,

@@ -27,6 +27,7 @@ import type {
   ViewMode,
 } from "../model.ts";
 import type { DiffMaps } from "../diffdoc.ts";
+import type { ColumnOf } from "../lines.ts";
 import type { DecodedLanguageSource, LanguageDecoder } from "./decoder.ts";
 import { utf8Decoder } from "./decoder.ts";
 import { typeScriptLanguage } from "./typescript/language.ts";
@@ -194,6 +195,10 @@ export interface HunkStructureContext {
   readonly hunkEnd: number;
 
   readonly diffLineStarts: number[];
+
+  /** Code-point columns of the diff text. */
+  readonly diffColumnOf: ColumnOf;
+
   readonly rawLines: string[];
 
   /** Name → declaration index the remap contributes to (for `t` peeks). */
@@ -279,6 +284,13 @@ export interface Language {
   /** Parse `text` into the full document model: colored lines, a structure
    * tree, and a name → definition index. `fileName` is advisory. */
   parseDocument(text: string, fileName?: string): Document;
+
+  /**
+   * Whether adding or removing a line that holds only comments and whitespace
+   * leaves what the source means as it was. Absent where it may not, such as
+   * in XML text, a YAML scalar, or JSON, which has no comments.
+   */
+  readonly commentLinesAreInert?: boolean;
 
   /** Color `text` into rendered lines only — the per-keystroke-safe subset of
    * {@link parseDocument}, with no structure tree or definitions. Used by the

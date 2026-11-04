@@ -1,7 +1,7 @@
 export { analyzeFunctionCapabilities } from "./capability-analysis.ts";
-export {
-  type MergeablePushMisuse,
-  type MergeablePushMisuseKind,
+export type {
+  MergeablePushMisuse,
+  MergeablePushMisuseKind,
 } from "./mergeable-push-classification.ts";
 export {
   classifyReactiveReceiverKind,

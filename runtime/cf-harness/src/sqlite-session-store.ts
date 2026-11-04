@@ -1,17 +1,18 @@
 import { fromFileUrl } from "@std/path";
 
 import { Database } from "@db/sqlite";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
-import {
-  type HarnessChatBrowserAccessLease,
-  type HarnessChatContext,
-  type HarnessChatEventEnvelope,
-  type HarnessChatPolicy,
-  type HarnessChatSessionStatus,
-  type HarnessChatTurnInput,
-  type HarnessChatTurnRecord,
-  type HarnessChatTurnStatus,
+import type {
+  HarnessChatBrowserAccessLease,
+  HarnessChatContext,
+  HarnessChatEventEnvelope,
+  HarnessChatPolicy,
+  HarnessChatSessionStatus,
+  HarnessChatTurnInput,
+  HarnessChatTurnRecord,
+  HarnessChatTurnStatus,
 } from "./contracts/interactive-chat.ts";
 import type { HarnessTranscriptMessage } from "./contracts/transcript.ts";
 import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
@@ -149,9 +150,7 @@ const parseJsonColumn = <Value>(
     return JSON.parse(value) as Value;
   } catch (error) {
     throw new Error(
-      `failed to parse ${column}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `failed to parse ${column}: ${describeFailure(error)}`,
     );
   }
 };

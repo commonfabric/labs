@@ -1,3 +1,4 @@
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
@@ -444,7 +445,7 @@ export const subscribe: AppRouteHandler<typeof Routes.subscribe> = (c) => {
       span.setAttribute("memory.status", "exception");
       span.setAttribute(
         "error.message",
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       );
       span.setAttribute(
         "error.type",

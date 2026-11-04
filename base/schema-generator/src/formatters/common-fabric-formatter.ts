@@ -30,6 +30,7 @@ import {
   isEmptyObjectDefaultType,
   resolveWrapperNode,
   type TypeWithInternals,
+  withoutTypeNode,
 } from "../type-utils.ts";
 import {
   isCommonFabricDeclaration,
@@ -2052,9 +2053,8 @@ export class CommonFabricFormatter implements TypeFormatter {
     context: GenerationContext,
   ): MutableJSONSchema {
     const payload = scopePayloadType(type, brand, context.typeChecker);
-    const { typeNode: _, ...rest } = context;
     const payloadContext: GenerationContext = {
-      ...rest,
+      ...withoutTypeNode(context),
       scopeBrandRead: new Set([
         type,
         payload,
@@ -2131,7 +2131,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     const instantiated = instantiatedBrand?.scope === brand.scope
       ? scopePayloadType(instantiatedType!, instantiatedBrand, checker)
       : undefined;
-    const { typeNode: _, instantiatedAs: __, ...outer } = written.context;
+    const { instantiatedAs: _, ...outer } = withoutTypeNode(written.context);
     return this.#schemaGenerator.formatChildType(
       payload,
       {
@@ -2885,11 +2885,10 @@ export class CommonFabricFormatter implements TypeFormatter {
     context: GenerationContext,
   ): MutableJSONSchema {
     const {
-      typeNode: _,
-      hintsNode: __,
-      instantiatedAs: ___,
+      hintsNode: _,
+      instantiatedAs: __,
       ...unplaced
-    } = context;
+    } = withoutTypeNode(context);
     const payloadContext: GenerationContext = {
       ...unplaced,
       carriersRead: type,

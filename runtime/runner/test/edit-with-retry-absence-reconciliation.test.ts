@@ -639,8 +639,12 @@ describe("editWithRetry absence reconciliation", () => {
             experimental: { serverExecution: true },
           });
           const engine = await server.engineForSpace(space);
-          lease = new ExecutionLeaseCycle({ engine, space, holder });
-          expect(lease.acquire()).toBe(true);
+          lease = new ExecutionLeaseCycle({
+            leases: engine.executionLeases,
+            space,
+            holder,
+          });
+          expect(await lease.acquire()).toBe(true);
 
           const tx = servingRuntime.edit();
           stampWaveRunContext(tx, {

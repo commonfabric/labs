@@ -8,6 +8,7 @@ import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
+import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
 import { cfcLabelViewForCell } from "../../src/cfc/label-view.ts";
@@ -148,6 +149,75 @@ describe("initialization attribution", () => {
       tx.abort();
     });
 
+    it("claims the acting principal for a seed in a document the mark names", async () => {
+      actingPrincipal = other.did();
+      expect(
+        await seedClaim(
+          "named",
+          (tx) =>
+            tx.markCfcAttributedInitialization(
+              runtimeWritePolicyAuthorization,
+              runtime.getCell(space, "named", claimSchema, tx)
+                .getAsNormalizedFullLink(),
+            ),
+        ),
+      ).toEqual([other.did()]);
+    });
+
+    it("claims nobody for a seed in a document the mark does not name", async () => {
+      actingPrincipal = other.did();
+      expect(
+        await seedClaim(
+          "unnamed",
+          (tx) =>
+            tx.markCfcAttributedInitialization(
+              runtimeWritePolicyAuthorization,
+              runtime.getCell(space, "unnamed-result", undefined, tx)
+                .getAsNormalizedFullLink(),
+            ),
+        ),
+      ).toEqual([]);
+    });
+
+    it("lists each named document once, under a mark for the whole transaction none", () => {
+      const tx = runtime.edit();
+      const piece = runtime.getCell(space, "listed", undefined, tx)
+        .getAsNormalizedFullLink();
+      tx.markCfcAttributedInitialization(
+        runtimeWritePolicyAuthorization,
+        piece,
+      );
+      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization, {
+        ...piece,
+      });
+      expect(tx.getCfcState().attributedInitialization).toBe(false);
+      expect(tx.getCfcState().attributedPieces).toEqual([piece]);
+      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
+      expect(tx.getCfcState().attributedInitialization).toBe(true);
+      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization, {
+        ...piece,
+        id: "of:another",
+      });
+      expect(tx.getCfcState().attributedPieces).toEqual([piece]);
+      tx.abort();
+    });
+
+    it("invalidates a preparation made before a mark naming a document", () => {
+      const tx = runtime.edit();
+      const seed = runtime.getCell(space, "held-named", claimSchema, tx);
+      runtime.getCell(space, "held-named-result", undefined, tx).set({
+        claim: seed,
+      });
+      runtime.prepareTxForCommit(tx);
+      expect(tx.getCfcState().prepare.status).toBe("prepared");
+      tx.markCfcAttributedInitialization(
+        runtimeWritePolicyAuthorization,
+        seed.getAsNormalizedFullLink(),
+      );
+      expect(tx.getCfcState().prepare.status).toBe("invalidated");
+      tx.abort();
+    });
+
     it("marks through a transaction wrapper", () => {
       const tx = runtime.edit();
       new TransactionWrapper(tx, {}).markCfcAttributedInitialization(
@@ -275,6 +345,7 @@ describe("initialization attribution", () => {
         requested: MemoryV2Client.MountOptions = {},
       ) {
         const client = await MemoryV2Client.connect({
+          instanceNames: namesInstancesByDefault(),
           transport: MemoryV2Client.loopback(this.#server),
         });
         const session = await client.mount(
@@ -322,6 +393,7 @@ describe("initialization attribution", () => {
       );
       space = spaceIdentity.did();
       server = new MemoryV2Server.Server({
+        namesInstances: namesInstancesByDefault,
         store: new URL(
           `memory://initialization-attribution-${crypto.randomUUID()}`,
         ),

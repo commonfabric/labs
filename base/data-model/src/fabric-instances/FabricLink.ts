@@ -2,6 +2,7 @@ import type {
   FabricLink as ApiFabricLink,
   FabricLinkConstructor as ApiFabricLinkConstructor,
 } from "@/api.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isPlainObject,
   isUnsafeObjectKey,
@@ -163,7 +164,7 @@ export class FabricLink extends BaseFabricInstance implements ApiFabricLink {
           return ProblematicValue.make(
             typeTag,
             state,
-            `Link: ${e instanceof Error ? e.message : String(e)}`,
+            `Link: ${describeFailure(e)}`,
             mutable,
           );
         }

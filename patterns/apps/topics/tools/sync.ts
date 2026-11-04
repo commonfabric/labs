@@ -10,13 +10,14 @@
  * nothing to the space.
  */
 
-import { dirname, join } from "@std/path";
+import { dirname } from "@std/path/dirname";
+import { join } from "@std/path/join";
 import {
   createSession,
   Identity,
   legacySpaceDid,
 } from "@commonfabric/identity";
-import { isDID } from "@commonfabric/identity/did";
+import { type DID, isDID } from "@commonfabric/identity/did";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import type {
   EntityDocument,
@@ -27,13 +28,14 @@ import type {
 } from "@commonfabric/memory/v2";
 import type { SpaceSession } from "@commonfabric/memory/v2/client";
 import { ROUTED_HOLDINGS_LIMIT } from "@commonfabric/memory/v2/routed-limits";
-import { settingsForDeployedClient } from "@commonfabric/runner";
+import { settingsForDeployedClient } from "@commonfabric/runner/deployment-meta";
 import {
   RemoteSessionFactory,
   type SessionFactory,
   storageAddressForHost,
-} from "@commonfabric/runner/storage/v2";
+} from "@commonfabric/runner/storage/v2-remote-session";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
@@ -59,8 +61,20 @@ export interface FetchedDoc {
   /** The document's `argument` field: a piece document's input link. */
   argument?: Plain;
 
+  /**
+   * The CFC label envelope the document stores beside its value, `null`
+   * for a document storing none.
+   */
+  cfc?: Plain | null;
+
   /** Set for a document that was deleted. */
   deleted?: true;
+
+  /**
+   * Set for a document the server sent along with another rather than
+   * because it was watched, which the copy takes only as far as it holds it.
+   */
+  riding?: true;
 }
 
 /** A document the fetching side already holds, at the revision it holds. */
@@ -183,14 +197,30 @@ export function applyDocs(
 ): void {
   for (const doc of docs) {
     if (doc.deleted) {
-      // The revision stays, so that nothing older takes the document back.
+      // The revision stays, so that nothing older takes the document back,
+      // and one the copy watches or holds is known to be gone.
+      if (!doc.riding || data.docs[doc.id]?.value !== undefined) {
+        absent.add(doc.id);
+      }
       data.docs[doc.id] = { seq: doc.seq };
-      absent.add(doc.id);
     } else {
       absent.delete(doc.id);
+      const held = data.docs[doc.id];
+      // A document riding along that the copy holds for its revision alone,
+      // a piece, say, or not at all, is kept for its revision alone; one it
+      // holds the content of, or a content-addressed one, which never
+      // changes and whose content is small, is kept whole.
+      const whole = !doc.riding || held?.value !== undefined ||
+        doc.id.startsWith("cid:");
+      // A content-addressed document sent without its content keeps the
+      // content the copy holds.
+      const value = whole
+        ? doc.value ?? (doc.id.startsWith("cid:") ? held?.value : undefined)
+        : undefined;
       data.docs[doc.id] = {
         seq: doc.seq,
-        ...(doc.value === undefined ? {} : { value: doc.value }),
+        ...(value === undefined ? {} : { value }),
+        ...(!whole || doc.cfc === undefined ? {} : { cfc: doc.cfc }),
       };
     }
   }
@@ -224,7 +254,12 @@ export async function assembleBoard(
       return piece === undefined ? [] : [{ number, entry, piece }];
     });
     const topics = located.map(({ number, entry, piece }) =>
-      assembleTopic(reader, number, entry, piece)
+      // The board's entry for the Topic is a slot the Topic is reached
+      // through.
+      assembleTopic(reader, number, entry, piece, [
+        { doc: boardInput, path: ["names", number] },
+        ...piece.via.map((doc) => ({ doc, path: [] })),
+      ])
     );
     if (reader.missing.size === 0) {
       const unreadable = located.flatMap(({ number, piece }) =>
@@ -245,7 +280,7 @@ export async function assembleBoard(
     // Documents the copy has no value for; any that still has none after the
     // fetch reads as nothing.
     const ids = [...reader.missing];
-    const docs = await source.fetch(ids, revisionOnly(data));
+    const docs = await source.fetch(ids, revisionOnly(data, reader.missing));
     fetched += docs.length;
     applyDocs(data, docs, absent);
     for (const id of ids) {
@@ -267,6 +302,8 @@ export async function resolvePieces(
   const seen = new Set(ids.map((id) => `${id} ${id}`));
   let fetched = 0;
   let frontier = new Map(ids.map((id) => [id, id]));
+  // The documents each id was followed through.
+  const via = new Map<string, string[]>();
   while (frontier.size > 0) {
     const docs = await source.lookup([...new Set(frontier.values())]);
     fetched += docs.length;
@@ -276,10 +313,15 @@ export async function resolvePieces(
       const doc = byId.get(at);
       const input = linkOf(doc?.argument)?.id;
       const onward = linkOf(doc?.value)?.id;
+      const passed = via.get(id) ?? [];
       if (input !== undefined) {
-        resolved.set(id, { piece: at, input });
-      } else if (onward !== undefined && !seen.has(`${id} ${onward}`)) {
+        resolved.set(id, { piece: at, input, via: passed });
+      } else if (
+        doc !== undefined && onward !== undefined &&
+        !seen.has(`${id} ${onward}`)
+      ) {
         seen.add(`${id} ${onward}`);
+        via.set(id, [...passed, at]);
         next.set(id, onward);
       }
     }
@@ -292,18 +334,25 @@ export function holding(id: string, doc: HeldDoc): Holding {
   return { id, seq: doc.seq };
 }
 
-/** The holdings for documents the copy keeps only for their revisions. */
-function revisionOnly(data: MirrorData): Holding[] {
+/**
+ * The holdings for documents the copy keeps only for their revisions, but
+ * for those `wanted` for their content, which the server would otherwise
+ * leave out as held.
+ */
+function revisionOnly(
+  data: MirrorData,
+  wanted: ReadonlySet<string> = new Set(),
+): Holding[] {
   return Object.entries(data.docs).flatMap(([id, doc]) =>
-    doc.value === undefined ? [holding(id, doc)] : []
+    doc.value === undefined && !wanted.has(id) ? [holding(id, doc)] : []
   );
 }
 
 /**
  * Drops every document no Topic read, from the copy and from `absent`, and
- * every entry the board no longer names, keeping the content-addressed
- * documents, which ride along with what links them and never change, for
- * their revisions.
+ * every entry the board no longer names, keeping for their revisions the
+ * documents that ride along with what links them: the content-addressed
+ * ones, which never change, and the pieces.
  */
 function prune(
   data: MirrorData,
@@ -316,8 +365,16 @@ function prune(
   for (const entry of Object.keys(data.pieces)) {
     if (!named.has(entry)) delete data.pieces[entry];
   }
-  for (const id of Object.keys(data.docs)) {
-    if (!read.has(id) && !id.startsWith("cid:")) delete data.docs[id];
+  // A piece is kept for its revision alone, so that the server, which sends
+  // it along with a document that links to it, need not send it again.
+  const pieces = new Set(Object.values(data.pieces).map(({ piece }) => piece));
+  for (const [id, doc] of Object.entries(data.docs)) {
+    if (read.has(id)) continue;
+    // A content-addressed document no Topic read is kept for its revision
+    // alone too, which spares watching it.
+    if (id.startsWith("cid:") || pieces.has(id)) {
+      data.docs[id] = { seq: doc.seq };
+    } else delete data.docs[id];
   }
 }
 
@@ -333,12 +390,17 @@ async function loadIdentity(path: string): Promise<Identity> {
   } catch (error) {
     throw new Error(
       `The identity keyfile \`${path}\` cannot be read (${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }); name another with \`--identity\` or \`CF_IDENTITY\`.`,
       { cause: error },
     );
   }
   return await Identity.fromPkcs8(pkcs8);
+}
+
+/** The DID of the identity the keyfile at `path` holds. */
+export async function identityDid(path: string): Promise<string> {
+  return (await loadIdentity(path)).did();
 }
 
 /** A {@link DocSource} over a memory session of its own. */
@@ -383,6 +445,11 @@ export interface OpenedSession {
   close(): Promise<void>;
 }
 
+/** The DID of the space `space` names, by its DID or by its name. */
+export async function spaceDid(space: string): Promise<DID> {
+  return isDID(space) ? space : await legacySpaceDid(space);
+}
+
 /**
  * Opens a memory session on `space` at the deployment `apiUrl` names, signed
  * by the identity key at `identity`.
@@ -399,9 +466,7 @@ export async function openSession(
   // A link's decoded form follows the deployment's cell representation, which
   // a runtime would set from these same settings.
   setModernCellRepConfig(experimental.modernCellRep);
-  const space = isDID(config.space)
-    ? config.space
-    : await legacySpaceDid(config.space);
+  const space = await spaceDid(config.space);
   const session = await createSession({ identity, spaceDid: space });
   const factory = new deps.Sessions(
     () => storageAddressForHost(memoryHost),
@@ -434,12 +499,28 @@ export async function openDocSource(
 export const FRESH_CHUNK = 500;
 
 /**
- * How many held documents one watch declares, beside `addressed`
- * content-addressed ones, to stay inside the memory host's limit on the
+ * How many held documents one watch declares, beside `riding` ones that
+ * ride along with them, to stay inside the memory host's limit on the
  * holdings one request may declare.
  */
-export function declarable(addressed: number): number {
-  return Math.max(FRESH_CHUNK, ROUTED_HOLDINGS_LIMIT - addressed);
+export function declarable(riding: number): number {
+  return Math.max(FRESH_CHUNK, ROUTED_HOLDINGS_LIMIT - riding);
+}
+
+/**
+ * Of `held`, the holdings of the documents not among `watched`, which ride
+ * along with what links them: the content-addressed ones first, since a
+ * request may declare only so many, and they are what most documents link.
+ */
+export function ridingHoldings(
+  held: readonly Holding[],
+  watched: ReadonlySet<string>,
+): Holding[] {
+  const riding = held.filter((h) => !watched.has(h.id));
+  return [
+    ...riding.filter((h) => h.id.startsWith("cid:")),
+    ...riding.filter((h) => !h.id.startsWith("cid:")),
+  ];
 }
 
 /**
@@ -459,27 +540,42 @@ export function sessionDocSource(
     space,
     async fetch(ids, held) {
       const holdings = new Map(held.map((h) => [h.id, h]));
-      // Content-addressed documents ride along with whatever links them, and
-      // never change, so every watch declares the ones the copy holds.
-      const addressed = held.filter((h) => h.id.startsWith("cid:"));
+      // A document held but not watched rides along with whatever links it,
+      // a content-addressed one or a piece, so every watch declares it, as
+      // many as one request may beside the documents it watches.
+      const watched = new Set(ids);
+      const riding = ridingHoldings(held, watched);
       const chunks = [
         ...chunked(
           ids.filter((id) => holdings.has(id)),
-          declarable(addressed.length),
+          declarable(riding.length),
         ),
         ...chunked(ids.filter((id) => !holdings.has(id)), FRESH_CHUNK),
       ];
-      const docs: FetchedDoc[] = [];
+      // A document sent more than once, in one chunk and with another, is
+      // taken once: its newest revision, as watched rather than riding
+      // along where both are as new.
+      const docs = new Map<string, FetchedDoc>();
       for (const chunk of chunks) {
+        const declared = chunk.flatMap((id) => holdings.get(id) ?? []);
         const { sync } = await session.watchSetSync(
           [watchOf("topics", chunk)],
-          [...chunk.flatMap((id) => holdings.get(id) ?? []), ...addressed],
+          [
+            ...declared,
+            ...riding.slice(0, ROUTED_HOLDINGS_LIMIT - declared.length),
+          ],
         );
-        for (const doc of fetchedFrom(sync.upserts, new Set(chunk))) {
-          docs.push(doc);
+        for (const doc of fetchedFrom(sync.upserts, watched)) {
+          const taken = docs.get(doc.id);
+          if (
+            taken === undefined || doc.seq > taken.seq ||
+            (doc.seq === taken.seq && !doc.riding)
+          ) {
+            docs.set(doc.id, doc);
+          }
         }
       }
-      return docs;
+      return [...docs.values()];
     },
     lookup: (ids) => queryDocs(session, ids),
   };
@@ -519,27 +615,24 @@ export function graphOf(ids: readonly string[]): GraphQuery {
 }
 
 /**
- * The documents among `upserts` that `wanted` names, and the
- * content-addressed documents that ride along with them, kept for their
- * revisions. A document with no content, deleted or never written, comes back
- * as deleted: the copy holds no record of an absence.
+ * The documents among `upserts`, each one `wanted` does not name marked as
+ * riding along. A document with no content, deleted or never written,
+ * comes back as deleted: the copy holds no record of an absence.
  */
 export function fetchedFrom(
   upserts: readonly SessionSyncUpsert[],
   wanted: ReadonlySet<string>,
 ): FetchedDoc[] {
-  return upserts.flatMap((upsert): FetchedDoc[] => {
-    const root = wanted.has(upsert.id);
-    if (!root && !upsert.id.startsWith("cid:")) return [];
-    if (upsert.deleted || upsert.doc === undefined) {
-      return root ? [{ id: upsert.id, seq: upsert.seq, deleted: true }] : [];
-    }
-    return [{
-      id: upsert.id,
-      seq: upsert.seq,
-      ...(root ? plainFields(upsert.doc) : {}),
-    }];
-  });
+  // What applying it keeps of a document riding along turns on what the
+  // copy holds of it: see `applyDocs`.
+  return upserts.map((upsert): FetchedDoc => ({
+    id: upsert.id,
+    seq: upsert.seq,
+    ...(upsert.deleted || upsert.doc === undefined
+      ? { deleted: true }
+      : plainFields(upsert.doc)),
+    ...(wanted.has(upsert.id) ? {} : { riding: true }),
+  }));
 }
 
 /** `items` in runs of at most `size`. */
@@ -554,12 +647,15 @@ export function chunked<T>(items: readonly T[], size: number): T[][] {
 /** The fields of `document` the copy reads, reduced to plain values. */
 export function plainFields(
   document: EntityDocument,
-): Pick<FetchedDoc, "value" | "argument"> {
+): Pick<FetchedDoc, "value" | "argument" | "cfc"> {
   const value = toPlain(document.value);
   const argument = toPlain(document.argument);
+  const cfc = document.cfc === undefined ? null : toPlain(document.cfc);
   return {
     ...(value === undefined ? {} : { value }),
     ...(argument === undefined ? {} : { argument }),
+    // An envelope with no plain form is left out, and so reads as not known.
+    ...(cfc === undefined ? {} : { cfc }),
   };
 }
 
@@ -567,11 +663,14 @@ export function plainFields(
  * Where a file about `board` at `apiUrl` is kept: the copy of the board,
  * named `.json`, under the user's cache directory, which is safe to clear;
  * the invocation session its writes are chosen within, named
- * `.invocation-session`, under the user's state directory, which outlives a
- * cleared cache so that a write can still be settled after one.
+ * `.invocation-session`, and what `browse` remembers for `viewer`, named
+ * after the viewer and `.browse.json`, under the user's state directory,
+ * which outlives a cleared cache so that a write can still be settled, and
+ * a draft finished, after one. What `browse` remembers is kept apart for
+ * each identity, so that a write one asked for is never made as another.
  */
 export function boardFile(
-  kind: "copy" | "session",
+  kind: "copy" | "session" | { browse: string },
   apiUrl: string,
   space: string,
   board: string,
@@ -591,7 +690,13 @@ export function boardFile(
     "topics",
     name(new URL(apiUrl).host),
     name(space),
-    `${name(board)}${kind === "copy" ? ".json" : ".invocation-session"}`,
+    `${name(board)}${
+      kind === "copy"
+        ? ".json"
+        : kind === "session"
+        ? ".invocation-session"
+        : `.${name(kind.browse)}.browse.json`
+    }`,
   );
 }
 
@@ -610,7 +715,21 @@ export async function loadMirror(path: string): Promise<MirrorData> {
     }
     throw error;
   }
-  return isMirrorData(parsed) ? parsed : { pieces: {}, docs: {} };
+  if (!isMirrorData(parsed)) return { pieces: {}, docs: {} };
+  // A document read, or an entry followed, before the copy kept label
+  // envelopes is read again, rather than taken for one storing none.
+  for (const [entry, piece] of Object.entries(parsed.pieces)) {
+    const { via } = piece;
+    if (!Array.isArray(via) || !via.every((doc) => typeof doc === "string")) {
+      delete parsed.pieces[entry];
+    }
+  }
+  for (const [id, doc] of Object.entries(parsed.docs)) {
+    if (!id.startsWith("cid:") && doc.value !== undefined && !("cfc" in doc)) {
+      delete parsed.docs[id];
+    }
+  }
+  return parsed;
 }
 
 function isMirrorData(value: unknown): value is MirrorData {
@@ -638,7 +757,32 @@ export async function saveMirror(
   data: MirrorData,
 ): Promise<void> {
   await Deno.mkdir(dirname(path), { recursive: true });
+  await replaceFile(path, JSON.stringify(data));
+}
+
+/**
+ * Replaces the file at `path` with `text` whole, readable only by its
+ * owner: written beside it and on the disk before it takes the file's
+ * place, so that a reader, or the next run after a crash, finds either the
+ * old file or the new one.
+ */
+export async function replaceFile(path: string, text: string): Promise<void> {
   const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-  await Deno.writeTextFile(temporary, JSON.stringify(data));
-  await Deno.rename(temporary, path);
+  try {
+    await Deno.writeTextFile(temporary, text, { mode: 0o600 });
+    {
+      using file = await Deno.open(temporary, { write: true });
+      await file.sync();
+    }
+    await Deno.rename(temporary, path);
+  } catch (error) {
+    await Deno.remove(temporary).catch(() => {});
+    throw error;
+  }
+  // The rename is on the disk once the directory holding it is, where a
+  // directory can be synced; Windows journals a rename itself.
+  if (Deno.build.os !== "windows") {
+    using directory = await Deno.open(dirname(path));
+    await directory.sync();
+  }
 }

@@ -5,6 +5,7 @@ import { stub } from "@std/testing/mock";
 
 import { Database } from "@db/sqlite";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { HarnessCfcModelContext } from "../src/contracts/cfc-model-context.ts";
 import type { HarnessResearchRunSummary } from "../src/contracts/research.ts";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
@@ -405,7 +406,7 @@ describe("research session context", () => {
                 lockResults.push("acquired");
               } catch (error) {
                 lockResults.push(
-                  error instanceof Error ? error.message : String(error),
+                  describeFailure(error),
                 );
               }
             }

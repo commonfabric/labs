@@ -81,6 +81,7 @@ import {
   getPatternSource,
   resolveEntryIdentity,
 } from "../src/index.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { newSharedServer, TestStorageManager } from "./memory-v2-test-utils.ts";
 
 const spaceSigner = await Identity.fromPassphrase("space root ensure space");
@@ -135,6 +136,7 @@ class CidDroppingSessionFactory implements SessionFactory {
   ) {
     const client = await MemoryV2Client.connect({
       transport: this.#transport(),
+      instanceNames: namesInstancesByDefault(),
     });
     const session = await client.mount(
       space,
@@ -369,6 +371,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
   const seedSelfOwnedKind = async (spaceKind: string): Promise<void> => {
     const client = await MemoryV2Client.connect({
       transport: MemoryV2Client.loopback(server),
+      instanceNames: namesInstancesByDefault(),
     });
     try {
       const session = await client.mount(
@@ -742,9 +745,11 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     expect(await created.activate()).toBe(true);
     await resolveRootAfterEnsure(clientRuntime(readerSigner));
 
+    // The ensure brings the root into being outside any action, so its start
+    // attributes the root's own initializations: the mark names the root.
     const starts = mintedTxs.filter((tx) =>
       waveRunContextOf(tx)?.actionId?.startsWith("piece-start/") === true &&
-      tx.getCfcState().attributedInitialization
+      tx.getCfcState().attributedPieces.length > 0
     );
     expect(starts.length).toBeGreaterThan(0);
     for (const tx of starts) {
@@ -849,7 +854,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     const resumedWave = Promise.withResolvers<void>();
     let demandReads = 0;
     const facade = new Proxy(server, {
-      get(target, property, receiver) {
+      get(target, property) {
         if (property === "demandForSpace") {
           return (...args: Parameters<typeof server.demandForSpace>) => {
             demandReads++;
@@ -862,7 +867,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
             resumedWave.resolve();
           };
         }
-        const value = Reflect.get(target, property, receiver);
+        const value = Reflect.get(target, property);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });

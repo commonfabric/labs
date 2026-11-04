@@ -2,6 +2,7 @@
 import { bodyLimit } from "@hono/hono/body-limit";
 import { cors } from "@hono/hono/cors";
 import { z } from "@hono/zod-openapi";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   INVITE_ACCESS,
   normalizeInviteHost,
@@ -132,7 +133,7 @@ export function createSpaceInviteRouter(
             // Production always passes the configured `API_URL` as the host; the
             // dialed origin is only for fixtures that build the router without one.
             authority: configuredHost ?? new URL(c.req.url).origin,
-            error: error instanceof Error ? error.message : String(error),
+            error: describeFailure(error),
           },
           "Rejected unauthenticated first-party HTTP request",
         );
@@ -205,6 +206,8 @@ export function createSpaceInviteRouter(
             { code: error.code },
             error.code === "not-owner"
               ? 403
+              : error.code === "space-deleted"
+              ? 410
               : error.code === "invalid-request" ||
                   error.code === "invalid-host"
               ? 400

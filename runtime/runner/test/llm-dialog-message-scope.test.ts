@@ -20,7 +20,7 @@ import type { BuiltInLLMMessage } from "@commonfabric/api";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { resolveLink } from "../src/link-resolution.ts";
-import { type JSONSchema } from "../src/builder/types.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";

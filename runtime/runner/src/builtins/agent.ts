@@ -38,8 +38,9 @@ import {
   waveRunContextOf,
   waveSettlementOf,
 } from "../executor/wave.ts";
+import { areLinksSame } from "../link-equality.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
-import { type RawBuiltinResult } from "../module.ts";
+import type { RawBuiltinResult } from "../module.ts";
 import { getCellOrThrow } from "../query-result-proxy.ts";
 import {
   type Runtime,
@@ -70,6 +71,7 @@ export type AgentRunRecord = Schema<typeof AgentRunRecordSchema>;
 
 /** The fields of the builtin's result cell, each bound to one transaction. */
 type ResultFields = {
+  progress: Cell<unknown>;
   pending: Cell<boolean>;
   result: Cell<unknown>;
   error: Cell<string | undefined>;
@@ -104,12 +106,16 @@ type InputLinkSnapshot = {
   scope?: NormalizedFullLink["scope"];
 };
 
+/** One entry of the home-space agent queue, as the runtime reads it. */
+type AgentQueueEntry = { run: Cell<unknown>; host: string; address?: string };
+
 /** The home-space agent queue as the runtime reads it. */
 export type AgentQueueIndex = {
-  entries?: { run: Cell<unknown>; host: string; address?: string }[];
+  entries?: AgentQueueEntry[];
   agentRunner?: {
     host: string;
     tools: string[];
+    progress?: boolean;
     registrationId?: string;
     registeredAt: string;
     lastClaimAt?: string;
@@ -160,16 +166,54 @@ export function agentRunRecordCell(
 }
 
 /**
+ * Helper for `agent()`, which names the entry listing the `AgentRun` record
+ * whose id is `recordId`. The record's id determines the entry's address, so
+ * concurrent index writes cannot reuse an element from the same list position.
+ * The stored array can carry a different item schema. The writer's canonical
+ * contract declares that each run resolves per user.
+ */
+function queueEntryCell(
+  queue: Cell<AgentQueueIndex>,
+  recordId: string,
+): Cell<AgentQueueEntry> {
+  return queue.key("entries").elementById(recordId).asSchema(
+    AgentQueueIndexSchema.properties.entries.items,
+  ) as Cell<AgentQueueEntry>;
+}
+
+/**
  * Helper for `agent()`, which reports whether `queue` lists the `AgentRun`
- * record whose id is `recordId`.
+ * record whose id is `recordId`. The record's id gives its entry's address, so
+ * the list's own slots answer this and no entry is read. Reading an entry's
+ * `run` would put that link's label on the transaction, and the label of a run
+ * in another space fits no document this transaction writes in the home space.
  */
 function listsRecord(
   queue: Cell<AgentQueueIndex>,
   recordId: string,
 ): boolean {
-  return (queue.key("entries").get() ?? []).some((entry) =>
-    entry.run.getAsNormalizedFullLink().id === recordId
-  );
+  const entries = queue.key("entries");
+  const entry = queueEntryCell(queue, recordId);
+  const slots = entries.getRawUntyped({ lastNode: "value" });
+  return Array.isArray(slots) &&
+    slots.some((slot) => areLinksSame(slot, entry, entries));
+}
+
+/**
+ * Takes the `AgentRun` record whose id is `recordId` off `queue`, and reports
+ * whether `queue` listed it. The record stays as it is, and the node that
+ * requested it keeps following it. A record still `queued` is listed again by
+ * its node, so this is for a record that has ended. It reads no entry, for the
+ * reason `listsRecord` gives. It lowers no label: the entry's document keeps its
+ * own, and the queue stops naming that document.
+ */
+export function removeRecordFromQueue(
+  queue: Cell<AgentQueueIndex>,
+  recordId: string,
+): boolean {
+  if (!listsRecord(queue, recordId)) return false;
+  queue.key("entries").removeByValue(queueEntryCell(queue, recordId));
+  return true;
 }
 
 /**
@@ -210,6 +254,7 @@ function resultFields(
   tx: IExtendedStorageTransaction,
 ): ResultFields {
   return {
+    progress: resultCell.key("progress").withTx(tx),
     pending: resultCell.key("pending").withTx(tx),
     result: resultCell.key("result").withTx(tx),
     error: resultCell.key("error").withTx(tx),
@@ -230,6 +275,7 @@ function settleWithoutRun(
 ): void {
   fields.pending.set(false);
   fields.result.set(undefined);
+  fields.progress.set(undefined);
   fields.run.set(undefined);
   fields.host.set(undefined);
   fields.error.set(error);
@@ -247,7 +293,10 @@ function deriveFromRecord(
   fields: ResultFields,
   resultCell: Cell<any>,
   record: Cell<AgentRunRecord>,
-  value: Pick<AgentRunRecord, "state" | "result" | "outcome" | "errorCode">,
+  value: Pick<
+    AgentRunRecord,
+    "state" | "result" | "progress" | "outcome" | "errorCode"
+  >,
   requestHash: string,
   host: string,
 ): void {
@@ -256,6 +305,14 @@ function deriveFromRecord(
   fields.requestHash.set(requestHash);
   fields.run.setRawUntyped(record.getAsLink({ base: resultCell }), true);
   fields.host.set(host);
+  if (value.progress !== undefined) {
+    fields.progress.setRawUntyped(
+      record.key("progress").getAsLink({ base: resultCell }),
+      true,
+    );
+  } else {
+    fields.progress.set(undefined);
+  }
   if (value.state === "completed" && value.result !== undefined) {
     fields.result.setRawUntyped(
       record.key("result").getAsLink({ base: resultCell }),
@@ -277,7 +334,8 @@ function deriveFromRecord(
  * `task` is context for the run; `inputs` are the cells it may read, passed
  * as links; `resultSchema` is what its structured result is validated
  * against; `maxConfidentiality` bounds what it may observe; `tools` selects
- * from the names the deployment publishes. The result cell holds `pending`,
+ * from the names the deployment publishes. Opt-in `progress` exposes the
+ * latest labeled milestone. The result cell holds `pending`,
  * `result` (a link to the result document), `error`, `requestHash`, and
  * `run` (a link to the `AgentRun` record).
  *
@@ -303,7 +361,7 @@ export function agent(
   const action: Action = (tx: IExtendedStorageTransaction) => {
     tx.resetNarrowestReadScope();
     const params = inputs.withTx(tx).get() ?? {};
-    const { task, resultSchema, maxConfidentiality, tools } = params;
+    const { task, resultSchema, maxConfidentiality, tools, progress } = params;
     const rawInputs = inputs.key("inputs").withTx(tx).get() as
       | Record<string, unknown>
       | undefined;
@@ -352,6 +410,7 @@ export function agent(
       // No request: nothing is in flight to abandon, since a staged request
       // is committed with its record and the record outlives this run.
       state.previousCallHash = undefined;
+      fields.progress.set(undefined);
       fields.pending.set(false);
       fields.result.set(undefined);
       fields.error.set(undefined);
@@ -386,6 +445,7 @@ export function agent(
       resultSchema: resultSchema as JSONSchema,
       ...(maxConfidentiality !== undefined ? { maxConfidentiality } : {}),
       ...(tools !== undefined ? { tools } : {}),
+      ...(progress === true ? { progress: true } : {}),
     });
     const hash = hashOf(requestSnapshot).toString();
     const effectId = `${AGENT_SINK}:${hash}`;
@@ -480,19 +540,19 @@ export function agent(
           const queue = agentQueueIndexCell(runtime, homeSpace, tx);
           // A home space with no queue has nowhere to list the record, and
           // writing the path anyway would leave a `defaultPattern` value where
-          // the home pattern's own creation expects none.
-          if (queue.withTx(tx).get() === undefined) {
+          // the home pattern's own creation expects none. The read stops at
+          // the queue, which is all this asks about: see `listsRecord`.
+          if (
+            queue.withTx(tx).getRawUntyped({
+              lastNode: "value",
+              nonRecursive: true,
+            }) === undefined
+          ) {
             throw new Error("the home space holds no agent queue");
           }
           if (listsRecord(queue.withTx(tx), recordId)) return tx;
           const entries = queue.key("entries").withTx(tx);
-          // The record's id determines the entry's address, so concurrent
-          // index writes cannot reuse an element from the same list position.
-          // The stored array can carry a different item schema. The writer's
-          // canonical contract declares that each run resolves per user.
-          const entry = entries.elementById(recordId).asSchema(
-            AgentQueueIndexSchema.properties.entries.items,
-          ) as Cell<{ run: Cell<unknown>; host: string; address?: string }>;
+          const entry = queueEntryCell(queue.withTx(tx), recordId);
           entry.set({
             run: record,
             host,
@@ -642,6 +702,7 @@ export function agent(
     takeHandoff();
     state.currentHash = hash;
 
+    fields.progress.set(undefined);
     fields.pending.set(true);
     fields.result.set(undefined);
     fields.error.set(undefined);
@@ -669,6 +730,17 @@ export function agent(
           }),
         );
         return;
+      }
+      if (progress === true) {
+        const runner = queue.key("agentRunner").get();
+        if (runner !== undefined && runner.progress !== true) {
+          await settleAbandoned(
+            new Error(
+              `${INVALID_INPUT}: the registered agent runner does not offer progress`,
+            ),
+          );
+          return;
+        }
       }
       if (tools !== undefined && tools.length > 0) {
         const runner = queue.key("agentRunner").get();
@@ -707,6 +779,7 @@ export function agent(
             ? { maxConfidentiality: live.maxConfidentiality }
             : {}),
           ...(live.tools !== undefined ? { tools: live.tools } : {}),
+          ...(live.progress === true ? { progress: true } : {}),
         });
         const replaced = hashOf(liveSnapshot).toString() !== hash;
         const record = agentRunRecordCell(
@@ -741,6 +814,7 @@ export function agent(
             ? { maxConfidentiality: live.maxConfidentiality }
             : {}),
           ...(live.tools !== undefined ? { tools: live.tools } : {}),
+          ...(live.progress === true ? { progressRequested: true } : {}),
           submittedAt: now,
           state: "queued",
           stateSince: now,

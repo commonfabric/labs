@@ -809,7 +809,7 @@ export class XRootView extends BaseView implements ShellApp {
           <aside id="client-update-required" class="attention-card" role="alert">
             <h2>Update required</h2>
             <p>${this._clientUpdateRequired.message}</p>
-            <p>Reload this tab to load the current version. Retrying access cannot update this runtime.</p>
+            <p>Reload this tab to load the version this site serves now. Retrying access cannot change this runtime. If the same message comes back after reloading, this site cannot open that space.</p>
             ${this._clientUpdateRequired.unconfirmedWrites === true
               ? html`
                 <p>Some changes were not confirmed as saved. Copy any recent edits you need to keep before reloading; this tab cannot confirm whether they reached the server.</p>

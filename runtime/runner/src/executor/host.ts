@@ -12,8 +12,8 @@
 //   provisioning path when its wave staged setup into the space, which
 //   activates a sessionless target where an ordinary authored write
 //   deliberately does not (T11.Q7's write-alone parking);
-// - plane (c): lease acquire/renew by direct table write (the
-//   SpaceServer's cycle);
+// - plane (c): lease acquire and release on the memory server's lease map
+//   (the SpaceServer's cycle);
 // - plane (d): admitted-commit records route to the space's SpaceServer
 //   feed (self-echo skipped there by class + holder).
 //
@@ -27,6 +27,7 @@ import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
 import { acquireServerExecutionEnabler } from "@commonfabric/memory/v2";
 import {
   type Engine,
+  findSpaceDeletion,
   selectPendingStreamEventDocs,
   serverSeq,
 } from "@commonfabric/memory/v2/engine";
@@ -38,12 +39,14 @@ import {
   type ParkedRuntimeHandle,
   ParkedServingRuntime,
 } from "./parked-runtime.ts";
+import { RoutedPlane, type RouteOptions } from "./routed-plane.ts";
 import { runInServingContext } from "./serving-context.ts";
 import {
   awaitDisposeTimeboxed,
   LIFECYCLE_VERB_SPACE_PARKED,
   type LifecycleVerb,
   type RuntimeFactoryContext,
+  SPACE_DELETED_PARK,
   SpaceServer,
   type SpaceServerOptions,
   type SpaceServerPolicy,
@@ -63,14 +66,14 @@ export type {
 
 /**
  * Thrown by {@link ExecutorHost.runLifecycleVerb} when this process cannot
- * serve the space the verb names: the host is closed, or another process
- * holds the space's execution lease.
+ * serve the space the verb names: the host is closed, or another holder on
+ * this memory server has the space's execution lease.
  */
 export class SpaceNotServedError extends Error {
   constructor(space: MemorySpace) {
     super(
       `space ${space} is not served by this process (host closed, or ` +
-        "its execution lease is held elsewhere)",
+        "another holder has its execution lease)",
     );
     this.name = "SpaceNotServedError";
   }
@@ -151,6 +154,15 @@ export type ExecutorHostOptions = {
    * `SpaceServerOptions.createWaveCommitSink`. */
   createWaveCommitSink?: SpaceServerOptions["createWaveCommitSink"];
 
+  /**
+   * The deployment's route to each space's owner
+   * (`serving-loop.md` §2). Present, the host sends every
+   * crossing into a space other than the one a tenure serves through that
+   * space's owner, over a routed plane it keeps for its life; absent, every
+   * crossing goes through this process's server.
+   */
+  route?: RouteOptions;
+
   /** DIAGNOSTIC (tests): forwarded to every SpaceServer this host
    * builds, with the space it serves — see `SpaceServerOptions`. */
   onWaveCycle?: (space: MemorySpace) => void;
@@ -221,11 +233,13 @@ export class ExecutorHost {
    * contiguity). */
   readonly #sinkLocalSeq = { value: 0 };
 
-  /** Consecutive failure parks per space: every park except an idle one
-   * and one on a rival's lease, and every activation that fails without
-   * parking. This backoff streak is cleared by an idle park or a
-   * successfully committed wave — real served progress, not merely a
-   * runtime that got built (every crash-loop tenure builds one). */
+  /** Consecutive failure parks per space: every park except an idle one,
+   * one on a rival's lease, and one for the space's deletion, and every
+   * activation that fails without parking. This backoff streak is cleared
+   * by an idle park or a successfully committed wave — real served
+   * progress, not merely a runtime that got built (every crash-loop tenure
+   * builds one) — and by the space's deletion, which leaves nothing to
+   * back off from (serving-loop.md, "A deleted space"). */
   readonly #failureParkStreaks = new Map<string, number>();
 
   /** Wakers for in-flight backoff sleeps — close() flushes them so a
@@ -246,11 +260,18 @@ export class ExecutorHost {
   readonly #parkedDisposals = new Set<Promise<void>>();
 
   readonly #stats: ServingLoopStats = emptyServingLoopStats();
+
+  /** The routed plane, while the host has a route. */
+  readonly #route: RoutedPlane | undefined;
+
   #releaseServerExecution: () => void = () => {};
   #closed = false;
 
   constructor(options: ExecutorHostOptions) {
     this.#options = options;
+    this.#route = options.route === undefined
+      ? undefined
+      : new RoutedPlane(options.route);
     // The host is a PROCESS-level flag ENABLER: while it lives, the
     // ambient flag stays on (the memory server's per-class admission
     // reads it), whatever individual runtimes construct or dispose. The
@@ -293,10 +314,22 @@ export class ExecutorHost {
     return { failureParkStreaks: this.#failureParkStreaks };
   }
 
+  /** The `events` block of {@link stats}, alone and in its own copy. */
+  eventStats(): ServingLoopStats["events"] {
+    refreshDeliveryCheckpointStats(this.#stats);
+    return {
+      ...this.#stats.events,
+      needsAttention: {
+        ...this.#stats.events.needsAttention,
+        byPhase: { ...this.#stats.events.needsAttention.byPhase },
+      },
+    };
+  }
+
   /** The §7 counters, live: static counts merged with per-space state
    * (activeSpaces and watermarkLag read the current SpaceServers). */
   stats(): ServingLoopStats {
-    refreshDeliveryCheckpointStats(this.#stats);
+    const events = this.eventStats();
     let watermarkLag = 0;
     let activeSpaces = 0;
     for (const server of this.#spaces.values()) {
@@ -310,13 +343,7 @@ export class ExecutorHost {
       // the top-level spread shares its reference (the same reason as
       // NIT-1's settle-series copy below).
       derivedCommitsBySpace: { ...this.#stats.derivedCommitsBySpace },
-      events: {
-        ...this.#stats.events,
-        needsAttention: {
-          ...this.#stats.events.needsAttention,
-          byPhase: { ...this.#stats.events.needsAttention.byPhase },
-        },
-      },
+      events,
       demand: { ...this.#stats.demand },
       settle: {
         // NIT-1: deep-copy the entries — a series row stays live after it
@@ -333,6 +360,7 @@ export class ExecutorHost {
         })),
       },
       memo: { ...this.#stats.memo },
+      routed: { ...this.#stats.routed },
       outbox: { ...this.#stats.outbox },
       lease: { ...this.#stats.lease },
       lifecycleVerbs: { ...this.#stats.lifecycleVerbs },
@@ -359,7 +387,7 @@ export class ExecutorHost {
    * is queued once more on the successor tenure.
    *
    * Throws {@link SpaceNotServedError} when this process cannot serve the
-   * space — the host is closed, or another process holds the space's lease.
+   * space — the host is closed, or another holder has the space's lease.
    */
   runLifecycleVerb<T>(
     space: MemorySpace,
@@ -416,7 +444,10 @@ export class ExecutorHost {
     // argument link into the viewer's home space, whose pre-genesis
     // session that space's genesis ACL de-authorized. Latch-only and
     // no-op unless a runtime actually holds a terminated session for the
-    // space, so the fan-out costs one map walk per ACL-doc admission.
+    // space, so the fan-out costs one map walk per ACL-doc admission. Only
+    // this server's admissions reach here; a list that changes on another
+    // process's owner reaches a serving runtime's replica of that space
+    // over its routed session, which watches the list itself.
     if (
       this.#spaces.size > 0 &&
       notice.writes.some((write) => write.id === `of:${notice.space}`)
@@ -553,6 +584,9 @@ export class ExecutorHost {
    * before its activation unwinds, so the gate waits for any activation
    * in flight rather than joining it. */
   #reactivateAfterPark(space: MemorySpace, parking?: SpaceServer): void {
+    // A tenure that ended for its space's deletion leaves nothing to
+    // re-evaluate (serving-loop.md, "A deleted space").
+    if (parking?.endedForDeletion === true) return;
     void (async () => {
       await parking?.whenParked;
       await this.#activating.get(space);
@@ -618,6 +652,13 @@ export class ExecutorHost {
     let parked = false;
     try {
       const engine = await this.#options.server.engineForSpace(space);
+      // The access list is read before the lease is acquired, on every
+      // activation, so a deleted space gets no tenure whatever demand set
+      // this one off (serving-loop.md, "A deleted space").
+      if (findSpaceDeletion(engine, space) !== undefined) {
+        this.#refuseDeletedSpace(space);
+        return;
+      }
       // The sink's session key IS the DR1 holder, whose process-instance
       // component makes a new process a NEW engine session — so the
       // process-global counter starting at 0 never collides with a prior
@@ -638,7 +679,12 @@ export class ExecutorHost {
           const parked = this.#takeParkedRuntime(space, engine);
           return parked !== undefined
             ? Promise.resolve(parked)
-            : this.#options.createRuntime(space, context);
+            : this.#options.createRuntime(space, {
+              ...context,
+              ...(this.#options.route === undefined
+                ? {}
+                : { route: this.#options.route }),
+            });
         },
         retainParkedRuntime: (handle) => this.#retainParkedRuntime(handle),
         localSeqRef,
@@ -655,6 +701,7 @@ export class ExecutorHost {
         ...(this.#options.createWaveCommitSink !== undefined
           ? { createWaveCommitSink: this.#options.createWaveCommitSink }
           : {}),
+        ...(this.#route === undefined ? {} : { route: this.#route }),
         onParked: (reason) => {
           parked = true;
           try {
@@ -667,6 +714,11 @@ export class ExecutorHost {
               error,
             ]);
           }
+          // A park for the space's deletion ends its tenures for good: the
+          // space is not served again, so nothing is re-evaluated, and the
+          // park clears the backoff streak, as there is nothing left to
+          // back off from (serving-loop.md, "A deleted space").
+          //
           // A park on a rival's lease leaves the space to the rival.
           // Any other park may leave a space that still meets the ACTIVE
           // criteria unserved, so the host re-evaluates them once the
@@ -674,8 +726,13 @@ export class ExecutorHost {
           // backoff streak and every other park extends it, so a space
           // that keeps failing re-activates at a widening interval; a
           // committed wave (below) clears it on the serving path.
-          const rivalHoldsLease = reason === "lease-unavailable" ||
-            reason === "lease-lost";
+          if (reason === SPACE_DELETED_PARK) {
+            this.#failureParkStreaks.delete(space);
+            this.#pendingNotices.delete(space);
+            this.#endTenure(space, server, true);
+            return;
+          }
+          const rivalHoldsLease = reason === "lease-unavailable";
           if (reason === "idle") {
             this.#failureParkStreaks.delete(space);
           } else if (!rivalHoldsLease) {
@@ -740,7 +797,7 @@ export class ExecutorHost {
         // close() ran while this activation was in flight (it awaits us,
         // but park() on a not-yet-active server is a no-op — so the
         // just-activated server must park itself, or it serves and
-        // renews a lease after the host closed).
+        // holds a lease after the host closed).
         await server.park("host-closed");
       }
     } catch (error) {
@@ -760,6 +817,19 @@ export class ExecutorHost {
       logger.error("activate-failed", `activation of ${space} failed`, error);
       this.#reportActivationSettled(space, "failed");
     }
+  }
+
+  /**
+   * Helper for `#activateInner()`, which declines to activate `space`,
+   * found deleted: whatever was buffered for its next tenure is dropped,
+   * since none comes, as are its failure streak and the runtime kept from
+   * its last idle park, and the attempt is reported refused.
+   */
+  #refuseDeletedSpace(space: MemorySpace): void {
+    this.#pendingNotices.delete(space);
+    this.#failureParkStreaks.delete(space);
+    this.#discardParkedRuntime(space);
+    this.#reportActivationSettled(space, "refused");
   }
 
   /**
@@ -942,7 +1012,7 @@ export class ExecutorHost {
     for (const wake of [...this.#backoffWakers]) wake();
     // Await in-flight activations FIRST: an activation past its #closed
     // check would otherwise register and start serving after close
-    // returned (a leaked runtime renewing a lease nobody can take), and
+    // returned (a leaked runtime holding a lease nobody can take), and
     // park() on a not-yet-active server is a no-op — so the park sweep
     // below cannot stop it. #activateInner's own post-activate check
     // parks the freshly-activated server once #closed is set; awaiting
@@ -953,7 +1023,7 @@ export class ExecutorHost {
         this.#activating.values(),
       );
     }
-    // A server already parking on its own — a lost lease, a failed loop
+    // A server already parking on its own — an idle park, a failed loop
     // — has park() return at once, so its completion is awaited through
     // whenParked: close() must not return while a tenure's runtime is
     // still being disposed against a memory server the caller closes
@@ -975,6 +1045,9 @@ export class ExecutorHost {
       this.#discardParkedRuntime(space);
     }
     await Promise.allSettled([...this.#parkedDisposals]);
+    // Every tenure has released its scope by now; what closes here is a
+    // session a park left behind.
+    await this.#route?.close();
     // The host's enabler releases; the ambient flag resets only when no
     // other enabler (an explicitly-enabled Runtime) is still live.
     this.#releaseServerExecution();

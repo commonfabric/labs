@@ -1,5 +1,7 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { describe, it } from "@std/testing/bdd";
 import { AliasResolver } from "@commonfabric/test-support/records";
 
 import {
@@ -452,4 +454,42 @@ Deno.test("series keeps a pass rate for a day with no passing run", async () => 
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
+});
+
+describe("test-records-history", () => {
+  describe("TestRecordsHistoryStore", () => {
+    describe("instance members", () => {
+      describe("refresh()", () => {
+        it("removes the temporary files that interrupted saves left beside the file", async () => {
+          const directory = await Deno.makeTempDir({
+            prefix: "test-records-history-",
+          });
+          try {
+            const leftovers = [
+              `history.json.${crypto.randomUUID()}.tmp`,
+              `history.json.tmp-${crypto.randomUUID()}`,
+            ];
+            for (const leftover of leftovers) {
+              await Deno.writeTextFile(join(directory, leftover), "{");
+            }
+            const store = new TestRecordsHistoryStore(
+              join(directory, "history.json"),
+            );
+
+            await store.refresh(Date.parse("2026-08-17T12:00:00Z"), {
+              fetchImpl: storeFetch([PASS]),
+              windowDays: 1,
+            });
+
+            const names = [...Deno.readDirSync(directory)].map((entry) =>
+              entry.name
+            );
+            expect(names.sort()).toEqual(["history.json", "history.json.lock"]);
+          } finally {
+            await Deno.remove(directory, { recursive: true });
+          }
+        });
+      });
+    });
+  });
 });

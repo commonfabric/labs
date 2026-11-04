@@ -36,6 +36,8 @@ interface MaterializedNode {
 
 const signer = await Identity.fromPassphrase("stored-argument-validation");
 const space = signer.did();
+const otherSpace = (await Identity.fromPassphrase("stored-argument-elsewhere"))
+  .did();
 
 describe("stored-argument-validation", () => {
   let storage: ReturnType<typeof StorageManager.emulate>;
@@ -396,6 +398,52 @@ describe("stored-argument-validation", () => {
       })).toBeUndefined();
       expect(snapshot).toEqual({ pending: undefined });
       expect(argument.getRaw()).toMatchObject({ extra: 1 });
+    } finally {
+      tx.abort();
+    }
+  });
+
+  it("judges a link that reaches another space without reading what it reaches", async () => {
+    // What another space holds is another piece's data, under labels of its
+    // own, so the judgement leaves it to the reads that follow the link. The
+    // same value in the argument's own space is judged in full.
+
+    const elsewhere = runtime.getCell(otherSpace, "elsewhere", undefined);
+    const write = runtime.edit();
+    elsewhere.withTx(write).set({ count: "many" });
+    expect((await write.commit().settled).error).toBeUndefined();
+    const tx = runtime.edit();
+    try {
+      const nearby = runtime.getCell(space, "nearby", undefined, tx);
+      nearby.set({ count: "many" });
+      const argument = runtime.getCell(space, "argument", undefined, tx);
+      const sourceSchema: JSONSchema = {
+        type: "object",
+        properties: { count: { type: "number" } },
+      };
+      const schema: JSONSchema = {
+        type: "object",
+        properties: { source: sourceSchema },
+      };
+
+      argument.set({ source: elsewhere });
+      using reads = spy(tx, "read");
+      expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
+        .toBeUndefined();
+      expect(
+        reads.calls.some((call) =>
+          call.args[0].id === elsewhere.getAsNormalizedFullLink().id
+        ),
+      ).toBe(false);
+
+      // A read through the link, under the slot's schema, is where its value
+      // is checked: the wrong-typed field reads as absent.
+      expect(argument.key("source").asSchema(sourceSchema).get())
+        .toStrictEqual({});
+
+      argument.set({ source: nearby });
+      expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
+        .toContain("count: value does not match type number");
     } finally {
       tx.abort();
     }

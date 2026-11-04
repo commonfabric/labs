@@ -34,28 +34,23 @@ describe("strategy", () => {
     }
   });
 
-  it("tells a quick run to answer directly, or by the shortest path that does what was asked", () => {
+  it("stops a quick run on verified evidence or a final refusal", () => {
     const quick = prompt("quick", ["personal"]);
-
     expect(quick).toContain(
-      "Their words set the task; a quick run adds nothing beyond it.",
-    );
-    // Quick narrows the gathering, not the deliverable the ask requires.
-    expect(quick).toContain(
-      "A quick run narrows how much you gather, never what you deliver: the shape of the result, such as a loom or page that they or your additional instructions call for, is part of the ask, so still make it.",
-    );
-    expect(quick).toContain("Answer directly when you can, without research");
-    expect(quick).toContain("take the shortest path that does what they asked");
-    expect(quick).toContain("only the further calls the ask itself needs");
-    expect(quick).toContain(
-      "Do not add calls, delegation or research to be thorough.",
+      "Do the requested work, including the result its destination requires",
     );
     expect(quick).toContain(
-      "Correct a call that failed or used the wrong arguments",
+      "Stop when the evidence answers the task and any requested changes are verified",
     );
-    // No ceiling on calls that would leave a multi-step ask undoable.
-    expect(quick).not.toContain("without chaining further calls");
-    expect(quick).not.toContain("correct once");
+    expect(quick).toContain(
+      "permission refusals are final; repair bad arguments",
+    );
+    expect(quick).toContain(
+      "Report what remains unknown without claiming the task is complete",
+    );
+    expect(quick).not.toContain(
+      "Answer directly when you can, without research",
+    );
     expect(quick).not.toContain("Search every source");
     expect(quick).not.toContain("Before you finish");
   });

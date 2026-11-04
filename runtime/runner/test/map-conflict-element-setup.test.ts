@@ -26,6 +26,7 @@ import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { encodeMemoryBoundary } from "@commonfabric/memory/v2";
 import type { FabricValue } from "@commonfabric/api";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { StorageNotification } from "../src/storage/interface.ts";
 import {
@@ -120,7 +121,10 @@ class GatedSessionFactory implements SessionFactory {
   ) {
     const { transport, gate } = gatedLoopback(this.#getServer());
     this.gate = gate;
-    const client = await MemoryV2Client.connect({ transport });
+    const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     const session = await client.mount(
       space,
       mountOptions,

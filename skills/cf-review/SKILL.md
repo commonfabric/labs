@@ -137,15 +137,16 @@ follow its update procedure in `runtime/cf-harness/docs/system-map/README.md`.
 
 For a change under `runtime/runner/src/cfc/` or `runtime/runner/src/cfc.ts`, the
 CFC tests under `runtime/runner/test/`, the render boundaries in
-`runtime/html/src/worker/reconciler.ts` and `display-fit.ts`, the harness's CFC
-enforcement in `runtime/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
+`runtime/html/src/worker/reconciler.ts`, `display-fit.ts` and
+`display-fit-atoms.ts`, the harness's CFC enforcement in
+`runtime/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
 `sandbox/runsc-cfc-result.ts`), or a `docs/specs/cfc-*.md` document, classify it
 yourself by `docs/development/cfc-spec-correspondence.md` before reading the
 author's classification: host arrangement, conforming implementation, or
 semantic gap. A semantic gap with no linked specs pull request, a kernel
 function given an input the pseudocode lacks, or a rule stated with MUST force
 in a labs document is Blocking. Count the `SPEC-PENDING` markers the diff adds:
-each names a specs pull request, the tree holds at most three, and marked code
+each names a specs pull request, the tree holds at most forty, and marked code
 runs at the strict default only when it is fail-closed. Reviewing a specs ruling
 pull request instead, check that its body says whether the entry was already
 answered at specs `main`, states the runtime's conformance under the current and

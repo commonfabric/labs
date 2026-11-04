@@ -60,11 +60,11 @@ cf() {
 }
 
 # Delegated scripts (verbs-over-the-cli, verb-session-gaps, and the drills)
-# run cf through $CF_BINARY, falling back to the checkout's deno task when it
-# is unset. Resolve and export it here once, from the same decision cf_impl
-# made, so a child tests the same artifact as the step that invoked it: the
-# external binary on PATH, or unset in local-source mode so the fallback
-# keeps parent and child on the checkout together.
+# run cf through cf-launcher.sh: $CF_BINARY, falling back to the checkout's
+# deno task when it is unset. Resolve and export it here once, from the same
+# decision cf_impl made, so a child tests the same artifact as the step that
+# invoked it: the external binary on PATH, or unset in local-source mode so
+# the fallback keeps parent and child on the checkout together.
 if [ -z "${CF_CLI_INTEGRATION_USE_LOCAL:-}" ] && [ -z "${CF_BINARY:-}" ]; then
   CF_BINARY="$(type -P cf || true)"
 fi
@@ -1032,7 +1032,7 @@ run_three_topic_fixture() {
   # retry collides on the create-only receipt and says so (`deduplicated`);
   # ON, no receipt precondition exists (events.md §4's subsumption) — the
   # duplicate is skipped at the dedupe horizon, and the retry's readback
-  # resolves the SAME cause-derived receipt the SERVING side wrote for the
+  # resolves the SAME receipt the SERVING side wrote for the
   # original handling (the ruled result carriage, 2026-08-29). The
   # original-result readback below is the witness in both arms.
   if server_execution_on; then

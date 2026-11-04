@@ -47,6 +47,7 @@ import {
   parsePointer,
   pathsOverlap,
 } from "../../memory/v2/path.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type {
   IStorageProvider,
   IStorageTransaction,
@@ -1991,7 +1992,10 @@ describe("memory-v2-stacked-commit", () => {
     it("returns the same result for a duplicate `localSeq`, sending it once", async () => {
       const model = new ScriptedServerModel();
       const transport = new ScriptedModelTransport(model);
-      const client = await MemoryV2Client.connect({ transport });
+      const client = await MemoryV2Client.connect({
+        instanceNames: namesInstancesByDefault(),
+        transport,
+      });
       try {
         const session = await client.mount(
           space,

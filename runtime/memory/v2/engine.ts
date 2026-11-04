@@ -15,6 +15,7 @@ import {
   SCHEMA_META_MEMBER,
   schemaMetaRefHashes,
 } from "@commonfabric/data-model-schema/schema-refs";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -42,6 +43,7 @@ import {
 } from "./path.ts";
 import { replaceSchedulerBasisRows } from "./scheduler-basis.ts";
 import { TouchedPathIndex } from "./touched-path-index.ts";
+import { ExecutionLeases } from "./execution-lease.ts";
 import {
   insertExecutionOutboxRows,
   type OutboxAppendRow,
@@ -49,6 +51,7 @@ import {
 import {
   createDefaultOperationCodecRegistry,
   operationBaselineHash,
+  type OperationCodec,
   type OperationCodecRegistry,
 } from "./operation-codec.ts";
 import {
@@ -56,7 +59,8 @@ import {
   containsSyncSchemaRefString,
   findSyncSchemaRef,
 } from "./sync-schema-ref.ts";
-import { aclDocId } from "../acl.ts";
+import { aclDocId, isDeletionTombstone } from "../acl.ts";
+import { deletionTombstoneOf, readAclHeads } from "./acl-heads.ts";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
@@ -77,12 +81,17 @@ import {
   type EntityId,
   type EventAppendDecl,
   EventAppendDuplicateError,
+  type FieldAnchor,
+  type FieldAnchorChanges,
   getServerExecutionConfig,
   type IntegratedOperation,
   isEntityDocument,
+  isOperationAnchorsDocId,
   isScopeKey,
   type OpCursor,
   type Operation,
+  operationAnchorsDocId,
+  type OperationFieldAddress,
   type OperationFieldQuery,
   type OperationFieldSnapshot,
   type PatchOp,
@@ -107,8 +116,10 @@ import {
   type StreamEventsDocValue,
   type StreamLinkRef,
   tableDeclaresRowLabel,
+  toValuePath,
   type ValuePath,
 } from "../v2.ts";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 // The scope_key vocabulary is PROTOCOL vocabulary and lives in the
 // wire-shape module (../v2.ts, beside CellScope) as the ONE definition —
@@ -234,7 +245,7 @@ CREATE TABLE IF NOT EXISTS "commit" (
   class              TEXT    NOT NULL DEFAULT 'authored',
   -- The producing lease holder, derived-class commits only (protocol.md §7's
   -- closed metadata list: 'holder' — derived only). NULL on every other
-  -- class. Admission verified it against the live execution_lease row before
+  -- class. Admission verified it against the memory server's lease map before
   -- the insert (serving-loop.md §2), so a stored value names the holder that
   -- actually held the lease at admission time.
   holder             TEXT,
@@ -322,6 +333,8 @@ CREATE TABLE IF NOT EXISTS op_field_epoch (
   materialized   JSON    NOT NULL,
   active         INTEGER NOT NULL DEFAULT 1,
   commit_seq     INTEGER NOT NULL,
+  anchors        JSON,
+  anchors_seq    INTEGER,
   PRIMARY KEY (branch, id, scope_key, path)
 );
 
@@ -340,6 +353,7 @@ CREATE TABLE IF NOT EXISTS op_submission (
   integrated_payload  JSON    NOT NULL,
   commit_seq          INTEGER NOT NULL,
   op_index            INTEGER NOT NULL,
+  anchors             JSON,
   PRIMARY KEY (branch, id, scope_key, path, epoch, submission_id),
   FOREIGN KEY (commit_seq) REFERENCES "commit"(seq)
 );
@@ -370,6 +384,7 @@ CREATE TABLE IF NOT EXISTS op_checkpoint (
   version       INTEGER NOT NULL,
   materialized  JSON    NOT NULL,
   commit_seq    INTEGER NOT NULL,
+  anchors       JSON,
   PRIMARY KEY (branch, id, scope_key, path, epoch, version),
   FOREIGN KEY (commit_seq) REFERENCES "commit"(seq)
 );
@@ -388,17 +403,10 @@ CREATE TABLE IF NOT EXISTS branch (
 INSERT OR IGNORE INTO branch (name, created_seq, head_seq, status)
 VALUES ('', 0, 0, 'active');
 
--- Server-execution v2: the single-deriver lease
--- (docs/specs/server-side-execution/serving-loop.md §2). One row per space,
--- EXACTLY three fields — the v1 branch's richer shape (branch PK,
--- generation/host/on-behalf-of columns, a state enum) is prior art this
--- REDUCES from, not substrate. 'holder' is a per-process identity (service
--- identity + process-instance component, minted at process start — DR1), so
--- the admission equality check itself fences cross-process succession.
--- Acquire/renew are DIRECT table writes on the direct-engine plane
--- (serving-loop.md §1 plane (c)) — a lease renewal is never a commit.
--- Liveness is judged by the memory server's own clock against expires_at;
--- an expired row matches nobody. References nothing; nothing references it.
+-- Unused: the single-deriver lease lives in the memory server's memory
+-- (docs/specs/server-side-execution/serving-loop.md §2). Nothing reads or
+-- writes this table. TODO(seefeld): Drop it once no deployed process writes
+-- its rows.
 CREATE TABLE IF NOT EXISTS execution_lease (
   space       TEXT    NOT NULL PRIMARY KEY,
   holder      TEXT    NOT NULL,
@@ -503,6 +511,19 @@ CREATE TABLE IF NOT EXISTS blob_store (
   data          BLOB    NOT NULL,
   content_type  TEXT    NOT NULL,
   size          INTEGER NOT NULL
+);
+
+-- The instance-naming mark (INV-16, docs/specs/memory-v2/09-invariants.md):
+-- present once the space holds data a runtime that names instances wrote. At
+-- most one row, which the memory server writes in the store transaction of
+-- the first commit it admits from a session declaring instanceNames: true,
+-- and which names that commit. Nothing updates or deletes it, except a reap
+-- of a deleted space (memory/v2/reap.ts), which removes the mark, and the
+-- commit it names unless that commit is the deletion.
+CREATE TABLE IF NOT EXISTS instance_name_mark (
+  singleton   INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
+  commit_seq  INTEGER NOT NULL,
+  FOREIGN KEY (commit_seq) REFERENCES "commit"(seq)
 );
 
 COMMIT;
@@ -819,17 +840,6 @@ ORDER BY r.seq ASC, r.op_index ASC
 LIMIT 1
 `;
 
-// The derived-class admission read (serving-loop.md §2): the space's LIVE
-// lease row, liveness judged by the memory server's own clock (the :now the
-// admission path passes is always this process's Date.now()). An expired row
-// is not returned, so it matches nobody.
-const SELECT_LIVE_EXECUTION_LEASE = `
-SELECT holder
-FROM execution_lease
-WHERE space = :space
-  AND expires_at > :now
-`;
-
 const SELECT_SET_DELETE_CONFLICT = `
 SELECT seq
 FROM revision
@@ -965,6 +975,16 @@ FROM blob_store
 WHERE hash = :hash
 `;
 
+const INSERT_INSTANCE_NAME_MARK = `
+INSERT OR IGNORE INTO instance_name_mark (singleton, commit_seq)
+VALUES (1, :commit_seq)
+`;
+
+const SELECT_INSTANCE_NAME_MARK = `
+SELECT 1 AS marked
+FROM instance_name_mark
+`;
+
 type PreparedStatement = ReturnType<Database["prepare"]>;
 
 interface PreparedStatements {
@@ -972,6 +992,7 @@ interface PreparedStatements {
   insertBlob: PreparedStatement;
   insertBranch: PreparedStatement;
   insertCommit: PreparedStatement;
+  insertInstanceNameMark: PreparedStatement;
   insertInvocation: PreparedStatement;
   insertRevision: PreparedStatement;
   insertSnapshot: PreparedStatement;
@@ -990,11 +1011,11 @@ interface PreparedStatements {
   selectExistingCommit: PreparedStatement;
   selectOldestRevisionAttribution: PreparedStatement;
   selectHead: PreparedStatement;
+  selectInstanceNameMark: PreparedStatement;
   selectLatestBase: PreparedStatement;
   selectLatestSnapshot: PreparedStatement;
   selectLatestSnapshotBelow: PreparedStatement;
   selectRevisionRow: PreparedStatement;
-  selectLiveExecutionLease: PreparedStatement;
   selectNextSeq: PreparedStatement;
   selectPatchConflicts: PreparedStatement;
   selectPatchConflictsExcludingSession: PreparedStatement;
@@ -1121,6 +1142,9 @@ export type Engine = {
   legacyCommitMetadataRefsRequired: boolean;
   operationCodecs: OperationCodecRegistry;
   statements: PreparedStatements;
+
+  /** The lease map derived-class admission checks (serving-loop.md §2). */
+  executionLeases: ExecutionLeases;
 
   /**
    * Documents already decoded, by the revision each one is.
@@ -1353,6 +1377,12 @@ export type OpenOptions = {
   /** The observer every commit decision is reported to; see
    * {@link CommitObserver}. */
   commitObserver?: CommitObserver;
+
+  /**
+   * The lease map derived-class admission checks: the opening `Server`'s, which
+   * all its spaces share. An engine opened without one starts a map of its own.
+   */
+  executionLeases?: ExecutionLeases;
 };
 
 export type InvocationRecord = {
@@ -1404,9 +1434,9 @@ export type ApplyCommitOptions = {
 
   /** The producing lease holder of a `derived`-class commit — the DR1
    *  per-process identity the SpaceServer minted at process start
-   *  (serving-loop.md §2). Admission compares it against the space's live
-   *  `execution_lease` row: one equality check, judged by this process's own
-   *  clock. Server-internal like `commitClass`: `ClientCommit` cannot express
+   *  (serving-loop.md §2). Admission compares it against the holder the
+   *  memory server's lease map names for the space: one equality check.
+   *  Server-internal like `commitClass`: `ClientCommit` cannot express
    *  a holder, and no session-facing path supplies one. Meaningless (and
    *  ignored) on other classes. */
   holder?: string;
@@ -1774,6 +1804,7 @@ const prepareStatements = (database: Database): PreparedStatements => ({
   insertBlob: database.prepare(INSERT_BLOB),
   insertBranch: database.prepare(INSERT_BRANCH),
   insertCommit: database.prepare(INSERT_COMMIT),
+  insertInstanceNameMark: database.prepare(INSERT_INSTANCE_NAME_MARK),
   insertInvocation: database.prepare(INSERT_INVOCATION),
   insertRevision: database.prepare(INSERT_REVISION),
   insertSnapshot: database.prepare(INSERT_SNAPSHOT),
@@ -1796,11 +1827,11 @@ const prepareStatements = (database: Database): PreparedStatements => ({
     SELECT_OLDEST_REVISION_ATTRIBUTION,
   ),
   selectHead: database.prepare(SELECT_HEAD),
+  selectInstanceNameMark: database.prepare(SELECT_INSTANCE_NAME_MARK),
   selectLatestBase: database.prepare(SELECT_LATEST_BASE),
   selectLatestSnapshot: database.prepare(SELECT_LATEST_SNAPSHOT),
   selectLatestSnapshotBelow: database.prepare(SELECT_LATEST_SNAPSHOT_BELOW),
   selectRevisionRow: database.prepare(SELECT_REVISION_ROW),
-  selectLiveExecutionLease: database.prepare(SELECT_LIVE_EXECUTION_LEASE),
   selectNextSeq: database.prepare(SELECT_NEXT_SEQ),
   selectPatchConflicts: database.prepare(SELECT_PATCH_CONFLICTS),
   selectPatchConflictsExcludingSession: database.prepare(
@@ -2101,6 +2132,39 @@ ADD COLUMN holder TEXT;
 `);
 };
 
+// Anchors of a collaborative field ride the field head and its checkpoints,
+// and a submission records the anchors it carried
+// (07-op-views-and-annotations.md §7.8). Rows from before the columns read as
+// NULL, which is a field with no anchors and a submission that carried none.
+// One guard per column, for the crash-window reason
+// `migrateCommitWaveCarriage` gives.
+const migrateOperationFieldAnchors = (database: Database): void => {
+  if (!hasColumn(database, "op_field_epoch", "anchors")) {
+    database.exec(`
+ALTER TABLE op_field_epoch
+ADD COLUMN anchors JSON;
+`);
+  }
+  if (!hasColumn(database, "op_field_epoch", "anchors_seq")) {
+    database.exec(`
+ALTER TABLE op_field_epoch
+ADD COLUMN anchors_seq INTEGER;
+`);
+  }
+  if (!hasColumn(database, "op_checkpoint", "anchors")) {
+    database.exec(`
+ALTER TABLE op_checkpoint
+ADD COLUMN anchors JSON;
+`);
+  }
+  if (!hasColumn(database, "op_submission", "anchors")) {
+    database.exec(`
+ALTER TABLE op_submission
+ADD COLUMN anchors JSON;
+`);
+  }
+};
+
 // Server-execution v2 stage D: derived-class commits carry their per-write
 // identity annotations and consequenceOf inside the commit row (protocol.md
 // §1, §7). Historical rows stay NULL — both fields are derived-only and no
@@ -2249,6 +2313,7 @@ export const open = async (
     documentCacheMaxEntries = DEFAULT_DOCUMENT_CACHE_MAX_ENTRIES,
     documentCacheCoordinator,
     commitObserver,
+    executionLeases = new ExecutionLeases(),
   }: OpenOptions,
 ): Promise<Engine> => {
   if (
@@ -2278,6 +2343,7 @@ export const open = async (
   migrateExecutionOutboxPayloadEncoding(database);
   migrateSchedulerObservationTablesToBasis(database);
   migrateIntegratedOperationIds(database);
+  migrateOperationFieldAnchors(database);
   return {
     url,
     database,
@@ -2287,6 +2353,7 @@ export const open = async (
     legacyCommitMetadataRefsRequired: commitMetadataRefsRequired(database),
     operationCodecs,
     statements: prepareStatements(database),
+    executionLeases,
     documentCache: new Map(),
     documentCacheBytes: 0,
     documentCacheBudgetBytes,
@@ -2546,6 +2613,7 @@ export const queryOperationField = (
     materialized: active
       ? decodeTrustedMemoryBoundary(field.materialized)
       : currentMaterialized,
+    anchors: active ? decodeStoredAnchors(field.anchors) : [],
     ...(active
       ? {
         retainedFrom: { epoch: field.epoch, version: retainedVersion },
@@ -2602,7 +2670,7 @@ export const pruneOperationFieldHistory = (
       );
     }
     const checkpoint = txEngine.database.prepare(`
-      SELECT version, materialized
+      SELECT version, materialized, commit_seq, anchors
       FROM op_checkpoint
       WHERE branch = :branch AND id = :id AND scope_key = :scope_key
         AND path = :path AND epoch = :epoch AND version <= :version
@@ -2612,7 +2680,14 @@ export const pruneOperationFieldHistory = (
       ...params,
       epoch: field.epoch,
       version: field.version,
-    }) as { version: number; materialized: string } | undefined;
+    }) as
+      | {
+        version: number;
+        materialized: string;
+        commit_seq: number;
+        anchors: string | null;
+      }
+      | undefined;
     if (!checkpoint || checkpoint.version === 0) {
       throw new OpHistoryUnavailableError(
         "operation field has no compacting checkpoint",
@@ -2666,6 +2741,42 @@ export const pruneOperationFieldHistory = (
     ) {
       throw new ProtocolError(
         "operation checkpoint diverged from materialized field state",
+      );
+    }
+    // The checkpoint's anchors mapped through the replayed operations are the
+    // head's, unless an operation added or removed anchors in the commit that
+    // wrote the checkpoint or a later one; the anchors document holds the
+    // head's set either way.
+    const headAnchors = decodeStoredAnchors(field.anchors);
+    if (
+      field.anchors_seq === null || field.anchors_seq < checkpoint.commit_seq
+    ) {
+      const replayedAnchors = codec.mapAnchors({
+        anchors: decodeStoredAnchors(checkpoint.anchors),
+        materialized: replayed,
+        operations: replayRows.map((row) =>
+          decodeTrustedMemoryBoundary(row.payload)
+        ),
+      });
+      if (!sameAnchors(replayedAnchors, headAnchors)) {
+        throw new ProtocolError(
+          "operation checkpoint anchors diverged from the field head",
+        );
+      }
+    }
+    const anchorsDocument = readStateForScopeKey(txEngine, {
+      id: operationAnchorsDocId({ id, scope: declaredScope, path }),
+      branch,
+      scope: declaredScope,
+      scopeKey,
+    })?.document ?? null;
+    const documentAnchors = (anchorsDocument?.value as
+      | { anchors?: FieldAnchor[] }
+      | null
+      | undefined)?.anchors ?? [];
+    if (!sameAnchors(documentAnchors, headAnchors)) {
+      throw new ProtocolError(
+        "operation anchors document diverged from the field head",
       );
     }
     const prunedOperations = txEngine.database.prepare(`
@@ -2973,6 +3084,36 @@ export const headSeq = (
 
 export const serverSeq = (engine: Engine): number => {
   return (engine.statements.selectServerSeq.get() as { seq: number }).seq;
+};
+
+/**
+ * Whether the store holds the instance-naming mark (INV-16): whether a commit
+ * from a session that names instances has been admitted to the space.
+ */
+export const hasInstanceNameMark = (engine: Engine): boolean =>
+  engine.statements.selectInstanceNameMark.get() !== undefined;
+
+/**
+ * Records the instance-naming mark (INV-16) as set by the commit at
+ * `commitSeq`, unless the store already holds it. The mark belongs to the
+ * transaction of that commit, so this throws outside a transaction; a
+ * transaction that rolls back takes the mark with it.
+ *
+ * @returns Whether this call recorded the mark.
+ */
+export const recordInstanceNameMark = (
+  engine: Engine,
+  commitSeq: number,
+): boolean => {
+  if (!engine.database.inTransaction) {
+    throw new Error(
+      "The instance-naming mark is recorded only inside its commit's " +
+        "transaction",
+    );
+  }
+  return engine.statements.insertInstanceNameMark.run({
+    commit_seq: commitSeq,
+  }) > 0;
 };
 
 /** Highest authored commit through a captured head, excluding bookkeeping. */
@@ -4119,6 +4260,78 @@ export class WaveStaleReadError extends Error {
 }
 
 /**
+ * A fresh commit refused because its space is deleted: the space's ACL
+ * document holds a deletion tombstone, and no commit to a deleted space is
+ * admitted on any write path (INV-15 in
+ * `docs/specs/memory-v2/09-invariants.md`). It is the `ProtocolError` naming
+ * the deletion that a `derived` or a delegated commit is refused with; the
+ * memory server gives a session's transact the deleted `AuthorizationError`
+ * in its place.
+ */
+export class SpaceDeletedError extends ProtocolError {
+  readonly #space: string;
+  readonly #aclRevision: number;
+
+  /**
+   * Constructs an instance for `space`, whose deletion tombstone is stored at
+   * `aclRevision`.
+   */
+  constructor(space: string, aclRevision: number) {
+    super(`Space ${space} is deleted`);
+    this.#space = space;
+    this.#aclRevision = aclRevision;
+  }
+
+  /** The deleted space. */
+  get space(): string {
+    return this.#space;
+  }
+
+  /** The `seq` at which the space's deletion tombstone is stored. */
+  get aclRevision(): number {
+    return this.#aclRevision;
+  }
+}
+
+/**
+ * The deletion `engine`'s store records, when its ACL document holds a
+ * deletion tombstone, or `undefined` when it does not: the ACL document of
+ * `space` where the caller names it, else the one ACL document the store
+ * holds, an engine serving one space. `aclRevision` is the `seq` at which the
+ * deletion tombstone is stored (INV-15).
+ */
+export const findSpaceDeletion = (
+  engine: Engine,
+  space?: string,
+): { space: string; aclRevision: number } | undefined => {
+  if (space !== undefined) {
+    const state = readState(engine, { id: aclDocId(space) });
+    return state !== null && isDeletionTombstone(state.document?.value)
+      ? { space, aclRevision: state.seq }
+      : undefined;
+  }
+  for (const head of readAclHeads(engine.database)) {
+    if (deletionTombstoneOf(head) !== undefined) {
+      return { space: head.id.slice("of:".length), aclRevision: head.seq };
+    }
+  }
+  return undefined;
+};
+
+/**
+ * Throws {@link SpaceDeletedError} when {@link findSpaceDeletion} finds a
+ * deletion in `engine`'s store, for `space` where the caller names it. Read
+ * inside a commit's write transaction, it sees a deletion another connection
+ * committed after the memory server's own check (INV-15).
+ */
+export const refuseDeletedSpace = (engine: Engine, space?: string): void => {
+  const deletion = findSpaceDeletion(engine, space);
+  if (deletion !== undefined) {
+    throw new SpaceDeletedError(deletion.space, deletion.aclRevision);
+  }
+};
+
+/**
  * A derived commit carries an operation on its space's ACL document.
  * No derived producer may write that document, in any memory ACL mode: the
  * derived admission checks the lease and nothing of INV-12's shape or of any
@@ -4889,6 +5102,13 @@ type OperationFieldRow = {
   baseline_hash: string;
   materialized: string;
   active: number;
+  /** The field's anchors, encoded and sorted by id; NULL when it has none. */
+  anchors: string | null;
+  /**
+   * Commit seq of the last operation of this epoch that added or removed
+   * anchors; NULL when none did.
+   */
+  anchors_seq: number | null;
 };
 
 type OperationSubmissionRow = {
@@ -4900,6 +5120,16 @@ type OperationSubmissionRow = {
   integrated_from: number;
   integrated_to: number;
   integrated_payload: string;
+  /** The anchors the submission carried and landed as; NULL when none. */
+  anchors: string | null;
+};
+
+/** What `op_submission.anchors` holds for a submission that carried anchors. */
+type SubmittedAnchors = {
+  add: FieldAnchor[];
+  remove: string[];
+  added: FieldAnchor[];
+  removed: string[];
 };
 
 type IntegratedOperationRow = {
@@ -4952,7 +5182,8 @@ const selectOperationField = (
   params: ReturnType<typeof operationFieldParams>,
 ): OperationFieldRow | undefined =>
   engine.database.prepare(`
-    SELECT epoch, codec, version, baseline_hash, materialized, active
+    SELECT epoch, codec, version, baseline_hash, materialized, active,
+           anchors, anchors_seq
     FROM op_field_epoch
     WHERE branch = :branch AND id = :id AND scope_key = :scope_key
       AND path = :path
@@ -5008,6 +5239,59 @@ const decodedIntegratedOperations = (
 
 const MAX_OPERATION_PAYLOAD_BYTES = 1_000_000;
 const MAX_OPERATION_BATCH_UPDATES = 256;
+const MAX_FIELD_ANCHORS = 1024;
+const MAX_ANCHOR_ID_LENGTH = 256;
+
+const requireOperationCodec = (engine: Engine, id: string): OperationCodec => {
+  try {
+    return engine.operationCodecs.require(id);
+  } catch {
+    throw new UnsupportedOpCodecError(`unknown operation codec: ${id}`);
+  }
+};
+
+const compareAnchors = (a: FieldAnchor, b: FieldAnchor): number =>
+  utf8Compare(a.id, b.id);
+
+const decodeStoredAnchors = (stored: string | null): FieldAnchor[] =>
+  stored === null ? [] : decodeTrustedMemoryBoundary<FieldAnchor[]>(stored);
+
+/** NULL for no anchors, so a field without any pays no storage. */
+const encodeStoredAnchors = (anchors: readonly FieldAnchor[]): string | null =>
+  anchors.length === 0 ? null : encodeMemoryBoundary(anchors);
+
+const sameAnchors = (
+  a: readonly FieldAnchor[],
+  b: readonly FieldAnchor[],
+): boolean =>
+  a.length === b.length &&
+  a.every((anchor, index) =>
+    anchor.id === b[index].id && anchor.from === b[index].from &&
+    anchor.to === b[index].to
+  );
+
+/** Whether a stored submission carried the anchors `carried`, by content. */
+const sameSubmittedAnchors = (
+  stored: string | null,
+  carried: Pick<SubmittedAnchors, "add" | "remove"> | undefined,
+): boolean => {
+  if (stored === null || carried === undefined) {
+    return stored === null && carried === undefined;
+  }
+  const { add, remove } = decodeTrustedMemoryBoundary<SubmittedAnchors>(stored);
+  return encodeMemoryBoundary({ add, remove }) ===
+    encodeMemoryBoundary(carried);
+};
+
+const isValidAnchor = (anchor: unknown): anchor is FieldAnchor => {
+  if (!isObjectNotArray(anchor)) return false;
+  const { id, from, to } = anchor as Record<string, unknown>;
+  return typeof id === "string" && id.length > 0 &&
+    id.length <= MAX_ANCHOR_ID_LENGTH &&
+    Number.isSafeInteger(from) && (from as number) >= 0 &&
+    Number.isSafeInteger(to) && (to as number) >= (from as number) &&
+    Object.keys(anchor).length === 3;
+};
 const operationValueByteLength = (value: FabricValue): number =>
   new TextEncoder().encode(encodeMemoryBoundary(value)).byteLength;
 
@@ -5062,10 +5346,61 @@ const validateApplyOperation = (operation: BasedApplyOpOperation): void => {
   if (Array.isArray(updates) && updates.length > MAX_OPERATION_BATCH_UPDATES) {
     throw new OpCodecError("operation payload exceeds the update-count limit");
   }
+  if (operation.anchors !== undefined) validateAnchorChanges(operation.anchors);
 };
 
 /** An `apply-op` whose base is stated, as the engine applies one. */
 type BasedApplyOpOperation = ApplyOpOperation & { base: OpCursor | null };
+
+const validateAnchorChanges = (changes: FieldAnchorChanges): void => {
+  if (
+    !isObjectNotArray(changes) ||
+    Object.keys(changes).some((key) => key !== "add" && key !== "remove")
+  ) {
+    throw new ProtocolError("apply-op anchors are malformed");
+  }
+  const add = changes.add ?? [];
+  const remove = changes.remove ?? [];
+  if (
+    !Array.isArray(add) || !Array.isArray(remove) ||
+    add.length > MAX_FIELD_ANCHORS || remove.length > MAX_FIELD_ANCHORS
+  ) {
+    throw new OpCodecError("apply-op anchors exceed the anchor-count limit");
+  }
+  if (add.length === 0 && remove.length === 0) {
+    throw new ProtocolError("apply-op anchors add and remove nothing");
+  }
+  const ids = new Set<string>();
+  for (const anchor of add) {
+    if (!isValidAnchor(anchor)) {
+      throw new ProtocolError("apply-op anchor is malformed");
+    }
+    if (ids.has(anchor.id)) {
+      throw new ProtocolError(`apply-op adds anchor ${anchor.id} twice`);
+    }
+    ids.add(anchor.id);
+  }
+  for (const id of remove) {
+    if (
+      typeof id !== "string" || id.length === 0 ||
+      id.length > MAX_ANCHOR_ID_LENGTH
+    ) {
+      throw new ProtocolError("apply-op removed anchor id is malformed");
+    }
+    if (ids.has(id)) {
+      throw new ProtocolError(`apply-op both adds and removes anchor ${id}`);
+    }
+  }
+};
+
+/** The anchors `operation` carries, as `op_submission.anchors` records them. */
+const submittedAnchors = (
+  operation: ApplyOpOperation,
+): Pick<SubmittedAnchors, "add" | "remove"> | undefined =>
+  operation.anchors === undefined ? undefined : {
+    add: operation.anchors.add ?? [],
+    remove: operation.anchors.remove ?? [],
+  };
 
 /**
  * An `apply-op` without a base whose `baselineHash` names a value the field no
@@ -5125,7 +5460,7 @@ const withStatedBase = (
   if (baselineHash !== undefined) {
     if (typeof baselineHash !== "string" || baselineHash.length === 0) {
       throw new OpFieldBaselineMismatchError(
-        "apply-op baselineHash is malformed",
+        `${operation.op} baselineHash is malformed`,
       );
     }
     if (baselineHash !== currentHash) {
@@ -5168,6 +5503,12 @@ const storedOperationResolution = (
       payload,
     })),
     duplicate,
+    ...(row.anchors === null ? {} : (() => {
+      const { added, removed } = decodeTrustedMemoryBoundary<SubmittedAnchors>(
+        row.anchors,
+      );
+      return { anchors: { added, removed } };
+    })()),
   };
 };
 
@@ -5182,7 +5523,7 @@ const applyOperation = (
     sessionId: SessionId;
     scopeKeyOverride?: string;
   },
-): { resolution: ApplyOpResolution; revision?: AppliedRevision } => {
+): { resolution: ApplyOpResolution; revisions: AppliedRevision[] } => {
   const { branch, seq, opIndex, operation, principal, sessionId } = options;
   assertDefaultOperationBranch(branch);
   validateApplyOperation(operation);
@@ -5214,7 +5555,7 @@ const applyOperation = (
 
   const duplicate = engine.database.prepare(`
     SELECT epoch, submission_id, codec, base_version, submitted_payload,
-           integrated_from, integrated_to, integrated_payload
+           integrated_from, integrated_to, integrated_payload, anchors
     FROM op_submission
     WHERE branch = :branch AND id = :id AND scope_key = :scope_key
       AND path = :path AND epoch = :epoch
@@ -5233,7 +5574,8 @@ const applyOperation = (
       duplicate.base_version !== (operation.base?.version ?? 0) ||
       (operation.base === null &&
         operation.baselineHash !== priorField?.baseline_hash) ||
-      duplicate.submitted_payload !== encodeMemoryBoundary(operation.payload)
+      duplicate.submitted_payload !== encodeMemoryBoundary(operation.payload) ||
+      !sameSubmittedAnchors(duplicate.anchors, submittedAnchors(operation))
     ) {
       throw new OpSubmissionMismatchError(
         `operation submission replay mismatch: ${operation.submissionId}`,
@@ -5241,6 +5583,7 @@ const applyOperation = (
     }
     return {
       resolution: storedOperationResolution(opIndex, address, duplicate, true),
+      revisions: [],
     };
   }
 
@@ -5343,26 +5686,21 @@ const applyOperation = (
     }
   }
 
+  const codec = requireOperationCodec(engine, operation.codec);
+  const carried = submittedAnchors(operation);
   let result;
   try {
-    let codec;
-    try {
-      codec = engine.operationCodecs.require(operation.codec);
-    } catch {
-      throw new UnsupportedOpCodecError(
-        `unknown operation codec: ${operation.codec}`,
-      );
-    }
     result = codec.integrate({
       materialized: currentMaterialized,
       submitted: operation.payload,
       intervening,
+      ...(carried === undefined ? {} : { anchors: carried.add }),
     });
   } catch (cause) {
     if (cause instanceof ProtocolError) throw cause;
     throw new OpCodecError(
       `operation codec ${operation.codec} rejected the payload: ${
-        cause instanceof Error ? cause.message : String(cause)
+        describeFailure(cause)
       }`,
     );
   }
@@ -5389,7 +5727,7 @@ const applyOperation = (
     if (cause instanceof ProtocolError) throw cause;
     throw new OpCodecError(
       `operation codec produced an invalid Fabric value: ${
-        cause instanceof Error ? cause.message : String(cause)
+        describeFailure(cause)
       }`,
     );
   }
@@ -5402,24 +5740,64 @@ const applyOperation = (
     );
   }
 
+  // The field's anchors move with the text, in this transaction: the codec
+  // maps them through the operations it produced (§7.15).
+  const priorAnchors = decodeStoredAnchors(activeField?.anchors ?? null);
+  let movedAnchors = priorAnchors;
+  if (priorAnchors.length > 0 && result.operations.length > 0) {
+    try {
+      movedAnchors = codec.mapAnchors({
+        anchors: priorAnchors,
+        materialized: result.materialized,
+        operations: result.operations,
+      });
+    } catch (cause) {
+      if (cause instanceof ProtocolError) throw cause;
+      throw new OpCodecError(
+        `operation codec ${operation.codec} could not map the field's anchors: ${
+          describeFailure(cause)
+        }`,
+      );
+    }
+  }
+  // The anchors the operation carries, which the codec mapped from the
+  // client's document to the result, join the moved set: a removed id
+  // leaves, an added id replaces the one held.
+  let nextAnchors = movedAnchors;
+  let landed: SubmittedAnchors | undefined;
+  if (carried !== undefined) {
+    const added = result.anchors ?? [];
+    if (
+      added.length !== carried.add.length ||
+      added.some((anchor, index) =>
+        anchor.id !== carried.add[index].id || !isValidAnchor(anchor)
+      )
+    ) {
+      throw new OpCodecError(
+        `operation codec ${operation.codec} did not map the carried anchors`,
+      );
+    }
+    const removing = new Set(carried.remove);
+    const removed = movedAnchors.flatMap((anchor) =>
+      removing.has(anchor.id) ? [anchor.id] : []
+    );
+    const merged = new Map(
+      movedAnchors.flatMap((anchor) =>
+        removing.has(anchor.id) ? [] : [[anchor.id, anchor] as const]
+      ),
+    );
+    for (const anchor of added) merged.set(anchor.id, anchor);
+    nextAnchors = [...merged.values()].sort(compareAnchors);
+    if (nextAnchors.length > MAX_FIELD_ANCHORS) {
+      throw new OpCodecError(
+        `operation field would hold more than ${MAX_FIELD_ANCHORS} anchors`,
+      );
+    }
+    landed = { ...carried, added, removed };
+  }
+
   const nextVersion = currentVersion + result.operations.length;
-  engine.database.prepare(`
-    INSERT INTO op_field_epoch (
-      branch, id, scope_key, path, epoch, codec, version,
-      baseline_hash, materialized, active, commit_seq
-    ) VALUES (
-      :branch, :id, :scope_key, :path, :epoch, :codec, :version,
-      :baseline_hash, :materialized, 1, :commit_seq
-    )
-    ON CONFLICT (branch, id, scope_key, path) DO UPDATE SET
-      epoch = excluded.epoch,
-      codec = excluded.codec,
-      version = excluded.version,
-      baseline_hash = excluded.baseline_hash,
-      materialized = excluded.materialized,
-      active = 1,
-      commit_seq = excluded.commit_seq
-  `).run({
+  upsertOperationFieldHead(engine, {
     ...params,
     epoch,
     codec: operation.codec,
@@ -5427,6 +5805,8 @@ const applyOperation = (
     baseline_hash: baselineHash,
     materialized: encodeMemoryBoundary(result.materialized),
     commit_seq: seq,
+    anchors: encodeStoredAnchors(nextAnchors),
+    anchors_seq: landed === undefined ? activeField?.anchors_seq ?? null : seq,
   });
 
   for (const [index, payload] of result.operations.entries()) {
@@ -5459,10 +5839,11 @@ const applyOperation = (
   ) {
     engine.database.prepare(`
       INSERT INTO op_checkpoint (
-        branch, id, scope_key, path, epoch, version, materialized, commit_seq
+        branch, id, scope_key, path, epoch, version, materialized, commit_seq,
+        anchors
       ) VALUES (
         :branch, :id, :scope_key, :path, :epoch, :version,
-        :materialized, :commit_seq
+        :materialized, :commit_seq, :anchors
       )
     `).run({
       ...params,
@@ -5470,6 +5851,7 @@ const applyOperation = (
       version: nextVersion,
       materialized: encodeMemoryBoundary(result.materialized),
       commit_seq: seq,
+      anchors: encodeStoredAnchors(nextAnchors),
     });
     const priorCheckpoint = engine.database.prepare(`
       SELECT version
@@ -5493,30 +5875,20 @@ const applyOperation = (
       });
     }
   }
-  engine.database.prepare(`
-    INSERT INTO op_submission (
-      branch, id, scope_key, path, epoch, submission_id, codec,
-      base_version, submitted_payload, integrated_from, integrated_to,
-      integrated_payload, commit_seq, op_index
-    ) VALUES (
-      :branch, :id, :scope_key, :path, :epoch, :submission_id, :codec,
-      :base_version, :submitted_payload, :integrated_from, :integrated_to,
-      :integrated_payload, :commit_seq, :op_index
-    )
-  `).run({
-    ...params,
-    epoch,
-    submission_id: operation.submissionId,
-    codec: operation.codec,
-    base_version: operation.base?.version ?? 0,
-    submitted_payload: encodeMemoryBoundary(operation.payload),
-    integrated_from: currentVersion,
-    integrated_to: nextVersion,
-    integrated_payload: encodeMemoryBoundary(result.operations),
-    commit_seq: seq,
-    op_index: opIndex,
-  });
-
+  if (landed !== undefined) {
+    // A checkpoint at the head version records the set at that version,
+    // which this operation just restated.
+    engine.database.prepare(`
+      UPDATE op_checkpoint SET anchors = :anchors
+      WHERE branch = :branch AND id = :id AND scope_key = :scope_key
+        AND path = :path AND epoch = :epoch AND version = :version
+    `).run({
+      ...params,
+      epoch,
+      version: nextVersion,
+      anchors: encodeStoredAnchors(nextAnchors),
+    });
+  }
   const submissionRow: OperationSubmissionRow = {
     epoch,
     submission_id: operation.submissionId,
@@ -5526,46 +5898,171 @@ const applyOperation = (
     integrated_from: currentVersion,
     integrated_to: nextVersion,
     integrated_payload: encodeMemoryBoundary(result.operations),
+    anchors: landed === undefined ? null : encodeMemoryBoundary(landed),
   };
+  engine.database.prepare(`
+    INSERT INTO op_submission (
+      branch, id, scope_key, path, epoch, submission_id, codec,
+      base_version, submitted_payload, integrated_from, integrated_to,
+      integrated_payload, commit_seq, op_index, anchors
+    ) VALUES (
+      :branch, :id, :scope_key, :path, :epoch, :submission_id, :codec,
+      :base_version, :submitted_payload, :integrated_from, :integrated_to,
+      :integrated_payload, :commit_seq, :op_index, :anchors
+    )
+  `).run({ ...params, ...submissionRow, commit_seq: seq, op_index: opIndex });
+
   const resolution = storedOperationResolution(
     opIndex,
     address,
     submissionRow,
     false,
   );
-  if (result.operations.length === 0) return { resolution };
+  const revisions: AppliedRevision[] = [];
+  if (result.operations.length > 0) {
+    revisions.push(writeOperation(engine, {
+      branch,
+      seq,
+      opIndex,
+      principal,
+      sessionId,
+      scopeKeyOverride: options.scopeKeyOverride,
+      operation: {
+        op: "patch",
+        id: operation.id,
+        ...(operation.scope === undefined ? {} : { scope: operation.scope }),
+        patches: [{
+          op: "replace",
+          path: encodePointer(["value", ...operation.path]),
+          value: result.materialized,
+        }],
+      },
+    }));
+  }
+  if (!sameAnchors(priorAnchors, nextAnchors)) {
+    revisions.push(writeAnchorsDocument(engine, {
+      ...options,
+      field: operation,
+      epoch,
+      version: nextVersion,
+      anchors: nextAnchors,
+    }));
+  }
+  return { resolution, revisions };
+};
 
-  const revision = writeOperation(engine, {
-    branch,
-    seq,
-    opIndex,
-    principal,
-    sessionId,
-    scopeKeyOverride: options.scopeKeyOverride,
+const upsertOperationFieldHead = (
+  engine: Engine,
+  row: ReturnType<typeof operationFieldParams> & {
+    epoch: number;
+    codec: string;
+    version: number;
+    baseline_hash: string;
+    materialized: string;
+    commit_seq: number;
+    anchors: string | null;
+    anchors_seq: number | null;
+  },
+): void => {
+  engine.database.prepare(`
+    INSERT INTO op_field_epoch (
+      branch, id, scope_key, path, epoch, codec, version,
+      baseline_hash, materialized, active, commit_seq, anchors, anchors_seq
+    ) VALUES (
+      :branch, :id, :scope_key, :path, :epoch, :codec, :version,
+      :baseline_hash, :materialized, 1, :commit_seq, :anchors, :anchors_seq
+    )
+    ON CONFLICT (branch, id, scope_key, path) DO UPDATE SET
+      epoch = excluded.epoch,
+      codec = excluded.codec,
+      version = excluded.version,
+      baseline_hash = excluded.baseline_hash,
+      materialized = excluded.materialized,
+      active = 1,
+      commit_seq = excluded.commit_seq,
+      anchors = excluded.anchors,
+      anchors_seq = excluded.anchors_seq
+  `).run(row);
+};
+
+/**
+ * Writes the field's anchors document (§7.15): the derived entity through
+ * which ordinary reads, watches and served handlers see the anchors. It is
+ * written in the field's own scope, beside the field's materializing patch,
+ * and only when the set changed.
+ */
+const writeAnchorsDocument = (
+  engine: Engine,
+  options: {
+    branch: BranchName;
+    seq: number;
+    opIndex: number;
+    principal?: string;
+    sessionId: SessionId;
+    scopeKeyOverride?: string;
+    field: OperationFieldAddress;
+    epoch: number;
+    version: number;
+    anchors: readonly FieldAnchor[];
+  },
+): AppliedRevision => {
+  const { field, epoch, version, anchors, ...write } = options;
+  return writeOperation(engine, {
+    ...write,
     operation: {
-      op: "patch",
-      id: operation.id,
-      ...(operation.scope === undefined ? {} : { scope: operation.scope }),
-      patches: [{
-        op: "replace",
-        path: encodePointer(["value", ...operation.path]),
-        value: result.materialized,
-      }],
+      op: "set",
+      id: operationAnchorsDocId(field),
+      ...(field.scope === undefined ? {} : { scope: field.scope }),
+      value: { value: { epoch, version, anchors: [...anchors] } },
     },
   });
-  return { resolution, revision };
+};
+
+/** Deletes the field's anchors document when it exists. */
+const deleteAnchorsDocument = (
+  engine: Engine,
+  options: {
+    branch: BranchName;
+    seq: number;
+    opIndex: number;
+    principal?: string;
+    sessionId: SessionId;
+    scopeKeyOverride?: string;
+    scopeKey: string;
+    field: OperationFieldAddress;
+  },
+): AppliedRevision | undefined => {
+  const { field, scopeKey, ...write } = options;
+  const id = operationAnchorsDocId(field);
+  const state = readStateForScopeKey(engine, {
+    branch: options.branch,
+    id,
+    scope: normalizeScope(field.scope),
+    scopeKey,
+  });
+  if (state === null || state.document === null) return undefined;
+  return writeOperation(engine, {
+    ...write,
+    operation: {
+      op: "delete",
+      id,
+      ...(field.scope === undefined ? {} : { scope: field.scope }),
+    },
+  });
 };
 
 const releaseOperationField = (
   engine: Engine,
   options: {
     branch: BranchName;
+    seq: number;
+    opIndex: number;
     operation: ReleaseOpFieldOperation;
     principal?: string;
     sessionId: SessionId;
     scopeKeyOverride?: string;
   },
-): void => {
+): AppliedRevision | undefined => {
   const { branch, operation, principal, sessionId } = options;
   assertDefaultOperationBranch(branch);
   validateOperationPath(operation.path);
@@ -5595,23 +6092,71 @@ const releaseOperationField = (
   if (field.codec !== operation.codec) {
     throw new OpCodecError("operation field release codec mismatch");
   }
+  // A released field's anchors go with its epoch: a later activation starts
+  // with none, and the anchors document is deleted beside the release.
   engine.database.prepare(`
-    UPDATE op_field_epoch SET active = 0
+    UPDATE op_field_epoch SET active = 0, anchors = NULL, anchors_seq = NULL
     WHERE branch = :branch AND id = :id AND scope_key = :scope_key
       AND path = :path
   `).run(params);
+  return deleteAnchorsDocument(engine, {
+    branch,
+    seq: options.seq,
+    opIndex: options.opIndex,
+    principal,
+    sessionId,
+    scopeKeyOverride: options.scopeKeyOverride,
+    scopeKey,
+    field: operation,
+  });
 };
 
+/**
+ * Releases every active operation field of an entity being deleted, and
+ * deletes their anchors documents.
+ */
 const releaseEntityOperationFields = (
   engine: Engine,
-  branch: BranchName,
-  id: EntityId,
-  scopeKey: string,
-): void => {
-  engine.database.prepare(`
-    UPDATE op_field_epoch SET active = 0
+  options: {
+    branch: BranchName;
+    seq: number;
+    opIndex: number;
+    operation: DeleteOperation;
+    principal?: string;
+    sessionId: SessionId;
+    scopeKeyOverride?: string;
+  },
+): AppliedRevision[] => {
+  const { branch, operation, principal, sessionId } = options;
+  const scopeKey = options.scopeKeyOverride ??
+    resolveScopeKey(operation.scope, { principal, sessionId });
+  const keys = { branch, id: operation.id, scope_key: scopeKey };
+  const fields = engine.database.prepare(`
+    SELECT path FROM op_field_epoch
     WHERE branch = :branch AND id = :id AND scope_key = :scope_key
-  `).run({ branch, id, scope_key: scopeKey });
+      AND active = 1
+  `).all(keys) as { path: string }[];
+  engine.database.prepare(`
+    UPDATE op_field_epoch SET active = 0, anchors = NULL, anchors_seq = NULL
+    WHERE branch = :branch AND id = :id AND scope_key = :scope_key
+  `).run(keys);
+  return fields.flatMap(({ path }) => {
+    const deleted = deleteAnchorsDocument(engine, {
+      branch,
+      seq: options.seq,
+      opIndex: options.opIndex,
+      principal,
+      sessionId,
+      scopeKeyOverride: options.scopeKeyOverride,
+      scopeKey,
+      field: {
+        id: operation.id,
+        ...(operation.scope === undefined ? {} : { scope: operation.scope }),
+        path: toValuePath(parsePointer(path)),
+      },
+    });
+    return deleted === undefined ? [] : [deleted];
+  });
 };
 
 const assertOperationFieldsPreserved = (
@@ -5690,7 +6235,7 @@ const applyCommitTransaction = (
   // The derived-class posture gate (protocol.md §1): off the flag NOTHING
   // may claim the class — retries included — because `derived` names the
   // single-deriver posture and nothing outside EXPERIMENTAL_SERVER_EXECUTION
-  // may claim it. Only this gate precedes replay detection; the LIVE-lease
+  // may claim it. Only this gate precedes replay detection; the lease
   // equality check sits after it below, on the fresh-commit path.
   if (commitClass === "derived" && !getServerExecutionConfig()) {
     throw new ProtocolError(
@@ -5700,14 +6245,14 @@ const applyCommitTransaction = (
   }
   const sessionKey = resolveCommitSessionKey(sessionId, principal);
   // Replay detection FIRST — ahead of every current-authority admission
-  // check, the live-lease equality check included (owner review on #5349,
+  // check, the lease equality check included (owner review on #5349,
   // 2026-08-12): a commit this session already applied returns its stored
   // result without re-validating preconditions — re-checking entity-absent
   // against the state the original application created would wrongly reject
-  // the replay — and without consulting the live `execution_lease`: the
-  // lease authorizes NEW derived commits, and a network retry of an
-  // already-ACCEPTED one must keep its stored answer after the producing
-  // lease was released, expired, or succeeded by a new holder. The stored
+  // the replay — and without consulting the lease map: the lease authorizes
+  // NEW derived commits, and a network retry of an already-ACCEPTED one must
+  // keep its stored answer after the producing lease was released or
+  // succeeded by a new holder. The stored
   // identity spans the payload bytes (sameStoredOriginal) AND the admission
   // envelope (class; for derived, the producing holder): a same-key
   // resubmission differing in either is a DIFFERENT submission and is
@@ -5746,7 +6291,9 @@ const applyCommitTransaction = (
     );
     const storedResolution = decodeTrustedMemoryBoundary(existing.resolution) as
       & FabricValue
-      & { operationResolutions?: ApplyOpResolution[] };
+      & {
+        operationResolutions?: ApplyOpResolution[];
+      };
     return {
       seq: existing.seq,
       branch: existing.branch,
@@ -5759,27 +6306,26 @@ const applyCommitTransaction = (
     };
   }
 
+  // No fresh commit is admitted to a deleted space, whatever its class or
+  // path (INV-15). The memory server checks before the write transaction
+  // starts; this repeats the check inside it, where a deletion committed
+  // through another connection in between is visible. An exact replay
+  // already answered from the store above.
+  refuseDeletedSpace(engine, space);
+
   // The derived-class admission rule (serving-loop.md §2, protocol.md §2's
-  // `derived` row): the producer holds the space's live `execution_lease` —
-  // ONE equality check against the row's holder, not admission machinery.
-  // Fresh commits only: an exact replay already answered from the store
-  // above. Liveness is judged by THIS process's clock — the memory
-  // server's own, never the holder's: the select excludes expired rows, so
-  // an expired lease matches nobody and a fresh derived commit under one
-  // is rejected even before any successor acquires.
+  // `derived` row): the producer holds the space's lease — ONE equality check
+  // against the holder the memory server's map names, not admission
+  // machinery. Fresh commits only: an exact replay already answered from the
+  // store above.
   if (commitClass === "derived") {
-    const lease = space === undefined
+    const leaseHolder = space === undefined
       ? undefined
-      : engine.statements.selectLiveExecutionLease.get({
-        space,
-        now: Date.now(),
-      }) as { holder: string } | undefined;
-    if (
-      holder === undefined || lease === undefined || lease.holder !== holder
-    ) {
+      : engine.executionLeases.holderOf(space);
+    if (holder === undefined || leaseHolder !== holder) {
       throw new ProtocolError(
-        "derived-class commit rejected: producer does not hold the live " +
-          "execution_lease for the space (serving-loop.md §2)",
+        "derived-class commit rejected: producer does not hold the " +
+          "execution lease for the space (serving-loop.md §2)",
       );
     }
     // Derived-envelope defense-in-depth (protocol.md §2, RULED 2026-08-05):
@@ -6901,6 +7447,13 @@ const applyCommitTransaction = (
   const revisions: AppliedRevision[] = [];
   const operationResolutions: ApplyOpResolution[] = [];
   for (const [opIndex, operation] of commit.operations.entries()) {
+    if (operation.op !== "sqlite" && isOperationAnchorsDocId(operation.id)) {
+      // The anchors document is derived state the engine alone writes, from
+      // the field's operations (§7.15).
+      throw new ProtocolError(
+        `commit operation ${opIndex} writes the anchors document ${operation.id}, which only the field's operations can change`,
+      );
+    }
     if (operation.op === "sqlite") {
       // Execute the SQL inside this commit's transaction (atomic with the cell
       // ops). It is NOT an entity revision — do not push to `revisions[]` so the
@@ -6941,30 +7494,33 @@ const applyCommitTransaction = (
         scopeKeyOverride,
       });
       operationResolutions.push(applied.resolution);
-      if (applied.revision) revisions.push(applied.revision);
+      for (const revision of applied.revisions) revisions.push(revision);
       continue;
     }
     if (operation.op === "release-op-field") {
-      releaseOperationField(engine, {
+      const released = releaseOperationField(engine, {
         branch,
+        seq,
+        opIndex,
         operation,
         principal: scanPrincipal,
         sessionId: scanSession,
         scopeKeyOverride: scopeKeyByOpIndex.get(opIndex),
       });
+      if (released) revisions.push(released);
       continue;
     }
     if (operation.op === "delete") {
-      releaseEntityOperationFields(
-        engine,
+      const released = releaseEntityOperationFields(engine, {
         branch,
-        operation.id,
-        scopeKeyByOpIndex.get(opIndex) ??
-          resolveScopeKey(operation.scope, {
-            principal: scanPrincipal,
-            sessionId: scanSession,
-          }),
-      );
+        seq,
+        opIndex,
+        operation,
+        principal: scanPrincipal,
+        sessionId: scanSession,
+        scopeKeyOverride: scopeKeyByOpIndex.get(opIndex),
+      });
+      for (const revision of released) revisions.push(revision);
     } else {
       assertOperationFieldsPreserved(engine, {
         branch,
@@ -7024,7 +7580,7 @@ const applyCommitTransaction = (
       resolution: encodeMemoryBoundary({
         seq,
         ...(resolvedPendingReads.length > 0 ? { resolvedPendingReads } : {}),
-        operationResolutions,
+        ...(operationResolutions.length > 0 ? { operationResolutions } : {}),
       }),
     });
   }

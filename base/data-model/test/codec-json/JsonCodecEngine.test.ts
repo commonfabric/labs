@@ -2104,6 +2104,18 @@ describe("JsonCodecEngine", () => {
       expect(unknown.state).toEqual({ some: "data" });
     });
 
+    it("round-trips `UnknownValue` with a namespaced tag through encode/decode", () => {
+      const us = new UnknownValue("sys.beep.Boop@1", { some: "data" });
+      expect(toEncodedFormat(us)).toEqual({
+        "/sys.beep.Boop@1": { some: "data" },
+      });
+      const result = roundTrip(us);
+      expect(result).toBeInstanceOf(UnknownValue);
+      const unknown = result as unknown as UnknownValue;
+      expect(unknown.wireTypeTag).toBe("sys.beep.Boop@1");
+      expect(unknown.state).toEqual({ some: "data" });
+    });
+
     it("rejects a `/hole` outside array context rather than calling it unknown", () => {
       // Per spec §9, `UnknownValue` is for a syntactically well-formed tag no
       // codec claims. `hole` is a meta-tag, meaningful only among array

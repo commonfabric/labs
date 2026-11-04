@@ -8,7 +8,7 @@
  * process, and the launcher does not grant that.
  *
  *   CF_PROF_OUT=/tmp/run CF_PROF_CPU=1 CF_TIMING_MEASURES=1 \
- *     deno run --quiet --config deno.jsonc --allow-net --allow-ffi \
+ *     deno run --quiet --unstable-lazy-dynamic-imports --config deno.jsonc --allow-net --allow-ffi \
  *     --allow-read --allow-write --allow-env --allow-run --allow-sys \
  *     skills/perf-investigation/scripts/profile-cf.ts cell get <address> ...
  *
@@ -25,6 +25,7 @@
 // deno-lint-ignore no-external-import
 import { Session } from "node:inspector";
 import { main } from "../../../runtime/cli/mod.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   getLoggerCountsBreakdown,
   getLoggerFlagsBreakdown,
@@ -112,9 +113,7 @@ async function finalize(code: number): Promise<void> {
     );
   } catch (error) {
     console.error(
-      `[profile-cf] writing the artifacts failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `[profile-cf] writing the artifacts failed: ${describeFailure(error)}`,
     );
   } finally {
     // The command's own code, whatever became of the artifacts.

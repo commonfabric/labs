@@ -11,17 +11,12 @@ import type {
 } from "../src/harness/types.ts";
 import {
   compiledDocKey,
-  getCompileCacheRuntimeVersion,
   loadCompiledClosure,
 } from "../src/compilation-cache/cell-cache.ts";
 import type { MemorySpace } from "../src/index.ts";
+import { compileCacheVersionOf } from "./support/compile-cache-version.ts";
 
 const signer = await Identity.fromPassphrase("storage-served values test");
-const resolvedRuntimeVersion = await getCompileCacheRuntimeVersion();
-if (resolvedRuntimeVersion === undefined) {
-  throw new Error("compile-cache runtime version unavailable in Deno test");
-}
-const runtimeVersion = resolvedRuntimeVersion;
 
 // Minimal injection-interface byte cache (same shape as
 // module-byte-cache.test.ts): stores artifact references as handed over, the
@@ -117,12 +112,16 @@ const compileInto = async (
   return entry;
 };
 
-/** The identities of the closure stored under `entryIdentity` in `space`. */
+/**
+ * The identities of the closure stored under `entryIdentity` in `space`, in
+ * the variant `rt` compiles under.
+ */
 const closureIdentities = async (
   rt: Runtime,
   space: MemorySpace,
   entryIdentity: string,
 ): Promise<string[]> => {
+  const runtimeVersion = await compileCacheVersionOf(rt);
   const readTx = rt.edit();
   try {
     const closure = await loadCompiledClosure(
@@ -139,7 +138,8 @@ const closureIdentities = async (
 };
 
 /**
- * The RAW stored `/sourceMap` of one compiled doc, as deep-plain JSON.
+ * The RAW stored `/sourceMap` of one compiled doc, in the variant `rt`
+ * compiles under, as deep-plain JSON.
  * `getRaw()` preserves stored link representations, so a (quoted) link at
  * `/sourceMap` shows up as its sigil structure instead of resolving through
  * to the map it points at — which is exactly what the assertions below must
@@ -150,6 +150,7 @@ const rawStoredSourceMap = async (
   space: MemorySpace,
   identity: string,
 ): Promise<unknown> => {
+  const runtimeVersion = await compileCacheVersionOf(rt);
   const readTx = rt.edit();
   try {
     const cell = rt.getCell(

@@ -28,11 +28,17 @@ import {
   read,
   readRevision,
 } from "./engine.ts";
-import { isACL } from "../acl.ts";
+import { isACL, isDeletionTombstone } from "../acl.ts";
+import { type AclHead, readAclHeads } from "./acl-heads.ts";
+import {
+  checkRewrittenStore,
+  fileSize,
+  preflightOfflineStore,
+} from "./offline-store.ts";
 
 /**
  * Which instances a compaction selects. Prefixes match `id` (the namespaces
- * are `of:`, `computed:` and `cid:`); the ACL document, the one id of the
+ * are `of:`, `computed:`, `receipt:` and `cid:`); the ACL document, the one id of the
  * form `of:did:…`, is never selected whatever the prefixes say — its history
  * is the membership audit, and the compaction commit is the one change
  * compaction makes to it. `scope` restricts the selection to one scope kind.
@@ -692,9 +698,6 @@ export const formatCompactionReport = (report: CompactionReport): string => {
 // ---------------------------------------------------------------------------
 // The run.
 
-/** The id of a space's ACL document: the one `of:did:…` id a store holds. */
-const ACL_ID_PATTERN = "of:did:%";
-
 /**
  * A store the run will not write, by name. The planner's preconditions, the
  * file's companions and the migrations a store may predate are each a reason
@@ -785,34 +788,6 @@ const HOLLOW_BATCH = 10_000;
 /** A FabricValue of `value`, with every `undefined` member dropped. */
 const storable = (value: unknown): FabricValue =>
   JSON.parse(JSON.stringify(value)) as FabricValue;
-
-/** The file's stat, or undefined for a file that is not there. Any other
- * failure — a permission refused, an I/O error — is not absence and is
- * rethrown: a companion the run cannot read is not a companion it may
- * treat as empty. */
-const statIfPresent = (path: string): Deno.FileInfo | undefined => {
-  try {
-    return Deno.statSync(path);
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return undefined;
-    throw error;
-  }
-};
-
-const fileSize = (path: string): number => statIfPresent(path)?.size ?? 0;
-
-/** Whether any directory entry is at `path` — a file, a directory, or a
- * symlink whether or not its target exists. The result is written through
- * whatever is there, so nothing may be. */
-const entryExists = (path: string): boolean => {
-  try {
-    Deno.lstatSync(path);
-    return true;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
-    throw error;
-  }
-};
 
 type SchemaObject = { type: string; name: string; tbl_name: string };
 type SchemaColumn = {
@@ -1015,32 +990,17 @@ export const compactStore = async (
   const runId = options.runId ?? new Date().toISOString();
   const sessionId = `${COMPACTION_SESSION_PREFIX}${runId}`;
 
-  // Preflight on the file: a store some process holds open in WAL mode has
-  // a log beside it, and a stale log left beside a replaced database is
-  // recovered onto the replacement.
-  try {
-    Deno.statSync(store);
-  } catch {
-    throw new CompactionRefused(`no store at ${store}`);
-  }
-  for (const companion of ["-wal", "-journal"]) {
-    if (fileSize(`${store}${companion}`) > 0) {
-      throw new CompactionRefused(
-        `${store}${companion} is not empty: a process holds the store open, or a log was left beside it; the run writes only a store nothing has open`,
-      );
-    }
-  }
-  if (entryExists(out)) {
-    throw new CompactionRefused(
-      `${out} exists; the result is never overwritten`,
-    );
-  }
+  preflightOfflineStore(
+    store,
+    out,
+    (reason) => new CompactionRefused(reason),
+  );
 
   // Plan read-only, on a connection that cannot write, before anything opens
   // the store for writing.
   const worklist: InstancePlan[] = [];
   let report: CompactionReport;
-  let aclHeads: Array<{ id: string; op: string; data: string | null }>;
+  let aclHeads: AclHead[];
   const planning = new Database(store, { readonly: true });
   let schemaBefore: string;
   try {
@@ -1069,12 +1029,7 @@ export const compactStore = async (
     if (reasons.length > 0) {
       throw new CompactionRefused(`refused: ${reasons.join("; ")}`);
     }
-    aclHeads = planning.prepare(
-      `SELECT h.id, h.op, r.data FROM head h
-       JOIN revision r ON r.branch = h.branch AND r.id = h.id AND r.scope_key = h.scope_key
-         AND r.seq = h.seq AND r.op_index = h.op_index
-       WHERE h.branch = '' AND h.scope_key = 'space' AND h.id LIKE ?`,
-    ).all<{ id: string; op: string; data: string | null }>(ACL_ID_PATTERN);
+    aclHeads = readAclHeads(planning);
     if (aclHeads.length > 1) {
       throw new CompactionRefused(
         `the store holds ${aclHeads.length} ACL documents (${
@@ -1090,6 +1045,16 @@ export const compactStore = async (
         ? undefined
         : (decodeTrustedMemoryBoundary(aclHeads[0].data) as EntityDocument)
           .value;
+      // A deleted space's store is reaped, not compacted: the audit
+      // revision would restate a deletion tombstone as though it were a list
+      // (random-space-identities.md, "Reaping a deleted space").
+      if (isDeletionTombstone(value)) {
+        throw new CompactionRefused(
+          `${
+            aclHeads[0].id
+          } holds a deletion tombstone: the space is deleted, and a deleted space's storage is reclaimed by reaping it (\`cf space reap\`), not by compacting it`,
+        );
+      }
       if (!isACL(value)) {
         throw new CompactionRefused(
           `${
@@ -1367,23 +1332,7 @@ export const compactStore = async (
     });
 
     // 5. The checks the plan ends a run with, then the fresh file.
-    const violations = db.prepare(`PRAGMA foreign_key_check`).all();
-    if (violations.length > 0) {
-      throw new Error(
-        `PRAGMA foreign_key_check reports ${violations.length} violation(s) after the run; the store is left as it is`,
-      );
-    }
-    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    const integrity = db.prepare(`PRAGMA integrity_check`).all<
-      { integrity_check: string }
-    >();
-    if (integrity.length !== 1 || integrity[0].integrity_check !== "ok") {
-      throw new Error(
-        `PRAGMA integrity_check: ${
-          integrity.map((row) => row.integrity_check).join("; ")
-        }`,
-      );
-    }
+    checkRewrittenStore(db);
     options.onProgress?.({ phase: "vacuum", out });
     db.prepare(`VACUUM main INTO ?`).run(out);
 

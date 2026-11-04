@@ -42,6 +42,16 @@ Deno.test("health routes", async (t) => {
   );
 
   await t.step(
+    "GET /api/health/collected-memory answers 404 on a server started without EXPOSE_GC",
+    async () => {
+      const response = await app.request("/api/health/collected-memory");
+      assertEquals(response.status, 404);
+      const json = await response.json();
+      assertEquals(typeof json.error, "string");
+    },
+  );
+
+  await t.step(
     "GET /api/health/stats reports this process's memory",
     async () => {
       const processMemory = async () => {

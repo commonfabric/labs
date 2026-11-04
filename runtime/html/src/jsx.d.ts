@@ -2911,6 +2911,7 @@ interface CFAutocompleteElement extends CFHTMLElement {}
 interface CFSelectElement extends CFHTMLElement {}
 interface CFRadioGroupElement extends CFHTMLElement {}
 interface CFPickerElement extends CFHTMLElement {}
+interface CFSuggestionsElement extends CFHTMLElement {}
 interface CFToolsChipElement extends CFHTMLElement {}
 interface CFHeadingElement extends CFHTMLElement {}
 interface CFCollapsibleElement extends CFHTMLElement {}
@@ -3992,6 +3993,23 @@ interface CFPickerAttributes<T> extends CFHTMLAttributes<T> {
   "oncf-blur"?: EventHandler<any>;
 }
 
+interface CFSuggestionsAttributes<T> extends CFHTMLAttributes<T> {
+  /** The ranked suggestion cards, best first. */
+  "$items": CellLike<any[]>;
+  /** The thing whose anchored cards are drawn. */
+  "$about": CellLike<unknown>;
+  /** Draws only cards carrying at least one of these tags. */
+  tags?: string[];
+  /** Fires when the person takes a card; `card` links to its row. */
+  "oncf-suggestion-take"?: EventHandler<
+    { id: string; card_revision?: string; card: unknown }
+  >;
+  /** Fires once per card, when the card is first shown. */
+  "oncf-suggestion-seen"?: EventHandler<
+    { id: string; card_revision?: string; card: unknown }
+  >;
+}
+
 interface CFToolsChipAttributes<T> extends CFHTMLAttributes<T> {
   "label"?: string;
   "show-count"?: boolean;
@@ -4532,6 +4550,9 @@ interface CFResizablePanelAttributes<T> extends CFHTMLAttributes<T> {
 
 interface CFResizablePanelGroupAttributes<T> extends CFHTMLAttributes<T> {
   "direction"?: "horizontal" | "vertical" | CellLike<"horizontal" | "vertical">;
+  /** Below this width (px) of the group itself, its panels lie vertically
+   * whatever `direction` says. */
+  "stackBelow"?: number | CellLike<number>;
 }
 
 interface CFResizableHandleAttributes<T> extends CFHTMLAttributes<T> {
@@ -5128,6 +5149,10 @@ declare global {
       "cf-picker": CFDOM.DetailedHTMLProps<
         CFPickerAttributes<CFPickerElement>,
         CFPickerElement
+      >;
+      "cf-suggestions": CFDOM.DetailedHTMLProps<
+        CFSuggestionsAttributes<CFSuggestionsElement>,
+        CFSuggestionsElement
       >;
       "cf-tools-chip": CFDOM.DetailedHTMLProps<
         CFToolsChipAttributes<CFToolsChipElement>,

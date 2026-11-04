@@ -19,9 +19,9 @@ import {
   parseLink,
 } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
-import {
-  type IExtendedStorageTransaction,
-  type IMemorySpaceAddress,
+import type {
+  IExtendedStorageTransaction,
+  IMemorySpaceAddress,
 } from "../src/storage/interface.ts";
 import { setResultCell } from "../src/result-utils.ts";
 import { trustPattern } from "./support/trusted-builder.ts";

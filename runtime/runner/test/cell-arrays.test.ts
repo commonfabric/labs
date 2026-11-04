@@ -18,7 +18,7 @@ import { JSONSchema } from "../src/builder/types.ts";
 import { type Cell, elementSchemaFor, isCell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   isLinkResolutionProbe,
   isReadIgnoredForScheduling,

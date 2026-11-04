@@ -16,22 +16,27 @@
  *   cause-assignments-dump.ts --root <dir> --out <file> <pattern path>...
  *
  * Each pattern path is relative to the root. A file that compiles to no
- * pattern is left out; one that fails to compile is written as an error.
+ * pattern is written with the digest of its source alone, which tells the gate
+ * a helper module from a pattern the compiler stopped building; one that fails
+ * to compile is written as an error.
  */
 
 import { encodeHex } from "@std/encoding/hex";
 import { sha256 } from "@commonfabric/content-hash";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { utf8Compare } from "@commonfabric/text/utf8";
 import { patternKey } from "./pattern-files.ts";
 import {
   assignmentLevels,
   type PatternAssignment,
   type PatternAssignmentError,
+  type UnassignedPattern,
 } from "./cause-assignments-lib.ts";
 
 /** What `main()` writes. */
 export interface DumpOutput {
   assignments: PatternAssignment[];
+  unassigned: UnassignedPattern[];
   errors: PatternAssignmentError[];
 }
 
@@ -48,7 +53,8 @@ function sourceDigest(
 
 /**
  * The runtime surface the dump reaches, which is the same in every checkout
- * the gate compiles with.
+ * the gate compiles with, apart from whether evaluating a graph returns a
+ * promise.
  */
 export interface DumpRuntime {
   harness: {
@@ -61,7 +67,7 @@ export interface DumpRuntime {
       graph: unknown,
       mainSpecifier: string,
       program: Program,
-    ): EvaluatedModules;
+    ): EvaluatedModules | Promise<EvaluatedModules>;
   };
   patternManager: {
     registerEvaluatedModules(evaluated: unknown): void;
@@ -139,7 +145,7 @@ export async function buildAssignment(
   // `cfcheck` type-checks this tree in its own job.
   const { id, graph, mainSpecifier } = await runtime.harness
     .compileToRecordGraph(program, { noCheck: true });
-  const evaluated = runtime.harness.evaluateRecordGraph(
+  const evaluated = await runtime.harness.evaluateRecordGraph(
     id,
     graph,
     mainSpecifier,
@@ -192,7 +198,7 @@ async function main() {
     `${root}/runtime/runner/src/harness/local-program.deno.ts`
   );
   const runtime = await createRuntime();
-  const output: DumpOutput = { assignments: [], errors: [] };
+  const output: DumpOutput = { assignments: [], unassigned: [], errors: [] };
   try {
     for (const file of files) {
       const pattern = patternKey(file);
@@ -202,11 +208,18 @@ async function main() {
           { main: `${root}/${file}`, root },
         );
         const assignment = await buildAssignment(runtime, program, pattern);
-        if (assignment !== undefined) output.assignments.push(assignment);
+        if (assignment === undefined) {
+          output.unassigned.push({
+            pattern,
+            source: sourceDigest(program.files),
+          });
+        } else {
+          output.assignments.push(assignment);
+        }
       } catch (error) {
         output.errors.push({
           pattern,
-          error: error instanceof Error ? error.message : String(error),
+          error: describeFailure(error),
         });
       }
     }

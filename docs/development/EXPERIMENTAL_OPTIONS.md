@@ -35,13 +35,14 @@ was last checked against the code.
 | [`computedCellIds`](#computedcellids)                                       | `EXPERIMENTAL_COMPUTED_CELL_IDS` env, or `RuntimeOptions.experimental`                                                                          | on                                                                                   | Robin McCollum (#4659)                                | graduate to unconditional behavior, then delete flag                                                                                                                                                                              | implemented, on by default                                                      |
 | [`lazyMaterialization`](#lazymaterialization)                               | `EXPERIMENTAL_LAZY_MATERIALIZATION` env, or `RuntimeOptions.experimental`                                                                       | on                                                                                   | Bernhard Seefeld                                      | fold into base read semantics, then delete flag                                                             | implemented, on by default                                         |
 | [`readerSchemaPrecedence`](#readerschemaprecedence)                         | `EXPERIMENTAL_READER_SCHEMA_PRECEDENCE` env, or `RuntimeOptions.experimental`                                                                   | on                                                                                   | Robin McCollum (#6338)                                | graduate to unconditional behavior, then delete flag                                                                                                                                                                              | implemented, on by default                                                      |
-| [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental`; the shell adopts both from its deployment, and an explicit build define overrides it | global off; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, off by default |
+| [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental`; the shell adopts both from its deployment, and an explicit build define overrides it | on for a web client under server execution, no effect without it; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, on by default under server execution |
 | [`viewScopedReplicationV1`](#viewscopedreplicationv1) | Memory hello capability | available when server execution is on | Bernhard Seefeld (2026-09-09) | retain as protocol negotiation until older clients and servers retire | optional capability |
 | [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define overrides it | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
 | [`localSessionDocuments`](#localsessiondocuments) | `EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS` env / shell build define, or `RuntimeOptions.experimental`; clients adopt the deployment value | off | Bernhard Seefeld (#8919) | validate local session semantics and performance, then graduate for client execution | implemented, opt-in; requires validation-only commit support |
 | [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define of the same name overrides it | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
 | [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
-| [`instanceNames`](#instancenames) | `RuntimeOptions.experimental` only (mapped `null` in the canonical env registry); the shell adopts it from its deployment | off | Dan Bornstein (2026-10-23) | exclude a runtime whose naming mode differs from its space's, turn it on, then delete the flag and the positional compile of `const`-bound instances | implemented, off by default; must not turn on before that exclusion exists |
+| [`pieceCreatorRecord`](#piececreatorrecord) | `EXPERIMENTAL_PIECE_CREATOR_RECORD` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment | off | Bernhard Seefeld (2026-11-01) | graduate once the ruling that binds an update-added owner field to the piece's creator merges, then delete the flag | implemented, off by default |
+| [`instanceNames`](#instancenames) | `RuntimeOptions.experimental` only (mapped `null` in the canonical env registry); the shell adopts it from its deployment | off | Dan Bornstein (2026-10-23) | make it reachable on servers, turn deployments' posture on, turn it on, then delete the flag and the positional compile of `const`-bound instances | implemented, off by default, with a runtime whose naming mode differs from its space's refused that space; must not turn on before deployments' posture names instances |
 | [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
 | [`sessionOpenProofs`](#sessionopenproofs) | Memory hello capability; toolshed withholds it under `MEMORY_ACL_DELEGATIONS=false` or `0` | on | Robin McCollum (2026-10-26) | retain as protocol negotiation while deployments may contain servers that admit no chain | implemented end to end and on by default; a profile space owns itself and its owner's runtime presents the chain Home records |
 | [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | on | Bernhard Seefeld (agent requests stage 3) | delete the flag after the default-on posture soaks | implemented, on by default |
@@ -61,8 +62,9 @@ was last checked against the code.
 | [`ownWriteEcho`](#ownwriteecho)                                             | `setOwnWriteEchoConfig()` (server-side only, not negotiated)                                                                                    | on                                                                                   | Robin McCollum (CT-1965)                              | remove the switch once the echo has field-soaked                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`experimentalConcurrentWatchRefresh`](#experimentalconcurrentwatchrefresh) | `IRemoteStorageProviderSettings`; in the shell, the `commonfabric.concurrentWatchRefresh()` console command (localStorage, per browser profile) | off                                                                                  | Ben Follington (#4937; shell toggle #4974)            | graduate to always-on after live measurement, or remove if superseded                                                                                                                                                             | off by default; acquisition/removal ordering tested; real-latency measurement pending |
 | [`cfcRenderCeiling`](#cfcrenderceiling)                                     | `commonfabric.cfcRenderCeiling()` in the browser (localStorage)                                                                                 | on                                                                                   | Bernhard Seefeld (#4550)                              | graduate to an unconditional ceiling                                                                                                                                                                                           | implemented, on by default; per-profile opt-out                                 |
-| [`SERVER_EXECUTION_STORE_READ_THROUGH`](#server_execution_store_read_through) | `SERVER_EXECUTION_STORE_READ_THROUGH` env on toolshed, or `SpaceServerPolicy.storeReadThrough` | off | Bernhard Seefeld (store read-through) | soak with the posture forced on, flip on, then delete the knob and the home-space session read path | implemented, off by default |
-| [`SERVER_EXECUTION_WORKER`](#server_execution_worker) | `SERVER_EXECUTION_WORKER` env on toolshed | off | Bernhard Seefeld (the serving loop off the request thread) | soak with the worker on, flip on, then delete the knob and the in-process arm | implemented, off by default |
+| [`SERVER_EXECUTION_STORE_READ_THROUGH`](#server_execution_store_read_through) | `SERVER_EXECUTION_STORE_READ_THROUGH` env on toolshed, or `SpaceServerPolicy.storeReadThrough` | on in toolshed; off in the test harness's serving memory server | Bernhard Seefeld (store read-through) | soak with the default on, then delete the knob and the home-space session read path | implemented, on by default in toolshed |
+| [`SERVER_EXECUTION_WORKER`](#server_execution_worker) | `SERVER_EXECUTION_WORKER` env on toolshed | on in toolshed over a file store; off in the test harness's serving memory server | Bernhard Seefeld (the serving loop off the request thread) | soak with the default on, then delete the knob and the in-process arm | implemented, on by default in toolshed |
+| [`SERVER_EXECUTION_OWNER_ROUTING`](#server_execution_owner_routing) | `SERVER_EXECUTION_OWNER_ROUTING` env on toolshed | on in toolshed | Bernhard Seefeld (serve each space from the process that owns it) | delete the knob and the in-process crossings once every process keeps the lease in memory | implemented for every crossing, on by default in toolshed |
 | [`SERVER_EXECUTION_OVERLAP_COMMIT`](#server_execution_overlap_commit) | `SERVER_EXECUTION_OVERLAP_COMMIT` env on toolshed, or `SpaceServerPolicy.overlapWaveCommit` | off | Bernhard Seefeld (the wave commit overlapped with the next cycle) | measure under the worker, flip on where it pays, then delete the knob and the inline arm | implemented, off by default |
 | [`SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`](#server_execution_flush_deadline_max_ms) | `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` env on toolshed, or `SpaceServerPolicy.flushDeadlineMaxMs` | off (a fixed deadline) | Bernhard Seefeld (the flush deadline that grows after a cut settle) | measure the vote burst and the seed with a cap, pick a default cap where it pays, then delete the knob | implemented, off by default |
 | [`fuseNfsCacheTuning`](#fusenfscachetuning)                                 | `cf fuse mount --attrcache-timeout <whole seconds; 0 = untuned>` or `--noattrcache`                                                             | cf adds `attrcache-timeout=1` (one second) to FUSE-T mounts                          | Ian Hickson                                           | keep the default; shrink the exec.ts listing-recheck delay once the default has field-soaked                                                                                                                                      | implemented, on by default for FUSE-T, soak-validated                           |
@@ -384,7 +386,7 @@ flags it adopts from the deployment it runs against.
     builtins.md §5 — AND the serving loop actually SERVES: toolshed
     constructs an ExecutorHost over its memory server, spaces activate on
     session open / authored admission, one SpaceServer per active space
-    holds and renews the lease, runs demanded derivations through the
+    holds the lease, runs demanded derivations through the
     seal-into-wave machinery, commits ONE derived transaction per wave
     carrying the watermark (protocol.md §4; `waitForSettled` rides it),
     hosts the pattern-update watcher server-side (serving-loop.md §3e),
@@ -439,9 +441,9 @@ flags it adopts from the deployment it runs against.
   default is ON). CI resolves stable `default` and `opposite`
   roles through `tasks/server-execution-ci.ts`: `default` leaves the flag
   unset, while `opposite` explicitly selects the inverse and bakes that same
-  value into its toolshed shell. Whichever role resolves ON also sets
-  `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true`, so the ON arm is exercised
-  with web view-scoped replication. Therefore changing the default is exactly:
+  value into its toolshed shell. Web view-scoped replication is on by default
+  under server execution, so the ON arm is exercised with it while CI sets no
+  variable for it. Therefore changing the default is exactly:
   `SERVER_EXECUTION_DEFAULT_ENABLED`, the summary cell above, a dated status
   entry here, and a delta in the plan's live coordination block; workflow
   job topology, probes, skip placement, coverage ownership, test record
@@ -486,6 +488,14 @@ flags it adopts from the deployment it runs against.
   retires and the OFF code path is removed — a separate post-soak PR (the plan's
   Phase 7 task 2; it also removes the opposite suites and the
   `toolshed-baked-opposite` capability).
+- **Status on 2026-10-31 (the verbs on the space's memory session).** Under
+  ON, the toolshed's memory server runs the verbs as `pattern.lifecycle`
+  requests and advertises `patternLifecycle`, and
+  `cf piece new` and `cf piece setsrc` send each verb on the space's memory
+  session, which reaches the process serving the space. The session request
+  is the only way a verb is sent
+  ([`server-pattern-lifecycle.md`](../features/server-pattern-lifecycle.md)).
+  OFF is unchanged.
 - **Status on 2026-10-27 (the shell follows its deployment).** The first-party
   default is unchanged. The browser shell takes the arm from the toolshed that
   serves it, where its build define leaves the flag unset, so a deployment
@@ -590,14 +600,18 @@ flags it adopts from the deployment it runs against.
   deployment defaults. Both are `"deployment"` in `SHELL_FLAG_SOURCES`, so the
   browser shell runs what the toolshed serving it publishes, and a shell build
   define pins either flag over the deployment.
-- **Default:** global `false`; web override absent. A web runtime resolves
-  `webViewScopedReplication ?? viewScopedReplication ?? false`. An explicit web
-  `false` overrides a global `true`. CI's server-execution ON arm sets the web
-  override `true` on its Toolshed servers, baked shells and the test processes
-  of its package- and pattern-integration suites
-  (`SERVER_EXECUTION_ON_ENVIRONMENT` in `tasks/server-execution-ci.ts`), and
-  its OFF arm sets neither flag. The setting follows the ON arm, so a flip of
-  `serverExecution`'s default moves it to the `default` role's lanes.
+- **Default:** both unset, which is on for a web client under server execution.
+  A web runtime resolves
+  `webViewScopedReplication ?? viewScopedReplication ?? true`, and only under
+  `serverExecution: true` (`Runtime.viewScopedReplicationRequested`). An
+  explicit web `false` turns it off, and so does a global `false` where the web
+  override is unset; an explicit web value outranks the global one either way.
+  Without server execution neither flag does
+  anything, whatever its value: the runtime requests no view replication, and
+  the memory server advertises `viewScopedReplicationV1` only under server
+  execution. CI sets neither flag on either arm, so its ON arm runs the
+  default, and the ON arm's posture probe fails a toolshed that publishes it
+  off.
 - **Scope:** requires `serverExecution: true`, the browser-worker
   `clientClass: "web"` preset, and a server advertising
   `viewScopedReplicationV1`. Other client classes retain ordinary replication.
@@ -665,6 +679,11 @@ flags it adopts from the deployment it runs against.
   it serves, where the shell's resolved `serverExecution` is on as well (the
   scope above). A shell build define still pins either flag, and
   `serverExecution` too.
+- **Status (2026-11-01):** on by default for a web client under server
+  execution, with no effect without it. CI's ON arm had set the web override
+  `true` on its servers, baked shells and integration suites; it now sets
+  nothing and runs the default. A deployment that runs server execution and
+  wants the old posture sets `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=false`.
 
 
 ### `lazyMaterialization`
@@ -1004,6 +1023,61 @@ holds the measurements and the conditions for revisiting.
   `runtime/runner/src/storage/v2.ts`, the `derivedWrites` transaction flag,
   and §3.8.3 go with it.
 
+### `pieceCreatorRecord`
+
+- **Toggle via.** `EXPERIMENTAL_PIECE_CREATOR_RECORD` environment variable
+  (through the canonical env registry) or
+  `RuntimeOptions.experimental.pieceCreatorRecord`. The shell adopts it from
+  its deployment (`SHELL_FLAG_SOURCES` in
+  [`runtime/runner/src/deployment-meta.ts`](../../runtime/runner/src/deployment-meta.ts)),
+  and it is server-authoritative in `EXPERIMENTAL_FLAG_AUTHORITY`: whether
+  pieces carry the record is the deployment's decision, since its serving side
+  is what binds an update-added field to it. The flag is consumed from the
+  Runtime instance, at the one place a setup writes the record, where it
+  brings a piece into being or moves a legacy piece's pattern pointer
+  (`#setupInternal` in
+  [`runtime/runner/src/runner.ts`](../../runtime/runner/src/runner.ts)); there
+  is no ambient control point.
+- **Added by.** Bernhard Seefeld, 2026-11-01.
+- **Purpose.** Gates the record of a piece's creator
+  ([`docs/plans/piece-creator-owns-update-added-fields.md`](../plans/piece-creator-owns-update-added-fields.md)):
+  the `creator` meta field a setup writes on a new piece's result document,
+  naming the DID of the principal the piece was created for. A child a piece
+  instantiates records its parent's creator; a piece a served run creates
+  records the run's actor; a run that acts for no one records nothing. A
+  piece from before the record gains one at its next source transition: a
+  space root takes the owner its space's access list names, any other piece
+  the one principal its owner-protected fields' stored labels name, and none
+  where they name two or none. Commit preparation admits a write to the field
+  only in the transaction that installs the piece's first pattern pointer, or
+  in a source transition that finds the field absent, with the runtime's own
+  mark vouching for the value either way, and refuses every other write to
+  it, whatever grant the writer holds. With the flag off, no record is
+  written and a stored one is left as it is. The record exists so that a
+  field a later release adds with `ownerPrincipal: CurrentPrincipal` is bound
+  to the piece's creator rather than to whoever first writes it; that binding
+  follows the record wherever one is stored and is gated by nothing else, so
+  the flag decides which pieces carry a record and so which bind.
+- **Current default and planned end state.** Off by default. Set
+  `EXPERIMENTAL_PIECE_CREATOR_RECORD=true` or pass
+  `RuntimeOptions.experimental.pieceCreatorRecord: true` to record creators.
+  The record and its admission rule are spec text under the CFC
+  correspondence procedure, so they land behind `SPEC-PENDING` markers in
+  `runtime/runner/src/cfc/prepare.ts` and
+  `runtime/runner/src/cfc/piece-creator-evidence.ts` naming the ruling,
+  [specs pull request 87](https://github.com/commonfabric/specs/pull/87). Once
+  that ruling merges, the record becomes unconditional and the flag is
+  deleted.
+- **Status on 2026-11-01.** Implemented and off. The record and the writes
+  refused are covered by `runtime/runner/test/cfc-piece-creator.test.ts`, the
+  binding and the legacy record by
+  `runtime/runner/test/cfc-creator-owner-binding.test.ts`, and the plumbing by
+  `runtime/runner/test/experimental-options.test.ts`.
+- **Path to removal.** Remove the env mapping, the runtime option and its
+  authority and shell-source entries, the default, and the gate at the write
+  site in `#setupInternal`; the meta field, the transaction mark and the
+  admission in `prepare.ts` stay.
+
 ### `instanceNames`
 
 - **Toggle via.** `RuntimeOptions.experimental.instanceNames` only. It is
@@ -1054,21 +1128,44 @@ holds the measurements and the conditions for revisiting.
   It has to cover runtimes already connected, long-lived browser tabs and
   backends among them, not only new admissions. A manifest entry an older
   guard reads is not enough on its own: an older runtime's plain reopen of a
-  parent is never judged by its guard. What a runtime with naming off does to a
-  parent a naming runtime carried over is pinned by
-  `runtime/runner/test/instance-naming-modes.test.ts`: its reopen and its
-  update alike run the inserted sibling on the carried child's document and the
-  named instance on a fresh one, and show the carried child's state under the
-  sibling, with no refusal in either. Its reopen of a parent a naming runtime
-  set up shows fresh children in place of the named ones.
-- **Status on 2026-10-29.** The transformer's off arm is held to `main`'s
+  parent is never judged by its guard. The mechanism is a one-way mark on each
+  space, recorded at the first commit from a naming runtime and only where the
+  deployment's posture names instances, after which the memory server admits
+  no runtime with naming off to the space (INV-16 in
+  [`../specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md#inv-16--instance-naming-admission)).
+  It is built. The memory server records the mark, enforces INV-16,
+  advertises `instanceNameMark`, and takes its posture from this flag's
+  deployment value, which toolshed gives it from `experimentalPosture()`. A
+  `Runtime` declares its mode to its storage manager
+  (`IStorageManager.setInstanceNames()`), whose memory clients declare
+  `instanceNames: true` in every open of a naming runtime
+  (`ConnectOptions.instanceNames`) and fail the connection permanently to a
+  server that does not advertise `instanceNameMark`. One storage manager
+  serves runtimes of one mode, and refuses a runtime of the other; one no
+  runtime has declared a mode to runs this build's default
+  (`namesInstancesByDefault()`), as a serving host's routed plane does. An
+  emulated storage manager's memory server takes the mode of the runtime it
+  serves as its posture, a loopback server (`newLoopbackServer()`) given none
+  takes the runtime's default, as a toolshed of the same build does, and the
+  `StandaloneMemoryServer`s `cf test` and the serving memory servers start are
+  given the mode their runtimes' flags resolve to. A `StandaloneMemoryServer`
+  takes a posture only from its caller, and each memory server or client this
+  repository's tests build is given the default. What remains is making the
+  flag reachable on servers, a deployment turning its posture on, and the flip,
+  which
+  [`../plans/instance-names-on.md`](../plans/instance-names-on.md)
+  sequences.
+- **Status on 2026-11-02.** The transformer's off arm is held to `main`'s
   output by the golden fixtures and `pipeline-regressions.test.ts`, and both
   arms by `transform.test.ts`. That compiled code is never shared between the
   two modes is pinned by `runtime/runner/test/instance-naming-modes.test.ts`.
-  So is a cold start, in either mode, of a parent the other mode set up: the
-  two modes stamp the same setup record, so the start runs the parent. With
-  naming on, it carries the children over; with naming off, the positional
-  roots start fresh. Carry-over is pinned by
+  So is the boundary between them: a runtime with naming off is refused a
+  space a naming runtime wrote, whether it reopens, updates or starts a parent
+  there, or loads compiled code from it, and a naming runtime that opens the
+  parent afterwards finds each child where it bound it. A cold start with
+  naming on of a parent a runtime with naming off set up carries the children
+  over, since the two modes stamp the same setup record. Carry-over is pinned
+  by
   `runtime/runner/test/instance-carry-over.test.ts`, and by the Home upgrade
   cases in `patterns/integration/home-interface-upgrade.test.ts`, which run
   with the flag on. The plumbing is pinned by
@@ -1749,6 +1846,39 @@ the per-epic implementation notes).
 >   Older servers omit it, which parses as `false`, and a client then keeps its
 >   reports to itself rather than sending a message the server would refuse.
 >   It is permanent.
+> - **`patternLifecycle`** is a configuration-derived capability, neither an
+>   experimental toggle nor build-inherent. A memory server advertises it
+>   exactly while its host has installed a lifecycle handler with
+>   `Server.setPatternLifecycleHandler()`, which toolshed does while it runs
+>   the serving loop ([`serverExecution`](#serverexecution) on). It advertises
+>   the `pattern.lifecycle` request of the memory protocol chapter's section
+>   4.3.10, which runs a pattern-lifecycle verb on the space's memory session
+>   ([`server-pattern-lifecycle.md`](../features/server-pattern-lifecycle.md)).
+>   Only the server advertises it; a client reads it from `hello.ok` and never
+>   offers it. A server that omits it parses as `false`, and the client then
+>   refuses a verb with `lifecycle-unsupported` before sending it. It is
+>   permanent.
+> - **`spaceInvites`** is a configuration-derived capability, neither an
+>   experimental toggle nor build-inherent. A memory server advertises it
+>   exactly when it was given `inviteHost`, the public origin its invitation
+>   links name; toolshed passes `normalizeInviteHost(API_URL)`. It advertises
+>   the `space.invite` request of the memory protocol chapter's section
+>   4.3.11, which administers a space's invitations on the space's memory
+>   session. Only the server advertises it; a client reads it from `hello.ok`
+>   and never offers it. A server that omits it parses as `false`, and
+>   `SpaceInviteClient` then sends administration over HTTP. It is permanent.
+> - **`servedRequests`** is a configuration-derived capability, neither an
+>   experimental toggle nor build-inherent. A memory server advertises it
+>   exactly while its host has installed a served-request handler through
+>   `Server.setServedRequestHandler()`, which toolshed does while it runs the
+>   serving loop ([`serverExecution`](#serverexecution) on). It advertises the
+>   `served` request of the memory protocol chapter's section 4.3.12, which
+>   delivers a crossing from another process's serving host to the space's
+>   owner
+>   ([`SERVER_EXECUTION_OWNER_ROUTING`](#server_execution_owner_routing)).
+>   Only the server advertises it; a client reads it from `hello.ok` and never
+>   offers it. A server that omits it parses as `false`, and a host then keeps
+>   the crossing for a later attempt. It is permanent.
 > - **`watchRemoveV1`** is a build-inherent capability, hardwired to `true`.
 >   It advertises `session.watch.remove`, which removes watches by id and
 >   answers with only what changed (the memory protocol chapter's section
@@ -1802,6 +1932,15 @@ the per-epic implementation notes).
 >   since such a server would neither validate nor seal it, and
 >   `Runtime.spaceKind()` throws there rather than report a kind as absent. It
 >   is permanent.
+> - **`instanceNameMark`** is a build-inherent capability, hardwired to
+>   `true`. It advertises that the server records a space's instance-naming
+>   mark and admits sessions and commits by it (INV-16 in
+>   [`../specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md#inv-16--instance-naming-admission)),
+>   with the server's posture taken from the
+>   [`instanceNames`](#instancenames) flag. Only the server's advertisement
+>   is read. Older servers omit it, which parses as `false`; such a server
+>   records no mark, and a client whose runtime names instances fails its
+>   connection there permanently. It is permanent.
 
 ### `experimentalConcurrentWatchRefresh`
 
@@ -1955,11 +2094,12 @@ the per-epic implementation notes).
   into `SpaceServerPolicy.storeReadThrough`; a harness constructing an
   `ExecutorHost` sets the policy field directly, and a test's serving memory
   server (`runtime/runner/src/executor/serving-memory-server.deno.ts`) reads
-  the same variable for a policy that leaves the field unset, which is how a
-  lane runs its tests under the posture. Only the literal `true` turns
-  it on; `false` and unset leave it off, and anything else leaves it off,
-  with a warning from the toolshed bootstrap and none from the test server. Meaningful only with the serving loop running
-  ([`serverExecution`](#serverexecution) on).
+  the same variable for a policy that leaves the field unset. In the toolshed
+  only the literal `false` turns it off; `true`, unset and empty leave it on,
+  and anything else leaves it on with a warning. The test server keeps the
+  opposite default, turning it on for the literal `true` alone, which is how a
+  lane runs its tests under the posture. Meaningful only with the serving loop
+  running ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the store read-through change.
 - **Purpose.** The serving runtime reads its HOME space straight from the
   space's engine instead of over its loopback session: a document its replica
@@ -1975,14 +2115,17 @@ the per-epic implementation notes).
   declares a wave quiescent. [`serving-loop.md`](../specs/server-side-execution/serving-loop.md)
   §1 plane (a) states the posture and what it does not do, and its §3
   prefix-coverage paragraph the barrier each posture gives the settle.
-- **Current default and planned end state.** Off by default. The read-through
-  follows session delivery's rules in its own form: another principal's
-  instance is read only under a live tenure of the space's lease (a read that
-  finds the row lapsed runs the renew arm first, and is withheld when the
-  lease is not regained), and an address the store holds nothing at leaves no
-  record. What stands between it and a default is soak with the posture forced
-  on. The end state is on by default, then the session read path for the home
-  space goes.
+- **Current default and planned end state.** On by default in the toolshed,
+  off in the test harness's serving memory server. The read-through follows
+  session delivery's rules in its own form: another principal's instance is
+  read only under a current tenure of the space's lease (a runtime that
+  outlived its tenure reads none), and an address the store holds nothing at
+  leaves no record. The
+  end state is the session read path for the home space gone, with the knob.
+- **Status on 2026-10-31.** Implemented, on by default in the toolshed. The
+  test harness's serving memory server keeps it off unless the variable is
+  `true`, and no CI lane sets it yet, so the executor and pattern suites run
+  without it in CI, and the toolshed-backed lanes run with it.
 - **Status on 2026-10-23.** Implemented, off by default. The replica reports
   which instances the read-through found nothing at
   (`IStorageProvider.storeReportedAbsent`), and the gate before a piece's run
@@ -2035,20 +2178,24 @@ the per-epic implementation notes).
   session depth serves the session instance at the moved ratchet, and a later
   session-scoped write re-runs it under the session key. The toolshed-backed
   integration lanes pass.
-- **Path to removal.** Soak with the posture forced on, flip the default, then
-  delete the knob and the home-space session read path it replaces.
+- **Path to removal.** Soak with the default on, then delete the knob and the
+  home-space session read path it replaces.
 
 ### `SERVER_EXECUTION_WORKER`
 
 - **Toggle via.** The `SERVER_EXECUTION_WORKER` environment variable on
   toolshed, read by the serving-host bootstrap
   ([`runtime/toolshed/lib/server-execution.ts`](../../runtime/toolshed/lib/server-execution.ts)).
-  Only the literal `true` turns it on; `false`, empty, and unset leave it off.
-  Other values warn and leave it off. The serving memory server tests build
+  The literal `true` puts the loop in a worker and `false` keeps it on the main
+  thread. Unset or empty, the loop runs in a worker when the memory server's
+  store is a file, as a toolshed's is, and on the main thread otherwise, since
+  a worker cannot open a store that is not a file. Other values warn and take
+  that default. The serving memory server tests build
   ([`runtime/runner/src/executor/serving-memory-server.deno.ts`](../../runtime/runner/src/executor/serving-memory-server.deno.ts))
-  reads it too, where its `worker` option is left unset, and `cf test` sets that
-  option to keep its loop on its own thread. Meaningful only with the serving
-  loop running ([`serverExecution`](#serverexecution) on).
+  reads it too, where its `worker` option is left unset, and runs its loop in a
+  worker for the literal `true` alone; `cf test` sets that option to keep its
+  loop on its own thread. Meaningful only with the serving loop running
+  ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the change that moves the serving loop
   off the request thread.
 - **Purpose.** The serving loop, its host and every serving runtime run in a Web
@@ -2063,10 +2210,73 @@ the per-epic implementation notes).
   it. The pattern-lifecycle verbs reach the loop as descriptors on both arms.
   [`docs/plans/serving-loop-worker.md`](../plans/serving-loop-worker.md) is the
   design and its stages.
-- **Current default and planned end state.** Off by default. The end state is
-  on by default, then the in-process arm goes, with the knob.
-- **Path to removal.** Soak with the worker on, flip the default, then delete
-  the knob and the in-process arm.
+- **Current default and planned end state.** On by default in the toolshed
+  over a file store, off in the test harness's serving memory server. The end
+  state is the in-process arm gone, with the knob.
+- **Status on 2026-10-31.** Implemented, on by default in the toolshed over a
+  file store. The worker entry builds its process's compiled-module byte cache,
+  as the main-thread loop does. Run with the variable `true`, the pattern
+  integration suites the `MultiRuntimeHarness` drives pass under the worker;
+  the private-inbox and FabriChat suites need a serving runtime to run no child
+  placed in a space other than the one it serves (#9418). No CI lane runs them
+  that way yet: in CI the worker runs in the toolshed-backed lanes and the
+  worker's own unit tests.
+- **Path to removal.** Soak with the default on, then delete the knob and the
+  in-process arm.
+
+### `SERVER_EXECUTION_OWNER_ROUTING`
+
+- **Toggle via.** The `SERVER_EXECUTION_OWNER_ROUTING` environment variable on
+  toolshed, read by the serving-host bootstrap
+  ([`runtime/toolshed/lib/server-execution.ts`](../../runtime/toolshed/lib/server-execution.ts)).
+  The literal `false` leaves every crossing on the process's own memory
+  server; `true`, unset or empty turn the route on, and other values warn and
+  turn it on. The route is `MEMORY_URL`, the deployment's memory endpoint that
+  its proxy routes by space. Meaningful only with the serving loop running
+  ([`serverExecution`](#serverexecution) on). The runner's tests give their
+  `ExecutorHost` a route as an option instead, and every test of a routed
+  arm sets one.
+- **Added by.** Bernhard Seefeld, in the change that serves each space from the
+  process that owns it.
+- **Purpose.** A deployment runs many toolshed processes over one memory store,
+  and its proxy routes each space's memory connections to one of them, the
+  space's owner. The serving loop's crossings into other spaces went through
+  the process's own memory server, whichever process owned the target, so the
+  owner learned of them only through the store. With the knob on, the loop
+  reaches a space other than the ones it serves through that space's owner: a
+  routed session per target space, open as the service identity on both
+  threads the loop can run on, carries the crossing as a `served` request of
+  the memory protocol (the memory protocol chapter's section 4.3.12), and the
+  owner admits it as its own host's call. The outbox's event appends, the
+  pattern-lifecycle handler's registration delivery, and the wave's foreign
+  batches and access-list changes go that way. The genesis of a space the
+  serving runtime creates takes the same route as a signed `session.open`
+  rather than a `served` request: the session signed by the new space's own
+  key is opened with the space's owner, and its first commit, the access
+  list, lands there. The loop's read sessions in other spaces are opened with
+  the owner too, so the owner's commits wake it.
+  [`docs/history/plans/serving-loop-owner-routing.md`](../history/plans/serving-loop-owner-routing.md)
+  records the design and its stages.
+- **Current default and planned end state.** On by default in toolshed,
+  which always has `MEMORY_URL`; the runner's harnesses route only where a
+  test hands their host a route. The end state is the route without a knob
+  and every crossing through the owner. With the lease in memory, the route is
+  what stops two processes from serving one space (`serving-loop.md` §2).
+- **Status on 2026-11-01.** Implemented for event appends, the registration
+  delivery, foreign wave batches, access-list changes, genesis and reads, and
+  on by default in toolshed. The served request admits every kind, and the
+  memory server's read row admits a routed service-identity session under the
+  read actor's grant.
+  [`runtime/runner/integration/owner-routing.test.ts`](../../runtime/runner/integration/owner-routing.test.ts)
+  runs two toolshed processes behind a proxy that routes by space. The
+  crossings a process sent through the route are counted by kind under
+  `servingLoop.routed` in `/api/health/stats`, zero with the route off, so a
+  deployment reads there whether routing carries its crossings.
+- **Path to removal.** Delete the knob and the in-process crossings, once a
+  deployment's every process runs a release that keeps the lease in memory.
+  The unused `execution_lease` table goes at the same point, since no process
+  writes its rows by then (the `TODO` beside its definition in
+  `runtime/memory/v2/engine.ts`).
 
 ### `SERVER_EXECUTION_OVERLAP_COMMIT`
 
@@ -2564,7 +2774,14 @@ The Category 1 flags are declared as the `ExperimentalOptions` interface in
 the per-flag defaults live in the summary table above and each flag's
 section, not in a second list here — propagates each one to its ambient
 control point, and then reads the effective state back so that
-`runtime.experimental.*` reflects what is actually in effect.
+`runtime.experimental.*` reflects what is actually in effect. A flag the
+runtime consumes from its own instance, with no ambient control point, takes
+its default from `applyLocalExperimentalDefaults()` in
+[`runtime/runner/src/experimental-defaults.ts`](../../runtime/runner/src/experimental-defaults.ts).
+A flag's default can change what the compiler builds from a pattern's source,
+so `deno task check-cause-assignments` compiles on any change to that module
+([`automated-gates.md`](automated-gates.md)), and a changed default is held to
+the cell numbering an unchanged pattern already has.
 
 First-party construction config is centralized in
 [`runtime/runner/src/runtime-presets.ts`](../../runtime/runner/src/runtime-presets.ts),

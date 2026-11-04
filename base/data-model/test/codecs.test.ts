@@ -124,7 +124,7 @@ describe("codecs", () => {
   });
 
   describe("a state the format cannot write down", () => {
-    // `2.10 Encode Input Contract` names three reasons `encode()` throws for a
+    // `2.11 Input Contracts` names three reasons `encode()` throws for a
     // value that is otherwise valid. This is the third: the class is claimed
     // by a codec in the registry, and that codec refuses this instance's
     // state. Asserted through the engine rather than the codec, because the

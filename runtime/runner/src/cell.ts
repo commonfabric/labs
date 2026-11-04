@@ -162,7 +162,7 @@ import {
   parseLink,
   toMemorySpaceAddress,
 } from "./link-utils.ts";
-import { type MetaField, type RawMetaWriteAuthorization } from "./meta-seam.ts";
+import type { MetaField, RawMetaWriteAuthorization } from "./meta-seam.ts";
 import {
   type CellResult,
   createQueryResultProxy,
@@ -176,9 +176,14 @@ import { isRuntime } from "./runtime-brand.ts";
 import {
   type Action,
   ignoreReadForScheduling,
+  type ReactivityLog,
   txToReactivityLog,
 } from "./scheduler.ts";
-import { mintEventId, scopeCallerEventId } from "./scheduler/event-identity.ts";
+import {
+  handlingReceiptLink,
+  mintEventId,
+  scopeCallerEventId,
+} from "./scheduler/event-identity.ts";
 import { withdrawHandlerWhileLoading } from "./scheduler/handler-load-wait.ts";
 import { InSpaceTargetUnresolved } from "./scheduler/retry-immediately.ts";
 import {
@@ -186,14 +191,11 @@ import {
   processDefaultValue,
   resolveSchema,
   schemaHasIfc,
+  singleReadTx,
   validateAndTransform,
 } from "./schema.ts";
 import { isCellScope, narrowerScopeCap, normalizeCellScope } from "./scope.ts";
-import {
-  type SigilLink,
-  type SigilWriteRedirectLink,
-  type URI,
-} from "./sigil-types.ts";
+import type { SigilLink, SigilWriteRedirectLink, URI } from "./sigil-types.ts";
 import { speculationRunContextOf } from "./speculation/overlay-destination.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
 import {
@@ -684,6 +686,15 @@ export type StreamSendOptions = {
     delivery: EventAppendDeliveryOutcome,
     tx: IExtendedStorageTransaction,
   ) => void;
+
+  /**
+   * `false` sends the event without running its handler in this runtime, for a
+   * client under server execution that has no use for a speculative echo: the
+   * event append is the whole of the send, the piece is not started for it, and
+   * the commit callback receives a transaction that wrote nothing and names the
+   * handling's receipt. A runtime that runs its own events ignores it.
+   */
+  echo?: false;
 };
 
 // The mint registry backing `runtimeInjectedEventKeys` (see
@@ -1979,9 +1990,9 @@ export class CellImpl<T extends FabricValue>
     if (!this.#synced) this.#startLoad(); // No await, just kicking this off
 
     // Wrap the transaction to make all reads non-reactive. Child cells created
-    // during validateAndTransform will use the original transaction (via
-    // getTransactionForChildCells).
-    const readTx = this.#runtime.readTx(this.#tx);
+    // during validateAndTransform use the cell's own transaction while it is
+    // open, and none otherwise (via getTransactionForChildCells).
+    const readTx = singleReadTx(this.#runtime, this.#tx);
     const nonReactiveTx = createNonReactiveTransaction(readTx);
 
     return validateAndTransform(this.#runtime, nonReactiveTx, this.#viewRef);
@@ -2979,29 +2990,40 @@ export class CellImpl<T extends FabricValue>
           onCommit?.(tx);
         }
         : onCommit;
-      this.#runtime.scheduler.queueEvent(
-        resolvedToValueLink,
-        event,
-        undefined,
-        settleCallback,
-        false,
-        {
-          // Under events-down the COMMITTED append's id is the one the
-          // echo must carry (overlay origin `intent(eventId)`,
-          // speculation.md §1) — the same session-scoped id, one mint.
-          eventId: firedEventId ?? deliveryEventId,
-          ...(clientCascadeParent !== undefined
-            ? { parentEventId: clientCascadeParent }
-            : {}),
-          originTx: this.#tx ?? undefined,
-          // Forward injection provenance only when it carries the mint (see
-          // markRuntimeInjectedEventKeys): a plain array here — the shape any
-          // in-process or sandboxed caller could pass — is dropped, and the
-          // closed-world gate then judges the key like any other undeclared
-          // field.
-          runtimeInjectedEventKeys: mintedKeys,
-        },
-      );
+      if (firedEventId !== undefined && sendOptions?.echo === false) {
+        if (settleCallback !== undefined) {
+          const unechoed = this.#runtime.edit();
+          unechoed.handlingReceiptLink = handlingReceiptLink(
+            firedEventId,
+            resolvedToValueLink,
+          );
+          void unechoed.commit().settled.then(() => settleCallback(unechoed));
+        }
+      } else {
+        this.#runtime.scheduler.queueEvent(
+          resolvedToValueLink,
+          event,
+          undefined,
+          settleCallback,
+          false,
+          {
+            // Under events-down the COMMITTED append's id is the one the
+            // echo must carry (overlay origin `intent(eventId)`,
+            // speculation.md §1) — the same session-scoped id, one mint.
+            eventId: firedEventId ?? deliveryEventId,
+            ...(clientCascadeParent !== undefined
+              ? { parentEventId: clientCascadeParent }
+              : {}),
+            originTx: this.#tx ?? undefined,
+            // Forward injection provenance only when it carries the mint (see
+            // markRuntimeInjectedEventKeys): a plain array here — the shape any
+            // in-process or sandboxed caller could pass — is dropped, and the
+            // closed-world gate then judges the key like any other undeclared
+            // field.
+            runtimeInjectedEventKeys: mintedKeys,
+          },
+        );
+      }
 
       this.#cleanup?.();
       const [cancel, addCancel] = useCancelGroup();
@@ -4191,7 +4213,8 @@ export class CellImpl<T extends FabricValue>
     const subPath = path || [];
     return createQueryResultProxy(
       this.#runtime,
-      requireTransaction(tx) ?? this.#tx ?? this.#runtime.edit(),
+      requireTransaction(tx) ?? this.#tx ??
+        singleReadTx(this.#runtime, undefined),
       {
         ...this.#link,
         path: [...this.path, ...subPath.map((p) => p.toString())] as string[],
@@ -5427,18 +5450,7 @@ function sinkHelper(
   });
   (sink.action as Action & { src?: string }).src = sinkName;
 
-  // Call action once immediately, which also defines what docs need to be
-  // subscribed to. Wrap with withExecutingAction so that any child sinks
-  // created during the callback see this action as their parent.
-  const tx = runtime.edit();
-  runtime.scheduler.withExecutingAction(sink.action, () => sink.action(tx));
-  const log = txToReactivityLog(tx);
-
-  // Technically unnecessary since we don't expect/allow callbacks to sink to
-  // write to other cells, and we retry by design anyway below when read data
-  // changed. But ideally we enforce read-only as well.
-  runtime.prepareTxForCommit(tx);
-  tx.commit();
+  const log = runSinkOnce(sink, runtime);
 
   // Mark as effect since sink() is a side-effectful consumer (FRP effect/sink)
   // Use resubscribe because we've already run it once above
@@ -5455,6 +5467,28 @@ function sinkHelper(
     if (isCancel(sink.cleanup)) sink.cleanup();
     sink.cleanup = undefined;
   };
+}
+
+/**
+ * Runs `sink`'s action once, in a transaction of its own, and returns what it
+ * read, which defines the documents it subscribes to. Any child sink the
+ * callback creates sees this action as its parent.
+ *
+ * The transaction is confined to this function: a closure here sharing scope
+ * with the cancel function `sinkHelper()` returns would keep it, and all it
+ * read, reachable for as long as the sink is live.
+ */
+function runSinkOnce(sink: SinkAction, runtime: Runtime): ReactivityLog {
+  const tx = runtime.edit();
+  runtime.scheduler.withExecutingAction(sink.action, () => sink.action(tx));
+  const log = txToReactivityLog(tx);
+
+  // Technically unnecessary since we don't expect/allow callbacks to sink to
+  // write to other cells, and we retry by design anyway below when read data
+  // changed. But ideally we enforce read-only as well.
+  runtime.prepareTxForCommit(tx);
+  tx.commit();
+  return log;
 }
 
 /**

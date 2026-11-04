@@ -1,4 +1,8 @@
-import type { FabricValue, SchemaPathSelector } from "@commonfabric/api";
+import type {
+  FabricPlainObject,
+  FabricValue,
+  SchemaPathSelector,
+} from "@commonfabric/api";
 import {
   cloneIfNecessary,
   debugStr,
@@ -20,18 +24,20 @@ import {
 } from "@commonfabric/identity";
 import type { DIDKey } from "@commonfabric/identity/did";
 import { aclDocId } from "@commonfabric/memory/acl";
-import type { ACL, Entity } from "@commonfabric/memory/interface";
-import {
-  type AuthorizationError as IAuthorizationError,
-  type ConflictError as IConflictError,
-  type ConnectionError as IConnectionError,
-  type MemorySpace,
-  type MIME,
-  type Revision,
-  type Signer,
-  type TransactionError,
-  type URI,
+import type {
+  ACL,
+  AuthorizationError as IAuthorizationError,
+  ConflictError as IConflictError,
+  ConnectionError as IConnectionError,
+  Entity,
+  MemorySpace,
+  MIME,
+  Revision,
+  Signer,
+  TransactionError,
+  URI,
 } from "@commonfabric/memory/interface";
+import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
@@ -57,6 +63,7 @@ import {
   type OperationFieldQuery,
   type OperationFieldSnapshot,
   type PatchOp,
+  type PatternLifecycleVerb,
   type PresencePublication,
   type ReleaseOpFieldOperation,
   resolveScopeKey,
@@ -85,6 +92,7 @@ import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
 import { BoundedKeyMap, LRUCache } from "@commonfabric/collections/cache";
 import { getLogger } from "@commonfabric/logger";
 import { maxOf, minOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -96,6 +104,7 @@ import {
   PatchApplyError,
 } from "../../../memory/v2/patch.ts";
 import { encodePointer, parsePointer } from "../../../memory/v2/path.ts";
+import { namesInstancesByDefault } from "../builder/instance-name.ts";
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import type { Cancel } from "../cancel.ts";
 import {
@@ -256,12 +265,6 @@ export type CfcSchemaDocumentSyncer = (
   space: MemorySpace,
   document: EntityDocument | undefined,
 ) => Promise<Error | undefined>;
-
-// A cell's CFC write-policy label lives at ["cfc"]. A mergeable write reads it as
-// part of the write; that read is dropped from its conflict set unless the
-// transaction also writes the envelope (`#commitReadActivities`).
-const isCfcLabelPath = (path: readonly string[]): boolean =>
-  path.length === 1 && path[0] === "cfc";
 
 const isStrictPrefixPath = (
   prefix: readonly string[],
@@ -1645,6 +1648,38 @@ function unwrapOuterHandle(schema: JSONSchemaObj): JSONSchemaObj {
   return values.length > 1 ? { ...inner, asCell: values.slice(1) } : inner;
 }
 
+/**
+ * How many microtask turns `crossSpaceSettled()` and `synced()` wait, once
+ * the cross-space promises are all settled, before taking the set as empty.
+ * Work that joins the set within those turns keeps them waiting.
+ *
+ * Nothing signals that no more follow-up work is coming. A reaction to settling
+ * work can track follow-up work a few promise hops later, and a waiter released
+ * the instant the set empties lets a caller that awaits `synced()` once read
+ * before that follow-up lands. Eight turns hold through a reaction that tracks
+ * its follow-up as late as six or seven hops after the work settles: a margin
+ * over the four or five hops that waiting on a `Promise.all()` over the set
+ * holds through, and over the `.then()` hops of a reaction that chains a step
+ * or two before it tracks.
+ *
+ * This is a partial fix. It covers only follow-up work that a promise reaction
+ * tracks within those turns. Follow-up work that goes through the scheduler is
+ * not covered: a load lands, the scheduler, which wakes and yields on
+ * macrotasks, runs an action later, and that action tracks new loads, past
+ * where any count of microtasks reaches. So a caller that awaits `synced()` or
+ * `crossSpaceSettled()` once can resume before the work a load set off has
+ * run. `Cell.pull()` covers that case by looping, the barrier then the
+ * scheduler's idle, until both stay quiet; the other callers do not. The call
+ * sites in this runtime that track follow-up work chain it into the work they
+ * track, so the count guards against a reaction that does not.
+ *
+ * TODO(danfuzz): Replace the count with a structural barrier: every
+ * `trackUntilSettled()` call tracks its whole follow-up chain, and the
+ * scheduler's pending work joins the barrier, so that waiters are released
+ * once both the set and the scheduler are quiet.
+ */
+const CROSS_SPACE_SETTLE_TURNS = 8;
+
 export class StorageManager implements IStorageManager {
   readonly id: string;
   readonly as: Signer;
@@ -1676,6 +1711,7 @@ export class StorageManager implements IStorageManager {
   #spaceAccessErrors = new Map<MemorySpace, Error>();
   #spaceAccessObservers = new Set<(space: MemorySpace, error: Error) => void>();
   #spaceAccessChangeObservers = new Set<(space: MemorySpace) => void>();
+  #spaceAnswerObservers = new Set<(space: MemorySpace) => void>();
   #spaceSessionReplacedObservers = new Set<(space: MemorySpace) => void>();
   #spaceSessionErrorObservers = new Set<
     (space: MemorySpace, error: Error) => void
@@ -1683,6 +1719,20 @@ export class StorageManager implements IStorageManager {
   #connectionRestoredObservers = new Set<() => void>();
   #subscription = SubscriptionManager.create();
   #crossSpacePromises = new Set<Promise<void>>();
+
+  /**
+   * The callers of `crossSpaceSettled()` and `synced()` waiting for
+   * `#crossSpacePromises` to empty, which `#releaseCrossSpaceWaiters()`
+   * releases together.
+   */
+  #crossSpaceWaiters: (() => void)[] = [];
+
+  /**
+   * How many promises have joined `#crossSpacePromises`, so that a check
+   * that the set has stayed empty can tell an emptying it began after from
+   * one that came later.
+   */
+  #crossSpaceAdditions = 0;
 
   /** The store read-throughs installed per space (see
    * IStorageManager.installStoreReadThrough); a provider resolves its
@@ -1788,6 +1838,13 @@ export class StorageManager implements IStorageManager {
 
   /** What `setSharedMemoryConnection()` last declared. */
   #sharedMemoryConnection = false;
+
+  /**
+   * The naming mode `setInstanceNames()` declared, or `undefined` while none
+   * is, when the manager's sessions run this build's default.
+   */
+  #instanceNames: boolean | undefined;
+
   #localSessionDocuments: boolean | undefined;
   #eventAppendQueueStore?: EventAppendQueueStore;
   #eventAppendPacing?: EventAppendPacing | false;
@@ -2374,6 +2431,24 @@ export class StorageManager implements IStorageManager {
     this.#sessionFactory.setSharedConnections?.(enabled);
   }
 
+  /** See `IStorageManager.setInstanceNames`. */
+  setInstanceNames(enabled: boolean): void {
+    if (this.#instanceNames !== undefined && this.#instanceNames !== enabled) {
+      throw new Error(
+        "setInstanceNames: this manager's runtimes already declared the " +
+          "other naming mode; one manager's sessions cannot serve both",
+      );
+    }
+    if (enabled !== this.namesInstances && this.#providers.size > 0) {
+      throw new Error(
+        "setInstanceNames: a session is already open; declaring the mode " +
+          "now would leave that session declaring the other",
+      );
+    }
+    this.#instanceNames = enabled;
+    this.#sessionFactory.setInstanceNames?.(enabled);
+  }
+
   /** See `IStorageManager.setSessionReadCeiling`. */
   setSessionReadCeiling(ceiling: SessionReadCeiling): void {
     if (this.#providers.size > 0) {
@@ -2383,6 +2458,15 @@ export class StorageManager implements IStorageManager {
       );
     }
     this.#sessionReadCeiling = ceiling;
+  }
+
+  /**
+   * Whether the sessions this manager opens declare that their runtime names
+   * instances: as `setInstanceNames()` declared, and while nothing has, as a
+   * runtime of this build does by default (`namesInstancesByDefault()`).
+   */
+  get namesInstances(): boolean {
+    return this.#instanceNames ?? namesInstancesByDefault();
   }
 
   /** The serving manager's HOME space (Options.servingHomeSpace) —
@@ -2418,6 +2502,31 @@ export class StorageManager implements IStorageManager {
     return await replica.resolveEventAttention(eventId, seq, sidecarId, action);
   }
 
+  /** @inheritDoc */
+  async runPatternLifecycle(
+    space: MemorySpace,
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    const replica = this.open(space).replica;
+    if (replica.runPatternLifecycle === undefined) {
+      throw new Error("storage replica does not run pattern-lifecycle verbs");
+    }
+    return await replica.runPatternLifecycle(verb, body);
+  }
+
+  /** @inheritDoc */
+  async administerInvites(
+    space: MemorySpace,
+    invite: MemoryV2Client.InviteAdministration,
+  ): Promise<FabricValue> {
+    const replica = this.open(space).replica;
+    if (replica.administerInvites === undefined) {
+      throw new Error("storage replica does not administer invitations");
+    }
+    return await replica.administerInvites(invite);
+  }
+
   /** IStorageManager (server-execution v2 Phase 4): first-open observer
    * — the flag-ON client effects channel subscribes per space through
    * it. Assigned post-construction by the Runtime; undefined otherwise. */
@@ -2435,10 +2544,14 @@ export class StorageManager implements IStorageManager {
    * `space`'s ACL document, so a session this manager holds on that space
    * — revoked when an EARLIER ACL landed — may now re-open under a
    * different verdict. The executor host calls this for every registered
-   * space server on every ACL-doc-touching admission; `space` is usually
-   * NOT the caller's own, because the session that starves is typically a
-   * CROSS-SPACE replica (a served dispatch's argument link into the
-   * viewer's home space).
+   * space server on every ACL-doc-touching admission on its own memory
+   * server; `space` is usually NOT the caller's own, because the session
+   * that starves is typically a CROSS-SPACE replica (a served dispatch's
+   * argument link into the viewer's home space). A gated replica's grant
+   * verdicts on the space's actors do not wait for this call: the replica
+   * watches the list itself (SpaceReplica.#watchAccessList), so a change
+   * committed on the space's owner in another process reaches it over the
+   * session its reads go through.
    *
    * ALREADY-OPEN providers only. Opening one here would mount a session
    * for a space this manager has never read, turning an unrelated ACL
@@ -2495,6 +2608,20 @@ export class StorageManager implements IStorageManager {
     space: MemorySpace,
   ): Promise<MemoryProtocolFlags | null | undefined> {
     return await this.#sessionFactory.serverFlags?.(space);
+  }
+
+  /** @inheritDoc */
+  async redeemInvite(
+    space: MemorySpace,
+    invite: { inviteId: string; code: string },
+  ): Promise<RedeemReceipt> {
+    if (this.#sessionFactory.redeemInvite === undefined) {
+      throw MemoryV2Client.spaceInviteRefusalError(
+        "invite-service-unsupported",
+        "This storage manager's sessions cannot carry an invitation",
+      );
+    }
+    return await this.#sessionFactory.redeemInvite(space, invite, this.as);
   }
 
   /** @inheritDoc */
@@ -2620,12 +2747,17 @@ export class StorageManager implements IStorageManager {
           }
         },
         onAccessChange: (error) => {
-          const alreadyDenied = this.#spaceAccessErrors.has(space);
+          const previous = this.#spaceAccessErrors.get(space);
+          const alreadyDenied = previous !== undefined;
+          // A refusal that turns out to be the space's deletion is news even
+          // to an observer that heard of the refusal before it.
+          const nowDeleted = MemoryV2Client.isDeletedSpaceError(error) &&
+            !MemoryV2Client.isDeletedSpaceError(previous);
           if (error === undefined) {
             this.#spaceAccessErrors.delete(space);
           } else {
             this.#spaceAccessErrors.set(space, error);
-            if (!alreadyDenied) {
+            if (!alreadyDenied || nowDeleted) {
               for (const observer of [...this.#spaceAccessObservers]) {
                 try {
                   observer(space, error);
@@ -2635,13 +2767,22 @@ export class StorageManager implements IStorageManager {
               }
             }
           }
-          if (alreadyDenied !== (error !== undefined)) {
+          if (alreadyDenied !== (error !== undefined) || nowDeleted) {
             for (const observer of [...this.#spaceAccessChangeObservers]) {
               try {
                 observer(space);
               } catch (cause) {
                 console.error("space-access-change subscriber threw:", cause);
               }
+            }
+          }
+        },
+        onSessionAnswered: () => {
+          for (const observer of [...this.#spaceAnswerObservers]) {
+            try {
+              observer(space);
+            } catch (cause) {
+              console.error("space-answer subscriber threw:", cause);
             }
           }
         },
@@ -3029,11 +3170,35 @@ export class StorageManager implements IStorageManager {
   }
 
   /** @inheritDoc */
+  spaceAnswered(space: MemorySpace): boolean | undefined {
+    if (this.#storeReadThroughs.has(space)) return undefined;
+    if (this.#spaceAccessErrors.has(space)) return true;
+    return this.#providers.get(space)?.sessionAnswered() ?? false;
+  }
+
+  /** @inheritDoc */
+  async awaitSpaceAnswer(space: MemorySpace): Promise<void> {
+    if (this.spaceAnswered(space) !== false) return;
+    try {
+      await this.#openProvider(space).ensureSession();
+    } catch (error) {
+      // A refusal is an answer, and is recorded before the open rejects.
+      if (this.spaceAnswered(space) !== true) throw error;
+    }
+  }
+
+  /** @inheritDoc */
   subscribeSpaceAccessLoss(
     observer: (space: MemorySpace, error: Error) => void,
   ): Cancel {
     this.#spaceAccessObservers.add(observer);
     return () => this.#spaceAccessObservers.delete(observer);
+  }
+
+  /** @inheritDoc */
+  subscribeSpaceAnswer(observer: (space: MemorySpace) => void): Cancel {
+    this.#spaceAnswerObservers.add(observer);
+    return () => this.#spaceAnswerObservers.delete(observer);
   }
 
   /** @inheritDoc */
@@ -3379,11 +3544,13 @@ export class StorageManager implements IStorageManager {
   }
 
   addCrossSpacePromise(promise: Promise<void>): void {
+    this.#crossSpaceAdditions++;
     this.#crossSpacePromises.add(promise);
   }
 
   removeCrossSpacePromise(promise: Promise<void>): void {
     this.#crossSpacePromises.delete(promise);
+    this.#releaseCrossSpaceWaiters();
   }
 
   /**
@@ -3597,9 +3764,21 @@ export class StorageManager implements IStorageManager {
   }
 
   trackUntilSettled(work: Promise<unknown>): void {
-    const tracked = work.finally(() =>
-      this.#crossSpacePromises.delete(tracked)
-    ) as Promise<void>;
+    // Settles either way and never rejects: no waiter attaches to it, so a
+    // rejection carried here would go unhandled. A rejection is logged, so
+    // work whose owner attaches no handler of its own still reports it.
+    const settle = () => {
+      this.#crossSpacePromises.delete(tracked);
+      this.#releaseCrossSpaceWaiters();
+    };
+    const tracked: Promise<void> = work.then(settle, (error: unknown) => {
+      logger.error("tracked-work-rejected", () => [
+        "work tracked until settled rejected:",
+        error,
+      ]);
+      settle();
+    });
+    this.#crossSpaceAdditions++;
     this.#crossSpacePromises.add(tracked);
   }
 
@@ -3609,7 +3788,7 @@ export class StorageManager implements IStorageManager {
 
   crossSpaceSettled(): Promise<void> {
     const { resolve, promise } = Promise.withResolvers<void>();
-    void this.#resolveCrossSpace(resolve);
+    this.#resolveCrossSpace(resolve);
     return promise;
   }
 
@@ -3934,21 +4113,49 @@ export class StorageManager implements IStorageManager {
     }, failLoad);
   }
 
-  #resolveCrossSpace(resolve: () => void): Promise<void> {
-    const promises = [...this.#crossSpacePromises.values()];
-    if (promises.length === 0) {
-      queueMicrotask(() => {
-        if (this.#crossSpacePromises.size === 0) {
-          resolve();
-          return;
-        }
-        void this.#resolveCrossSpace(resolve);
-      });
-      return Promise.resolve();
+  /**
+   * Calls `resolve` once `#crossSpacePromises` is empty. The caller joins the
+   * one list of waiters the set's emptying releases, and nothing is chained
+   * onto the pending promises themselves, so the cost of waiting is the
+   * number of waiters plus the number of pending promises rather than their
+   * product: a client starting many pieces at once has thousands of each.
+   */
+  #resolveCrossSpace(resolve: () => void): void {
+    this.#crossSpaceWaiters.push(resolve);
+    this.#releaseCrossSpaceWaiters();
+  }
+
+  /**
+   * Releases every waiter of `#resolveCrossSpace()` once `#crossSpacePromises`
+   * has been empty for {@link CROSS_SPACE_SETTLE_TURNS} microtask turns with
+   * nothing joining it, so that follow-up work which a settling promise's
+   * reactions track within those turns keeps the waiters waiting. The count of
+   * additions tells this emptying apart from a later one: a check that sees it
+   * change stops, and the later emptying starts its own. The constant's
+   * comment says what the count leaves uncovered.
+   */
+  #releaseCrossSpaceWaiters(): void {
+    if (
+      this.#crossSpacePromises.size !== 0 ||
+      this.#crossSpaceWaiters.length === 0
+    ) {
+      return;
     }
-    return Promise.all(promises)
-      .then(() => undefined)
-      .finally(() => this.#resolveCrossSpace(resolve));
+    const additions = this.#crossSpaceAdditions;
+    let turns = CROSS_SPACE_SETTLE_TURNS;
+    const check = () => {
+      // Work that joined since this check began has its own emptying, which
+      // starts a check of its own.
+      if (this.#crossSpaceAdditions !== additions) return;
+      if (--turns > 0) {
+        queueMicrotask(check);
+        return;
+      }
+      const waiters = this.#crossSpaceWaiters;
+      this.#crossSpaceWaiters = [];
+      for (const resolve of waiters) resolve();
+    };
+    queueMicrotask(check);
   }
 
   async #syncImmutableCell<T>(
@@ -4314,6 +4521,12 @@ type ProviderOptions = {
   settings: IRemoteStorageProviderSettings;
   subscription: IStorageSubscription;
   onAccessChange?: (error: Error | undefined) => void;
+
+  /**
+   * Called when the memory server answers an open of the session, admitting
+   * or refusing it, after the answer is recorded.
+   */
+  onSessionAnswered?: () => void;
 
   /** Registers operation writes with the manager's durability barrier. */
   trackPendingCommit?: (promise: Promise<unknown>) => void;
@@ -4946,6 +5159,11 @@ class Provider
     return this.replica.authorizationError();
   }
 
+  /** See SpaceReplica.sessionAnswered. */
+  sessionAnswered(): boolean {
+    return this.replica.sessionAnswered();
+  }
+
   ensureSession(): Promise<void> {
     return this.#followReplacement((replica) => replica.ensureSession());
   }
@@ -5523,8 +5741,9 @@ export class SpaceReplica
   /** The grant verdicts this provider has asked for, by actor: a settled
    * one answers `foreignScopedReadStanding` and every later read of that
    * actor's instances until word of an access-list change
-   * (`noteAclChanged`) asks for each again, the last verdict standing
-   * until the new one lands. */
+   * (`noteAclChanged`, which the replica's own watch on the list gives it
+   * whichever process the list changed in) asks for each again, the last
+   * verdict standing until the new one lands. */
   readonly #foreignScopedReadVerdicts = new Map<
     string,
     ForeignScopedReadVerdictEntry
@@ -5537,6 +5756,11 @@ export class SpaceReplica
     string,
     Map<string, { id: URI; scope: CellScope; scopeKey: ScopeKey }>
   >();
+
+  /** The watch a gated replica holds on this space's access-list document
+   * from its first grant ask on (`#watchAccessList`), with the list's
+   * confirmed seq as the watch last saw it. */
+  #accessListWatch: { cancel: Cancel; seq: number | undefined } | undefined;
 
   #closed = false;
   readonly #closeSignal = Promise.withResolvers<void>();
@@ -5685,6 +5909,7 @@ export class SpaceReplica
   #lastAuthorizationError: IAuthorizationError | null = null;
   #sessionAdmissionError: Error | undefined;
   #onAccessChange?: (error: Error | undefined) => void;
+  #onSessionAnswered?: () => void;
   #cancelTermination: Cancel | undefined;
   #onSessionReplaced?: () => void;
   #onSessionError?: (error: Error) => void;
@@ -5720,6 +5945,7 @@ export class SpaceReplica
       (() => false);
     this.#subscription = options.subscription;
     this.#onAccessChange = options.onAccessChange;
+    this.#onSessionAnswered = options.onSessionAnswered;
     this.#onSessionReplaced = options.onSessionReplaced;
     this.#onSessionError = options.onSessionError;
     this.#scopeKeyIdentity = options.scopeKeyIdentity;
@@ -6162,6 +6388,16 @@ export class SpaceReplica
     return undefined;
   }
 
+  /**
+   * Whether the memory server has answered for this replica's space: it has
+   * admitted a session this replica opened, or refused one, as
+   * `authorizationError()` reports.
+   */
+  sessionAnswered(): boolean {
+    return this.#sessionSession !== undefined ||
+      this.authorizationError() !== undefined;
+  }
+
   /** The terminal error of the remote subscription supplying this replica. */
   sessionError(): Error | undefined {
     if (this.#storeReadThrough() !== undefined) return undefined;
@@ -6269,10 +6505,17 @@ export class SpaceReplica
   noteAclChanged(): void {
     if (this.#closed) return;
     this.#aclChangedSinceMount = true;
-    // The list that decided every actor's grant has changed: each actor this
-    // replica has asked about is asked about again now, rather than on its
-    // next load, since an instance already loaded is read from the replica
-    // and loads no more. Its last verdict stands until the new one lands.
+    this.#reaskForeignScopedReadGrants();
+  }
+
+  /**
+   * Asks again for the grant of each actor this replica has asked about,
+   * now rather than on its next load, since an instance already loaded is
+   * read from the replica and loads no more: the list that decided every
+   * verdict has changed, or may have. Each last verdict stands until the
+   * new one lands.
+   */
+  #reaskForeignScopedReadGrants(): void {
     for (const actor of [...this.#foreignScopedReadVerdicts.keys()]) {
       this.#askForeignScopedReadGrant(actor);
     }
@@ -6322,6 +6565,7 @@ export class SpaceReplica
           "actor's grant with",
       });
     }
+    this.#watchAccessList();
     let entry = this.#foreignScopedReadVerdicts.get(actor);
     if (entry === undefined) {
       entry = { promise: Promise.resolve({ granted: true }) };
@@ -6354,6 +6598,37 @@ export class SpaceReplica
       });
     current.promise = asked;
     return asked;
+  }
+
+  /**
+   * Holds a watch on this space's access-list document through this
+   * replica's own session, so that a change to the list reaches a gated
+   * replica over the session its reads go through: the host's
+   * `noteSpaceAclChanged` fan-out hears the commits its own memory server
+   * admits, and the list of a space another process owns changes there.
+   * Each version of the list that lands after the first the watch saw is
+   * word of a change (`noteAclChanged`). The first landing re-asks every
+   * actor's grant without arming the remount latch: a verdict asked before
+   * the list reached the replica may have been decided on an older one.
+   */
+  #watchAccessList(): void {
+    if (this.#accessListWatch !== undefined || this.#closed) return;
+    const id = aclDocId(this.#space) as URI;
+    const seqOf = (): number | undefined =>
+      this.#visibleVersion(id, "space")?.record.confirmed.seq;
+    const watch = { cancel: () => {}, seq: seqOf() };
+    this.#accessListWatch = watch;
+    watch.cancel = this.sinkDocument(id, () => {
+      const seq = seqOf();
+      if (seq === watch.seq) return;
+      const before = watch.seq;
+      watch.seq = seq;
+      if (before !== undefined) {
+        this.noteAclChanged();
+      } else {
+        this.#reaskForeignScopedReadGrants();
+      }
+    });
   }
 
   /**
@@ -7199,6 +7474,27 @@ export class SpaceReplica
     return await session.resolveEventAttention(eventId, seq, sidecarId, action);
   }
 
+  /** @inheritDoc */
+  async runPatternLifecycle(
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    const { session } = await this.#activeSessionHandle();
+    // A verb changes the space, so a late host hint may no longer move it.
+    this.#markRouteWriteIssued();
+    return await session.runPatternLifecycle(verb, body);
+  }
+
+  /** @inheritDoc */
+  async administerInvites(
+    invite: MemoryV2Client.InviteAdministration,
+  ): Promise<FabricValue> {
+    const { session } = await this.#activeSessionHandle();
+    // Administration changes the space, as a verb does.
+    this.#markRouteWriteIssued();
+    return await session.administerInvites(invite);
+  }
+
   /** Pending (undischarged) event intents — the offline queue's live
    * content, bounded by pending-intent count (speculation.md §5). */
   pendingEventAppends(): readonly QueuedEventAppend[] {
@@ -7305,6 +7601,8 @@ export class SpaceReplica
     this.#watchView?.close();
     this.#watchView = null;
     this.#operationSinks.clear();
+    this.#accessListWatch?.cancel();
+    this.#accessListWatch = undefined;
     // Also close the view the update consumer is bound to, in case it diverged
     // from #watchView; otherwise its pending next() never settles and the
     // `Promise.allSettled([...#updatePromises])` below hangs forever.
@@ -8353,9 +8651,7 @@ export class SpaceReplica
           (reason) => ({
             verdict: {
               withdrawn: {
-                message: `wave verdict rejected: ${
-                  reason instanceof Error ? reason.message : String(reason)
-                }`,
+                message: `wave verdict rejected: ${describeFailure(reason)}`,
               },
             } satisfies SealedCommitVerdict,
           }),
@@ -9147,9 +9443,7 @@ export class SpaceReplica
       ]);
     }, (error) => {
       logger.debug("cascade-late-reject", () => [
-        `late server verdict after local rejection: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `late server verdict after local rejection: ${describeFailure(error)}`,
         { localSeq },
       ]);
     }).finally(() => {
@@ -9964,7 +10258,10 @@ export class SpaceReplica
     const envelopeWritersWithMergeableOps = new Set<string>();
     if (mergeableOpPathsByEntity.size > 0) {
       for (const write of getTransactionWriteAttempts(source) ?? []) {
-        if (write.space !== this.#space || !isCfcLabelPath(write.path)) {
+        if (
+          write.space !== this.#space ||
+          !Differential.isCfcEnvelopePath(write.path)
+        ) {
           continue;
         }
         const key = `${write.id}\0${normalizeCellScope(write.scope)}`;
@@ -10002,7 +10299,10 @@ export class SpaceReplica
       }
       // Runtime verifier reads of the CFC label are point-in-time policy
       // observations, not consumed values.
-      if (isInternalVerifierRead(read.meta) && isCfcLabelPath(read.path)) {
+      if (
+        isInternalVerifierRead(read.meta) &&
+        Differential.isCfcEnvelopePath(read.path)
+      ) {
         continue;
       }
       const opPaths = mergeableOpPathsByEntity.get(key);
@@ -10015,7 +10315,10 @@ export class SpaceReplica
         !readsMergeableOpArrayLength &&
         (isMergeableOpRead(read.meta) ||
           isReadMarkedAsAttemptedWrite(read.meta) ||
-          isCfcLabelPath(read.path) ||
+          // A mergeable write reads the CFC envelope as part of the write;
+          // the read leaves the conflict set unless the transaction also
+          // writes the envelope (handled above).
+          Differential.isCfcEnvelopePath(read.path) ||
           opPaths.some((opPath) =>
             isStrictPrefixPath(opPath, read.path) ||
             (read.nonRecursive === true && isSamePath(opPath, read.path))
@@ -12364,6 +12667,7 @@ export class SpaceReplica
           this.#sessionAdmissionError = undefined;
           this.#lastAuthorizationError = null;
           this.#onAccessChange?.(undefined);
+          this.#onSessionAnswered?.();
           this.#cancelTermination?.();
           this.#cancelTermination = resolved.session.subscribeTermination(
             (error) => {
@@ -12402,9 +12706,14 @@ export class SpaceReplica
         },
       ).catch((error) => {
         if (this.#sessionHandle === handle) {
+          // A connection that never completed a handshake, in every attempt
+          // its factory allows, ends the space's session as a denial does:
+          // its readers fail with that error instead of waiting for a session
+          // nothing is still opening.
           const permanent = error instanceof Error && (
             isPermanentAuthorizationFailure(error) ||
-            MemoryV2Client.isClientUpdateRequiredError(error)
+            MemoryV2Client.isClientUpdateRequiredError(error) ||
+            MemoryV2Client.isFirstHandshakeFailure(error)
           );
           if (permanent && !this.#closed) {
             this.#sessionAdmissionError = error;
@@ -12413,6 +12722,7 @@ export class SpaceReplica
               !MemoryV2Client.isClientUpdateRequiredError(error)
             ) {
               this.#onAccessChange?.(error);
+              this.#onSessionAnswered?.();
             }
             this.#onSessionError?.(error);
           } else {
@@ -12451,11 +12761,11 @@ const snapshotState = (
 const toConnectionError = (error: unknown): IConnectionError =>
   ({
     name: "ConnectionError",
-    message: error instanceof Error ? error.message : String(error),
+    message: describeFailure(error),
     address: "",
     cause: {
       name: "SystemError",
-      message: error instanceof Error ? error.message : String(error),
+      message: describeFailure(error),
       code: 500,
     },
   }) as IConnectionError;
@@ -12469,10 +12779,34 @@ const isPermanentAuthorizationFailure = (error: { name: string }): boolean =>
   error.name === "AuthorizationError" &&
   (error as { retriable?: unknown }).retriable !== true;
 
-// Preserve a real AuthorizationError (name, message, and the server's retriable
-// marker) instead of flattening it to a generic ConnectionError, so a caller can
-// tell an authorization denial apart from a transport failure. Everything else
-// remains a ConnectionError.
+/**
+ * Returns the markers of the memory server's refusal that `error` carries,
+ * which every copy of an `AuthorizationError` keeps: `permanentEvidence`,
+ * `aclRevision`, and `deleted`, the marker of a deleted space.
+ */
+const authorizationMarkersOf = (error: object): {
+  permanentEvidence?: true;
+  aclRevision?: number;
+  deleted?: true;
+} => {
+  const details = error as {
+    permanentEvidence?: unknown;
+    aclRevision?: unknown;
+    deleted?: unknown;
+  };
+  return {
+    ...(details.permanentEvidence === true ? { permanentEvidence: true } : {}),
+    ...(typeof details.aclRevision === "number"
+      ? { aclRevision: details.aclRevision }
+      : {}),
+    ...(details.deleted === true ? { deleted: true } : {}),
+  };
+};
+
+// Preserve a real AuthorizationError (name, message, and the server's markers)
+// instead of flattening it to a generic ConnectionError, so a caller can tell an
+// authorization denial apart from a transport failure. Everything else remains
+// a ConnectionError.
 const toPullError = (error: unknown): PullError => {
   if (
     !(error instanceof Error) || error.name !== "AuthorizationError" ||
@@ -12480,44 +12814,30 @@ const toPullError = (error: unknown): PullError => {
   ) {
     return toConnectionError(error);
   }
-  const details = error as unknown as {
-    retriable?: unknown;
-    permanentEvidence?: unknown;
-    aclRevision?: unknown;
-  };
   return ({
     name: "AuthorizationError",
     message: error.message,
-    ...(details.retriable === true ? { retriable: true } : {}),
-    ...(details.permanentEvidence === true ? { permanentEvidence: true } : {}),
-    ...(typeof details.aclRevision === "number"
-      ? { aclRevision: details.aclRevision }
+    ...((error as { retriable?: unknown }).retriable === true
+      ? { retriable: true }
       : {}),
+    ...authorizationMarkersOf(error),
   }) as unknown as IAuthorizationError;
 };
 
 // Rebuild a throwable Error from a stored AuthorizationError result so `synced()`
 // rejects with a proper Error instance a caller can match on by name.
-const authorizationErrorToThrow = (error: IAuthorizationError): Error => {
-  const details = error as unknown as {
-    permanentEvidence?: unknown;
-    aclRevision?: unknown;
-  };
-  return Object.assign(new Error(error.message), {
+const authorizationErrorToThrow = (error: IAuthorizationError): Error =>
+  Object.assign(new Error(error.message), {
     name: "AuthorizationError",
-    ...(details.permanentEvidence === true ? { permanentEvidence: true } : {}),
-    ...(typeof details.aclRevision === "number"
-      ? { aclRevision: details.aclRevision }
-      : {}),
+    ...authorizationMarkersOf(error),
   });
-};
 
 const toRejectedError = (
   error: unknown,
   commit: ClientCommit,
   space: MemorySpace,
 ): StorageTransactionRejected => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   const name = error instanceof Error
     ? error.name
     : (error as { name?: unknown })?.name;

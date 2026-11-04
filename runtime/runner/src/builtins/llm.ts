@@ -1,4 +1,4 @@
-import {
+import type {
   BuiltInGenerateObjectParams,
   BuiltInGenerateTextParams,
   BuiltInLLMMessage,
@@ -23,6 +23,7 @@ import {
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/logger";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -50,9 +51,9 @@ import {
   isCellResultForDereferencing,
   snapshotQueryResult,
 } from "../query-result-proxy.ts";
-import { type RawBuiltinResult } from "../module.ts";
+import type { RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
-import { type Action } from "../scheduler.ts";
+import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { llmToolExecutionHelpers } from "./llm-dialog.ts";
 import {
@@ -446,7 +447,7 @@ async function handleLLMError<T, P>(
 ): Promise<void> {
   if (thisRun !== getCurrentRun() && announce === undefined) return;
 
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   if (thisRun === getCurrentRun() && (!ownsRefusal || ownsRefusal())) {
     console.warn(`[LLM Error] ${message}`);
     logger.warn("llm", "Error in LLM request", { error });
@@ -2165,7 +2166,7 @@ export function generateObject<T extends Record<string, unknown>>(
       const settleWithError = (error: unknown) => {
         logGenerateObject("error", {
           ...toolsRequestSummary,
-          error: error instanceof Error ? error.message : String(error),
+          error: describeFailure(error),
         });
         return handleLLMError(
           error,
@@ -2579,7 +2580,7 @@ export function generateObject<T extends Record<string, unknown>>(
       const settleWithError = (error: unknown) => {
         logGenerateObject("error", {
           ...directRequestSummary,
-          error: error instanceof Error ? error.message : String(error),
+          error: describeFailure(error),
         });
         return handleLLMError(
           error,

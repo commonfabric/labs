@@ -4,7 +4,7 @@ import type {
   MutableJSONSchema,
   MutableJSONSchemaObj,
 } from "@commonfabric/api";
-import { type Mutable } from "@commonfabric/js-values/types";
+import type { Mutable } from "@commonfabric/js-values/types";
 import type { ExpansionBudget } from "./typescript/expanding-recursion.ts";
 
 import type { AnyValueBesideUnwritten } from "./ifc-labels.ts";
@@ -78,6 +78,7 @@ export interface SchemaGenerationDiagnostic {
   readonly type:
     | "schema-default:unresolved"
     | "schema-type:unread"
+    | "schema-type:symbol"
     | "cfc-schema:recursion-limit"
     | "cfc-schema:recursive-alias-of-any"
     | "cfc-write-authorized-by:unread"
@@ -288,8 +289,18 @@ export interface GenerationContext {
     readonly elements: readonly ts.Type[];
   };
 
-  /** Type node for additional context */
+  /**
+   * Type node for additional context. A reading that drops it does so through
+   * `withoutTypeNode()`, which keeps it as `writtenAround`.
+   */
   typeNode?: ts.TypeNode;
+
+  /**
+   * The nearest node written around the type at hand. A diagnostic names it
+   * for a type that has no `typeNode` of its own, such as a member of the
+   * union `keyof T`.
+   */
+  writtenAround?: ts.TypeNode;
 
   /**
    * A CFC union alternative sharing a semantic member with another written

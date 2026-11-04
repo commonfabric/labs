@@ -148,6 +148,58 @@ describe("cfcLabelViewForResolvedCellWithStatus", () => {
     });
   });
 
+  it("returns the slot's own label alone when stopping at a link the path holds", async () => {
+    await withRuntime(async (runtime) => {
+      // `lastNode: "top"` stops at the link stored at the path, so the view
+      // is the slot's; a link the path crosses part way through is still
+      // followed, so a slot one link away is reached too.
+      const target = runtime.getCell<string>(space, "top-target", {
+        type: "string",
+        ifc: { confidentiality: ["from-target"] },
+      });
+      await commit(runtime, (tx) => {
+        target.withTx(tx).set("linked value");
+      });
+
+      const holder = runtime.getCell<{ body: string }>(space, "top-holder", {
+        type: "object",
+        properties: {
+          body: { type: "string", ifc: { confidentiality: ["from-slot"] } },
+        },
+      });
+      await commit(runtime, (tx) => {
+        holder.withTx(tx).set({ body: "placeholder" });
+      });
+      await commit(runtime, (tx) => {
+        holder.withTx(tx).key("body").setRawUntyped(target.getAsLink());
+      });
+
+      const outer = runtime.getCell<Record<string, unknown>>(
+        space,
+        "top-outer",
+      );
+      await commit(runtime, (tx) => {
+        outer.withTx(tx).key("holder").setRawUntyped(holder.getAsLink());
+      });
+
+      const atoms = (status: { view?: { entries: ReadonlyArray<unknown> } }) =>
+        ((status.view?.entries ?? []) as Array<
+          { label: { confidentiality?: string[] } }
+        >).flatMap((entry) => entry.label.confidentiality ?? []).sort();
+      for (const slot of [holder.key("body"), outer.key("holder", "body")]) {
+        const status = cfcLabelViewForResolvedCellWithStatus(slot, {
+          lastNode: "top",
+        });
+        expect(status.readFailed).toBe(false);
+        expect(atoms(status)).toEqual(["from-slot"]);
+        expect(atoms(cfcLabelViewForResolvedCellWithStatus(slot))).toEqual([
+          "from-slot",
+          "from-target",
+        ]);
+      }
+    });
+  });
+
   it("fails CLOSED when the resolution itself throws", async () => {
     await withRuntime(async (runtime) => {
       // A link that points at itself: the runtime's resolution runs out of

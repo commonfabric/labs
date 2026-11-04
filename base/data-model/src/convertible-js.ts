@@ -36,10 +36,10 @@ import {
   isInertArray,
 } from "@commonfabric/js-values/arrays";
 
-import {
-  type FabricConvertibleJsValue,
-  type FabricValue,
-  type FabricValueLayer,
+import type {
+  FabricConvertibleJsValue,
+  FabricValue,
+  FabricValueLayer,
 } from "./interface.ts";
 import {
   assertValidFabricValueLayer,

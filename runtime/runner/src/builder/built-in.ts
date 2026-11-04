@@ -1,4 +1,4 @@
-import { BuiltInLLMDialogState } from "@commonfabric/api";
+import type { BuiltInLLMDialogState } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type {

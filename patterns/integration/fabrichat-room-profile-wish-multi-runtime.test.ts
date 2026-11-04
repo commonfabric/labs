@@ -19,6 +19,10 @@
  * profile time to derive its answers again and write them back, which hides
  * the overwrite with server execution off.
  *
+ * A person who sends a message in the room may edit, delete and obliterate
+ * it, as the room's `messageRights` says to that person's session, with
+ * server execution on or off.
+ *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
 
@@ -39,6 +43,10 @@ const PROGRAM_PATH = join(
   "main.tsx",
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
+
+// The reviewed action a send is admitted from, as
+// `../system/fabrichat/schemas.tsx` names it.
+const SEND_ACTION = { surface: "ChatSendSurface", action: "ChatSend" };
 
 /**
  * The path, below `path`, to the node of the stored rendering `node` whose
@@ -160,6 +168,51 @@ describe("fabrichat room profile wish across runtimes", () => {
         // other runtime time to derive its answers again and write them back
         // over the failing runtime's, which would hide that overwrite.
         expect(await setupDisplay(failed)).toBe("block");
+      });
+
+      it("gives the sender of a message the rights to edit, delete and obliterate it", async () => {
+        const person = await Identity.fromPassphrase(
+          "fabrichat-room-profile-wish-sender",
+          { implementation: "noble" },
+        );
+        harness = await MultiRuntimeHarness.create({
+          programPath: PROGRAM_PATH,
+          rootPath: ROOT_PATH,
+          sessions: [{
+            label: "fabrichat-room-profile-wish-sender-setup",
+            identity: person,
+            cfc,
+          }],
+        });
+
+        // The person's home lists their profile before the runtime under test
+        // opens the room, as in the case above.
+        const [setup] = harness.sessions;
+        const profile = await setup.createOwnProfile("Sender");
+        await setup.send("holdProfile", { profile });
+        await harness.settle();
+        await setup.client().call("selectProfile", { path: ["profile"] });
+        await harness.settle();
+
+        const sender = await harness.addSession({
+          label: "fabrichat-room-profile-wish-sender",
+          identity: person,
+          cfc,
+        });
+        await harness.settle();
+        expect(await sender.read(["canSend"])).toBe(true);
+
+        // The sender owns the harness's space, so in this group room they may
+        // obliterate a message as well as edit and delete their own.
+        await sender.send("sendMessage", { body: "Hello" }, SEND_ACTION);
+        await harness.settle();
+        expect(await sender.read(["messageRights", "length"])).toBe(1);
+        expect(await sender.read(["messageRights", 0, "message", "body"]))
+          .toBe("Hello");
+        expect(await sender.read(["messageRights", 0, "canEdit"])).toBe(true);
+        expect(await sender.read(["messageRights", 0, "canDelete"])).toBe(true);
+        expect(await sender.read(["messageRights", 0, "canObliterate"]))
+          .toBe(true);
       });
     });
   }

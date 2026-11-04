@@ -1,10 +1,11 @@
 /**
  * Stands in for a person's Home around FabriChat, in their home space, with a
- * share inbox whose offers carry the person's `PersonalSpace` label. Taking an
- * offer into the person's shared-space catalog, as Home's share intake does,
- * carries that label into the catalog, which no room's space admits. The
- * person's FabriChat manager, whose profile is their first, creates rooms over
- * that catalog. An offer naming a space the catalog lists, with a title,
+ * share inbox whose offers carry the person's `PersonalSpace` label. Its
+ * `ingest` takes those offers into the person's shared-space catalog in the
+ * transaction that reads them, as a writer outside Home's share intake can,
+ * which carries that label into the catalog, where no room's space admits it.
+ * The person's FabriChat manager, whose profile is their first, creates rooms
+ * over that catalog. An offer naming a space the catalog lists, with a title,
  * retitles that space's entry, which carries the label onto the entry's title
  * alone. The catalog and the share inbox are each a cell of their own, apart
  * from the manager's records, as Home's catalog and a share inbox are. The

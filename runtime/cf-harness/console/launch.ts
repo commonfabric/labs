@@ -42,6 +42,7 @@
  */
 import { parseArgs } from "@std/cli/parse-args";
 import { fromFileUrl, join } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
@@ -269,9 +270,7 @@ const parseJsonRecord = (
     parsed = JSON.parse(text);
   } catch (error) {
     throw new Error(
-      `\`${path}\` is not valid JSON: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `\`${path}\` is not valid JSON: ${describeFailure(error)}`,
     );
   }
   if (!isObjectNotArray(parsed)) {
@@ -805,7 +804,7 @@ export const readToolshedStoreDir = async (
   } catch (error) {
     throw new Error(
       `could not run \`${loomBinary} toolshed-store-dir ${instance}\`: ` +
-        `${error instanceof Error ? error.message : String(error)}; set ` +
+        `${describeFailure(error)}; set ` +
         `\`--loom-bin\` to loom's executable`,
     );
   }
@@ -1190,21 +1189,12 @@ export const launchConsole = async (
   });
 };
 
-/**
- * What a launch that could not start says. A misconfigured launch is an
- * operator's problem to fix and the message is the whole of what they need,
- * so the stack behind it — which names this file rather than their mistake —
- * is dropped.
- */
-export const launchFailureMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 // Running the file serves; importing it (the tests do) serves nothing.
 if (import.meta.main) {
   try {
     await launchConsole();
   } catch (error) {
-    console.error(launchFailureMessage(error));
+    console.error(describeFailure(error));
     Deno.exit(1);
   }
 }

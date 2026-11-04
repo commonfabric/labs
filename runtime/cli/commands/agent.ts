@@ -29,6 +29,7 @@ import {
 } from "@commonfabric/cf-harness/contracts/tool-descriptor";
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 import { commandEndpointUrlProblem } from "@commonfabric/cf-harness/loom-commands";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { type Cell, type Runtime, sendEvent } from "@commonfabric/runner";
 import {
   AGENT_RUN_STATES,
@@ -43,6 +44,7 @@ import {
   cancelAgentRun,
   readAgentRun,
   readAgentRuns,
+  removeAgentRun,
 } from "../lib/agent-inspection.ts";
 import { render } from "../lib/render.ts";
 
@@ -409,6 +411,7 @@ export async function startAgentRunner(
       runnerHost: config.runnerHost,
       runnerId: `${home}#${crypto.randomUUID()}`,
       tools: config.tools,
+      progress: true,
       maxConcurrent: config.maxConcurrent,
       leaseMs: config.leaseMs,
       runtimeForHost,
@@ -446,9 +449,7 @@ export async function startAgentRunner(
     } catch (cleanupError) {
       report(
         `agent runner: startup cleanup failed: ${
-          cleanupError instanceof Error
-            ? cleanupError.message
-            : String(cleanupError)
+          describeFailure(cleanupError)
         }`,
       );
     } finally {
@@ -585,7 +586,7 @@ export async function agentRunnerAction(
     if (options.localOnly) throw error;
     deps.report(
       `agent runner: the local lane did not start, continuing with the Fabric lane: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
     return await runFabricLane(options, deps);
@@ -616,11 +617,11 @@ export async function agentRunnerAction(
       } catch (error) {
         local.setFabricReadiness({
           state: "refused",
-          reason: error instanceof Error ? error.message : String(error),
+          reason: describeFailure(error),
         });
         deps.report(
           `agent runner: the Fabric lane did not start, so this runner serves local jobs only: ${
-            error instanceof Error ? error.message : String(error)
+            describeFailure(error)
           }`,
         );
       }
@@ -684,6 +685,7 @@ export interface AgentInspectionCommandDeps {
   read: typeof readAgentRuns;
   readOne: typeof readAgentRun;
   cancel: typeof cancelAgentRun;
+  remove: typeof removeAgentRun;
   render: typeof render;
 }
 
@@ -691,6 +693,7 @@ const defaultInspectionDeps: AgentInspectionCommandDeps = {
   read: readAgentRuns,
   readOne: readAgentRun,
   cancel: cancelAgentRun,
+  remove: removeAgentRun,
   render,
 };
 
@@ -735,9 +738,9 @@ export function formatAgentRun(run: AgentRunInspection): string {
   return lines.join("\n");
 }
 
-/** Runs one metadata read or durable cancellation request. */
+/** Runs one metadata read, durable cancellation request, or queue removal. */
 export async function agentInspectionAction(
-  kind: "ls" | "show" | "cancel",
+  kind: "ls" | "show" | "cancel" | "remove",
   options: {
     identity?: string;
     apiUrl?: string;
@@ -777,6 +780,8 @@ export async function agentInspectionAction(
   }
   const run = kind === "cancel"
     ? await deps.cancel(config, identifier)
+    : kind === "remove"
+    ? await deps.remove(config, identifier)
     : await deps.readOne(config, identifier);
   deps.render(options.json ? run : formatAgentRun(run), { json: options.json });
 }
@@ -820,6 +825,14 @@ export const createAgentCommand = (
     .arguments("<run:string>")
     .action((options, run) =>
       agentInspectionAction("cancel", options, run, inspectionDeps)
+    );
+  const removeCommand = inspectionCommand()
+    .description(
+      "Take a finished run off the home queue. Its record stays where it is.",
+    )
+    .arguments("<run:string>")
+    .action((options, run) =>
+      agentInspectionAction("remove", options, run, inspectionDeps)
     );
   const runnerCommand = new Command()
     .name("runner")
@@ -913,7 +926,8 @@ export const createAgentCommand = (
     .command("status", createAgentStatusCommand())
     .command("ls", listCommand)
     .command("show", showCommand)
-    .command("cancel", cancelCommand).reset();
+    .command("cancel", cancelCommand)
+    .command("remove", removeCommand).reset();
 };
 
 export const agent = createAgentCommand();

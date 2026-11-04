@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   commitSubjects,
   findCommitMessages,
@@ -289,7 +290,7 @@ fi`,
       try {
         runner.amendCommit("amended", new Map(), head);
       } catch (caught) {
-        error = caught instanceof Error ? caught.message : String(caught);
+        error = describeFailure(caught);
       }
       assert(error.includes("HEAD changed"), error || "the amend did not fail");
       assertEquals(runner.headSha(), head);

@@ -1126,6 +1126,11 @@ const OPTION_VALUE_PROVIDERS: Readonly<Record<string, OptionProvider>> = {
     ["space compact"],
     () => Promise.resolve(directive({ kind: "files", glob: "*.sqlite" })),
   ),
+  // `cf space reap --dry-run --live` names the space's live store file.
+  live: onlyOn(
+    ["space reap"],
+    () => Promise.resolve(directive({ kind: "files", glob: "*.sqlite" })),
+  ),
 };
 
 /** The scope kinds `cf space compact --scope` restricts a selection to. */
@@ -1139,6 +1144,7 @@ const SCOPE_KIND_CANDIDATES: readonly Candidate[] = [
 const ID_PREFIX_CANDIDATES: readonly Candidate[] = [
   { value: "of:", description: "entity documents" },
   { value: "computed:", description: "computed cells" },
+  { value: "receipt:", description: "handling receipts" },
   { value: "cid:", description: "content-addressed label documents" },
 ];
 
@@ -1186,6 +1192,7 @@ const ARGUMENT_PROVIDERS: Readonly<
 > = {
   "agent show:run": agentRunCandidates,
   "agent cancel:run": agentRunCandidates,
+  "agent remove:run": agentRunCandidates,
   "cell get-label:path": cellPathCandidates,
   "cell set-label:path": cellPathCandidates,
   "piece call:callable": callableCandidates,
@@ -1237,8 +1244,10 @@ const ARGUMENT_PROVIDERS: Readonly<
   // candidates.
   "space clone:space": () => spaceCandidates(),
   "space fingerprint:space": () => spaceCandidates(),
-  // `compact` takes a store file by path, never a space name.
+  // `compact` and `reap` take a store file by path, never a space name.
   "space compact:store": () =>
+    Promise.resolve(directive({ kind: "files", glob: "*.sqlite" })),
+  "space reap:store": () =>
     Promise.resolve(directive({ kind: "files", glob: "*.sqlite" })),
   // `verify`/`reset` take a clone directory built by `space clone`.
   "space verify:dir": () => Promise.resolve(directive({ kind: "dirs" })),

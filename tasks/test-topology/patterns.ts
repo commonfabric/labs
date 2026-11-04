@@ -15,7 +15,7 @@ import { patternTestListLine } from "../integration.ts";
 import { PATTERN_TREES } from "../pattern-files.ts";
 import { SERVER_EXECUTION_ON_SKIPS } from "../server-execution-on-skips.ts";
 import { serverExecutionCiLane } from "../server-execution-ci.ts";
-import { taskEnvironment } from "./deno-task.ts";
+import { memberTestFiles, taskEnvironment } from "./deno-task.ts";
 import {
   type CommandContext,
   fileSuite,
@@ -234,8 +234,11 @@ function coverageEnv(
  * hard-codes the directory it runs, so a lane can ask for the suite or
  * not ask for it, and nothing finer.
  */
-function patternReloadSuite(): Suite {
+async function patternReloadSuite(root: string): Promise<Suite> {
   const unit = "patterns/integration/reload";
+  const directory = path.join(root, unit);
+  const sources = (await memberTestFiles(directory, { paths: [], ignores: [] }))
+    .map((file) => path.relative(root, path.resolve(directory, file)));
   return {
     id: "pattern-reload",
     recordSurfaces: [{ kind: "integration", scope: "patterns" }],
@@ -246,6 +249,7 @@ function patternReloadSuite(): Suite {
     // development stack around that run. A lane runs the whole suite or none of
     // it.
     whole: [unit],
+    sourcesOf: (asked) => asked === unit ? sources : [],
     locate(record): Location | undefined {
       if (record.test.v !== undefined) return undefined;
       if (record.test.k !== "integration" || record.test.s !== "patterns") {
@@ -356,7 +360,7 @@ export async function loadPatternSuites(
 ): Promise<Suite[]> {
   return [
     ...await patternIntegrationSuites(root, defaultEnabled),
-    patternReloadSuite(),
+    await patternReloadSuite(root),
     await patternUnitSuite(root),
     await generatedPatternSuite(root),
   ];

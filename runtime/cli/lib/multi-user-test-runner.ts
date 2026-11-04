@@ -67,6 +67,7 @@ import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import { listenServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
+import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 import type {
@@ -344,7 +345,11 @@ export async function runMultiUserTestPattern(
         // as the single-runtime runner's loop is.
         worker: false,
       })
-      : StandaloneMemoryServer.start();
+      : StandaloneMemoryServer.start({
+        // The posture of a toolshed whose runtimes run the participants'
+        // flags (INV-16).
+        namesInstances: () => namesInstancesByDefault(experimental),
+      });
     const identities = new Map<string, Identity>();
     for (const spec of meta.participants) {
       if (!identities.has(spec.user)) {

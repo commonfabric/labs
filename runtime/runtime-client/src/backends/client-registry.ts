@@ -17,6 +17,7 @@
 
 import { debugStr } from "@commonfabric/data-model";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
@@ -37,7 +38,6 @@ import {
 import { RuntimeProcessor } from "@/backends/mod.ts";
 import { assertNoKeyMaterial } from "@/shared/key-material.ts";
 import type { MessagePortLike } from "@/shared/message-port-like.ts";
-import { describeFailure } from "@/shared/utils.ts";
 import { IpcChannelTally } from "./ipc-channel-tally.ts";
 import { ownerChannelSizes, postThrough } from "./post-to-client.ts";
 import { runtimeErrorCode } from "./runtime-error.ts";

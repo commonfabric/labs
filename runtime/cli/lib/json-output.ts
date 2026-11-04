@@ -1,4 +1,4 @@
-import { type ConsoleHandler } from "@commonfabric/runner";
+import type { ConsoleHandler } from "@commonfabric/runner";
 import { NodeConsole, Writable } from "./deps.ts";
 
 const textEncoder = new TextEncoder();

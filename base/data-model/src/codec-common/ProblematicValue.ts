@@ -34,7 +34,7 @@ type ProblematicValueState = {
  * Container for a value whose encoding or decoding failed. Preserves the tag
  * and raw state at fault, for round-tripping and debugging. Used in lenient
  * mode to allow graceful degradation rather than hard failures. See Section 3.5
- * of the formal spec.
+ * of `1-fabric-values.md`.
  *
  * Both of the things it preserves are whatever was at fault, which is why the
  * constructor takes anything at all for either: the one thing this class must

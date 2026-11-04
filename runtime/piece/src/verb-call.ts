@@ -24,6 +24,7 @@ import {
   sendEvent,
   transactionFailureMessage,
 } from "@commonfabric/runner";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isInstance, isObjectNotArray } from "@commonfabric/js-values/types";
 import { loadPiecePattern } from "./ops/piece-controller.ts";
 import { nearestName } from "./refusal.ts";
@@ -75,6 +76,12 @@ export interface SendVerbEventOptions {
 
   /** Wraps each span, for a caller that times them. */
   time?: <T>(span: VerbDispatchSpan, run: () => Promise<T>) => Promise<T>;
+
+  /**
+   * `false` sends the event without running its handler in this runtime, for
+   * a caller under server execution that has not started the piece.
+   */
+  echo?: false;
 
   /** @internal Seam for tests, which dispatch to a stand-in handler. */
   sendEvent?: typeof sendEvent;
@@ -182,6 +189,7 @@ export async function sendVerbEvent(
                 eventId: invocation.id,
                 session: invocation.session,
               }),
+              ...(options.echo === false ? { echo: false } : {}),
               onAppended,
             },
           );
@@ -350,9 +358,7 @@ export async function callVerb(
   } catch (error) {
     return {
       status: "refused",
-      message: `could not read the piece's pattern: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      message: `could not read the piece's pattern: ${describeFailure(error)}`,
     };
   }
   const verbs = resultVerbs(pattern);
@@ -398,7 +404,7 @@ export async function callVerb(
     return {
       status: "failed",
       message: `the event for "${verb}" could not be sent: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -430,7 +436,7 @@ export async function callVerb(
     return {
       ...settled,
       receipt: committed.receipt,
-      unread: error instanceof Error ? error.message : String(error),
+      unread: describeFailure(error),
     };
   }
   return {

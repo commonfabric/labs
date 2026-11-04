@@ -120,6 +120,58 @@ space's owners, as
 [self-serve ingest channels](../features/self-serve-ingest-channels.md)
 describes.
 
+### Deleting a space
+
+[Deleting a space](../specs/random-space-identities.md#deleting-a-space) lands
+in this order, each step a change of its own:
+
+1. **Every client fails safely on a deletion before any server sends it.** The
+   Memory server sends the `deleted` marker and the `deleted` revocation
+   reason to every client whatever it advertises, so a deleted space must
+   crash no client in use, and must stop none from handling the spaces still
+   live. This repository's Memory client, runtime, renderer and shell handle
+   both outright: they read an invitation operation's `space-deleted` as final
+   rather than retrying it, and an `AuthorizationError` marked `deleted` as a
+   refusal no later grant heals. A client outside this repository, including
+   one that runs against a pinned tag of this one, may instead treat a deleted
+   space as any space it is refused, so long as it fails safely.
+2. **`aclRevision` names the access-control document's `seq`.** Done: every
+   ACL refusal's `aclRevision` is the `seq` at which the space's
+   access-control document is stored, or 0 where it has none, rather than the
+   server's current sequence (INV-15, and section 4.5.1 of the Memory
+   protocol).
+3. **INV-15 is read before the server work starts.** Its refusal in every mode,
+   `off` included, and its check inside the engine's write transaction are the
+   parts most expensive to reverse, so the Memory server's and serving loop's
+   owners read INV-15 before the server work starts.
+4. **The spaces to be deleted are checked.** Before the server work starts,
+   read-only, against copies: the access lists of the spaces meant to be
+   deleted first, the old chat rooms among them, with `cf inspect`, so the
+   [recipe for a space not yet down to one member](../specs/random-space-identities.md#deleting-a-space)
+   covers each list as it stands, including a store with no access-control
+   document.
+5. **The server refuses a deleted space.** Every Home space has an
+   access-control document first, the first step of "Operational" above:
+   INV-15's Home clause reads the list, so a Home with none is not protected by
+   it, and the recipe's genesis for a space with no list must never land on a
+   Home. The Memory server's part is done: it refuses a
+   space whose access-control document holds a deletion tombstone, in every
+   mode. So is the serving loop's: it starts no tenure for a deleted space,
+   ends one on the deletion, and starts no further outbox row.
+6. **The server admits the deletion commit.** Done: the Memory server admits a
+   sole member's deletion and revokes the space's sessions with the reason
+   `deleted`. Compaction's refusal of a deletion tombstone names reaping in the
+   same change. Once a deletion has been committed, rolling a server back to a
+   release from before step 5 is not available: such a release reads the
+   deletion tombstone as a malformed list, which a service identity may repair,
+   and a repair would write an access list over it and so undo the deletion. Nor
+   does an operator repair an access-control document whose value is a deletion
+   tombstone.
+7. **`cf space delete` and `cf space reap`.** Done: the
+   [CLI README](../../runtime/cli/README.md#deleting-a-space) describes both,
+   and [reaping a space's store](../development/space-reaping.md) is the
+   operator's procedure.
+
 ### In other repositories
 
 - **`commonfabric/specs`:** SC-52 in the

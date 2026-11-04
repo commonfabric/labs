@@ -49,7 +49,7 @@ import {
   VDomMountResponse,
 } from "@/protocol/mod.ts";
 import { assertNoKeyMaterial } from "@/shared/key-material.ts";
-import { RuntimeTransport } from "./transport.ts";
+import type { RuntimeTransport } from "./transport.ts";
 import { EventEmitter } from "./emitter.ts";
 import {
   $onCellRefused,

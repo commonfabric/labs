@@ -5,9 +5,10 @@
  * can read it, unless it is a group made joinable by its link, which anyone
  * can read.
  *
- * Three sessions share the harness's space, where the manager lives: the
- * starter, who creates the rooms; a member, named in each; and a stranger,
- * named in none. A room's space grants its members at creation, so the member
+ * Four sessions share the harness's space, where the manager lives: the
+ * starter, who creates the rooms; a member of the access-test rooms; a
+ * stranger, named in none; and an invited sender with a room of their own.
+ * A room's space grants its members at creation, so its member
  * reads it with nothing more to do, and the stranger's read is refused, except
  * of a joinable group's.
  * `fabrichat-manager.test.ts` checks the access list each room's space holds.
@@ -32,8 +33,14 @@ const PROGRAM_PATH = join(
   "main.tsx",
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
+const PROFILE_HOLDER_PATH = join(
+  import.meta.dirname!,
+  "fixtures",
+  "fabrichat-room-profile-wish",
+  "main.tsx",
+);
 
-/** The CFC write gate's refusals in one runtime. */
+/** Returns the CFC write gate's refusal count in one runtime. */
 function writeRefusals(
   counts: Record<string, Record<string, { total: number }> | number>,
 ): number {
@@ -57,6 +64,7 @@ describe("fabrichat spaces across runtimes", () => {
   let starter: MultiRuntimeSession;
   let member: MultiRuntimeSession;
   let stranger: MultiRuntimeSession;
+  let invited: MultiRuntimeSession;
 
   beforeAll(async () => {
     harness = await MultiRuntimeHarness.create({
@@ -66,10 +74,11 @@ describe("fabrichat spaces across runtimes", () => {
         "fabrichat-spaces-starter",
         "fabrichat-spaces-member",
         "fabrichat-spaces-stranger",
+        "fabrichat-spaces-invited-sender",
       ],
       aclMode: "enforce",
     });
-    [starter, member, stranger] = harness.sessions;
+    [starter, member, stranger, invited] = harness.sessions;
     await harness.settle();
   });
 
@@ -272,23 +281,32 @@ describe("fabrichat spaces across runtimes", () => {
 
   it("lets an invited member send through the manager-created root room", async () => {
     const refusalsBefore = await Promise.all(
-      [starter, member].map(async (session) =>
+      [starter, invited].map(async (session) =>
         writeRefusals(await session.loggerCounts())
       ),
     );
-    await member.send("claimProfile", { name: "Invited member" }, {
-      surface: "FabriChatTestProfileSurface",
-      action: "FabriChatTestWriteProfile",
-    });
-    await member.client().call("selectProfile", { path: ["memberProfile"] });
-    await harness.settle();
-    expect(await member.read(["memberPrincipal"])).toBe(member.identity.did());
     const room = await start("openDirect", {
       requestId: "d-member-send",
-      counterpart: member.identity.did(),
+      counterpart: invited.identity.did(),
     });
-    expect(await member.read(["canSend"], { piece: room })).toBe(true);
-    await member.send(
+    // Open the room before selecting a profile. The same session's existing
+    // room must pick up that selection when its member sends.
+    expect(await invited.read(["about", "kind"], { piece: room })).toBe(
+      "direct",
+    );
+    expect(await invited.read(["messages", "count"], { piece: room })).toBe(0);
+
+    const profile = await invited.createOwnProfile("Invited member");
+    await invited.client().call("createPiece", {
+      programPath: PROFILE_HOLDER_PATH,
+      rootPath: ROOT_PATH,
+    });
+    await invited.send("holdProfile", { profile });
+    await harness.settle();
+    await invited.client().call("selectProfile", { path: ["profile"] });
+    await harness.settle();
+    expect(await invited.read(["canSend"], { piece: room })).toBe(true);
+    await invited.send(
       "sendMessage",
       {
         body: "A message from the invited member",
@@ -297,23 +315,23 @@ describe("fabrichat spaces across runtimes", () => {
       { piece: room },
     );
     await harness.settle();
-    expect(await member.read(["messages", "count"], { piece: room })).toBe(1);
+    expect(await invited.read(["messages", "count"], { piece: room })).toBe(1);
     expect(
       await starter.read(["messages", "latest", "messages", 0, "body"], {
         piece: room,
       }),
     ).toBe("A message from the invited member");
     expect(
-      await member.link([
+      await invited.link([
         "messages",
         "latest",
         "messages",
         0,
         "authorProfile",
       ], { piece: room }),
-    ).toEqual(await member.link(["memberProfile"]));
+    ).toEqual(await invited.link(["profile"]));
     const refusalsAfter = await Promise.all(
-      [starter, member].map(async (session) =>
+      [starter, invited].map(async (session) =>
         writeRefusals(await session.loggerCounts())
       ),
     );

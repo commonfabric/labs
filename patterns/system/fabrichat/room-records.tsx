@@ -470,7 +470,10 @@ export interface MessageEntry extends ViewItem {
 
 /** The entries of a room's messages, and every author among them. */
 export interface MessageEntries {
-  /** Every stored message, in the order recorded. */
+  /**
+   * Every stored message the room can read (see `readableMessage()`), in
+   * the order recorded.
+   */
   entries: MessageEntry[];
 
   /**
@@ -479,7 +482,7 @@ export interface MessageEntries {
    */
   authors: ProfileCell[];
 
-  /** Each stored message's record, by its entry's key. */
+  /** Each entry's record, by its key. */
   records: ReadonlyMap<string, MessageRecord>;
 
   /**
@@ -510,12 +513,84 @@ const cellAt = (
 };
 
 /**
- * Every stored message of `messages`, as an entry, with the authors among
- * them, in one walk of the list that reads each record once. It writes
- * nothing, which its parameter declares by being a `Cell` where
- * `MessagesCell` is a `Writable`: a computation that hands a cell to a
- * helper of another module is scheduled as a writer of that cell when the
- * helper's parameter is a `Writable`.
+ * The indexes of the elements of `list`. Only the list's length is read
+ * through the list: an element read through it is read under the list's
+ * schema, where one the schema doesn't accept refuses the whole computation
+ * reading it.
+ */
+const indexesOf = (
+  list: Cell<MessagesValue> | Cell<ReactionsValue>,
+): number[] =>
+  Array.from({ length: (list.get() ?? []).length }, (_, index) => index);
+
+/**
+ * The value of `cell`, or `undefined` where it lacks a field its schema
+ * requires or holds one of `fields` of a type the schema doesn't accept. A
+ * field like that, read through a list holding the value or through the value
+ * itself, refuses the whole computation reading it, so the value is read as
+ * that of its own cell, and each of `fields` as the value of a cell of its
+ * own, where it reads as `undefined` instead.
+ */
+const readableRecord = <T extends object>(
+  cell: Cell<T>,
+  fields: readonly (keyof T & string)[],
+): T | undefined => {
+  const record = cell.get();
+  if (record === undefined) return undefined;
+  return fields.every((field) => cell.key(field).get() !== undefined)
+    ? record
+    : undefined;
+};
+
+/**
+ * The stored message `message`, or `undefined` where it lacks a field its
+ * schema requires or holds a `sentAt` or a `body` of a type the schema doesn't
+ * accept (see `readableRecord()`).
+ */
+const readableMessage = (message: MessageCell): MessageRecord | undefined =>
+  readableRecord(message, ["sentAt", "body"]);
+
+/** A reaction the room can read, and its place in its message's reactions. */
+export interface ReadableReaction {
+  /** The reaction, as the element of its message's reactions. */
+  cell: Cell<ChatReaction>;
+
+  /** Its value. */
+  record: ChatReaction;
+}
+
+/**
+ * Every reaction of `list` the room can read, in the order added: each with
+ * every field `ChatReaction` requires, an `emoji` and a `sentAt` of the types
+ * it gives them (see `readableRecord()`), and a `reactorProfile` that is a
+ * link. A reaction it can't read is one no handler stores, and is left out, so
+ * the other reactions don't depend on it.
+ */
+export const readableReactions = (
+  list: Cell<ReactionsValue>,
+): ReadableReaction[] =>
+  indexesOf(list).flatMap((index): ReadableReaction[] => {
+    const cell: Cell<ChatReaction> = list.key(index);
+    const record = readableRecord(cell, ["emoji", "sentAt"]);
+    if (record === undefined) return [];
+    // Read as its own cell's value, a `reactorProfile` is a cell either way:
+    // over what it links where it is a link, and over itself where it isn't,
+    // one that refuses any read of it through the reaction. The field is
+    // addressed in the reaction's own document, where a cell over itself has
+    // the field's own link.
+    const reactor = cell.resolveAsCell().key("reactorProfile");
+    return reactor.equalLinks(reactor.get()) ? [] : [{ cell, record }];
+  });
+
+/**
+ * Every stored message of `messages` the room can read (see
+ * `readableMessage()`), as an entry, with the authors among them, in one walk
+ * of the list. A message it can't read is one no handler stores, and has no
+ * entry, so the other messages' entries don't depend on it. It writes nothing,
+ * which its parameter declares by being a `Cell` where `MessagesCell` is a
+ * `Writable`: a computation that hands a cell to a helper of another module is
+ * scheduled as a writer of that cell when the helper's parameter is a
+ * `Writable`.
  */
 export const messageEntries = (
   messages: Cell<MessagesValue>,
@@ -524,10 +599,11 @@ export const messageEntries = (
   const authors: ProfileCell[] = [];
   const records = new Map<string, MessageRecord>();
   let legacyReplies = 0;
-  const entries = ((messages.get() ?? []) as MessageRecord[]).flatMap(
-    (record, index): MessageEntry[] => {
-      if (record?.sentAt === undefined) return [];
+  const entries = indexesOf(messages).flatMap(
+    (index): MessageEntry[] => {
       const cell = cellAt(messages, index).resolveAsCell();
+      const record = readableMessage(cell);
+      if (record === undefined) return [];
       const key = entityKeyOf(cell);
       if (key === undefined) return [];
       records.set(key, record);

@@ -24,6 +24,7 @@
 
 import { parseArgs } from "@std/cli/parse-args";
 import { basename, join } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -55,16 +56,6 @@ export type TranscriptJson<Value> =
   | { kind: "read"; value: Value }
   | { kind: "unread"; reason: string };
 
-/**
- * What went wrong, as a line for a report.
- *
- * One helper rather than the same ternary at every catch: a thrown value is
- * not always an `Error`, and a reader of a report should not be able to tell
- * which catch site produced a reading from how the message is shaped.
- */
-export const describeError = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 const read = <Value>(value: Value): TranscriptJson<Value> => ({
   kind: "read",
   value,
@@ -83,7 +74,7 @@ const parseJson = <Value>(
     return read(JSON.parse(text) as Value);
   } catch (error) {
     return unread(
-      `${what} is not JSON: ${describeError(error)}`,
+      `${what} is not JSON: ${describeFailure(error)}`,
     );
   }
 };
@@ -925,7 +916,7 @@ const readTranscript = async (
     return unread(
       error instanceof Deno.errors.NotFound
         ? "the run directory holds no transcript.json"
-        : `transcript.json could not be read: ${describeError(error)}`,
+        : `transcript.json could not be read: ${describeFailure(error)}`,
     );
   }
   const parsed = parseJson<unknown>(text, "transcript.json");
@@ -982,7 +973,7 @@ const readJsonObject = async (
       : unread(`${basename(path)} is not an object`);
   } catch (error) {
     return unread(
-      `${basename(path)} could not be read: ${describeError(error)}`,
+      `${basename(path)} could not be read: ${describeFailure(error)}`,
     );
   }
 };
@@ -1066,7 +1057,7 @@ const measureResearchArtifacts = async (
     reportText = await Deno.readTextFile(join(runRoot, "run-report.json"));
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) return measurement;
-    return { ...measurement, research: unread(describeError(error)) };
+    return { ...measurement, research: unread(describeFailure(error)) };
   }
   const parsed = parseJson<HarnessRunReport>(reportText, "run-report.json");
   if (parsed.kind === "unread") return { ...measurement, research: parsed };
@@ -1428,7 +1419,7 @@ export const main = async (
       "`measure-runs`",
     );
   } catch (error) {
-    log(error instanceof Error ? error.message : String(error));
+    log(describeFailure(error));
     return 2;
   }
   const report = await measureArtifactRoot(

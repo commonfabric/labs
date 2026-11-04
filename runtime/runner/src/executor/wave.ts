@@ -95,9 +95,10 @@ const logger = getLogger("wave-accumulator", {
  * class at the wave commit's per-doc CAS (serving-loop.md §3d):
  *
  * - `derivation` writes are PURE — re-derivable, so a write whose doc head
- *   advanced past the wave's basis is DROPPED; the drop re-arms nothing —
- *   recomputation arrives only through the ordinary dependency path
- *   (serving-loop.md §3d, RULED 2026-08-05);
+ *   advanced past the wave's basis is DROPPED; recomputation arrives through
+ *   the ordinary dependency path (serving-loop.md §3d, RULED 2026-08-05),
+ *   unless the commits that superseded the run's writes left its documents
+ *   with no value, which re-arms the run ({@link SupersededOutput});
  * - `event-handler` writes are NON-RE-DERIVABLE consequences — rebased and
  *   retried on conflict, and REQUEUED (rolled back to unconsequenced,
  *   never lost) when the rebase conflicts semantically;
@@ -412,10 +413,34 @@ type WaveSettlement = Result<
     /** This run read a contribution whose optimistic state was withdrawn. */
     readDependencyWithdrawn?: true;
 
+    /** The documents this derivation's writes were dropped from as
+     * superseded. */
+    supersededOutputs?: readonly SupersededOutput[];
+
     /** Why the wave withdrew this transaction's contribution. */
     waveWithdrawalCause?: WaveWithdrawalCause;
   }
 >;
+
+/**
+ * A document instance a derivation's write to it was dropped from as
+ * superseded (serving-loop.md §3d). Nothing wakes the derivation for the
+ * superseding commit unless it read the document, and a computed never reads
+ * its own output. That commit can leave the document with no value, as a
+ * client's piece start does, and then the run can be owed again:
+ * `scheduler/superseded-output.ts`.
+ */
+export interface SupersededOutput {
+  space: MemorySpace;
+  id: string;
+  scope?: CellScope;
+
+  /** The identity the instance's scope resolves against. */
+  scopeKeyIdentity?: ScopeKeyIdentity;
+
+  /** The store's head for the instance when the wave dropped the write. */
+  seq: number;
+}
 
 const waveSettlements = new WeakMap<
   IExtendedStorageTransaction,
@@ -632,10 +657,12 @@ export function isAclDocumentWriteRefusal(
  * terminal for the wave.
  */
 export interface WaveCommitRejection {
+  /** `SpaceDeleted`: the commit's space is deleted (INV-15). */
   name:
     | "WaveCommitRejected"
     | "RowLabelCommitError"
-    | "AclDocumentWriteRefused";
+    | "AclDocumentWriteRefused"
+    | "SpaceDeleted";
   message: string;
   conflictedDocs?: readonly string[];
   failedPreconditions?: readonly number[];
@@ -824,6 +851,10 @@ interface WaveContribution {
    * closure, the first one found. Set only by that closure, and read only
    * to name the cause when the run's withdrawal is reported. */
   withdrawnRead?: WithdrawnRead;
+
+  /** Per doc-instance key, what this derivation's dropped writes lost to.
+   * Set only where the commit step drops such a write. */
+  supersededOutputs?: Map<string, SupersededOutput>;
   index: number;
   context: WaveRunContext;
 
@@ -911,7 +942,14 @@ export interface WaveCommitOutcome {
    * commit or aborted. */
   seq?: number;
 
-  aborted?: "lease-lost" | "abandoned" | "foreign-commit-failed" | "rejected";
+  /** `space-deleted`: the home commit was refused because the space is
+   * deleted (INV-15), which no successor tenure could have admitted. */
+  aborted?:
+    | "lease-lost"
+    | "abandoned"
+    | "foreign-commit-failed"
+    | "rejected"
+    | "space-deleted";
 
   /** Superseded pure-derivation writes dropped at the per-doc CAS —
    * §7's `supersededWrites` counter feeds from this. */
@@ -945,9 +983,10 @@ export interface WaveCommitOutcome {
   /** Event-handler contributions REFUSED as orphans (server-execution v2
    * stage C build W3, (α3); events.md §4's third clause): runs of an
    * LT1 same-wave cascade whose durable entry rode an emitter write
-   * this wave withdrew — a derivation's superseded per-doc drop (re-arms
-   * nothing), a dropped-whole or requeued emitter — so the entry never
-   * lands and nothing re-emits it. Withdrawn, disposition `dropped`,
+   * this wave withdrew — a derivation's superseded per-doc drop, a
+   * dropped-whole or requeued emitter — so the entry never lands and nothing
+   * re-emits it (a re-armed emitter appends an entry of its own). Withdrawn,
+   * disposition `dropped`,
    * NOT reported as requeued (there is no entry to retry); the serving
    * loop's `events.orphanDeliveriesRefused` feeds from this. */
   orphanDeliveriesRefused: number;
@@ -1696,8 +1735,22 @@ export class WaveAccumulator
         ).then((settled): Result<Unit, StorageTransactionRejected> =>
           settled.find((outcome) => outcome.error !== undefined) ?? { ok: {} }
         )).then((outcome): WaveSettlement =>
-          outcome.error !== undefined && contribution.readDependencyWithdrawn
-            ? { error: { ...outcome.error, readDependencyWithdrawn: true } }
+          outcome.error !== undefined &&
+            (contribution.readDependencyWithdrawn ||
+              contribution.supersededOutputs !== undefined)
+            ? {
+              error: {
+                ...outcome.error,
+                ...(contribution.readDependencyWithdrawn
+                  ? { readDependencyWithdrawn: true }
+                  : {}),
+                ...(contribution.supersededOutputs === undefined ? {} : {
+                  supersededOutputs: [
+                    ...contribution.supersededOutputs.values(),
+                  ],
+                }),
+              },
+            }
             : outcome
         ),
       );
@@ -2336,7 +2389,10 @@ export class WaveAccumulator
      * Dropping costs nothing: the value is re-derivable, and a derivation
      * that read the doc carries it in its basis rows, so the arrival of
      * the commit it missed re-runs it through the ordinary dependency
-     * path. A non-re-derivable consequence takes no view check here: its
+     * path. One that did not read the doc runs again only if the commits
+     * it lost to left every doc with no value (SupersededOutput). A
+     * non-re-derivable
+     * consequence takes no view check here: its
      * reads are held to the store ahead of this loop, and one with a stale
      * read is requeued whole before any doc of its reaches this, so what
      * arrives here rests on current reads and conflicts on its written
@@ -2517,14 +2573,24 @@ export class WaveAccumulator
           }
           if (contribution.context.kind === "derivation") {
             // Pure derivation write superseded: DROP, sound because
-            // re-derivable. The drop re-arms nothing — recomputation
-            // arrives only through the ordinary dependency path
-            // (§3d, RULED 2026-08-05).
+            // re-derivable. Recomputation arrives through the ordinary
+            // dependency path (§3d, RULED 2026-08-05), or, where the
+            // superseding commits leave the run's docs with no value, through
+            // the settlement this records for the scheduler.
             droppedDocs[contribution.index].add(key);
             outcome.supersededWrites += this.#homeOpCountFor(
               contribution,
               doc,
             );
+            const identity = contribution.context.scopeKeyIdentity ??
+              this.#scopeKeyIdentity;
+            (contribution.supersededOutputs ??= new Map()).set(key, {
+              space: this.#space,
+              id: doc.id,
+              ...(doc.scope === undefined ? {} : { scope: doc.scope }),
+              ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
+              seq: heads.get(key) ?? 0,
+            });
           } else {
             // Non-re-derivable consequence (event-handler and the loop's
             // bookkeeping alike): rebase against the new head —
@@ -2669,8 +2735,9 @@ export class WaveAccumulator
           // clause, RULED 2026-08-18): an event-handler run of an LT1
           // same-wave cascade whose durable entry rode an emitter write
           // this wave WITHDRAWS — a DERIVATION emitter's superseded
-          // per-doc drop (§3d: the drop re-arms nothing, so nothing ever
-          // re-emits the entry), a dropped-whole emitter, or a requeued
+          // per-doc drop (§3d: nothing re-emits the entry, and an emitter the
+          // drop re-arms appends one of its own), a dropped-whole emitter, or
+          // a requeued
           // emitter the parentEventId thread did not reach — has NO
           // durable entry behind it. Delivering it would commit one
           // consequence for zero entries: the invariant broken from the
@@ -2884,6 +2951,13 @@ export class WaveAccumulator
           changes,
         );
         if (result.error === undefined) continue;
+        // A change to this tenure's own list refused for its deletion ends
+        // the tenure, as the home commit's refusal would; one to another
+        // space's list requeues like any other refusal, and the replay's
+        // seal refuses it.
+        if (result.error.name === "SpaceDeleted" && space === this.#space) {
+          return this.#abortForDeletedSpace(outcome);
+        }
         logger.warn("access-list-change-commit-refused", () => [
           `access-list change to ${space} by event ` +
           `${contribution.context.eventId} refused at the wave commit; ` +
@@ -2916,7 +2990,7 @@ export class WaveAccumulator
       const { key, batch } of this.#buildForeignBatches(requeued, droppedWhole)
     ) {
       // Tenure re-check per sink call (defense-in-depth over the entry
-      // check): the entry check plus the engine's live-lease row cover
+      // check): the entry check plus the memory server's lease map cover
       // today's synchronous sink, but an ASYNC sink would re-open the
       // same-process C7b window between entry and this call.
       if (this.#tenureEnded) {
@@ -3021,10 +3095,15 @@ export class WaveAccumulator
         return outcome;
       }
       // The memory server refuses a derived commit whose holder no longer
-      // holds the live lease, and the sink's owner ends the tenure when it
-      // sees such a refusal (serving-loop.md §2). A refusal under an ended
-      // tenure is a lease loss, with no conflict to resolve.
+      // holds the lease (serving-loop.md §2), so a refusal under a tenure a
+      // park ended meanwhile is a lease loss, with no conflict to resolve.
       if (this.#tenureEnded) return this.#abortForLostLease(outcome);
+      // The space is deleted, which ends the tenure for good
+      // (serving-loop.md, "A deleted space"): nothing to resolve, and no
+      // successor could commit the wave.
+      if (result.error.name === "SpaceDeleted") {
+        return this.#abortForDeletedSpace(outcome);
+      }
 
       // The sink re-verified inside its transaction and something moved
       // after our head query (or a precondition failed). Fold the news
@@ -4268,19 +4347,46 @@ export class WaveAccumulator
    * home commit landed (serving-loop.md §2's stop-committing MUST).
    */
   #abortForLostLease(outcome: WaveCommitOutcome): WaveCommitOutcome {
+    return this.#abortWithdrawingAll(
+      outcome,
+      "lease-lost",
+      "lease lost mid-wave; the in-flight wave aborts (serving-loop.md §2)",
+    );
+  }
+
+  /**
+   * Withdraws every contribution because the home commit was refused for
+   * the space's deletion (serving-loop.md, "A deleted space"). The events
+   * stay unconsequenced, in a store no tenure serves again.
+   */
+  #abortForDeletedSpace(outcome: WaveCommitOutcome): WaveCommitOutcome {
+    return this.#abortWithdrawingAll(
+      outcome,
+      "space-deleted",
+      "the space is deleted; the wave aborts and the tenure ends " +
+        '(serving-loop.md, "A deleted space")',
+    );
+  }
+
+  /**
+   * Helper for {@link #abortForLostLease} and {@link #abortForDeletedSpace},
+   * which withdraws every contribution for `reason`, requeueing each event
+   * handler's and dropping every other, and marks `outcome` `aborted`.
+   */
+  #abortWithdrawingAll(
+    outcome: WaveCommitOutcome,
+    aborted: "lease-lost" | "space-deleted",
+    reason: string,
+  ): WaveCommitOutcome {
     for (const contribution of this.#contributions) {
-      this.#withdraw(
-        contribution,
-        "lease lost mid-wave; the in-flight wave aborts " +
-          "(serving-loop.md §2)",
-      );
+      this.#withdraw(contribution, reason);
       outcome.dispositions[contribution.index] =
         contribution.context.kind === "event-handler"
           ? { kind: "requeued" }
           : { kind: "dropped" };
     }
     this.#reportRequeuedEvents(outcome, () => true);
-    outcome.aborted = "lease-lost";
+    outcome.aborted = aborted;
     return outcome;
   }
 

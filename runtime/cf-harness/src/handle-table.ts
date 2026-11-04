@@ -91,7 +91,7 @@ export const parseHandleRef = (refText: string): NormalizedFullLink => {
   );
   if (parsed.id === undefined || !hasEntityUriScheme(parsed.id)) {
     throw new Error(
-      `Handle refs must name an entity URI (\`of:\`/\`computed:\`): \`${refText}\``,
+      `Handle refs must name an entity URI (\`of:\`/\`computed:\`/\`receipt:\`): \`${refText}\``,
     );
   }
   return {

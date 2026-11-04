@@ -10,6 +10,7 @@ import {
 } from "@commonfabric/memory/v2/execution-lease";
 import { diffAndUpdate } from "../src/data-updating.ts";
 import { toMemorySpaceAddress } from "../src/link-types.ts";
+import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { Runtime } from "../src/runtime.ts";
 import { sendValueToBinding } from "../src/pattern-binding.ts";
 import { createSigilLinkFromParsedLink } from "../src/link-utils.ts";
@@ -70,11 +71,11 @@ describe("reactive wave withdrawal", () => {
     });
     engine = await server.engineForSpace(space);
     lease = new ExecutionLeaseCycle({
-      engine,
+      leases: engine.executionLeases,
       space,
       holder: executionLeaseHolder(`service:${space}`),
     });
-    expect(lease.acquire()).toBe(true);
+    expect(await lease.acquire()).toBe(true);
   });
 
   afterEach(async () => {
@@ -82,7 +83,7 @@ describe("reactive wave withdrawal", () => {
     runtime.clearSealDestination();
     for (const wave of waves) wave.abandon("test cleanup");
     await Promise.all(waves.map((wave) => wave.settled()));
-    lease.release();
+    await lease.release();
     await storageManager.synced();
     await runtime.dispose();
     await Promise.all(peers.map((peer) => peer.dispose()));
@@ -697,6 +698,150 @@ describe("reactive wave withdrawal", () => {
       runtime.scheduler.unsubscribe(derive);
     });
   }
+  for (
+    const [writer, description] of [
+      [
+        "own",
+        "derives again when an authored commit left its output with no value",
+      ],
+      [
+        "peer",
+        "derives again over a commit this replica had not taken when the wave dropped its output",
+      ],
+    ] as const
+  ) {
+    it(description, async () => {
+      // A client's piece start stores a computed document's structure, a
+      // `result` link and no `value`. That commit can land above the view a
+      // served run of the computed sealed on, which drops the run's write.
+      // The run never read its output, so the commit's arrival wakes nothing,
+      // and the document would hold no value until the next input change.
+
+      const output = runtime.getCell<string>(
+        space,
+        `structure-output-${writer}`,
+        undefined,
+      );
+      const outputLink = output.getAsNormalizedFullLink();
+      const wave = newWave();
+      const authoring = writer === "own" ? runtime : new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: EmulatedStorageManager.connectTo(server, {
+          as: signer,
+          id: "structure-author",
+        }),
+      });
+      if (authoring !== runtime) peers.push(authoring);
+      const resultLink = createSigilLinkFromParsedLink(
+        runtime.getCell(space, "structure-result", undefined)
+          .getAsNormalizedFullLink(),
+      );
+      const authored = authoring.edit();
+      authoring.getCellFromLink(outputLink).withTx(authored).setMetaRaw(
+        "result",
+        resultLink,
+        rawMetaWriteAuthorization,
+      );
+      expect((await authored.commit().settled).error).toBeUndefined();
+      let flushing = false;
+      let recoveryWave: WaveAccumulator | undefined;
+      const sink = newSink();
+      runtime.installSealDestination({
+        seal: (tx) => (flushing ? recoveryWave ??= newWave() : wave).seal(tx),
+      }, {
+        runStamper: (tx, info) =>
+          stampWaveRunContext(tx, { actionId: info.actionId, kind: info.kind }),
+      });
+      let runs = 0;
+      const rerun = Promise.withResolvers<void>();
+      const derive: Action = (tx) => {
+        if (++runs === 2) rerun.resolve();
+        tx.writeValueOrThrow(outputLink, "derived");
+      };
+      actions.push(derive);
+      runtime.scheduler.subscribe(derive, {
+        reads: [],
+        shallowReads: [],
+        writes: [],
+      }, { isEffect: true });
+      await runtime.scheduler.idleWithPendingCommits();
+      expect(runs).toBe(1);
+
+      flushing = true;
+      const outcome = await wave.commitWave(sink);
+      await wave.settled();
+      expect(outcome.supersededWrites).toBe(1);
+      expect(outcome.dispositions).toEqual([{ kind: "dropped" }]);
+      await rerun.promise;
+      await runtime.scheduler.idleWithPendingCommits();
+      expect(runs).toBe(2);
+
+      expect(recoveryWave).toBeDefined();
+      await recoveryWave!.commitWave(sink);
+      await recoveryWave!.settled();
+      expect(
+        Engine.readState(engine, { id: outputLink.id })?.document,
+      ).toEqual({ result: resultLink, value: "derived" });
+      runtime.scheduler.unsubscribe(derive);
+    });
+  }
+  it("leaves a run down when one of its outputs lost to an authored value", async () => {
+    // Running again writes both outputs, and the replica now holds the commits
+    // they lost to, so the wave would let the authored value be overwritten.
+
+    const valued = runtime.getCell<string>(space, "mixed-valued", undefined);
+    const unvalued = runtime.getCell<string>(
+      space,
+      "mixed-unvalued",
+      undefined,
+    );
+    const wave = newWave();
+    const authored = runtime.edit();
+    valued.withTx(authored).set("authored");
+    unvalued.withTx(authored).setMetaRaw(
+      "result",
+      createSigilLinkFromParsedLink(valued.getAsNormalizedFullLink()),
+      rawMetaWriteAuthorization,
+    );
+    expect((await authored.commit().settled).error).toBeUndefined();
+    let flushing = false;
+    let recoveryWave: WaveAccumulator | undefined;
+    runtime.installSealDestination({
+      seal: (tx) => (flushing ? recoveryWave ??= newWave() : wave).seal(tx),
+    }, {
+      runStamper: (tx, info) =>
+        stampWaveRunContext(tx, { actionId: info.actionId, kind: info.kind }),
+    });
+    let runs = 0;
+    const derive: Action = (tx) => {
+      runs++;
+      tx.writeValueOrThrow(valued.getAsNormalizedFullLink(), "derived");
+      tx.writeValueOrThrow(unvalued.getAsNormalizedFullLink(), "derived");
+    };
+    actions.push(derive);
+    runtime.scheduler.subscribe(derive, {
+      reads: [],
+      shallowReads: [],
+      writes: [],
+    }, { isEffect: true });
+    await runtime.scheduler.idleWithPendingCommits();
+    expect(runs).toBe(1);
+
+    flushing = true;
+    const outcome = await wave.commitWave(newSink());
+    await wave.settled();
+    expect(outcome.supersededWrites).toBe(2);
+    await runtime.scheduler.idleWithPendingCommits();
+
+    expect(runs).toBe(1);
+    expect(recoveryWave).toBeUndefined();
+    expect(
+      Engine.readState(engine, { id: valued.getAsNormalizedFullLink().id })
+        ?.document,
+    ).toEqual({ value: "authored" });
+    runtime.scheduler.unsubscribe(derive);
+  });
+
   for (const boundary of ["retained", "removed", "replaced"] as const) {
     it(
       boundary === "retained"
@@ -704,10 +849,14 @@ describe("reactive wave withdrawal", () => {
         : `does not revive a ${boundary} user instance after withdrawal`,
       async () => {
         await runtime.dispose();
-        lease.release();
+        await lease.release();
         const holder = executionLeaseHolder(signer.did());
-        lease = new ExecutionLeaseCycle({ engine, space, holder });
-        expect(lease.acquire()).toBe(true);
+        lease = new ExecutionLeaseCycle({
+          leases: engine.executionLeases,
+          space,
+          holder,
+        });
+        expect(await lease.acquire()).toBe(true);
         storageManager = EmulatedStorageManager.connectTo(server, {
           as: signer,
           id: holder,

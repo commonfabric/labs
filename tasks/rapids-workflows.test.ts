@@ -104,7 +104,7 @@ const infraSha = "1234567890abcdef1234567890abcdef12345678";
 const readerToken = "${{ steps.reader.outputs.token }}";
 
 describe("rapids-workflows", () => {
-  it("validates an exact production source before environment approval and rechecks the demo window", async () => {
+  it("validates an exact main commit before environment approval", async () => {
     const production = await workflow("deploy-production.yml");
     expect(production.name).toBe("Manual Production Deployment");
     expect(production.permissions).toEqual({ contents: "read" });
@@ -116,88 +116,55 @@ describe("rapids-workflows", () => {
     const deploy = production.jobs["deploy-estuary"];
     expect(deploy.needs).toBe("validate");
     expect(deploy.environment).toBe("estuary");
-    const window = validate.steps[0];
-    expect(deploy.steps[0]).toEqual(window);
     const deployment = oneStep(
       deploy.steps,
       (step) => step.id === "deployment",
     );
-    expect(deploy.steps[deploy.steps.indexOf(deployment) - 1]).toEqual(window);
     expect(deployment.if).toBe("${{ !inputs.verify_only }}");
     const deno = oneStep(
       deploy.steps,
       (step) => step.uses === "./.github/actions/deno-setup",
     );
     expect(deno.if).toBe("${{ !inputs.verify_only }}");
-    for (
-      const [NOW, allowed] of [
-        ["2026-10-19T22:15:15Z", false],
-        ["2026-10-19T22:15:16Z", true],
-        ["2026-10-22T22:15:15Z", true],
-        ["2026-10-22T22:15:16Z", false],
-      ] as const
-    ) {
-      expect(
-        (await runStep(window, {
-          SOURCE_BRANCH: "alex-daily",
-          WORKFLOW_REF: "refs/heads/main",
-          NOW,
-        }, {
-          date: 'printf "%s\\n" "$NOW"',
-        })).code === 0,
-      ).toBe(allowed);
-    }
-    expect(
-      (await runStep(window, {
-        SOURCE_BRANCH: "main",
-        WORKFLOW_REF: "refs/heads/main",
-      }, {})).code,
-    ).toBe(0);
-    for (
-      const [SOURCE_BRANCH, WORKFLOW_REF] of [["rw_demo", "refs/heads/main"], [
-        "alex-daily",
-        "refs/heads/alex-daily",
-      ], ["main", "refs/pull/1/merge"]]
-    ) {
-      expect((await runStep(window, { SOURCE_BRANCH, WORKFLOW_REF }, {})).code)
-        .not.toBe(0);
-    }
     const guard = oneStep(validate.steps, (step) => step.id === "resolve");
-    for (const source of ["main", "alex-daily"]) {
-      for (
-        const status of ["ahead", "identical", "behind", "diverged", "", "null"]
-      ) {
-        const result = await runStep(guard, {
-          DEPLOY_SHA: infraSha,
-          SOURCE_BRANCH: source,
-          GITHUB_REPOSITORY: "commonfabric/labs",
-          GITHUB_OUTPUT: "/dev/stdout",
-          STATUS: status,
-        }, { gh: 'printf "%s\\n" "$@" > "$CALLS"\nprintf "%s\\n" "$STATUS"' });
-        expect(result.code === 0).toBe(["ahead", "identical"].includes(status));
-        expect(result.calls).toContain(`compare/${infraSha}...${source}`);
-      }
+    const check = (env: Record<string, string>) =>
+      runStep(guard, {
+        DEPLOY_SHA: infraSha,
+        WORKFLOW_REF: "refs/heads/main",
+        GITHUB_REPOSITORY: "commonfabric/labs",
+        GITHUB_OUTPUT: "/dev/stdout",
+        ...env,
+      }, { gh: 'printf "%s\\n" "$@" > "$CALLS"\nprintf "%s\\n" "$STATUS"' });
+    for (
+      const STATUS of ["ahead", "identical", "behind", "diverged", "", "null"]
+    ) {
+      const result = await check({ STATUS });
+      expect(result.code === 0).toBe(["ahead", "identical"].includes(STATUS));
+      expect(result.calls).toContain(`compare/${infraSha}...main`);
     }
     for (
-      const DEPLOY_SHA of [
-        "",
-        "main",
-        infraSha.slice(1),
-        infraSha.toUpperCase(),
-        `${infraSha}\n`,
-        "$(exit 0)",
+      const env of [
+        ...["refs/heads/feature", "refs/pull/1/merge", ""].map((
+          WORKFLOW_REF,
+        ) => ({ WORKFLOW_REF })),
+        ...[
+          "",
+          "main",
+          infraSha.slice(1),
+          infraSha.toUpperCase(),
+          `${infraSha}\n`,
+          "$(exit 0)",
+        ].map((DEPLOY_SHA) => ({ DEPLOY_SHA })),
       ]
     ) {
-      const result = await runStep(guard, { DEPLOY_SHA }, {
-        gh: 'echo called > "$CALLS"',
-      });
+      const result = await check({ ...env, STATUS: "ahead" });
       expect(result.code).not.toBe(0);
       expect(result.calls).toBe("");
     }
     expect(
       (await runStep(guard, {
         DEPLOY_SHA: infraSha,
-        SOURCE_BRANCH: "alex-daily",
+        WORKFLOW_REF: "refs/heads/main",
         GITHUB_REPOSITORY: "commonfabric/labs",
       }, { gh: "exit 42" })).code,
     ).not.toBe(0);
@@ -247,7 +214,6 @@ describe("rapids-workflows", () => {
     const env = {
       REMOTE_OUTPUT: collected.stdout,
       DEPLOY_SHA: infraSha,
-      SOURCE_BRANCH: "alex-daily",
       VERIFY_ONLY: "true",
       GITHUB_REPOSITORY: "commonfabric/labs",
       GITHUB_SHA: infraSha,
@@ -263,7 +229,6 @@ describe("rapids-workflows", () => {
       workflow_sha: infraSha,
       run_id: "123",
       run_attempt: "2",
-      source_branch: "alex-daily",
       verify_only: true,
     });
     for (
@@ -554,7 +519,6 @@ describe("rapids-workflows", () => {
         workflows: [
           "CI",
           "Deploy Rapids release",
-          "Manual Production Deployment",
         ],
         types: ["completed"],
         branches: ["main"],
@@ -602,6 +566,7 @@ describe("rapids-workflows", () => {
           { head_repository: { full_name: "contributor/labs" } },
           { event: "pull_request" },
           { path: ".github/workflows/test-order-tomorrow.yml" },
+          { path: ".github/workflows/deploy-production.yml" },
         ]
       ) {
         expect(allowed({ ...green, ...changes })).toBe(false);
@@ -618,87 +583,6 @@ describe("rapids-workflows", () => {
       expect(job.steps.some((step) => step.uses?.includes("checkout@")))
         .toBe(false);
     }
-  });
-
-  it("wakes Estuary for production workflow completions inside the authorization window", async () => {
-    const job = (await workflow("notify-rapids.yml")).jobs["notify-infra"];
-    const accepts = new Function("github", `return (${job.if});`);
-    const run = {
-      path: ".github/workflows/deploy-production.yml",
-      event: "workflow_dispatch",
-      conclusion: "success",
-      head_branch: "main",
-      head_repository: { full_name: "commonfabric/labs" },
-      display_title: "Manual Production Deployment",
-    };
-    const allowed = (changes: Partial<typeof run> = {}) =>
-      accepts({
-        repository: "commonfabric/labs",
-        event: { workflow_run: { ...run, ...changes } },
-      });
-    expect(allowed()).toBe(true);
-    expect(
-      allowed({
-        display_title: `Estuary ${infraSha} from alex-daily (verify=true)`,
-      }),
-    ).toBe(true);
-    for (const conclusion of ["success", "failure", "cancelled", "skipped"]) {
-      expect(allowed({ conclusion })).toBe(true);
-    }
-    expect(
-      allowed({
-        display_title: `Estuary ${infraSha} from main (verify=false)`,
-      }),
-    ).toBe(true);
-    for (
-      const changes of [
-        { head_branch: "alex-daily" },
-        { event: "pull_request" },
-        { head_repository: { full_name: "contributor/labs" } },
-        { path: ".github/workflows/other.yml" },
-      ]
-    ) expect(allowed(changes)).toBe(false);
-    const send = oneStep(
-      job.steps,
-      (step) => step.run?.includes("gh api") ?? false,
-    );
-    for (
-      const [NOW, enabled] of [
-        ["2026-10-19T22:15:15Z", false],
-        ["2026-10-19T22:15:16Z", true],
-        ["2026-10-22T22:15:15Z", true],
-        ["2026-10-22T22:15:16Z", false],
-      ] as const
-    ) {
-      const result = await runStep(send, { WORKFLOW_PATH: run.path, NOW }, {
-        gh: 'printf "%s\\n" "$@" > "$CALLS"',
-        date: 'printf "%s\\n" "$NOW"',
-      });
-      expect(result.code).toBe(0);
-      expect(result.calls.split("\n")).toEqual(
-        enabled
-          ? [
-            "api",
-            "--method",
-            "POST",
-            "repos/commonfabric/infra/actions/workflows/rapids.yml/dispatches",
-            "-f",
-            "ref=main",
-            "-f",
-            "inputs[channel]=estuary",
-          ]
-          : [""],
-      );
-    }
-    expect(
-      (await runStep(send, {
-        WORKFLOW_PATH: run.path,
-        NOW: "2026-10-20T00:00:00Z",
-      }, {
-        gh: "exit 42",
-        date: 'printf "%s\\n" "$NOW"',
-      })).code,
-    ).toBe(42);
   });
 
   it("sends paired producer hints for CI and an empty-input reconciliation for deployment", async () => {

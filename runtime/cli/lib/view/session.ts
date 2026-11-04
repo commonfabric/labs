@@ -6,6 +6,7 @@
  * exercisable from tests by feeding keys and inspecting `view()`.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type {
   Document,
   Line,
@@ -69,6 +70,7 @@ import {
   sourceColumnOf,
 } from "./display.ts";
 import {
+  commentOnlyFiles,
   DIFF_COUNT_MODES,
   type DiffCountMode,
   diffCountModeLabel,
@@ -669,7 +671,7 @@ export class Session {
     if (this.#foldFileCache?.doc !== this.#currentDoc) {
       this.#foldFileCache = {
         doc: this.#currentDoc,
-        files: diffFiles(this.#currentDoc.text),
+        files: diffFiles(this.#currentDoc.text, this.#source.declaredTests),
       };
     }
     return this.#foldFileCache.files;
@@ -978,7 +980,7 @@ export class Session {
           ? 0
           : selected.startCol,
         endCol: this.#renderedLineChangesColumns(selected.endLine)
-          ? codePointLength(
+          ? cpLen(
             this.#currentDoc.lines[selected.endLine]?.text ?? "",
           )
           : selected.endCol,
@@ -998,7 +1000,7 @@ export class Session {
       endLine,
       startCol: startSynthetic ? 0 : node.startCol,
       endCol: endSynthetic
-        ? codePointLength(fold.displayLines[endLine]?.text ?? "")
+        ? cpLen(fold.displayLines[endLine]?.text ?? "")
         : node.endCol,
     };
   }
@@ -1013,7 +1015,7 @@ export class Session {
       ...match,
       line,
       start: 0,
-      end: codePointLength(fold.displayLines[line]?.text ?? ""),
+      end: cpLen(fold.displayLines[line]?.text ?? ""),
     };
   }
 
@@ -1056,12 +1058,6 @@ export class Session {
     }
     if (section) return section.name ?? section.label.replace(/^[▸▾]\s*/, "");
     return this.#source?.label ?? null;
-  }
-
-  get #maxLineLen(): number {
-    let m = 0;
-    for (const l of this.#currentDoc.lines) m = Math.max(m, l.text.length);
-    return m;
   }
 
   /** The folded line and display column at the viewport's top-left content. */
@@ -1653,7 +1649,7 @@ export class Session {
       return plan ? plan.lastRow[folded] ?? 0 : folded;
     }
     const endCol = this.#renderedLineChangesColumns(node.endLine)
-      ? codePointLength(this.#currentDoc.lines[node.endLine]?.text ?? "")
+      ? cpLen(this.#currentDoc.lines[node.endLine]?.text ?? "")
       : node.endCol;
     return this.#toDisplayWithPlan(
       node.endLine,
@@ -2382,8 +2378,10 @@ export class Session {
         this.#cycleLineNumbers();
         return;
       case "c":
-      case "C":
         this.#cycleDisplayMode();
+        return;
+      case "C":
+        this.#toggleCommentOnlyFiles();
         return;
       case "f":
         this.#toggleCurrentFile();
@@ -2601,6 +2599,19 @@ export class Session {
     this.#message = `${expand ? "Showing" : "Hid"} ${changed} ${label} file${
       changed === 1 ? "" : "s"
     }.`;
+  }
+
+  /** Toggle the files whose changes touch only comments. */
+  #toggleCommentOnlyFiles(): void {
+    let commentOnly: readonly boolean[] | undefined;
+    this.#toggleFileCategory(
+      (file) =>
+        (commentOnly ??= commentOnlyFiles(
+          this.#sourceDoc.text,
+          this.#source?.diffCountContexts?.(this.#sourceDoc.text) ?? [],
+        ))[file.index],
+      "comment-only",
+    );
   }
 
   //
@@ -2882,7 +2893,7 @@ export class Session {
                 0,
                 [`${prefix}${transport}`],
                 0,
-                [...prefix].length,
+                cpLen(prefix),
               );
             } else {
               this.#splitDiffLine(prefix);
@@ -2988,7 +2999,7 @@ export class Session {
       1,
       [`${before}${transport}`, `${prefix}${after}${transport}`],
       1,
-      [...prefix].length,
+      cpLen(prefix),
     );
   }
 
@@ -3193,7 +3204,7 @@ export class Session {
   #logicalLineEnd(row = this.#buffer!.row): number {
     const b = this.#buffer!;
     const line = b.lines[row] ?? "";
-    const physicalEnd = [...line].length;
+    const physicalEnd = cpLen(line);
     const ordinaryEnd = line.endsWith("\r") && row < b.lines.length - 1
       ? physicalEnd - 1
       : physicalEnd;
@@ -3666,7 +3677,7 @@ export class Session {
   #maxLeft(
     annotations: readonly DiffAnnotation[] = this.#activeDiffAnnotations(),
   ): number {
-    if (!this.#hasDiffMargin()) return this.#maxLineLen;
+    if (!this.#hasDiffMargin()) return this.#maxDisplayWidth();
     const contentWidth = this.#contentWidth();
     let width = this.#maxDisplayWidth() - contentWidth;
     const lines = this.#foldPlan().displayLines;
@@ -3985,7 +3996,7 @@ export class Session {
       }
       return true;
     } catch (e) {
-      this.#message = `Save failed: ${e instanceof Error ? e.message : e}`;
+      this.#message = `Save failed: ${describeFailure(e)}`;
       return false;
     }
   }
@@ -5275,6 +5286,10 @@ export class Session {
         this.#toggleFileCategory((file) => file.isMarkdown, "Markdown");
         this.#rebuildJumpEntries();
         return;
+      case "C":
+        this.#toggleCommentOnlyFiles();
+        this.#rebuildJumpEntries();
+        return;
       case "D":
         this.#cycleJumpCountMode();
         return;
@@ -5503,12 +5518,6 @@ export class Session {
   }
 }
 
-function codePointLength(text: string): number {
-  let length = 0;
-  for (const _ of text) length++;
-  return length;
-}
-
 function isArrowName(name: string): boolean {
   return name === "up" || name === "down" || name === "left" ||
     name === "right";
@@ -5626,6 +5635,7 @@ export function helpOverlay(hasMultipleCommits: boolean): {
     ["  F / E", "hide all files / show all files"],
     ["  T", "hide / show test and test-support files"],
     ["  M", "hide / show Markdown files"],
+    ["  C", "hide / show files with only comment changes"],
     ["  i", "list the diff's files and commits, jump to one"],
     ...commitRows,
     ["", ""],
@@ -5670,7 +5680,7 @@ export function helpOverlay(hasMultipleCommits: boolean): {
     ["  #", "line numbers: off / input position / file or message line"],
     ["  B", "blame: when each line last changed, and who changed it"],
     ["  \\", "line wrapping: off / hard / word"],
-    ["  C", "cycle non-printables: pictures / ANSI color / hidden"],
+    ["  c", "cycle non-printables: pictures / ANSI color / hidden"],
     ["  ?", "this help   ·   Q  quit"],
   ];
   const info: Line[] = rows.map(([k, v]) => {

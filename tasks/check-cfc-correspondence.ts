@@ -76,8 +76,12 @@ export const KERNEL_LEDGER_FILES: ReadonlySet<string> = new Set([
   `${KERNEL_DIR}spec-header.ts`,
 ]);
 
-/** The most `SPEC-PENDING` markers the governed files may hold at once. */
-export const SPEC_PENDING_BUDGET = 3;
+/**
+ * The most `SPEC-PENDING` markers the governed files may hold at once. Set
+ * by the CFC owner (2026-10-30: three was too low to let labs changes land
+ * while their rulings wait).
+ */
+export const SPEC_PENDING_BUDGET = 40;
 
 /**
  * The source files the CFC rule in `.claude/rules/cfc.md` governs, which is
@@ -90,7 +94,7 @@ export const GOVERNED_SOURCE: readonly RegExp[] = [
   /^runtime\/runner\/src\/cfc\.ts$/,
   /^runtime\/runner\/test\/cfc[^/]*\.test\.tsx?$/,
   /^runtime\/runner\/test\/cfc\/.*\.tsx?$/,
-  /^runtime\/html\/src\/worker\/(?:reconciler|display-fit)\.ts$/,
+  /^runtime\/html\/src\/worker\/(?:reconciler|display-fit|display-fit-atoms)\.ts$/,
   /^runtime\/cf-harness\/src\/cfc-[^/]*\.ts$/,
   /^runtime\/cf-harness\/src\/contracts\/cfc-[^/]*\.ts$/,
   /^runtime\/cf-harness\/src\/sandbox\/runsc-cfc-result\.ts$/,

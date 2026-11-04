@@ -1,7 +1,7 @@
 import { type Cell, isCell } from "../cell.ts";
-import { type Action } from "../scheduler.ts";
-import { type RawBuiltinResult } from "../module.ts";
-import { type Runtime } from "../runtime.ts";
+import type { Action } from "../scheduler.ts";
+import type { RawBuiltinResult } from "../module.ts";
+import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
   CONF_LABEL_NOT_AVAILABLE,

@@ -1,11 +1,20 @@
 import { isDID } from "@commonfabric/identity/did";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { validateSlug } from "../slugs.ts";
-import { ENTITY_URI_SCHEMES, type EntityUriScheme } from "../entity-kind.ts";
+import { COMPUTED_URI_SCHEME } from "../entity-kind.ts";
 
 export const HASH_RE = /^[A-Za-z0-9_-]{43}$/;
 
 const HOST_RE = /^[a-z0-9.-]+(:\d+)?$/i;
+
+/**
+ * The entity schemes an import can name. A `receipt:` document holds the
+ * outcome of one handling, which is nothing to import, so it stays out.
+ */
+const IMPORTABLE_ENTITY_SCHEMES = ["of", COMPUTED_URI_SCHEME] as const;
+
+type ImportableEntityScheme = (typeof IMPORTABLE_ENTITY_SCHEMES)[number];
 
 export interface FabricRef {
   /** Toolshed host (authority); only present in the cf://host/... form. */
@@ -16,7 +25,7 @@ export interface FabricRef {
 
   ref:
     | { kind: "slug"; slug: string }
-    | { kind: "uri"; scheme: EntityUriScheme | "pattern"; hash: string };
+    | { kind: "uri"; scheme: ImportableEntityScheme | "pattern"; hash: string };
 
   /** Path inside the target program. */
   subpath?: string;
@@ -194,12 +203,12 @@ function parseRefToken(
     }
     if (
       parts.length === 3 &&
-      (ENTITY_URI_SCHEMES as readonly string[]).includes(parts[0]) &&
+      (IMPORTABLE_ENTITY_SCHEMES as readonly string[]).includes(parts[0]) &&
       parts[1] === "fid1"
     ) {
       return {
         kind: "uri",
-        scheme: parts[0] as EntityUriScheme,
+        scheme: parts[0] as ImportableEntityScheme,
         hash: parseHash(parts[2], specifier),
       };
     }
@@ -216,7 +225,7 @@ function parseRefToken(
   try {
     return { kind: "slug", slug: validateSlug(refToken) };
   } catch (cause) {
-    const message = cause instanceof Error ? cause.message : String(cause);
+    const message = describeFailure(cause);
     throw new FabricRefError(message, specifier);
   }
 }
@@ -236,7 +245,7 @@ function validateSpace(
   try {
     validateSlug(space);
   } catch (cause) {
-    const message = cause instanceof Error ? cause.message : String(cause);
+    const message = describeFailure(cause);
     throw new FabricRefError(message, specifier);
   }
 }

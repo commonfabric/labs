@@ -114,13 +114,13 @@ export const PROMPT_SECTION_AUDIENCE: Readonly<
   "research-tools": { anyOf: ["author", "find", "pieces"] },
   "pieces-tools": { anyOf: ["pieces"] },
   "resolve-piece-tools": {
-    anyOf: ["find", "act", "pieces"],
+    anyOf: ["pieces"],
     noneOf: ["author"],
   },
   "loom-commands-tools": { anyOf: ["find", "act"] },
   "loom-retrieval-tools": { anyOf: ["find", "act"] },
   // How far to take the work (`strategy.ts`): a quick run answers directly or
-  // takes the shortest path that does what was asked; a deep run searches the
+  // stops when evidence answers the task or a final refusal ends it; a deep run searches the
   // person's data exhaustively or reads several independent web sources, where
   // its domains say, holds what it leaves to a bar, and reads its result back
   // before it finishes.

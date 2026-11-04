@@ -41,6 +41,7 @@ import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { PatternEnvironment, setPatternEnvironment } from "./builder/env.ts";
+import { namesInstances } from "./builder/instance-name.ts";
 import { popFrame, pushRuntimeDefaultFrame } from "./builder/pattern.ts";
 import type {
   AnyCell,
@@ -117,6 +118,9 @@ import {
   waveRunActorOf,
   waveRunContextOf,
 } from "./executor/wave.ts";
+import type { OwningRootAddress } from "./ensure-piece-running.ts";
+import { applyLocalExperimentalDefaults } from "./experimental-defaults.ts";
+import type { CompileTurns } from "./harness/compile-interleave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
@@ -421,7 +425,10 @@ export interface ExperimentalOptions {
    */
   agentBuiltin?: boolean | undefined;
 
-  /** Global default for server-selected view replication. Defaults to off. */
+  /**
+   * Global default for server-selected view replication, which only a web
+   * client under server execution requests. Unset, such a client requests it.
+   */
   viewScopedReplication?: boolean | undefined;
 
   /** Web client override; an explicit value takes precedence over the default. */
@@ -452,6 +459,18 @@ export interface ExperimentalOptions {
    * not write changes. Defaults to off.
    */
   localFold?: boolean | undefined;
+
+  /**
+   * Record the principal a piece was created for on its result document, in
+   * the `creator` meta field, when a setup brings the piece into being, and
+   * give a piece from before the record one at its next source transition,
+   * from the owner its space's access list names for a space root and from
+   * the principal its owner-protected fields represent for any other piece
+   * (`docs/plans/piece-creator-owns-update-added-fields.md`). The record is
+   * what binds a field a later release adds to the piece's creator. Defaults
+   * to off; off, no record is written and a stored one is left as it is.
+   */
+  pieceCreatorRecord?: boolean | undefined;
 
   /**
    * Compile a pattern factory call bound to a `const` as a named sub-pattern
@@ -988,6 +1007,14 @@ export interface RuntimeOptions {
   moduleByteCache?: ModuleByteCache;
 
   /**
+   * The turns at a cold compile this runtime takes with the other runtimes that
+   * share its {@link RuntimeOptions.moduleByteCache}, so that a compile that
+   * yields does not leave them to read a miss and compile the same modules.
+   * When unset, this runtime compiles without waiting for any other.
+   */
+  compileTurns?: CompileTurns;
+
+  /**
    * Statement-coverage collector for authored patterns. When set, every compile
    * this runtime performs is instrumented — the transformer injects a hit call
    * in front of each authored statement — and the collector receives the hits.
@@ -1372,6 +1399,28 @@ const externalObservationRefusal = (
 /** Maximum load waves an external observation traversal may discover. */
 const EXTERNAL_OBSERVATION_LOAD_ROUNDS = 100;
 
+/**
+ * Helper for `Runtime.prepareExternalContentObservation()`, which reads every
+ * document an observed value links to, wherever the link sits in the value,
+ * since writing the value stores each link whether its schema describes the
+ * place or not.
+ */
+const linksInValue = (
+  value: unknown,
+  links: CellLink[] = [],
+  seen = new WeakSet<object>(),
+): CellLink[] => {
+  if (isCellLink(value)) {
+    links.push(value);
+  } else if (typeof value === "object" && value !== null && !seen.has(value)) {
+    // A Cell is a link (`isCellLink`), so only plain data is walked, and an
+    // object reached twice is walked once.
+    seen.add(value);
+    for (const item of Object.values(value)) linksInValue(item, links, seen);
+  }
+  return links;
+};
+
 /** A document a commit retry's catch-up could not load, and the reason. */
 export type CommitRetryPullFailure = {
   space: MemorySpace;
@@ -1411,6 +1460,7 @@ export class Runtime {
   readonly #writeTeardown = new AbortController();
   readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
   readonly #derivedInternalCellIds = new DerivedInternalCellIds();
+  readonly #compileTurns: CompileTurns | undefined;
 
   readonly id: string;
   readonly scheduler: Scheduler;
@@ -1613,6 +1663,11 @@ export class Runtime {
   /** The ids of the derived internal cells this runtime's pieces own. */
   get derivedInternalCellIds(): DerivedInternalCellIds {
     return this.#derivedInternalCellIds;
+  }
+
+  /** See `RuntimeOptions.compileTurns`. */
+  get compileTurns(): CompileTurns | undefined {
+    return this.#compileTurns;
   }
 
   /**
@@ -1996,19 +2051,10 @@ export class Runtime {
       }
     }
 
-    // These flags are consumed from this Runtime instance. Normalize their
+    // Some flags are consumed from this Runtime instance. Normalize their
     // local defaults after override logging so an omitted option does not
     // appear as an explicit override.
-    this.experimental.computedCellIds ??= true;
-    this.experimental.plainResultReceipts ??= true;
-    this.experimental.lazyMaterialization ??= true;
-    this.experimental.agentBuiltin ??= true;
-    this.experimental.localFold ??= false;
-    // TODO(danfuzz): Turn this on only once a runtime whose naming mode
-    // differs from a space's data is kept away from that space;
-    // `instance-naming-modes.test.ts` pins what one does to it until then.
-    this.experimental.instanceNames ??= false;
-    this.experimental.localSessionDocuments ??= false;
+    applyLocalExperimentalDefaults(this.experimental);
 
     // Propagate experimental flags to their ambient control points, then read
     // back the effective state so `experimental.*` reflects what is actually in
@@ -2114,6 +2160,7 @@ export class Runtime {
       // Create harness first (no dependencies on other services)
       this.harness = new Engine(this, {
         hideInternalStackFrames: options.hideInternalStackFrames,
+        interleaveCompile: this.servingPosture ? true : undefined,
       });
 
       this.storageManager = options.storageManager;
@@ -2132,7 +2179,13 @@ export class Runtime {
       this.storageManager.setSharedMemoryConnection?.(
         this.experimental.sharedMemoryConnection === true,
       );
+      // Declared before any session opens as well, since each open declares
+      // the mode and the server admits it by that (INV-16).
+      this.storageManager.setInstanceNames?.(
+        namesInstances(this.experimental),
+      );
       this.moduleByteCache = options.moduleByteCache;
+      this.#compileTurns = options.compileTurns;
       this.patternCoverage = options.patternCoverage;
       // Validated + digested + frozen before the trust-snapshot provider
       // default below, whose `revision` covers the config digest (a trust
@@ -2395,18 +2448,28 @@ export class Runtime {
     | undefined;
 
   /**
-   * Server-execution v2 stage C tuning (T3; serving-loop.md §2/§3): the
-   * serving scheduler's mid-wave hook. A SERVING runtime's scheduler
-   * yields one macrotask between runs whenever its slice of continuous
-   * work is spent (scheduler/cooperative-yield.ts — that is what makes the
-   * wave's flush deadline honest and lets the lease-renew and push-flush
-   * timers fire mid-settle), and calls this observer synchronously at
-   * every such yield. The SpaceServer installs it at activation to renew
-   * the lease mid-wave once the wave has run longer than TTL/3 — a renew
-   * that never depends on the timer queue being serviced. Undefined
-   * everywhere else (the OFF arm and clients construct no yielder at all).
+   * Whether a piece's origin has been followed, asked before a start of the
+   * piece this runtime makes on its own, as `EnsurePieceOptions.originFollowed`
+   * (the event auto-start's). The SpaceServer installs it at activation: the
+   * serving runtime is the opener of every piece it serves, so the piece's
+   * source is brought up to date before the tenure's first start of it, and
+   * the serving loop follows the origin between waves, where the adopting
+   * write can commit (serving-loop.md §3e). Undefined everywhere else: a
+   * client follows a piece's origin when it opens it.
    */
-  servingYieldObserver: (() => void) | undefined;
+  pieceOriginFollowed: ((root: OwningRootAddress) => boolean) | undefined;
+
+  /**
+   * Resolves once every wave this runtime's seals have opened so far has
+   * finished committing: the state they staged is then the store's or
+   * withdrawn, and a transaction that commits directly (`directCommit`) may
+   * read it. The SpaceServer installs it on the serving runtime, where a
+   * sealed transaction's `commit()` resolves at the seal and the wave
+   * commits later; undefined everywhere else, where a committed transaction
+   * is durable on its own. A caller the loop awaits inside a cycle must not
+   * wait on it: the wave it waits for commits when that cycle ends.
+   */
+  sealsCommitted: (() => Promise<void>) | undefined;
 
   /**
    * Register an in-flight async builtin operation so `settled()` waits for it
@@ -2982,12 +3045,16 @@ export class Runtime {
     return this.#viewReplication ??= new ViewReplicationClient(this);
   }
 
-  /** Whether this client requests view replication, subject to session support. */
+  /**
+   * Whether this client requests view replication, subject to session
+   * support: a web client under server execution does unless the web
+   * override, or else the global default, is `false`.
+   */
   get viewScopedReplicationRequested(): boolean {
     return this.#clientClass === "web" &&
       this.experimental.serverExecution === true && !this.servingPosture &&
       (this.experimental.webViewScopedReplication ??
-        this.experimental.viewScopedReplication ?? false);
+        this.experimental.viewScopedReplication ?? true);
   }
 
   /** DIAGNOSTIC (tests): the lazily-created speculation overlay, if this
@@ -4019,6 +4086,22 @@ export class Runtime {
       options.schema,
       tx,
     );
+    let finalTx: IExtendedStorageTransaction | undefined;
+    // Reads every document a link in the value names, through the link's
+    // own schema, wherever the link sits; relative links resolve against
+    // the target. Links inside a linked document follow that document's
+    // schema, as any read of it does.
+    const readStoredLinks = (
+      readTx: IExtendedStorageTransaction,
+      target: Cell<unknown>,
+    ) => {
+      for (const link of linksInValue(options.value)) {
+        const linked = parseLink(link, target);
+        this.getCellFromLink(linked, linked.schema, readTx).get({
+          traverseCells: true,
+        });
+      }
+    };
     try {
       await cell.sync();
       cell.set(options.value);
@@ -4078,8 +4161,11 @@ export class Runtime {
         posture: [...externalObservationPosture(preparedState)],
       };
 
-      // This read runs only after the staged write passed preparation, or in
-      // disabled mode where preparation is intentionally a no-op. Traversal
+      // The staged transaction is never committed: it admits the write before
+      // anything linked is loaded, and its traversal below loads what the
+      // value reaches. This read runs only after the staged write passed
+      // preparation, or in disabled mode where preparation is intentionally
+      // a no-op. Traversal
       // can discover an unloaded linked document and start its sync, so each
       // arrival is followed by another read until no link-target load remains.
       // Each pass drops current-instant read memoization so a value materialized
@@ -4091,6 +4177,7 @@ export class Runtime {
       for (; loadRound < EXTERNAL_OBSERVATION_LOAD_ROUNDS; loadRound++) {
         tx.resetCurrentReadMemoization();
         cell.get({ traverseCells: true });
+        readStoredLinks(tx, cell);
         // Link resolution can register its tracked sync in a promise
         // continuation. Let that continuation run before inspecting the
         // manager's settled pool, or a just-kicked load looks absent here.
@@ -4108,8 +4195,52 @@ export class Runtime {
           tx.getCfcState(),
         );
       }
-      tx.prepareCfc();
-      const finalPreparedState = tx.getCfcState();
+      // The traversal above loaded what the value reaches, but its reads
+      // come after the staged write, and a write's input check counts only
+      // the reads before that write (§8.10.3). The final check therefore runs
+      // in a fresh transaction that reads through the value first and writes
+      // it after, so what the traversal reaches is an input to the write.
+      // Writing the same value again in the staged transaction would not do:
+      // a write that changes nothing records no write attempt, so the bound
+      // stays at the first one. Everything the fresh transaction reads is
+      // loaded by now.
+      tx.abort("external content observation staged");
+      finalTx = this.edit();
+      const finalCell = this.getCell<unknown>(
+        options.space,
+        options.cause,
+        options.schema,
+        finalTx,
+      );
+      this.getImmutableCell(
+        options.space,
+        options.value,
+        options.schema,
+        finalTx,
+      ).get({ traverseCells: true });
+      // The schema-guided read above follows only what the target schema
+      // describes; each link the value stores is read as well, so a link in
+      // a place the schema leaves out still gates.
+      readStoredLinks(finalTx, finalCell);
+      // The staged traversal loaded everything these reads reach; a load
+      // they start would leave a hole the input check reads as nothing.
+      // Link resolution registers its load in a promise continuation, so
+      // let that run before asking.
+      await Promise.resolve();
+      if ((this.storageManager.pendingCrossSpacePromiseCount?.() ?? 0) > 0) {
+        throw externalObservationRefusal(
+          "external content observation reached an unloaded document",
+          finalTx.getCfcState(),
+        );
+      }
+      finalCell.set(options.value);
+      // Read the written value back as well: the read through the immutable
+      // cell carries only the labels of the documents the value links to,
+      // and the receipt's flow and consumed labels also need the ones the
+      // target schema gives the written value itself.
+      finalCell.get({ traverseCells: true });
+      this.prepareTxForCommit(finalTx);
+      const finalPreparedState = finalTx.getCfcState();
       if (
         !enforcementDisabled &&
         finalPreparedState.prepare.status !== "prepared"
@@ -4154,9 +4285,9 @@ export class Runtime {
           finalPreparedState,
         );
       }
-      const flow = deriveFlowJoin(tx, { collectLabeledSpaces: true });
-      const consumed = collectConsumedLabel(tx);
-      const source = cell.getAsNormalizedFullLink();
+      const flow = deriveFlowJoin(finalTx, { collectLabeledSpaces: true });
+      const consumed = collectConsumedLabel(finalTx);
+      const source = finalCell.getAsNormalizedFullLink();
       const observation = cloneIfNecessary({
         source: {
           space: source.space,
@@ -4183,7 +4314,7 @@ export class Runtime {
       const receipt = Object.freeze({});
       externalObservationReceipts.set(receipt, {
         runtime: this,
-        sourceTx: tx,
+        sourceTx: finalTx,
         targetTx: options.targetTx,
         space: options.space,
         producer: options.producer,
@@ -4195,6 +4326,9 @@ export class Runtime {
     } finally {
       if (tx.status().status === "ready") {
         tx.abort("external content observation recorded");
+      }
+      if (finalTx?.status().status === "ready") {
+        finalTx.abort("external content observation recorded");
       }
     }
   }
@@ -4465,6 +4599,9 @@ export class Runtime {
   /**
    * Makes a read-only cell whose content is `data`, carried entirely in the
    * runtime's snapshot store behind a compact URI; there is no stored document to fetch.
+   * The snapshot lives as long as its frozen value, the returned cell, or a
+   * cell or link derived from it does; a bare id string taken from it does not
+   * keep it, and `portableSnapshotId()` makes one that does not need it.
    *
    * **Contract note:** `data` is an arbitrary value, deliberately NOT limited
    * to `FabricValue`. Callers pass, among other things, `Cell` objects (wish
@@ -4515,7 +4652,7 @@ export class Runtime {
     // immutable data.
     const store = immutableCellsFor(this);
     const readerSchema = internCellLinkSchema(schema);
-    const snapshot = store.create(
+    const snapshot = store.createOwned(
       fabricFromConvertibleJsValue(
         flattenBuilderArtifacts(data, {
           isLeaf: isRendererTrustedEvent,

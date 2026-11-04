@@ -4,6 +4,7 @@ import {
   toUnpaddedBase64url,
 } from "@commonfabric/bytes/base64url";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { backtickQuote } from "@commonfabric/text/markdown";
 import { isPlainObject } from "@commonfabric/js-values/types";
 
@@ -84,7 +85,7 @@ type RealmHandleState = {
  *
  * That refusal makes this class one of the exceptions
  * `docs/specs/space-model-formal-spec/1-fabric-values.md` allows under
- * `2.10 Encode Input Contract`: an instance valid as a `FabricValue`, whose
+ * `2.11 Input Contracts`: an instance valid as a `FabricValue`, whose
  * class a codec in the JSON registry claims, and which that format still
  * cannot express.
  *
@@ -307,7 +308,7 @@ export class FabricKeyPair extends BaseFabricPrimitive {
           return ProblematicValue.make(
             typeTag,
             state,
-            `KeyPair: ${e instanceof Error ? e.message : String(e)}`,
+            `KeyPair: ${describeFailure(e)}`,
             mutable,
           );
         }

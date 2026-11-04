@@ -46,10 +46,10 @@ import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { ImplementationIdentity } from "../cfc/types.ts";
 import type { EntityKind } from "../entity-kind.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
-import { type Runtime } from "../runtime.ts";
-import {
-  type IExtendedStorageTransaction,
-  type MemorySpace,
+import type { Runtime } from "../runtime.ts";
+import type {
+  IExtendedStorageTransaction,
+  MemorySpace,
 } from "../storage/interface.ts";
 import type { PatternBuilder } from "./pattern.ts";
 import { AuthSchema, WebhookConfigSchema } from "./schema-lib.ts";
@@ -388,6 +388,13 @@ export type Frame = {
 
   /** Per-frame counter giving each anonymous `inSpace()` call a stable name. */
   inSpaceCounter?: number;
+
+  /**
+   * The spaces a `spaceDeleted()` call in this handler frame asked about that
+   * the memory server has not answered for yet. The runner waits for each
+   * answer after the run and re-runs (see RetryImmediately).
+   */
+  pendingSpaceAnswers?: Set<MemorySpace>;
 
   /**
    * The access-list changes `grantSpaceAccess()` and `revokeSpaceAccess()`

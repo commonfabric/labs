@@ -29,9 +29,9 @@
  */
 
 import { basename, fromFileUrl, join } from "@std/path";
-import {
-  type PatternIndexClient,
-  type PatternIndexPublishRequest,
+import type {
+  PatternIndexClient,
+  PatternIndexPublishRequest,
 } from "@commonfabric/pattern-index/client";
 import {
   compileAndSavePattern,
@@ -41,15 +41,12 @@ import {
   type RuntimeProgram,
 } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { createHarnessPatternIndexClientFactory } from "../src/pattern-index/factory.ts";
 import { createHarnessFabricSessionFactory } from "../src/fabric-session.ts";
 import { patternIndexDependencies } from "../src/pattern-index/composition.ts";
 import { patternIndexDeclaredType } from "../src/tools/search-patterns.ts";
-
-/** The text of a thrown value, for a message that names what went wrong. */
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 /** Where the atoms live, relative to the repository root. */
 export const SEED_DIRECTORY = "patterns/product/primitives";
@@ -228,7 +225,7 @@ export const parseGenerations = (
   try {
     parsed = JSON.parse(text);
   } catch (error) {
-    throw new Error(`${path} is not JSON: ${errorMessage(error)}`);
+    throw new Error(`${path} is not JSON: ${describeFailure(error)}`);
   }
   const record = parsed as Partial<SeedGenerations>;
   // `atoms` is a map from an atom's name to its chain, and an array is an
@@ -820,7 +817,7 @@ export const main = async (
     }
     settings = resolveSettings(parsed, io.env);
   } catch (error) {
-    io.logError(`seed-pattern-index: ${errorMessage(error)}\n\n${USAGE}`);
+    io.logError(`seed-pattern-index: ${describeFailure(error)}\n\n${USAGE}`);
     return 2;
   }
   try {
@@ -836,7 +833,7 @@ export const main = async (
       directory: join(io.repoRoot, SEED_DIRECTORY),
     }, deps);
   } catch (error) {
-    io.logError(`seed-pattern-index: ${errorMessage(error)}`);
+    io.logError(`seed-pattern-index: ${describeFailure(error)}`);
     return error instanceof SeedUsageError ? 2 : 1;
   }
 };

@@ -1373,6 +1373,111 @@ describe("SchemaGenerator", () => {
         { ...UNSUPPORTED_NON_OBJECT as object, ifc: labelS },
       ],
       [
+        "keeps a scope written beside a reference to an intersection that fell back",
+        `
+          type Fallback = { x: string } & string[];
+          type M1 = PerUser<Fallback>;
+          type M2 = { y: number };
+        `,
+        { ...UNSUPPORTED_INDEX_SIGNATURE as object, scope: "user" },
+      ],
+      [
+        "keeps a scope written beside a reference to a fallback that holds a fallback",
+        `
+          type Inner = { x: string } & string[];
+          type Fallback = Inner & { z: boolean };
+          type M1 = PerUser<Fallback>;
+          type M2 = { y: number };
+        `,
+        { ...UNSUPPORTED_INDEX_SIGNATURE as object, scope: "user" },
+      ],
+      [
+        "keeps a scope written beside a reference to a fallback on a property",
+        `
+          type Fallback = { x: string } & string[];
+          type M1 = { a: PerUser<Fallback> };
+          type M2 = { a: { y: number } };
+        `,
+        propertyA({ ...UNSUPPORTED_INDEX_SIGNATURE as object, scope: "user" }),
+      ],
+      [
+        "keeps a label written beside a reference to an intersection that fell back",
+        `
+          type Fallback = { x: string } & string[];
+          type M1 = Confidential<Fallback, readonly ["s"]>;
+          type M2 = { y: number };
+        `,
+        { ...UNSUPPORTED_INDEX_SIGNATURE as object, ifc: labelS },
+      ],
+      [
+        "keeps a label a named alias writes beside a reference to a fallback",
+        `
+          type Fallback = { x: string } & string[];
+          type Labeled = Confidential<Fallback, readonly ["s"]>;
+          type M1 = Labeled;
+          type M2 = { y: number };
+        `,
+        { ...UNSUPPORTED_INDEX_SIGNATURE as object, ifc: labelS },
+      ],
+      [
+        "joins a label around a named alias with the one it writes beside a reference to a fallback",
+        `
+          type Fallback = { x: string } & string[];
+          type Labeled = Confidential<Fallback, readonly ["s"]>;
+          type M1 = Confidential<Labeled, readonly ["t"]>;
+          type M2 = { y: number };
+        `,
+        {
+          ...UNSUPPORTED_INDEX_SIGNATURE as object,
+          ifc: { confidentiality: ["s", "t"] },
+        },
+      ],
+      [
+        "keeps a label written beside a reference to a fallback on an arm of a union",
+        `
+          type Fallback = { x: string } & string[];
+          type M1 = Confidential<Fallback, readonly ["s"]> | null;
+          type M2 = { y: number };
+        `,
+        { ...UNSUPPORTED_INDEX_SIGNATURE as object, ifc: labelS },
+      ],
+      [
+        "keeps no evidence written beside a reference to an intersection that fell back",
+        `
+          type Fallback = Record<number, string> & Record<string, string>;
+          type M1 = Cfc<Fallback, { integrity: readonly ["v"] }>;
+          type M2 = string;
+        `,
+        UNSUPPORTED_NON_OBJECT,
+      ],
+      [
+        "keeps the restriction and not the evidence written beside a reference to a fallback",
+        `
+          type Fallback = Record<number, string> & Record<string, string>;
+          type M1 = Cfc<Fallback, {
+            confidentiality: readonly ["s"];
+            integrity: readonly ["v"];
+          }>;
+          type M2 = string;
+        `,
+        { ...UNSUPPORTED_NON_OBJECT as object, ifc: labelS },
+      ],
+      [
+        "keeps a default written beside a reference to an intersection that fell back",
+        `
+          type Fallback = Record<number, string> & Record<string, string>;
+          type M1 = Default<Fallback, {}>;
+          type M2 = { y: number };
+        `,
+        {
+          type: "object",
+          additionalProperties: true,
+          $comment:
+            "Unsupported intersection pattern: index signatures on different keys",
+          default: {},
+        },
+      ],
+      [
         "returns the cell a cell constituent declares beside an object",
         `type M1 = Cell<unknown>; type M2 = { y: number };`,
         { type: "unknown", asCell: ["cell"] },
