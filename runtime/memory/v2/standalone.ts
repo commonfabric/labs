@@ -41,6 +41,7 @@ import {
 } from "./message-compression.ts";
 import * as MemoryServer from "./server.ts";
 import { verifySessionOpenAuthorization } from "./session-open-auth.ts";
+import { upgradeMemoryWebSocket } from "./websocket-upgrade.ts";
 
 const standaloneMemoryAudience = (await Identity.fromPassphrase(
   "common tools standalone memory audience",
@@ -191,7 +192,7 @@ export class StandaloneMemoryServer {
           response ?? upgradeRequired()
         );
       }
-      const { socket, response } = Deno.upgradeWebSocket(request);
+      const { socket, response } = upgradeMemoryWebSocket(request);
       socket.binaryType = "arraybuffer";
       const connectionTag = nextConnectionTag++;
       let compressionNegotiated = false;
