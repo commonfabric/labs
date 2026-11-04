@@ -5,7 +5,7 @@ import { repeat } from "lit/directives/repeat.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createArrayCellController } from "../../core/cell-controller.ts";
-import { LinkTargetWatch } from "../../core/link-target-watch.ts";
+import { AboutTarget } from "./about-target.ts";
 import {
   type DrawnCard,
   drawnCards,
@@ -185,19 +185,10 @@ export class CFSuggestions extends BaseElement {
     timing: { strategy: "immediate" },
   });
 
-  /** The cell `about` resolves to, once it has. */
-  #aboutTarget: CellHandle | undefined = undefined;
-
-  /** Counts resolutions of `about`, so a superseded one changes nothing. */
-  #aboutGeneration = 0;
-
-  /** The resolution of `about` under way, or the last one, for a test. */
-  #aboutResolution: Promise<void> = Promise.resolve();
-
-  /** Follows the link `about` holds, resolving it again when it moves. */
-  #linkTarget = new LinkTargetWatch({
-    isCurrent: () => this.isConnected,
-    onRetarget: () => this.#resolveAbout(),
+  /** The cell `about` resolves to, followed while the element is connected. */
+  #aboutTarget = new AboutTarget({
+    isConnected: () => this.isConnected,
+    onChange: () => this.requestUpdate(),
   });
 
   #observer: IntersectionObserver | undefined = undefined;
@@ -242,7 +233,7 @@ export class CFSuggestions extends BaseElement {
         return component.#drawn().map(({ card }) => card);
       },
       get aboutResolved() {
-        return component.#aboutResolution;
+        return component.#aboutTarget.resolution;
       },
       take: (event) => this.#take(event),
       isTakeable: (id) => this.#takeable.has(id),
@@ -262,16 +253,14 @@ export class CFSuggestions extends BaseElement {
     // A reconnect resolves `about` again and observes the cards; a first
     // connect does both as it updates.
     if (this.hasUpdated) {
-      this.#resolveAbout();
+      this.#aboutTarget.resolve(this.about);
       this.#observeCards();
     }
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.#aboutGeneration++;
-    this.#aboutTarget = undefined;
-    this.#linkTarget.cancel();
+    this.#aboutTarget.clear();
     this.#observer?.disconnect();
     this.#observer = undefined;
     this.#observed.clear();
@@ -291,7 +280,7 @@ export class CFSuggestions extends BaseElement {
         this.#rowLinks.bind([]);
       }
     }
-    if (changed.has("about")) this.#resolveAbout();
+    if (changed.has("about")) this.#aboutTarget.resolve(this.about);
   }
 
   override updated(changed: PropertyValues): void {
@@ -334,43 +323,9 @@ export class CFSuggestions extends BaseElement {
   #drawn(): DrawnCard[] {
     return drawnCards(
       this.#rows.getValue() ?? [],
-      this.#aboutTarget,
+      this.#aboutTarget.target,
       this.tags,
       isCellHandle(this.items) ? this.items.space() : undefined,
-    );
-  }
-
-  /**
-   * Resolves `about` to the cell it links to, drawing nothing until it has,
-   * and follows that link while the element stays connected.
-   */
-  #resolveAbout(): void {
-    const generation = ++this.#aboutGeneration;
-    const superseded = () => generation !== this.#aboutGeneration;
-    const about = this.about;
-    if (this.#aboutTarget !== undefined) {
-      this.#aboutTarget = undefined;
-      this.requestUpdate();
-    }
-    if (!isCellHandle(about) || !this.isConnected) {
-      this.#linkTarget.cancel();
-      this.#aboutResolution = Promise.resolve();
-      return;
-    }
-    this.#aboutResolution = this.#linkTarget.follow(about, superseded).then(
-      (followed) => {
-        // A resolution started after `follow()` settled supersedes this one.
-        if (!followed || superseded()) return;
-        this.#aboutTarget = followed.cell;
-        this.requestUpdate();
-      },
-      (error) => {
-        if (superseded()) return;
-        this.#linkTarget.cancel();
-        // A disposal race cancels the resolution; that is no failure.
-        if (about.runtime().signal.aborted) return;
-        console.error("Failed to resolve about:", error);
-      },
     );
   }
 
