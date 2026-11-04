@@ -914,9 +914,6 @@ export class SpaceServer implements TransactionSealDestination {
   #feed: AdmittedCommitNotice[] = [];
   #feedArrived: PromiseWithResolvers<void> | undefined;
 
-  /** How many times the loop has suspended on its input wait. */
-  #rests = 0;
-
   /** Resolved by the loop's next suspension on its input wait, or the park. */
   #nextRest = Promise.withResolvers<void>();
 
@@ -2642,28 +2639,24 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   /**
-   * Resolves once {@link quiescent} holds and every frame the memory server
-   * has sent toward this tenure's runtime has been applied, or once the tenure
-   * has ended. A loop that goes on to do anything during the wait, however
-   * briefly, is waited for again.
+   * Resolves once the loop has come to rest, and everything that could still
+   * disturb that rest has finished: the effects and built-ins working for it,
+   * and every frame the memory server has sent toward its runtime. Or once the
+   * tenure has ended. Says nothing of the loop after that;
+   * `ExecutorHost.whenQuiescent()` reads {@link quiescent} and the loops' rests
+   * to learn whether it stayed there.
    */
   async whenQuiescent(): Promise<void> {
-    while (this.#active) {
-      if (!this.#atRest()) {
-        await this.#nextRest.promise;
-        continue;
-      }
-      const rests = this.#rests;
-      const runtime = this.#runtime!;
-      await this.#outbox?.settle();
-      await runtime.settled();
-      await this.#options.server.idle();
-      await runtime.storageManager.inputSynced?.();
-      // A handed-over frame's application schedules work, and this lets it
-      // register, as the wave's own settle does.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      if (rests === this.#rests && this.quiescent) return;
-    }
+    while (this.#active && !this.#atRest()) await this.#nextRest.promise;
+    const runtime = this.#runtime;
+    if (!this.#active || runtime === undefined) return;
+    await this.#outbox?.settle();
+    await runtime.settled();
+    await this.#options.server.idle();
+    await runtime.storageManager.inputSynced?.();
+    // A handed-over frame's application schedules work, and this lets it
+    // register, as the wave's own settle does.
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
   /**
@@ -4298,7 +4291,6 @@ export class SpaceServer implements TransactionSealDestination {
       return;
     }
     this.#feedArrived = Promise.withResolvers<void>();
-    this.#rests += 1;
     this.#options.onLoopRest?.();
     this.#nextRest.resolve();
     this.#nextRest = Promise.withResolvers<void>();
