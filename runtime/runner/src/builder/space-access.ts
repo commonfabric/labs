@@ -35,7 +35,8 @@ const LEVEL_OF_ROLE: Record<SpaceRole, SpaceAccessLevel> = {
  *
  * `"none"` means the principal holds nothing there: the list grants them
  * nothing, or, on a client, the memory server has refused the principal the
- * space outright. `undefined` means the answer is not known yet, which is
+ * space outright, or, on any runtime, has refused the space as deleted.
+ * `undefined` means the answer is not known yet, which is
  * what an access list that has not arrived, a space that has no access list,
  * a run with no principal, and a `target` passed as `undefined` all return.
  *
@@ -84,8 +85,9 @@ export function spaceAccess(
  * handler that must know whether the principal a label names still belongs
  * to the space asks this.
  *
- * The answer is the list's alone. Whether the memory server has refused this
- * runtime the space says nothing about another principal, so a refusal does
+ * The answer is the list's alone, unless the memory server has refused this
+ * runtime the space as deleted, which ends it for every principal, and is
+ * `"none"`. Any other refusal says nothing about another principal, so it does
  * not enter into it, and the answer does not depend on who asks, so a
  * computation calling it keeps its read scope. `undefined` means the list has
  * not arrived, the space has no list, or `target` was passed as `undefined`.
@@ -416,7 +418,8 @@ function ownCall(name: string, args: [target?: unknown]): {
  * `tx`. With `reactive`, a change to whether the memory server admits this
  * runtime to `space` runs the executing action again. `own` says whether
  * `principal` is the one the calling code runs for, whose session this
- * runtime's may be; the session says nothing about any other principal.
+ * runtime's may be; the session says nothing about any other principal, unless
+ * the refusal says the space is deleted, which holds for all of them.
  */
 function accessLevel(
   runtime: Runtime,
@@ -428,20 +431,22 @@ function accessLevel(
 ): SpaceAccessLevel | undefined {
   if (principal === undefined) return undefined;
 
-  // A serving runtime reads every space as that space's owner, so what the
-  // memory server thinks of its own session says nothing about the principal
-  // whose level it returns. Only a client's session is that principal's.
-  const sessionIsPrincipal = own && !runtime.servingPosture;
   const action = runtime.scheduler.executingAction;
-  if (sessionIsPrincipal && reactive && action !== null) {
+  if (reactive && action !== null) {
     runtime.spaceAccessWatch.rerunOnChange(space, action);
   }
 
   const acl = aclOf(runtime, tx, space);
 
-  if (sessionIsPrincipal && refusalOf(runtime, space) !== undefined) {
-    return "none";
-  }
+  // A serving runtime reads every space as that space's owner, so what the
+  // memory server thinks of its own session says nothing about the principal
+  // whose level it returns. Only a client's session is that principal's. A
+  // deletion is the exception: it ends the space for every principal, so the
+  // refusal that says so holds whoever's session heard it, and what the
+  // replica kept of the list no longer grants anything.
+  const refusal = refusalOf(runtime, space);
+  if (isDeletedSpaceError(refusal)) return "none";
+  if (own && !runtime.servingPosture && refusal !== undefined) return "none";
   if (acl === undefined) return undefined;
   const role = spaceReaderRole(isACL(acl) ? acl : undefined, principal);
   return role === null ? "none" : LEVEL_OF_ROLE[role];
