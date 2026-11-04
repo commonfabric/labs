@@ -17,8 +17,10 @@ import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   ACLManager,
+  entityIdFrom,
   resolveEntryIdentity,
   Runtime,
+  slugIdForSpace,
 } from "@commonfabric/runner";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -181,6 +183,34 @@ async function rootlessSpace(grants: ACL = { "*": "WRITE" }) {
       await ownerParty.storage.synced();
     },
 
+    /**
+     * Binds `slug`, in a space of `at`'s or else the room's own, to the piece
+     * `piece` in the room's space, as `set-slug` does, and returns the address
+     * of the document that holds the binding.
+     */
+    pointSlug: async (
+      slug: string,
+      piece: string,
+      at: MemorySpace = space,
+    ): Promise<string> => {
+      const runtime = ownerParty.runtime;
+      const id = slugIdForSpace(at, slug);
+      const slugCell = runtime.getCellFromEntityId(at, entityIdFrom(id));
+      const target = runtime.getCellFromEntityId(space, entityIdFrom(piece));
+      await runtime.editWithRetry((tx) => {
+        const slugWithTx = slugCell.withTx(tx);
+        slugWithTx.setRawUntyped(
+          target.withTx(tx).getAsWriteRedirectLink({ base: slugWithTx }),
+        );
+      });
+      await runtime.idle();
+      await ownerParty.storage.synced();
+      return id;
+    },
+
+    /** A space that goes on existing, which the owner alone belongs to. */
+    otherSpace: () => ownerParty.runtime.createSpace({}),
+
     /** Whether a space answers to `did`, asked as the owner. */
     spaceExists: (did: MemorySpace) => ownerParty.runtime.spaceExists(did),
 
@@ -313,6 +343,32 @@ describe("space-root-open", () => {
         expect(room.fetched).toEqual([]);
       });
     }
+
+    it("says so for a slug the runtime still holds", async () => {
+      await using room = await rootlessSpace({});
+      const root = await room.owner.getSpaceRootPattern(room.space);
+      await room.pointSlug("held", root!.id());
+      const before = await room.owner.resolveSlug("held", room.space);
+      expect(before.refusal).toBeUndefined();
+
+      await room.deleteSpace();
+
+      expect(await codeOf(room.owner.resolveSlug("held", room.space)))
+        .toBe(RuntimeErrorCode.SpaceDeleted);
+    });
+
+    it("says so for a redirect from a space that goes on existing", async () => {
+      await using room = await rootlessSpace({});
+      const root = await room.owner.getSpaceRootPattern(room.space);
+      const live = await room.otherSpace();
+      const redirect = await room.pointSlug("into", root!.id(), live);
+      await room.deleteSpace();
+      room.fetched.length = 0;
+
+      expect(await codeOf(room.owner.getPiece(redirect, live, true)))
+        .toBe(RuntimeErrorCode.SpaceDeleted);
+      expect(room.fetched).toEqual([]);
+    });
 
     it("has no event needing attention", async () => {
       await using room = await rootlessSpace({});

@@ -3422,6 +3422,8 @@ export class RuntimeProcessor {
           path: [],
         });
       await landing.sync();
+      const landingDeletion = this.#spaceDeletion(targetLink.space);
+      if (landingDeletion !== undefined) throw landingDeletion;
       const hasPattern = getPatternIdentityRef(landing) !== undefined;
       const viewScoped = this.#runtime.viewScopedReplicationRequested &&
         await this.#runtime.viewReplication.enable(target.space);
@@ -3513,6 +3515,10 @@ export class RuntimeProcessor {
   ): Promise<SlugReferenceResponse> {
     const cc = this.#getSpaceCtx(request.space);
     const space = cc.getSpace();
+    // A slug a runtime read before the deletion is still in its replica, and
+    // names nothing anyone can open.
+    const held = this.#spaceDeletion(space);
+    if (held !== undefined) throw held;
     try {
       if (request.member === undefined) {
         const { piece } = await resolveSlugTargetInPiece(
