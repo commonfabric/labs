@@ -81,10 +81,11 @@ const finalizedStores = new FinalizationRegistry<Set<URI>>(releaseSnapshots);
 
 /**
  * Holds explicitly created snapshots for one runtime. Owned snapshots, those of
- * array elements and of `Runtime.getImmutableCell()` among them, are held by
- * their frozen source values and live cell/link handles instead, so a
- * discarded document version, or a cell nothing holds any longer, releases its
- * snapshot. Disposal releases both kinds.
+ * array elements and of `Runtime.getImmutableCell()` among them, are held
+ * instead by their frozen source values, when those are containers, and by
+ * live cell/link handles, which alone hold a primitive's. So a discarded
+ * document version, or a cell nothing holds any longer, releases its snapshot.
+ * Disposal releases both kinds.
  */
 export class ImmutableCellStore {
   #elementStores = new WeakMap<object, ImmutableCellStore>();
