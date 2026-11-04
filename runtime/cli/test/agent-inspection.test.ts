@@ -226,6 +226,21 @@ describe("agent-inspection", () => {
       expect((await readAgentRuns(config, deps)).length).toBe(2);
     });
 
+    it("refuses a run listed twice, and leaves both listings", async () => {
+      const { completed } = await seedAtAddresses();
+      const runtime = runtimes.get(HOME_HOST)!;
+      const entries = runtime.getCell(home, "home-pattern").key("agentQueue")
+        .key("entries");
+      await runtime.editWithRetry((tx) => {
+        entries.withTx(tx).push({ run: completed, host: OTHER_HOST });
+      });
+
+      await expect(removeAgentRun(config, "hash-completed", deps)).rejects
+        .toThrow("listed 2 times");
+
+      expect((entries.get() as unknown[] | undefined)?.length).toBe(3);
+    });
+
     it("refuses an entry away from the address its id gives it", async () => {
       await seed();
 

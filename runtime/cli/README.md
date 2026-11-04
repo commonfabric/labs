@@ -1838,10 +1838,12 @@ the run's state; the runner acknowledges it by ending the run `cancelled`.
 
 `cf agent remove <run> [--json]` takes a finished run off the home queue, so
 `ls` and `show` stop finding it. The record stays where it is, and the piece
-that requested it keeps following it. A run that has not ended is refused:
-cancel it first. Removing an entry lowers no label: the entry's document keeps
-what it holds, and the queue stops naming it, so reading the queue no longer
-reaches that entry's labels.
+that requested it keeps following it. It removes the one entry at the address
+the record's id gives it, which is where the `agent` builtin lists every run. A
+run that has not ended is refused (cancel it first), and so is a run the queue
+lists more than once or anywhere else; nothing is removed then. Removing an
+entry lowers no label: the entry's document keeps what it holds, and the queue
+stops naming it, so reading the queue no longer reaches that entry's labels.
 
 All four commands take `--identity` / `CF_IDENTITY` and `--api-url` /
 `CF_API_URL`. The API URL names the home toolshed; each queue entry determines

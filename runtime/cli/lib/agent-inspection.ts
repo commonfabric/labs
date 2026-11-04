@@ -213,6 +213,18 @@ async function inspect(
               "finished run can be removed. Cancel it first.",
           );
         }
+        // Only the entry at the record's own address can be removed without
+        // reading entries, so a run the queue also lists elsewhere is refused
+        // before anything changes, rather than reported removed while listed.
+        const listings = (queue?.entries ?? []).filter((entry) =>
+          entry.run.getAsNormalizedFullLink().id === selected.id
+        ).length;
+        if (listings > 1) {
+          throw new Error(
+            `Agent run ${selected.address} is listed ${listings} times, so it ` +
+              "cannot be removed.",
+          );
+        }
         // Its own transaction, apart from the reads above: one that read the
         // record, or the entries, would have to label the list with what it
         // read, and a run's label from another space does not fit there.
