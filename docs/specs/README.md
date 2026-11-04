@@ -106,6 +106,10 @@ entries; a new gap is filed as a specs pull request.
 
 - [Shared profile space](shared-profile-space.md)
 - [Shared-profile participant rosters](shared-profile-rosters.md)
+- [Profile delegation](profile-delegation.md) (design sketch): a profile
+  space that owns itself and, before its key is destroyed, delegates to the
+  core identity; the delegation is presented as a UCAN proof chain when a
+  session opens
 
 ### Chat
 
@@ -113,3 +117,10 @@ entries; a new gap is filed as a specs pull request.
   README lists): a room per conversation, a
   per-user manager, and placements and adapters that show rooms in other
   spaces
+
+### Files
+
+- [FabriFile](fabrifile/README.md) (implemented, with the departures its README
+  lists; no root names a store yet): a space's set of
+  named files, each a record linking a blob, with its rendering in a module of
+  its own

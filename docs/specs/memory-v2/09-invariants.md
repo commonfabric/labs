@@ -30,14 +30,14 @@ where those properties are stated once.
 Checkers referenced below:
 
 - the **durable-history oracle**: `staleReadAnomalies` in
-  `packages/state-inspector/oracle.ts`, which replays the engine's own
+  `runtime/state-inspector/oracle.ts`, which replays the engine's own
   admission predicate over a space DB's commit history
-  (`packages/state-inspector/test/engine-oracle.test.ts` proves it detects
+  (`runtime/state-inspector/test/engine-oracle.test.ts` proves it detects
   seeded corruption);
 - the **differential harness**:
-  `packages/memory/test/v2-differential-consistency.test.ts`, which runs
+  `runtime/memory/test/v2-differential-consistency.test.ts`, which runs
   seeded random commit schedules against the engine and a naive reference
-  validator (`packages/memory/test/naive-admission.ts`);
+  validator (`runtime/memory/test/naive-admission.ts`);
 - the **TLA+ model**: `docs/specs/memory-v2/tla/PendingStacks.tla`, which
   model-checks INV-1/INV-3/INV-4/INV-5 over all small interleavings for each
   dependency-recording, staleness-basis, and identity-acceptance variant,
@@ -68,8 +68,8 @@ This is the master invariant. It forbids both failure directions at once:
   recorded basis, and admission did not scan it. This is the CT-1910 shape.
 
 Layer: server admission (`validateConfirmedReads`, `resolvePendingReads` in
-`packages/memory/v2/engine.ts`) together with client dependency recording
-(`packages/runner/src/storage/v2.ts`, `v2-transaction.ts`).
+`runtime/memory/v2/engine.ts`) together with client dependency recording
+(`runtime/runner/src/storage/v2.ts`, `v2-transaction.ts`).
 
 Soundness direction: admission MAY reject a commit whose observation is in
 fact coherent (over-rejection costs a retry). It MUST NOT accept a commit
@@ -92,10 +92,22 @@ admitted out of submission order or omitted while durably integrated
 (03-commit-model.md §3.6.3) — the shape current clients always emit. The TLA+ config
 `PendingStacks_Current.cfg` reproduces the legacy-shape violation (kept as a
 regression witness, alongside the legacy-shape engine test in
-`packages/memory/test/v2-pending-read-basis-overadvance.test.ts`) and
+`runtime/memory/test/v2-pending-read-basis-overadvance.test.ts`) and
 `PendingStacks_Repaired.cfg` certifies the repaired shape in the bounded
 model. The residual deviation retires when clients that omit `basisSeq`
 fall below the support floor.
+
+What a client SHOWS for a pending layer is bound by this invariant too,
+because a later commit's observation is whatever view it read. A positional
+`splice` shown as the array its writer computed (`03-commit-model.md`
+§3.3.3) is sound only where the commit read the array, since that read is
+what gets the layer refused once the array moves. Shown for a layer that
+read nothing, a reader over it observes a list the server, replaying the
+layer's ops, never reconstructs, and is accepted having missed the foreign
+write the substitution hid. The TLA+ model's `ViewMode` dial states this:
+`PendingStacks_ChannelIntended.cfg` is the witness, violating
+`ReadCoherence` within seconds, and the `*IntendedRead.cfg` configs certify
+the read-conditioned form.
 
 A second deviation is deliberate: an **identity commit**
 (`03-commit-model.md` §3.6.1), which leaves every document it writes as the
@@ -108,7 +120,11 @@ inside the commit's transaction: per document, the commit's ordered `set`
 and `patch` operations replayed on the view the reader saw yield the stored
 document, and replayed on the stored document leave it unchanged, where a
 pending read's view is its declared confirmed basis with exactly the own
-layers it names replayed on it; a client claim would not do. The
+layers it names replayed on it; a client claim would not do. The second
+condition is waived for a session whose client advertised `elidedVerdicts`,
+since its replica promotes an elided layer to the document its transaction
+computed rather than folding it, and the first condition alone is what this
+invariant needs. The
 differential harness's reference model applies the idempotence half alone,
 so it admits a superset of what the engine admits. The TLA+ model's `IdentityMode = "elide"`
 (`PendingStacks_Identity.cfg`, `PendingStacks_ChannelIdentity.cfg`) certifies
@@ -120,7 +136,11 @@ foreign write that carried the same value, so the writer sets differ where
 the content does not (`PendingStacks_IdentityWriterForm.cfg` is the witness,
 on the writer-set form restricted to commits that wrote). `ElidedUnchanged`
 pins the exemption's premise: every path an elided commit would have written
-already held its value at its resolution point.
+already held its value at its resolution point. A later own commit whose
+pending read names such a layer is scanned from the layer's seq where its view
+through the layer is the one the identity was proved against
+(`03-commit-model.md` §3.6.3): the document at that seq is the reader's view,
+so the writes at or below it are already in what the reader saw.
 
 ### INV-2 — Overlap over-approximation only
 
@@ -148,11 +168,11 @@ Soundness direction: toward precision only from above; never below exact.
 Checked by: the differential harness (engine-accept must imply
 naive-accept, where the naive validator implements exact overlap); the
 generator test asserting the runner's array-op discipline
-(`packages/runner/test/memory-v2-native-commit.test.ts`); the tests holding
+(`runtime/runner/test/memory-v2-native-commit.test.ts`); the tests holding
 `TouchedPathIndex` to `isPrefixPath` and `pathsOverlap`, and the engine's
 check to `patchOverlapsRead` and `patchOverlapsNonRecursiveRead`
-(`packages/memory/test/v2/TouchedPathIndex.test.ts` and
-`packages/memory/test/v2/engine-conflicts.test.ts` respectively).
+(`runtime/memory/test/v2/TouchedPathIndex.test.ts` and
+`runtime/memory/test/v2/engine-conflicts.test.ts` respectively).
 
 Known deviations: **Topic 544** on the team's Topics board
 (`of:fid1:mccA4KBv8PYXLwRiqvDu51Bcm1CP57iy9z0Aosa7Y64`), a shallow read that
@@ -165,7 +185,7 @@ writes it back as a `replace` or an unflagged mergeable op; the engine creates
 the key, and a shallow read of the container taken after the removal is
 accepted (`08-conflict-granularity.md` §2). The engine test "accepts a shallow
 read of a container whose key a writer with an older base re-created" in
-`packages/memory/test/v2/engine-conflicts.test.ts` records the accept. The
+`runtime/memory/test/v2/engine-conflicts.test.ts` records the accept. The
 deviation retires when the engine records, at apply time, whether an op created
 a key.
 
@@ -224,7 +244,7 @@ there still names the dead layer and is refused by the dead-dependency
 admission rule, while a commit built after the processed drop records the
 sparse survivor set and is admitted.
 
-Layer: client dependency recording (`packages/runner/src/storage/v2.ts`
+Layer: client dependency recording (`runtime/runner/src/storage/v2.ts`
 pending-stack bookkeeping); server resolution (`resolvePendingReads`).
 
 Soundness direction: MAY record more layers than semantically necessary;
@@ -245,9 +265,9 @@ delayed-delivery configs) for recording completeness and sparse-omission
 reachability — its `Build` always names the view's full layer set, so the
 declared-set scan's VALIDATION half (a buggy omission of a durably
 integrated layer) is outside its reach and is checked instead by the
-engine unit tests (`packages/memory/test/v2-sparse-pending-dependencies.test.ts`),
+engine unit tests (`runtime/memory/test/v2-sparse-pending-dependencies.test.ts`),
 the differential harness's sparse mutation, and stacked-commit unit
-tests (`packages/runner/test/memory-v2-stacked-commit.test.ts`); see the
+tests (`runtime/runner/test/memory-v2-stacked-commit.test.ts`); see the
 TLA README's "Canonical dependency arrays" note for the coincidence
 argument and the `SkipLayers` refinement that would bring it in scope.
 
@@ -271,7 +291,7 @@ dependency sets it walks (INV-3). A complete cascade over incomplete
 dependencies still admits phantoms.
 
 Layer: server (`resolvePendingReads` rejection path); client drop cascade
-and pre-send refusal (`packages/runner/src/storage/v2.ts`).
+and pre-send refusal (`runtime/runner/src/storage/v2.ts`).
 
 Soundness direction: MAY drop commits that name a rejected layer they did
 not semantically depend on (over-coupling, a wasted retry); MUST NOT leave a
@@ -354,7 +374,7 @@ Soundness direction: MAY surface a failure for a write that would have
 eventually succeeded; MUST NOT drop one without surfacing.
 
 Checked by: backpressure and convergence-storm tests
-(`packages/patterns/integration/convergence-storm.test.ts` asserts all 2K
+(`patterns/integration/convergence-storm.test.ts` asserts all 2K
 contended writes land).
 
 ### INV-8 — Transaction atomicity
@@ -387,7 +407,7 @@ comparison (a torn apply diverges from the naive fold).
 > have integrated the same prefix compute identical values, and a stored
 > snapshot equals the replay of its prefix (`01-data-model.md` §7.3).
 
-Layer: patch application (`packages/memory/v2/patch.ts` server-side, the
+Layer: patch application (`runtime/memory/v2/patch.ts` server-side, the
 client apply path in `v2-document.ts`); snapshot materialization.
 
 Soundness direction: none — exact. Note this requires client and server
@@ -396,7 +416,7 @@ coalesces ops differently is a violation even if each side is internally
 consistent.
 
 Checked by: the differential harness (engine `read` versus naive fold);
-`packages/state-inspector` convergence verdicts
+`runtime/state-inspector` convergence verdicts
 (`multispace.ts`) and `reconstruct-parity.test.ts`.
 
 ### INV-10 — Single-snapshot reads
@@ -416,7 +436,7 @@ Soundness direction: MAY reject a transaction whose reads are in fact coherent
 (a local rejection costs a re-run); MUST NOT export a read set that mixes two
 prefixes.
 
-Checked by: `packages/runner/test/commit-read-basis.test.ts` for the claim
+Checked by: `runtime/runner/test/commit-read-basis.test.ts` for the claim
 check (a document that lands under an open transaction rejects the commit
 locally); the durable-history oracle would surface a resulting incoherent
 acceptance as an INV-1 hit.
@@ -438,11 +458,12 @@ Checked by: engine and reconnect unit tests.
 ### INV-12 — ACL mutation commit shape
 
 > A commit that touches a space's ACL document (entity id `of:<space>`) is
-> admitted only if it is, all at once: the **only** operation in the commit;
-> an `op: "set"` on exactly that id, with `scope` `"space"` or absent; on the
-> default branch (`branch` absent or `""`); and carrying a value that
-> satisfies `isACL` and retains at least one **concrete** (non-`"*"`) OWNER.
-> Every other shape — a patch, a delete, a different scope, a mixed ACL/data
+> admitted only if it is, all at once: the **only** operation in the commit; an
+> `op: "set"` on exactly that id, with `scope` `"space"` or absent; on the
+> default branch (`branch` absent or `""`); and carrying a value that satisfies
+> `isACL` and retains at least one **concrete** (non-`"*"`) OWNER, or a deleted
+> space's deletion tombstone, which INV-15 holds to its own rule. Every other
+> shape — a patch, a document `delete`, a different scope, a mixed ACL/data
 > commit, a non-default branch, an ownerless or malformed result — is a
 > `ProtocolError`.
 
@@ -459,7 +480,7 @@ publishes cache and watch changes only after durable commit. Its only public
 document operation remains the whole-document ACL `set` described here. Private
 invitation metadata is not part of `ClientCommit` and cannot be submitted through
 `session.transact`. See the
-[invitation service contract](../../../packages/toolshed/README.md#space-invitations).
+[invitation service contract](../../../runtime/toolshed/README.md#space-invitations).
 
 The clauses are checked in this order, each rejecting with a `ProtocolError`
 carrying a distinct message (so a message identifies the clause):
@@ -471,14 +492,20 @@ carrying a distinct message (so a message identifies the clause):
 | whole-document `set` on `of:<space>`, scope space-or-absent | `ACL mutations must replace the space-scoped ACL document` |
 | result is a valid ACL with a concrete OWNER | `ACL must be valid and retain at least one concrete OWNER` |
 
+A commit whose ACL document's value claims to be a deletion tombstone, a value
+with a `deleted` field, is held to INV-15's clauses in place of the last one.
+None of these clauses is reached for a space that is already deleted: INV-15
+refuses every commit to one first.
+
 It holds in **both** `observe` and `enforce`, and is skipped only when
-`MEMORY_ACL_MODE` is `off`. The code states its own reason for keeping it
-outside the mode dial: it is a *storage* invariant, not an access decision —
-"an invalid ACL or an ordinary first write would make later enforcement
-ambiguous or impossible" (`#validateAclCommit`'s doc comment). The shape check
-also runs *before* the OWNER capability check on the same commit, so a
-malformed ACL write reports `ProtocolError` even from a principal that has no
-OWNER capability at all.
+`MEMORY_ACL_MODE` is `off`, except for a commit that writes a deletion tombstone
+or one to a deleted space, which INV-15 holds to its rules in `off` as well. The
+code states its own reason for keeping it outside the mode dial: it is a
+*storage* invariant, not an access decision — "an invalid ACL or an ordinary
+first write would make later enforcement ambiguous or impossible"
+(`#validateAclCommit`'s doc comment). The shape check also runs *before* the
+OWNER capability check on the same commit, so a malformed ACL write reports
+`ProtocolError` even from a principal that has no OWNER capability at all.
 
 The capability check that follows requires OWNER for an ACL mutation, with one
 exception: a member may remove its own entry. A session principal without OWNER
@@ -507,16 +534,16 @@ separately stated motivation, and no spec gives one. Anyone proposing to relax
 it owes the argument #4670 did not record.
 
 Layer: server admission (`#validateAclCommit` in
-`packages/memory/v2/server.ts`, for a session's transact and, with the carried
+`runtime/memory/v2/server.ts`, for a session's transact and, with the carried
 actor as the principal, for a served run's change through
 `commitServedAclChange()` and `checkServedAclChange()`); client emission
 (`writeAcl()` in
-`packages/runner/src/acl-manager.ts`, which `ACLManager` and a handler's
+`runtime/runner/src/acl-manager.ts`, which `ACLManager` and a handler's
 `grantSpaceAccess()` and `revokeSpaceAccess()` both write through, and which
 satisfies the rule by addressing the whole document at path `[]` — a write
 through the ordinary value surface decomposes into per-key `op: "patch"`
 details and is refused). The self-removal exception to the capability check
-is `#isSelfRemoval` in `packages/memory/v2/server.ts`, and `cf acl leave` is
+is `#isSelfRemoval` in `runtime/memory/v2/server.ts`, and `cf acl leave` is
 the client that sends one.
 
 The served plane writes the ACL document only through the memory server. A
@@ -531,10 +558,10 @@ principal
 ([`space-access-changes.md`](../../features/space-access-changes.md#serving-runtimes)).
 The wave's seal refuses a run that writes `of:<space>` of any space, failing
 that run alone
-(`packages/runner/src/executor/wave.ts`); the engine's `derived` admission
-refuses a commit carrying such an operation (`packages/memory/v2/engine.ts`);
+(`runtime/runner/src/executor/wave.ts`); the engine's `derived` admission
+refuses a commit carrying such an operation (`runtime/memory/v2/engine.ts`);
 and the wave sink refuses a foreign batch carrying one
-(`packages/runner/src/executor/engine-wave-sink.ts`). What the refusal does to
+(`runtime/runner/src/executor/engine-wave-sink.ts`). What the refusal does to
 the run is in
 [`serving-loop.md` §3d](../server-side-execution/serving-loop.md#3d-transactions-the-action-tx-seals-into-the-wave).
 
@@ -547,7 +574,7 @@ carries could not be removed. Over-acceptance lets the ACL document reach a stat
 no admission check ever validated.
 
 Checked by: example-based server tests only — no oracle, TLA+, or differential
-coverage. `packages/memory/test/v2-server-acl.test.ts`: "ACL mutations must
+coverage. `runtime/memory/test/v2-server-acl.test.ts`: "ACL mutations must
 preserve a concrete owner" (rejects `delete`, `patch`, `scope: "user"`, and
 empty / wildcard-only-owner / downgraded-owner / invalid-capability values) and
 "ACL mutations are default-branch ACL-only commits" (rejects a non-default
@@ -557,16 +584,16 @@ entry" in the same file (admits a READ or WRITE member's own removal, in
 `observe` too; refuses one that also removes, changes or adds another entry,
 adds a document field, keeps its own entry at another level, removes someone
 else's entry, or is sent under a `"*"` entry).
-Client side, `packages/runner/test/memory-v2-acl-mutation.test.ts` asserts the
+Client side, `runtime/runner/test/memory-v2-acl-mutation.test.ts` asserts the
 emitted operation *shape and count* against a real server, not just the
 resulting value. Served plane,
-`packages/runner/test/executor-acl-document-write.test.ts` drives a served
+`runtime/runner/test/executor-acl-document-write.test.ts` drives a served
 handler's cell-shaped and whole-document writes under `off` and `enforce`,
-and `packages/runner/test/executor-wave.test.ts` hands the engine and the
+and `runtime/runner/test/executor-wave.test.ts` hands the engine and the
 sink batches built directly, past the seal. The served change's admission is
 "checkServedAclChange() and commitServedAclChange()" in
-`packages/memory/test/v2-server-acl.test.ts`, and
-`packages/runner/test/executor-space-access-change.test.ts` drives served
+`runtime/memory/test/v2-server-acl.test.ts`, and
+`runtime/runner/test/executor-space-access-change.test.ts` drives served
 handlers' grants and revokes, and their refusals, under `off` and `enforce`.
 
 ### INV-13 — ACL genesis precedence and authority
@@ -600,7 +627,8 @@ The precedence clause binds only at server sequence 0. A *populated* space that
 never had an ACL is not forced through genesis; it falls under the temporary
 pre-launch compatibility rule in `04-protocol.md` §4.5.1 (authenticated
 READ/WRITE, never OWNER). Retracted, malformed, and ownerless ACL state is not
-equivalent to missing state — it fails closed rather than reopening genesis.
+equivalent to missing state — it fails closed rather than reopening genesis,
+and so does a deleted space's deletion tombstone.
 
 Layer: server admission (`#validateAclCommit`). The operator `writeDocument`
 path enforces the same precedence separately and additionally refuses *any*
@@ -609,7 +637,7 @@ direct write to the ACL document, so genesis cannot be performed off-protocol.
 Soundness direction: none — exact.
 
 Checked by: example-based server tests only.
-`packages/memory/test/v2-server-acl.test.ts`: "an ordinary opener cannot claim
+`runtime/memory/test/v2-server-acl.test.ts`: "an ordinary opener cannot claim
 or write a new space", "the space identity initializes a private space",
 "service DIDs have implicit OWNER and do not claim spaces", "acl observe:
 fresh-space genesis remains a hard invariant", "direct writes cannot create or
@@ -647,10 +675,10 @@ DELIVERED at, never from a locally promoted confirmed seq the server never
 sent.
 
 Layer: server (`holdingsToCacheEntries` and the resumed-open reconcile in
-`packages/memory/v2/server.ts`; `buildDiffSync` against the declaration in
+`runtime/memory/v2/server.ts`; `buildDiffSync` against the declaration in
 `watchSet`); client (`SpaceSession.holdingsProvider`, `reopen`/`restore` in
-`packages/memory/v2/client.ts`; `SpaceReplica.holdings()` in
-`packages/runner/src/storage/v2.ts`).
+`runtime/memory/v2/client.ts`; `SpaceReplica.holdings()` in
+`runtime/runner/src/storage/v2.ts`).
 
 Soundness direction: the server MAY deliver a document the replica already
 holds (a redundant frame is tolerated — the replica's monotonic seq guard makes
@@ -676,11 +704,362 @@ model certifies the SERVER's diff rule against a truthful declaration —
 `tla/README.md` states the assumption set — and each CLIENT construction
 obligation is pinned by a unit test instead: delivered-not-promoted seqs and
 the end-to-end declaration by
-`packages/runner/test/memory-v2-reconnect-holdings.test.ts`; branch identity,
+`runtime/runner/test/memory-v2-reconnect-holdings.test.ts`; branch identity,
 the wire-boundary parse, and the zero-watch retraction by
-`packages/memory/test/v2-session-holdings.test.ts`; the declaration on both
+`runtime/memory/test/v2-session-holdings.test.ts`; the declaration on both
 reconnect paths and the terminal restore against a server that cannot take
-one by `packages/memory/test/v2-client-holdings.test.ts`.
+one by `runtime/memory/test/v2-client-holdings.test.ts`.
+
+### INV-15 — Space deletion
+
+> A commit that replaces a space's ACL document with a deletion tombstone,
+> `{ "deleted": { "by": <principal> } }`, is admitted only if it satisfies
+> INV-12's shape clauses; the deletion tombstone holds nothing else and its `by`
+> is the committing principal; the space is not a Home, that is, not a space
+> whose stored list grants its own DID OWNER and that declares no kind; and the
+> stored ACL is valid and its one entry is at OWNER and is either the committing
+> principal or the principal the session's capability resolves to through a
+> proof chain. `by` names the committing principal in both cases. Once one is
+> admitted the space is deleted: every command any principal sends it, a service
+> DID's included, is refused, and no commit to it is admitted again on any write
+> path, an ACL commit included. It holds in every ACL mode, `off` included.
+
+Deleting a space ends it for everyone. It writes the space's ACL document and
+never removes it: a document `delete` of the ACL stays refused under INV-12. The
+sole-member clause asks no authority an OWNER lacks, since an OWNER may already
+remove every other entry, one ordinary ACL commit at a time. What it adds is
+that each other member's loss of access is a commit of its own, made before the
+space is deleted, rather than a side effect of deleting it. A service DID's
+implicit OWNER does not satisfy it: the stored list has to name the principal.
+The Home clause refuses a deletion tombstone while the stored list has a Home's
+shape, since nothing could replace a Home. It turns on the space rather than on
+who commits, so it holds whether the deleting session acts as itself or through
+a chain. A Home's DID is its user's own, so its list grants its own DID OWNER,
+and it declares no kind; that is the test the server already applies when it
+resolves the `actingAs` binding, which takes a space that owns itself and
+declares no kind for a home. A self-owned space that declares a kind, such as a
+profile's space, which declares `profile`, is not a Home, and the chain clause
+below admits deleting it. A self-owned space that declares no kind is
+Home-shaped by this test, and so is never deleted; a self-owned space meant to
+be deletable declares a kind. The kind is read from the space's genesis
+receipt, which never changes once written
+([`space-kinds.md`](../../features/space-kinds.md)).
+
+What the clause guarantees is bounded by what it reads, which is the list. A
+deployment's service identity may rewrite any list, as it may repair one
+([`04-protocol.md`](04-protocol.md#451-current-pass) §4.5.1), and a Home whose
+list no longer grants its own DID OWNER is no longer Home-shaped, so the clause
+trusts a service identity not to reshape a Home's list first. A Home with no
+access-control document has no list to test, and the clause does not protect
+it; every Home has one before deletion is deployed
+([the order deletion lands in](../../plans/random-space-identities.md#deleting-a-space)).
+A test that a list rewrite cannot defeat would have to read something the
+rewrite does not touch, such as whether the DID is a user's identity, of which
+the server keeps no record. Whether to have one is an open design question for
+the Memory server's owners.
+
+The chain clause serves a self-owned space, whose list names the space's own DID
+at OWNER and whose owner acts through a delegation the space issued. A session
+presenting a verified proof chain
+([`04-protocol.md`](04-protocol.md#proof-chains) §4.5.1, "Proof chains")
+resolves its capability from the chain's root issuer, and that is the test the
+server applies to every OWNER act on such a space, replacing its list included;
+deleting it takes the same test and no detour through a list naming the deleting
+principal. It is a different rule from the sole-member clause, and deliberately
+so. A delegation is a proof the owner hands out, not an entry in the list, so
+the server cannot see whether the owner also delegated to other identities, and
+a clause that required it to would leave any such space impossible to delete.
+Those other holders lose access with no commit of their own first, as they do
+when an owner replaces the list. `by` names the committing principal, not the
+root issuer, so for such a space the deletion tombstone is the one place the
+identity that acted for the space appears. The clause counts a `"*"` entry like
+any other, so a self-owned profile's space, whose list also grants `"*"` WRITE,
+is deleted after one ordinary list replacement through the chain removes that
+entry.
+
+The clauses are checked after INV-12's shape clauses, in this order:
+
+| Clause | Rejection |
+| --- | --- |
+| the deletion tombstone holds `by` alone, naming the committing principal | `ProtocolError`: `A deletion tombstone must name the deleting principal and nothing else` |
+| the space is not a Home: its stored list does not grant its own DID OWNER, or it declares a kind | `AuthorizationError`: `A Home space cannot be deleted` |
+| the stored ACL is valid, and its one entry is at OWNER and is the committing principal or the principal its capability resolves to through a proof chain | `AuthorizationError`: `Only the sole member of <space> may delete it` |
+
+The first clause constrains the document's `value`, which is the deletion
+tombstone. The fields beside it, such as the persisted label map, are held to
+nothing more than they are on any other ACL write, so a client that writes the
+whole document by carrying the stored one forward, as `writeAcl()` does, deletes
+the space without dropping them.
+
+"Nothing else" excludes a successor: a deletion tombstone does not name a space
+that replaces the deleted one, and no reader follows a deleted space anywhere. A
+redirect would need more than a field. Every command to a deleted space is
+refused, so a successor named in the deletion tombstone would reach a reader
+only as a new marker on the refusal, which each client would have to read and
+decide whether to follow, and the space it names would be trusted on the word of
+whoever deleted the old one. A redirect is a later change to this specification,
+and a server that admits one then refuses nothing a client before it reads,
+since a client ignores a marker it does not know. A space deleted before that
+change has no successor, and keeps none.
+
+A command sent to a deleted space is refused with an `AuthorizationError`,
+`Space <space> is deleted`, carrying `deleted: true`, `permanentEvidence`, and
+`aclRevision`, which on this refusal as on every ACL refusal is the `seq` at
+which the ACL document is stored
+([`04-protocol.md`](04-protocol.md#451-current-pass) §4.5.1), here the deletion
+commit's. The server checks for deletion once it has routed the command to a
+space it serves and, for a command that names a session, found that session
+open. Every other check comes after it: the access check, INV-12's shape clauses
+and these clauses, INV-13's genesis rules, and the checks of the facts a genesis
+commit declares. So a second deletion tombstone, a malformed ACL write and an
+ordinary write to a deleted space are all refused as a deleted space's, and none
+of them reports a shape, capability or genesis failure.
+
+No write path admits a commit to a deleted space. The server's checks above run
+before the commit's write transaction starts, and another connection to the same
+store can commit a deletion in between, so they are an early refusal and not the
+guarantee. The guarantee is the engine's own: inside the SQLite write
+transaction that applies a fresh commit, before it applies anything, the engine
+reads the space's ACL document and refuses the commit when that document holds a
+deletion tombstone. That holds for every fresh commit whatever its class or
+path: a session's authored commit, a served run's access-list change and every
+other commit carrying delegated carriage, a serving wave's `derived` commit, the
+invitation service's system commit, and the operator `writeDocument` path. An
+exact replay of a commit accepted before the deletion still answers from the
+store, since replay detection precedes admission. A commit that writes a
+deletion tombstone is held to these clauses inside that transaction too, against
+the ACL document as stored there, so a member added through another connection
+after the server's check is never deleted along with the space.
+
+When the engine's check refuses a commit that the server's earlier check
+admitted, the refusal reaches the committer as the server's own would have: a
+session's transact gets the `AuthorizationError` above, with the `aclRevision`
+the engine read; a `derived` commit and a delegated commit get a
+`ProtocolError` naming the deletion, the deterministic refusal a wave's commit
+step and the outbox already handle
+([`serving-loop.md`](../server-side-execution/serving-loop.md#a-deleted-space));
+and an invitation operation gets `space-deleted`.
+
+The invitation service decides `space-deleted` in `invite()`, the server's
+invitation entry point, inside the write transaction it runs every one of the
+five operations in (`executeInvite`), so a deletion committed through another
+connection is seen there as it is by the engine. Over HTTP, the router reaches
+`invite()` only once the request has passed rate limiting, its proof has
+verified, and its body has validated
+([invitation service contract](../../../runtime/toolshed/README.md#space-invitations)).
+The memory-session forms never reach `invite()` for a deleted space. A
+`session.open` carrying an invitation is refused with the deleted
+`AuthorizationError` above before it redeems anything
+([`04-protocol.md`](04-protocol.md#412-logical-sessions-and-resume) §4.1.2),
+since the deletion check precedes every other part of an open. A `space.invite`
+needs a session on the space, which deletion revokes and no reopen gets back
+([`04-protocol.md`](04-protocol.md#4311-spaceinvite--administer-a-spaces-invitations)
+§4.3.11). So on that transport the refusal is the deleted `AuthorizationError`,
+marked `deleted: true`, not `space-deleted`.
+
+What follows the deletion commit revokes every session open on the space with
+the `session/revoked` reason `deleted`, and sends no `session/admissible`. It
+does so in every mode, unlike what follows an access-list change that leaves
+the space in place, which revokes only in `enforce`: a deleted space refuses
+every principal in every mode, so a session left open would be one whose every
+command is refused. The session that committed the deletion receives its
+transact response first and its revocation after, as a member's session does
+when it removes its own entry.
+
+Unlike INV-12, it holds in every mode, `off` included. Deletion cannot be
+undone, and a mode in which a deleted space took commits would let one replace
+its deletion tombstone and so undo it, while a mode that admitted a deletion
+tombstone unchecked would let any writer delete a space for good. So in `off`
+too the server tests a deletion tombstone against INV-12's shape clauses and
+these clauses, and refuses every command to a deleted space, before the checks
+that `off` skips. The engine's check inside the write transaction and the
+serving plane's foreign grant (`foreignWriteAuthorityFor()` and
+`foreignReadAuthorityFor()`) consult no mode in any case. The foreign grant's
+refusal of a deleted space carries `deleted: true`, so a serving runtime's
+`spaceDeleted(target)` for a foreign space reads the deletion as a client's
+does.
+
+Deleting a space reclaims no storage by itself. An operator reclaims it by
+reaping the space, which keeps the deletion commit and its deletion tombstone,
+and so a server sequence no lower than that commit's `seq`, and removes every
+earlier commit
+([random space identities](../random-space-identities.md#reaping-a-deleted-space)).
+A store removed outright leaves a DID with no history, and INV-13 lets that
+DID's own key write a new genesis there. A space created under
+[random space identities](../random-space-identities.md) has no such key left,
+but a legacy space's key can be recomputed from its name.
+
+Layer: server admission (`#validateAclCommit` and the capability check in
+`runtime/memory/v2/server.ts`, with the ACL state a deletion tombstone gives in
+`readAclState`, the home test `#resolveSpaceOwnerBinding` applies, over
+`resolveSpaceOwnerOf()` and the declared kind `#spaceKindOf()` reads, and the
+session's `capabilityPrincipal`, which
+`verifySessionOpenProofs` in `runtime/memory/v2/session-open-auth.ts` sets to a
+verified chain's root issuer); engine admission of every fresh commit, inside
+its write transaction (`applyCommitTransaction` in
+`runtime/memory/v2/engine.ts`); the foreign grant
+(`#foreignGrantOn` in `runtime/memory/v2/server.ts`); invitation admission
+(`invite()` and `executeInvite` in `runtime/memory/v2/server.ts` and
+`runtime/memory/v2/invites.ts`); client emission (`writeAcl()` in
+`runtime/runner/src/acl-manager.ts`). The chain clause applies only where the
+server admits delegations (`acl.delegations`, which toolshed sets from
+`MEMORY_ACL_DELEGATIONS`, on unless set false): a server that admits none
+refuses every chain, and there the clause's other branch is the only one.
+
+Soundness direction: none — exact. Over-acceptance destroys a space a member
+the list names other than the deleting principal or its chain's root issuer
+still holds, or lets a deleted space take writes again. Over-rejection leaves
+the space's owner no way to delete it.
+
+Checked by: the "a deleted space" cases of
+`runtime/memory/test/v2-server-acl.test.ts`, for the refusal of a space whose
+ACL document holds a deletion tombstone: at `session.open` in every mode; on
+each command of an open session, ahead of the command's other checks, in `off`
+and `enforce`; on an operator's direct write; on an invitation operation; on
+the foreign grant; and on a fresh commit inside the engine's write transaction,
+with an exact replay still answered. The same file's served-change cases cover
+a served change to a deleted space's access list, and
+`runtime/toolshed/test/space-invites.test.ts` the invitation route's
+`space-deleted`. The same "a deleted space" cases cover admitting a deletion:
+the sole OWNER's in every mode, answered before every session on the space is
+revoked as `deleted`; the deletion tombstone's shape; another member; a Home;
+a service identity; a patch in `off` mode; and an operator's direct write.
+`runtime/memory/test/v2-server-session-open-proofs.test.ts` covers the chain
+clause, and the Home clause through a chain. The clauses are decided again
+inside the transact's write transaction, which no test reaches with a member
+added in between.
+
+### INV-16 — Instance-naming admission
+
+> A space marked as holding data a naming runtime wrote admits no open, and no
+> commit, from a session that does not declare `instanceNames: true`. The
+> first commit admitted to a space from a session that declares it, a genesis
+> commit included, marks the space, and the mark is recorded in the same store
+> transaction as that commit. A server admits a declaring session's open of an
+> unmarked space only while its own posture names instances. Nothing removes a
+> mark.
+
+A positional runtime, one with the `instanceNames` experimental flag off, binds
+a parent's children by position, and a naming runtime binds a parent's named
+instances by name ([`computed-cell-identity.md`](../computed-cell-identity.md),
+"Sub-pattern instance identity"). Once a naming runtime has written a parent, a
+positional runtime that runs it binds its children to other documents, and
+nothing in the runtime refuses it. This invariant keeps the two from both
+writing one space. Before the mark, every session a space admits writes what a
+positional runtime would read the same way, since a naming session that never
+commits leaves the stored data as it was. After it, only naming sessions are
+admitted, and only their commits.
+
+A session declares its mode in its signed `session.open` descriptor, and one
+that declares nothing is positional, which is what every runtime of a build
+older than the declaration sends ([`04-protocol.md`](04-protocol.md) §4.1.2).
+The declaration is self-reported, which is enough for what it guards: a runtime
+of the other mode that does what its code does. A writer that misdeclares its
+mode already holds WRITE on the space.
+
+The server records the mark in a row of the space's database, beside the commit
+that set it, rather than in a document or a commit field. The toolshed owning
+the space opens that database, so a change of owner keeps the mark. The server
+reads the mark from the space's store when it admits an open and when it
+admits a commit, as it reads the kind the space's genesis commit declares.
+
+A server's posture is the deployment's value of the `instanceNames` flag, which
+the toolshed hosting it publishes on `/api/meta`. A server whose posture names
+no instances admits no naming session to an unmarked space, so no space is
+marked before the toolshed owning it has turned the posture on, and a
+deployment switched back to off marks no more spaces. It still admits naming
+sessions to marked spaces, and still refuses positional ones there. The toolshed
+gives the server its posture as an option, and a server given none has a
+posture that names no instances, so it refuses every naming open of an
+unmarked space.
+
+The clauses are checked in this order, each condition being what an admitted
+open or commit satisfies:
+
+| Clause | Rejection |
+| --- | --- |
+| an open of a marked space declares `instanceNames: true` | `SessionRevokedError` with `clientUpdateRequired: true`: `Space <space> holds data written with instance names, which this runtime does not use` |
+| an open of an unmarked space that declares `instanceNames: true` is made to a server whose posture names instances | `SessionRevokedError` with `clientUpdateRequired: true`: `The server of space <space> does not name instances, and this runtime does` |
+| a commit to a marked space comes from a session that declares `instanceNames: true` | `SessionRevokedError` with `clientUpdateRequired: true`: `Space <space> holds data written with instance names, which this runtime does not use` |
+
+A resume is an open, so a positional session's resume of a marked space is
+refused like a fresh open. The open clauses are checked after authorization, so
+a principal the space would refuse is refused for that and learns nothing of
+the mark. They use the marker the expression-result identity check uses
+(§4.1.1): a client keeps it across mounts and never retries it.
+
+The commit clause is what keeps a positional commit out of a marked space.
+Once a commit marks a space, the server also revokes the space's positional
+sessions with the `session/revoked` reason `instance-names`, as it revokes the
+sessions an ACL commit deauthorizes. The revocation tells their clients, which
+make the message `Space <space> now holds data written with instance names,
+which this runtime does not use` from it and keep it as they keep the open
+refusal; a late or lost revocation admits nothing, since every commit a
+session makes is checked against the mark as it arrives.
+
+The commit clause and the marking cover the commits sessions make. The commits
+the server makes itself, on a principal's behalf or its own (blob writes,
+delegated appends, served access-list changes, invitations, and resolving an
+event's attention), run no pattern and bind no parent's children, so they
+neither check the mark nor set it.
+
+The mark is not access control, so it holds in every ACL mode, `off` included:
+a server that checks no access still keeps a positional runtime from a space a
+naming runtime wrote. A server that does not advertise `instanceNameMark`
+neither records nor enforces the mark, so a naming runtime opens no session on
+it.
+
+Layer: server admission and commit admission (`runtime/memory/v2/server.ts`, in
+`session.open` admission after authorization and before session restoration,
+since the mark is read from the space's store, and where a commit is
+authorized); the server's posture
+(`runtime/toolshed/lib/experimental-posture.ts`); client declaration and
+refusal handling (`runtime/memory/v2/client.ts`, given the mode by the
+runner's session factories in `runtime/runner/src/storage/v2-remote-session.ts`,
+`runtime/runner/src/storage/v2-emulate.ts` and
+`runtime/runner/src/executor/loopback-storage.ts`, which the storage manager
+tells the mode a `Runtime` declares from its `instanceNames` experimental
+flag, and by a serving host's routed plane in
+`runtime/runner/src/executor/routed-plane.ts`).
+
+Soundness direction: over-rejection is safe. Refusing a positional session to
+an unmarked space, or a naming session to an unmarked space of a server whose
+posture names instances, costs availability and loses no state.
+Over-acceptance, a positional session or commit admitted to a marked space,
+lets a positional runtime bind a named instance's children to other documents;
+a naming session admitted to an unmarked space of a server whose posture names
+none lets one client close the space to every positional runtime the
+deployment serves.
+
+Checked by: `runtime/memory/test/instance-naming-admission.test.ts`, one case
+per clause: the mark a naming commit records in its own transaction, genesis
+included; the positional commit and the positional open and resume a marked
+space refuses; the revocation of its positional sessions; the posture an
+unmarked space's naming open is admitted under; and the `off` ACL mode.
+`runtime/memory/test/session-open-auth.test.ts` checks that the declaration is
+bound to the signed descriptor. The client's handling of the `instance-names`
+revocation is tested on its own: it ends the session with a
+`SessionRevokedError` that carries `clientUpdateRequired: true` and the message
+above, and the client keeps it
+(`runtime/memory/test/v2-session-termination.test.ts`), as does the storage
+manager (`runtime/runner/test/storage-retry-space-access.test.ts`). The same
+memory test file checks the client's declaration: a client whose runtime names
+instances declares it in each open it signs, a reopen included, and fails its
+connection permanently, sending no open, to a server that does not advertise
+`instanceNameMark`, while a positional client declares nothing and connects
+there. `runtime/runner/test/instance-naming-modes.test.ts` checks the boundary
+between runtimes of the two modes over one memory server: a positional runtime
+is refused a space a naming runtime wrote, whether it reopens, updates, starts
+or loads compiled code from a parent there, and the parent's children stay
+where the naming runtime bound them. The same file checks that a runtime
+declares its mode to its storage manager, which refuses a runtime of the other
+mode, and the posture of an emulated memory server
+(`runtime/runner/src/storage/v2-emulate.ts`), which follows the mode of the
+runtime it serves, and of a loopback server given none, which follows the
+runtime's default; `runtime/runner/test/experimental-options.test.ts` checks
+that a `Runtime` declares its mode at construction. The `instanceNames` flag
+stays off until deployments turn their posture on
+([`../../plans/instance-names-on.md`](../../plans/instance-names-on.md)).
 
 ## Change discipline
 

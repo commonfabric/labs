@@ -8,12 +8,12 @@ and `session.watch.*`.
 ## Where execution happens
 
 - Each space is a single `@db/sqlite` `Database` opened by the memory engine
-  ([`packages/memory/v2/engine.ts`](../../../packages/memory/v2/engine.ts),
+  ([`runtime/memory/v2/engine.ts`](../../../runtime/memory/v2/engine.ts),
   `open()` → `engine.database`), cached one-per-space by the server
-  ([`packages/memory/v2/server.ts`](../../../packages/memory/v2/server.ts),
+  ([`runtime/memory/v2/server.ts`](../../../runtime/memory/v2/server.ts),
   `Server.#openEngine()`).
 - The space websocket is served at `/api/storage/memory?space=<did>`
-  ([`packages/toolshed/routes/storage/memory/memory.routes.ts`](../../../packages/toolshed/routes/storage/memory/memory.routes.ts)),
+  ([`runtime/toolshed/routes/storage/memory/memory.routes.ts`](../../../runtime/toolshed/routes/storage/memory/memory.routes.ts)),
   authorized via UCAN on session open.
 - Cell-derived SQLite databases (Section [03](./03-database-sources.md)) are
   **one sibling file per database** in the same storage directory (Q6 → Option
@@ -114,7 +114,7 @@ the statement guard, run the `SELECT`, return rows.
 
 ### The connection pool (`ReadConnectionPool`)
 
-[`packages/memory/v2/sqlite/read-pool.ts`](../../../packages/memory/v2/sqlite/read-pool.ts):
+[`runtime/memory/v2/sqlite/read-pool.ts`](../../../runtime/memory/v2/sqlite/read-pool.ts):
 
 - Keyed by **canonical file path**; opened **read-only** (`new Database(path, {
   readonly: true })`). This is **real per-connection read-only** — replacing the
@@ -171,10 +171,10 @@ idempotently.)
 ## Protocol extension
 
 The v2 protocol is a discriminated union of message `type`s
-([`packages/memory/v2.ts`](../../../packages/memory/v2.ts), `ClientMessage` /
+([`runtime/memory/v2.ts`](../../../runtime/memory/v2.ts), `ClientMessage` /
 server messages; parsed in `parseClientMessage`, routed in
 `Connection.#receiveOrdered`, correlated by `requestId` in
-[`packages/memory/v2/client.ts`](../../../packages/memory/v2/client.ts)). It is
+[`runtime/memory/v2/client.ts`](../../../runtime/memory/v2/client.ts)). It is
 extensible by adding variants. We add **one new read verb** and **fold writes
 into the existing `transact` commit**.
 
@@ -250,21 +250,21 @@ same transaction that carries the surrounding cell writes — so they apply in t
 The client-side seam is:
 
 ```
-db.exec(...)                                  // packages/runner/src/cell.ts
+db.exec(...)                                  // runtime/runner/src/cell.ts
   → tx.recordSqliteWrite(space, { op: "sqlite", db, sql, params })
                                               // storage transaction (interface.ts +
                                               //   v2-transaction.ts / extended-storage-transaction.ts)
   → getNativeCommit                           // folds the op into the pending commit
   → ClientCommit { operations: [...cellOps, sqliteOp] }
-                                              // packages/memory/v2.ts
+                                              // runtime/memory/v2.ts
   → engine applies all operations atomically  // applyCommitTransaction
 ```
 
 The client commit (`ClientCommit` in
-[`packages/memory/v2.ts`](../../../packages/memory/v2.ts)) carries an
+[`runtime/memory/v2.ts`](../../../runtime/memory/v2.ts)) carries an
 `operations: Operation[]` list applied inside
 `engine.database.transaction(applyCommitTransaction).immediate(...)`
-([`packages/memory/v2/engine.ts`](../../../packages/memory/v2/engine.ts)
+([`runtime/memory/v2/engine.ts`](../../../runtime/memory/v2/engine.ts)
 `applyCommit` → `applyCommitTransaction`, which iterates operations through
 `writeOperation`). The `sqlite` operation kind:
 
@@ -333,7 +333,7 @@ Goal: transactions are **atomic across cells and the attached SQLite database**.
   attached databases atomically when they share a connection and journal
   coordination — so in the no-crash path, cells and rows commit together.
 - **WAL caveat.** The engine runs `PRAGMA journal_mode = WAL`
-  ([`packages/memory/v2/engine.ts`](../../../packages/memory/v2/engine.ts)
+  ([`runtime/memory/v2/engine.ts`](../../../runtime/memory/v2/engine.ts)
   `PRAGMAS`). With WAL, cross-file atomic commit is **not guaranteed across a
   crash** mid-commit: one file's WAL frame may be durable while the other's is
   not. In normal (no-crash) operation the commit is atomic.
@@ -341,7 +341,7 @@ Goal: transactions are **atomic across cells and the attached SQLite database**.
   small `_cf_commit_watermark(seq)` row, written **inside** the commit txn and
   advanced on commit; the commit also **persists its `sqlite` ops** in the commit
   record. On open, the engine compares the space's committed `seq` (the `commit`
-  table, [`packages/memory/v2/engine.ts`](../../../packages/memory/v2/engine.ts)
+  table, [`runtime/memory/v2/engine.ts`](../../../runtime/memory/v2/engine.ts)
   `insertCommit`) against each attached db's watermark. If they **disagree** —
   the only thing the WAL crash window can cause — the engine **quarantines** that
   pattern db: it fails the db's queries with a clear error and logs loudly,
@@ -377,4 +377,4 @@ Goal: transactions are **atomic across cells and the attached SQLite database**.
 > **As-built proof.** Atomic cells + the `sqlite` op in one commit is proven
 > engine → server → protocol → runner and end-to-end through `cf check` plus the
 > real server (`integration/sqlite-db-query-decode.test.ts`), with rollback and
-> two-connection isolation pinned in `packages/memory/test/v2-sqlite-*-test.ts`.
+> two-connection isolation pinned in `runtime/memory/test/v2-sqlite-*-test.ts`.

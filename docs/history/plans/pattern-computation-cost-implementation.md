@@ -36,7 +36,7 @@ scope; this document owns dependencies, implementation slices, acceptance
 checks, and the next task. Keep the A–E identifiers aligned with the design. Its
 reported durations and access estimates are hypotheses until reproduced here.
 
-The [execution dashboard](../../../tools/implementation-progress/README.md)
+The [execution dashboard](../../../scripts/implementation-progress/README.md)
 shows delivery state, review gates, outstanding questions, and observable demos.
 Checked items below mean implemented and validated; the dashboard separately
 records whether they have landed. Keep both current at implementation
@@ -86,7 +86,7 @@ replacement advice requires a shipped replacement.
       points.
 - [x] Create the full implementation sequence with explicit acceptance gates.
 - [x] Reconcile D3 with the current implementation: `getSnapshotMemo()` in
-      [extended-storage-transaction.ts](../../../packages/runner/src/storage/extended-storage-transaction.ts)
+      [extended-storage-transaction.ts](../../../runtime/runner/src/storage/extended-storage-transaction.ts)
       selects separate memos by epoch and ambient metadata. D3 must verify
       isolation and measure reuse, rather than assume scoped memoization is
       absent.
@@ -123,8 +123,8 @@ replacement advice requires a shipped replacement.
 - [x] **A1b — Implement reactive-action accounting at the operations it
       measures.**
   - [x] Extend `ActionStats` and scheduler recording in
-        [telemetry.ts](../../../packages/runner/src/telemetry.ts) and
-        [timing.ts](../../../packages/runner/src/scheduler/timing.ts).
+        [telemetry.ts](../../../runtime/runner/src/telemetry.ts) and
+        [timing.ts](../../../runtime/runner/src/scheduler/timing.ts).
   - [x] Trace both query-result and schema-backed lazy reads before placing
         proxy counters. Count link crossings in the actual resolution and schema
         traversal paths, without counting the same crossing twice.
@@ -140,7 +140,7 @@ replacement advice requires a shipped replacement.
         the result is limited to that workload and does not claim zero overhead.
 - [x] **A2 — Expose attributed reactive-action counts.**
   - [x] Extend per-step output in
-        [test-runner.ts](../../../packages/cli/lib/test-runner.ts), sorting by
+        [test-runner.ts](../../../runtime/cli/lib/test-runner.ts), sorting by
         access deltas and retaining run counts and authored `src`.
   - [x] Keep builtin/coordinator work visible when no authored site exists. The
         CLI aggregates completed-run events, including removed actions. Avoid
@@ -204,12 +204,12 @@ require separate coordination.
 
 [PR #7257](https://github.com/commontoolsinc/labs/pull/7257) implements the
 checked A3 acceptance items.
-[Read-accounting tests](../../../packages/runner/test/read-accounting.test.ts)
+[Read-accounting tests](../../../runtime/runner/test/read-accounting.test.ts)
 cover transaction ownership, aborted attempts, queued preflight setup failures,
 fan-out, and asynchronous writebacks. The
-[budget collector tests](../../../packages/cli/test/read-budgets.test.ts) cover
+[budget collector tests](../../../runtime/cli/test/read-budgets.test.ts) cover
 exact boundaries, total/per-run separation, and action/attempt attribution. The
-[CLI budget fixtures](../../../packages/cli/test/test-runner-read-budgets.test.ts)
+[CLI budget fixtures](../../../runtime/cli/test/test-runner-read-budgets.test.ts)
 exercise declarations, functional-failure preservation, rejected initialization
 settlement without restarting it, render enforcement, many cheap runs, and one
 expensive run.
@@ -235,9 +235,9 @@ before merge, with clean Cubic and antagonistic reviews.
   - [x] Verify rendered rows after reconnect.
 
   The
-  [independent-replica probes](../../../packages/patterns/integration/reactive-vote-rows.test.ts)
+  [independent-replica probes](../../../patterns/integration/reactive-vote-rows.test.ts)
   assert nested-filter membership and derived tally updates. The
-  [browser tests](../../../packages/patterns/integration/reactive-vote-rows-browser.test.ts)
+  [browser tests](../../../patterns/integration/reactive-vote-rows-browser.test.ts)
   cover same-space and cross-space profiles, remote colors, profile-only edits,
   membership additions, removal/restoration, ranking changes, and nested mapped
   swatches. Removal checks pin the empty row, absence of nested swatches,
@@ -252,7 +252,7 @@ before merge, with clean Cubic and antagonistic reviews.
   [repeatable relay procedure](../../development/TESTING.md#browser-row-reconnect-acceptance)
   keeps the writer connected and asserts that each outage closes live sockets.
   The
-  [reconnect probe](../../../packages/patterns/integration/reactive-vote-rows-reconnect.test.ts)
+  [reconnect probe](../../../patterns/integration/reactive-vote-rows-reconnect.test.ts)
   closes the reader's storage sockets while the writer changes membership and
   profiles. Ordinary memory queries wait for session restoration before
   constructing their requests. This guards the handshake-to-session interval; a
@@ -262,7 +262,7 @@ before merge, with clean Cubic and antagonistic reviews.
 
   C3 records the mutable inline element used when resolving a nested array to a
   content-addressed snapshot. The
-  [cell callback regression](../../../packages/runner/test/cell-callbacks.test.ts)
+  [cell callback regression](../../../runtime/runner/test/cell-callbacks.test.ts)
   verifies updates after initial demand settles and confirms that changing a
   neighboring inline element causes no rerun. The fix and its validation are
   recorded in [PR #7265](https://github.com/commontoolsinc/labs/pull/7265). C3's
@@ -291,9 +291,9 @@ before merge, with clean Cubic and antagonistic reviews.
       acceptance verify correct derived values, stable normalized output links
       and producer identities, and no execution of the untouched row producer
       after edits to each of two linked rows. The
-      [client case](../../../packages/patterns/integration/reactive-vote-rows.test.ts)
+      [client case](../../../patterns/integration/reactive-vote-rows.test.ts)
       uses independent worker replicas and merged in #7329. The
-      [serving-loop case](../../../packages/runner/test/executor-serving-loop.test.ts)
+      [serving-loop case](../../../runtime/runner/test/executor-serving-loop.test.ts)
       observes the actual serving runtime and waits for the authored input
       watermark; a client diagnostic graph does not contain those actions.
       Serving acceptance is published in
@@ -331,7 +331,7 @@ before merge, with clean Cubic and antagonistic reviews.
         records consequences and alternatives.
   - [x] Implement tagged enumeration and verify authored output acceptance,
         lookup round trips, cross-space identities, and durable resume. The
-        [authored consumer tests](../../../packages/runner/test/collection-index-key-entries.test.ts)
+        [authored consumer tests](../../../runtime/runner/test/collection-index-key-entries.test.ts)
         exercise both producer modes with equal-valued primitive and Cell keys;
         stored-descriptor recovery preserves lookup-only demand behavior.
   - [x] Bound invalidation to affected keys; state initialization, update,

@@ -125,6 +125,6 @@ interface Input { title: string | Default<"Untitled">; }
 
 ## See Also
 
-- `packages/patterns/self-reference-test.tsx` - Canonical example
-- `packages/patterns/notes/notebook.tsx` - Real-world parent-child usage
-- `packages/patterns/notes/note.tsx` - Reading parent from self
+- `patterns/dev/self-reference-test/self-reference-test.tsx` - Canonical example
+- `patterns/system/notes/notebook.tsx` - Real-world parent-child usage
+- `patterns/system/notes/note.tsx` - Reading parent from self

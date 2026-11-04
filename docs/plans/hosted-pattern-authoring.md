@@ -3,8 +3,8 @@
 Implement the product contract in
 [`../specs/hosted-pattern-authoring.md`](../specs/hosted-pattern-authoring.md).
 The smallest useful system has one hosted agent session, two authoring
-operations, and three thin entry points. It does not require the Pattern
-Factory phase machine or server-primary pattern execution.
+operations, and three thin entry points. It does not require a multi-phase
+authoring pipeline or server-primary pattern execution.
 
 ## Status
 
@@ -123,7 +123,7 @@ and recovered after a service restart. No stage can publish source yet.
   repair followed by success, cancellation, and process recovery.
 
 The harness fabric session
-(`packages/cf-harness/src/fabric-session.ts`) provides a host-side,
+(`runtime/cf-harness/src/fabric-session.ts`) provides a host-side,
 authorization-verified runtime target with no fabric credential inside the
 sandbox; the adapter builds on it rather than constructing its own.
 
@@ -195,7 +195,7 @@ once and every failure leaves it unchanged.
   and final source revision.
 
 The harness handle table and diagnostic scrubber
-(`packages/cf-harness/src/handle-table.ts`) redact fabric identifiers at the
+(`runtime/cf-harness/src/handle-table.ts`) redact fabric identifiers at the
 model boundary; the identifier-free progress events here are a separate
 person-facing projection, but they reuse that scrubber rather than
 reimplementing identifier detection.
@@ -283,7 +283,7 @@ Success means Home and the CLI complete the same new-space steel thread.
 
 ## Explicitly outside this plan
 
-Do not add multiple-agent orchestration, mandatory Pattern Factory phases,
+Do not add multiple-agent orchestration, mandatory authoring phases,
 automatic repository following, scheduled source updates, automatic stale
 candidate merging, or an agent-controlled compatibility override. This plan
 can grow only when a concrete product requirement or measured failure of the

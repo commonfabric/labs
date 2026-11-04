@@ -3,8 +3,8 @@
 Chapter 8 ended with an optimistic commit leaving the local replica. This
 chapter follows it: the wire protocol, how the server detects conflicts
 without locks, how other clients hear about it, and what's actually on disk.
-The code is `packages/memory` (the store and protocol) plus
-`packages/runner/src/storage/` (the client side).
+The code is `runtime/memory` (the store and protocol) plus
+`runtime/runner/src/storage/` (the client side).
 
 > **Historical note, because you'll see traces of it in the code.** The
 > original storage engine ("v1") modeled storage as a chain of immutable
@@ -12,7 +12,7 @@ The code is `packages/memory` (the store and protocol) plus
 > engine and its fact vocabulary have been removed; what survives is a
 > handful of names (`URI`, `ConflictError`, `MIME`, and `State` — now just
 > an address and the value it holds — in `interface.ts`), reused by the
-> current engine ("v2", `packages/memory/v2/`). V2 keeps the spirit —
+> current engine ("v2", `runtime/memory/v2/`). V2 keeps the spirit —
 > optimistic concurrency over append-only history — but moves the unit of
 > conflict from single facts to **commits with read-set validation**, which
 > is what's described below. Toolshed and the runtime speak only v2.
@@ -32,10 +32,22 @@ Documents also carry a **scope key**. `PerUser`/`PerSession` cells
 revisions by `scope_key` derived from the session's principal
 (`v2/engine.ts`). Isolation by partition, not by discipline.
 
+Session documents synchronize by default. With the experimental
+[`localSessionDocuments`](../development/EXPERIMENTAL_OPTIONS.md#localsessiondocuments)
+flag enabled and server execution disabled, the runtime's own session instance
+lives only in its local replica. Explicit foreign-instance reads still go to the
+server for admission and loading. A transaction whose reads, writes, and
+preconditions are entirely local needs no server connection. Values of the local
+session instance are not persisted in the space's SQLite database. Space and
+user documents still synchronize.
+Server execution always synchronizes session documents so the serving runtime
+can read and derive them. Toolshed's webhook runtime keeps its session state
+synchronized even when the deployment enables local session storage for clients.
+
 ## The commit protocol: optimistic concurrency via read sets
 
-A client ships each transaction as a `ClientCommit`
-(`packages/memory/v2.ts`):
+A client sends the synchronized part of a transaction as a `ClientCommit`
+(`runtime/memory/v2.ts`):
 
 ```ts
 // Shown for illustration only.
@@ -50,6 +62,16 @@ ClientCommit {
   // observations, branch/merge fields, ...)
 }
 ```
+
+With local session storage enabled in client-execution mode, transactions whose
+reads, writes, and preconditions are entirely local settle locally. A session
+write that consumes shared state still sends those shared reads for server
+validation. Mixed
+transactions send their space/user operations and reads while keeping session
+operations and reads local. Their optimistic session writes settle with the
+server verdict: rejection rolls them back and rejects dependent local writes.
+Local origin and value preconditions are checked by the replica; the server
+validates the synchronized portion described below.
 
 A `patch` operation is itself a small language: alongside the
 diff-generated ops (`replace`, `add`, `remove`, `move`, `splice`) it
@@ -99,7 +121,7 @@ client-side story from Chapter 8 (revert, re-run, retry) starts from
 current data, not after another round trip.
 
 Client-side resilience details worth knowing
-(`packages/memory/v2/client.ts`): unacknowledged commits are kept and
+(`runtime/memory/v2/client.ts`): unacknowledged commits are kept and
 **replayed on reconnect** (safe by idempotence), and a connection drop
 leaves commits queued rather than failed. On the way back the client also
 declares what its replica holds, so the server re-delivers exactly what it
@@ -108,7 +130,12 @@ Offline-tolerant by construction, within a session's lifetime.
 
 ## Subscriptions: watches over schema-shaped graphs
 
-The read side mirrors the reactive model. Over one WebSocket, a client opens
+With local session storage enabled, client-executed session reads subscribe to
+replica changes without registering server graph watches. A local write or rollback notifies
+reactive readers through the same sink/trigger machinery.
+
+For synchronized documents, the read side mirrors the reactive model. Over one
+WebSocket, a client opens
 a session per space (`hello` → `session.open`, then `transact` /
 `graph.query` / `session.watch.set` / `session.watch.add` / `session.ack`).
 
@@ -184,7 +211,7 @@ apply read-time clearance to query results — Chapter 10.)
 
 One detail with outsized architectural value: the *same* client and server
 classes run in-process. `EmulatedStorageManager`
-(`packages/runner/src/storage/v2-emulate.ts`) constructs a real
+(`runtime/runner/src/storage/v2-emulate.ts`) constructs a real
 `MemoryServer` and connects the real client over a loopback transport — no
 sockets, identical protocol. Tests and CLI runs exercise the genuine commit
 and watch machinery, and "local vs deployed" differs only in transport and

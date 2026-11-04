@@ -66,7 +66,7 @@ identical to a handler that never ran.
 
 ### A sub-pattern's cell reads as `undefined` at the id you have
 
-`instantiatePatternNode` (`packages/runner/src/runner.ts`) binds a sub-pattern
+`instantiatePatternNode` (`runtime/runner/src/runner.ts`) binds a sub-pattern
 node's output spot twice, from the same cause, so both mints share a hash:
 
 - the **identity bind** never sees the pattern's `derivedInternalCells`
@@ -295,7 +295,9 @@ commonfabric.logger["runtime-client"].timeStats
 
 // Stats for a specific key path
 commonfabric.logger["runtime-client"].getTimeStats("ipc/CellGet")
-// { count, min, max, average, p50, p95, lastTime, lastTimestamp, cdf, ... }
+// { count, min, max, average, p50, p95, lastTime, lastTimestamp, slowest, ... }
+// `slowest`: the longest few, longest first, each as
+// { elapsed, at, epochMs, detail? } — `at` on the `performance.now()` clock
 
 // Reset all timing stats
 commonfabric.resetAllTimingStats()
@@ -353,8 +355,46 @@ and most runtime code runs in a web worker, so its loggers are in a separate
 
 ```javascript
 // Shown inside a pattern body.
-// Fetch worker counts, timing, and flags
+// Fetch worker counts, timing, flags, CFC counters, compile-cache counters,
+// and structure sizes
 await commonfabric.rt.getLoggerCounts()
+// .compileCache = { hits, misses, byIdentityHits }; the `pattern-manager`
+// timing rows `compile-cache/load-by-identity/<outcome>` (memory — the
+// in-memory artifact index served the load, with no storage read, which is
+// also how the runner resolves a live pattern when it starts a piece — hit,
+// entry-absent, entry-unverified, closure-refused, coverage-missing,
+// eval-failed, no-version) and `compile-cache/cold-load/<outcome>` (compiled,
+// shared — the load reused a compile of the same identity already in flight
+// — source-unavailable, compile-failed, eval-failed) name the pattern in each
+// row's `slowest` details
+
+// Counts of the worker's live structures right now: scheduler nodes and
+// queues, storage documents and subscriptions (`storage` is `null`, not zeros,
+// for a storage manager that reports no sizes), compiled-code caches, the
+// module-delegation registry and how often its snapshot was built, the
+// worker's own subscription and mount tables, and cumulative CFC commit
+// refusals by reason. Take two readings apart to see which tracked collection
+// is growing; growth in a structure not counted here does not show.
+//
+// Four views say where the growth sits. `storage.bySpace` ranks the open
+// spaces by the approximate JSON size of their documents, measured across
+// reads within a node budget (`measuredDocuments` against `documents` says
+// how far the measurement has got; the rest of the spaces past the first 64
+// add up under `bySpaceOmitted`). `storage.wire` counts the frames the memory
+// connections have sent and received and the bytes the open sockets still
+// hold queued (`null` for a session factory that reports none, as the
+// emulated one is). `runtime.immutableSnapshotsBySpace` counts the snapshots
+// by the space each was read out of. `ipc` counts the `MessagePort`s the
+// worker holds and has closed, and what each outbound channel has carried:
+// every message counted, one in sixteen measured, `approxBytes` scaled from
+// the sample (`null` for a processor with no client registry behind it).
+(await commonfabric.rt.getLoggerCounts()).sizes
+
+// The storage counts above add every open space together. Each open space's
+// own share is the `sizes` of its entry here, beside its session state (at
+// most 64 spaces; `spacesOmitted` counts the rest; `null` for a storage
+// manager without diagnostics).
+(await commonfabric.rt.getStorageDiagnostics())?.spaces
 
 // Control worker loggers
 await commonfabric.rt.setLoggerLevel("debug")         // all loggers
@@ -689,7 +729,8 @@ await commonfabric.watchWrites([])
 | `commonfabric.rt` | RuntimeClient for worker IPC |
 | `commonfabric.rt.setLoggerLevel(lvl, name?)` | Set worker logger level |
 | `commonfabric.rt.setLoggerEnabled(on, name?)` | Enable/disable worker logger |
-| `commonfabric.rt.getLoggerCounts()` | Get worker logger counts/timing/flags |
+| `commonfabric.rt.getLoggerCounts()` | Get worker logger counts/timing/flags/CFC counters/structure sizes |
+| `commonfabric.rt.getStorageDiagnostics()` | Get worker storage work in flight and each open space's session state and sizes |
 | `commonfabric.rt.setSettleStatsEnabled(on)` | Enable/disable worker settle stats |
 | `commonfabric.rt.getSettleStats()` | Get the last worker settle stats payload |
 | `commonfabric.rt.getSettleStatsHistory()` | Get recent worker settle stats history |

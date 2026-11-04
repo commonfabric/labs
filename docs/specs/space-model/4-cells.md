@@ -188,7 +188,7 @@ differ in what they already know about the value in hand:
 - A walk over an arbitrary graph — deriving a content-addressed id, or a
   pattern-authored schema default — has recognized nothing, so it asks **by
   member name**: `toEncodableForm()`, read via `hasEncodableForm()` /
-  `encodableFormOf()` (`packages/runner/src/encodable-form.ts`). That name is
+  `encodableFormOf()` (`runtime/runner/src/encodable-form.ts`). That name is
   the runtime's own, shared with the builder artifacts the same walk serializes.
 
 `toJSON()` returns the same link under the JSON protocol's name, so a cell reads
@@ -330,7 +330,7 @@ The current system does **not** add timestamps or unique IDs to event payloads:
 
 However, each handler **invocation** does receive a unique identity. When an
 event handler is invoked, `Runner.#instantiateJavaScriptHandlerNode`
-(`packages/runner/src/runner.ts`) puts an event id in the `cause` object used
+(`runtime/runner/src/runner.ts`) puts an event id in the `cause` object used
 to derive cell identities for handler results — the durable id minted for the
 dispatched event (`tx.dispatchedEventId`), falling back to a fresh
 `crypto.randomUUID()` for non-dispatch invocations such as a test calling the

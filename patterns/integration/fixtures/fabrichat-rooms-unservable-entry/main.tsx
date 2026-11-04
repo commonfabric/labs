@@ -1,0 +1,186 @@
+/**
+ * Stands in for a person's Home around FabriChat: a shared-space catalog the
+ * person registers spaces in, and their FabriChat manager over it, whose
+ * profile is their first. A registration carries only the fields its event
+ * names, so the catalog carries no label. A room can also be recorded as one
+ * the person belongs to, as joining it through its container records it,
+ * whatever the room is. Fixture for
+ * `fabrichat-rooms-unservable-entry-multi-runtime.test.ts`.
+ */
+
+import {
+  type Cell,
+  Default,
+  handler,
+  NAME,
+  pattern,
+  type PerUser,
+  type Stream,
+  UI,
+  type VNode,
+  Writable,
+} from "commonfabric";
+import {
+  FabriChatManagerCore,
+  type FabriChatManagerInput,
+  type ManagerStreamEvent,
+  type RoomMembership,
+} from "../../../system/fabrichat/manager.tsx";
+import {
+  type ChatIndexEntry,
+  type ChatRequestOutcome,
+  type ChatRoomKind,
+  type ChatRoomLink,
+  epochNsecFromMsec,
+  type ManagerProfileCell,
+} from "../../../system/fabrichat/schemas.tsx";
+import ProfileHome, {
+  type ProfileHomeOutput,
+} from "../../../system/profile-home/profile-home.tsx";
+import {
+  registerSharedSpaceIn,
+  type SharedSpaceCatalogStorage,
+} from "../../../system/shared-space/shared-space-catalog.ts";
+
+/** The person's first profile, as the profile a FabriChat manager reads. */
+function firstProfileOf(
+  profiles: Writable<ProfileHomeOutput[]>,
+): ManagerProfileCell;
+function firstProfileOf(profiles: Writable<ProfileHomeOutput[]>): unknown {
+  return profiles.key(0);
+}
+
+/** What creating a profile asks: the name to give it. */
+interface CreateProfileEvent {
+  /** The profile's name. */
+  name?: string;
+}
+
+/**
+ * Creates one of the person's profiles, in a space of its own that grants
+ * anyone `WRITE`, as `profile-create.tsx` does.
+ */
+const createProfile = handler<
+  CreateProfileEvent,
+  { profiles: Writable<ProfileHomeOutput[]> }
+>((event, { profiles }) => {
+  profiles.push(
+    ProfileHome.inSpace(undefined, { grants: { "*": "WRITE" }, root: true })({
+      initialName: event?.name ?? "Someone",
+    }) as ProfileHomeOutput,
+  );
+});
+
+/** What registering a space asks: the space, its host and its kind. */
+interface RegisterEvent {
+  /** The space to register. */
+  space: string;
+
+  /** The host serving the space. */
+  host: string;
+
+  /** The kind of space it is. */
+  kind: string;
+}
+
+/** Registers the event's space in the catalog, saved. */
+const register = handler<
+  RegisterEvent,
+  { catalog: Writable<SharedSpaceCatalogStorage> }
+>((event, { catalog }) => {
+  registerSharedSpaceIn(catalog, {
+    space: event.space,
+    host: event.host,
+    kind: event.kind,
+  });
+});
+
+/** What recording a membership asks: the room, and the kind it is said to be. */
+interface RememberEvent {
+  /** The room. */
+  room: Cell<ChatRoomLink>;
+
+  /** The room's kind, as the membership records it. */
+  kind: ChatRoomKind;
+}
+
+/** Records the event's room as one the person belongs to and keeps. */
+const remember = handler<
+  RememberEvent,
+  { memberships: Writable<RoomMembership[]> }
+>((event, { memberships }) => {
+  memberships.push({
+    room: event.room,
+    kind: event.kind,
+    since: epochNsecFromMsec(0),
+    state: "saved",
+    revision: "remembered",
+  });
+});
+
+/** What the stand-in stores, the FabriChat manager's records among it. */
+export interface MainInput
+  extends Omit<FabriChatManagerInput, "sharedSpaceCatalog"> {
+  profiles: Writable<Default<ProfileHomeOutput[], []>>;
+}
+
+export interface MainOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  profiles: ProfileHomeOutput[];
+
+  /** Creates one of the person's profiles. */
+  createProfile: Stream<CreateProfileEvent>;
+
+  /** Registers a space in the person's catalog. */
+  register: Stream<RegisterEvent>;
+
+  /** Records a room as one the person belongs to. */
+  remember: Stream<RememberEvent>;
+
+  /** Creates a group room from the person's manager. */
+  createGroup: Stream<ManagerStreamEvent>;
+
+  /** The outcome of each of the manager's requests. */
+  requests: Record<string, ChatRequestOutcome>;
+
+  /** The person's shared-space catalog, as stored. */
+  sharedSpaceCatalog: SharedSpaceCatalogStorage;
+
+  /** The rooms the manager lists for the person. */
+  rooms: PerUser<ChatIndexEntry[]>;
+
+  /** The people the person's rooms list, by principal. */
+  people: PerUser<Record<string, ManagerProfileCell[]>>;
+}
+
+export default pattern<MainInput, MainOutput>((
+  { profiles, direct, requests, outgoingNotices },
+) => {
+  const catalog = new Writable<SharedSpaceCatalogStorage>({
+    entries: {},
+    offers: {},
+  }).for("sharedSpaceCatalog");
+  const profile = firstProfileOf(profiles);
+  const chats = FabriChatManagerCore({
+    myProfile: profile,
+    sessionProfile: profile,
+    sharedSpaceCatalog: catalog,
+    direct,
+    requests,
+    outgoingNotices,
+  });
+  return {
+    [NAME]: "FabriChat unservable catalog entry fixture",
+    [UI]: <div>fabrichat unservable catalog entry fixture</div>,
+    profiles,
+    createProfile: createProfile({ profiles }),
+    register: register({ catalog }),
+    remember: remember({ memberships: chats.roomMembership }),
+    createGroup: chats.createGroup,
+    requests: chats.requests,
+    sharedSpaceCatalog: chats.sharedSpaceCatalog,
+    rooms: chats.rooms,
+    people: chats.people,
+  };
+});

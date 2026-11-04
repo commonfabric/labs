@@ -53,9 +53,6 @@ export interface HealthInput {
   /** Which capabilities each suite needs, from the topology. */
   capabilities: ReadonlyMap<string, readonly string[]>;
 
-  /** The process each unit runs in, from the topology. */
-  processes: ReadonlyMap<string, string>;
-
   /** What lanes measured about themselves over the cost window. */
   observations: Pick<Observations, "charges" | "lanes">;
 }
@@ -67,12 +64,11 @@ export interface HealthInput {
  */
 export function suiteCharges(
   manifest: Manifest,
-  topology: Pick<HealthInput, "capabilities" | "processes">,
+  topology: Pick<HealthInput, "capabilities">,
 ): Record<string, PreviousSuiteHealth> {
   const fixed = fixedCharges({
     manifest,
     capabilities: topology.capabilities,
-    processes: topology.processes,
   });
   const tooLong = new Map<string, number>();
   for (const { suite } of manifest.unschedulable) {
@@ -163,7 +159,7 @@ function healthFigures(input: HealthInput): HealthFigures {
  */
 function previousCharges(
   previous: Manifest,
-  topology: Pick<HealthInput, "capabilities" | "processes">,
+  topology: Pick<HealthInput, "capabilities">,
 ): Record<string, PreviousSuiteHealth> {
   const recorded = previous.health?.suites;
   if (recorded === undefined) return suiteCharges(previous, topology);

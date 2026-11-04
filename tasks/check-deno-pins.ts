@@ -7,7 +7,7 @@
 // and .github/actions/deno-setup reads it at job time for CI. Other places
 // encode a version and can drift, so this script checks them:
 //
-// - The root deployment Dockerfiles bake the version into their FROM lines,
+// - The deployment Dockerfiles bake the version into their FROM lines,
 //   which cannot read a file. Each denoland/deno image tag must equal the pin.
 // - tasks/check.sh accepts a range of versions (so a developer without mise
 //   can still build, at the cost of a warning). The range must contain the
@@ -24,8 +24,8 @@ const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
 const MISE_TOML = "mise.toml";
 const DOCKERFILES = [
-  "Dockerfile.dashboard",
-  "Dockerfile.toolshed",
+  "dashboard/Dockerfile",
+  "runtime/toolshed/Dockerfile",
 ] as const;
 const CHECK_SH = "tasks/check.sh";
 const DENO_SETUP_ACTION = ".github/actions/deno-setup/action.yml";

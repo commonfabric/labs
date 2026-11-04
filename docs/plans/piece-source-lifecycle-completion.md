@@ -48,16 +48,16 @@ as one, and sits with the recommendations below rather than here.
 ### What is built end to end
 
 - **One reconciliation mechanism, on one trigger.**
-  [`SourceReconciler`](../../packages/runner/src/source-reconciler.ts)
+  [`SourceReconciler`](../../runtime/runner/src/source-reconciler.ts)
   resolves a piece's origin and adopts what it names, and it is called from
   three places in
-  [`PiecesController`](../../packages/piece/src/ops/pieces-controller.ts)
+  [`PiecesController`](../../runtime/piece/src/ops/pieces-controller.ts)
   — `getPiece` when it is going to run, `openPiece`, and the space-root ensure
   — all of which are a user opening something. No serving path calls it.
 - **A closed origin vocabulary.**
-  [`classifyPieceOriginString`](../../packages/runner/src/piece-origin-kind.ts)
+  [`classifyPieceOriginString`](../../runtime/runner/src/piece-origin-kind.ts)
   returns exactly one kind for any recorded string, and both the reconciler and
-  [`piece-origin.ts`](../../packages/piece/src/ops/piece-origin.ts) dispatch on
+  [`piece-origin.ts`](../../runtime/piece/src/ops/piece-origin.ts) dispatch on
   that enumeration rather than re-deriving it, so what the product says about
   an origin and what the runtime does with it cannot drift apart. A test holds
   the two classifiers to the same boundary and the same reasons.
@@ -76,7 +76,7 @@ as one, and sits with the recommendations below rather than here.
   confirmation. A candidate the piece's own stored data cannot satisfy is
   refused outright and says why there is no button.
 - **Guarded, append-only revisions.** `pieceSourceHistory` in
-  [`runner.ts`](../../packages/runner/src/runner.ts) carries a revision
+  [`runner.ts`](../../runtime/runner/src/runner.ts) carries a revision
   identifier, timestamp, pattern, retaining source link, origin, the recorded
   origin when normalization changed it, an operation, and the selected
   revision. `applyPieceSourceTransition` compares the expected revision head,
@@ -98,7 +98,7 @@ as one, and sits with the recommendations below rather than here.
   dropped.
 - **Cross-space source copies fail closed on labels.**
   `sourceCfcMetadataProhibitsCrossSpaceCopy` in
-  [`pattern-manager.ts`](../../packages/runner/src/pattern-manager.ts) refuses
+  [`pattern-manager.ts`](../../runtime/runner/src/pattern-manager.ts) refuses
   to replicate a closure whose stored confidentiality or integrity labels the
   destination cannot preserve.
 - **Late host hints, and hydration from the site table.**
@@ -113,7 +113,7 @@ Seven gaps, ordered by how much each one costs a person using the product.
 **1. A revision retains the reachable closure, not the authored program.**
 There is no `cf/authored-program-manifest/v1` anywhere in the tree, no
 `publicSubpaths` on the compiler's `Program`
-([`interface.ts:29`](../../packages/js-compiler/interface.ts)), and no
+([`interface.ts:29`](../../base/js-compiler/interface.ts)), and no
 enumeration hook on `ProgramResolver`, which exposes only `main()` and
 `resolveSource()`. A revision's `source` field is a link to the
 `pattern:<identity>` closure. So revert restores what the entry could reach; an
@@ -125,14 +125,14 @@ program.
 
 **2. There is no runtime fingerprint or program digest.** `computeModuleHashes`
 accepts `runtimeFingerprint` and every production caller leaves it empty
-([`pattern-manager.ts:631`](../../packages/runner/src/pattern-manager.ts),
-[`cell-cache.ts:554`](../../packages/runner/src/compilation-cache/cell-cache.ts)).
+([`pattern-manager.ts:631`](../../runtime/runner/src/pattern-manager.ts),
+[`cell-cache.ts:554`](../../runtime/runner/src/compilation-cache/cell-cache.ts)).
 `getExecutableRuntimeFingerprint()` does not exist. Neither does
 `cf/runtime-neutral-program-digest/v1`. A revision therefore cannot record why
 an executable identity changed, cannot distinguish a runtime rebuild from an
 authored-source change, and cannot tell a revert whether it may reuse a
 historical identity. `pieceSourceCellSchema` in
-[`schemas.ts:281`](../../packages/runner/src/schemas.ts) still declares a
+[`schemas.ts:281`](../../runtime/runner/src/schemas.ts) still declares a
 `lineage` array that nothing outside a `cf-harness` test fixture reads.
 
 **3. Fork, detach-and-rebuild, and baseline migration do not exist.** There is
@@ -150,8 +150,8 @@ cost no schema change; that question is open and worth settling before the code
 is written.
 
 **5. Roots are still special in two places.** `defaultAppUrl` lives on the
-mutable home root ([`home.ts:16`](../../packages/home-schemas/home.ts),
-[`pieces-controller.ts:1587`](../../packages/piece/src/ops/pieces-controller.ts)),
+mutable home root ([`home.ts:16`](../../base/home-schemas/home.ts),
+[`pieces-controller.ts:1587`](../../runtime/piece/src/ops/pieces-controller.ts)),
 and nothing validates a root-interface contract when `defaultPattern` is
 created or relinked.
 
@@ -276,7 +276,7 @@ This is the heaviest change in the plan. It should land on its own.
 appends a revision with a new digest and an unchanged executable
 identity, a follower adopts it, and a revert restores the sibling.
 
-*Files:* `packages/js-compiler`, `packages/runner/src/harness`,
+*Files:* `base/js-compiler`, `runtime/runner/src/harness`,
 `pattern-manager.ts`, `runner.ts`, `piece-controller.ts`,
 `cf-piece-menu.ts`.
 
@@ -305,7 +305,7 @@ a restorable baseline the first time it is opened, and a piece that
 cannot be baselined says so rather than gaining a broken one.
 
 *Files:* `runner.ts`, `pieces-controller.ts`, `ensure-space-root.ts`,
-`packages/home-schemas`.
+`base/home-schemas`.
 
 ### B1 — One route operation that can fail
 
@@ -334,7 +334,7 @@ Independent of Track A apart from its consumer.
 precondition race reports a real `ConflictError` to its caller and writes
 nothing.
 
-*Files:* `packages/runner/src/storage`, `runtime-processor.ts`, the
+*Files:* `runtime/runner/src/storage`, `runtime-processor.ts`, the
 runtime-client protocol, `piece-origin.ts`.
 
 ## Tests
@@ -345,15 +345,15 @@ after the behavior it covers is a fixture written against the implementation
 rather than against the design. Its general version-to-version golden replay
 fixtures ride with A1. That is where a fingerprint and a digest first make
 "the previous version" a thing a fixture can name. The existing synthetic
-home-shaped and default-app-shaped replays in `packages/piece/test` are the
+home-shaped and default-app-shaped replays in `runtime/piece/test` are the
 template.
 
 The transition matrix — every transition, concurrent source and origin
 races, failed and incompatible updates, self-follow, concurrent
 reciprocal follows where at most one commits, subscription cancellation,
 authorization loss — belongs to the pull request that introduces each
-transition. `packages/piece/test/piece-source-lifecycle.test.ts` and
-`packages/runner/test/source-reconciler.test.ts` are where those already
+transition. `runtime/piece/test/piece-source-lifecycle.test.ts` and
+`runtime/runner/test/source-reconciler.test.ts` are where those already
 live.
 
 ## What this plan defers, and why

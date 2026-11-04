@@ -1,0 +1,277 @@
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
+import type { MemoryProtocolFlags } from "@commonfabric/memory/v2";
+import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { namesInstancesByDefault } from "../builder/instance-name.ts";
+import { servingContextLoopback } from "../executor/serving-context.ts";
+import type { SpaceHostRegistration } from "../space-host.ts";
+import { DelegationStore } from "./delegation-store.ts";
+import { type Options, type SessionFactory, StorageManager } from "./v2.ts";
+
+const emulatedMemoryAudience = "did:key:z6Mk-runner-emulated-memory";
+
+/**
+ * Build a stock in-process memory server for loopback storage managers:
+ * {@link authorizeLoopbackSessionOpen} as its authorizer, an emulated
+ * audience, and optionally a fan-out cadence — `"manual"` disables
+ * timer-driven fan-out entirely: either explicit synchronization point
+ * (`flushSessions()`, or `idle()`, which drains held fan-out to keep its
+ * quiescence contract) delivers it. The controlled-staleness shape. Its
+ * posture (INV-16) names instances when `namesInstances` returns `true`, and
+ * by default when a runtime of this build names them by default
+ * (`namesInstancesByDefault()`): a toolshed publishes its runtime's resolved
+ * flags as its posture, so that is the posture a toolshed of this build
+ * serves with when its deployment sets none.
+ */
+export const newLoopbackServer = (options?: {
+  audience?: string;
+  subscriptionRefreshDelayMs?: number | "manual";
+  store?: URL;
+
+  /** A registry the caller owns (tests): the registry's own detached-session
+   * TTL decides how long a closed connection's sessions — and their watches,
+   * i.e. their DEMAND — linger, and pruning against it is lazy, so a test
+   * that has to observe a session GONE removes it rather than waiting the
+   * window out. Absent, the server's default registry and resume window
+   * apply. */
+  sessions?: MemoryV2Server.SessionRegistry;
+
+  /** The server's delegating class (tests): the service identity a serving
+   * runtime's sessions carry, as a toolshed running server execution lists
+   * its own process identity. Access lists stay off. */
+  delegatingDids?: readonly string[];
+
+  /**
+   * The server's posture (INV-16), asked at each open of an unmarked space
+   * that declares `instanceNames: true`, as the memory server's own option
+   * of that name is.
+   */
+  namesInstances?: () => boolean;
+}): MemoryV2Server.Server =>
+  new MemoryV2Server.Server({
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
+    namesInstances: options?.namesInstances ?? namesInstancesByDefault,
+    sessionOpenAuth: {
+      audience: options?.audience ?? emulatedMemoryAudience,
+    },
+    ...(options?.delegatingDids !== undefined
+      ? { acl: { mode: "off", delegatingDids: options.delegatingDids } }
+      : {}),
+    ...(options?.subscriptionRefreshDelayMs !== undefined
+      ? { subscriptionRefreshDelayMs: options.subscriptionRefreshDelayMs }
+      : {}),
+    ...(options?.store !== undefined ? { store: options.store } : {}),
+    ...(options?.sessions !== undefined ? { sessions: options.sessions } : {}),
+  });
+
+/**
+ * The unsigned open a loopback session on `space` makes as `signer`, which
+ * {@link authorizeLoopbackSessionOpen} admits as the principal it names. The
+ * chain `delegations` holds for the space and that principal, read at each
+ * open, rides as a signed open would carry it, CIDs in the invocation and
+ * bytes beside it, for the loopback server to verify the same way.
+ */
+export const loopbackSessionOpenAuth = (
+  delegations: DelegationStore,
+  space: MemorySpace,
+  signer: Signer | undefined,
+): MemoryV2Client.SessionOpenAuthFactory =>
+(_space, _session, context) => {
+  const chain = signer === undefined
+    ? undefined
+    : delegations.chainFor(space, signer.did());
+  return {
+    invocation: {
+      aud: context.audience,
+      challenge: context.challenge.value,
+      ...(chain === undefined ? {} : { prf: chain.map((d) => d.cid) }),
+    },
+    authorization: {
+      principal: signer?.did(),
+      ...(chain === undefined ? {} : {
+        proofs: chain.map((d) => new FabricBytes(d.bytes)),
+      }),
+    },
+  };
+};
+
+class EmulatedSessionFactory implements SessionFactory {
+  readonly #getServer: () => MemoryV2Server.Server;
+
+  /** The chains held here, one of which a session's open presents. */
+  readonly #delegations = new DelegationStore();
+
+  /**
+   * Whether this factory's sessions declare that their runtime names
+   * instances: what `setInstanceNames()` last chose, and until then this
+   * build's default.
+   */
+  #instanceNames = namesInstancesByDefault();
+
+  constructor(
+    getServer: () => MemoryV2Server.Server,
+  ) {
+    this.#getServer = getServer;
+  }
+
+  async create(
+    space: MemorySpace,
+    signer?: Signer,
+    mountOptions: MemoryV2Client.MountOptions = {},
+  ) {
+    // A client session's frames are no serving loop's work, whichever
+    // session's request caused them.
+    const transport = servingContextLoopback(this.#getServer(), false);
+    const client = await MemoryV2Client.connect({
+      transport,
+      instanceNames: this.#instanceNames,
+    });
+    const session = await client.mount(
+      space,
+      mountOptions,
+      loopbackSessionOpenAuth(this.#delegations, space, signer),
+    );
+    return { client, session };
+  }
+
+  /** @inheritDoc */
+  setInstanceNames(enabled: boolean): void {
+    this.#instanceNames = enabled;
+  }
+
+  /** @inheritDoc */
+  async addDelegationChain(chain: readonly Uint8Array[]): Promise<void> {
+    await this.#delegations.add(chain);
+  }
+
+  /** @inheritDoc */
+  delegationChainFor(
+    space: MemorySpace,
+    principal: string,
+  ): readonly Uint8Array[] | undefined {
+    return this.#delegations.chainFor(space, principal)?.map((delegation) =>
+      delegation.bytes.slice()
+    );
+  }
+
+  /** @inheritDoc */
+  async serverFlags(): Promise<MemoryProtocolFlags | null> {
+    const client = await MemoryV2Client.connect({
+      transport: MemoryV2Client.loopback(this.#getServer()),
+    });
+    try {
+      return client.serverFlags;
+    } finally {
+      await client.close();
+    }
+  }
+}
+
+export class EmulatedStorageManager extends StorageManager {
+  #serverFactory: (manager: EmulatedStorageManager) => MemoryV2Server.Server;
+  #server?: MemoryV2Server.Server;
+  #ownsServer = true;
+
+  static emulate(
+    options: Omit<Options, "memoryHost" | "spaceHostMap">,
+  ): EmulatedStorageManager {
+    return new this(
+      {
+        ...options,
+        // Placeholder: the emulated session factory is loopback and never
+        // resolves a storage address against this.
+        memoryHost: new URL("memory://"),
+      },
+      // Single-manager emulation wants prompt fan-out: a zero-delay flush
+      // keeps marker delivery in the same scheduling class as the request
+      // round trips that stage it (each is one turn of the event loop), so
+      // awaited commits settle without wall-clock coalescing.
+      //
+      // The turn is the point here, not the delay. A deployed server does
+      // its own work on microtasks and then the sync frame crosses a real
+      // boundary before any client sees it. Fan-out that arrives inside the
+      // committing caller's own microtask cascade puts a client where no
+      // deployment puts it, and leaves whatever races live at that boundary
+      // invisible. Zero is as short as the boundary gets; it is still a
+      // boundary.
+      //
+      // Harnesses that share one server across managers use connectTo()
+      // and pick their own cadence — "manual" for controlled-staleness
+      // premises that depend on frames NOT spreading until the test says.
+      //
+      // The server serves this manager alone, so its posture is the naming
+      // mode of the runtime the manager serves (INV-16).
+      (manager) =>
+        newLoopbackServer({
+          subscriptionRefreshDelayMs: 0,
+          namesInstances: () => manager.namesInstances,
+        }),
+    );
+  }
+
+  /**
+   * Connect a manager to an externally owned shared server: several managers
+   * on one server model several real sessions, where data written by one
+   * reaches another only through an explicit per-space server
+   * query/subscription. Fan-out keeps the server's own cadence (no
+   * flush-on-send nudge), and the CALLER owns the server's lifecycle —
+   * closing this manager does not close the shared server.
+   */
+  static connectTo(
+    server: MemoryV2Server.Server,
+    options: Omit<Options, "memoryHost" | "spaceHostMap">,
+  ): EmulatedStorageManager {
+    const manager = new this(
+      { ...options, memoryHost: new URL("memory://") },
+      () => server,
+    );
+    manager.#ownsServer = false;
+    return manager;
+  }
+
+  protected constructor(
+    options: Options,
+    serverFactory: (manager: EmulatedStorageManager) => MemoryV2Server.Server,
+  ) {
+    const serverHolder: { get: () => MemoryV2Server.Server } = {
+      get: () => {
+        throw new Error("Emulated server requested before initialization");
+      },
+    };
+    super(
+      options,
+      new EmulatedSessionFactory(() => serverHolder.get()),
+    );
+    this.#serverFactory = serverFactory;
+    serverHolder.get = () => this.server();
+  }
+
+  /**
+   * Emulated sessions are loopback — there is no per-space host to
+   * resolve, so a host hint can never take effect. Refuse honestly
+   * rather than inherit an acceptance that routes nothing.
+   */
+  override registerSpaceHostDetailed(): SpaceHostRegistration {
+    return { accepted: false, reason: "no-remote-resolution" };
+  }
+
+  /**
+   * Closes this manager, and its server if it owns one. A closed server stays
+   * closed, so a manager used again after this gets a new server, and with it
+   * a new in-memory store.
+   */
+  override async close(): Promise<void> {
+    await super.close();
+    if (this.#server && this.#ownsServer) {
+      await this.#server.close();
+      this.#server = undefined;
+    }
+  }
+
+  protected server(): MemoryV2Server.Server {
+    this.#server ??= this.#serverFactory(this);
+    return this.#server;
+  }
+}

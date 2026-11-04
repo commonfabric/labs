@@ -1,0 +1,238 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "ItemStatus": {
+        "enum": [
+          "want",
+          "reading",
+          "finished",
+          "abandoned"
+        ]
+      },
+      "ItemType": {
+        "enum": [
+          "book",
+          "article",
+          "paper",
+          "video"
+        ]
+      }
+    },
+    "description": "Input for creating a new reading item detail piece",
+    "properties": {
+      "addedAt": {
+        "default": 0,
+        "type": "number"
+      },
+      "author": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "finishedAt": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "notes": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "rating": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "asCell": [
+          "cell"
+        ],
+        "default": null
+      },
+      "status": {
+        "$ref": "#/$defs/ItemStatus",
+        "asCell": [
+          "cell"
+        ],
+        "default": "want"
+      },
+      "title": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "type": {
+        "$ref": "#/$defs/ItemType",
+        "asCell": [
+          "cell"
+        ],
+        "default": "article"
+      },
+      "url": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "reading-list/reading-item-detail.tsx",
+  "resultSchema": {
+    "$defs": {
+      "ItemStatus": {
+        "enum": [
+          "want",
+          "reading",
+          "finished",
+          "abandoned"
+        ]
+      },
+      "ItemType": {
+        "enum": [
+          "book",
+          "article",
+          "paper",
+          "video"
+        ]
+      }
+    },
+    "description": "Output shape of the reading item piece - this is what gets stored in lists\n#book #article #reading",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addedAt": {
+        "type": "number"
+      },
+      "author": {
+        "type": "string"
+      },
+      "finishedAt": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "notes": {
+        "type": "string"
+      },
+      "rating": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "setNotes": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "notes"
+        ],
+        "type": "object"
+      },
+      "setRating": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "rating": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "rating"
+        ],
+        "type": "object"
+      },
+      "setStatus": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/$defs/ItemStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "status": {
+        "$ref": "#/$defs/ItemStatus"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "type": {
+        "$ref": "#/$defs/ItemType"
+      },
+      "url": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "author",
+      "url",
+      "type",
+      "status",
+      "rating",
+      "notes",
+      "summary",
+      "addedAt",
+      "finishedAt",
+      "setStatus",
+      "setRating",
+      "setNotes",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

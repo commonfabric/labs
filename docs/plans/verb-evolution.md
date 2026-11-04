@@ -91,12 +91,12 @@ the planned design stream that gives verbs declared, checkable result types
 in the shape — is expected to replace is recording an output *in the durable
 shape*. Recording one at all is already done. A verb's declared result
 travels on `module.resultSchema`, a module field that enters no durable
-schema and that no baseline under `packages/patterns/baselines/` records,
+schema and that no baseline under `patterns/baselines/` records,
 which is what made that road passable while the durable one was not; and it
 is resolvable per deployed piece, because `cf piece verbs` publishes it as a
 row's `outputSchema` and `cf piece call <verb> --help` publishes it for a
 single verb (`listPieceCallables`, `declaredVerbResults` and
-`withDeclaredResult`, `packages/cli/lib/piece.ts`). What is still deferred is
+`withDeclaredResult`, `runtime/cli/lib/piece.ts`). What is still deferred is
 the durable record and the comparison it would feed: nothing holds one
 deploy's output beside the next, so output changes are governed by convention
 alone.
@@ -112,7 +112,7 @@ arrives from the other side:
 | Demand a new **required verb** | **refused** |
 | Stop demanding a field or verb it no longer uses | allowed |
 
-The refusal comes from `packages/piece/src/schema-compatibility.ts`: raising
+The refusal comes from `runtime/piece/src/schema-compatibility.ts`: raising
 a demand hits `newly required argument field has no default`, and a verb is
 a stream, which cannot carry a default, so a newly required verb is the same
 refusal arriving from the other direction.
@@ -431,7 +431,7 @@ a bump means is still undesigned, so its cells are contingent.
 
 **The optional-verb and versioned columns are identical.** So the choice
 between them is not about what can evolve but about what a reader can tell.
-`BackwardsCompatibleProfile` in `packages/patterns/system/profile-home.tsx`
+`BackwardsCompatibleProfile` in `patterns/system/profile-home/profile-home.tsx`
 is the exhibit: a `PartialBy` over the full Output that records its vintages
 in a comment, because the type cannot say them, plus a hand-maintained
 instruction to add every future stream to the list. The optionality *is* a
@@ -527,7 +527,7 @@ the recourse this grows into.
 
 The count has a horizon, and the report has to name it. References cross
 spaces — a stored link carries its target's space (`NormalizedFullLink`,
-`packages/runner/src/link-types.ts`) — and links are one-directional,
+`runtime/runner/src/link-types.ts`) — and links are one-directional,
 recorded in the holder's space, with no reverse index anywhere. So the
 report enumerates in rings: the workspace's recorded demands, completely;
 spaces the deployment can read, by scan; and beyond that nothing, because a
@@ -679,14 +679,14 @@ Five smaller calls belong to whoever does the work:
 - Whether the embedding rule warns, lints, or fails, and in what order those
   arrive; [#5746] starts at advisory on purpose.
 - How wide the baseline reset has to be once narrow demands land (the
-  recorded shapes under `packages/patterns/baselines/` that updates are
+  recorded shapes under `patterns/baselines/` that updates are
   checked against), and how it is sequenced against the append-only
   baselines gate.
 - Where an interim output check runs before Fabric-types, and what it does
   on a mismatch. Availability is not the question: a verb's declared result
   resolves from a deployed piece's compiled graph and from a candidate's, so
   a comparison has both of its sides. `setPattern`
-  (`packages/piece/src/ops/piece-controller.ts`) loads the deployed pattern
+  (`runtime/piece/src/ops/piece-controller.ts`) loads the deployed pattern
   and compiles the candidate before it asserts compatibility, so both graphs
   are in hand at that point. What is **not** established is what comparing
   them costs there, or what a graph compiled before `module.resultSchema`
@@ -700,7 +700,7 @@ Five smaller calls belong to whoever does the work:
   but only until a binding check reads them, at which point the key stops
   being annotation-neutral. A real design step, not an extension — and a
   two-registry one. [#5746] adds `demand` to `ANNOTATION_KEYS`
-  (`packages/piece/src/schema-compatibility.ts`), and item 2 of
+  (`runtime/piece/src/schema-compatibility.ts`), and item 2 of
   [the verbs implementation plan](verbs-implementation.md) derives the
   projection reader's *tolerated* keys from that same set, so a key
   reclassified out of it lands in projection's *refused* tier by default and

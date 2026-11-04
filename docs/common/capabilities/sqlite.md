@@ -63,6 +63,17 @@ query asked for one. Keep `request` itself for `isPending()` or `hasError()`
 guards; computations which only consume the projected result wait while the
 request is unavailable.
 
+Pass an optional string `requestKey` in the query options to correlate this
+successful value with the application state that requested it. Successful results, including empty rows, carry the key; unavailable markers do not. A changed key issues
+a new request even when SQL and parameters match. Compare the returned key with
+the current key before using rows as current search results: reactive inputs can
+change while the query still holds its previous state. Choose keys that cover
+the search and source identity; the runtime separately enforces its full request
+identity and reader scope. Keep the key stable while those inputs are unchanged:
+render counters, timestamps, or pane identifiers cause extra database requests
+without changing the search. Include a source or registration generation only
+when that change must invalidate the previous answer and issue a fresh request.
+
 Render the failure when the UI needs to explain it. Guard the original request
 with `hasError(request)` and read `request.errorMessage`; otherwise the unavailable
 error propagates and downstream computations do not run. Query errors include

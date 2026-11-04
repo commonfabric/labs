@@ -76,7 +76,7 @@ type Right = { [NAME]: string; [UI]: VNode; label: string };
 
 The compiler rejects the first form: `pattern-result:opaque-reserved-key`,
 raised at the `pattern()` call by `reserved-result-keys.ts` in
-`packages/ts-transformers`. The rejection applies where an author can act —
+`base/ts-transformers`. The rejection applies where an author can act —
 `cf check`, deploy, candidate admission; the runtime's identity-pinned reload
 of already-deployed stored source demotes it to a warning, so pieces that
 predate the rule keep loading. It reaches the root of a **result** schema and

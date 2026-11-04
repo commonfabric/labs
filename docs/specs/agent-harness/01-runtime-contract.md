@@ -207,6 +207,14 @@ identifiers sufficient for idempotent correlation and replay.
 **AH-INT-2.** A session MUST define whether turns are serial or concurrent and
 MUST reject unsupported overlap rather than silently interleave model context.
 
+Batch `--continue-run` starts a separate serial run from the prior run's last
+complete checkpoint and appends a new user message. It explicitly carries the
+handle table, result schema, research context, CFC record and prompt-slot
+binding, under the same restoration checks as resume. A binding carrying a
+`valueDigest`, `slotDigest` or `snapshotDigest` covers one exact prompt value,
+so continuation is refused before any model request. A truncated tail adds an
+interrupted-turn notice. Each run owns its artifacts, result and terminal state.
+
 **AH-INT-3.** Event replay MUST have an explicit cursor or sequence contract.
 Bounded in-memory retention MUST NOT erase events promised as durable.
 

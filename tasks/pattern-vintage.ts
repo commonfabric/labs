@@ -52,10 +52,10 @@
  * doc is still a finding.
  *
  *   deno task pattern-vintage                                  # replay; fail on a stranded fixture
- *   deno task pattern-vintage --only topics/topics.test.tsx    # replay matching fixtures alone
- *   deno task pattern-vintage --update topics/topics.test.tsx  # first pinned fixture
+ *   deno task pattern-vintage --only apps/topics/topics.test.tsx    # replay matching fixtures alone
+ *   deno task pattern-vintage --update apps/topics/topics.test.tsx  # first pinned fixture
  *   deno task pattern-vintage --capture-changed                # capture a generation where due
- *   deno task pattern-vintage --pin topics/topics.test.tsx     # promote the newest generation
+ *   deno task pattern-vintage --pin apps/topics/topics.test.tsx     # promote the newest generation
  *
  * `--only` takes one value per flag and may be repeated. It restricts the
  * replay to the fixtures whose repository-relative path contains one of the
@@ -114,7 +114,7 @@
  * That discipline is enforced HERE, in what the command will do, and otherwise
  * rests on review — deliberately, and unlike Tier 1, whose baselines have a
  * mechanical checker (`tasks/check-baselines-append-only.ts`). There is no
- * equivalent gate over `packages/piece/test/vintages/`, so a deleted fixture is
+ * equivalent gate over `runtime/piece/test/vintages/`, so a deleted fixture is
  * caught by a human reading the diff and nothing else. Recapturing one is
  * therefore a decision to make out loud, not a routine step.
  *
@@ -129,7 +129,7 @@ import { Identity } from "@commonfabric/identity";
 import {
   DEFAULT_APP_PATTERN_SOURCE,
   HOME_PATTERN_SOURCE,
-} from "../packages/piece/src/system-pattern-url.ts";
+} from "../runtime/piece/src/system-pattern-url.ts";
 import {
   deriveRequiredPatternKeys,
   recordExistsUnder,
@@ -204,7 +204,7 @@ async function main() {
     // Absolute, so the task behaves the same whatever directory it is invoked
     // from — the workspace runner does not run it from the repo root.
     repoRoot: REPO_ROOT,
-    patternsRoot: `${REPO_ROOT}/packages/patterns`,
+    patternsRoot: `${REPO_ROOT}/patterns`,
     vintagesRoot: `${REPO_ROOT}/${VINTAGES_DIR}`,
     signer: FIXTURE_SIGNER,
   };

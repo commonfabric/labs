@@ -14,8 +14,8 @@ import {
   openFileBackedRuntime,
   readVintageManifest,
   writeVintageManifest,
-} from "../packages/piece/test/state-continuity-harness.ts";
-import { vintageCompanionDir } from "../packages/piece/test/vintage-layout.ts";
+} from "../runtime/piece/test/state-continuity-harness.ts";
+import { vintageCompanionDir } from "../runtime/piece/test/vintage-layout.ts";
 import {
   captureChangedGenerations,
   captureGenerations,
@@ -241,7 +241,7 @@ const NESTED_ROW_ARGS_TIGHTENED = nestedSource()
 
 /**
  * A subject that returns a key its declared output type never NAMES, riding an
- * index signature instead — the shape `system/default-app.tsx` declares
+ * index signature instead — the shape `system/default-app/default-app.tsx` declares
  * (`[key: string]: unknown`), and the reason its root's `summaryIndex` is
  * stored under `additionalProperties: {"type": "unknown"}`.
  *
@@ -315,7 +315,7 @@ const undeclaredTest = [
 
 /**
  * A subject whose child is instantiated in ANOTHER space — the shape
- * `system/profile-create.tsx` uses, where each profile lives in its own
+ * `system/profile-create/profile-create.tsx` uses, where each profile lives in its own
  * `ProfileHome.inSpace()` space.
  *
  * The child owns its own CFC-labeled root in that space, so the fixture has to
@@ -503,7 +503,7 @@ describe("isUpgradeTarget", () => {
   ) => ({
     identity: "abc123",
     symbol: "default",
-    main: "/packages/patterns/system/home.tsx",
+    main: "/patterns/system/home/home.tsx",
     cellId: "of:fid1:whatever",
     space: "did:key:zSpace",
     ...over,
@@ -825,7 +825,7 @@ describe("the vintage gate, end to end", () => {
         },
         {
           // Repo-root-relative and a real-looking path, but NOT under
-          // `packages/patterns/` and not a served route — so there is no
+          // `patterns/` and not a served route — so there is no
           // pattern key for it. Capture refuses this shape now (it asks
           // `patternKeyFromMain`, the same question replay asks), which is why
           // it has to be written directly.
@@ -836,7 +836,7 @@ describe("the vintage gate, end to end", () => {
           // never reaches the branch this case is about.
           ...(manifest?.entries ?? []).find((e) => e.main !== undefined)!,
           symbol: "__cfPattern_11",
-          main: "/packages/home-schemas/well-known.tsx",
+          main: "/base/home-schemas/well-known.tsx",
         },
       ]);
       // To a fresh path, not over the file this runtime opened FROM — sqlite
@@ -2071,7 +2071,7 @@ describe("the vintage gate, end to end", () => {
       // stores it under `additionalProperties: {"type": "unknown"}` and a
       // schema-driven read resolves NOTHING there — the before value came back
       // `undefined`, `isPreserved` read that as "held nothing", and the moved
-      // key replayed clean. The committed `system/default-app.tsx` fixture
+      // key replayed clean. The committed `system/default-app/default-app.tsx` fixture
       // exercises the same shape through its undeclared `summaryIndex` key.
       await captureMissing(roots, [UNDECLARED_TEST_KEY], STAMP);
       await writeUndeclared(undeclaredSource("notesMoved"));

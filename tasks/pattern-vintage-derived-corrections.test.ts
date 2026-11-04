@@ -9,8 +9,8 @@ import {
   readVintageManifest,
   strandedKeys,
   type VintageManifestEntry,
-} from "../packages/piece/test/state-continuity-harness.ts";
-import { vintageCompanionDir } from "../packages/piece/test/vintage-layout.ts";
+} from "../runtime/piece/test/state-continuity-harness.ts";
+import { vintageCompanionDir } from "../runtime/piece/test/vintage-layout.ts";
 import { derivedCorrectionsFor } from "./pattern-vintage-derived-corrections.ts";
 import type { VintageRef } from "./pattern-vintage-lib.ts";
 import { replayVintage } from "./pattern-vintage-run.ts";
@@ -20,12 +20,12 @@ const repoRoot = fromFileUrl(new URL("../", import.meta.url)).replace(
   "",
 );
 const fixture: VintageRef = {
-  testKey: "lunch-poll/main.test.tsx",
+  testKey: "apps/lunch-poll/main.test.tsx",
   tier: "pinned",
   stamp: "2026-07-30T21-32-46.548Z",
   identity: "vKpn8ERxJNomhrTLevYIZ5cL3qg_QKk73pMRtnPKJwM",
   path: repoRoot +
-    "/packages/piece/test/vintages/lunch-poll/main.test.tsx/pinned/2026-07-30T21-32-46.548Z-vKpn8ERxJNomhrTLevYIZ5cL3qg_QKk73pMRtnPKJwM.sqlite",
+    "/runtime/piece/test/vintages/apps/lunch-poll/main.test.tsx/pinned/2026-07-30T21-32-46.548Z-vKpn8ERxJNomhrTLevYIZ5cL3qg_QKk73pMRtnPKJwM.sqlite",
 };
 const entry: VintageManifestEntry = {
   cellId: "of:fid1:nBd8WTpSRoVy0BNB2CKnWShQAhJJOS8pqYFHL45hI1U",
@@ -101,8 +101,8 @@ describe("pattern-vintage-derived-corrections", () => {
       await Deno.copyFile(repoRoot + "/" + record, dir + "/" + record);
       const report = await replayVintage({
         repoRoot: dir,
-        patternsRoot: dir + "/packages/patterns",
-        vintagesRoot: dir + "/packages/piece/test/vintages",
+        patternsRoot: dir + "/patterns",
+        vintagesRoot: dir + "/runtime/piece/test/vintages",
         signer: await Identity.fromPassphrase("pattern vintage fixture"),
       }, fixture);
       expect(report.targets).toBeGreaterThan(0);
@@ -131,7 +131,7 @@ describe("pattern-vintage-derived-corrections", () => {
       const other of [
         { cellId: "of:another-root" },
         { space: "did:example:other" },
-        { main: "/packages/patterns/other.tsx" },
+        { main: "/patterns/other.tsx" },
         { symbol: "other" },
         { identity: "other" },
       ]

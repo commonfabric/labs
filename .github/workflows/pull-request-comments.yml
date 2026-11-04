@@ -97,14 +97,17 @@ jobs:
     steps:
       # The commit under report, so the topology the reporter reads is the
       # pull request's tree as it landed, and so the diff behind the commit
-      # is the change itself. Two commits is what `HEAD^` needs. The commit
-      # is on the default branch, so this is base-repository code in a job
-      # holding a write token, which a pull request head would not be.
+      # is the change itself. The history reaches back to the commit the
+      # pull request's manifest was published from, since what the default
+      # branch gained after that commit is what its lanes left to the score.
+      # The commit is on the default branch, so this is base-repository code
+      # in a job holding a write token, which a pull request head would not
+      # be.
       - name: 📥 Checkout the commit under report
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: 🦕 Setup Deno
         uses: ./.github/actions/deno-setup

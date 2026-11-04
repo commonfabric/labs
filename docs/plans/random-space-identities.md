@@ -2,9 +2,10 @@
 
 ## Status
 
-The code is implemented in this repository. What remains is the deployment
-sequence under "What remains" and two changes in other repositories. When those
-are done, this plan is archived.
+The code is implemented in this repository, except for deleting a space. What
+remains is the deployment sequence under "What remains", the order deleting a
+space lands in, and two changes in other repositories. When those are done,
+this plan is archived.
 
 The [random space identities specification](../specs/random-space-identities.md)
 is the normative target. The [Common Fabric URL](../specs/fabric-urls.md) and
@@ -16,15 +17,18 @@ either.
 
 Creating a space and opening a space are separate operations.
 
-- **Creating a space.** `StorageManager.createSpace(acl, root?)`
-  ([`packages/runner/src/storage/v2.ts`](../../packages/runner/src/storage/v2.ts))
+- **Creating a space.**
+  `StorageManager.createSpace(acl, { root?, spaceKind? })`
+  ([`runtime/runner/src/storage/v2.ts`](../../runtime/runner/src/storage/v2.ts))
   generates a key pair from the platform random source, opens one session as
   that key through the same route every later session for the DID takes, and
   commits `acl` as the space's genesis document against a confirmed absent one,
-  with an optional reserved root. The memory client resubmits the identical
-  commit after a lost connection until the server confirms or refuses it. The
-  DID is returned only after confirmation, and the key is dropped when the call
-  returns. `Runtime.createSpace({ owner?, grants?, root? })` writes
+  with an optional reserved root and an optional declared kind, each of which
+  requires the host to advertise its capability (`genesisRoot`, `spaceKind`).
+  The memory client resubmits the identical commit after a lost connection
+  until the server confirms or refuses it. The DID is returned only after
+  confirmation, and the key is dropped when the call returns.
+  `Runtime.createSpace({ owner?, grants?, root?, spaceKind? })` writes
   `{ ...grants, [owner]: "OWNER" }`, defaulting the owner to the runtime's
   identity; a serving runtime requires an owner. The client surfaces are
   `RuntimeClient.createSpace(label?)`, `PiecesController.createSpace(label?)`,
@@ -37,7 +41,7 @@ Creating a space and opening a space are separate operations.
   whether a DID has an ACL document or a space cell.
   `PiecesController.ensureDefaultPattern` throws `SpaceNotFoundError`
   (defined in
-  [`packages/runner/src/ensure-space-root.ts`](../../packages/runner/src/ensure-space-root.ts))
+  [`runtime/runner/src/ensure-space-root.ts`](../../runtime/runner/src/ensure-space-root.ts))
   for a non-Home space that does not exist, and it crosses the worker boundary
   as `RuntimeErrorCode.SpaceNotFound`; the serving loop's root ensure already
   skips a space with no owner. The
@@ -45,22 +49,25 @@ Creating a space and opening a space are separate operations.
   `cf piece new` reports it and names `cf space create`; the FUSE mount answers
   `ENOENT`.
 - **Legacy names.** `legacySpaceDid(name)`
-  ([`packages/identity/src/legacy-space.ts`](../../packages/identity/src/legacy-space.ts))
+  ([`base/identity/src/legacy-space.ts`](../../base/identity/src/legacy-space.ts))
   returns the DID a legacy name resolves to, and never a key. `createSession`
   takes a DID only. The shell's `resolveSpaceDid`, the CLI's ingest-channel
   resolver, `PiecesController.initialize`, the connectors, and `cellFromUrl`
   resolve names through it, offline. Creation never calls it.
-- **`inSpace` allocation records.** `PatternFactory.inSpace(name, { grants })`
-  resolves through one document per name in the calling space, addressed by
-  the cause `{ inSpaceAllocation: { space, name } }`
-  (`Runtime.resolveInSpaceNameSync` and `Runtime.resolveInSpaceName`). On a
-  miss the runner creates a space and the re-run writes the record in the same
-  commit as the writes that refer to it; a concurrent writer of the same record
-  makes that commit conflict. A record is never overwritten, and one naming a
-  DID with no history is reported rather than replaced. The in-process map of
-  resolved names only grows. Profile creation grants the wildcard `"*"` WRITE
-  on the space it creates, because a runtime showing a profile writes into the
-  profile's space.
+- **`inSpace` allocation records.**
+  `PatternFactory.inSpace(name, { grants, root, spaceKind })` resolves through
+  one document per name in the calling space, addressed by the cause
+  `{ inSpaceAllocation: { space, name } }` (`Runtime.resolveInSpaceNameSync`
+  and `Runtime.resolveInSpaceName`). On a miss the runner creates a space with
+  the request's grants, root reservation and declared kind, which are
+  independent of one another, and the re-run writes the record in the same
+  commit as the writes that refer to it; until the record is written, a
+  request finds only a space created for the same grants, root and kind. A
+  concurrent writer of the same record makes that commit conflict. A record is
+  never overwritten, and one naming a DID with no history is reported rather
+  than replaced. The in-process map of resolved names only grows. Profile
+  creation grants the wildcard `"*"` WRITE on the space it creates, because a
+  runtime showing a profile writes into the profile's space.
 - **Narrowed space-identity authority.** The memory server grants a principal
   equal to the space DID OWNER only while the space has no ACL document and is
   at server sequence 0 (`#resolveCapability`), and grants it nothing beyond the
@@ -75,7 +82,7 @@ Creating a space and opening a space are separate operations.
   behind it.
 - **Home space list.** An entry with a `did` opens that space and is keyed by
   it, and its `name` is only its label
-  ([`packages/home-schemas/spaces.ts`](../../packages/home-schemas/spaces.ts));
+  ([`base/home-schemas/spaces.ts`](../../base/home-schemas/spaces.ts));
   the Home pattern's streams are `addSpace`, `removeSpace`, `adoptSpace` and
   `renameSpace`. The runtime worker adopts each name-only legacy entry once per
   worker, keyed by the DID the name resolves to and labeled with the name, and
@@ -113,6 +120,55 @@ reachable more widely would audit and retire those channels and review every
 space's owners, as
 [self-serve ingest channels](../features/self-serve-ingest-channels.md)
 describes.
+
+### Deleting a space
+
+[Deleting a space](../specs/random-space-identities.md#deleting-a-space) lands
+in this order, each step a change of its own:
+
+1. **Every client fails safely on a deletion before any server sends it.** The
+   Memory server sends the `deleted` marker and the `deleted` revocation
+   reason to every client whatever it advertises, so a deleted space must
+   crash no client in use, and must stop none from handling the spaces still
+   live. This repository's Memory client, runtime, renderer and shell handle
+   both outright: they read an invitation operation's `space-deleted` as final
+   rather than retrying it, and an `AuthorizationError` marked `deleted` as a
+   refusal no later grant heals. A client outside this repository, including
+   one that runs against a pinned tag of this one, may instead treat a deleted
+   space as any space it is refused, so long as it fails safely.
+2. **`aclRevision` names the access-control document's `seq`.** Done: every
+   ACL refusal's `aclRevision` is the `seq` at which the space's
+   access-control document is stored, or 0 where it has none, rather than the
+   server's current sequence (INV-15, and section 4.5.1 of the Memory
+   protocol).
+3. **INV-15 is read before the server work starts.** Its refusal in every mode,
+   `off` included, and its check inside the engine's write transaction are the
+   parts most expensive to reverse, so the Memory server's and serving loop's
+   owners read INV-15 before the server work starts.
+4. **The spaces to be deleted are checked.** Before the server work starts,
+   read-only, against copies: the access lists of the spaces meant to be
+   deleted first, the old chat rooms among them, with `cf inspect`, so the
+   [recipe for a space not yet down to one member](../specs/random-space-identities.md#deleting-a-space)
+   covers each list as it stands, including a store with no access-control
+   document.
+5. **The server refuses a deleted space**, which nothing can yet produce. Every
+   Home space has an access-control document first, the first step of
+   "Operational" above: INV-15's Home clause reads the list, so a Home with none
+   is not protected by it, and the recipe's genesis for a space with no list
+   must never land on a Home. The Memory server's part is done: it refuses a
+   space whose access-control document holds a deletion tombstone, in every
+   mode. So is the serving loop's: it starts no tenure for a deleted space,
+   ends one on the deletion, and starts no further outbox row.
+6. **The server admits the deletion commit.** Done: the Memory server admits a
+   sole member's deletion and revokes the space's sessions with the reason
+   `deleted`. Compaction's refusal of a deletion tombstone names reaping in the
+   same change. Once a deletion has been committed, rolling a server back to a
+   release from before step 5 is not available: such a release reads the
+   deletion tombstone as a malformed list, which a service identity may repair,
+   and a repair would write an access list over it and so undo the deletion. Nor
+   does an operator repair an access-control document whose value is a deletion
+   tombstone.
+7. **`cf space delete` and `cf space reap`.**
 
 ### In other repositories
 
@@ -154,29 +210,29 @@ describes.
 Covered by automated tests:
 
 - Two creations differ, and one creation's ACL names its creator alone plus its
-  grants: `packages/runner/test/memory-v2-acl-bootstrap.test.ts`,
-  `packages/piece` controller tests.
+  grants: `runtime/runner/test/memory-v2-acl-bootstrap.test.ts`,
+  `runtime/piece` controller tests.
 - A refused genesis returns no DID and leaves the space uninitialized; a root
   reservation lands in the genesis commit and binds later root intents:
   `memory-v2-acl-bootstrap.test.ts`.
 - Opening a DID with no history writes nothing, and nothing can be written to
   it: `memory-v2-acl-bootstrap.test.ts`; `ensureDefaultPattern` refuses a
-  missing space: `packages/piece` tests; the FUSE mount answers `ENOENT`.
+  missing space: `runtime/piece` tests; the FUSE mount answers `ENOENT`.
 - Allocation records: named and anonymous targets, two calls in one handler,
   two events with identical inputs, one name from two calling spaces, a later
   process reading the record, a record never overwritten, a record naming no
   space reported, monotonic resolution, and two processes converging on one
-  record: `packages/runner/test/in-space-allocation.test.ts`.
+  record: `runtime/runner/test/in-space-allocation.test.ts`.
 - The narrowed server rule, in `enforce` and `observe`, Home spaces, repair by
   service DIDs only, and `foreignWriteAuthorityFor`:
-  `packages/memory/test/v2-server-acl.test.ts`, `v2-invites.test.ts`.
+  `runtime/memory/test/v2-server-acl.test.ts`, `v2-invites.test.ts`.
 - The Home space list, labels, renaming, removal and adoption:
-  `packages/patterns/system/home.test.tsx`.
+  `patterns/system/home/home.test.tsx`.
 
 Covered by integration tests, which run against live servers: the shell's
 no-space alert and its create button, two identities navigating to an unused
 name, legacy name URLs opening the space the name has always named
-(`createLegacyTestSpace` in `packages/integration`), and every browser flow that
+(`createLegacyTestSpace` in `runtime/integration`), and every browser flow that
 creates its own space with `createTestSpace`.
 
 Needing a deployment: routing through the production frontends, process

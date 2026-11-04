@@ -1,0 +1,81 @@
+{
+  "runtime": {
+    "deno": "2.9.4",
+    "v8": "15.0.245.2-rusty",
+    "typescript": "6.0.3"
+  },
+  "results": [
+    {
+      "mode": "legacy",
+      "retainIds": false,
+      "versions": 100,
+      "rows": 1000,
+      "before": 25858752,
+      "after": 26726720,
+      "disposed": 26736688,
+      "retainedBytes": 867968,
+      "releasedBytes": -9968,
+      "idChars": 0
+    },
+    {
+      "mode": "explicit",
+      "retainIds": false,
+      "versions": 100,
+      "rows": 1000,
+      "before": 26848048,
+      "after": 63065376,
+      "disposed": 26112752,
+      "retainedBytes": 36217328,
+      "releasedBytes": 36952624,
+      "idChars": 0
+    },
+    {
+      "mode": "element",
+      "retainIds": false,
+      "versions": 100,
+      "rows": 1000,
+      "before": 26113240,
+      "after": 26153024,
+      "disposed": 26145008,
+      "retainedBytes": 39784,
+      "releasedBytes": 8016,
+      "idChars": 0
+    },
+    {
+      "mode": "legacy",
+      "retainIds": true,
+      "versions": 100,
+      "rows": 1000,
+      "before": 26145248,
+      "after": 66453520,
+      "disposed": 26880040,
+      "retainedBytes": 40308272,
+      "releasedBytes": 39573480,
+      "idChars": 39965060
+    },
+    {
+      "mode": "explicit",
+      "retainIds": true,
+      "versions": 100,
+      "rows": 1000,
+      "before": 26880312,
+      "after": 63103528,
+      "disposed": 26149816,
+      "retainedBytes": 36223216,
+      "releasedBytes": 36953712,
+      "idChars": 5200
+    },
+    {
+      "mode": "element",
+      "retainIds": true,
+      "versions": 100,
+      "rows": 1000,
+      "before": 26150152,
+      "after": 26183936,
+      "disposed": 26165728,
+      "retainedBytes": 33784,
+      "releasedBytes": 18208,
+      "idChars": 9600
+    }
+  ]
+}

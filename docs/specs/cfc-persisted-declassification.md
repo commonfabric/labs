@@ -259,6 +259,78 @@ specified in [sealed custody](cfc-custody-seal.md). It releases nothing itself.
 The copy's audience is the policy's release rules, which a rule can bind to the
 seal through the input witness on `TransformedBy`.
 
+### 3.3 Owner releases in place
+
+`cf cell set-label --dangerously-allow-lowering-confidentiality` lowers the
+confidentiality stored at one path of a document in place, for the case where
+a label is on a value its owner can neither copy forward nor wait out: a store
+whose stamped label refuses every later writer that reads it. The host
+operation is `releaseCellConfidentiality()` in `cfc/confidentiality-release.ts`;
+the transaction method that writes it is `releaseCfcConfidentiality()`, and the
+decision is `planConfidentialityRelease()` in
+`cfc/confidentiality-release-plan.ts`.
+
+- **What it removes.** Every clause stored at exactly the path that the
+  caller's list does not name, from every component there — the declared
+  entries and the stored schema's declaration at that path, the derived
+  `shape` and `value` entries, and a link's own label — leaving labels at
+  other paths, an ancestor's covering this one included, and the
+  label-metadata templates as they are. A `*` segment of the path stands for
+  any segment, so a path holding one reaches every stored position it matches
+  at its depth: the wildcard entry there, and each concrete position's
+  entries. A path naming a concrete segment leaves a wildcard entry covering
+  it as it is. The stored schema's declarations at a `*` are those of every
+  named property, tuple position and `items` there, and of the
+  `additionalProperties` of a schema naming no property.
+- **At a link.** A link stored at the path is a slot whose own labels, the
+  link-carried component, are stored at the path; its target's labels are
+  stored at the target, and are not that component (§8.12.8). A release
+  lowers a link's own labels and leaves its target's. By default it follows a
+  write redirect at the path, as a write does, and lowers the labels where the
+  redirect leads; asked to address the link slot itself
+  (`cf cell set-label --link-slot`, `releaseCellConfidentiality()`'s
+  `linkSlot`), it lowers the redirect's own labels instead. Whether that
+  default conforms to §8.12.7 route 2c, whose request names its own document,
+  is an open question pending a ruling;
+  [`cfc-conformance-statement.md`](cfc-conformance-statement.md) §8 records
+  it.
+- **Who may.** The runtime refuses the release unless the transaction runs
+  under the `cfc-confidentiality-release` builtin identity, its acting
+  principal is authenticated, and the document is in the space whose DID is
+  that principal's. It refuses a clause unless every alternative stands for
+  that principal alone by the test the sealed custody copy (§3.2) applies,
+  `isActorOwnedAlternative()` in `cfc/host-review.ts` — the principal's DID,
+  a `User`, `Context` or `Resource` atom naming it, or its own space as
+  `Space` or `PersonalSpace` — with a digest commitment to the principal's
+  DID read as the DID. §3.1.8 bounds an authored clause by the same
+  authority: choosing the audience of one's own content.
+- **What it refuses to leave behind.** The path's effective label view is
+  read again in the releasing transaction, and a clause it still shows from a
+  position the release does not rewrite — an ancestor's entry, a wildcard
+  entry covering a segment the path names concretely, the slot of a write
+  redirect the release follows, a branch of the stored schema, or the cell's
+  own schema — refuses the whole release, and a change to a label that view
+  read fails the commit. The view is read with the path resolved as the
+  release resolved it, so the labels of the target of a link the release
+  lowers are not in it. The request may keep only clauses stored at the path
+  (§8.12.7), so a path such a position also labels is released only once that
+  position is.
+- **The record.** Each release commits with a create-only receipt in the same
+  space, labeled `User(actor)` and writable only by the release writer,
+  holding the actor, the document and path, the positions the clauses were
+  removed at, the clauses removed and their canonical clause digests, and
+  digests of the canonical envelope before and after. Reads journaled before
+  the release keep the label they consumed, so what was released is what
+  later reads see.
+
+This is §8.12.7 route 2c, the owner release, which differs from §4's
+rewrite event in two ways: it reaches the derived and link-carried components
+as well as the declared one, the frozen existence entry of §8.12.8 included,
+and its request is the authenticated owner's explicit command rather than a
+consumed intent, the reduced-evidence form §4 item 1 describes.
+[`cfc-conformance-statement.md`](cfc-conformance-statement.md) §8 records how
+the runtime answers the route.
+
 ## 4. The rewrite event (specify now, build later)
 
 When a widening must survive without evaluation (§2.4), route 2 proper: an

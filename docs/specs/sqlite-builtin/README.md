@@ -65,7 +65,7 @@ Two cross-cutting rules make cell references first-class inside SQLite:
    the same seams rather than inventing parallel infrastructure.
 2. **Server-side execution.** Queries run inside toolshed, which already hosts
    the space and owns the SQLite engine
-   ([`packages/memory/v2/engine.ts`](../../../packages/memory/v2/engine.ts)).
+   ([`runtime/memory/v2/engine.ts`](../../../runtime/memory/v2/engine.ts)).
    The runtime reaches them over the **existing space-scoped websocket** — no
    new connection, no new auth path.
 3. **Atomic writes across cells and SQLite.** SQLite writes ride the *same*

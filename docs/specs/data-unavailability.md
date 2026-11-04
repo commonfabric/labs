@@ -12,17 +12,18 @@ compatibility; new patterns use the direct generation APIs or `llmDialog<T>()`.
 The runtime represents temporarily or permanently unavailable data with the
 `FabricUnavailable` FabricType instead of overloading `undefined`.
 
-`FabricUnavailable` has three discriminated reasons:
+`FabricUnavailable` has four discriminated reasons:
 
 - `"pending"`
 - `"error"`
 - `"syncing"`
+- `"obsolete"` — an output that is no longer served, with optional migration guidance.
 
 Schema mismatch is a terminal `"error"` with `errorKind: "schemaMismatch"`.
 
 Single-result asynchronous built-ins such as `fetchJson<T>` and
 `generateObject<T>` expose an explicit `AsyncResult<T>` union: either the
-usable `T` or one of the three `FabricUnavailable` variants. Authors inspect that
+usable `T` or one of the four `FabricUnavailable` variants. Authors inspect that
 union with the guard helpers or project its usable view with the zero-node
 `resultOf()` helper. `resultOf()` removes the unavailable variants from the
 TypeScript type while leaving the reactive runtime value untouched, so a
@@ -111,11 +112,13 @@ type UnavailableObservationKind =
   | "pending"
   | "error"
   | "syncing"
+  | "obsolete"
   | "schemaMismatch";
 
 type FabricUnavailableState =
   | { reason: "pending" }
   | { reason: "syncing" }
+  | { reason: "obsolete"; obsoleteMessage?: string }
   | {
     reason: "error";
     errorKind: UnavailableErrorKind;
@@ -128,6 +131,26 @@ do not authenticate a marker. `UNAVAILABLE_PENDING` and `UNAVAILABLE_SYNCING`
 are shared prefab instances. Error markers carry an error kind and message,
 not an embedded `Error` or `FabricError`. Consumers propagate the same instance
 to preserve the producer's classification and avoid value churn.
+
+`obsolete` is non-transient and is not an error. `UNAVAILABLE_OBSOLETE` is its
+message-free prefab. An authored marker may provide an optional
+`obsoleteMessage` explaining which output to use instead:
+
+```typescript
+// Shown at module scope.
+const retired = new FabricUnavailable(
+  "obsolete", null, null, "Use overview.text instead.",
+);
+```
+
+The message survives storage, transport, hashing, propagation, and debug
+inspection. It is diagnostic data, not executable instructions or authority to
+access or rewrite another piece. Upgrade logic chooses when to write a marker;
+the runtime does not automatically mark removed outputs.
+
+Headless Wish reads report nonempty obsolete guidance as their unavailable
+diagnostic. A message-free obsolete result remains unavailable rather than
+becoming a successful empty value.
 
 The `"schemaMismatch"` error intentionally carries no expected schema,
 actual value, or input path. Those details are large, can contain sensitive
@@ -158,6 +181,10 @@ type IsSyncing = FabricUnavailable & {
   readonly reason: "syncing";
 };
 
+type IsObsolete = FabricUnavailable & {
+  readonly reason: "obsolete";
+};
+
 type HasSchemaMismatch = HasError & {
   readonly errorKind: "schemaMismatch";
 };
@@ -165,14 +192,15 @@ type HasSchemaMismatch = HasError & {
 type UnavailableVariant =
   | IsPending
   | HasError
-  | IsSyncing;
+  | IsSyncing
+  | IsObsolete;
 ```
 
-The primitive methods `isPending()`, `isSyncing()`, and `isError()` inspect its
+The primitive methods `isPending()`, `isSyncing()`, `isObsolete()`, and `isError()` inspect its
 discriminator. Pattern guards narrow the corresponding aliases. `hasError()`
 accepts every terminal error kind; `hasSchemaMismatch()` accepts only the
 schema-mismatch subset. The observation-policy token `"schemaMismatch"` names
-that subset, not a fourth wire reason.
+that subset, not a wire reason.
 
 Only an actual decoded or runtime-created `FabricUnavailable` instance is a
 control signal. A plain object such as `{ reason: "pending" }` is ordinary user
@@ -287,6 +315,7 @@ The public guard helpers are pure predicates:
 declare function isPending(value: unknown): value is IsPending;
 declare function hasError(value: unknown): value is HasError;
 declare function isSyncing(value: unknown): value is IsSyncing;
+declare function isObsolete(value: unknown): value is IsObsolete;
 declare function hasSchemaMismatch(
   value: unknown,
 ): value is HasSchemaMismatch;
@@ -392,7 +421,7 @@ It should be absent from ordinary request/result code: retain and guard the
 original `AsyncResult<T>`, or use `resultOf()` when the consumer only waits for
 usable data.
 
-Calling `observeAvailability(value)` without reasons accepts all three variants.
+Calling `observeAvailability(value)` without reasons accepts all four variants.
 That broad form is intended only for generic diagnostic or compatibility
 adapters. Callers should prefer a reason list when they only need selected
 states.
@@ -623,11 +652,12 @@ boundary.
 When more than one unaccepted input is unavailable, the selected reason is:
 
 ```text
-error > pending > syncing
+error = obsolete > pending > syncing
 ```
 
 Accepted markers do not participate in selection. Among markers with the same
-reason, the first marker in deterministic argument order wins.
+precedence, including `error` and `obsolete`, the first marker in deterministic
+argument order wins. The selected marker's diagnostic is preserved.
 
 Argument order is the serialized input-binding order. Arrays are visited by
 increasing index and object bindings by their serialized property order. The
@@ -716,9 +746,9 @@ protecting it recovers or is removed. Text rendered directly into the host
 container is retained without marking that unrelated container. The marker is
 never stringified as `{}` and is not reported as invalid VDOM.
 
-`error`, `syncing`, and `schemaMismatch` do not retain prior content. They
-contribute no visible content unless the authored expression explicitly
-observes the reason and renders a corresponding branch.
+`error`, `syncing`, `obsolete`, and `schemaMismatch` do not retain prior
+content. They contribute no visible content unless the authored expression
+explicitly observes the reason and renders a corresponding branch.
 
 Authored `undefined` remains ordinary empty render content, not a suspense
 signal. It contributes no visible content initially, and a transition from a
@@ -888,8 +918,10 @@ without explicit result or partial markers. Internal state schemas continue to
 materialize that shape until reconciliation; the runtime upgrades both channels
 without retrying the provider. New producers always write explicit availability
 markers. A child generation used by `llmDialog` waits only for transient
-pending/syncing states and fails the tool call immediately for error or schema
-mismatch instead of consuming the full tool timeout.
+pending/syncing states and fails the tool call immediately for error, schema
+mismatch, or obsolete results. An obsolete result reports its migration guidance
+or a default retirement message. Tool waits end when a result arrives, the run
+quiesces, or the turn is canceled.
 
 ### Dynamic compilation
 
@@ -1009,8 +1041,8 @@ carry the initial pending marker, and ordinary runner propagation gates its
 consumers until the first snapshot.
 
 The transformer injects one schema derived from the TypeScript input type. It
-recursively removes `FabricUnavailable` and all three concrete unavailable
-variants from unions at every schema path. The same stripped schema governs:
+recursively removes `FabricUnavailable` and all four concrete unavailable
+variants, including `IsObsolete`, from unions at every schema path. The same stripped schema governs:
 
 - the built-in's schema-aware input read;
 - the exact value copied to the snapshot output; and
@@ -1167,7 +1199,7 @@ runtime/compiler version gate before patterns emit the new type or policy.
 ### Runner
 
 - Callback suppression and unchanged-marker propagation.
-- `error > pending > syncing` precedence and stable
+- `error = obsolete > pending > syncing` precedence and stable
   same-reason tie-breaking.
 - Accepted reasons reach the callback while other reasons propagate.
 - Object-shaped `T` never accepts a marker without policy.
@@ -1190,7 +1222,8 @@ runtime/compiler version gate before patterns emit the new type or policy.
 - No stale successful value after inputs change.
 - Resume preserves list-operator markers, linked-load failures remain terminal
   until a new reconnect epoch, and child tool failures reject without waiting
-  for timeout.
+  for quiescence. Obsolete child results reject with migration guidance or a
+  nonempty retirement message.
 - Legacy persisted generation errors without a result remain materializable.
 - Direct APIs and advanced streaming APIs share one operation rather than
   issuing duplicate requests.

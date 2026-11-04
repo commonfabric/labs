@@ -41,9 +41,15 @@ The ON soak is paused. A renewed ON rollout follows the Phase 7 gate
 dispositions and the owner's rollout decision; the flip record alone does not
 establish current readiness.
 
+**Delta 2026-10-31 (the verbs on the space's memory session): under ON, a
+lifecycle verb travels only as a `pattern.lifecycle` memory request on the
+space's session, which reaches the process that serves the space; the toolshed
+serves no HTTP route for the verbs (`docs/features/server-pattern-lifecycle.md`,
+"Sending a verb").**
+
 **Delta 2026-09-11 (the served source update): `setsrc` is a served verb.
-Under ON, `cf piece setsrc` sends the resolved program to
-`/api/pattern-lifecycle/setsrc`; the serving runtime uploads it as a verb
+Under ON, `cf piece setsrc` sends the resolved program to the space's
+serving runtime, which uploads it as a verb
 of its own and, in the cycle after, commits the update's setup transaction
 DIRECTLY to the store — the loop's own derived-class commit outside the
 wave, its written docs re-verified against the seq it was stamped at — so
@@ -56,8 +62,8 @@ client-side. OFF is byte-identical.**
 **Delta 2026-09-09 (the lifecycle verbs as server calls): the seed archived
 at `docs/history/plans/server-pattern-verbs-seed.md` is BUILT for `upload`
 and `instantiate`. Under ON, `cf piece new` sends the resolved program to
-`/api/pattern-lifecycle/*`, and the space's serving runtime compiles,
-materializes, and commits inside a wave cycle
+the space's serving runtime, which compiles, materializes, and commits
+inside a wave cycle
 (`docs/features/server-pattern-lifecycle.md`), the registry entry and the
 slug in the creation's own transaction; the receipt returns once that wave
 has committed and the verb's durability read has passed, ahead of the
@@ -132,7 +138,7 @@ report's §5.1 flip-decision question) is discharged as recorded: the
 no-server pattern-tests lane resolves the AMBIENT baseline (OFF) by
 construction — the `patternTest` preset does not read the constant
 (conformance-golden-pinned) — verified live at the flipped head
-(`topics/multi-user.test.tsx` 7/7 with env unset); "grow the in-process
+(`apps/topics/multi-user.test.tsx` 7/7 with env unset); "grow the in-process
 serving role" stays the not-taken alternative. testing.md §2,
 EXPERIMENTAL_OPTIONS.md, and the register's FLIP PR block re-tensed
 with it. The OFF path is NOT removed — it is the soak's rollback lever;
@@ -182,7 +188,7 @@ honest classification. PROBE 6 VERDICT (run 33222653635 at 1a5f3e66e,
 settle-confirmed): GREEN AT THE SURFACE — all ten ON shards succeeded,
 shard 7 RUNNING lunch-poll-vote; the lift STANDS and B1's list-EMPTY
 precondition is MET (the register's PROBE 6 block carries the full
-reading, including the board's sole red — a packages/cli view test this
+reading, including the board's sole red — a runtime/cli view test this
 diff cannot reach, second observation with the merge gate). The deltas
 below are the prior PRs' records.**
 
@@ -309,7 +315,7 @@ strictly-older replications registered INTO its origin space before
 reading it (`pattern-manager.ts` `replicationsIntoSpace`, monotonic
 tickets — acyclic by construction; genuine absence still fails loud and
 settles). Red-first pin
-`packages/runner/test/pattern-replication-sibling-race.test.ts`
+`runtime/runner/test/pattern-replication-sibling-race.test.ts`
 (deterministic-by-construction race; watched red pre-fix with the exact
 production error; mutation-killed), plus a working-tree fault injection
 that reproduced the FULL CI signature locally (80 stuck warns over 40
@@ -724,7 +730,7 @@ the render-stall mechanisms with fix seats S-A..S-J:
 [`stage-c/on-render-stall-rootcause.md`](../history/plans/server-execution-v2/stage-c/on-render-stall-rootcause.md).
 The coordinator merges on green.** The merge's conflict ledger, the five tx-boundary
 interaction findings (lead: the all-no-op wave is safe-by-construction,
-pinned green by `packages/runner/test/executor-no-op-wave.test.ts`),
+pinned green by `runtime/runner/test/executor-no-op-wave.test.ts`),
 the full suite counts, the reproduced ON gates (lunch 3/3 {1:16}, chat
 n=20, note n=20), and the W4-lite re-anchor live in
 [the land-off reconciliation report](../history/plans/server-execution-v2/stage-c/land-off-reconciliation-report.md).
@@ -1263,7 +1269,7 @@ Tasks:
       CLOSED as a row — its flagged residuals, the served-host wish
       pin, the sidecar per-demander refinement, and the unstamped
       non-sqlite effect writebacks, stay owed THERE, as refinements to
-      the built mechanism; `packages/runner/src/scheduler/fan-out.ts`).
+      the built mechanism; `runtime/runner/src/scheduler/fan-out.ts`).
       What the scopes review itself still owes is session-data GC
       (scopes.md §8 item 2), a deferred design, not a blocker. Q6's
       non-quota remainder —
@@ -1295,7 +1301,7 @@ Tasks:
       of the server-driven commit variant — a protocol change, and
       the intended one) and LD3 (the `scope_key` format is PROTOCOL
       vocabulary, defined once in the wire-shape module
-      `packages/memory/v2.ts` beside `CellScope`, imported by engine
+      `runtime/memory/v2.ts` beside `CellScope`, imported by engine
       and runner alike; the runner constructs keys from demand-/
       `firedAt`-supplied identity and never resolves them from
       ambient state — key-vocabulary.md §3). Phase 1 stage E is
@@ -1307,7 +1313,7 @@ Tasks:
       and register it in `EXPERIMENTAL_OPTIONS.md` with both states
       defined; OFF is today byte-for-byte. REGISTERED 2026-08-04
       (stage A): env → runtime → ambient control point in
-      `packages/memory/v2.ts`, both states defined in the registry.
+      `runtime/memory/v2.ts`, both states defined in the registry.
 - [x] CI runs a flag-ON arm of the integration suites from the first PR
       that has anything to test (v1 lesson: the flags-on branch never went
       through CI) — STOOD UP 2026-08-04 (stage A): the pattern and package
@@ -1362,7 +1368,7 @@ client's only computational commit (spec §3.6).
 
 | milestone | derivations: run by / committed by | handlers: run by / the client commits | effects performed by | scoped state (user/session instances) | client posture |
 | --- | --- | --- | --- | --- | --- |
-| OFF baseline (the OFF arm of every phase until Phase 7) | every client runtime / the clients | the firing client / the handler's writes, as today | the client running the node (cross-tab mutex arbitrates — runtime-mapping.md N44) | cardinality 1 per runtime: each client derives ONLY its own instance, keyed by scope NAME (scopes.md §7 M2) — sound because the identity is the runtime's own | today, byte-for-byte; any OFF-arm diff is a phase-gate failure (testing.md §2). Commits carry a `class`, and every client commit is `authored` — `derived` is never claimed off the flag (protocol.md §1) |
+| OFF baseline (the OFF arm of every phase until Phase 7) | every client runtime / the clients | the firing client / the handler's writes, as today | the client running the node (cross-tab mutex arbitrates — runtime-mapping.md N44) | cardinality 1 per runtime: each client derives ONLY its own instance, keyed by scope NAME (scopes.md §7 M2) — sound because the identity is the runtime's own | client execution with all scopes synchronized by default; opt-in `localSessionDocuments` keeps session documents local, and mixed transactions retain rollback semantics. Every client commit is `authored` (protocol.md §1; EXPERIMENTAL_OPTIONS.md defines the OFF posture) |
 | Phase 1 stages A–G (flag OFF throughout) | as OFF baseline — the serving loop lands dark | as OFF baseline | as OFF baseline | as OFF baseline; stage E re-keys the vocabulary per instance WITHOUT changing OFF-arm behavior (at cardinality 1 the instance dimension is derivable from the session) | unchanged; a local ON flip CAS-storms against still-deriving clients — expected, local-only, never shipped (L14) |
 | Phase 2 ON — server derives, client does not (first ON milestone; L14) | SpaceServer / SpaceServer, derived-class under lease; the client runs the same graph as overlay speculation only | the firing client, authoritatively / its handler writes, still authored-class (F10 — protocol.md §1) | server only (stage G outbox); the client reads effectful nodes through to last committed results | SpaceServer derives EVERY demanded instance: per-instance run identity (M1, stage F), per-instance keys (M2, stage E), per-`scope_key` push filtering (M4, stage F) — all three MUST be in before this gate | loses exactly one right — committing derivations (by construction); still commits UI-binding writes and handler writes; receives only its own applicable `scope_key`s (protocol.md §3) |
 | Phase 3 ON — events down (D-v2-1) | unchanged | SpaceServer, reacting to the event commit / ONLY the event append; the local run is speculative echo, and the client handler-write commit path DELETES (events.md §7 — F10's interim ends) | unchanged | handler consequences land in the ACTING principal's instances, resolved from the server-stamped `firedAt` (scopes.md §5, protocol.md §2) | commits nothing but intent: event appends + UI-binding writes; echo via overlay |
@@ -1414,13 +1420,15 @@ Stages, one PR each except C, which is a three-PR train (below):
       enforced in-process. LANDED 2026-08-04: the table is
       `(space, holder, expires_at)` — exactly three fields, the v1
       shape reduced away; acquire/renew/release are direct engine-table
-      writes (`packages/memory/v2/execution-lease.ts` — a renewal is
+      writes (`runtime/memory/v2/execution-lease.ts` — a renewal is
       never a commit), the in-memory tenure counter makes a reacquire
       unreachable without first ending the lapsed tenure, and admission
       enforces the one equality check under the flag, judged by the
       memory server's clock (an expired row matches nobody). Landed
       dark: nothing drives the renew cadence until stage F's
-      SpaceServer.
+      SpaceServer. *(The lease has since moved into the memory server's
+      memory, with no renewal or expiry:
+      [`serving-loop.md` §2](../specs/server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally).)*
 - [x] **C — main reduction** (a THREE-PR TRAIN, not one PR — the
       surface is ~25 source files across five packages plus ~110
       goldens, and the seams below are where it cuts cleanly):
@@ -1428,7 +1436,7 @@ Stages, one PR each except C, which is a three-PR train (below):
         `completeSchedulerScopeSummary` /
         `completeActionScopeSummary` emission (ts-transformers) and
         every consumer (runner), and REGENERATE the ~110 fixtures
-        under `packages/ts-transformers/test/fixtures/` in the same
+        under `base/ts-transformers/test/fixtures/` in the same
         PR. Deleting at the source collapses the rest (spec §4's
         measured lesson).
   - [x] **C.2 — protocol + engine + client + tools**: replace the
@@ -1438,7 +1446,7 @@ Stages, one PR each except C, which is a three-PR train (below):
         `scheduler_action_state`, which drop with the rest
         (serving-loop.md §3b). Drive the migration off §3b's
         SEVEN-table list, not off `CORE_SCHEDULER_TABLES`
-        (`packages/memory/v2/engine.ts:1275-1282`), which enumerates
+        (`runtime/memory/v2/engine.ts:1275-1282`), which enumerates
         six and omits `scheduler_context_floor`. NO BACKFILL — the
         new table starts empty and opted-in stores lose warm start
         once (§3b). Carry the protocol-layer deletions that fall out
@@ -1447,11 +1455,11 @@ Stages, one PR each except C, which is a three-PR train (below):
         `scheduler.snapshot.list` RPC, and
         `CommitData.schedulerObservation`; old-client compat is the
         existing hello-degrade path
-        (`packages/runner/src/storage/v2.ts:2142`). Collateral that
-        no byte-identical gate covers: `packages/state-inspector`
+        (`runtime/runner/src/storage/v2.ts:2142`). Collateral that
+        no byte-identical gate covers: `runtime/state-inspector`
         (`scheduler.ts:15-19`, `246-281`), the `cf inspect` surface
         that renders it, and
-        `packages/memory/v2/sqlite/guard.ts:16-33` — drop the dead
+        `runtime/memory/v2/sqlite/guard.ts:16-33` — drop the dead
         names from the `CORE_TABLE_NAMES` blocklist and ADD
         `scheduler_basis`.
   - [x] **C.3 — flag retirement + doc archival**: retire the
@@ -1483,14 +1491,14 @@ Stages, one PR each except C, which is a three-PR train (below):
       it — which is why it is its own stage rather than a task
       inside F. LD3 is RULED (owner 2026-08-03, key-vocabulary.md
       §3): the `scope_key` format moves to the wire-shape module
-      (`packages/memory/v2.ts`) as ONE shared definition imported by
+      (`runtime/memory/v2.ts`) as ONE shared definition imported by
       engine and runner alike; the nine sites construct keys from
       demand-/`firedAt`-supplied identity, never from ambient state
       (OFF arm: the identity is the runtime's own authenticated
       session — key-vocabulary.md §3). The stage LEADS with that
       definition move. LANDED 2026-08-04: the vocabulary (constructor
       + parse/inspect helpers + `ProtocolError`) lives in
-      `packages/memory/v2.ts` beside `CellScope`, and the engine
+      `runtime/memory/v2.ts` beside `CellScope`, and the engine
       re-exports the same objects — no twin exists; all nine sites
       (plus the server's query/watch doc keys, which share the
       tracker strings with sites 5–6) construct instance keys from an
@@ -1600,7 +1608,7 @@ Success criteria (flag OFF — the ON gates are Phase 2's):
 - [x] Stage E lands with the OFF arm byte-identical: the re-keyed
       vocabulary partitions state exactly as the scope-NAME form did
       at cardinality 1 (2026-08-04: partition equivalence pinned by
-      `packages/runner/test/scope-key-rekeying.test.ts` against the
+      `runtime/runner/test/scope-key-rekeying.test.ts` against the
       name-keyed form; full runner + memory unit suites green; the
       runner package integration suite run in BOTH arms —
       flag-OFF and flag-ON toolshed — 14/14 each, ON-arm skip list
@@ -1621,7 +1629,7 @@ Tasks:
 - [x] Remove the client's derivation-commit path under the flag (by
       construction, not firewall). LANDED 2026-08-07: the speculation
       overlay is the DEFAULT seal destination of every non-serving
-      flag-ON runtime (`packages/runner/src/speculation/
+      flag-ON runtime (`runtime/runner/src/speculation/
       overlay-destination.ts`) — a stamped derivation-kind run's
       writes redirect into the replica's pending layer and no code
       path from a derivation run to the wire exists; serving runtimes
@@ -1664,7 +1672,7 @@ W):
       a frame parked on the loop's OWN sealed commit from foreign
       novelty, so a foreign authored frame in that position can be
       claimed by W one wave early (self-healing next wave — the
-      documented residual at `packages/runner/src/storage/v2.ts`,
+      documented residual at `runtime/runner/src/storage/v2.ts`,
       `inputSynced`). Either distinguish parked-on-own-seal frames
       from foreign novelty, or exclude unapplied frames' seqs from
       the wave's `batchHead`. RESOLVED 2026-08-07 via the exclusion
@@ -1874,15 +1882,17 @@ Tasks:
       judges foreign rows against their own co-hosted engines
       (serving-loop.md §6 step 2, pinned at the helper —
       `selectForeignStaleInstances`).
-      Foreign SCOPED reads are FAIL-CLOSED refused at both ends — the
-      RULED 2026-08-13 delegated-scoped-read precondition: the
-      grant-scoped read design landed in protocol.md §2 (carried actor
-      + grant; resolution refuses, never envelope fallback), its
-      fail-closed interim is the producer-side provider refusal + the
-      admission-side unnamed-scoped refusal, and the read row gained
-      FP2's cross-engine widening + the per-process full-DR1-holder
+      Foreign SCOPED reads are admitted on the reading actor's own READ
+      grant in the target space's access list, the actor's entry or an
+      `ANYONE` entry granting READ or more, and refused otherwise —
+      protocol.md §2's grant-scoped read (RULED 2026-10-27): the
+      serving manager's gate asks `Server.foreignReadAuthorityFor`
+      before a named read leaves it, admission resolves the same grant
+      for a named root in a space whose lease the requester does not
+      hold and refuses an unnamed one, and the read row keeps FP2's
+      cross-engine widening + the per-process full-DR1-holder
       sharpening (`v2-explicit-read.test.ts`'s Phase-5 arms,
-      red-first).
+      `executor-cross-space.test.ts`'s grant-scoped read cases).
 - [ ] Per-reader clearance enforced where the read is served (sqlite row
       admissibility, CFC labels). (The per-reader memo/materialization
       machinery is builtins.md §2's landed base; cross-space label
@@ -1938,7 +1948,7 @@ Tasks:
       2026-08-14: two-phase fan-out (derived-subscribed sessions
       before bulk-only, across every connection), `servingLoop.push`
       counters; ordering pinned in
-      `packages/memory/test/v2-push-priority.test.ts`
+      `runtime/memory/test/v2-push-priority.test.ts`
       (verification-coverage OW8).
 - [x] Per-space budgets in the executor (CPU per wave, outstanding LLM
       calls, egress rate); a runaway pattern degrades only its own
@@ -2053,7 +2063,7 @@ Tasks:
 - [x] **The flip — landed by #6535 (2026-08-28); the default has since
       been a data-only toggle, each flip a dated delta in the coordination
       block above.** The ONE first-party default `SERVER_EXECUTION_DEFAULT_ENABLED`
-      (`packages/memory/v2/server-execution-default.ts`; the registry's
+      (`runtime/memory/v2/server-execution-default.ts`; the registry's
       summary table states its current value) is resolved by the
       `productionServer` / `remoteClient`
       presets, the shell define fallback, and toolshed's serving-host
@@ -2149,7 +2159,7 @@ Tasks:
       under ON, because receipts went unwritten under the flag by
       events.md §4/N26's exactly-once subsumption, which replaced only
       that role and left the receipt's result-carriage
-      (plainResultReceipts; `cf call`'s `.result`) with no substitute.
+      (plainResultReceipts; `cf piece call`'s `.result`) with no substitute.
       The owner RULED it 2026-08-29 — "yes, Serving-side receipt/result
       write, as that is indeed what i said before" — and the PR's
       result-carriage commit (its fourth) builds it: the served handler

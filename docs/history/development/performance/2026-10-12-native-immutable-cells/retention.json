@@ -1,0 +1,57 @@
+{
+  "runtime": {
+    "deno": "2.9.4",
+    "v8": "15.0.245.2-rusty",
+    "typescript": "6.0.3"
+  },
+  "results": [
+    {
+      "mode": "legacy",
+      "retainIds": false,
+      "versions": 100,
+      "rows": 1000,
+      "before": 25238920,
+      "after": 26107520,
+      "disposed": 26116880,
+      "retainedBytes": 868600,
+      "releasedBytes": -9360,
+      "idChars": 0
+    },
+    {
+      "mode": "native",
+      "retainIds": false,
+      "versions": 100,
+      "rows": 1000,
+      "before": 26228240,
+      "after": 62452672,
+      "disposed": 25509680,
+      "retainedBytes": 36224432,
+      "releasedBytes": 36942992,
+      "idChars": 0
+    },
+    {
+      "mode": "legacy",
+      "retainIds": true,
+      "versions": 100,
+      "rows": 1000,
+      "before": 25510248,
+      "after": 65812272,
+      "disposed": 26238792,
+      "retainedBytes": 40302024,
+      "releasedBytes": 39573480,
+      "idChars": 39965060
+    },
+    {
+      "mode": "native",
+      "retainIds": true,
+      "versions": 100,
+      "rows": 1000,
+      "before": 26239032,
+      "after": 62490176,
+      "disposed": 25546176,
+      "retainedBytes": 36251144,
+      "releasedBytes": 36944000,
+      "idChars": 5200
+    }
+  ]
+}

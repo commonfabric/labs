@@ -1,0 +1,55 @@
+Task cf deno run --allow-run --allow-env --allow-read ./packages/cli/launcher.ts 'test' 'packages/patterns/primitives/amount-ledger.test.tsx'
+Found 1 test file(s)
+Test order shuffled with seed 20261013. Set CF_TEST_SHUFFLE_SEED=20261013 to run this order again.
+
+amount-ledger.test.tsx
+Experimental flag overrides: serverExecution=true
+  CFC posture: enforcement=enforce-strict flowLabels=persist
+Experimental flag overrides: serverExecution=true
+  ✓ assertion_1
+  ✓ assertion_2
+  ✓ assertion_3
+  ✓ assertion_4 (after action_1)
+  ✓ assertion_5 (after action_1)
+  ✓ assertion_6 (after action_1)
+  ✓ assertion_7 (after action_2)
+  ✓ assertion_8 (after action_2)
+  ✓ assertion_9 (after action_2)
+  ✓ assertion_10 (after action_2)
+  ✓ assertion_11 (after action_3)
+  ✓ assertion_12 (after action_4)
+  ✓ assertion_13 (after action_4)
+  ✓ assertion_14 (after action_5)
+  ✓ assertion_15 (after action_5)
+  ✓ assertion_16 (after action_5)
+  ✓ assertion_17 (after action_5)
+  ✓ assertion_18 (after action_5)
+  ✓ assertion_19 (after action_5)
+  ✓ assertion_20 (after action_5)
+  ✓ assertion_21 (after action_5)
+  ✓ assertion_22 (after action_5)
+  ✓ assertion_23 (after action_5)
+  ✓ assertion_24 (after action_6)
+  ✗ assertion_25 (after action_7)
+    ledger.entryCount === 1
+      ledger.entryCount = 2
+  ✓ assertion_26 (after action_8)
+  ✓ assertion_27 (after action_8)
+  ✓ assertion_28 (after action_8)
+  ✗ assertion_29 (after action_9)
+    parentEntries.get().length === 1
+      parentEntries.get().length = 2
+  ✓ assertion_30 (after action_9)
+  ✓ assertion_31 (after action_9)
+  ✓ assertion_32 (after action_9)
+  ✓ assertion_33 (after action_10)
+  ✓ assertion_34 (after action_10)
+  ✓ assertion_35 (after action_10)
+  ✗ assertion_36 (after action_12)
+    duplicates.entries.length === 1
+      duplicates.entries.length = 2
+  ✓ assertion_37 (after action_12)
+  ✓ assertion_38 (after action_12)
+  ✓ assertion_39 (after action_12)
+
+36 passed, 3 failed (12696ms)

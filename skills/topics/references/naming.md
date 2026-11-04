@@ -36,7 +36,7 @@ address is taken — `deno task cf cell get //<space>/top/42 title`,
 one segment reaches a member, so `//<space>/top/42/title` is that Topic's
 `title` field. A name with no member after it is refused, naming the piece
 holding the collection; and `no member 999 in top` is the refusal for a member
-the board does not hold. `packages/cli/README.md` is the whole grammar, and
+the board does not hold. `runtime/cli/README.md` is the whole grammar, and
 `docs/specs/collection-naming.md` the design.
 
 A member name is the board's, not the fabric's: it means something only through
@@ -55,10 +55,9 @@ duplicates and no gaps, the `top` slug is bound, and every Topic on the board
 stores the number the namespace holds for it, so `top/<n>` resolves there and
 `namesTable` names every Topic.
 
-It does not yet carry the publication. A deployed Topic stores its number and
-publishes no `shortName`, so no header or board card badge, no number on a
-mention pill, and nothing offered for `#42` in a Topic's body editor. Read a
-number from `namesTable`, or one Topic's from its own input with
-`cf cell get --cell "$TOPIC" shortName --input`. The pattern update that makes
-those Topics publish what they store is the team's step, not an agent's, and
-`references/pattern-updates.md` governs it.
+It carries the publication. Every Topic on the board publishes the number it
+stores as `shortName`, and so does every Topic the board creates, so a Topic's
+header and its board card show the number as a badge, a mention pill shows it,
+and `#42` offers it in a Topic's body editor. A Topic's own `shortName` field
+reads what it publishes, and `namesTable` remains the reverse lookup for a
+caller holding a Topic rather than a number.

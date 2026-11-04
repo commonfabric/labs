@@ -3,8 +3,8 @@
 A schema node carrying `ifc.addIntegrity` stamps integrity atoms onto the value
 a write leaves at that node's position. This document says where a stamp is
 stored, how long it holds, and how one schema position stands for many values.
-The reconciliation is `packages/runner/src/cfc/minted-integrity.ts`; the commit
-preparation that calls it is `packages/runner/src/cfc/prepare.ts`.
+The reconciliation is `runtime/runner/src/cfc/minted-integrity.ts`; the commit
+preparation that calls it is `runtime/runner/src/cfc/prepare.ts`.
 
 ## A stamp is one write's, about one value
 
@@ -122,6 +122,13 @@ the floor in two cases: it lands on the written value, or the floor's own
 branch names it, as a branch that both requires and stamps an atom does. A
 stamp named by some other branch, which the value does not take, credits
 nothing.
+
+A stamp credits a floor only where the store keeps it. A reference written at
+the floor's path, or above it, leaves no value there to stamp, so the stamp
+the schema mints at that path credits nothing for the reference, and the floor
+is held to what the linked document carries at the corresponding position. A
+stamp at a container the write persists, a list whose path both requires and
+mints an atom, covers the references beneath it.
 
 ## A stamp held in a declared entry
 

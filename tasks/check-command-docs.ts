@@ -29,11 +29,12 @@
  */
 
 import type { Command } from "@cliffy/command";
-import { main as cliRoot } from "../packages/cli/commands/main.ts";
-import { VERB_HELP } from "../packages/cli/lib/shuttle/verbs.ts";
+import { main as cliRoot } from "../runtime/cli/commands/main.ts";
+import { VERB_HELP } from "../runtime/cli/lib/shuttle/verbs.ts";
 import { walk } from "@std/fs/walk";
 import { parse as parseJsonc } from "@std/jsonc";
 import { dirname, fromFileUrl, join, relative } from "@std/path";
+import { PACKAGE_ROOTS, packageDirOf } from "./package-layout.ts";
 
 /**
  * Commands deliberately left without prose, each with the reason.
@@ -77,15 +78,15 @@ export const NO_VERB_PROSE = new Map<string, string>();
 export const DOC_ROOTS: readonly string[] = [
   "docs",
   "skills",
-  "packages",
+  ...PACKAGE_ROOTS,
 ];
 
 /**
  * The README of each workspace package, as a repository-relative path.
  *
  * A package is what the root config says it is, rather than what the shape of
- * a path suggests: `packages/connectors/agents` is a package and
- * `packages/ts-transformers/test/fixtures` is not, and only the member list
+ * a path suggests: `connectors/agents` is a package and
+ * `base/ts-transformers/test/fixtures` is not, and only the member list
  * tells the two apart. The path a member yields need not exist — one that
  * does not simply never turns up in the walk.
  */
@@ -105,7 +106,7 @@ export async function readPackageDocs(root: string): Promise<Set<string>> {
 /**
  * Documents that record a moment rather than describing the system.
  *
- * `packageDocs` is {@link readPackageDocs}: under `packages/` the
+ * `packageDocs` is {@link readPackageDocs}: in a package the
  * documentation is a package's own README, and an internal one — a fixture
  * corpus, a test directory, a sub-example — is no more somewhere a caller is
  * sent to read than the source beside it.
@@ -125,7 +126,7 @@ export function isLiveDoc(
   // today, so naming a command there is not documenting it.
   if (doc.startsWith("docs/plans/")) return false;
   if (doc.includes("/node_modules/")) return false;
-  if (doc.startsWith("packages/") && !packageDocs.has(doc)) return false;
+  if (packageDirOf(doc) !== undefined && !packageDocs.has(doc)) return false;
   return true;
 }
 
@@ -163,7 +164,7 @@ export function declaredCommands(
  * document has to write it under.
  *
  * The verb table is the domain rather than a copy of it, so a verb added to
- * `packages/cli/lib/shuttle/verbs.ts` is a verb this gate asks about with
+ * `runtime/cli/lib/shuttle/verbs.ts` is a verb this gate asks about with
  * nothing else to edit. It is that table's own account of itself that the
  * document is held to: the usage string `help` opens a verb's page with is the
  * one a row has to carry, so a verb whose operands change is a verb whose row
@@ -224,7 +225,7 @@ export function commandPattern(
  * and holds the verb's usage, as code, and nothing besides.
  *
  * That is what a mention cannot satisfy, and the difference is the whole
- * point. `packages/cli/README.md` lost its row for `more` while its prose went
+ * point. `runtime/cli/README.md` lost its row for `more` while its prose went
  * on saying what `more` writes, and no gate saw it.
  */
 export function verbPattern(usage: string): RegExp {
@@ -363,7 +364,7 @@ export function verbSurface(verbs: ReadonlyMap<string, string>): Surface {
     table: "NO_VERB_PROSE",
     remedy: "A live document describes a verb by giving it a row of its own " +
       "in a table, the row opening with the verb's usage in backticks as " +
-      "written above; the verb table in packages/cli/README.md is the shape. " +
+      "written above; the verb table in runtime/cli/README.md is the shape. " +
       "A mention in a sentence is not that. Either give the verb such a row, " +
       "or record why it needs none in tasks/check-command-docs.ts.",
   };

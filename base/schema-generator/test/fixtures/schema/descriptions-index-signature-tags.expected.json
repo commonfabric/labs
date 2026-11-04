@@ -1,0 +1,8 @@
+{
+  "additionalProperties": {
+    "description": "Maps ids to #catalog entries.",
+    "type": "string"
+  },
+  "properties": {},
+  "type": "object"
+}

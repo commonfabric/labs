@@ -1,0 +1,123 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Contact": {
+        "properties": {
+          "company": {
+            "default": "",
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "number"
+          },
+          "email": {
+            "default": "",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "notes": {
+            "default": "",
+            "type": "string"
+          },
+          "phone": {
+            "default": "",
+            "type": "string"
+          },
+          "tags": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "email",
+          "phone",
+          "company",
+          "tags",
+          "notes",
+          "createdAt"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "contact": {
+        "$ref": "#/$defs/Contact",
+        "asCell": [
+          "cell"
+        ]
+      }
+    },
+    "required": [
+      "contact"
+    ],
+    "type": "object"
+  },
+  "pattern": "contacts/contact-detail.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Contact": {
+        "properties": {
+          "company": {
+            "default": "",
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "number"
+          },
+          "email": {
+            "default": "",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "notes": {
+            "default": "",
+            "type": "string"
+          },
+          "phone": {
+            "default": "",
+            "type": "string"
+          },
+          "tags": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "email",
+          "phone",
+          "company",
+          "tags",
+          "notes",
+          "createdAt"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "#contact #person",
+    "properties": {
+      "contact": {
+        "$ref": "#/$defs/Contact"
+      },
+      "summary": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "contact",
+      "summary"
+    ],
+    "type": "object"
+  }
+}

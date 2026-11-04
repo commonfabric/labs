@@ -17,6 +17,7 @@ With `Writable<T>` in your signature:
 | `.pushAll(items)` | Append every item of a list, however long, as one `push` (mergeable) |
 | `.addUnique(...items)` | Append each item only if not already present (mergeable) |
 | `.increment(by?)` | Add a number (default `+1`, may be negative) to a number cell (mergeable) |
+| `.applyChanges(changes)` | Edit a string cell by position, even while a collaborative editor has it open (see below) |
 | `.remove(item)` | Remove first `item` from array |
 | `.removeAll(item)` | Remove all `item` from array |
 | `.removeByValue(item)` | Remove every element equal to `item` by stored value (mergeable) |
@@ -90,6 +91,41 @@ write to it, which lands on whatever is there.
 
 A `push` or `addUnique` onto a list that does not exist yet, or that was set
 to `undefined`, starts the list with what it adds.
+
+## Editing text a collaborative editor has open: `applyChanges`
+
+A string field that a `cf-code-editor` with `collaborative` has edited is
+merged on the server from the editors' keystrokes, and a `.set()` of it is
+refused: a whole new value would bypass the edits the open editors merge
+with their own typing. `.applyChanges()` is how a handler edits such a field.
+It takes changes in the shape of a CodeMirror change spec, `{ from, to?,
+insert? }`, whose positions refer to the value the handler read:
+
+```typescript
+// Shown for illustration only.
+const append = handler<{ line: string }, { content: Writable<string> }>(
+  ({ line }, { content }) => {
+    const text = content.get();
+    const separator = text === "" || text.endsWith("\n") ? "" : "\n";
+    content.applyChanges({ from: text.length, insert: separator + line });
+  },
+);
+```
+
+The changes land only while the field still holds the value the handler read.
+If someone typed in the meantime, the commit is refused and the handler runs
+again against the new text, so a position computed from what it read is never
+applied to text it did not read. Several changes in one call run in ascending
+order without overlap, all against the same value; a second call in the same
+handler is against the value the first one left, which a `.get()` after the
+call also returns. The method works on a field no editor has opened too: there
+the first edit opens the field for collaboration, after which `.set()` of it is
+refused like any other collaborative field's.
+
+Because any keystroke anywhere in the field refuses the commit, a handler
+editing a document several people type in at once may run more than once
+before it lands. A write that must not wait on the typing belongs in a field of
+its own.
 
 ## Addressing one array element: `elementById`
 

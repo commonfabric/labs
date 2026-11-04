@@ -77,12 +77,20 @@ authoritative statement of these rules.
 
 #### `undefined`
 
-`undefined` has special semantics depending on context:
+`undefined` is a first-class `FabricValue`, and an encoding records it
+wherever it appears, in the tagged form `Undefined@1` (see
+`space-model-formal-spec/3-json-encoding.md` Section 3):
 
-- **Top-level**: Indicates deletion (remove the stored value)
-- **Object property**: Treated as absent (property is omitted)
+- **Top-level**: Writing `undefined` as a cell's value deletes the stored
+  value. That is the application layer's reading of the value, not a property
+  of the encoding
+- **Object property**: Stored as `undefined`, and remains distinguishable from
+  an absent property
 - **Array element**: Stored as `undefined`, and remains distinguishable from
   both a hole and a `null`
+
+See `space-model-formal-spec/1-fabric-values.md` Section 1.3 for the
+authoritative statement.
 
 #### Non-Fabric Types
 
@@ -426,9 +434,9 @@ The `[DEEP_FREEZE]` / `[IS_DEEP_FROZEN]` pair lets a generic top-level
 abstract `FabricInstance` base. The `subFreeze` / `subIsDeepFrozen`
 callbacks (rather than direct utility imports) thread shared
 cycle-detection state through implementations without creating an import
-cycle. See `space-model-formal-spec/1-fabric-values.md` Section 8.6 for
-the full protocol, dispatch shape, and boundary-crossing egress
-contracts.
+cycle. See `space-model-formal-spec/1-fabric-values.md` Section 2.3 for
+the full protocol and dispatch shape, and Section 2.10 for the
+boundary-crossing egress contracts.
 
 `decode()` lives on the codec rather than being a constructor for two
 reasons:
@@ -573,10 +581,10 @@ pipeline, dispatching per-type work to the codecs through a registry:
 
 ```typescript
 // Shown at module scope.
-// The public boundary (formal spec Section 4.3): an engine exposes
+// The public boundary (`1-fabric-values.md` Section 4.3): an engine exposes
 // `encode()` and `decode()`, and mints a context per act of each.
 // Internally, a registry maps classes -> codecs (for encoding) and
-// tags -> codecs (for decoding); see formal spec Section 4.5.
+// tags -> codecs (for decoding); see `1-fabric-values.md` Section 4.5.
 ```
 
 This separation enables:
@@ -724,7 +732,7 @@ came from the fabric encoder from arbitrary JSON of unrelated origin.
 digit reserves space for future incompatible revisions of the wire format.
 
 For full details — including how decoders verify and strip the prefix —
-see Section 1.1 of the formal spec.
+see `space-model-formal-spec/3-json-encoding.md` Section 1.1.
 
 #### Current State: Two Conventions
 
@@ -833,13 +841,12 @@ Use cases for `/quote`:
   still be interpreted normally
 - `/quote`: You want the entire subtree treated as literal JSON data
 
-**Encoder dispatch (recommended best practice).** When the encoder must wrap
-a plain object with `/`-prefixed keys, both forms are valid wire output, but
-the recommended choice is `/quote` when the entire subtree is fully literal
-(no descendants need encoding) and `/object` otherwise. The wire form is
-unambiguous either way — a conforming encoder may emit `/object` in any
-case, and **a conforming decoder must accept both forms**. See Section 6 of
-the formal spec for the precise dispatch rule and motivation.
+**Encoder dispatch.** When the encoder must wrap a plain object with
+`/`-prefixed keys, it must emit `/quote` when the entire subtree is fully
+literal (no descendants need encoding) and `/object` otherwise, so that each
+value has one text. The rule binds the encoder alone: **a conforming decoder
+must accept both forms**. See `space-model-formal-spec/3-json-encoding.md`
+Section 6 for the precise dispatch rule and motivation.
 
 #### Reservation Rule
 
@@ -863,8 +870,8 @@ Concretely:
   `ProblematicValue` from a lenient engine, a raise from a strict one. It is
   not a valid plain object.
 
-See Section 9 of the formal spec for the full rule and the
-`ProblematicValue` interpretation across the cases above.
+See `space-model-formal-spec/3-json-encoding.md` Section 9 for the full rule
+and the `ProblematicValue` interpretation across the cases above.
 
 #### Unknown Type Handling
 

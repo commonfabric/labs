@@ -103,7 +103,7 @@ of its properties are load-bearing, and then changes only the rest.
 ## What already exists
 
 The CLI has two callable contracts (`callableCommandSpec`,
-`packages/cli/lib/callable.ts`), and both of them block:
+`runtime/cli/lib/callable.ts`), and both of them block:
 
 **`handler`** — default verb `invoke`, input schema only. Execution sends into
 the stream, awaits `runtime.idle()` and `manager.synced()`, then inspects the
@@ -124,13 +124,13 @@ And beneath the CLI, the scheduler already has invocation machinery that the
 callable layer predates:
 
 - Every event gets a **durable event id minted at send time**
-  (`packages/runner/src/scheduler/event-identity.ts`; spec scheduler-v2 §7.5),
+  (`runtime/runner/src/scheduler/event-identity.ts`; spec scheduler-v2 §7.5),
   and `queueEvent` already accepts a **caller-supplied id** — its `opts.eventId?`
-  (`Scheduler.queueEvent`, `packages/runner/src/scheduler/facade.ts`), with its
+  (`Scheduler.queueEvent`, `runtime/runner/src/scheduler/facade.ts`), with its
   own passing test suite
-  (`packages/runner/test/scheduler-event-receipts.test.ts`). `Cell.send` now
+  (`runtime/runner/test/scheduler-event-receipts.test.ts`). `Cell.send` now
   takes that id as its third argument and `Cell.set`'s stream branch forwards
-  it through `scopeCallerEventId` (`packages/runner/src/cell.ts`), which binds
+  it through `scopeCallerEventId` (`runtime/runner/src/cell.ts`), which binds
   an opaque caller key to the specific stream so two verbs sharing input
   bindings cannot collide on one receipt.
 - Every handling gets a **canonical per-invocation result cell** addressed
@@ -138,8 +138,8 @@ callable layer predates:
   <event id> }` — `Runner.#instantiateJavaScriptHandlerNode` builds the `cause`
   (`$event: tx.dispatchedEventId ?? crypto.randomUUID()`) and
   `Runner.#handleJavaScriptHandlerResult` mints the cell from it, both in
-  `packages/runner/src/runner.ts`; the `$ctx`/`$event` argument shape comes
-  from `generateHandlerSchema` (`packages/runner/src/schema.ts`). So the
+  `runtime/runner/src/runner.ts`; the `$ctx`/`$event` argument shape comes
+  from `generateHandlerSchema` (`runtime/runner/src/schema.ts`). So the
   address folds in the handler's binding, not the id alone. A return value
   **containing reactives or cells** is run as a result pattern into that cell
   (`navigateTo` is the existing UI consumer); a **plain JSON return projects
@@ -167,10 +167,10 @@ plumbing through the callable layer:
 1. **No caller-supplied id from the CLI.** *Closed.* Written when `cf piece
    call` sent without an `eventId`, so a client retry minted a fresh event and
    re-executed rather than colliding on the receipt. `resolveInvocationIdentity`
-   (`packages/cli/commands/piece.ts`) now mints the id–session pair whenever
+   (`runtime/cli/commands/piece.ts`) now mints the id–session pair whenever
    neither is named — refusing an `--invocation` named without its session —
    and `executeResolvedCallable`'s handler branch
-   (`packages/cli/lib/callable.ts`) forwards it as
+   (`runtime/cli/lib/callable.ts`) forwards it as
    `{ eventId: invocation.id, session: invocation.session }`.
 2. **No readback.** *Closed.* The same handler branch reads the receipt at
    `tx.handlingReceiptLink` through `runtime.getCellFromLink`, pulls it, and
@@ -274,7 +274,7 @@ relies on. Closing them is safe; what it costs is two commitments:
    CFC already rejects unauthorized commits and the runner surfaces the error —
    `Runner.setup`'s `editWithRetry` branch rethrows the
    `"CFC enforcement rejected commit"` abort instead of swallowing it as a lost
-   race, `packages/runner/src/runner.ts`.)
+   race, `runtime/runner/src/runner.ts`.)
 5. **Address by identity, never by position.** Pass a child reference, or a
    client-rendered fid/path derived from one, never `{ index }`; indices shift
    under concurrent writes. A pattern need not and generally cannot manufacture
@@ -305,7 +305,7 @@ facts and belong at different layers:
 
 - The **principal** — whose key authorized the write — stays fabric-level:
   CFC carries it in its integrity labels (`RepresentsCurrentUser` /
-  `AuthoredByCurrentUser` over `CurrentPrincipal`, `packages/api/cfc.ts`). For
+  `AuthoredByCurrentUser` over `CurrentPrincipal`, `base/api/cfc.ts`). For
   display, the browser path resolves the viewer's canonical Profile
   (`wish({ query: "#profileName" })`;
   `docs/common/patterns/multi-user-patterns.md:263-272` — "the viewer is
@@ -318,7 +318,7 @@ facts and belong at different layers:
   session/tool context, or a protected reference to the triggering request.
   CFC already has runtime-minted provenance families such as `ExternalIngest`,
   `LlmDerived`, and `TransformedBy` (all three in the atom-URI table in
-  `packages/api/cfc.ts`), but
+  `base/api/cfc.ts`), but
   no `AgentActor` atom exists and the external `cf` call path does not yet
   preserve this distinction.
 
@@ -351,7 +351,7 @@ path.
 
 `topics.index` is the worked example: one reference-plus-summary row per child,
 the reference declared through a title-only schema so no row can expand a topic
-(the `TopicIndexRow` interface, `packages/patterns/topics/main.tsx`). A
+(the `TopicIndexRow` interface, `patterns/apps/topics/main.tsx`). A
 reference-bearing result that does not do this is not an index — a row whose
 reference expands to the full piece made a headless survey of the live board
 produce over 300k tokens of output. Acceptance for an index: its serialization
@@ -370,7 +370,7 @@ Discovery is the parent's job; the child's own verbs are the child's. A comment
 is addressed to the topic, not routed through the board — **but that depends on
 the CLI dispatching a nested piece's streams, which today fails with
 `Transaction required for .set()`** (the non-stream branch of `Cell.set`,
-`packages/runner/src/cell.ts`; its own
+`runtime/runner/src/cell.ts`; its own
 board topic). Until that lands, board-level routing
 (`addComment {topicFid, body}`) is the documented workaround — pragmatic, not
 the target shape.
@@ -387,7 +387,7 @@ any workstream in this implementation plan.
 **A set of verbs is checkable as a structural interface with the machinery that
 exists.** Schemas are the type system, so a verb set is a schema fragment and
 conformance is a subset check the repo already computes (`schemaSubsetIssue`,
-`packages/piece/src/schema-compatibility.ts`). Its variance is already correct
+`runtime/piece/src/schema-compatibility.ts`). Its variance is already correct
 for the purpose: an implementer must accept at least the declared payload and
 return at most the declared result, which is exactly the argument/result
 direction pair above. Interface conformance and schema evolution are the same
@@ -410,7 +410,7 @@ What is **not** yet true is the premise all of that rests on: that a piece's
 verbs can be identified from its schema. Verb-ness had three independent
 encodings — the cell's construction kind, `asCell: ["stream"]` in the schema,
 and a stored `{$stream: true}` value — and `Cell.isStream` accepts any one of
-them (`Cell.isStream`, `packages/runner/src/cell.ts`). The stored one is
+them (`Cell.isStream`, `runtime/runner/src/cell.ts`). The stored one is
 retired (`docs/plans/stream-markers-out-of-stored-data.md`): nothing writes it,
 and the schema now rides on every link that reaches a stream. A conformance
 check filtering on the schema marker still misses a verb whose stored links
@@ -600,7 +600,7 @@ once.)
 
 Records carry the same scoping as the callable that produced them. Tool result
 cells already inherit `resultScope` from the callable cell
-(`executeResolvedCallable`, `packages/cli/lib/callable.ts`), so the mechanism
+(`executeResolvedCallable`, `runtime/cli/lib/callable.ts`), so the mechanism
 exists; today those
 cells are unlinked and merely unguessable.
 
@@ -640,10 +640,10 @@ self-contained snapshot — the pattern knows which is meaningful for that verb.
 
 The repo checks **a pattern's own** schema evolution:
 `assertPatternSchemasBackwardCompatible`
-(`packages/piece/src/schema-compatibility.ts`) runs on every `setsrc` unless
+(`runtime/piece/src/schema-compatibility.ts`) runs on every `setsrc` unless
 `--dangerously-allow-incompatible-schema` is passed
 (`dangerouslyAllowIncompatibleSchema`,
-`packages/piece/src/ops/piece-controller.ts`). It compares four schemas and no
+`runtime/piece/src/ops/piece-controller.ts`). It compares four schemas and no
 others — the previous and candidate `Pattern`'s `argumentSchema` and
 `resultSchema` — and it compares the two roles in **opposite directions**:
 
@@ -663,7 +663,7 @@ named property from a **result** is rejected outright — `objectSubsetIssue`
 returns "existing result field was removed" whenever the comparison is an
 evolution, on the stated principle that a result's named fields are the
 contract consumers read (`objectSubsetIssue`,
-`packages/piece/src/schema-compatibility.ts`). An argument's named fields are
+`runtime/piece/src/schema-compatibility.ts`). An argument's named fields are
 not held that way: dropping one gives up a demand, which the same function
 accepts wherever the candidate object can still hold the value the piece
 carries. The removed-field check recurses, so a nested removal is rejected on
@@ -677,14 +677,14 @@ and never of names, at every depth.
 
 A verb's `asCell` marker is pinned the same way: it is a semantic extension key
 compared for exact equality (`SEMANTIC_EXTENSION_KEYS`,
-`packages/piece/src/schema-compatibility.ts`), so a field cannot change between
+`runtime/piece/src/schema-compatibility.ts`), so a field cannot change between
 data and verb across a deploy. Verb names and their verb-ness are therefore
 already a contract with teeth, before this document adds any rule.
 
 **What a verb hands back sits outside all of it.** A verb's declared result
 travels on `module.resultSchema` — the `CELL_RESULT_TYPE` doc comment
-(`packages/api/index.ts`) states this, and `declaredVerbResults`
-(`packages/cli/lib/piece.ts`) is what reads it back off a piece's compiled
+(`base/api/index.ts`) states this, and `declaredVerbResults`
+(`runtime/cli/lib/piece.ts`) is what reads it back off a piece's compiled
 graph — while the comparison above sees only `Pattern.argumentSchema` and
 `Pattern.resultSchema`. There a verb is a property carrying its
 `asCell: ["stream"]` marker and a reference to its event schema, and nothing
@@ -705,7 +705,7 @@ Fabric-types records outputs in the shape and a check replaces the convention.
 An envelope remains a reasonable readability choice — the llm-dialog tool path
 returns a single-key shape from both of its branches, an `@resultLocation`
 link, the value, and its schema together (both `"@resultLocation"` sites in
-`handleInvoke`, `packages/runner/src/builtins/llm-dialog.ts`).
+`handleInvoke`, `runtime/runner/src/builtins/llm-dialog.ts`).
 
 ### Authoring
 
@@ -741,14 +741,14 @@ without reading pattern source. The pieces exist:
 - **Per verb**, `cf piece call --piece <piece> <verb> --help --json` already emits the
   machine-readable command spec — kind, default verb, input schema — derived
   from the pattern's own types (`callableCommandSpec`,
-  `packages/cli/lib/callable.ts`).
+  `runtime/cli/lib/callable.ts`).
 - **Enumeration**: `cf piece verbs --json` lists every callable — name, kind
   (handler/tool), which cell it lives on, and its input schema (tools also
   carry their output schema) — read off the compiled pattern the piece is
   pinned to: its declared result type, its result graph, and its declared
   argument type, without loading the piece's result tree. FUSE independently
   classifies the same entries (`classifyCallableEntry`,
-  `packages/fuse/callables.ts`) into `.handler` / `.tool` files plus a
+  `runtime/fuse/callables.ts`) into `.handler` / `.tool` files plus a
   `.handlers` listing — flagged on the board as neither universal nor
   complete.
 
@@ -887,7 +887,7 @@ miniature. Its **handler** path mints a result cell at a *caller-supplied* id
 (`toolCall.id`), hands that cell to the handler as `result` — the code's own
 comment reads "doesn't HAVE to be used, but can be" — and resolves off the
 commit callback: `handler.withTx(tx).send({...input, result}, (completedTx) =>
-…)` (`handleInvoke`, `packages/runner/src/builtins/llm-dialog.ts`).
+…)` (`handleInvoke`, `runtime/runner/src/builtins/llm-dialog.ts`).
 That is this design's shape, already in production. Two qualifications keep the
 citation honest. It is specifically the handler branch that is the precedent;
 the sibling `runtime.run(tx, pattern, invocationArgs, result)` branch of the
@@ -938,7 +938,7 @@ client retry needs.
 3. **How do plain JSON returns reach the receipt?** A return value containing
    reactives/cells projects into the receipt, while a **plain JSON return is
    discarded** — the receipt-only branch of
-   `Runner.#handleJavaScriptHandlerResult` (`packages/runner/src/runner.ts`)
+   `Runner.#handleJavaScriptHandlerResult` (`runtime/runner/src/runner.ts`)
    writes `{}`. For `topics` this mostly does not bite — `{ topic: piece }`
    carries a cell — but "retry reads back the original result" is incomplete
    without it. Options: a small runtime change writing the validated plain
@@ -956,7 +956,7 @@ client retry needs.
   under the one-required-field rule.
 - **Retry composition lives in clients**, as guidance rather than runtime
   support, keeping the core small.
-- **No `cf topic` command.** `packages/cli` is a layer-4 package (Operation) and
+- **No `cf topic` command.** `runtime/cli` is a layer-4 package (Operation) and
   patterns are layer 7 (End-User Programs); a pattern-specific command inverts
   that dependency and has no principled stopping point once the first one lands.
 - **No third callable kind — tools are deferred, not rejected.** The protocol
@@ -977,7 +977,7 @@ client retry needs.
   patterns return child references), and the payload model must be able to
   express a *declared but not caller-suppliable* field. The second already
   exists at the type layer as `FrameworkProvided<T>` and
-  `FrameworkProvidedKeys<>` (`packages/api/index.ts`, used for the
+  `FrameworkProvidedKeys<>` (`base/api/index.ts`, used for the
   bash tool's `sandboxId`);
   only the runtime's strip list is hardcoded. Rule 1 should be worded so a
   declared field may be framework-owned rather than caller-supplied.

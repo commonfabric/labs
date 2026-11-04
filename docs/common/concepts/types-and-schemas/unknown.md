@@ -117,8 +117,8 @@ rather than a copy, so the controls in it stay bound to the piece that owns
 them. An argument declaration also has to keep accepting every value it accepted
 before, which a narrower one does not, so a consumer view of a result type holds
 `unknown` even where the producing type names `VNode`;
-`BackwardsCompatibleProfile` in `packages/patterns/system/profile-home.tsx` is
-the worked example.
+`BackwardsCompatibleProfile` in `patterns/system/profile-home/profile-home.tsx`
+is the worked example.
 
 ### `unknown` is not `any`
 

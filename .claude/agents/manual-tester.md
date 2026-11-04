@@ -46,7 +46,7 @@ Check if servers are running, and start/restart if needed:
 ./scripts/check-local-dev.sh || ./scripts/restart-local-dev.sh --force
 ```
 
-If a port offset is specified (e.g. for factory runs), pass it:
+If a port offset is specified, pass it:
 
 ```bash
 ./scripts/restart-local-dev.sh --port-offset=200 --force
@@ -115,8 +115,8 @@ agent-browser close 2>/dev/null
 rm -rf /tmp/cf-browser-profile
 ```
 
-Then open the pattern in the browser. Use `--headed` if a human is watching
-(interactive factory run), or headless for unattended runs:
+Then open the pattern in the browser. Use `--headed` if a human is watching, or
+headless for unattended runs:
 
 ```bash
 # Interactive (human watching):
@@ -126,7 +126,7 @@ agent-browser --headed open {api-url}/{space-name}/{piece-id}
 agent-browser open {api-url}/{space-name}/{piece-id}
 ```
 
-Default to headless. Only use `--headed` if the orchestrator prompt explicitly
+Default to headless. Only use `--headed` if your prompt explicitly
 says the run is interactive or a human is watching.
 
 Then test each acceptance criterion from the spec:

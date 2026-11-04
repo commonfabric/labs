@@ -7,8 +7,8 @@ Use it together with:
 
 - `docs/common/patterns/style.md`
 - `docs/common/components/COMPONENTS.md`
-- `packages/patterns/catalog/stories/vignette-recipe-story.tsx`
-- `packages/patterns/catalog/stories/vignette-finance-story.tsx`
+- `patterns/dev/catalog/stories/vignette-recipe-story.tsx`
+- `patterns/dev/catalog/stories/vignette-finance-story.tsx`
 
 ## 1. Theme-First Shell
 
@@ -174,9 +174,9 @@ think.
 Use these when you want a concrete aesthetic starting point instead of a blank
 page:
 
-- `packages/patterns/catalog/stories/vignette-recipe-story.tsx`
+- `patterns/dev/catalog/stories/vignette-recipe-story.tsx`
   Warm serif editorial recipe app.
-- `packages/patterns/catalog/stories/vignette-finance-story.tsx`
+- `patterns/dev/catalog/stories/vignette-finance-story.tsx`
   Dark metric-heavy finance dashboard.
 
 When creating new examples, try to add new aesthetic directions rather than

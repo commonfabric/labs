@@ -14,7 +14,7 @@ import plugin from "./lint-access-for-testing-only.ts";
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
 /** A source file's name, which puts every case in scope unless it says. */
-const SOURCE = "packages/fryer/src/fryer.ts";
+const SOURCE = "runtime/fryer/src/fryer.ts";
 
 /** Lints `source` as the file at `fileName`, returning the messages. */
 function diagnose(source: string, fileName = SOURCE): string[] {
@@ -162,13 +162,13 @@ describe("lint-access-for-testing-only", () => {
     `;
     for (
       const fileName of [
-        "packages/fryer/test/fryer.test.ts",
-        "packages/fryer/fryer.test.ts",
-        "packages/fryer/src/fryer.test.tsx",
-        "packages/fryer/bench/fryer.bench.ts",
-        "packages/fryer/test/helper.ts",
-        "packages/fryer/integration/harness.ts",
-        "packages/fryer/bench/fixtures/far-side.ts",
+        "runtime/fryer/test/fryer.test.ts",
+        "runtime/fryer/fryer.test.ts",
+        "runtime/fryer/src/fryer.test.tsx",
+        "runtime/fryer/bench/fryer.bench.ts",
+        "runtime/fryer/test/helper.ts",
+        "runtime/fryer/integration/harness.ts",
+        "runtime/fryer/bench/fixtures/far-side.ts",
       ]
     ) {
       expect(diagnose(access, fileName)).toEqual([]);
@@ -181,7 +181,7 @@ describe("lint-access-for-testing-only", () => {
       fryer.accessForTestingOnly.temperature;
     `;
     expect(diagnose(access, resolve(REPO_ROOT, SOURCE)).length).toBe(1);
-    expect(diagnose(access, resolve(REPO_ROOT, "packages/fryer/test/x.ts")))
+    expect(diagnose(access, resolve(REPO_ROOT, "runtime/fryer/test/x.ts")))
       .toEqual([]);
   });
 });

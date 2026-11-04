@@ -27,10 +27,10 @@ import { buildZip } from "./zip-testing.ts";
 Deno.test("acceptedCoverageDebt reads a name's line increment", () => {
   assertEquals(
     acceptedCoverageDebt(
-      "ACCEPT_COVERAGE_DEBT: packages/runner  +123 lines\n" +
+      "ACCEPT_COVERAGE_DEBT: runtime/runner  +123 lines\n" +
         "ACCEPT_COVERAGE_DEBT: workspace +7 lines",
     ),
-    new Map([["packages/runner", 123], ["workspace", 7]]),
+    new Map([["runtime/runner", 123], ["workspace", 7]]),
   );
 });
 
@@ -48,7 +48,7 @@ Deno.test("acceptedCoverageDebt rejects a total in place of an increment", () =>
 
   assertThrows(
     () =>
-      acceptedCoverageDebt("ACCEPT_COVERAGE_DEBT: packages/runner = 123 lines"),
+      acceptedCoverageDebt("ACCEPT_COVERAGE_DEBT: runtime/runner = 123 lines"),
     Error,
     "<workspace member> +N lines",
   );
@@ -58,7 +58,7 @@ Deno.test("acceptedCoverageDebt rejects a metric name in place of a name", () =>
   assertThrows(
     () =>
       acceptedCoverageDebt(
-        "ACCEPT_COVERAGE_DEBT: coverage-debt: packages/runner uncovered lines +7 lines",
+        "ACCEPT_COVERAGE_DEBT: coverage-debt: runtime/runner uncovered lines +7 lines",
       ),
     Error,
     "<workspace member> +N lines",
@@ -66,8 +66,8 @@ Deno.test("acceptedCoverageDebt rejects a metric name in place of a name", () =>
 });
 
 Deno.test("acceptedCoverageDebt rejects a name nothing could measure", () => {
-  // Only `packages` splits below its top level, so a path below any other
-  // top-level directory cannot name a member.
+  // Only a package's directory splits below its top level, so a path below
+  // any other top-level directory cannot name a member.
   assertThrows(
     () => acceptedCoverageDebt("ACCEPT_COVERAGE_DEBT: tasks/foo +7 lines"),
     Error,
@@ -81,16 +81,16 @@ Deno.test("two acceptances of one name are refused", () => {
   assertThrows(
     () =>
       acceptedCoverageDebt(
-        "ACCEPT_COVERAGE_DEBT: packages/runner +12 lines\n" +
-          "ACCEPT_COVERAGE_DEBT: packages/runner +3 lines",
+        "ACCEPT_COVERAGE_DEBT: runtime/runner +12 lines\n" +
+          "ACCEPT_COVERAGE_DEBT: runtime/runner +3 lines",
       ),
     Error,
     "Two ACCEPT_COVERAGE_DEBT acceptances",
   );
 });
 
-Deno.test("acceptedCoverageDebt reads a workspace member nested below packages", () => {
-  const name = "packages/connectors/github/connector";
+Deno.test("acceptedCoverageDebt reads a workspace member nested below its package's directory", () => {
+  const name = "connectors/github/connector";
   assertEquals(
     acceptedCoverageDebt(`ACCEPT_COVERAGE_DEBT: ${name} +7 lines`).get(name),
     7,
@@ -110,7 +110,7 @@ Deno.test("acceptedCoverageDebt reads only a marker starting a line", () => {
   assertEquals(
     acceptedCoverageDebt(
       "Accept a rise above the baseline instead:\n\n" +
-        "    ACCEPT_COVERAGE_DEBT: packages/runner +12 lines\n",
+        "    ACCEPT_COVERAGE_DEBT: runtime/runner +12 lines\n",
     ).size,
     0,
   );
@@ -126,14 +126,14 @@ Deno.test("acceptedCoverageDebt reads only a marker starting a line", () => {
 
 Deno.test("coverageGroupsForChangedFiles names the source group of each changed source file", () => {
   const groups = coverageGroupsForChangedFiles([
-    "packages/runner/src/cell.ts",
-    "packages/patterns/README.md",
-    "packages/ui/src/button.test.tsx",
+    "runtime/runner/src/cell.ts",
+    "patterns/README.md",
+    "runtime/ui/src/button.test.tsx",
     "tasks\\coverage-gate.ts",
     "scripts/build.ts",
   ]);
 
-  assertEquals([...groups].sort(), ["packages/runner", "packages/ui", "tasks"]);
+  assertEquals([...groups].sort(), ["runtime/runner", "runtime/ui", "tasks"]);
 });
 
 Deno.test("fetchIssueComments reads every page of a pull request's comments", async () => {
@@ -667,33 +667,33 @@ Deno.test("isNotFound tells a thing that is not there from an interface that cou
 });
 
 Deno.test("a measured set's metric is not one of its member's source groups", () => {
-  const metric = measuredSetCoverageMetric("workspace-unit/packages/memory");
+  const metric = measuredSetCoverageMetric("workspace-unit/runtime/memory");
   assertEquals(
     coverageMetricMeasuredSet(metric),
-    "workspace-unit/packages/memory",
+    "workspace-unit/runtime/memory",
   );
   // The two carry the same package name, and reading one as the other
   // would report a figure the gate has no opinion about.
   assertEquals(coverageMetricGroupName(metric), null);
   assertEquals(
-    coverageMetricMeasuredSet(coverageMetricForGroup("packages/memory")),
+    coverageMetricMeasuredSet(coverageMetricForGroup("runtime/memory")),
     null,
   );
   assertEquals(
-    coverageMetricGroupName(coverageMetricForGroup("packages/memory")),
-    "packages/memory",
+    coverageMetricGroupName(coverageMetricForGroup("runtime/memory")),
+    "runtime/memory",
   );
 });
 
 Deno.test("two suites over one member are two metrics", () => {
-  const unit = measuredSetCoverageMetric("workspace-unit/packages/memory");
+  const unit = measuredSetCoverageMetric("workspace-unit/runtime/memory");
   const integration = measuredSetCoverageMetric(
-    "memory-integration/packages/memory",
+    "memory-integration/runtime/memory",
   );
   assertEquals(unit === integration, false);
   assertEquals(
     coverageMetricMeasuredSet(integration),
-    "memory-integration/packages/memory",
+    "memory-integration/runtime/memory",
   );
 });
 

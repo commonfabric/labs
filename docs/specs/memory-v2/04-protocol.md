@@ -27,13 +27,32 @@ rewrite. In particular:
 - the server ACL policy gates session opens and commands when enabled
 - fresh spaces require a space-identity- or service-authorized ACL genesis
   transaction before ordinary writes
+- deleting a space (section 4.5.1, INV-15) is implemented: the server admits
+  its sole member's deletion commit, revokes the space's sessions with the
+  reason `deleted`, and refuses the space from then on
+- the client in this repository handles the `deleted` marker and
+  `session/revoked` reason, which the server sends once a space is deleted.
+  Every client in use, those built outside this repository included, fails
+  safely on both before any space is deleted: a deleted space crashes none of
+  them and stops none from handling the spaces still live
+  ([the order it lands in](../../plans/random-space-identities.md#deleting-a-space))
+- instance-naming admission (sections 4.1.1 and 4.1.2, INV-16) is enforced
+  by the server, which advertises `instanceNameMark`, records the mark and
+  admits opens and commits by it. A client whose runtime names instances
+  declares `instanceNames: true` in every open and requires
+  `instanceNameMark`, and a client keeps the `session/revoked` reason
+  `instance-names` as the refusal `clientUpdateRequired` marks. The runtime's
+  `instanceNames` flag is off by default and no environment sets it, so no
+  deployed runtime declares naming and no deployment's posture names
+  instances
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
 - the public one-shot read surfaces are `graph.query`, `entity-id.list`, and
   `entity-id.exists`
-- watch-set mutations return inline `sync` payloads, and steady-state topology
-  shrink does not yet guarantee automatic `removes`
+- watch-set mutations return inline `sync` payloads; a pushed frame retracts a
+  document a write left no watch reaching, and a client shrinks its watch set
+  explicitly
 
 ## 4.1 Transport
 
@@ -56,6 +75,8 @@ The client MUST declare its protocol version in the first WebSocket message:
     "stableExpressionResultIds": true,
     "messageCompressionV1": true,
     "syncSchemaTableV2": true,
+    "syncLabelTableV1": true,
+    "commitLabelTableV1": true,
     "verdictCatchUpMarkers": true,
     "entityIdListing": true,
     "entityIdPagination": true,
@@ -64,7 +85,9 @@ The client MUST declare its protocol version in the first WebSocket message:
     "sessionReadCeiling": true,
     "presenceV1": true,
     "sessionClose": true,
-    "admissionNotice": true
+    "admissionNotice": true,
+    "elidedVerdicts": true,
+    "syncPartsV1": true
   }
 }
 ```
@@ -80,6 +103,8 @@ If the server accepts the protocol, it returns:
     "stableExpressionResultIds": true,
     "messageCompressionV1": true,
     "syncSchemaTableV2": true,
+    "syncLabelTableV1": true,
+    "commitLabelTableV1": true,
     "verdictCatchUpMarkers": true,
     "entityIdListing": true,
     "entityIdPagination": true,
@@ -88,7 +113,15 @@ If the server accepts the protocol, it returns:
     "sessionReadCeiling": true,
     "presenceV1": true,
     "sessionClose": true,
-    "admissionNotice": true
+    "admissionNotice": true,
+    "sessionReportV1": true,
+    "patternLifecycle": true,
+    "servedRequests": true,
+    "spaceInvites": true,
+    "syncCrossingsV1": true,
+    "watchRemoveV1": true,
+    "syncPartsV1": true,
+    "watchSetPartsV1": true
   },
   "sessionOpen": {
     "audience": "did:key:z6Mk...",
@@ -108,7 +141,8 @@ does not mark the connection ready.
 `ifElse`, `when`, and `unless` key their result stores on the owning piece and
 output spot. It is inherent to the build, and an absent marker means false.
 The server accepts a wire-compatible `hello` without this marker, but refuses
-every `session.open` on that connection with `SessionRevokedError`, before
+every `session.open` on that connection with `SessionRevokedError` and
+`clientUpdateRequired: true`, before
 authorization, store opening, or session restoration. A reconnecting client
 treats this verdict as terminal for the session, dropping its pending commits
 and watches. Refusing at session admission uses that terminal path even in
@@ -234,6 +268,43 @@ when absent. The server sends compact sync payloads only when both peers
 advertise the capability; otherwise it sends the historical fully expanded
 shape.
 
+`syncLabelTableV1` advertises per-sync label and label-path tables, independently
+of schema tables and message compression. It is a build capability, always
+advertised by this build, and defaults to `false` when absent. The server
+compacts labels and paths only
+when both peers advertise it. A client refuses a sync carrying either table
+unless the connection negotiated the capability.
+
+`commitLabelTableV1` independently advertises label and label-path tables for
+client `transact` requests and server transaction acknowledgments. This build
+advertises `true`; omission means `false`. Both peers must advertise it before
+either endpoint compacts transaction metadata.
+`syncLabelTableV1` authorizes only server sync encoding and does not authorize
+compact commits. See [commit metadata encoding](#negotiated-commit-metadata-encoding).
+
+`syncCrossingsV1` is a server capability: its session sync payloads carry
+`crossings`, the links its schema traversals followed out of the space, as
+described in [Session Sync Payload](#423-session-sync-payload). It defaults to
+`false` when absent. A client of a server that does not advertise it finds
+those links by reading the documents it synced, and sends nothing on account
+of the flag.
+
+`watchRemoveV1` advertises support for `session.watch.remove` (section
+4.3.9). It defaults to `false` when absent. A client must not send the request
+unless the server advertises the capability; a client of an older server
+removes a watch by replacing the session's watch set.
+
+`syncPartsV1` advertises that a client handles a session sync sent in parts
+(see [Syncs in parts](#syncs-in-parts)). It defaults to `false` when absent. A
+server sends parts only to a client that advertised it, and a client that did
+not refuses a sync carrying `more`. A server advertises it too, but splits a
+sync only where its transport bounds what one message may carry.
+
+`watchSetPartsV1` is a server capability: the server applies a
+`session.watch.set` staged in parts as one set (section 4.3.5). It defaults to
+`false` when absent. A client must not send `part` or `more` unless the server
+advertises it; a client of an older server sends every set whole.
+
 `entityIdListing` advertises support for `entity-id.list`. It defaults to
 `false` when absent. A client must not send the request unless the server
 advertises the capability.
@@ -304,6 +375,73 @@ client connected to an older server, or a server connected to an older client,
 leaves a refused principal to learn of a later grant by opening the session
 again.
 
+`elidedVerdicts` advertises that the peer's replica promotes a pending layer
+whose accept the verdict reports as elided (`elidedOpIndexes`, section
+4.3.1) to the document its transaction computed, rather than folding the
+layer's operations over its confirmed base.
+It is build-inherent and defaults to `false` when absent. A server waives
+the second condition of the identity proof (03-commit-model.md §3.6.1) only
+for sessions opened on a connection where both peers advertise it: an older
+client is held to both conditions, since its replica would fold a positional
+write a second time.
+
+`sessionReportV1` advertises that the server records the diagnostics a client
+reports about its own session with `session.report` (section 4.14). It is
+build-inherent and defaults to `false` when absent: a client connected to an
+older server keeps its reports to itself rather than sending a message the
+server would refuse. Only the server advertises it. A client's `hello` leaves
+it out, since an older routed host refuses a `hello` carrying a flag it does
+not know.
+
+`patternLifecycle` advertises that the server runs `pattern.lifecycle`
+requests (section 4.3.10). It is not build-inherent: a server advertises it
+exactly while its host has installed a lifecycle handler, which toolshed does
+while it runs the serving loop. It defaults to `false` when absent: a client
+then sends no `pattern.lifecycle` request, and sends the verb some other way
+or not at all. Only the server advertises it, and a client's `hello` leaves it
+out.
+
+`servedRequests` advertises that the server takes `served` requests (section
+4.3.12), the crossings another process of its deployment sends it as the owner
+of their target space. It is not build-inherent: a server advertises it
+exactly while its host has installed a served-request handler, which toolshed
+does while it runs the serving loop. It defaults to `false` when absent: a
+client then sends no `served` request and keeps the crossing for a later
+attempt. Only the server advertises it, and a client's `hello` leaves it out.
+
+`spaceInvites` advertises that the server administers a space's invitations
+through `space.invite` requests (section 4.3.11). It is not build-inherent: a
+server advertises it exactly when its host gave it the public origin its
+invitation links name, since an invitation's code verifier is bound to that
+origin. It defaults to `false` when absent: a client then sends no
+`space.invite` request, and administers invitations some other way or not at
+all. Only the server advertises it, and a client's `hello` leaves it out.
+
+`spaceKind` advertises that the server seals the kind a space's genesis commit
+declares, and reports it in the result of every `session.open` it admits
+(sections 4.1.2 and 4.5.1). It is build-inherent and
+defaults to `false` when absent. A client connected to an older server neither
+declares a kind there, since that server would keep the field without holding
+it to the genesis rules, nor reads one, since that server reports none.
+
+`instanceNameMark` advertises that the server records the instance-naming mark
+of a space and enforces INV-16: a marked space admits only sessions, and
+commits, that declare `instanceNames: true`; the first commit from such a
+session marks the space; and the server admits a declaring session to an
+unmarked space only while its own posture names instances. It is
+build-inherent, defaults to `false` when absent, and only the server advertises
+it: a client's `hello` leaves it out, as it leaves out `sessionReportV1`. A
+client whose runtime names instances REQUIRES it: an
+older server would admit its commits and mark nothing, leaving positional
+runtimes free to bind the parents it wrote to other documents. Such a client
+fails the connection permanently against a server that does not advertise it,
+before signing any `session.open`, as it does against a server that does not
+advertise `stableExpressionResultIds`, with guidance to update the server. A
+client whose runtime names none declares nothing and is unaffected on any
+server. A client of a build that knows the capability treats the
+`session/revoked` reason `instance-names` as the refusal
+`clientUpdateRequired` marks, and keeps it the same way.
+
 ### 4.1.2 Logical Sessions and Resume
 
 Pending-read resolution, idempotent replay, and live sync are scoped to a
@@ -314,6 +452,14 @@ logical session per space rather than to one TCP connection.
 type SessionId = string;
 type SignatureBytes = Uint8Array;
 
+interface MemoryClientInfo {
+  application: string;
+  gitSha: string | null;
+  instanceId: string;
+  generation?: number;
+  startedAt: number;
+}
+
 interface SessionOpenRequest {
   type: "session.open";
   requestId: string;
@@ -322,17 +468,38 @@ interface SessionOpenRequest {
   // naming one carries neither `invocation` nor `authorization`.
   principal?: DID;
   session: {
+    client?: MemoryClientInfo;
     sessionId?: SessionId;
     seenSeq?: number;
     sessionToken?: string;
+    // A random key the client makes for one session and sends on every open
+    // of it, and the number of the open among that session's opens, from 1
+    // (see the rules). Both inside the signed descriptor.
+    resumeKey?: string;
+    resumeAttempt?: number;
     // The read ceiling every `db.query` served as this session reads
     // under (see the rules). Inside the signed descriptor: a bound on
     // what the session is served, declared by the session itself.
     readCeiling?: SessionReadCeiling;
+    // The kind the space declares in its genesis commit (see the rules).
+    // Inside the signed descriptor, like everything the session declares.
+    spaceKind?: string;
+    // An invitation the open redeems before its grant is checked (see the
+    // rules). Bound to the open's principal with the rest of the descriptor:
+    // signed into a signed open, covered by the connection's authentication
+    // of an open that names its principal.
+    invite?: { inviteId: string; code: string };
+    // Present when the session's runtime names instances (see the rules and
+    // INV-16). Absent means positional. Inside the signed descriptor.
+    instanceNames?: true;
   };
   invocation?: SessionOpenInvocation;
   authorization?: {
     signature: SignatureBytes;
+    // The delegations `invocation.prf` names, as their issuers encoded
+    // them, in the same order (section 4.5.1, "Proof chains"). Outside the
+    // signature: each is signed by its own issuer, and `prf` binds the set.
+    proofs?: Uint8Array[];
   };
   // The client's declared holdings, sent when resuming (see the rules).
   // Outside the signed descriptor: it shapes only what this session is
@@ -374,15 +541,24 @@ interface SessionOpenInvocation {
   aud: DID;
   args: {
     protocol: "memory";
+    // The request's `session` descriptor, field for field: the server refuses
+    // an open whose descriptor differs from the signed one.
     session: {
+      client?: MemoryClientInfo;
       sessionId?: SessionId;
       seenSeq?: number;
       sessionToken?: string;
+      resumeKey?: string;
+      resumeAttempt?: number;
     };
   };
   challenge: string;
   iat: number;
   exp: number;
+  // The CIDs of `authorization.proofs`, in chain order, on an open that
+  // presents a proof chain (section 4.5.1, "Proof chains"). Inside the
+  // signed invocation, so the chain is bound to the signature.
+  prf?: string[];
 }
 
 interface SessionOpenResult {
@@ -396,6 +572,15 @@ interface SessionOpenResult {
   caughtUpLocalSeq?: number;
   resumed?: boolean;
   sync?: SessionSync;
+  // The kind the space's genesis commit declares; absent when it declares
+  // none, or the space has no history yet.
+  spaceKind?: string;
+  // The redemption of the invitation the open carried.
+  invite?: {
+    outcome: "redeemed" | "already-redeemed";
+    redemption: { inviteId: string; did: string };
+    currentAccess: "READ" | "WRITE" | "OWNER" | null;
+  };
   sessionOpen: {
     challenge: {
       value: string;
@@ -405,6 +590,26 @@ interface SessionOpenResult {
   };
 }
 ```
+
+`session.client` is optional, bounded, self-reported runtime provenance. The
+application is 1–64 printable ASCII characters; the SHA is a full lowercase
+40-character hash or `null`; the instance ID is 1–128 ASCII letters, digits,
+underscores or hyphens. Generation is optional and, when present, a positive safe
+integer. Start time is a nonnegative safe integer in Unix milliseconds. Unknown
+fields are ignored; malformed known fields make the optional report absent. A
+signed open binds the recognized report fields in its descriptor; both signed
+and received reports use the same normalization, so changing or stripping a valid
+report fails authentication; a connection-authenticated open attributes it to the
+named principal, without attesting the running code.
+
+Client attribution does not control session admission. Producers emit the
+reserved `generation` field as `1`; readers accept its absence or any positive
+safe integer as diagnostic data. An absent generation stays absent in the
+normalized report, so adding or removing it from a valid signed report fails
+authentication. Client retirement is disabled, and nonzero startup cutoff
+settings are rejected. See
+[client attribution](../../../runtime/memory/README.md#client-attribution)
+for host wiring and configuration constraints.
 
 Rules:
 
@@ -427,7 +632,60 @@ Rules:
   re-declares reads under what it re-declared. The server records it on the
   session and the serving runtime reads it per run; a server may also assign
   a session a ceiling of its own, which lands in the same record
+- a session that declares a `spaceKind` asserts the kind the space's genesis
+  commit declares: the server refuses the open with a `ProtocolError` when the
+  space has a genesis commit that declares a different kind or none. A space
+  with no history admits the declaration, and its genesis commit must then
+  carry the same kind. Every open of a space with history is told the kind its
+  genesis declares, in `spaceKind`, whether the session declared one or not
+- an open carrying an `invite` first redeems it as the open's authenticated
+  principal, through the same invitation service as `space.invite` (section
+  4.3.11) and checked against the server's invitation host, and then checks
+  the open's grant, so a principal the access list did not name is admitted by
+  the grant the invitation conferred. A refusal of the redemption refuses the
+  open with an error named `SpaceInviteRefusal` carrying the service's code, a
+  server knowing no invitation host refuses it with
+  `invite-service-unsupported`, and an anonymous open, or one that also
+  presents a proof chain or an `actingAs` binding, is refused with
+  `invalid-request`. A client sends
+  `invite` only to a server advertising `spaceInvites`, on the open that
+  redeems and on none of the session's resumes: a server that does not know
+  the field would open, or refuse, the session without redeeming anything
+- a session whose runtime names instances declares `instanceNames: true`, and
+  one that declares nothing is positional; a value other than `true` refuses
+  the message. A client declares it on every open, a resume included, when
+  its runtime names instances. A server
+  that advertises `instanceNameMark` refuses, with a `SessionRevokedError`
+  carrying `clientUpdateRequired: true`, an open or resume of a marked space by
+  a positional session, and an open of an unmarked space by a naming session
+  while its own posture names no instances. It checks both after
+  authorization and before session restoration, so a principal the space
+  would refuse learns nothing of its mark. It marks the space in the same
+  store transaction as the first commit it admits from a naming session,
+  refuses every later commit to the space from a positional session, and
+  revokes the space's positional sessions with the reason `instance-names`.
+  INV-16 states the rule
 - the server rotates `sessionToken` on every successful `session.open`
+- a client sends the same `resumeKey` on every open of one session, a random
+  value it makes for that session alone, with a `resumeAttempt` that counts
+  the session's opens from 1. The server keeps the key, the attempt and the
+  presented `sessionToken` of a session's latest open, and resumes the session
+  from that presented token, as well as from the latest one, when the resume
+  carries the same key and a greater attempt: the connection can drop after
+  the server handles a resume and before its response arrives, and the client
+  then holds only the token it presented. The attempt orders resumes: one the
+  client gave up on carries the same key and token as the one that replaced
+  it, and is refused when it reaches the server after that one has restored
+  the session. Only this fallback needs the key; the latest token resumes the
+  session without one
+- an open whose connection closes while the server admits it opens nothing
+- a resume whose connection closes during catch-up fails; the connection
+  detaches its session as it closes, so the session's grace period runs while
+  catch-up is pending
+- an open that fails after registering session ownership releases its
+  connection's session handle and detaches the session; catch-up computed for
+  that open is rolled back for redelivery, unless a newer open has already
+  replaced it
 - at most one connection may own a given `(space, sessionId)` at a time
 - a successful resume transfers ownership to the new connection, invalidates the
   old owner for that session, and MAY emit `session/revoked` to the previous
@@ -435,9 +693,12 @@ Rules:
 - a successful `session.open` returns a new challenge in `sessionOpen` for
   signed-open clients; a connection-auth client does not replace its audience
   or held challenge from that response
-- a stale `sessionToken` MUST fail with `SessionRevokedError`
-- when a resumed session already has watches installed, `sync` carries the
-  catch-up delta the client missed while offline
+- any other stale `sessionToken` MUST fail with `SessionRevokedError`
+- when a resumed session already has watches installed, a non-routed connection
+  may receive `session/effect` while catch-up is pending, before the
+  `session.open` response; the response's `sync` carries only the remaining
+  catch-up delta. Reconnecting clients route early frames to their existing
+  session and apply them as they arrive
 - a resuming client that advertises `sessionHoldings` (and whose server does)
   sends `holdings`: the documents its replica holds, each at the seq it holds
   it at. The server replaces its memory of what the session was delivered with
@@ -466,7 +727,14 @@ Rules:
   forever. A `retriable` authorization race (an expired, used, or mismatched
   challenge; a stale signed `exp`) or a transport-level disconnect can recover
   through retries on a transport that can discard its failed connection. A
-  permanent protocol-flag mismatch at `hello` ends the whole connection. See
+  `retriable` denial of a session that authenticates through `connection.auth`,
+  such as a router's while that space's toolshed is down, holds that session
+  alone: it keeps its watch intent and unconfirmed commits and retries its open
+  on the same connection with the reconnect backoff, while the connection's
+  other sessions restore. If a retry fails for a reason only a new connection
+  heals, the client discards the connection, after a backoff that grows with
+  each such restart. A permanent protocol-flag mismatch at `hello` ends the
+  whole connection. See
   [`../../features/authorization-failure-surfacing.md`](../../features/authorization-failure-surfacing.md)
   for how the client, the runner storage layer, and the CLI act on this
   classification end to end.
@@ -493,6 +761,10 @@ interface HelloMessage {
     stableExpressionResultIds?: boolean;
     messageCompressionV1?: boolean;
     syncSchemaTableV2?: boolean;
+    syncLabelTableV1?: boolean;
+    commitLabelTableV1?: boolean;
+    syncCrossingsV1?: boolean;
+    watchRemoveV1?: boolean;
     entityIdListing?: boolean;
     entityIdPagination?: boolean;
     entityIdLookup?: boolean;
@@ -501,7 +773,16 @@ interface HelloMessage {
     presenceV1?: boolean;
     sessionClose?: boolean;
     connectionAuth?: boolean;
+    sessionOpenProofs?: boolean;
     admissionNotice?: boolean;
+    elidedVerdicts?: boolean;
+    sessionReportV1?: boolean;
+    patternLifecycle?: boolean;
+    servedRequests?: boolean;
+    spaceInvites?: boolean;
+    spaceKind?: boolean;
+    // INV-16.
+    instanceNameMark?: boolean;
   };
 }
 
@@ -514,9 +795,13 @@ interface RequestMessage {
     | "entity-id.exists"
     | "session.watch.set"
     | "session.watch.add"
+    | "session.watch.remove"
     | "session.ack"
     | "session.close"
     | "event.attention.resolve"
+    | "pattern.lifecycle"
+    | "served"
+    | "space.invite"
     | "presence.join"
     | "presence.publish"
     | "presence.leave";
@@ -558,9 +843,11 @@ Per-commit invocation / authorization persistence is deferred in this pass.
 Every position where a message names fields holds a plain object. Those
 positions are the message itself, and within it `session`, `invocation`,
 `commit`, `query`, `db`, `db.tables`, each entry of `holdings`, a
-`hello` message's `flags`, and a `presence.publish` message's `facets`
-together with each value in it. Both sides refuse anything else there, and
-the refusal is the one a string or a number in that position gets.
+`hello` message's `flags`, a `presence.publish` message's `facets`
+together with each value in it, a `pattern.lifecycle` message's `body`,
+a `space.invite` message's `invite` and `invite.body`, and a `session.open`
+descriptor's `invite`. Both sides refuse anything else there, and the refusal
+is the one a string or a number in that position gets.
 
 The value codec that decodes a frame builds class instances as well as
 records: a `FabricBytes`, a `FabricLink`, a `FabricRegExp`, a
@@ -608,7 +895,10 @@ The server sends:
 
 - `response` for command results
 - `session/effect` for catch-up sync on an open logical session
-- `session/revoked` when a session loses ownership to a newer connection
+- `session/revoked` when a session loses ownership to a newer connection, when
+  an access-list change deauthorizes it, when its space is deleted, or, once
+  specified behavior is built, when a naming commit marks its space and it
+  declares no naming (INV-16)
 - `session/admissible` when an access-list change admits a principal this
   connection was refused a space for
 - `presence/upsert` and `presence/remove` for the presence rooms the
@@ -623,6 +913,11 @@ interface ResponseMessage<Result> {
   error?: {
     name: string;
     message: string;
+    // Stable name of the refusal's reason, on an error whose kind classifies
+    // its refusals: a `PatternLifecycleRefusal` (section 4.3.10) or a
+    // `SpaceInviteRefusal` (section 4.3.11). A client branches on it, never on
+    // `message`.
+    code?: string;
     // On an AuthorizationError, present and `true` when the denial is an
     // anti-replay handshake race a fresh reconnect heals (an expired, used, or
     // mismatched connection challenge; a stale signed `exp`). Absent marks a
@@ -631,12 +926,22 @@ interface ResponseMessage<Result> {
     // keep reopening a denied session or to terminate it. An older server sends
     // no marker, so its AuthorizationError is read as permanent.
     retriable?: boolean;
+    // Runtime incompatibility: retain the server's reason and stop mounting
+    // until the runtime is replaced. Independent of the error name; access
+    // retries and ACL changes cannot heal it.
+    clientUpdateRequired?: true;
     // Positive, versioned evidence that the server reached a durable no-commit
     // verdict. Delivery recovery may use this to distinguish a permanent
     // protocol failure from an ambiguous transport or storage outcome.
     permanentEvidence?: true;
-    // Engine revision whose ACL state produced an authorization denial.
+    // The `seq` at which the space's ACL document is stored, on a refusal its
+    // state decided (section 4.5.1): the document's revision, not the server's
+    // current sequence.
     aclRevision?: number;
+    // On an AuthorizationError, present and `true` when the space is deleted
+    // (section 4.5.1): every principal is refused it for good. An older client
+    // ignores the marker and reads the denial as permanent, which it is.
+    deleted?: true;
   };
 }
 
@@ -651,7 +956,13 @@ interface SessionRevoked {
   type: "session/revoked";
   space: SpaceId;
   sessionId: SessionId;
-  reason: "taken-over";
+  // `taken-over`: a newer connection resumed the session. `unauthorized`: an
+  // access-list change left its principal without access. `deleted`: its
+  // space was deleted (section 4.5.1), so no principal will be admitted again.
+  // `instance-names`: a naming commit marked the space and the session
+  // declares no naming (INV-16); a client treats it as
+  // `clientUpdateRequired`.
+  reason: "taken-over" | "unauthorized" | "deleted" | "instance-names";
 }
 
 interface SessionAdmissible {
@@ -661,30 +972,55 @@ interface SessionAdmissible {
 }
 ```
 
-`session/admissible` names a space and a principal that the server refused
-that space on this connection, and that the space's access list now grants
-`READ`. The server records a refusal when it denies a `session.open` for want
-of `READ`, and when an access-list change revokes a session for the same
-reason. An access-list commit that gives a recorded principal `READ` sends the
-notice to the connection the refusal was recorded on, and removes the record,
-so each refusal is told at most once. A change that leaves the principal
-without `READ` sends nothing, and the notice reaches no other connection.
+`session/admissible` names a space and a principal that the server refused that
+space, on this connection or on a closed one whose refusal it holds (below), and
+that the space's access list now grants `READ`. The server records a refusal
+when it denies a `session.open` for want of `READ`, and when an access-list
+change revokes a session for the same reason. An access-list commit that gives a
+recorded principal `READ` sends the notice to the connection the refusal was
+recorded on, and removes the record, so each refusal is told at most once. A
+grant written to the space's store by another process sends it at the space's
+next refresh turn after the server finds the change (see the capability cache
+under the ACL policy below), or sooner, when the principal's own admitted
+`session.open` of the space finds it and so ends a held record (below). A change
+that leaves the principal without `READ` sends nothing. While the connection the
+refusal was recorded on is open, the notice reaches no other connection.
+
+A refusal outlives the connection it was recorded on. With one connection per
+space, a refused `session.open` closes the connection it was refused on while
+the principal's sessions on other spaces stay open on theirs, so when that
+connection closes the server holds the record for the principal instead. A grant
+then sends the notice to every connection serving the principal: each that holds
+a session opened as it, in any space, under a lease that has not run out, and
+each whose `connection.auth` holds it. A connection is told once however many of
+its principal's refusals the grant answers. The principal is told on whichever
+connection its client still has, and learns nothing it could not learn there by
+opening the session again.
 
 The notice is a hint and grants nothing. A client that acts on it opens the
 session again through ordinary admission, which decides on the access list as
 it then stands. It tells the principal only that its own access changed, and
 when, which opening the session again would also tell it.
 
-A record lives as long as its connection, and ends with an admitted
-`session.open` of the same space and principal, or with a `connection.release`
-of the principal. A connection holds at most 1024 records, and the oldest is
-dropped past that; its principal then learns of a grant only by opening the
-session again. A connection whose peer did not advertise `admissionNotice`
-records nothing, and neither does a routed connection
-([`routed-mode-a.md`](routed-mode-a.md)), whatever its peers advertise. Nor
-does a session opened `actingAs: "space-owner"`: only a co-hosted serving
-runtime opens one, and it hears of every access-list commit in process, after
-which its next read of the space opens the session again.
+A record ends with an admitted `session.open` of the same space and principal on
+its connection, or with a `connection.release` of the principal there. A held
+record ends with an admitted `session.open` of its space and principal on any
+connection, which first sends the notice to every other connection serving the
+principal, since one runtime's admission says nothing of another's, and ends
+each of those connections' own record of the space and principal, which that
+notice answers; or once no connection serves its principal, which the server
+checks when a connection closes, a session closes or is revoked, and a
+`connection.release` ends an authentication. A lease running out is not checked
+when it happens, so a held record whose principal only an expired lease serves
+stays until the next of those, and its notice reaches no connection meanwhile. A
+connection holds at most 1024 records, and so do a principal's held records; the
+oldest is dropped past that, and its principal then learns of a grant only by
+opening the session again. A connection whose peer did not advertise
+`admissionNotice` records nothing, and neither does a routed connection
+([`routed-mode-a.md`](routed-mode-a.md)), whatever its peers advertise. Nor does
+a session opened `actingAs: "space-owner"`: only a co-hosted serving runtime
+opens one, and it hears of every access-list commit in process, after which its
+next read of the space opens the session again.
 
 Live data delivery is not routed through the initiating request id.
 
@@ -726,6 +1062,17 @@ interface SessionSync {
     branch: BranchId;
     id: EntityId;
   }>;
+  // Links the walks behind this frame's watches followed out of the space
+  // (servers advertising `syncCrossingsV1`; see below).
+  crossings?: Array<{
+    space: SpaceId;
+    id: EntityId;
+    scope?: CellScope;
+    path: string[];
+    schema?: JSONSchema;
+  }>;
+  // On every part of a sync sent in parts but the last (see below).
+  more?: true;
 }
 ```
 
@@ -736,6 +1083,56 @@ Semantics:
 - `deleted: true` means the entity is currently tombstoned
 - `removes` are not deletions in storage; they mean the entity is no longer in
   the session's relevant watch-set result
+- `crossings` are the value links a watch's schema traversal followed into
+  another space. The server walks one space, so it stops at such a link and
+  reports it instead: the target document by space, scope name, and id, and
+  the path within the document's value and the schema the read needed there,
+  which is what a walk rooted at the target would deliver. A client loads
+  each from the target space under that selector, so the documents a read
+  through the link reaches are local before anything reads them. A session
+  is told of each crossing once, on the first frame whose watches reach it,
+  and of all of them again on a `session.watch.set` that declares no
+  `holdings`. A crossing is a hint about what to load, never a holding: a
+  frame carrying only crossings is not empty, and a client that cannot load
+  a crossing's target, for want of access say, carries on without it. Only
+  servers advertising `syncCrossingsV1` send the field; a client of an
+  older server finds the links by reading what it synced.
+
+#### Syncs in parts
+
+A server may send a sync too large for one message as several, to a client
+that advertised `syncPartsV1`. A split divides the sync's lists (`upserts`,
+`removes`, `crossings`, `operationFields` and `viewPlans`), never an entry of
+one, and the concatenation of each list over the parts, in order, is the list
+the sync carried. Every part repeats the sync's other fields, and every part
+but the last carries `more: true`. A receiver requires the parts to repeat those
+fields alike, so a list added to `SessionSync` can be divided only behind a
+capability of its own.
+
+The first part goes where the whole sync would have gone, as `response.ok.sync`
+or `session/effect.effect`; each later part is a `session/effect` for the same
+space and session. The server sends a sync's parts one after another, with no
+other message for that session between them. Messages for other sessions may
+come between them on the way to the client, and so may a router's own answer
+to another request of the session (a refusal), which carries no sync. Each
+part is a message of its own: it carries its own schema and label tables, and
+each bound on a message applies to each part. An entry larger than those
+bounds goes alone, in a part of its own.
+
+The client holds the parts and handles their concatenation, once the last
+arrives, as the sync it would have received whole: a response completes only
+then. It handles a message for the session that carries no sync as it arrives,
+and takes the next sync for the session as the next part. A sync for the
+session other than an effect before the last part, a part whose repeated fields
+differ from the first's, and a `more` other than `true` are protocol
+violations, which discard the connection, as a frame the client cannot decode
+does. A connection that closes before the last part arrives loses the parts
+with it, as it loses any frame in flight.
+
+The routed host splits a sync that one message could not carry, past the
+routed frame cap or the bytes a message may take, into parts of at most 1 MiB
+([`routed-mode-a.md`](routed-mode-a.md)): splitting costs the server more than
+sending whole. A direct server sends every sync whole.
 
 #### Negotiated schema-table encoding
 
@@ -802,14 +1199,108 @@ carry them, so current servers leave alias schemas inline. Clients deployed
 against the earlier revision continue to expand references at alias schema
 positions, so those positions remain covered by the reservation rule below.
 
+The compaction interns the `schema` of each entry in `crossings` the same way,
+and the client expands it with the same table.
+
 The `schema-ref@2:` prefix is reserved in the `schema` field of `link@1` and
-`$alias` payloads. Link recognition follows the canonical cell-rep form — in
+`$alias` payloads, and of `crossings` entries. Link recognition follows the canonical cell-rep form — in
 the legacy representation, the single-key `{ "/": { "link@1": … } }`
 envelope — so an envelope carrying sibling keys is not a link and its contents
 are ordinary data. Memory servers MUST reject set or patch operations
 whose resulting stored document uses that prefix as an opaque schema string in
 a recognized schema position; ordinary strings in other document positions are
 unaffected.
+
+#### Negotiated label-table encoding
+
+The label tables were motivated by a rehearsal sync they reduced from 3,930,754
+to 669,274 bytes and from 211,817 to 58,476 values. Since labs #8767, #8788 and
+#8790 changed how link labels are carried, documents written carry few labels:
+measured again on 2026-10-23, the tables changed under 1% of the Memory messages
+in a Topics run and in a lunch-poll run, and saved at most 0.1% of those
+messages' gzipped bytes. Documents written by the labs builds of 2026-10-01 to
+10-15, before those changes, keep their labels until rewritten; in the heaviest
+such space on the rehearsal copy, the tables reduce syncs of its label-bearing
+documents from 17.6 MB to 3.8 MB, and the largest of those syncs from 190,663 to
+56,201 values, under the routed default of 150,000 values per frame. The tables
+change neither stored documents nor CFC decisions: they are a wire
+representation that every receiver expands before reading.
+
+When both peers advertise `syncLabelTableV1`, a `SessionSync` in
+`response.ok.sync` or `session/effect.effect` may carry dense `labelTable` and
+`labelPathTable` arrays. Only `upserts[].doc.cfc.labelMap.entries[]` uses these
+tables: a `.label` object or `.path` array may be replaced with its nonnegative
+integer index into the corresponding table. Each table is selected independently
+when it saves bytes. Canonical content hashes deduplicate equal labels and paths
+internally; the wire carries only indices and one copy of each selected value.
+
+Inline, nonindexed CFC metadata is preserved unchanged for semantic readers,
+including malformed metadata and `cfc: null` (no stored policy). The codec
+validates dictionary contents and indexed references, not inline CFC semantics.
+A number in a whole entry's `label` or `path` field is a dictionary reference
+exactly when the sync carries that field's table, even when the sibling field is
+missing, an envelope version is unsupported, or the entry sits at a numeric key
+in a malformed `entries` record. Invalid indices are rejected. Without the table
+the number is stored data and passes through inline on negotiated and
+unnegotiated connections alike; the server emits no table beside such a number,
+and commit admission refuses to store one (see the commit section below).
+Numeric values inside labels, path components, or application data are not
+whole-field references.
+
+For example, these two entries refer to the same label and path:
+
+```json
+{
+  "type": "sync",
+  "fromSeq": 10,
+  "toSeq": 11,
+  "upserts": [{
+    "branch": "",
+    "id": "of:donuts",
+    "seq": 11,
+    "doc": {
+      "value": { "flavor": "chocolate" },
+      "cfc": {
+        "version": 1,
+        "schemaHash": "fid1:...",
+        "labelMap": {
+          "version": 1,
+          "entries": [
+            { "path": 0, "label": 0 },
+            { "path": 0, "origin": "derived", "label": 0 }
+          ]
+        }
+      }
+    }
+  }],
+  "removes": [],
+  "labelTable": [{ "confidentiality": [], "integrity": [] }],
+  "labelPathTable": [["flavor"]]
+}
+```
+
+Both tables belong to this sync alone. The server compacts labels and paths
+before schemas. The client expands schemas first, then labels and paths, before
+delivering the sync to session consumers. It removes both metadata tables and
+restores exact labels, paths, and ordering. Invalid table contents and invalid or
+out-of-range indices reject the frame. One shared 16 MiB expansion budget counts
+the cumulative canonical encoded label and path bytes referenced by the sync,
+including the codec tag at each occurrence. Schemas nested inside label links
+are complete before this accounting. This encoding changes neither stored
+documents nor CFC policy decisions.
+
+A client that cannot decode or expand a server frame discards that connection:
+skipping an effect would let a later sequence acknowledge state the client never
+received. The failed frame reaches no session consumer and receives no
+acknowledgment. A reconnectable transport resets its connection, fences queued
+frames from it, and restores sessions from their last applied state. A transport
+that cannot reset terminates its sessions with the receive error. Recovery
+declares the replica provider's holdings, or the local watch view's holdings when
+there is no provider. The server's delivery cache is not a valid baseline for a
+frame the client could not apply. A server without `sessionHoldings`, or a view
+of explicit scope instances without a provider, terminates the affected session
+instead. An invalid handshake fails the connection attempt before sessions are
+admitted.
 
 ### 4.2.4 Batching
 
@@ -843,6 +1334,10 @@ interface Commit {
   invocationRef: Reference | null;
   authorizationRef: Reference | null;
   revisions: StoredRevision[];
+  // The operations the server elided: a `cid:` set of the stored content,
+  // or every operation of an identity commit (03-commit-model.md §3.6.1).
+  // An elided operation produced no revision and advanced no head.
+  elidedOpIndexes?: number[];
   createdAt: string;
 }
 
@@ -858,11 +1353,95 @@ Path conventions on the wire:
 - `ClientCommit` reads and writes use full document paths.
 - `readValue` / `writeValue` style helpers are client-side conveniences that
   prepend `"value"` before constructing those commit paths.
-- Inline `data:` document reads are local-only. Clients may read them during
+- Immutable `snapshot:` and Fabric `data:` document reads are local-only. Clients may read them during
   traversal, but must not serialize them into `ClientCommit.reads` because they
   have no server sequence and do not participate in conflict validation.
 - query selectors remain value-relative and are re-rooted by the shared
   traversal layer.
+
+#### Negotiated commit metadata encoding
+
+When both peers advertise `commitLabelTableV1`, a `transact` may carry dense
+`commit.labelTable` and `commit.labelPathTable` arrays. Each table is local to
+that commit and selected independently when interning saves bytes. Nonnegative
+integer references replace only labels and paths in actual CFC metadata carried
+by set operations or supported patch payloads at their document-relative metadata
+positions. Patch payloads include newly supplied and compared values; patch
+pointers, order and indices retain their meaning.
+Application values, reads, preconditions and unrelated operation payloads retain
+their original representation. Metadata-looking application objects do not
+become reference positions merely because they have `label` or `path` keys.
+
+As with sync tables, nonindexed inline metadata, including malformed CFC
+subtrees and `cfc: null`, reaches semantic CFC readers unchanged. Such a subtree
+does not prevent compression of eligible metadata elsewhere in the commit.
+Dictionary contents, including unused slots, and indexed references remain
+codec-validated. A numeric whole entry `label` or `path` is a reference exactly
+when the commit carries the corresponding dictionary, even under an unsupported
+version, with a missing sibling field, or at a numeric key in a malformed
+`entries` record; it must then resolve through that dictionary. This rule also
+applies at document-rooted patch positions. Without the dictionary the number is
+not transport metadata: the request parses, and commit admission refuses a
+resulting document whose whole entry `label` or `path` is a number, including
+one a `move` or `increment` patch produces from application data, because no
+dictionary is stored with a document and a stored number could never be
+resolved. The one exception keeps a document stored with such a number before
+this rule existed writable: admission accepts a resulting document whose
+`cfc.labelMap` equals the one the write replaces, so only a write that changes
+the label map must leave no number in it.
+
+The client compacts a temporary outgoing message before Fabric encoding and
+transport byte/node validation. It retains the original inline commit for
+pending requests, conflict handling and reconnect replay. Each send uses the
+current connection's negotiation; a replacement connection without the
+capability receives the inline representation even for a retained commit.
+
+The server performs bounded wire decoding, then expands negotiated metadata
+before validating the request's commit shape or running CFC and storage checks.
+Unnegotiated tables, malformed table contents, out-of-range references, and
+expansion beyond the codec's shared 16 MiB referenced-label/path byte budget
+reject the request before commit application.
+That budget counts cumulative canonical encoded label and path bytes at every
+reference, including the codec tag. Expansion removes the tables and restores
+exact metadata; internal and stored commits use the inline representation.
+
+The same capability permits tables at `response.ok.labelTable` and
+`response.ok.labelPathTable` in transaction acknowledgments. These dictionaries
+replace only metadata labels and paths in set revisions' `.document.cfc` and
+patch revisions' `.patches` operands at document-rooted metadata positions. Delete
+revisions carry no metadata payload. Revision identifiers, sequence numbers,
+operation indices, patch order and pointers, and application values retain their
+meaning. Each acknowledgment has its own 16 MiB cumulative
+referenced-label/path expansion budget, independent of the request's budget.
+Dictionary labels are self-contained: the sender never interns a label that
+carries a reserved schema reference at a schema position, leaving that label
+inline where schema expansion handles it, and a receiver rejects a dictionary
+that carries one, even in an unused slot. Sync schema tables do not supply
+schemas to acknowledgment label tables. Nonindexed inline CFC metadata is preserved for semantic readers,
+including malformed subtrees and `cfc: null`; the numeric-reference rules above
+apply independently of sibling fields and envelope versions.
+
+The server compacts a temporary response in the connection's send path before
+wire encoding and byte/node validation. Normal accepts and exact replay results,
+including commits resent after session resumption, use the current connection's
+capability. Stored results and original commits remain inline; a replacement
+connection without the capability receives inline acknowledgments.
+
+The client expands acknowledgment metadata before resolving the request or
+delivering revisions to commit consumers and replica caches. It rejects
+unnegotiated tables or references and malformed or over-budget encodings through
+the same connection-discard and recovery path as invalid sync metadata. Send
+preparation runs sync and acknowledgment label transforms before schema
+compression; receive preparation expands schemas before either label transform.
+Sync and acknowledgment dictionaries have separate contexts, and
+`syncLabelTableV1` does not authorize acknowledgment tables.
+
+Routed transport validates the compact frame's structural bounds and routing
+fields and forwards its original payload to the Memory endpoint. It neither
+expands commit metadata nor re-encodes an expanded body through the transport's
+node limit. The generic signed effective-capability descriptor includes this
+boolean under the same client/public-offer intersection as other encodings;
+original client flags retain their existing authentication bindings.
 
 ### 4.3.2 `query` — Deferred In This Pass
 
@@ -895,18 +1474,28 @@ interface GraphQueryRequest {
     roots: GraphQueryRoot[];
     branch?: BranchId;
     atSeq?: number;
+    includeAuthoredSeq?: boolean;
   };
 }
 
 interface GraphQueryResult {
   serverSeq: number;
   entities: EntitySnapshot[];
+  authoredSeq?: number;
 }
 ```
 
 The selector path is relative to `document.value`, not the full stored document
 root. The server converts it to a document path by prepending `"value"` before
 running shared traversal.
+
+When `includeAuthoredSeq` is true, `authoredSeq` is the highest authored commit
+sequence in the query's branch at or below `atSeq` (or `serverSeq` when omitted),
+and is zero when none exists. This metadata requires the same authenticated READ
+authority as the query and does not load document values. A client waiting for
+serving coverage through a captured head can request it with empty roots and
+wait for W to cover that authored sequence. A watermark document's revision
+alone is not evidence that intervening authored commits have been covered.
 
 ### 4.3.4 Entity Identifier Discovery and Lookup
 
@@ -1002,6 +1591,17 @@ interface WatchSetRequest {
   // The client's declared holdings (section 4.1.2): when present, the
   // response's `sync` is the difference between the new union and these.
   holdings?: SessionHolding[];
+  // On every part of a set staged in parts: the set's name, the number of
+  // parts before this one, and on every part but the last, `more` (servers
+  // advertising `watchSetPartsV1`; see below).
+  stage?: string;
+  part?: number;
+  more?: true;
+}
+
+// The answer to a staged part that more parts follow.
+interface WatchSetStagedResult {
+  staged: true;
 }
 
 interface WatchSetResult {
@@ -1023,6 +1623,37 @@ Semantics:
   resume, a restarted server) re-establishes its watches without downloading
   again every document it still holds
 - later committed changes continue to arrive via `session/effect`
+
+A client may stage a set too large for one message in parts, to a server that
+advertises `watchSetPartsV1`. Each part is a `session.watch.set` with a request
+ID of its own, the set's name in `stage` (an identifier every part of the set
+carries), a `part` counting the parts before it, and a share of the set's
+`watches`, `holdings` and `views`; every part but the last carries `more: true`.
+The server holds a part that more parts follow and answers it with
+`{ staged: true }`, changing nothing the session holds, and the last part
+replaces the watch set with the concatenation of every part's lists, as the one
+set they divide would: its response carries the sync. A part may leave out a
+list it has no entries for; the set names `holdings` or `views` when any part
+does. The joined set is checked as one set: a view named in two parts is
+refused as one named twice in one set is.
+
+A part numbered 0 starts a staged set, ending any set the session staged
+before. The server refuses, as a `ProtocolError`, a later part that does not
+follow the parts of its set the server holds, and with it the set: the parts
+after it are refused too, as none follows the parts held, so a set staged in
+parts is applied whole or not at all. A set without `part` is whole, and it and
+any other watch mutation of the session end a set the session was staging, and
+are applied as ever; a router or a routed host can have refused the set's last
+part itself, leaving the server parts no part follows. A watch mutation the
+server refuses unread, or for a session whose lease has run out, ends nothing. A staged set also ends
+when its connection closes, and when the session closes, is revoked or is
+opened again. A server holds at most 64 parts of one set before the last part,
+and at most 64 Mi characters of the parts of every set a connection's sessions
+are staging; a part past either is refused, and with it its set.
+
+A client sends a set's parts back to back on one connection, before any later
+watch mutation of the session, and takes the first refusal among their answers
+as the set's.
 
 ### 4.3.6 `session.watch.add` — Extend the Session Watch Set
 
@@ -1058,11 +1689,11 @@ Semantics:
   entity-plus-selector pair
 - the server returns the inline `sync` needed for the mutation; pure additive
   growth does not emit `removes`
-- in the current pass, `removes` are only guaranteed for explicit watch-set
-  replacement; steady-state topology shrink does not yet drive automatic
-  unwatch behavior
+- a later write that leaves a document reached by no watch, because the link
+  that reached it changed, is pushed as a `remove` by the refresh that re-walks
+  the changed document (section 4.6.3)
 - watch mutations are applied in order per session; clients must serialize
-  `session.watch.set` and `session.watch.add`
+  `session.watch.set`, `session.watch.add` and `session.watch.remove`
 
 ### 4.3.7 `session.close` — End One Session
 
@@ -1104,6 +1735,272 @@ Semantics:
 Branch create / delete / merge lifecycle commands are not currently exposed on
 the v2 wire. The engine already carries branch state internally, but public wire
 commands for that surface remain deferred in this pass.
+
+### 4.3.9 `session.watch.remove` — Shrink the Session Watch Set
+
+`session.watch.remove` removes watch specs from the existing session watch set
+by `id`. A server advertises it with the `watchRemoveV1` capability flag; a
+client talking to a server that does not removes a watch by sending the
+remaining set with `session.watch.set`.
+
+```typescript
+// Shown at module scope.
+interface WatchRemoveRequest {
+  type: "session.watch.remove";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  watchIds: string[];
+}
+
+interface WatchRemoveResult {
+  serverSeq: number;
+  sync: SessionSync;
+}
+```
+
+Semantics:
+
+- each listed watch is removed from the session watch set; an id the set does
+  not hold is ignored
+- the server releases what the removed watches alone reached (section 4.6.3):
+  the union of watched entities is what the watches that remain reach
+- the response carries the difference between what the session has been
+  delivered and the new union: an entity the union no longer covers is sent
+  in `removes`, and an entity it still covers is not resent unless it changed
+- the cursors of operation watches that remain are kept
+
+### 4.3.10 `pattern.lifecycle` — Run a Pattern-Lifecycle Verb
+
+`pattern.lifecycle` runs one of the pattern-lifecycle verbs — `upload`,
+`instantiate`, `setsrc` — in the session's space, as the session's principal.
+A server advertises it with the `patternLifecycle` capability flag. The verbs,
+their arguments, and their receipts are defined in
+[`server-pattern-lifecycle.md`](../../features/server-pattern-lifecycle.md).
+A request on the session reaches the process that serves the space, since the
+space's memory connection is routed to that process.
+
+```typescript
+// Shown at module scope.
+type SpaceId = string;
+type SessionId = string;
+
+interface PatternLifecycleRequest {
+  type: "pattern.lifecycle";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  verb: "upload" | "instantiate" | "setsrc";
+  /** The verb's arguments; the session supplies the space. */
+  body: Record<string, unknown>;
+}
+
+/** `ok` of the response: the verb's receipt. */
+type PatternLifecycleResult = Record<string, unknown>;
+```
+
+Semantics:
+
+- a request naming a session the connection does not hold gets a
+  `SessionError`
+- the server refuses a message of more than 8 MiB in UTF-8
+  (`PATTERN_LIFECYCLE_MAX_BYTES`) with `payload-too-large`. A client refuses
+  before sending a request whose encoding takes more than that, or more than
+  its connection takes in one request: 4 MiB on a routed connection
+  (`ROUTED_QUEUE_LIMIT`), which the router would otherwise refuse by closing
+  the connection
+- the DID the session was opened as must itself hold WRITE on the space; a
+  grant reached only through a proof chain's root issuer (section 4.5.1) does
+  not count, since the verb commits with the requester's own trust. An
+  anonymous session, or a principal without WRITE, is refused with `forbidden`
+- the server hands the verb, its `body` unread, and the principal to the
+  handler its host installed; a server with no handler refuses with
+  `server-execution-off`, and a handler that throws is refused with `internal`.
+  The handler validates `body` and refuses one that does not match the verb's
+  schema with `invalid-request`
+- the server finishes handling the frame once the verb has started, and sends
+  the response when the verb settles. Frames after it for the same space are
+  not held behind the verb (section 4.11.2), and on a routed connection the
+  request's credit returns to the router when the frame's handling ends
+- a refusal is an error named `PatternLifecycleRefusal` whose `code` names the
+  reason (section 4.7); `server-pattern-lifecycle.md` lists the handler's
+  codes
+- a client raises `lifecycle-unsupported` without sending when the server does
+  not advertise `patternLifecycle`. A connection lost before the response
+  leaves the verb's outcome unknown
+
+### 4.3.11 `space.invite` — Administer a Space's Invitations
+
+`space.invite` runs one operation of the space's invitation service as the
+session's principal. A server advertises it with the `spaceInvites` capability
+flag. The service, its operations, their bodies and results, and its refusal
+codes are defined in the
+[invitation service contract](../../../runtime/toolshed/README.md#space-invitations),
+which also exposes them as HTTP routes.
+
+```typescript
+// Shown at module scope.
+type SpaceId = string;
+type SessionId = string;
+
+interface SpaceInviteRequest {
+  type: "space.invite";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  invite: {
+    operation: "create" | "list" | "revoke" | "receipts";
+    /** The operation's body, as the HTTP route takes it. */
+    body: Record<string, unknown>;
+  };
+}
+```
+
+Semantics:
+
+- `redeem` is not among the operations: the identity redeeming holds no grant
+  on the space yet, and opening a session needs READ, so redemption travels
+  as the `invite` of a `session.open` (section 4.1.2). A `space.invite` naming
+  `redeem`, an unknown operation, or a body that is not exactly the
+  operation's fields gets the refusal any unreadable message gets (section
+  4.2.1)
+- a request naming a session the connection does not hold gets a
+  `SessionError`
+- the service runs the operation as the DID the session was opened as, with
+  the public origin the server's host configured as the invitation host; it
+  decides what that DID may do, and every operation here takes an explicit
+  OWNER grant. An anonymous session is refused with `not-owner`
+- the response's `ok` is the service's result for the operation, the body the
+  HTTP route returns
+- a refusal is an error named `SpaceInviteRefusal` whose `code` is the
+  service's code (section 4.7). A server given no invitation host refuses
+  every request with `invite-service-unsupported`, and a client raises the same
+  code without sending when the server does not advertise `spaceInvites`
+
+### 4.3.12 `served` — Deliver a Crossing to a Space's Owner
+
+`served` carries one crossing from the serving host of one space into the
+session's space, for the process that owns that space to admit: the host's
+side of
+[owner routing](../server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally), where a crossing
+was a call on the host's own co-hosted memory server. A server advertises it
+with the `servedRequests` capability flag. The session is the host's routed
+session to the owner, open as the deployment's service identity.
+
+```typescript
+// Shown at module scope.
+type SpaceId = string;
+type SessionId = string;
+
+interface ServedRequest {
+  type: "served";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  kind: "append" | "commit" | "acl";
+  /** The crossing, in the kind's shape, which the server hands on unread. */
+  body: Record<string, unknown>;
+}
+
+/** `ok` of an `append`: the admitted entry's position, or that the target's
+ * `eventId` horizon already held it. */
+interface ServedAppendResult {
+  seq?: number;
+  deduped: boolean;
+}
+
+/** The body of a `commit`: a foreign wave batch in the memory boundary's
+ * encoding, and the sender's number for the commit it makes. */
+interface ServedCommitBody {
+  batch: string;
+  localSeq: number;
+}
+
+/** `ok` of a `commit`: the position the batch committed at. */
+interface ServedCommitResult {
+  seq: number;
+}
+
+/** The body of an `acl`: a served access-list change as the list of changes
+ * it applies, and the sender's number for the commit it makes. */
+interface ServedAclBody {
+  change: {
+    space: SpaceId;
+    actingPrincipal: string;
+    actingSession?: string;
+    capabilityRef: string;
+    sourceEvent: { space: SpaceId; sidecarId: string; eventId: string };
+    changes: Array<{ principal: string; level?: string; actor: string }>;
+  };
+  localSeq: number;
+}
+
+/** `ok` of an `acl`: the position the list's commit landed at, or nothing
+ * where the change left the list as it was. */
+interface ServedAclResult {
+  seq?: number;
+}
+```
+
+The kinds are the serving loop's three crossings, and each body carries the
+sender's `localSeq`, the number the crossing's commit is keyed by on the
+session together with the session's id. An `append` is one delegated event
+append (`serving-loop.md` §5): its body is the entry the owner's
+`commitDelegatedAppend` takes, without the target space, which the session
+names, and without the session, which is the one the request came on. A
+`commit` is a foreign wave batch (`protocol.md` §2b), which the owner commits
+as the sender's own sink would have, under the same delegated admission and
+the same refusals, and reports to its own server as the warm authored commit
+that activates the space there. An `acl` is a served run's change to the
+session's space's access list, as the list of changes rather than the
+function that applies them; the owner rebuilds the function and commits the
+change as its own loop's would be (`Server.commitServedAclChange()`), under
+the carried actor. A batch or change for a space other than the session's is
+refused.
+
+Semantics:
+
+- a request naming a session the connection does not hold gets a
+  `SessionError`
+- the server refuses a message of more than 8 MiB in UTF-8
+  (`SERVED_REQUEST_MAX_BYTES`, the `pattern.lifecycle` bound) with
+  `payload-too-large`. A client refuses before sending a request whose
+  encoding takes more than that, or more than its connection takes in one
+  request
+- the session's principal must be of the access list's delegating class
+  (`acl.delegatingDids`, the deployment's service identity); any other
+  session is refused with `forbidden`. The crossing then runs under the actor
+  its body carries, as the delegated carriage does on the host's own server
+  (`protocol.md` §2): the deployment's processes trust each other's carried
+  actor claims, and admissibility comes from the validated grant
+- the server hands the kind, the `body` unread, the space, the principal and
+  the session id to the handler its host installed; a server with no handler
+  refuses with `unavailable`, and a handler that throws is refused with
+  `internal`. The handler answers with the kind's result, or refuses with
+  `refused` for a crossing the owner's admission rejects deterministically.
+  What a refusal means to the sender is the crossing's own rule: the outbox
+  retires an `append` refused as `refused` and keeps one refused as
+  `unavailable` or `internal`, and a wave fails foreign on every refusal of a
+  `commit` or an `acl` alike, withholds its home commit, and replays the
+  event (`protocol.md` §2b)
+- for an `acl`, the owner resolves the carried grant against the entry the
+  run delivers, which lives in the stream of the source event's space, a
+  space the owner need not own: it reads that space's store, which the
+  deployment's one shared store gives every process. A deployment whose
+  owners hold stores of their own carries the entry in the request or has the
+  source's owner verify it; neither is specified here
+- the server finishes handling the frame once the crossing has started, and
+  sends the response when it settles. Frames after it for the same space are
+  not held behind it (section 4.11.2)
+- a refusal is an error named `ServedRequestRefusal` whose `code` names the
+  reason (section 4.7)
+- a client raises `served-unsupported` without sending when the server does
+  not advertise `servedRequests`. A connection lost before the response
+  leaves the crossing's outcome unknown, and the sender's own rule says what
+  it does then: the outbox keeps its row and sends it again, and the owner's
+  `eventId` horizon dedupes the repeat; a wave fails foreign, withholds its
+  home commit, and replays the event, whose next run reads what the lost
+  reply applied (`protocol.md` §2b)
 
 ## 4.4 Selectors
 
@@ -1205,6 +2102,14 @@ refusal is permanent. One challenge accepts several keys, once each, so
 authenticating two keys needs no ordering between them. A client holding no
 usable challenge asks for one with `connection.challenge`.
 
+On direct connections the SDK shares a lease renewal's complete outcome with
+mounts for that key, including mounts arriving during the renewal's backoff.
+A retriable refusal keeps those mounts pending while the renewal retries with
+a fresh challenge. Its retry rate is independent of the number of waiting
+mounts. Permanent refusal, connection loss, client closure or failure, and a
+mount's cancellation end its wait. Canceling a mount leaves the renewal and
+other mounts running. Session restoration has its own retry policy.
+
 An authentication is a lease. It runs out at the invocation's `exp`, or an
 hour after it was accepted, whichever is sooner, and the response says
 which. From then on a `session.open` naming the principal is refused, a
@@ -1236,7 +2141,8 @@ Opening a previously unused space may initialize empty backing storage, but
 `session.open` is not itself a logical write or claim.
 
 When ACL policy is active, the authenticated principal is evaluated against
-the space ACL document (wire entity id `of:<space DID>`) for every command:
+the space ACL document (wire entity id `of:<space DID>`) for every command. The
+row for a deleted space applies whether or not the policy is active:
 
 | Stored ACL state | Effective access |
 | --- | --- |
@@ -1244,26 +2150,100 @@ the space ACL document (wire entity id `of:<space DID>`) for every command:
 | never-created ACL, server sequence 0 | Authenticated READ only, except that the space DID itself holds OWNER; the first write must be a valid ACL-only genesis by the space identity or a service DID |
 | never-created ACL, server sequence greater than 0 | Temporary pre-launch compatibility: authenticated READ and WRITE, never OWNER |
 | malformed, ownerless, or retracted ACL | No ordinary access (fail closed) |
+| a deleted space's deletion tombstone | No access for any principal, service DIDs included, for good |
 
 Configured service DIDs hold implicit OWNER on every space, so they can
-initialize or repair ACL state. The exact space DID holds OWNER only while the
-space has no ACL document and no history, which is what genesis needs and all
-it needs; after that it holds what the ACL grants it, like any other principal.
-A space DID therefore cannot repair a malformed or retracted ACL, and cannot
-claim a populated space that has none. A valid ACL mutation is a whole-document,
-space-scoped replacement on the default branch and must retain at least one
-concrete (non-`"*"`) OWNER. Patch, deletion, mixed ACL/data commits, and
-last-owner removal are rejected. These shape and genesis rules are hard
-storage invariants in both `observe` and `enforce`; `observe` relaxes only
-READ and WRITE shortfalls on an already valid ACL, and refuses a principal
-lacking OWNER, so no principal can write a space's ACL while a deployment
-stages its access control. The one ACL mutation a principal without OWNER may
-make, in both modes, is removing its own entry: a replacement whose document is
-the stored one less that principal's entry, and nothing else, from a list with
-no `"*"` entry.
+initialize or repair ACL state, except a deleted space's. The exact space DID
+holds OWNER only while the space has no ACL document and no history, which is
+what genesis needs and all it needs; after that it holds what the ACL grants it,
+like any other principal. A space DID therefore cannot repair a malformed or
+retracted ACL, and cannot claim a populated space that has none. A valid ACL
+mutation is a whole-document, space-scoped replacement on the default branch and
+must retain at least one concrete (non-`"*"`) OWNER, unless it deletes the
+space, as below. A patch, a document `delete`, a mixed ACL/data commit, and
+last-owner removal are rejected. These shape and genesis rules are hard storage
+invariants in both `observe` and `enforce`; `observe` relaxes only READ and
+WRITE shortfalls on an already valid ACL, and refuses a principal lacking OWNER,
+so no principal can write a space's ACL while a deployment stages its access
+control. The one ACL mutation a principal without OWNER may make, in both modes,
+is removing its own entry: a replacement whose document is the stored one less
+that principal's entry, and nothing else, from a list with no `"*"` entry.
+
+A refusal that a space's ACL state decided, and that carries
+`permanentEvidence`, carries `aclRevision` too: the `seq` at which the space's
+ACL document is stored, the revision of the document whose state decided the
+refusal, not the server's current sequence. It names the same revision for as
+long as the document stands, and a new one once the document changes. A refusal
+for a space whose store holds no ACL document carries `aclRevision` 0, since no
+revision of the document exists.
+
+A space's sole member deletes it, which ends it for everyone and for good.
+Deleting a space writes its ACL document and never removes it: the deletion
+commit is an ACL-only commit, shaped as any other, whose document is a
+deletion tombstone rather than an access list:
+
+```json
+{ "deleted": { "by": "did:key:z6Mk..." } }
+```
+
+`by` names the committing principal, and the deletion tombstone holds nothing
+else. The server admits it only when the stored ACL is valid and its one entry
+is at OWNER, naming either the committing principal or the principal the
+session's capability resolves to through a verified proof chain, the chain's
+root issuer ("Proof chains" below). For an ordinary space that entry is the
+deleting principal's own, so another member has to be removed, visibly and
+through the ordinary check, before the space can be deleted. That asks no
+authority an OWNER does not already hold. A self-owned space, whose list names
+the space's own DID and whose owner acts through a delegation from it, is
+deleted through the chain, as every other OWNER act on it is. A server whose
+access-list policy admits no delegations, and so advertises no
+`sessionOpenProofs`, refuses every chain, and there only an entry naming the
+committing principal admits a deletion. A delegation is not an entry in the
+list, so another holder of one loses access with no commit of its own first, as
+it does when an owner replaces the list; and since `by` still names the
+committing principal, the deletion tombstone is the one place such a space
+records the identity that acted for it. A self-owned profile's space, whose list
+also grants `"*"` WRITE, has that entry removed by an ordinary list replacement
+through the chain before it is deleted. A Home space is not deleted while its
+list has a Home's shape, through a chain or without one: a space whose list
+grants its own DID OWNER and that declares no kind, which is how the server
+already tells a home when it resolves the `actingAs` binding. INV-15 says what
+that test guarantees and what it leaves to a service identity's trust.
+"Nothing else" binds the document's `value`, the deletion tombstone itself; the
+fields beside it are held to what any ACL write holds them to.
+
+From the deletion commit on, the server refuses every command any principal
+sends the space, a service DID's included, with a permanent `AuthorizationError`
+carrying `deleted: true` and, as `aclRevision`, the deletion commit's `seq`. The
+server checks for deletion once it has routed the command and, for a command
+that names a session, found that session open, and before every other check, so
+a command to a deleted space reports the deletion and never a shape, capability
+or genesis failure. The server revokes the sessions open on the space with the
+`session/revoked` reason `deleted`. The session that committed the deletion
+receives its transact response first and its revocation after, as a member's
+session does when it removes its own entry. The server admits no further commit
+to the space on any write path, engine-direct writes from the serving plane
+included, so no principal can undo the deletion. These checks run before a
+commit's write transaction starts, so the engine repeats the deletion tombstone
+check inside that transaction for every fresh commit, and checks a deletion
+tombstone commit's own clauses there too, against the ACL as stored: a deletion
+committed through another connection in between still refuses the commit, with
+the same refusal (INV-15). All of this holds in every ACL mode, `off` included,
+as do the admission rules above for a commit that writes a deletion tombstone: a
+deleted space is refused whatever the policy, since a mode that admitted commits
+to one could undo it. A deletion tombstone is not an access list, so a server
+rolled back to a release that does not know deletion tombstones finds the ACL
+malformed, and refuses the space to every principal but a service DID.
+
+The server sends the `deleted` marker and the `deleted` reason to every client,
+whatever the client advertises. A client that predates the marker reads the
+refusal as the permanent `AuthorizationError` it is. One that predates the
+reason discards the `session/revoked` frame, whose reason it does not
+recognize.
 
 The shape and genesis rules are catalogued as **INV-12** (ACL mutation commit
-shape) and **INV-13** (ACL genesis precedence and authority) in
+shape) and **INV-13** (ACL genesis precedence and authority), and deleting a
+space as **INV-15** (space deletion), in
 [`09-invariants.md`](09-invariants.md#inv-12--acl-mutation-commit-shape) —
 go there for the exact admission predicate, what each rejection message means,
 and what is and is not known about why the whole-document rule exists. A client
@@ -1276,11 +2256,22 @@ thing that writes one. A create action generates a fresh key pair from random
 data, opens one session authenticated as that key through the same route every
 later session for the DID takes, and commits the genesis document against a
 confirmed absent ACL: the creator as OWNER, together with any grants the
-creator chose (`StorageManager.createSpace(acl, root?)`, reached as
-`Runtime.createSpace()`). The key is used for nothing else, and is dropped once
-the commit is confirmed. The creator is the concrete owner, and can later grant
-access to other principals or to `"*"`. Opening a DID that has no history
-writes nothing: it is not a space, and stays that way.
+creator chose (`StorageManager.createSpace(acl, { root?, spaceKind? })`,
+reached as `Runtime.createSpace()`). The key is used for nothing else, and is
+dropped once the commit is confirmed. The creator is the concrete owner, and
+can later grant access to other principals or to `"*"`. Opening a DID that has
+no history writes nothing: it is not a space, and stays that way.
+
+The genesis commit may also declare the space's kind, in the commit's
+`spaceKind` field: a string of lowercase words joined by hyphens, at most 32
+characters. The server admits it only on the space's genesis commit, made by
+the space identity itself, on the default branch, holding nothing but the
+ACL-only `set`, and only when it equals the `spaceKind` the committing session
+declared. It refuses `spaceKind` on every other commit, in every ACL mode,
+whoever makes it, and so the kind never changes once sealed. A custom root
+reservation is held to the same rules
+([`custom-space-roots.md`](../../features/custom-space-roots.md));
+[`space-kinds.md`](../../features/space-kinds.md) describes the kind.
 
 The one space born on open is a Home space, whose DID is its user's own. When
 the active identity is the space DID and the space has no ACL document and no
@@ -1293,6 +2284,25 @@ The server's unauthenticated `writeDocument` operator path cannot create a
 fresh space or mutate the ACL document while ACL policy is active. Its access
 to ordinary documents in an already-created space remains a known deferred
 blob-authorization issue.
+
+The server caches, per space and principal, the capability the space's ACL
+resolves to. The cache is valid only for the store as it was when the entry
+was made: each space's entry records the store's SQLite `data_version`, read
+on the space's connection just before the ACL, and a cached decision is served
+only while a fresh reading matches. Otherwise the space's entries are dropped
+and the ACL is read again, on the current snapshot, before the operation is
+authorized. A commit the server makes to the ACL drops the entries itself. So
+a grant written to the space's store through another connection, by another
+process on the same host, admits its principal at that principal's next
+`session.open`, and a revocation written there refuses the principal's next
+command, without a restart. A change that lands while a request is being
+authorized is seen by the next request. When the dropped entries show the ACL
+document itself at a new revision, the space's next refresh turn also runs
+what follows an ACL commit the server makes: it revokes the sessions the
+change deauthorized, before any frame of that turn, and sends
+`session/admissible` for the principals it admits; the request that found the
+change schedules that turn. Each capability check costs one prepared pragma
+read.
 
 The challenge protects against replay of a captured signed `session.open` after
 the original WebSocket handshake has moved on.
@@ -1320,6 +2330,68 @@ transport.
 Broader ACL-based read opens and non-owner session opens are implemented by the
 server ACL policy when enabled.
 Route-level `Origin` checks remain future work on the v2 websocket route.
+
+#### Proof chains
+
+A `session.open` may present a UCAN proof chain: delegations by which a
+principal the access list grants hands its authority over the space down to
+the principal opening the session. The server verifies the chain and resolves
+the session's capability, READ, WRITE and OWNER alike, from the access list's
+grant to the chain's **root issuer**, while the session's principal stays the
+key that opened it: scope partitions, commit attribution, presence, and
+`session/admissible` are unchanged. [`profile-delegation.md`](../profile-delegation.md)
+is the design this serves, and the delegation's encoding is specified there.
+
+A server advertises `sessionOpenProofs` when its access-list policy admits
+delegations, and refuses every chain when it does not; a client holding a
+chain for the space refuses such a server before opening, rather than open
+under its key's own grant and be refused there. The chain is
+`authorization.proofs`, the delegations' bytes as their issuers encoded them,
+in order from the root. A signed open also names their CIDs in
+`invocation.prf`, in the same order; the invocation is signed, so a relay
+cannot add, drop, or reorder proofs without invalidating the open. An open
+naming a connection-authenticated `principal` carries the proofs alone, since
+proofs are per space and connection authentication is per key.
+
+The server, after authenticating the open's principal, checks that:
+
+- `proofs` is a non-empty array of bytes, and on a signed open `prf` names
+  exactly one CID per proof
+- each proof decodes as a delegation of the shape the design specifies, and
+  its CID, computed over the bytes as received, is the one `prf` names
+- each proof's signature verifies against its own `iss`
+- each proof's `sub` is the requested space
+- each proof's `cmd` covers `/memory/session.open`: it is `/`, `/memory`, or
+  `/memory/session.open`
+- each proof is within its `nbf` and `exp`, to the second: valid from the
+  `nbf` second through the `exp` second, with no clock-skew grace
+- the proofs link, each `aud` being the next proof's `iss`, and the last `aud`
+  is the open's principal
+- the open does not also carry the `actingAs` binding
+
+The structural checks run over the whole chain before any signature is
+verified, and a chain holds at most eight proofs, so a chain that fails them
+costs the server no signature verification. A chain failing any check is
+refused with a permanent `AuthorizationError` naming the step: no fresh
+handshake heals it, and an expired proof is not retriable. The capability is
+then resolved for the root issuer, and an open whose root issuer the access
+list does not grant READ is refused as any ungranted principal is. Such a
+refusal records no admission wait: as with the `actingAs` binding, the grant
+the open would need is not the connection's principal's. The chain is fresh
+per open: a resume presenting none leaves the session to its principal's own
+grant.
+
+The chain is held to after admission as it is at admission. A session opened
+with a chain carries the chain's earliest `exp`; from the second after it,
+the session is refused every request with a permanent
+`AuthorizationError`, is ended with `session/revoked` at the first such
+request, and is sent no `session/effect`, `presence/upsert`, or
+`presence/remove`. That refusal comes before the
+lease's, so a session whose chain and lease have both run out is ended rather
+than told to renew. Nothing renews the chain: a client whose delegation has a
+later expiry opens the session again with a current chain, and every open,
+a reopen on the same connection included, replaces the deadline with the
+chain it presents, or clears it when it presents none.
 
 ### 4.5.2 Future Target
 
@@ -1363,18 +2435,22 @@ Because the watch set is a union, overlapping watches dedupe naturally:
 
 ### 4.6.3 Watch Changes
 
-When the client replaces the watch set:
+When the client replaces the watch set, or removes watches from it:
 
 - newly relevant entities are sent as `upserts`
 - entities no longer relevant are sent as `removes`
 - entities still relevant but unchanged are not resent when the replacement
-  declares `holdings` (section 4.3.5); a replacement that declares none is
-  delivered in full, since the server does not assume a silent client holds
-  anything
+  declares `holdings` (section 4.3.5), or after a removal (section 4.3.9); a
+  replacement that declares none is delivered in full, since the server does
+  not assume a silent client holds anything
 
-In the current pass, that `removes` guarantee only applies to explicit
-watch-set replacement. Steady-state topology shrink during background refresh
-does not yet drive automatic unwatch behavior.
+A background refresh retracts in the same way: the server attributes each
+tracked document to the watch root or the linking document whose walk reached
+it, and a re-walk after a write releases the attributions it does not make
+again. A document left with no attribution, and one kept only by documents
+that are themselves no longer reached, is sent as a `remove` in the pushed
+frame. A document reached through a different link, or by another watch, is
+not resent.
 
 ### 4.6.4 Cross-Session Delivery
 
@@ -1392,7 +2468,20 @@ The runtime-facing scheduler rules remain the same:
 
 ## 4.7 Error Responses
 
-All errors are returned in `response`.
+All errors are returned in `response`. That includes a failure the server did
+not anticipate while handling a request: the request is answered on its own
+`requestId` with a `TransactionError` for a commit and a `QueryError` for any
+other request, unless the failure is a protocol error with a name of its own.
+The connection carries on, so a commit the server cannot handle fails alone,
+without taking the connection or the client's other commits with it. A failure
+to deliver a response is a failure of the connection instead, and closes it:
+the request may already have taken effect, a commit whose verdict was lost
+among them, so the client replays it and the server answers from its record.
+A request is answered once. A failure after its response has gone out, such as
+in delivering the self-revocation a commit defers until after its verdict, is
+not answered again on the same `requestId`; it closes the connection the same
+way, and the client learns on reconnecting what the lost message would have
+told it.
 
 ```typescript
 // Shown at module scope.
@@ -1434,7 +2523,29 @@ interface RateLimitError extends Error {
   name: "RateLimitError";
   retryAfter: number;
 }
+
+interface PatternLifecycleRefusal extends Error {
+  name: "PatternLifecycleRefusal";
+  /** Why the verb was refused (section 4.3.10). */
+  code: string;
+}
+
+interface SpaceInviteRefusal extends Error {
+  name: "SpaceInviteRefusal";
+  /** The invitation service's refusal code (section 4.3.11). */
+  code: string;
+}
+
+interface ServedRequestRefusal extends Error {
+  name: "ServedRequestRefusal";
+  /** Why the crossing was refused (section 4.3.12). */
+  code: string;
+}
 ```
+
+A `PatternLifecycleRefusal`, a `SpaceInviteRefusal` and a
+`ServedRequestRefusal` carry `code` in the response's `error`, and a client
+branches on it.
 
 ## 4.8 Client Library API
 
@@ -1480,15 +2591,33 @@ An implementation MAY still expose convenience methods named `subscribe()` at
 the client API level, but they are library constructs built on `watchSet()` and
 the session cache rather than distinct server-routed effect streams.
 
-### 4.8.4 Session Lifecycle
+### 4.8.4 Refusals
+
+The client library rejects a refused request with an `Error` whose `name` is
+the response's `error.name` and whose `message` is its `error.message`, and
+copies onto it each marker the envelope carries: `retriable`, `code`,
+`permanentEvidence`, `aclRevision`, `deleted`, `clientUpdateRequired`,
+`precondition`, `retryAfterSeq`, and `conflicts`. A consumer matches on `name`
+and the markers, never on `message`. A `session/revoked` terminates the session
+with an `Error` named `SessionRevokedError` for `taken-over`, and
+`AuthorizationError` for `unauthorized` and `deleted`; the `deleted` reason
+also sets `deleted: true` on it, so a session open when its space is deleted
+reports the deletion as a refused reopen would.
+
+### 4.8.5 Session Lifecycle
 
 On disconnect:
 
-1. pending promises reject with `ConnectionError`
+1. requests awaiting a response get none; retained commits and watch mutations
+   stay pending, and every other request rejects with `ConnectionError`
 2. the logical session may still be resumable
 3. the client reconnects, replays retained commits, restores the watch set, and
    resumes integrating sync from `seenSeq` — declaring what its replica holds
    (section 4.1.2) so the server re-delivers exactly what it lacks
+4. the client sends again, in their original order, the pending watch
+   mutations from the first one whose answer it lacks onwards (every pending
+   one, when the session was re-established), and every watch mutation made
+   after them follows them
 
 The client session lifecycle API publishes `ready(epoch)`,
 `disconnected(epoch, cause)`, and `closed(epoch, cause)` states. Subscription
@@ -1546,7 +2675,10 @@ handed over before it, so a `session.open` handed over behind the
 signed opens handed over together are handled one at a time whatever spaces
 they name. Frames for different spaces on
 one connection do not wait for each other, so a `transact` waiting for its
-space's publication lock delays nothing addressed to another space. Presence
+space's publication lock delays nothing addressed to another space. A
+`pattern.lifecycle` frame's handling ends once its verb has started, and its
+response follows when the verb settles (section 4.3.10), so the frames after it
+for its space do not wait for the verb. Presence
 messages stay outside these turns (section 4.13.4).
 
 For live sync, transact verdicts return INLINE before the independently batched
@@ -1829,9 +2961,105 @@ assigned a new participant id with the new connection — and republishes the
 last record at a fresh revision. A session that terminates ends its rooms with
 a `failure` event carrying the cause, and nothing follows it.
 
+## 4.14 Session Reports
+
+A session report is a diagnostic a client sends about its own session to the
+server serving the session's space, which counts it and keeps it where an
+operator reads the server's health. It rides the memory connection because every
+client already holds one, authenticated and routed to the server holding the
+space, so a report lands beside that server's commit rates for the same
+session (the health route's `commitRates` and `sessionReports`). Like a presence
+message it is not a commit, carries no `seq`, settles nothing, and is handled
+as it arrives rather than behind the ordered frame queue — which matters here,
+since the space a report describes is often the one with the deepest queue.
+The server advertises the capability as `sessionReportV1` (section 4.1.1).
+
+The one reporter is the scheduler's remote-echo breaker
+([`../../plans/scheduler-remote-echo-breaker.md`](../../plans/scheduler-remote-echo-breaker.md)):
+a `trip` says a reactive action kept rewriting a document, each time
+re-triggered by another writer's change to that same document, and that the
+client is now deferring the action's re-runs; a `clear` says how a tripped
+action ended.
+
+```typescript
+// Shown at module scope.
+
+type SpaceId = string;
+type SessionId = string;
+/** `space`, `user:<principal>`, or `session:<principal>:<session>`, each part
+ * URI-component encoded. */
+type ScopeKey = string;
+
+interface EchoBreakerReportDocument {
+  id: string;
+  /** The scope instance the action wrote, resolved. A serving runtime reports
+   * the runs it serves for many sessions on its own session, so the report
+   * names the instance rather than leaving the reporting session to stand for
+   * it. */
+  scopeKey: ScopeKey;
+}
+
+interface EchoBreakerTripReport {
+  kind: "echo-breaker";
+  event: "trip";
+  document: EchoBreakerReportDocument;
+  /** The action's scheduler id. */
+  action: string;
+}
+
+interface EchoBreakerClearReport {
+  kind: "echo-breaker";
+  event: "clear";
+  document: EchoBreakerReportDocument;
+  action: string;
+  /** Converged on the document, quiet for the breaker's reset, the action
+   * unregistered, or the pair dropped from the breaker's bounded table. */
+  reason: "convergence" | "quiet" | "retired" | "evicted";
+  /** Echoes after the trip, each of which renewed the backoff. */
+  renewals: number;
+  /** Milliseconds from the trip to the clear. */
+  trippedMs: number;
+}
+
+interface SessionReportRequest {
+  type: "session.report";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  report: EchoBreakerTripReport | EchoBreakerClearReport;
+}
+```
+
+The request receives a `response` whose `ok` is empty. It requires an open
+session for `space` on the same connection, as presence does; a session the
+connection does not hold gets a `SessionError`, and a routed connection is
+re-authorized for `READ` on the space as it is for presence. Every string
+carries at most 512 characters and no control character, since the server
+writes report text into its log; `scopeKey` is a canonical scope key; and every
+count is a non-negative integer. A report that breaks one of these is answered
+as an unparseable message. The server records only the fields defined here,
+under the session and the principal it was opened as. A report is best-effort
+on the client: it is not sent to a server that does not advertise the
+capability or while the connection is down, and a refusal is not surfaced,
+since a lost report costs only the diagnostic. `SpaceSession.sendReport(report)`
+is the client library's entry point. It cuts an over-long string to fit, and
+does not send a report the server would still refuse, since an unparseable
+message is answered under no request id.
+
 ## Routed public-stage Mode A
 
 The opt-in router path uses the dedicated [Mode A contract](routed-mode-a.md):
 router-audience client signatures, attested issuance and exact-byte receipt,
 single-use socket-bound tickets, durable replay custody and independent toolshed
 ACL/ownership checks. Direct Memory hosts keep the protocol described above.
+
+Private router-to-toolshed requests additionally use
+[header admission](routed-mode-a.md#private-request-body-admission): a
+consecutive per-socket request ordinal, and 8-byte binary `mri\x02` request
+credit in declared body bytes. The endpoint grants its whole input budget once
+the socket is ready and returns each request's bytes when its turn ends; the
+router sends a request only within the credit it holds. Public upload and
+private response headers carry no request ordinal.
+The private `routerRequestCredit` capability is required on authenticated
+peers and excluded from public and effective Memory flags. It changes neither
+logical Memory messages nor public `mrt\x01` framing and `mrc\x01` upload credits.

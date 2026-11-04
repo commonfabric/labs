@@ -373,6 +373,60 @@ describe("test-records-mint", () => {
         "octocat",
       )).rejects.toThrow("iam.serviceAccountKeys.delete");
     });
+
+    it("returns the key once the account has reached key creation", async () => {
+      const log: { method: string; url: string; body?: string }[] = [];
+      let waits = 0;
+      const keyFile = await mintKey(
+        {
+          token: "t",
+          fetchImpl: sequenceFetch([
+            { status: 200, json: { keys: [] } },
+            {
+              status: 404,
+              json: {
+                error: {
+                  code: 404,
+                  message:
+                    "Service account projects/p/serviceAccounts/sa@x does not exist.",
+                  status: "NOT_FOUND",
+                },
+              },
+            },
+            { status: 200, json: { privateKeyData: keyData } },
+          ], log),
+          awaitVisibility: () => {
+            waits++;
+            return Promise.resolve();
+          },
+        },
+        "sa@x",
+        "octocat",
+      );
+      expect(JSON.parse(keyFile).cf_username).toBe("octocat");
+      expect(waits).toBe(1);
+      expect(log.map((entry) => entry.method)).toEqual(["GET", "POST", "POST"]);
+    });
+
+    it("throws for a mint refused on any other ground", async () => {
+      await expect(mintKey(
+        {
+          token: "t",
+          fetchImpl: sequenceFetch([
+            { status: 200, json: { keys: [] } },
+            {
+              status: 404,
+              json: { error: { message: "Project p does not exist." } },
+            },
+          ], []),
+          awaitVisibility: () => {
+            throw new Error("no wait expected");
+          },
+        },
+        "sa@x",
+        "octocat",
+      )).rejects.toThrow("minting a key");
+    });
   });
 
   describe("runMint()", () => {

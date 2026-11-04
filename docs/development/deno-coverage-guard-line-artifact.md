@@ -22,7 +22,7 @@ invariant guards in the runtime are marked uncovered by it.
 ## Where it bites us
 
 The mergeable-write record methods in
-`packages/runner/src/storage/v2-transaction.ts` guard invariants that every
+`runtime/runner/src/storage/v2-transaction.ts` guard invariants that every
 caller already establishes (each writes through the same transaction before
 recording, so the target is always editable and writable):
 
@@ -32,7 +32,7 @@ if (ready.error) throw ready.error;
 if (!doc) throw new Error("append target is not writable");
 ```
 
-The `buildReads` space filter in `packages/runner/src/storage/v2.ts` skips
+The `buildReads` space filter in `runtime/runner/src/storage/v2.ts` skips
 mergeable ops belonging to another space, which only happens under multi-space
 writes:
 
@@ -142,7 +142,7 @@ it did not.
 
 How far the reach goes depends on where the source map names positions, so
 read the counts rather than predicting them. Two instances measured in
-`packages/runner/src/builtins/compile-and-run.ts`: a single-line callback that
+`runtime/runner/src/builtins/compile-and-run.ts`: a single-line callback that
 never ran zeroed the three argument lines above it, its own line, and the line
 opening the callback after it; a block-bodied callback that never ran zeroed
 its own five lines and nothing else.

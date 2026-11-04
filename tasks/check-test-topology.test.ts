@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { dirname, fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import {
   candidateSurfaces,
@@ -17,6 +18,10 @@ import {
 import { AliasResolver } from "@commonfabric/test-support/records";
 import type { Suite } from "./test-topology/suite.ts";
 import { loadTopology } from "./test-topology.ts";
+import { coverageGateSuite } from "./test-topology/coverage-gates.ts";
+
+/** The repository this file belongs to, whose own tree some cases check. */
+const REPOSITORY = dirname(dirname(fromFileUrl(import.meta.url)));
 
 /** A suite holding exactly what a case describes. */
 function suite(partial: Partial<Suite> & { id: string }): Suite {
@@ -35,14 +40,14 @@ function suite(partial: Partial<Suite> & { id: string }): Suite {
 describe("the tree half of the drift guard", () => {
   it("passes a file some suite enumerates", () => {
     const suites = [
-      suite({ id: "workspace-unit", units: ["packages/bakery/glaze.test.ts"] }),
+      suite({ id: "workspace-unit", units: ["runtime/bakery/glaze.test.ts"] }),
     ];
-    expect(checkTree(suites, ["packages/bakery/glaze.test.ts"])).toEqual([]);
+    expect(checkTree(suites, ["runtime/bakery/glaze.test.ts"])).toEqual([]);
   });
 
   it("fails a file no suite accounts for", () => {
     const findings = checkTree([suite({ id: "workspace-unit" })], [
-      "packages/bakery/glaze.test.ts",
+      "runtime/bakery/glaze.test.ts",
     ]);
     expect(findings.map((finding) => finding.fails)).toEqual([true]);
     expect(findings[0]!.message).toContain("claimed by no suite");
@@ -52,9 +57,9 @@ describe("the tree half of the drift guard", () => {
     // A workspace member that runs whole, or a directory one task owns,
     // accounts for what it contains.
     const suites = [
-      suite({ id: "workspace-unit", units: ["packages/bakery"] }),
+      suite({ id: "workspace-unit", units: ["runtime/bakery"] }),
     ];
-    expect(checkTree(suites, ["packages/bakery/glaze.test.ts"])).toEqual([]);
+    expect(checkTree(suites, ["runtime/bakery/glaze.test.ts"])).toEqual([]);
   });
 
   it("reads no unit of a suite that maps changes itself as a directory", () => {
@@ -75,22 +80,22 @@ describe("the tree half of the drift guard", () => {
 
   it("lets a default suite and a variant suite claim one file", () => {
     const suites = [
-      suite({ id: "package-integration", units: ["packages/oven/a.test.ts"] }),
+      suite({ id: "package-integration", units: ["runtime/oven/a.test.ts"] }),
       suite({
         id: "package-integration-on",
         variant: "server-execution",
-        units: ["packages/oven/a.test.ts"],
+        units: ["runtime/oven/a.test.ts"],
       }),
     ];
-    expect(checkTree(suites, ["packages/oven/a.test.ts"])).toEqual([]);
+    expect(checkTree(suites, ["runtime/oven/a.test.ts"])).toEqual([]);
   });
 
   it("fails two suites claiming one file under the same variant", () => {
     const suites = [
-      suite({ id: "one", units: ["packages/oven/a.test.ts"] }),
-      suite({ id: "other", units: ["packages/oven/a.test.ts"] }),
+      suite({ id: "one", units: ["runtime/oven/a.test.ts"] }),
+      suite({ id: "other", units: ["runtime/oven/a.test.ts"] }),
     ];
-    const findings = checkTree(suites, ["packages/oven/a.test.ts"]);
+    const findings = checkTree(suites, ["runtime/oven/a.test.ts"]);
     expect(findings.map((finding) => finding.fails)).toEqual([true]);
     expect(findings[0]!.message).toContain("one and other");
   });
@@ -101,13 +106,13 @@ describe("the tree half of the drift guard", () => {
         id: "package-integration-on",
         variant: "server-execution",
         unavailable: [{
-          unit: "packages/oven/a.test.ts",
+          unit: "runtime/oven/a.test.ts",
           phase: "phase-3",
           reason: "the surface it exercises has not landed",
         }],
       }),
     ];
-    expect(checkTree(suites, ["packages/oven/a.test.ts"])).toEqual([]);
+    expect(checkTree(suites, ["runtime/oven/a.test.ts"])).toEqual([]);
   });
 
   it("accepts a script a suite names as a source of its own", () => {
@@ -117,10 +122,10 @@ describe("the tree half of the drift guard", () => {
       suite({
         id: "cli-core",
         units: ["integration.sh verbs"],
-        sources: ["packages/cli/integration/integration.sh"],
+        sources: ["runtime/cli/integration/integration.sh"],
       }),
     ];
-    expect(checkTree(suites, ["packages/cli/integration/integration.sh"]))
+    expect(checkTree(suites, ["runtime/cli/integration/integration.sh"]))
       .toEqual([]);
   });
 });
@@ -131,9 +136,9 @@ describe("the store half of the drift guard", () => {
 
   const bakery = suite({
     id: "workspace-unit",
-    units: ["packages/bakery/test/glaze.test.ts"],
+    units: ["runtime/bakery/test/glaze.test.ts"],
     locate: (record) =>
-      record.file === "packages/bakery/test/glaze.test.ts"
+      record.file === "runtime/bakery/test/glaze.test.ts"
         ? { level: "unit", unit: record.file }
         : undefined,
   });
@@ -141,7 +146,7 @@ describe("the store half of the drift guard", () => {
   it("passes a recorded identity exactly one suite claims", () => {
     const findings = checkStore([bakery], [{
       test: { k: "unit", s: "bakery", n: "glaze > sets" },
-      file: "packages/bakery/test/glaze.test.ts",
+      file: "runtime/bakery/test/glaze.test.ts",
       commit: HERE,
     }], HERE);
     expect(findings.filter((finding) => finding.fails)).toEqual([]);
@@ -150,7 +155,7 @@ describe("the store half of the drift guard", () => {
   it("fails an identity no suite recognizes", () => {
     const findings = checkStore([bakery], [{
       test: { k: "unit", s: "bakery", n: "icing > sets" },
-      file: "packages/bakery/icing.test.ts",
+      file: "runtime/bakery/icing.test.ts",
       commit: HERE,
     }], HERE);
     expect(
@@ -164,7 +169,7 @@ describe("the store half of the drift guard", () => {
     const twin = suite({ ...bakery, id: "runner-unit" });
     const findings = checkStore([bakery, twin], [{
       test: { k: "unit", s: "bakery", n: "glaze > sets" },
-      file: "packages/bakery/test/glaze.test.ts",
+      file: "runtime/bakery/test/glaze.test.ts",
       commit: HERE,
     }], HERE);
     expect(
@@ -190,7 +195,7 @@ describe("the store half of the drift guard", () => {
       },
       {
         test: { k: "unit", s: "bakery", n: "glaze > sets" },
-        file: "packages/bakery/test/glaze.test.ts",
+        file: "runtime/bakery/test/glaze.test.ts",
         commit: HERE,
       },
     ], HERE);
@@ -217,13 +222,32 @@ describe("the store half of the drift guard", () => {
     expect(findings[0]!.message).toContain("never recorded");
   });
 
+  it("reports no gate as never recorded, since the job running it records them after", () => {
+    const measured = suite({
+      id: "workspace-unit",
+      units: ["runtime/bakery/test/glaze.test.ts"],
+      measured: [{
+        member: "runtime/bakery",
+        reachedBy: ["runtime/bakery/"],
+        units: ["runtime/bakery/test/glaze.test.ts"],
+      }],
+    });
+    const messages = checkStore(
+      [measured, coverageGateSuite([measured])],
+      [],
+      HERE,
+    ).map((finding) => finding.message);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("workspace-unit enumerates");
+  });
+
   it("names the job and the file a failing identity came from", () => {
     // The identity says what disagreed. Acting on it means finding the
     // thing that wrote it, and a reader has neither the artifact nor the
     // source unless the finding carries them.
     const findings = checkStore([bakery], [{
       test: { k: "unit", s: "bakery", n: "icing > sets" },
-      file: "packages/bakery/icing.test.ts",
+      file: "runtime/bakery/icing.test.ts",
       commit: HERE,
       from: "test-records-test-3-a1",
     }], HERE);
@@ -234,7 +258,7 @@ describe("the store half of the drift guard", () => {
     ).toEqual([
       'no suite claims the recorded identity ["unit","bakery","icing > ' +
       'sets"], recorded by test-records-test-3-a1 from ' +
-      "packages/bakery/icing.test.ts",
+      "runtime/bakery/icing.test.ts",
     ]);
   });
 
@@ -288,7 +312,7 @@ describe("the store half of the drift guard", () => {
     const findings = checkStore([bakery], [
       {
         test: { k: "unit", s: "bakery", n: "glaze > sets" },
-        file: "packages/bakery/test/glaze.test.ts",
+        file: "runtime/bakery/test/glaze.test.ts",
         commit: HERE,
         from: "test-records-test-1-a1",
       },
@@ -312,7 +336,7 @@ describe("the store half of the drift guard", () => {
     // a disagreement would fail the default branch for deleting a test.
     const findings = checkStore([bakery], [{
       test: { k: "unit", s: "bakery", n: "icing > sets" },
-      file: "packages/bakery/icing.test.ts",
+      file: "runtime/bakery/icing.test.ts",
       commit: "9a8b7c6d",
     }], HERE);
     expect(findings.map((finding) => finding.fails)).toEqual([true]);
@@ -325,7 +349,7 @@ describe("the store half of the drift guard", () => {
     // so the guard cannot say whether it agrees with it.
     const findings = checkStore([bakery], [{
       test: { k: "unit", s: "bakery", n: "icing > sets" },
-      file: "packages/bakery/icing.test.ts",
+      file: "runtime/bakery/icing.test.ts",
     }], HERE);
     expect(findings.map((finding) => finding.fails)).toEqual([true]);
     expect(findings[0]!.message).toContain("no commit");
@@ -334,7 +358,7 @@ describe("the store half of the drift guard", () => {
   it("judges records from this commit", () => {
     const findings = checkStore([bakery], [{
       test: { k: "unit", s: "bakery", n: "icing > sets" },
-      file: "packages/bakery/icing.test.ts",
+      file: "runtime/bakery/icing.test.ts",
       commit: HERE,
     }], HERE);
     expect(
@@ -348,7 +372,7 @@ describe("the store half of the drift guard", () => {
     const withSkip = suite({
       ...bakery,
       unavailable: [{
-        unit: "packages/bakery/test/glaze.test.ts",
+        unit: "runtime/bakery/test/glaze.test.ts",
         reason: "the surface it exercises has not landed",
       }],
     });
@@ -374,18 +398,18 @@ describe("what the tree half looks at", () => {
 
   it("finds every shape Deno takes for a test file", async () => {
     const root = await tree([
-      "packages/oven/test/bake.test.ts",
-      "packages/oven/test/glaze.test.tsx",
-      "packages/oven/test/proof_test.ts",
-      "packages/oven/test/test.ts",
-      "packages/oven/src/oven.ts",
+      "runtime/oven/test/bake.test.ts",
+      "runtime/oven/test/glaze.test.tsx",
+      "runtime/oven/test/proof_test.ts",
+      "runtime/oven/test/test.ts",
+      "runtime/oven/src/oven.ts",
     ]);
     try {
       expect(await candidateSurfaces(root)).toEqual([
-        "packages/oven/test/bake.test.ts",
-        "packages/oven/test/glaze.test.tsx",
-        "packages/oven/test/proof_test.ts",
-        "packages/oven/test/test.ts",
+        "runtime/oven/test/bake.test.ts",
+        "runtime/oven/test/glaze.test.tsx",
+        "runtime/oven/test/proof_test.ts",
+        "runtime/oven/test/test.ts",
       ]);
     } finally {
       await Deno.remove(root, { recursive: true });
@@ -394,12 +418,12 @@ describe("what the tree half looks at", () => {
 
   it("finds a shell script only where an integration directory holds it", async () => {
     const root = await tree([
-      "packages/cli/integration/acl.sh",
-      "packages/cli/support/release.sh",
+      "runtime/cli/integration/acl.sh",
+      "runtime/cli/support/release.sh",
     ]);
     try {
       expect(await candidateSurfaces(root)).toEqual([
-        "packages/cli/integration/acl.sh",
+        "runtime/cli/integration/acl.sh",
       ]);
     } finally {
       await Deno.remove(root, { recursive: true });
@@ -409,9 +433,9 @@ describe("what the tree half looks at", () => {
   it("finds a test anywhere in the repository and nowhere it ignores", async () => {
     const root = await tree([
       ".claude/scripts/hook.test.ts",
-      ".claude/worktrees/copy/packages/oven/test/c.test.ts",
-      "packages/oven/node_modules/dep/a.test.ts",
-      "packages/oven/test/c.test.ts",
+      ".claude/worktrees/copy/runtime/oven/test/c.test.ts",
+      "runtime/oven/node_modules/dep/a.test.ts",
+      "runtime/oven/test/c.test.ts",
     ]);
     try {
       await Deno.writeTextFile(
@@ -420,7 +444,7 @@ describe("what the tree half looks at", () => {
       );
       expect(await candidateSurfaces(root)).toEqual([
         ".claude/scripts/hook.test.ts",
-        "packages/oven/test/c.test.ts",
+        "runtime/oven/test/c.test.ts",
       ]);
     } finally {
       await Deno.remove(root, { recursive: true });
@@ -431,7 +455,7 @@ describe("what the tree half looks at", () => {
     // A file that gets registered or deleted takes its line with it,
     // which is what stops the list describing a tree nobody has.
     const findings = checkTree([], [], {
-      fixtures: [{ path: "packages/gone.test.ts", reason: "moved away" }],
+      fixtures: [{ path: "runtime/gone.test.ts", reason: "moved away" }],
     });
     expect(findings.map((finding) => finding.fails)).toEqual([true]);
     expect(findings[0]!.message).toContain("no longer holds it");
@@ -502,9 +526,10 @@ describe("the workflow half of the drift guard", () => {
   it("finds no step recording by hand in this repository's workflows", async () => {
     // The lanes run every test and gate the topology declares, so the
     // workflows this repository ships record nothing of their own.
-    const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
-    const suites = await loadTopology(root);
-    expect(checkWorkflows(suites, await workflowRecords(root))).toEqual([]);
+    const suites = await loadTopology(REPOSITORY);
+    expect(checkWorkflows(suites, await workflowRecords(REPOSITORY))).toEqual(
+      [],
+    );
   });
 
   it("fails a step no suite claims", () => {
@@ -798,7 +823,7 @@ describe("reading a run's records", () => {
           test: { k: "unit", s: "oven", n: "bakes" },
           outcome: "pass",
           durationMs: 1,
-          file: "packages/oven/test/bake.test.ts",
+          file: "runtime/oven/test/bake.test.ts",
         }),
         JSON.stringify({
           line: "record",
@@ -816,7 +841,7 @@ describe("reading a run's records", () => {
       ]);
       // The file the producer knew travels with the record, because it
       // is what locates a unit identity.
-      expect(records[0]!.file).toBe("packages/oven/test/bake.test.ts");
+      expect(records[0]!.file).toBe("runtime/oven/test/bake.test.ts");
       expect(records[1]!.test.v).toBe("server-execution");
     } finally {
       await Deno.remove(at);
@@ -905,15 +930,15 @@ describe("what the guard declines to fail on", () => {
     // topology claims what it produced.
     const bakery = suite({
       id: "workspace-unit",
-      units: ["packages/bakery/test/glaze.test.ts"],
+      units: ["runtime/bakery/test/glaze.test.ts"],
       locate: () => ({
         level: "unit",
-        unit: "packages/bakery/test/glaze.test.ts",
+        unit: "runtime/bakery/test/glaze.test.ts",
       }),
     });
     const record = {
       test: { k: "unit", s: "bakery", n: "glaze > sets" },
-      file: "packages/bakery/test/glaze.test.ts",
+      file: "runtime/bakery/test/glaze.test.ts",
       commit: "c1",
     };
     expect(checkStore([bakery], [record, record, record], "c1"))
@@ -951,7 +976,6 @@ describe("reading a run's gathered artifacts", () => {
     // A lane's artifact holds a record for every test the lane ran, and
     // a mapping gone wrong leaves each of those unclaimed. Both are more
     // than one function call can take as arguments.
-    const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
     const dir = await Deno.makeTempDir({ prefix: "large-" });
     const count = 500_000;
     try {
@@ -962,7 +986,7 @@ describe("reading a run's gathered artifacts", () => {
         Array.from({ length: count }, (_, at) => `bakes ${at}`),
       );
       const { findings } = await check({
-        root,
+        root: REPOSITORY,
         store: { records: [dir], commit: "c0ffee" },
       });
       const unclaimed = findings.filter((finding) =>
@@ -1040,6 +1064,86 @@ describe("reading a run's gathered artifacts", () => {
     }
   });
 
+  it("reads only the latest attempt at each job that was re-run", async () => {
+    // A lane stopped at its bound ships what it finished, and a re-run of
+    // it ships again under the next attempt. The run as it stands is the
+    // re-run's records, beside those of every job that was not re-run.
+    const root = await Deno.makeTempDir({ prefix: "artifacts-" });
+    try {
+      const facts = { job: "Lane", commit: "c0ffee" };
+      await artifact(root, "test-records-tests-1-a1", facts, ["cut short"]);
+      await artifact(root, "test-records-tests-1-a2", facts, ["bakes"]);
+      await artifact(root, "test-records-tests-11-a1", facts, ["glazes"]);
+      await artifact(root, "test-records-tests-2-a9", facts, ["burns"]);
+      await artifact(root, "test-records-tests-2-a10", facts, ["cools"]);
+      await artifact(root, "test-records-tests-3-a1", facts, ["rises"]);
+      await artifact(root, "test-records-coverage-a1", facts, ["gate"]);
+      await artifact(root, "not-shipped-a1", facts, ["proves"]);
+      await artifact(root, "not-shipped-a2", facts, ["rests"]);
+      const records = await readRecords([root], new AliasResolver([]));
+      expect(
+        records.map((record) => [record.from, record.test.n]).sort(),
+      ).toEqual([
+        ["not-shipped-a1", "proves"],
+        ["not-shipped-a2", "rests"],
+        ["test-records-coverage-a1", "gate"],
+        ["test-records-tests-1-a2", "bakes"],
+        ["test-records-tests-11-a1", "glazes"],
+        ["test-records-tests-2-a10", "cools"],
+        ["test-records-tests-3-a1", "rises"],
+      ]);
+      // The same holds where each artifact, or each file, is named on its
+      // own.
+      for (const tail of ["", "/records.ndjson"]) {
+        const named = await readRecords(
+          [
+            `${root}/test-records-tests-1-a1${tail}`,
+            `${root}/test-records-tests-1-a2${tail}`,
+          ],
+          new AliasResolver([]),
+        );
+        expect(named.map((record) => record.test.n)).toEqual(["bakes"]);
+      }
+      // And where the check is handed each artifact as a path of its own:
+      // the superseded one is neither judged nor taken for a path that
+      // arrived empty.
+      const { findings } = await check({
+        root: REPOSITORY,
+        store: {
+          records: [
+            `${root}/test-records-tests-1-a1`,
+            `${root}/test-records-tests-1-a2`,
+          ],
+          commit: "c0ffee",
+        },
+      });
+      const failing = findings.filter((finding) => finding.fails).map((
+        finding,
+      ) => finding.message);
+      expect(failing.length).toBe(1);
+      expect(failing[0]).toContain('"bakes"');
+      // A latest attempt that recorded nothing leaves its path holding
+      // nothing, whatever the attempt before it recorded.
+      const rerun = `${root}/rerun`;
+      await artifact(rerun, "test-records-tests-1-a1", facts, ["bakes"]);
+      await artifact(rerun, "test-records-tests-1-a2", facts, []);
+      const emptied = await check({
+        root: REPOSITORY,
+        store: { records: [rerun], commit: "c0ffee" },
+      });
+      expect(
+        emptied.findings.filter((finding) => finding.fails).map((finding) =>
+          finding.message
+        ),
+      ).toEqual([
+        `${rerun} hold no records, so the store half read nothing of what ` +
+        "they were to carry",
+      ]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   it("walks a directory of them, however deep each one sits", async () => {
     // A run that produced a single artifact arrives flattened into the
     // directory above, and one that produced many arrives as a directory
@@ -1062,7 +1166,6 @@ describe("reading a run's gathered artifacts", () => {
     // Each named path is a part of the run. One that arrived cannot
     // answer for one that did not, so summing them and asking whether
     // anything came back would validate a corpus only partly read.
-    const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
     const dir = await Deno.makeTempDir({ prefix: "partial-" });
     try {
       await Deno.mkdir(`${dir}/present`);
@@ -1077,7 +1180,7 @@ describe("reading a run's gathered artifacts", () => {
       );
       const missing = `${dir}/never-downloaded`;
       const { findings } = await check({
-        root,
+        root: REPOSITORY,
         store: { records: [`${dir}/present`, missing], commit: "c0ffee" },
       });
       expect(
@@ -1098,13 +1201,12 @@ describe("reading a run's gathered artifacts", () => {
     // guard with nothing to judge. It says so once: reporting every unit
     // the topology holds as never recorded would bury that line in
     // thousands of its own making.
-    const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
     const empty = await Deno.makeTempDir({ prefix: "no-records-" });
     const missing = `${empty}/never-downloaded`;
     try {
       for (const at of [empty, missing]) {
         const { findings } = await check({
-          root,
+          root: REPOSITORY,
           store: { records: [at], commit: "c0ffee" },
         });
         expect(
@@ -1294,7 +1396,6 @@ describe("running the check and saying what it found", () => {
   });
 
   it("runs the store half against the records it is given", async () => {
-    const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
     const at = await Deno.makeTempFile({ suffix: ".ndjson" });
     await Deno.writeTextFile(
       at,
@@ -1302,7 +1403,7 @@ describe("running the check and saying what it found", () => {
     );
     try {
       const { findings } = await check({
-        root,
+        root: REPOSITORY,
         store: { records: [at], commit: "c1" },
       });
       expect(
@@ -1318,20 +1419,20 @@ describe("running the check and saying what it found", () => {
   it("exits zero over a tree it accounts for and one over a tree it does not", async () => {
     // A surface nobody registered has to stop a build; a guard that only
     // printed would be a log line nobody reads.
-    const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
     const log = console.log;
     const err = console.error;
     console.log = () => {};
     console.error = () => {};
     try {
-      expect(await main([], root)).toBe(0);
+      expect(await main([], REPOSITORY)).toBe(0);
       const at = await Deno.makeTempFile({ suffix: ".ndjson" });
       await Deno.writeTextFile(
         at,
         recordsAt("c1"),
       );
       try {
-        expect(await main(["--commit", "c1", "--records", at], root)).toBe(1);
+        expect(await main(["--commit", "c1", "--records", at], REPOSITORY))
+          .toBe(1);
       } finally {
         await Deno.remove(at);
       }
@@ -1345,12 +1446,11 @@ describe("running the check and saying what it found", () => {
     // A usage mistake is not a topology defect, and reporting it as one
     // sends somebody looking through the tree for a surface nobody
     // registered. The exit status is what tells the two apart.
-    const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
     const said: string[] = [];
     const err = console.error;
     console.error = (line: string) => said.push(line);
     try {
-      expect(await main(["--records", "a.ndjson"], root)).toBe(2);
+      expect(await main(["--records", "a.ndjson"], REPOSITORY)).toBe(2);
     } finally {
       console.error = err;
     }
@@ -1360,8 +1460,7 @@ describe("running the check and saying what it found", () => {
 
   it("accounts for this repository's own tree", async () => {
     // The check the repository runs on itself, run the way it runs it.
-    const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
-    const { findings, suites } = await check({ root });
+    const { findings, suites } = await check({ root: REPOSITORY });
     expect(findings.filter((finding) => finding.fails)).toEqual([]);
     expect(suites).toBeGreaterThan(0);
   });

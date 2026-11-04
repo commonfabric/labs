@@ -1,0 +1,223 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "idle",
+          "running",
+          "error"
+        ]
+      }
+    },
+    "properties": {
+      "agentName": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "Unnamed Agent",
+        "type": "string"
+      },
+      "directive": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "enabled": {
+        "asCell": [
+          "cell"
+        ],
+        "default": true,
+        "type": "boolean"
+      },
+      "isAgent": {
+        "default": true,
+        "type": "boolean"
+      },
+      "lastRun": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "lastRunSummary": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "learned": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/$defs/AgentStatus",
+        "asCell": [
+          "cell"
+        ],
+        "default": "idle"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "agent/agent.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AgentStatus": {
+        "enum": [
+          "idle",
+          "running",
+          "error"
+        ]
+      }
+    },
+    "description": "An #agent piece — autonomous worker with directive, learned state, and status.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "agentName": {
+        "type": "string"
+      },
+      "appendLearned": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "entry": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "entry"
+        ],
+        "type": "object"
+      },
+      "directive": {
+        "type": "string"
+      },
+      "enabled": {
+        "type": "boolean"
+      },
+      "isAgent": {
+        "type": "boolean"
+      },
+      "lastRun": {
+        "type": "string"
+      },
+      "lastRunSummary": {
+        "type": "string"
+      },
+      "learned": {
+        "type": "string"
+      },
+      "markError": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "type": "object"
+      },
+      "markIdle": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "learned": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "type": "object"
+      },
+      "markRunning": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "setDirective": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
+      "setLearned": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
+      "status": {
+        "$ref": "#/$defs/AgentStatus"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "toggleEnabled": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      }
+    },
+    "required": [
+      "agentName",
+      "directive",
+      "enabled",
+      "learned",
+      "status",
+      "lastRun",
+      "lastRunSummary",
+      "isAgent",
+      "summary",
+      "setDirective",
+      "setLearned",
+      "appendLearned",
+      "toggleEnabled",
+      "markRunning",
+      "markIdle",
+      "markError",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

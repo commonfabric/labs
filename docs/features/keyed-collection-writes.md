@@ -14,7 +14,7 @@ that make such a migration look finished while it is not, see
 
 ## The lunch poll's read-then-write inventory
 
-Every list-mutating handler in `packages/patterns/lunch-poll`, by what it
+Every list-mutating handler in `patterns/apps/lunch-poll`, by what it
 mutates and the form it uses. The poll is the worked example because a lunch
 decision is the contended case: everyone votes at once, on the same list.
 
@@ -43,7 +43,7 @@ points at. That keeps the key computable from the event alone, which is the
 property the whole scheme rests on: a handler that had to search the list for
 its voter would put the list back in its conflict set and give up the merge.
 
-`packages/patterns/integration/lunch-poll-keyed-votes.test.ts` holds the poll
+`patterns/integration/lunch-poll-keyed-votes.test.ts` holds the poll
 to this. It has one session read another session's vote at that address, which
 only succeeds if the vote was stored as a keyed element — the tally reads the
 same either way, so nothing lighter than an address can tell the two apart.
@@ -142,7 +142,7 @@ keyed operation to be refused.
 **The collection's own link, under every keyed access.** `elementById` derives
 its address by resolving the collection's link, and the sigil probe that
 resolution makes — `resolveLinkTracingDereferences` in
-`packages/runner/src/link-resolution.ts`, tagged `linkResolutionProbe` — is
+`runtime/runner/src/link-resolution.ts`, tagged `linkResolutionProbe` — is
 recorded as a read at the collection's path plus the probe's sub-path. So even
 a bare `elementById(key).set(...)` — no `addUnique`, no scan, nothing that
 touches membership — commits against the collection. Its conflict set is three
@@ -194,7 +194,7 @@ the collection document — a `removeByValue`, an `addUnique` that does add, a
 whole-list `set` — refuses it, while the commit that made the membership
 change is not refused on this account, its own array read having been dropped.
 
-`packages/patterns/integration/lunch-poll-keyed-votes.test.ts` pins the free
+`patterns/integration/lunch-poll-keyed-votes.test.ts` pins the free
 case and the boundary either mechanism crosses. Its burst recasts only, holds
 the collection's membership still through every round, and requires that no
 commit refused while it ran wrote the collection — the question a count of

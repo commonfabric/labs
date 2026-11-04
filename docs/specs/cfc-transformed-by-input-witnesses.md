@@ -15,13 +15,13 @@ This document specifies the input witnesses the runtime retains on
 `TransformedBy`, so that a rule can require that the endorsed code was fed by
 specific code, and says what they do not cover. The mint lives in
 `deriveFlowJoinImpl` and `observationInputWitnesses`
-(`packages/runner/src/cfc/prepare.ts`) over the helpers in
-`packages/runner/src/cfc/input-witness.ts`. The cases are in
-`packages/runner/test/cfc-transformed-by-input-witness.test.ts`, and, run as
+(`runtime/runner/src/cfc/prepare.ts`) over the helpers in
+`runtime/runner/src/cfc/input-witness.ts`. The cases are in
+`runtime/runner/test/cfc-transformed-by-input-witness.test.ts`, and, run as
 compiled patterns, in
-`packages/runner/test/cfc-transformed-by-input-witness-compiled.test.ts`,
-`packages/runner/test/cfc-transformed-by-input-witness-references.test.ts` and
-`packages/patterns/cfc-exchange-rules/witnessed-chain.test.tsx`.
+`runtime/runner/test/cfc-transformed-by-input-witness-compiled.test.ts`,
+`runtime/runner/test/cfc-transformed-by-input-witness-references.test.ts` and
+`patterns/examples/cfc-exchange-rules/witnessed-chain.test.tsx`.
 
 ## What the specification asks for
 
@@ -88,7 +88,10 @@ read's confidential locations:
   enclosing location does, so these locations cover every position of the value.
 - A location's integrity is its own resolution: per origin component, the most
   specific entry at or above it, joined across components. That is a claim
-  about the value at that location.
+  about the value at that location. A `TransformedBy` in that resolution is a
+  witness only where a flow stamp holds it, a `derived` or `structure` entry:
+  one a declared entry holds names no attempt (CFC §15.4) and is left out,
+  whatever the trust of the code that declared it.
 - An entry's `*` segment applies at every location beneath it. A location's `*`
   stands for the children that have no entry of their own, so a concrete
   sibling's entry does not resolve there.
@@ -109,6 +112,9 @@ read's confidential locations:
 - A reference probe (`followRef`) keeps its own entries. A pointer's link
   entry is the link write's, with no `TransformedBy`, so a probe that observes
   which reference sits at a slot without reading the slot retains no witness.
+  A probe of a slot that holds no reference finds the value stored there, so
+  it resolves its location as a shallow read of the slot does, unless the
+  transaction wrote at, above or beneath the slot.
   A read of the slot itself resolves the slot's value stamp, which is where a
   reference the writer supplied carries its writer (see "References the
   writer supplied" below). A reference followed
@@ -124,7 +130,12 @@ transformation that follows a reference to confidential content consumed the
 reference as an input, whatever the slot holding it is labeled. Such a slot is
 a location of its own: its integrity is resolved over the value stamps at the
 slot, as a shallow read of it is, and it counts even when nothing labels the
-slot. So is a slot whose reference leads to another such slot. A reference
+slot. A value stamp is one the flow stage minted on the value an attempt
+wrote; a `TransformedBy` a schema declares at the slot, or in a template over
+the list's items, is no value stamp and witnesses nothing there, so a slot
+another writer filled under such a declaration witnesses only what that
+writer's own stamp says. So is a slot whose reference leads to another such
+slot. A reference
 counts when the transformation read the slot, or read recursively above it,
 and read the document it names at or below its target with confidentiality. A
 reference also counts when the transformation followed it and the label of
@@ -172,7 +183,9 @@ included. A destination qualifies only when all of these hold:
 - no reference sits anywhere in its final value, because a pointer the diff
   found in place, such as a write redirect it writes through, is not one the
   writer supplied;
-- the join fits every ceiling declared at or beneath it;
+- the join fits every ceiling declared at or beneath it, each joined with the
+  document's residency clauses (§8.12.4, as `cfc-enforcement-matrix.md` §4
+  describes them);
 - the transaction created the destination, or read no content at or beneath
   it, nor recursively above it. A writer that read its destination can carry a
   value it found there into what it sets, and the diff leaves that value in
@@ -205,7 +218,7 @@ Pattern code that puts a plain object in an array does not store it inline.
 The diff anchors it: it writes the object into an entity document of its own,
 at an id the runtime derives, and stores a reference to that document at the
 object's slot (`anchorValueAsEntity` in
-`packages/runner/src/data-updating.ts`). A list of objects is a list of
+`runtime/runner/src/data-updating.ts`). A list of objects is a list of
 references, and a reader reaches each object in two steps: it reads the slot,
 then the entity the reference names.
 
@@ -222,6 +235,21 @@ entity's root, and not a write redirect. So:
   and
 - a `Cell.set` destination whose value holds such references, a record
   holding a list of objects, say, is stamped whole.
+
+A slot's stamp describes the reference the slot holds only in an envelope
+that says where its stamps sit, with `stampPlacement: "committed"`
+(`cfc-stored-envelope.md`). The runtime re-derives an attempt's labels
+against the committed placement (spec §8.10.2.2), and writes the member when
+the stored envelope carried it or the transaction stamped a slot beside a
+reference it anchored, and no stamp carried over from an envelope without it
+stands at a slot holding a reference. Before that rule, an append landed at
+the live tail while its envelope described the list the attempt read, so a
+stamp could sit beside another writer's reference. A writer's stamp at a
+reference slot of an envelope that does not carry the member is therefore
+no witness at all (spec §18.7, `slotStampPlacementUnknown` in `prepare.ts`),
+and an append beside such a stamp does not make it one: the list witnesses
+again once the endorsed step has rewritten the slots the earlier envelope
+stamped.
 
 A slot's stamp says who stored the reference there and nothing about what it
 refers to. A reader that follows it reads the entity as well, and each
@@ -309,8 +337,8 @@ Each of these refuses an honest release rather than admitting a crafted one:
 - **References the writer did not supply.** A reference stored any way other
   than by anchoring an object the writer put in an array — a cell set into a
   slot, a reference copied from another list — earns its slot no value stamp,
-  and its link entry (`LinkReference` provenance and the carried
-  confidentiality) has no `TransformedBy`. A transformation that reads such a
+  and its link entry (the reference's own restriction) has no
+  `TransformedBy`. A transformation that reads such a
   slot retains no witness, whoever wrote it. So does a standalone reference
   probe, which consumes the link entry alone.
 - **A list whose own node is confidential, grown by collection operations.** A
@@ -358,14 +386,13 @@ not rely on the witness without them.
   a chain is evidence minted where data enters — a user's gesture on a trusted
   surface — which is proof-of-gesture work, and a family this design can
   retain once it exists.
-- **Composition at the release gate.** The gate evaluates a rule once per
-  consumed read over that read's effective label, whose integrity is the union
-  described above. A document that holds the endorsed output at one path and a
-  value written by other code at another satisfies the guard through the first
-  and releases both, verbatim. The identity-only guard has the same exposure;
-  the witness does not change it. An endorsed transformer whose output document
-  nobody else can write (a writer policy again) is not exposed; a gate that
-  evaluates integrity guards per consumed entry is the general fix.
+- **Composition at the release gate.** A gate runs a value-intrinsic rule at
+  each location an access consumed, on that location's own evidence (§5.3,
+  §4.6.3), so a document that holds the endorsed output at one path and a
+  value written by other code at another releases the first and not the
+  second. A cell's stored label at the display is still fitted on its root's
+  integrity, so a root stamp written whole by the endorsed transformer
+  speaks for a child entry beneath it there.
 - **Stance stuffing through an endorsed entry point.** Implementation identity
   is content-addressed, so any program that imports the endorsed module runs the
   same identity. A member can bind the submit step to a crafted event and

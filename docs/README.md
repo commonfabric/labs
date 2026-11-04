@@ -4,8 +4,8 @@ How this repository writes things down: comments in code, and documents.
 
 Every document in this repository is in one of two categories, and the
 category determines whether the document may be edited. This applies to
-`docs/`, to package-level documents under `packages/`, and to tool documents
-under `tools/`.
+`docs/`, to package-level documents inside each package, and to the documents
+of the scripts under `scripts/`.
 
 The test for which is which: if the system changed, would someone edit this
 document, or write a new one and leave this one alone? Edit it — it is live.
@@ -71,8 +71,8 @@ because your own change is what completed the plan — archive the document:
 
 1. `git mv` it to `docs/history/<original path>`, dropping a leading `docs/`
    from the original path (so `docs/specs/foo.md` becomes
-   `docs/history/specs/foo.md`, and `packages/cli/BAR.md` becomes
-   `docs/history/packages/cli/BAR.md`).
+   `docs/history/specs/foo.md`, and `runtime/cli/BAR.md` becomes
+   `docs/history/runtime/cli/BAR.md`).
 2. Prepend the metadata header described in
    [`history/README.md`](history/README.md).
 3. Fix references: repoint links elsewhere in the repo to the new path, and

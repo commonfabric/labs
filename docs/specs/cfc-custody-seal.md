@@ -3,7 +3,7 @@
 A person can release something derived from their own data without releasing
 the data itself, if they trust the code that does the deriving. The custody seal
 is the host operation that makes that concrete. The actor reviews a value that
-is entirely their own, and the host copies it into the custody of a policy
+is their own, and the host copies it into the custody of a policy
 module `P` that the actor's trust configuration names as a trusted declassifier.
 After the seal, the only way anything derived from the value leaves is through
 `P`'s own release rules. Those rules can require, through the input witness on
@@ -12,10 +12,10 @@ everything confidential the releasing code read was written by the seal.
 
 This is the spec's multi-party consent release through an endorsed transformer
 (§5.3.4, §13.3), with consent given once per value at a trusted gesture. The
-host module is `packages/runner/src/cfc/custody-seal.ts`, exported to hosts as
+host module is `runtime/runner/src/cfc/custody-seal.ts`, exported to hosts as
 `@commonfabric/runner/cfc/custody-seal` and absent from pattern imports, the
 same arrangement as [reviewed snapshot copies](cfc-persisted-declassification.md#31-reviewed-snapshot-copies).
-The cases are in `packages/runner/test/cfc-custody-seal.test.ts`.
+The cases are in `runtime/runner/test/cfc-custody-seal.test.ts`.
 
 ## The operation
 
@@ -51,30 +51,61 @@ established the checks are compared against the committing transaction: the
 transaction that writes the entry reads each of them again and refuses the seal
 if any holds something else, so the value checked is the value committed.
 
-- **Every clause of the draft's label is the actor's own.** Each alternative of
-  each clause must be one of six shapes: a bare DID equal to the actor;
-  `User{subject}`; `Context{name, subject}`; `Resource{class, subject}`;
-  `Space{id}`; or `PersonalSpace{owner}`. The subject, `id`, or `owner` must
-  equal the acting principal exactly, and each shape is matched on its exact
-  key set. The two space shapes admit only the actor's home space, the space
-  whose DID is the actor's own, which is where a draft written at home is
-  labeled; a `Space` naming any other DID is refused, whether it is the room
-  or another member's home. A `Context` that carries a `hash` is a named policy
-  reference, and an atom with any other extra field (a `scope`, a `role`) also
-  belongs to someone else's policy, so neither counts as the actor's. The seal
-  refuses:
-  - a clause holding any other alternative;
+- **The draft is the actor's own.** Every clause of its label must admit the
+  actor through an alternative of the actor's own, one of six shapes: a bare
+  DID equal to the actor; `User{subject}`; `Context{name, subject}`;
+  `Resource{class, subject}`; `Space{id}`; or `PersonalSpace{owner}`. The
+  subject, `id`, or `owner` must equal the acting principal exactly, and each
+  shape is matched on its exact key set. The two space shapes admit only the
+  actor's home space, the space whose DID is the actor's own, which is where a
+  draft written at home is labeled; a `Space` naming any other DID is not the
+  actor's, whether it is the room or another member's home. A `Context` that
+  carries a `hash` is a named policy reference, and an atom with any other
+  extra field (a `scope`, a `role`) also belongs to someone else's policy, so
+  neither counts as the actor's.
+- **A clause shared with other people is absorbed.** A value made the actor's
+  own from data shared with others carries a clause naming them beside the
+  actor, as a message row labeled for its participants and the store's owner
+  does (§13.12). The seal accepts such a clause only when another clause, all
+  of whose alternatives are the actor's own, holds only alternatives the shared
+  clause holds. That clause then absorbs it (§3.1.8(5), `03-core-concepts.md`),
+  the label admits whom the actor's own clause admits (§3.1.4), and the shared
+  clause adds no reader. The actor's `User` and bare DID count as one
+  principal here, since a store names its owner by bare DID and a value private
+  to its reader by `User`. A draft private to the actor, joined with a message
+  row, is sealed; the row alone, or the row beside the actor's home space or a
+  source, is not, since those do not hold only alternatives the row holds.
+- **Beside the actor, a shared clause names only people:** `User{subject}` or
+  a well-formed bare DID, so that the dialog can name each one. A policy, a
+  source or a space is refused there; this is the seal's own rule, not the
+  specification's, which admits those as alternatives (§3.1.8(2)).
+- **The seal refuses:**
+  - a clause with no alternative that is the actor's own;
+  - a shared clause no clause of the actor's own absorbs, since its other
+    people could read the value too;
   - an empty clause, which no one can read and which sealing would open;
   - a clause carrying a `Caveat`. The caveat has to be discharged before the
-    seal, for example by instruction-inert structured generation.
+    seal, for example by instruction-inert structured generation. A caveat
+    named by its short form is not a person, so it is refused beside the
+    actor as well.
+
+  The preview names the people a value was drawn from data shared with
+  (`heldWith`): one sorted group per distinct set of people a shared clause
+  names, so conversations with different people stay apart. Two conversations
+  with the same people carry identical clauses, which a label holds once. The dialog lists them; the actor-private receipt records them;
+  the box entry does not.
 
   When an owner-shaped alternative names another DID, the refusal names both
   DIDs. That makes a stance labeled under a rotated key diagnosable: the seal
   never accepts an alternate or mapped DID.
 - **The sources are allowed.** The host must supply `allowedSources`, and every
-  `Context` and `Resource` the draft draws on must be among them. An empty list
-  admits only a value labeled for the actor alone, as a value the actor typed
-  in is. The preview lists these sources. A host passes the actor's private
+  `Context` and `Resource` the draft draws on must be among them: those are the
+  actor's own `Context` and `Resource` alternatives. An empty list admits only a
+  value that names none of them: one the actor typed in, or one made the
+  actor's own from data shared with other people, whom the preview names. The
+  list governs the actor's own sources; data shared with people is not a source
+  of the actor's, and what admits it is the actor's confirmation, which names
+  them. The preview lists these sources. A host passes the actor's private
   settings cell rather than a list it read itself; the seal reads it as
   `readCustodySourcePolicy(settings)` does: a list of the actor's own `Context`
   and `Resource` atoms in a document in the actor's home space, and nowhere
@@ -131,25 +162,27 @@ if any holds something else, so the value checked is the value committed.
 ### Seats
 
 A pattern holds a member's profile, never the member's DID. So a seat may be a
-reference to a cell whose stored label attests one principal: a
-`represents-principal` integrity atom at the cell's root or on one of its
-top-level fields, as a profile's owner-protected fields carry their owner's.
-This is the evidence `cf-cfc-authorship` reads an author claim from. A runtime
-binds the subject of an atom in the form `{kind, subject}` to its acting
-principal and refuses a literal DID there, so in that form a cell attests only
-the principal whose runtime wrote it. The seal counts only that form: an atom
-whose subject is exactly a well-formed DID, with no other key, on any label
-entry at the cell or one of its top-level fields, whatever that entry's origin. Any other
-spelling that names a principal, the `represents-principal:<did>` string form
-or a subject padded with spaces among them, gets past the runtime's refusal,
-and the seal refuses a seat whose cell carries one. The seal resolves the cell
-the reference names, reads its label, and refuses a cell that attests no
-principal or more than one, and a cell whose own label carries a clause
+reference to a cell whose stored label attests one principal through its
+`represents-principal` integrity atoms, as a profile's owner-protected fields
+carry their owner's. Which entries count is the profile rule every reader of a
+profile's principal shares (`representsPrincipalEntries()` in
+`runtime/runner/src/cfc/represents-principal.ts`): for a cell whose `name`
+holds a name its owner wrote, the entries on `name` and the root's own; for any
+other cell, every entry its label holds. This is the evidence
+`cf-cfc-authorship` reads an author claim from. A runtime binds the subject of
+an atom in the form `{kind, subject}` to its acting principal and refuses a
+literal DID there, so in that form a cell attests only the principal whose
+runtime wrote it. The seal counts only that form: an atom whose subject is
+exactly a well-formed DID, with no other key, on an entry that rule counts. Any
+other spelling that names a principal, the `represents-principal:<did>` string
+form or a subject padded with spaces among them, gets past the runtime's
+refusal, and the seal refuses a seat whose cell carries one. The seal resolves
+the cell the reference names, reads its label, and refuses a cell that attests
+no principal or more than one, and a cell whose own label carries a clause
 neither `Space(S)` nor `P` satisfies, since the DID it attests is shown to every
-reader of the room; the read is evidence the entry's transaction
-verifies, so a seat that attests another principal before the entry is written
-refuses the seal. Only `seats` may hold references; the other fields are read
-as values.
+reader of the room; the read is evidence the entry's transaction verifies, so a
+seat that attests another principal before the entry is written refuses the
+seal. Only `seats` may hold references; the other fields are read as values.
 
 Naming a seat grants the named member nothing and takes nothing from them: only
 that member can seal into it, since the seal requires the storage signer to be
@@ -173,10 +206,10 @@ attestations on their seat cells; a pattern, which reads neither DIDs nor
 attestations, gains from `D` only a test of a guess at the whole set of seat
 DIDs, and the box's address already gives it the same test. Neither the component nor the worker hands
 the pattern the entry's key: a pattern that held it could write down which
-member's entry it is. `packages/patterns/cfc-exchange-rules/custody-answer-room.tsx`
-is such a room, and `packages/patterns/cfc-exchange-rules/custody-projector.tsx`
+member's entry it is. `patterns/examples/cfc-exchange-rules/custody-answer-room.tsx`
+is such a room, and `patterns/examples/cfc-exchange-rules/custody-projector.tsx`
 is the same room demo-grade, its rule naming the projector alone.
-`packages/patterns/integration/cfc-custody-projector.test.ts` seals two
+`patterns/integration/cfc-custody-projector.test.ts` seals two
 members' stances through each room's cells and shows that a room reader sees
 its projector's answer and not a member's rating. For the answer room, whose
 rule requires the seal's witness, the host publishes that answer once and
@@ -191,7 +224,8 @@ creates it, so a seal that cannot establish one has written nothing durable.
 Then:
 
 1. **A receipt in the actor's home space.** It is labeled `User(actor)` and
-   records the event, `P`, `D`, the entry key, the sources, and the stance's
+   records the event, `P`, `D`, the entry key, the sources, the people the
+   value was drawn from data shared with (`heldWith`), and the stance's
    digest. The receipt is written first, so every entry has one. A receipt
    whose entry is absent records a seal that did not commit, or an entry lost
    afterwards, as when the box is replaced (see below). A seal whose commit
@@ -381,7 +415,7 @@ to the room's argument document by any other code, through any schema, and
 nothing more. A writer claim on `T | null` sits on the `T` branch alone and
 does not refuse a write of `null`, so the room's terms are absent until
 proposed rather than `null`. The pattern's integration test,
-`packages/patterns/integration/cfc-custody-projector.test.ts`, pins a link
+`patterns/integration/cfc-custody-projector.test.ts`, pins a link
 written into the room's result document, and the room's own pattern bound
 beneath its terms, as known residuals.
 

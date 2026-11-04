@@ -13,10 +13,7 @@ import {
   namedBenchmarkFiles,
   stepWords,
 } from "./check-bench-workflow.ts";
-import {
-  CALIBRATION_FILE,
-  KEY_BENCHMARKS,
-} from "../packages/dashboard/bench-report.ts";
+import { CALIBRATION_FILE, KEY_BENCHMARKS } from "../dashboard/bench-report.ts";
 
 /** Helper for the tests below, which builds a workflow around its steps. */
 const workflowWith = (steps: string[]): string =>
@@ -67,8 +64,8 @@ describe("check-bench-workflow", () => {
     it("returns the calibration file and each key benchmark's file", () => {
       expect([...namedBenchmarkFiles()]).toEqual([
         CALIBRATION_FILE,
-        "packages/patterns/integration/topic-board-navigation.bench.ts",
-        "packages/patterns/integration/topic-board-scale.bench.ts",
+        "patterns/integration/topic-board-navigation.bench.ts",
+        "patterns/integration/topic-board-scale.bench.ts",
       ]);
     });
 

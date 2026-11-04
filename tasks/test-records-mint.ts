@@ -79,7 +79,8 @@ export interface GcpClient {
 
   /**
    * Waits out the window in which a just-created service account is not
-   * yet visible to the other services that name it. Tests pass a no-op.
+   * yet visible to the services that name it, IAM's own key creation among
+   * them. Tests pass a no-op.
    */
   awaitVisibility?: () => Promise<void>;
 }
@@ -242,8 +243,8 @@ export async function ensurePersonFolder(
 }
 
 /**
- * Whether a response is a service the account has not propagated to yet,
- * which answers a binding that names it as though it did not exist.
+ * Whether a response comes from a service the account has not propagated
+ * to yet, which answers a request that names it as though it did not exist.
  */
 export function isAccountNotVisible(
   status: number,
@@ -283,7 +284,9 @@ export async function mintKey(
   );
   if (before.status !== 200) {
     throw new Error(
-      `listing the keys of ${email} failed: HTTP ${before.status}`,
+      `listing the keys of ${email} failed: HTTP ${before.status} ${
+        toLongQuotedDebugString(before.json)
+      }`,
     );
   }
   const superseded = ((before.json as { keys?: { name?: string }[] })
@@ -305,13 +308,25 @@ export async function mintKey(
     }
   }
 
-  const minted = await gcp(client, "POST", `${account}/keys`, {});
-  if (minted.status !== 200) {
-    throw new Error(
-      `minting a key for ${email} failed: HTTP ${minted.status} ${
-        toLongQuotedDebugString(minted.json)
-      }`,
-    );
+  // IAM's key-create endpoint can answer that a just-created account does
+  // not exist after the key listing above has already found it. As with
+  // the folder grant, that answer is the signal to wait and the only one
+  // this loop accepts, and the wait has no bound because the account does
+  // exist. A refused create made no key, so asking again cannot leave a
+  // second one behind.
+  let minted: { status: number; json: unknown };
+  for (;;) {
+    minted = await gcp(client, "POST", `${account}/keys`, {});
+    if (minted.status === 200) break;
+    if (!isAccountNotVisible(minted.status, minted.json, email)) {
+      throw new Error(
+        `minting a key for ${email} failed: HTTP ${minted.status} ${
+          toLongQuotedDebugString(minted.json)
+        }`,
+      );
+    }
+    console.log(`${email} has not reached IAM key creation yet; waiting`);
+    await awaitVisibility(client);
   }
   const keyData = (minted.json as { privateKeyData?: string }).privateKeyData;
   if (keyData === undefined) {

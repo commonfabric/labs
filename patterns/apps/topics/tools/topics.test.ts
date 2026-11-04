@@ -1,0 +1,1801 @@
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+import { fromFileUrl, join } from "@std/path";
+import type { FabricPlainObject } from "@commonfabric/api";
+import { stripAnsi } from "@commonfabric/cli/view/ansi";
+import { taggedHashStringOf } from "@commonfabric/data-model";
+import { legacySpaceDid } from "@commonfabric/identity";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+
+import { boardFile } from "./sync.ts";
+import {
+  bodyAction,
+  browseWrite,
+  commentAction,
+  findTopic,
+  linkAction,
+  main,
+  mentionAction,
+  newAction,
+  type ProgramRun,
+  runProgram,
+  searchAction,
+  showAction,
+  similarAction,
+  stdinText,
+  syncAction,
+  titleAction,
+  type TopicsDeps,
+  USAGE,
+  writeSession,
+} from "./topics.ts";
+import type { Topic } from "./mirror.ts";
+import {
+  BOARD,
+  BOARD_DOCS,
+  type BoardServer,
+  boardServer,
+  INPUT_1,
+  link,
+  SPACE,
+} from "./board-fixture.ts";
+
+/** A verb call the fake dispatch received. */
+interface Call {
+  piece: string;
+  verb: string;
+  payload: Record<string, string>;
+  invocation: string;
+  session: string;
+  args: readonly string[];
+}
+
+/** A comment's time on the second day the board's comments span. */
+const DAY_TWO = Date.UTC(2026, 9, 27, 12);
+
+/** How far a failing `cf piece call` got before it failed. */
+type Phase = "initial_sync" | "dispatched" | "committed";
+
+describe("topics command", () => {
+  let board: BoardServer;
+  let dir: string;
+  let output: string[];
+  let warnings: string[];
+  let opened: string[];
+  let copied: string[];
+  let calls: Call[];
+  let results: Map<string, unknown>;
+  let stepped: string[];
+  let stdin: string | undefined;
+  let input: FabricPlainObject;
+  let applyWrites: boolean;
+  let status: string;
+  let failure: { phase: Phase | undefined; error: Error } | undefined;
+  let garbled: boolean;
+  let stepFails: boolean;
+
+  beforeEach(async () => {
+    board = await boardServer();
+    dir = await Deno.makeTempDir({ prefix: "topics-tool-command-" });
+    output = [];
+    warnings = [];
+    opened = [];
+    copied = [];
+    calls = [];
+    results = new Map();
+    stepped = [];
+    stdin = undefined;
+    input = { ...INPUT_1 };
+    applyWrites = true;
+    status = "settled";
+    failure = undefined;
+    garbled = false;
+    stepFails = false;
+  });
+
+  afterEach(async () => {
+    await board.close();
+    await Deno.remove(dir, { recursive: true });
+  });
+
+  /**
+   * Performs `verb` on the board the way the Topics pattern does, for the
+   * documents these tests read back. A repeated invocation id settles on the
+   * first outcome without writing.
+   */
+  async function dispatch(
+    piece: string,
+    verb: string,
+    payload: Record<string, string>,
+  ): Promise<unknown> {
+    const by = { kind: "agent", name: payload.agentName };
+    const writeInput = (value: FabricPlainObject) => {
+      input = value;
+      return board.write({ "of:fid1:input-1": { value } });
+    };
+    const list = (key: string) => {
+      const value = input[key];
+      return Array.isArray(value) ? value : [];
+    };
+    if (!applyWrites) return undefined;
+    if (verb === "addTopic") {
+      await board.write({
+        "of:fid1:topic-piece-3": {
+          value: {},
+          argument: link("of:fid1:input-3"),
+        },
+        "of:fid1:input-3": {
+          value: { title: payload.title, body: payload.body, createdBy: by },
+        },
+        "of:fid1:board-input": {
+          value: {
+            names: {
+              "1": link("of:fid1:topic-alias-1"),
+              "2": link("of:fid1:topic-piece-2"),
+              "3": link("of:fid1:topic-piece-3"),
+            },
+          },
+        },
+      });
+      return { topic: { $link: "/of:fid1:topic-piece-3" }, name: "3" };
+    }
+    expect(piece).toBe("of:fid1:topic-alias-1");
+    if (verb === "addComment") {
+      const id = `of:fid1:comment-${calls.length + 1}`;
+      await board.write({
+        [id]: { value: { author: by, body: payload.body, sentAt: 9000 } },
+      });
+      await writeInput({
+        ...input,
+        comments: [...list("comments"), link(id)],
+      });
+    } else if (verb === "mention" || verb === "unmention") {
+      const others = list("mentioned").filter((entry) =>
+        JSON.stringify(entry) !== JSON.stringify(link(payload.topic.slice(1)))
+      );
+      await writeInput({
+        ...input,
+        mentioned: verb === "mention"
+          ? [...others, link(payload.topic.slice(1))]
+          : others,
+      });
+    } else if (verb === "setBody") {
+      await writeInput({ ...input, body: payload.body });
+    } else if (verb === "setTitle") {
+      await writeInput({ ...input, title: payload.title });
+    } else if (verb === "removeLink") {
+      const links = list("links");
+      const at = links.findLastIndex((entry) =>
+        isObjectNotArray(entry) && entry.url === payload.url &&
+        entry.removedAt === undefined
+      );
+      await writeInput({
+        ...input,
+        links: links.map((entry, index) =>
+          index === at && isObjectNotArray(entry)
+            ? { ...entry, removedAt: 9500 }
+            : entry
+        ),
+      });
+    } else if (verb === "addLink") {
+      await writeInput({
+        ...input,
+        links: [...list("links"), {
+          url: payload.url,
+          kind: payload.kind ?? "web",
+          label: payload.label ?? payload.url,
+        }],
+      });
+    }
+    return undefined;
+  }
+
+  /**
+   * Stands in for the checkout's `cf`: answers `piece call` by performing the
+   * verb on the board the way the Topics pattern does, under the invocation
+   * id and session it is given, and records `piece step`.
+   */
+  async function cf(
+    args: readonly string[],
+    env: Record<string, string>,
+    stdin: string,
+  ): Promise<ProgramRun> {
+    expect(env).toMatchObject({
+      CF_API_URL: "http://localhost:1",
+      CF_SPACE: SPACE,
+      CF_IDENTITY: join(dir, "identity.key"),
+    });
+    expect(args[0]).toBe("--");
+    const [, group, command, , cell] = args;
+    const piece = cell.replace(/^\//, "");
+    if (`${group} ${command}` === "piece step") {
+      if (stepFails) return { code: 1, stdout: "", stderr: "step failed" };
+      stepped.push(piece);
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    const id = args[args.indexOf("--invocation") + 1];
+    const verb = args[args.indexOf("--invocation") + 2];
+    const session = env.CF_INVOCATION_SESSION;
+    const payload = JSON.parse(stdin);
+    const key = `${session} ${id}`;
+    const repeated = results.has(key);
+    calls.push({ piece, verb, payload, invocation: id, session, args });
+    if (failure !== undefined) {
+      const { phase, error } = failure;
+      return {
+        code: 1,
+        stdout: "",
+        stderr: `invocation: ${id}\nsession: ${session}\n${error.message}\n` +
+          (phase === undefined ? "" : `invocation: ${id} phase: ${phase}\n`),
+      };
+    }
+    // A repeated invocation answers with what its first run returned.
+    const result = repeated
+      ? results.get(key)
+      : await dispatch(piece, verb, payload);
+    results.set(key, result);
+    if (garbled) return { code: 0, stdout: "log line\n{}", stderr: "" };
+    return {
+      code: 0,
+      stdout: JSON.stringify({
+        invocation: id,
+        status,
+        ...(result === undefined ? {} : { result }),
+        ...(repeated ? { deduplicated: true } : {}),
+      }),
+      stderr: "wrote to space\n",
+    };
+  }
+
+  const deps: TopicsDeps = {
+    openDocSource: () => board.open(),
+    async openSession() {
+      const { client, session } = await board.mount();
+      return { space: SPACE, session, close: () => client.close() };
+    },
+    // A terminal whose input closes, ending `watch`, once the view is live.
+    get terminal() {
+      let keys!: ReadableStreamDefaultController<Uint8Array>;
+      const input = new ReadableStream<Uint8Array>({
+        start: (controller) => void (keys = controller),
+      });
+      return {
+        write(text: string) {
+          output.push(text);
+          if (text.includes("LIVE")) keys.close();
+        },
+        size: () => ({ columns: 100, rows: 30 }),
+        setRaw() {},
+        input: () => input,
+        on: () => () => {},
+        hold: () => () => {},
+      };
+    },
+    clock: { now: () => Date.UTC(2026, 9, 26, 12), after: () => () => {} },
+    timeZone: "UTC",
+    launcher: "/labs/runtime/cli/launcher.ts",
+    run: (program, args, env, stdin) => {
+      expect(program).toBe("/labs/runtime/cli/launcher.ts");
+      return cf(args, env, stdin);
+    },
+    serverExecutes: () => Promise.resolve(false),
+    get stdin() {
+      return {
+        isTerminal: () => stdin === undefined,
+        readable: new Response(stdin ?? "").body!,
+      };
+    },
+    write: (text) => output.push(text),
+    warn: (text) => warnings.push(text),
+    openUrl: (url) => Promise.resolve(void opened.push(url)),
+    copyText: (text) => Promise.resolve(void copied.push(text)),
+    identityDid: () => Promise.resolve("did:key:z6Mk-tester"),
+    env: (name) =>
+      ({
+        XDG_CACHE_HOME: join(dir, "cache"),
+        HOME: dir,
+        CF_IDENTITY: join(dir, "identity.key"),
+        TOPICS_API_URL: "http://localhost:1",
+        TOPICS_SPACE: SPACE,
+        TOPICS_BOARD: `/${BOARD}`,
+      })[name],
+  };
+
+  /** What the last action printed. */
+  function printed(): string {
+    return output.at(-1) ?? "";
+  }
+
+  /** Labels Topic 1's comment as only for `subject`. */
+  async function labelComment(subject: string): Promise<void> {
+    await board.write({
+      "of:fid1:comment-1": {
+        value: BOARD_DOCS["of:fid1:comment-1"].value,
+        cfc: {
+          version: 2,
+          schemaHash: taggedHashStringOf(true),
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              origin: "declared",
+              label: {
+                confidentiality: [{
+                  type: "https://commonfabric.org/cfc/atom/User",
+                  subject,
+                }],
+              },
+            }],
+          },
+        },
+      },
+      [`cid:${taggedHashStringOf(true)}`]: { value: true },
+    });
+  }
+
+  describe("findTopic()", () => {
+    const read = {
+      topics: [
+        { number: "4", address: "of:fid1:e4", piece: "of:fid1:p4" },
+        { number: "42", address: "of:fid1:e42", piece: "of:fid1:p42" },
+      ] as Topic[],
+      spaces: ["my-space", "did:key:z6Mk-space"],
+      apiUrl: "https://board.example",
+    };
+
+    it("returns the Topic a number names, however the number is written", () => {
+      for (
+        const reference of [
+          "42",
+          "#42",
+          "top/42",
+          "/top/42",
+          "//my-space/top/42",
+          "//my-space/42",
+          "//my-space/#42",
+          "//did:key:z6Mk-space/top/42",
+          "https://board.example/my-space/top/42",
+        ]
+      ) {
+        expect(findTopic(read, reference).piece).toBe("of:fid1:p42");
+      }
+    });
+
+    it("returns the Topic its address or its piece's address names", () => {
+      for (
+        const reference of [
+          "of:fid1:e4",
+          "/of:fid1:e4",
+          "fid1:e4",
+          "/fid1:e4",
+          "//my-space/fid1:e4",
+          "//did:key:z6Mk-space/of:fid1:e4",
+          "fid1:p4",
+          "//my-space/of:fid1:p4",
+          "/of:fid1:e4#result",
+          "/of:fid1:e4@space",
+        ]
+      ) {
+        expect(findTopic(read, reference).number).toBe("4");
+      }
+      expect(findTopic(read, "of:fid1:p42").number).toBe("42");
+    });
+
+    describe("given part of an address", () => {
+      const quoting = {
+        ...read,
+        topics: [
+          {
+            number: "5",
+            address: "of:fid1:3MmaxyNMtCzB8R_FBZ4tE1_Q3z1MQ_12345678",
+            piece: "of:fid1:Wq8vRk2LmPz5",
+          },
+          {
+            number: "6",
+            address: "of:fid1:AEVJwT4HnfruI0_3MmaxyNMtCzB8R",
+            piece: "of:fid1:p6",
+          },
+          {
+            number: "7",
+            address: "of:fid1:e7",
+            piece: "of:fid1:AEVJwT4HnfruI0",
+          },
+        ] as Topic[],
+      };
+
+      it("returns the one Topic whose address or piece's address holds it", () => {
+        expect(findTopic(quoting, "Wq8vRk2LmP").number).toBe("5");
+        for (
+          const reference of [
+            "FBZ4tE1_Q3z1MQ",
+            "B8R_FBZ4tE1",
+            "fid1:3MmaxyNMtCzB8R_FBZ4",
+            "/of:fid1:3MmaxyNMtCzB8R_FB",
+          ]
+        ) {
+          expect(findTopic(quoting, reference).number).toBe("5");
+        }
+      });
+
+      it("returns the Topic it names whole, though another's address holds it", () => {
+        for (
+          const reference of ["fid1:AEVJwT4HnfruI0", "/of:fid1:AEVJwT4HnfruI0"]
+        ) {
+          expect(findTopic(quoting, reference).number).toBe("7");
+        }
+      });
+
+      it("throws for a part of more than one Topic's address, naming each", () => {
+        expect(() => findTopic(quoting, "AEVJwT4HnfruI0")).toThrow(
+          "it is part of the address or piece address of each of top/6, top/7.",
+        );
+        expect(() => findTopic(quoting, "3MmaxyNMtCzB8R")).toThrow(
+          '`"3MmaxyNMtCzB8R"` names no Topic on this board: it is part of ' +
+            "the address or piece address of each of top/5, top/6.",
+        );
+      });
+
+      it("throws for a part quoting fewer than eight characters of an id", () => {
+        for (
+          const reference of ["Q3z1MQ_", "fid1:3Mmaxy", "/of:fid1:", "of"]
+        ) {
+          expect(() => findTopic(quoting, reference)).toThrow(
+            `The board has no Topic \`"${reference}"\`.`,
+          );
+        }
+        expect(findTopic(quoting, "_Q3z1MQ_").number).toBe("5");
+      });
+
+      it("reads a number as a number, though an address holds it", () => {
+        expect(() => findTopic(quoting, "12345678")).toThrow(
+          "The board has no Topic top/12345678.",
+        );
+      });
+    });
+
+    it("returns the Topic a page on the board's server shows", () => {
+      for (
+        const reference of [
+          "https://board.example/my-space/fid1:e4",
+          "https://board.example/my-space/of:fid1:p4",
+          "https://board.example/@my-space/fid1:e4",
+          "https://board.example/did:key:z6Mk-space/fid1:e4",
+          "https://board.example/my-space/top/4",
+        ]
+      ) {
+        expect(findTopic(read, reference).piece).toBe("of:fid1:p4");
+      }
+    });
+
+    it("throws for a Topic the board does not hold, naming it once", () => {
+      expect(() => findTopic(read, "#7")).toThrow(
+        "The board has no Topic top/7.",
+      );
+      expect(() => findTopic(read, "/of:fid1:other")).toThrow(
+        'The board has no Topic `"/of:fid1:other"`.',
+      );
+      expect(() => findTopic(read, "fid1:other")).toThrow(
+        'The board has no Topic `"fid1:other"`.',
+      );
+    });
+
+    it("throws for a reference in another space, naming both spaces", () => {
+      for (
+        const reference of [
+          "//other-space/top/42",
+          "//other-space/fid1:e4",
+          "https://board.example/other-space/fid1:e4",
+          "https://board.example/other-space/top/4",
+        ]
+      ) {
+        expect(() => findTopic(read, reference)).toThrow(
+          `\`"${reference}"\` names no Topic on this board: it names the ` +
+            "space other-space, not the board's, my-space.",
+        );
+      }
+    });
+
+    it("throws for a long page URL the board does not hold, naming all of it", () => {
+      const reference = "https://board.example/my-space/fid1:" + "x".repeat(60);
+
+      expect(() => findTopic(read, reference)).toThrow(
+        `The board has no Topic \`"${reference}"\`.`,
+      );
+    });
+
+    it("throws for a page on another server, naming both servers", () => {
+      expect(() =>
+        findTopic(read, "https://elsewhere.example/my-space/fid1:e4")
+      ).toThrow(
+        '`"https://elsewhere.example/my-space/fid1:e4"` names no Topic on ' +
+          "this board: it is a page on https://elsewhere.example, not on " +
+          "the board's server, https://board.example.",
+      );
+    });
+
+    it("throws for a reference to something other than a Topic's number or a piece", () => {
+      for (
+        const reference of [
+          "/of:fid1:e4/title",
+          "/of:fid1:e4#argument",
+          "/of:fid1:e4@user",
+          "//my-space/top/4/comments",
+          "https://board.example/",
+          "https://board.example/my-space",
+          "https://board.example/my-space/fid1:e4/title",
+          "https://board.example/my-space/top/4/comments",
+          "https://board.example/my-space/other/4",
+        ]
+      ) {
+        expect(() => findTopic(read, reference)).toThrow(
+          `\`"${reference}"\` names no Topic on this board: it names ` +
+            "neither a Topic's number nor a piece.",
+        );
+      }
+    });
+
+    it("throws for a reference that does not parse, naming it", () => {
+      for (const reference of ["#4a", "fid1:e4#bar", "computed:fid1:e4"]) {
+        expect(() => findTopic(read, reference)).toThrow(
+          `\`"${reference}"\` names no Topic on this board: `,
+        );
+      }
+    });
+  });
+
+  describe("searchAction()", () => {
+    it("prints each matching Topic with its matching lines, and a count", async () => {
+      await searchAction({}, ["oil"], deps);
+
+      expect(printed()).toBe([
+        "top/1  1970-01-01  Flaky fryer test  [1 comment]",
+        "    body: when the oil is cold.",
+        "    comment 1 (Ada (person)): Reproduced with cold oil.",
+        "1 of 2 Topics match.",
+      ].join("\n"));
+    });
+
+    it("lists the most recently active Topics up to the limit when given no terms", async () => {
+      await searchAction({ limit: 1 }, [], deps);
+
+      expect(printed()).toBe([
+        "top/1  1970-01-01  Flaky fryer test  [1 comment]",
+        "2 Topics match; these are the 1 most recently active (`--limit` lists more).",
+      ].join("\n"));
+    });
+
+    it("matches a term that is not a valid regular expression as literal text", async () => {
+      await searchAction({}, ["glaze ["], deps);
+
+      expect(printed()).toBe("0 of 2 Topics match.");
+      await searchAction({}, ["Ada ("], deps);
+      expect(printed()).toMatch(/^top\/1 .*\n1 of 2 Topics match\.$/);
+    });
+  });
+
+  describe("similarAction()", () => {
+    it("ranks a Topic by nothing the viewer cannot be shown", async () => {
+      await labelComment("did:key:zSomeoneElse");
+      // Only the withheld comment says it.
+      await similarAction({}, "Reproduced.", deps);
+
+      expect(printed()).toBe("0 of 2 Topics share words with the text.");
+    });
+
+    it("prints the Topics like the text, most similar first, with their similarity and shared words, and a count", async () => {
+      await similarAction({}, "Cold oil in a fryer, and a glaze.", deps);
+
+      expect(printed()).toMatch(
+        new RegExp(
+          "^top/1  1970-01-01  Flaky fryer test  \\[1 comment\\]\n" +
+            "    similarity 0\\.\\d\\d; shared words: fryer, cold, oil\n" +
+            "top/2  .*  Donut glaze\n" +
+            "    similarity 0\\.\\d\\d; shared words: glaze\n" +
+            "2 of 2 Topics share words with the text\\.$",
+        ),
+      );
+    });
+
+    it("lists the most similar Topics up to the limit, saying how many more share words", async () => {
+      await similarAction({ limit: 1 }, "glaze glaze fryer", deps);
+
+      expect(printed()).toBe([
+        "top/2  1970-01-01  Donut glaze",
+        "    similarity 0.63; shared words: glaze",
+        "2 Topics share words with the text; these are the 1 most like it " +
+        "(`--limit` lists more).",
+      ].join("\n"));
+    });
+
+    it("reads the text from stdin when it is not an argument, and refuses no text", async () => {
+      stdin = "Which Topic covers cold oil?";
+      await similarAction({}, undefined, deps);
+
+      expect(printed()).toMatch(/^top\/1 .*\n.*: cold, oil\n1 of 2 Topics/);
+      stdin = undefined;
+      await expect(similarAction({}, undefined, deps)).rejects.toThrow(
+        "Give the text as an argument or on stdin.",
+      );
+      await expect(similarAction({}, " \n", deps)).rejects.toThrow(
+        "Give the text as an argument or on stdin.",
+      );
+    });
+  });
+
+  describe("showAction()", () => {
+    it("prints the Topic as Markdown with its address", async () => {
+      await showAction({}, ["top/2"], deps);
+
+      expect(printed()).toMatch(
+        /^# top\/2: Donut glaze\n\nAddress: \/of:fid1:topic-piece-2\n/,
+      );
+      expect(printed()).toContain("Glaze ratios.");
+    });
+
+    it("prints nothing of what the default display ceiling withholds from the viewer, and finds nothing by it", async () => {
+      await labelComment("did:key:zSomeoneElse");
+      await showAction({}, ["top/1"], deps);
+
+      expect(printed()).not.toContain("Reproduced with cold oil.");
+      expect(printed()).toContain("The fryer test fails");
+
+      await searchAction({}, ["cold oil"], deps);
+
+      expect(printed()).toBe("0 of 2 Topics match.");
+    });
+
+    it("prints what is only for the viewer to the viewer", async () => {
+      await labelComment("did:key:z6Mk-tester");
+      await showAction({}, ["top/1"], deps);
+
+      expect(printed()).toContain("Reproduced with cold oil.");
+    });
+
+    it("prints offline, with no identity to read as, only what names no one", async () => {
+      await labelComment("did:key:z6Mk-tester");
+      await syncAction({}, deps);
+      await showAction({ offline: true }, ["top/1"], {
+        ...deps,
+        identityDid: () => Promise.reject(new Error("No keyfile.")),
+      });
+
+      expect(printed()).toContain("The fryer test fails");
+      expect(printed()).not.toContain("Reproduced with cold oil.");
+    });
+
+    it("refuses to read offline before there is a copy", async () => {
+      await expect(showAction({ offline: true }, ["1"], deps)).rejects.toThrow(
+        /no local copy/,
+      );
+    });
+
+    it("reads offline from the copy as it stands, without asking the server", async () => {
+      await syncAction({}, deps);
+      await board.write({
+        "of:fid1:input-2": { value: { title: "Renamed on the server" } },
+      });
+      await showAction({ offline: true }, ["2"], {
+        ...deps,
+        openDocSource: () => Promise.reject(new Error("went online")),
+      });
+
+      expect(printed()).toMatch(/^# top\/2: Donut glaze/);
+    });
+
+    it("prints each Topic named, in the order named", async () => {
+      await showAction({}, ["2", "top/1"], deps);
+
+      expect(printed()).toMatch(
+        /^# top\/2: Donut glaze\n[\s\S]*\n\n# top\/1: Flaky fryer test\n/,
+      );
+    });
+
+    it("prints the Topic a page on the board's server shows", async () => {
+      await showAction(
+        {},
+        [`http://localhost:1/${SPACE}/fid1:topic-alias-1`],
+        deps,
+      );
+
+      expect(printed()).toMatch(/^# top\/1: Flaky fryer test\n/);
+    });
+
+    it("prints the Topics the board holds, then throws naming those it does not", async () => {
+      await expect(showAction({}, ["99999", "1", "#7"], deps)).rejects
+        .toThrow("The board has no Topics top/99999, top/7.");
+      expect(printed()).toMatch(/^# top\/1: Flaky fryer test\n/);
+      expect(printed()).not.toContain("# top/2");
+
+      const shown = output.length;
+
+      await expect(showAction({}, ["9"], deps)).rejects.toThrow(
+        "The board has no Topic top/9.",
+      );
+      expect(output.length).toBe(shown);
+    });
+
+    it("throws for a reference to another space before printing any Topic", async () => {
+      const shown = output.length;
+
+      await expect(showAction({}, ["1", "//other-space/top/2"], deps)).rejects
+        .toThrow(
+          '`"//other-space/top/2"` names no Topic on this board: it names ' +
+            "the space other-space",
+        );
+      expect(output.length).toBe(shown);
+    });
+  });
+
+  describe("readTopics()", () => {
+    it("warns about board entries that lead to no Topic it has read", async () => {
+      await syncAction({}, deps);
+      await board.write({
+        "of:fid1:board-input": {
+          value: {
+            names: {
+              "1": link("of:fid1:topic-alias-1"),
+              "2": link("of:fid1:topic-piece-2"),
+              "3": link("of:fid1:never-written"),
+            },
+          },
+        },
+      });
+      await searchAction({}, [], deps);
+
+      expect(warnings).toEqual([
+        "These board entries lead to no Topic piece the copy has read, so " +
+        "they are left out: top/3",
+      ]);
+    });
+
+    it("warns about Topics not stored as the pattern stores them, and about no others", async () => {
+      await searchAction({}, [], deps);
+      expect(warnings).toEqual([]);
+      await board.write({ "of:fid1:input-2": { value: { heading: "Moved" } } });
+      await searchAction({}, [], deps);
+
+      expect(warnings).toEqual([
+        "These Topics are not stored where this client reads a Topic's title, " +
+        "comments, and links, so they show blank; the deployed Topics " +
+        "pattern may store Topics differently: top/2",
+      ]);
+    });
+  });
+
+  describe("syncAction()", () => {
+    it("reads the whole board again with `rebuild`", async () => {
+      await syncAction({}, deps);
+      await syncAction({ rebuild: true }, deps);
+
+      expect(printed()).toMatch(/^2 Topics; the server sent [1-9]\d* changed/);
+    });
+
+    it("prints how many Topics there are, what the server sent, and where the copy is", async () => {
+      await syncAction({}, deps);
+      const first = printed();
+      await syncAction({}, deps);
+
+      expect(first).toMatch(
+        /^2 Topics; the server sent [1-9]\d* changed documents\./,
+      );
+      expect(printed()).toBe(
+        "2 Topics; the server sent 0 changed documents.\nLocal copy: " +
+          join(
+            dir,
+            "cache/commonfabric/topics/localhost%3A1",
+            encodeURIComponent(SPACE),
+            "of%3Afid1%3Atopics-board.json",
+          ),
+      );
+    });
+  });
+
+  describe("commentAction()", () => {
+    it("adds the comment under the agent's name, and prints the Topic it reads back on", async () => {
+      await commentAction(
+        { agentName: " Sol " },
+        "1",
+        "Warm oil fixes it.\n",
+        deps,
+      );
+
+      expect(
+        calls.map(({ piece, verb, payload }) => ({ piece, verb, payload })),
+      )
+        .toEqual([{
+          piece: "of:fid1:topic-alias-1",
+          verb: "addComment",
+          payload: { body: "Warm oil fixes it.\n", agentName: "Sol" },
+        }]);
+      expect(printed()).toBe(
+        "Commented on top/1.\ntop/1  1970-01-01  Flaky fryer test  [2 comments]",
+      );
+    });
+
+    it("reads the comment from stdin when it is not an argument", async () => {
+      stdin = "From stdin.";
+      await commentAction({ agentName: "Sol" }, "top/1", undefined, deps);
+
+      expect(calls[0].payload.body).toBe("From stdin.");
+    });
+
+    it("refuses an empty comment and a write with no agent", async () => {
+      await expect(commentAction({ agentName: "Sol" }, "1", undefined, deps))
+        .rejects.toThrow(/as an argument or on stdin/);
+      await expect(commentAction({ agentName: " " }, "1", "Text", deps))
+        .rejects.toThrow(/--agent-name/);
+      expect(calls).toEqual([]);
+    });
+
+    it("makes each run a new invocation, announcing its id before it dispatches", async () => {
+      await commentAction({ agentName: "Sol" }, "1", "Done.", deps);
+      await commentAction({ agentName: "Sol" }, "1", "Done.", deps);
+
+      expect(calls.map((call) => call.invocation)).toEqual([
+        expect.stringMatching(/^topics-/),
+        expect.stringMatching(/^topics-/),
+      ]);
+      expect(calls[1].invocation).not.toBe(calls[0].invocation);
+      expect(calls[1].session).toBe(calls[0].session);
+      expect(warnings).toEqual(
+        calls.map((call) =>
+          `Writing as invocation ${call.invocation}; if no answer arrives, run ` +
+          `the same command with \`--invocation ${call.invocation}\` to settle it.`
+        ),
+      );
+      expect(printed()).toMatch(/\[3 comments\]$/);
+    });
+
+    it("settles the invocation `--invocation` names on its first outcome", async () => {
+      await commentAction({ agentName: "Sol" }, "1", "Once.", deps);
+      const invocation = calls[0].invocation;
+      await commentAction({ agentName: "Sol", invocation }, "1", "Once.", deps);
+
+      expect(calls[1].invocation).toBe(invocation);
+      expect(printed()).toMatch(
+        /^Commented on top\/1, by an earlier run of this invocation\.\n.*\[2 comments\]$/,
+      );
+    });
+
+    it("throws when the comment does not read back, without offering a retry that cannot help", async () => {
+      applyWrites = false;
+
+      await expect(commentAction({ agentName: "Sol" }, "1", "Lost.", deps))
+        .rejects.toThrow(
+          /^The write settled but does not read back on top\/1\.$/,
+        );
+    });
+
+    it("does not take an earlier identical comment as the one it wrote", async () => {
+      await commentAction({ agentName: "Sol" }, "1", "Done.", deps);
+      applyWrites = false;
+
+      await expect(commentAction({ agentName: "Sol" }, "1", "Done.", deps))
+        .rejects.toThrow(/does not read back/);
+    });
+
+    it("does not take a retracted identical comment as the one a repeated invocation wrote", async () => {
+      await board.write({
+        "of:fid1:input-1": {
+          value: {
+            ...INPUT_1,
+            comments: [link("of:fid1:comment-1"), {
+              author: { kind: "agent", name: "Sol" },
+              body: "Done.",
+              sentAt: 4000,
+              removedAt: 5000,
+            }],
+          },
+        },
+      });
+      applyWrites = false;
+      const options = { agentName: "Sol", invocation: "topics-retracted" };
+      await expect(commentAction(options, "1", "Done.", deps)).rejects
+        .toThrow(/does not read back/);
+
+      await expect(commentAction(options, "1", "Done.", deps)).rejects
+        .toThrow(/does not read back/);
+      expect(calls.map((call) => call.invocation)).toEqual([
+        "topics-retracted",
+        "topics-retracted",
+      ]);
+    });
+
+    it("throws when the call does not settle, saying how to settle the write", async () => {
+      status = "committed";
+
+      await expect(commentAction({ agentName: "Sol" }, "1", "Slow.", deps))
+        .rejects.toThrow(
+          /^`addComment` did not settle: .*status:"committed".*\nThe write may have committed: run the same command with `--invocation topics-/,
+        );
+    });
+
+    it("says how to settle a write whose output is not an outcome", async () => {
+      garbled = true;
+
+      await expect(commentAction({ agentName: "Sol" }, "1", "Noisy.", deps))
+        .rejects.toThrow(
+          /^`addComment` answered `"log line.*`\.\nThe write may have committed/,
+        );
+    });
+
+    it("says how to settle a write that failed after it dispatched, or at a phase it did not name, and not one that failed before", async () => {
+      failure = { phase: "dispatched", error: new Error("Connection lost.") };
+      await expect(commentAction({ agentName: "Sol" }, "1", "A.", deps))
+        .rejects.toThrow(
+          /^`cf piece call` failed:\n[\s\S]*Connection lost\.\ninvocation: \S+ phase: dispatched\nThe write may have committed: run the same command with `--invocation topics-/,
+        );
+      failure = { phase: undefined, error: new Error("Killed.") };
+      await expect(commentAction({ agentName: "Sol" }, "1", "B.", deps))
+        .rejects.toThrow(
+          /^`cf piece call` failed:\n[\s\S]*Killed\.\nThe write may have committed/,
+        );
+      failure = { phase: "initial_sync", error: new Error("No such verb.") };
+
+      await expect(commentAction({ agentName: "Sol" }, "1", "C.", deps))
+        .rejects.toThrow(
+          /^`cf piece call` failed:\n[\s\S]*No such verb\.\ninvocation: \S+ phase: initial_sync$/,
+        );
+    });
+
+    it("leaves the invocation session out of a failure's report", async () => {
+      failure = { phase: "dispatched", error: new Error("Lost.") };
+      const report = commentAction({ agentName: "Sol" }, "1", "A.", deps).then(
+        () => "",
+        (error: Error) => error.message,
+      );
+
+      expect(await report).toContain("Lost.");
+      expect(await report).not.toContain("session:");
+    });
+
+    it("sends `cf piece call` the cell, the invocation, the verb, and the payload on stdin", async () => {
+      await commentAction({ agentName: "Sol" }, "1", "Hello.", deps);
+      stdin = "Body.";
+      await newAction({ agentName: "Sol" }, "Fresh", undefined, deps);
+      const [comment, filed] = calls;
+
+      // `cf piece call` takes `-` as its payload from stdin, and the words
+      // after `--` as how to shape its printed result.
+      expect(comment.args).toEqual([
+        "--",
+        "piece",
+        "call",
+        "--cell",
+        "/of:fid1:topic-alias-1",
+        "--invocation",
+        comment.invocation,
+        "addComment",
+        "-",
+      ]);
+      expect(filed.args).toEqual([
+        "--",
+        "piece",
+        "call",
+        "--cell",
+        `/${BOARD}`,
+        "--invocation",
+        filed.invocation,
+        "addTopic",
+        "-",
+        "--",
+        "--schema",
+        JSON.stringify({
+          properties: { topic: { $link: true }, name: { type: "string" } },
+        }),
+      ]);
+    });
+  });
+
+  describe("bodyAction()", () => {
+    it("replaces the body", async () => {
+      await bodyAction({ agentName: "Sol" }, "1", "New body.", deps);
+
+      expect(calls[0].verb).toBe("setBody");
+      expect(printed()).toMatch(/^Replaced the body of top\/1\./);
+    });
+  });
+
+  describe("titleAction()", () => {
+    it("renames the Topic", async () => {
+      await titleAction({ agentName: "Sol" }, "1", "Fryer fixed", deps);
+
+      expect(calls[0].payload).toEqual({
+        title: "Fryer fixed",
+        agentName: "Sol",
+      });
+      expect(printed()).toBe(
+        "Retitled top/1.\ntop/1  1970-01-01  Fryer fixed  [1 comment]",
+      );
+    });
+  });
+
+  describe("linkAction()", () => {
+    it("does not take a link already there as the one it added", async () => {
+      applyWrites = false;
+
+      await expect(
+        linkAction(
+          { agentName: "Sol" },
+          "1",
+          "https://example.com/pull/1",
+          undefined,
+          deps,
+        ),
+      ).rejects.toThrow(/does not read back/);
+    });
+
+    it("adds a link with its kind and label", async () => {
+      await linkAction(
+        { agentName: "Sol", kind: "pr" },
+        "1",
+        "https://example.com/pull/2",
+        "Second fix",
+        deps,
+      );
+
+      expect(calls[0].payload).toEqual({
+        url: "https://example.com/pull/2",
+        kind: "pr",
+        label: "Second fix",
+        agentName: "Sol",
+      });
+      expect(printed()).toMatch(/^Linked top\/1\./);
+    });
+
+    it("leaves the kind and label to the verb when they are not given", async () => {
+      await linkAction(
+        { agentName: "Sol" },
+        "1",
+        "https://example.com/a",
+        undefined,
+        deps,
+      );
+
+      expect(calls[0].payload).toEqual({
+        url: "https://example.com/a",
+        agentName: "Sol",
+      });
+    });
+  });
+
+  describe("newAction()", () => {
+    it("files the Topic and runs no `piece step` on a deployment that runs its pieces itself", async () => {
+      stdin = "The body.";
+      await newAction(
+        { agentName: "Sol" },
+        "A new Topic",
+        undefined,
+        { ...deps, serverExecutes: () => Promise.resolve(true) },
+      );
+
+      expect(calls.map(({ verb }) => verb)).toEqual(["addTopic"]);
+      expect(stepped).toEqual([]);
+      expect(printed()).toBe(
+        "Created top/3 (/of:fid1:topic-piece-3).\ntop/3  -           A new Topic",
+      );
+    });
+
+    it("files the Topic, steps it, and prints its number and address", async () => {
+      stdin = "The body.";
+      await newAction({ agentName: "Sol" }, "A new Topic", undefined, deps);
+
+      expect(
+        calls.map(({ piece, verb, payload }) => ({ piece, verb, payload })),
+      )
+        .toEqual([{
+          piece: BOARD,
+          verb: "addTopic",
+          payload: {
+            title: "A new Topic",
+            body: "The body.",
+            agentName: "Sol",
+          },
+        }]);
+      expect(stepped).toEqual(["of:fid1:topic-piece-3"]);
+      expect(printed()).toBe(
+        "Created top/3 (/of:fid1:topic-piece-3).\ntop/3  -           A new Topic",
+      );
+    });
+
+    it("files the Topic once for a repeated `--invocation`, printing it each time", async () => {
+      const options = { agentName: "Sol", invocation: "topics-again" };
+      await newAction(options, "Once", "B", deps);
+      await newAction(options, "Once", "B", deps);
+
+      expect(calls.map((call) => call.invocation)).toEqual([
+        "topics-again",
+        "topics-again",
+      ]);
+      expect(stepped).toEqual([
+        "of:fid1:topic-piece-3",
+        "of:fid1:topic-piece-3",
+      ]);
+      expect(output.filter((line) => line.startsWith("Created top/3")).length)
+        .toBe(2);
+    });
+
+    it("throws when the call names no created Topic", async () => {
+      applyWrites = false;
+
+      await expect(newAction({ agentName: "Sol" }, "T", "B", deps)).rejects
+        .toThrow(
+          /without naming the Topic it created/,
+        );
+      expect(stepped).toEqual([]);
+    });
+  });
+
+  describe("mentionAction()", () => {
+    it("recognizes a reference already stored under another address of the same piece", async () => {
+      await board.write({
+        "of:fid1:another-alias-2": { value: link("of:fid1:topic-piece-2") },
+      });
+      input = { ...input, mentioned: [link("of:fid1:another-alias-2")] };
+      await board.write({ "of:fid1:input-1": { value: input } });
+      applyWrites = false;
+
+      await mentionAction({}, "mention", "1", "2", deps);
+      expect(printed()).toMatch(/^top\/1 now mentions top\/2\./);
+      await expect(mentionAction({}, "unmention", "1", "2", deps)).rejects
+        .toThrow(/does not read back on top\/1/);
+    });
+
+    it("records and removes a reference to another Topic", async () => {
+      await mentionAction({}, "mention", "1", "2", deps);
+      await mentionAction({}, "unmention", "1", "2", deps);
+
+      expect(calls.map(({ verb, payload }) => [verb, payload])).toEqual([
+        ["mention", { topic: "/of:fid1:topic-piece-2" }],
+        ["unmention", { topic: "/of:fid1:topic-piece-2" }],
+      ]);
+      expect(output.map((text) => text.split("\n")[0])).toEqual([
+        "top/1 now mentions top/2.",
+        "top/1 no longer mentions top/2.",
+      ]);
+    });
+  });
+
+  describe("stdinText()", () => {
+    it("returns everything a piped stdin holds", async () => {
+      const readable = new Response("piped text").body!;
+
+      expect(await stdinText({ isTerminal: () => false, readable })).toBe(
+        "piped text",
+      );
+    });
+
+    it("returns `undefined` for a terminal, without reading it", async () => {
+      const readable = new ReadableStream<Uint8Array<ArrayBuffer>>({
+        pull: () => {
+          throw new Error("read a terminal");
+        },
+      });
+
+      expect(await stdinText({ isTerminal: () => true, readable }))
+        .toBeUndefined();
+    });
+  });
+
+  describe("browseWrite()", () => {
+    it("makes a write through its command as the invocation given, returning what the command printed", async () => {
+      const outcome = await browseWrite(
+        deps,
+        {},
+        { verb: "comment", topic: "1", text: "From the browser." },
+        "Ian (person)",
+        "topics-from-browse",
+      );
+
+      expect(outcome).toEqual({
+        result: "written",
+        report: "Commented on top/1.",
+      });
+      expect(calls.map(({ payload, invocation }) => [payload, invocation]))
+        .toEqual([[
+          { body: "From the browser.", agentName: "Ian (person)" },
+          "topics-from-browse",
+        ]]);
+      expect(output).toEqual([]);
+      expect(warnings).toEqual([]);
+    });
+
+    it("says a write whose answer was lost may have landed, and settles it under the same invocation", async () => {
+      // The write lands, and its answer comes back unreadable.
+      garbled = true;
+      const request = { verb: "title", topic: "1", text: "Renamed" } as const;
+      const lost = await browseWrite(deps, {}, request, "Ian", "topics-lost");
+      garbled = false;
+
+      expect(lost).toEqual({
+        result: "unsettled",
+        message: expect.stringMatching(/^`setTitle` answered/),
+      });
+      expect(lost.result === "written" || lost.message.includes("--invocation"))
+        .toBe(false);
+
+      const settled = await browseWrite(
+        deps,
+        {},
+        request,
+        "Ian",
+        "topics-lost",
+      );
+
+      expect(settled.result).toBe("written");
+      expect(calls.map((call) => call.invocation)).toEqual([
+        "topics-lost",
+        "topics-lost",
+      ]);
+    });
+
+    it("says a write that settled and does not read back landed unconfirmed", async () => {
+      applyWrites = false;
+      const outcome = await browseWrite(
+        deps,
+        {},
+        { verb: "comment", topic: "1", text: "Lost." },
+        "Ian",
+        "topics-unread",
+      );
+
+      expect(outcome).toEqual({
+        result: "unconfirmed",
+        message: "The write settled but does not read back on top/1.",
+      });
+    });
+
+    it("says a write that never dispatched certainly did not land", async () => {
+      const outcome = await browseWrite(
+        deps,
+        {},
+        { verb: "comment", topic: "99", text: "Nowhere." },
+        "Ian",
+        "topics-nowhere",
+      );
+
+      expect(outcome).toEqual({
+        result: "failed",
+        message: "The board has no Topic top/99.",
+      });
+    });
+  });
+
+  describe("main()", () => {
+    /** Runs the words after `deno task topics`. */
+    async function run(...args: string[]): Promise<void> {
+      await main(args, deps);
+    }
+
+    it("prints the usage, which says a write is recovered by naming its invocation", async () => {
+      await run();
+      await run("search", "--help");
+      const help = USAGE.replaceAll(/\s+/g, " ");
+
+      expect(output).toEqual([USAGE, USAGE]);
+      expect(help).toContain(
+        "run the same command with --invocation <id>: that settles on the " +
+          "first outcome, where running it again without the id writes a " +
+          "second time.",
+      );
+    });
+
+    it("refuses to `watch` when standard input is not a terminal", async () => {
+      stdin = "";
+
+      await expect(run("watch")).rejects.toThrow(
+        "`watch` takes over a terminal; run it in one.",
+      );
+      expect(output).toEqual([]);
+    });
+
+    it("withholds from `watch` what is not for the identity watching", async () => {
+      await labelComment("did:key:zSomeoneElse");
+      await run("watch");
+
+      expect(output.join("")).not.toContain("Reproduced with cold oil.");
+    });
+
+    it("shows the board live on the whole terminal for `watch`", async () => {
+      await run("watch");
+      const drawn = output.join("");
+
+      expect(drawn).toContain("● LIVE");
+      expect(drawn).toContain("Donut glaze");
+      expect(output.at(-1)).toContain("\x1b[?1049l");
+    });
+
+    it("refuses to `browse` when standard input is not a terminal, or a Topic of another space", async () => {
+      stdin = "";
+      await expect(run("browse")).rejects.toThrow(
+        "`browse` takes over a terminal; run it in one.",
+      );
+      stdin = undefined;
+      await expect(run("browse", "//other-space/top/1")).rejects.toThrow(
+        '`"//other-space/top/1"` names no Topic on this board: it names the ' +
+          "space other-space, not the board's, " + SPACE,
+      );
+      expect(output.join("")).not.toContain("● LIVE");
+    });
+
+    it("shows the board to browse for `browse`, opening the Topic named, and remembers it was read", async () => {
+      // Named as a link to its page is, as any command takes it.
+      await run("browse", `http://localhost:1/${SPACE}/top/1`);
+      const drawn = output.join("");
+      const state = JSON.parse(
+        await Deno.readTextFile(
+          boardFile(
+            { browse: "did:key:z6Mk-tester" },
+            "http://localhost:1",
+            SPACE,
+            BOARD,
+            deps.env,
+          ),
+        ),
+      );
+
+      expect(drawn).toContain("● LIVE");
+      expect(drawn).toContain("top/1");
+      expect(drawn).toContain("Reproduced with cold oil.");
+      expect(output.at(-1)).toContain("\x1b[?1049l");
+      expect(Object.keys(state.seen)).toEqual(["1"]);
+    });
+
+    for (
+      const [spelled, space] of [
+        ["name", () => Promise.resolve("topics-dev")],
+        ["DID", () => legacySpaceDid("topics-dev")],
+      ] as const
+    ) {
+      it(`opens a Topic for \`browse\` named in its space's ${spelled}`, async () => {
+        const named = {
+          ...deps,
+          env: (name: string) =>
+            name === "TOPICS_SPACE" ? "topics-dev" : deps.env(name),
+        };
+        await main(["browse", `//${await space()}/top/1`], named);
+
+        expect(output.join("")).toContain("Reproduced with cold oil.");
+      });
+    }
+
+    it("opens a Topic for `browse` named by a fragment of its id", async () => {
+      await run("browse", "topic-piece-1");
+
+      expect(output.join("")).toContain("Reproduced with cold oil.");
+    });
+
+    it("says why for `browse` a fragment of more than one Topic's id names none", async () => {
+      await run("browse", "topic-piece");
+      const drawn = stripAnsi(output.join(""));
+
+      expect(drawn).toContain(
+        '`"topic-piece"` names no Topic on this board: it is part of the address',
+      );
+      expect(drawn).not.toContain("Reproduced with cold oil.");
+    });
+
+    it("takes back the newest link to an address for `unlink`", async () => {
+      await run("link", "1", "https://example.com/c", "--agent-name", "Sol");
+      await run("unlink", "1", "https://example.com/c", "--agent-name", "Sol");
+
+      expect(calls.at(-1)?.verb).toBe("removeLink");
+      expect(calls.at(-1)?.payload).toEqual({
+        url: "https://example.com/c",
+        agentName: "Sol",
+      });
+      expect(printed()).toMatch(/^Took back a link of top\/1\./);
+    });
+
+    it("passes each command's arguments and options to its action", async () => {
+      await run("search", "oil", "cold", "-n", "1");
+      expect(printed()).toMatch(/^top\/1 .*\n.*\n.*\n1 of 2 Topics match\.$/);
+      await run("show", "top/2", "--offline");
+      expect(printed()).toMatch(/^# top\/2: Donut glaze/);
+      await run("sync", "--rebuild");
+      expect(printed()).toMatch(/^2 Topics; the server sent [1-9]/);
+      await run("comment", "1", "Via the command.", "--agent-name", "Sol");
+      await run("body", "1", "007", "--agent-name", "Sol");
+      await run("title", "1", "New title", "--agent-name", "Sol");
+      await run(
+        "link",
+        "1",
+        "https://example.com/c",
+        "Label",
+        "--kind",
+        "pr",
+        "--agent-name",
+        "Sol",
+      );
+      await run("mention", "1", "2", "--invocation", "topics-chosen");
+      await run("unmention", "1", "2");
+      stdin = "Body from stdin.";
+      await run("new", "Filed via the command", "--agent-name", "Sol");
+
+      expect(calls.map(({ verb, payload }) => [verb, payload])).toEqual([
+        ["addComment", { body: "Via the command.", agentName: "Sol" }],
+        ["setBody", { body: "007", agentName: "Sol" }],
+        ["setTitle", { title: "New title", agentName: "Sol" }],
+        ["addLink", {
+          url: "https://example.com/c",
+          kind: "pr",
+          label: "Label",
+          agentName: "Sol",
+        }],
+        ["mention", { topic: "/of:fid1:topic-piece-2" }],
+        ["unmention", { topic: "/of:fid1:topic-piece-2" }],
+        ["addTopic", {
+          title: "Filed via the command",
+          body: "Body from stdin.",
+          agentName: "Sol",
+        }],
+      ]);
+      expect(calls[4].invocation).toBe("topics-chosen");
+    });
+
+    it("steps the Topic each write wrote to, once the write settles", async () => {
+      await run("comment", "1", "Hi.", "--agent-name", "Sol");
+      await run("title", "1", "Fryer", "--agent-name", "Sol");
+      await run("mention", "1", "2");
+      await run("new", "Filed", "Body.", "--agent-name", "Sol");
+
+      expect(stepped).toEqual([
+        "of:fid1:topic-alias-1",
+        "of:fid1:topic-alias-1",
+        "of:fid1:topic-alias-1",
+        "of:fid1:topic-piece-3",
+      ]);
+    });
+
+    it("says how to step a Topic that was written to when its step fails, without writing again", async () => {
+      stepFails = true;
+      const failure = await run("comment", "1", "Hi.", "--agent-name", "Sol")
+        .then(() => "", (error: Error) => error.message);
+      const id = /`--invocation (\S+)`/.exec(failure)?.[1] ?? "";
+
+      expect(failure).toMatch(
+        /^`cf piece step` failed:\nstep failed\nThe write was made, but the board will not show it until \/of:fid1:topic-alias-1 runs: run the same command with `--invocation topics-\S+` to run it without writing again\.$/,
+      );
+
+      stepFails = false;
+      await run(
+        "comment",
+        "1",
+        "Hi.",
+        "--agent-name",
+        "Sol",
+        "--invocation",
+        id,
+      );
+
+      expect(stepped).toEqual(["of:fid1:topic-alias-1"]);
+      expect(calls.map((call) => call.invocation)).toEqual([id, id]);
+      expect(printed()).toMatch(
+        /^Commented on top\/1, by an earlier run of this invocation\./,
+      );
+    });
+
+    it("attributes a write to `CF_AGENT_NAME` unless `--agent-name` names another agent", async () => {
+      const named = {
+        ...deps,
+        env: (name: string) =>
+          name === "CF_AGENT_NAME" ? "Envy" : deps.env(name),
+      };
+      await main(["comment", "1", "From the environment."], named);
+      await main(
+        ["comment", "1", "From the flag.", "--agent-name", "Tom"],
+        named,
+      );
+
+      expect(calls.map((call) => call.payload.agentName)).toEqual([
+        "Envy",
+        "Tom",
+      ]);
+    });
+
+    it("throws for an option the command does not take, or an empty invocation id", async () => {
+      await expect(run("comment", "1", "x", "--kind", "pr")).rejects.toThrow(
+        "`comment` takes no `--kind`.",
+      );
+      await expect(run("show", "1", "--limit", "3")).rejects.toThrow(
+        "`show` takes no `--limit`.",
+      );
+      await expect(run("comment", "1", "x", "--offline")).rejects.toThrow(
+        "`comment` takes no `--offline`.",
+      );
+      await expect(run("search", "--rebuild")).rejects.toThrow(
+        "`search` takes no `--rebuild`.",
+      );
+      await expect(
+        run("comment", "1", "x", "--agent-name", "Sol", "--invocation", " "),
+      ).rejects.toThrow("`--invocation` names an invocation id.");
+      expect(calls).toEqual([]);
+    });
+
+    it("reads a relative identity path from where the command was typed, for reads and writes alike", async () => {
+      const identities: string[] = [];
+      const typedIn: TopicsDeps = {
+        ...deps,
+        env: (name: string) =>
+          name === "INIT_CWD"
+            ? dir
+            : name === "CF_IDENTITY"
+            ? "identity.key"
+            : deps.env(name),
+        run: (_program, args, env, stdin) => {
+          identities.push(env.CF_IDENTITY);
+          return cf(
+            args,
+            { ...env, CF_IDENTITY: join(dir, "identity.key") },
+            stdin,
+          );
+        },
+      };
+      await main(["comment", "1", "Hi.", "--agent-name", "Sol"], typedIn);
+      await main(
+        ["comment", "1", "Again.", "--agent-name", "Sol", "-i", "other.key"],
+        typedIn,
+      );
+
+      // Each write runs `cf` twice: the call, then the step.
+      expect(identities).toEqual([
+        join(dir, "identity.key"),
+        join(dir, "identity.key"),
+        join(dir, "other.key"),
+        join(dir, "other.key"),
+      ]);
+    });
+
+    it("throws for an unknown command, an unknown option, a wrong count of arguments, or a bad limit", async () => {
+      await expect(run("frobnicate")).rejects.toThrow(
+        'Unknown command `"frobnicate"`',
+      );
+      await expect(run("search", "--verbose")).rejects.toThrow(
+        'Unknown option `"--verbose"`',
+      );
+      await expect(run("show")).rejects.toThrow(
+        "`show` takes at least 1 arguments",
+      );
+      await expect(run("title", "1")).rejects.toThrow(
+        "`title` takes 2 arguments",
+      );
+      await expect(run("new", "a", "b", "c")).rejects.toThrow(
+        "`new` takes 1 to 2 arguments",
+      );
+      await expect(run("search", "-n", "0")).rejects.toThrow(
+        "`--limit` takes a positive whole number",
+      );
+      expect(calls).toEqual([]);
+    });
+
+    it("searches only the parts `--in` names, leaving out Topics whose titles match `--exclude`", async () => {
+      await run("search", "reproduced", "--in", "title, body");
+      const inTitleOrBody = printed();
+      await run("search", "reproduced", "--in", "comments");
+      const inComments = printed();
+      await run("search", "--exclude", "^Flaky", "--exclude", "nothing");
+
+      expect(inTitleOrBody).toBe("0 of 2 Topics match.");
+      expect(inComments).toMatch(/^top\/1 [\s\S]*1 of 2 Topics match\.$/);
+      expect(printed()).toMatch(/^top\/2 .*\n1 of 2 Topics match\.$/);
+      await expect(run("search", "--in", "title,bodies")).rejects.toThrow(
+        "`--in` takes a comma-separated list of title, body, comments, " +
+          "links, authors.",
+      );
+    });
+
+    it("ranks for `similar` from the copy as it stands with `--offline`, leaving out Topics whose titles match `--exclude`", async () => {
+      await run("similar", "fryer glaze");
+      const both = printed();
+      await main(
+        ["similar", "fryer glaze", "--offline", "--exclude", "^Donut"],
+        { ...deps, openDocSource: () => Promise.reject(new Error("online")) },
+      );
+
+      expect(both).toMatch(/^top\/2 .*\n.*\ntop\/1 .*\n.*\n2 of 2 Topics/);
+      expect(printed()).toMatch(/^top\/1 .*\n.*: fryer\n1 of 2 Topics/);
+    });
+
+    it("throws for `similar` given two texts, an option it does not take, or a bad limit", async () => {
+      await expect(run("similar", "a", "b")).rejects.toThrow(
+        "`similar` takes 0 to 1 arguments",
+      );
+      await expect(run("similar", "a", "--in", "title")).rejects.toThrow(
+        "`similar` takes no `--in`.",
+      );
+      await expect(run("similar", "a", "-n", "1.5")).rejects.toThrow(
+        "`--limit` takes a positive whole number.",
+      );
+    });
+
+    it("prints JSON for `similar --json`", async () => {
+      await run("similar", "cold oil", "--json");
+
+      expect(JSON.parse(printed())).toEqual({
+        matching: 1,
+        topics: [{
+          number: "1",
+          address: "/of:fid1:topic-alias-1",
+          title: "Flaky fryer test",
+          createdAt: 1000,
+          createdBy: "Sol (agent)",
+          lastActivityAt: expect.any(Number),
+          comments: 1,
+          similarity: expect.any(Number),
+          shared: ["cold", "oil"],
+        }],
+      });
+    });
+
+    it("prints JSON for `search --json` and `show --json`", async () => {
+      await run("search", "cold", "--json");
+      const found = JSON.parse(printed());
+      await run("show", "1", "2", "--json");
+      const shown = JSON.parse(printed());
+
+      expect(found).toEqual({
+        matching: 1,
+        topics: [{
+          number: "1",
+          address: "/of:fid1:topic-alias-1",
+          title: "Flaky fryer test",
+          createdAt: 1000,
+          createdBy: "Sol (agent)",
+          lastActivityAt: expect.any(Number),
+          comments: 1,
+          matches: [
+            "body: when the oil is cold.",
+            "comment 1 (Ada (person)): Reproduced with cold oil.",
+          ],
+        }],
+      });
+      expect(shown.map((topic: { number: string }) => topic.number)).toEqual(
+        ["1", "2"],
+      );
+      expect(shown[0].comments).toEqual([{
+        number: 1,
+        author: "Ada (person)",
+        body: "Reproduced with cold oil.",
+        sentAt: 2000,
+      }]);
+    });
+
+    it("shows a Topic named by part of its address", async () => {
+      await run("show", "topic-alias-1", "c-piece-2", "--json");
+      const shown = JSON.parse(printed());
+
+      expect(shown.map((topic: { number: string }) => topic.number)).toEqual(
+        ["1", "2"],
+      );
+      await expect(run("show", "alias-1")).rejects.toThrow(
+        'The board has no Topic `"alias-1"`.',
+      );
+    });
+
+    it("shows only the comments `--last` and `--comments-since` leave", async () => {
+      await board.write({
+        "of:fid1:input-1": {
+          value: {
+            ...INPUT_1,
+            comments: [
+              link("of:fid1:comment-1"),
+              { author: { name: "Bo" }, body: "Day two.", sentAt: DAY_TWO },
+              { author: { name: "Cy" }, body: "Later.", sentAt: DAY_TWO + 1 },
+            ],
+          },
+        },
+      });
+      const numbers = () =>
+        [...printed().matchAll(/^### (\d+)\./gm)].map((match) => match[1]);
+      await run("show", "1", "--last", "2");
+      const last = numbers();
+      await run("show", "1", "--comments-since", "2026-10-27");
+      const sinceDay = numbers();
+      await run("show", "1", "--comments-since", "2026-10-27T12:00:00.001Z");
+      const sinceTime = numbers();
+
+      expect(last).toEqual(["2", "3"]);
+      expect(sinceDay).toEqual(
+        Date.parse("2026-10-27T00:00") <= DAY_TWO ? ["2", "3"] : ["3"],
+      );
+      expect(sinceTime).toEqual(["3"]);
+      await expect(run("show", "1", "--last", "0")).rejects.toThrow(
+        "`--last` takes a positive whole number.",
+      );
+      await expect(run("show", "1", "--comments-since", "soon")).rejects
+        .toThrow("`--comments-since` takes a date or time");
+      await expect(run("search", "--last", "2")).rejects.toThrow(
+        "`search` takes no `--last`.",
+      );
+      await expect(run("show", "1", "--exclude", "x")).rejects.toThrow(
+        "`show` takes no `--exclude`.",
+      );
+      await expect(run("sync", "--json")).rejects.toThrow(
+        "`sync` takes no `--json`.",
+      );
+    });
+  });
+
+  describe("runProgram()", () => {
+    const TOPICS = fromFileUrl(new URL("./topics.ts", import.meta.url));
+
+    it("runs a program with arguments, added variables, and stdin, returning what it wrote and its exit code", async () => {
+      const program = join(dir, "echo.ts");
+      await Deno.writeTextFile(
+        program,
+        `const input = await new Response(Deno.stdin.readable).text();
+console.log(JSON.stringify([Deno.args, Deno.env.get("TOPICS_ECHO"), input]));
+console.error("to stderr");
+Deno.exit(3);`,
+      );
+      const run = await runProgram(
+        program,
+        ["one", "--two"],
+        { TOPICS_ECHO: "set" },
+        "piped in",
+      );
+
+      expect(run).toEqual({
+        code: 3,
+        stdout: `${JSON.stringify([["one", "--two"], "set", "piped in"])}\n`,
+        stderr: "to stderr\n",
+      });
+    });
+
+    it("returns what a program reported when it exits without reading its input", async () => {
+      const program = join(dir, "early.ts");
+      await Deno.writeTextFile(
+        program,
+        `console.error("refused"); Deno.exit(4);`,
+      );
+
+      expect(
+        await runProgram(program, [], {}, "x".repeat(4 * 1024 * 1024)),
+      ).toEqual({ code: 4, stdout: "", stderr: "refused\n" });
+    });
+
+    it("runs this script, which prints its usage and reports a bad command on stderr", async () => {
+      const help = await runProgram(TOPICS, ["--help"], {}, "");
+      const bad = await runProgram(TOPICS, ["frobnicate"], {}, "");
+
+      expect(help).toEqual({ code: 0, stdout: `${USAGE}\n`, stderr: "" });
+      expect(bad.code).toBe(1);
+      expect(bad.stderr).toBe(
+        'Unknown command `"frobnicate"`; see `--help`.\n',
+      );
+    });
+  });
+
+  describe("writeSession()", () => {
+    /** A board whose session is kept at `session`. */
+    function at(session: string) {
+      return {
+        apiUrl: "",
+        space: "",
+        identity: "",
+        board: "",
+        mirror: "",
+        session,
+      };
+    }
+
+    it("throws when the session cannot be put in place, leaving nothing behind", async () => {
+      const state = join(dir, "state");
+
+      await expect(
+        writeSession(at(join(state, `${"x".repeat(260)}.invocation-session`))),
+      ).rejects.toThrow(/name too long/i);
+      expect([...Deno.readDirSync(state)]).toEqual([]);
+    });
+
+    it("mints a session once, readable only by its owner, and returns it after", async () => {
+      const path = join(dir, "state", "board.invocation-session");
+      const first = await writeSession(at(path));
+      const second = await writeSession(at(path));
+
+      expect(second).toBe(first);
+      expect(first).toMatch(/^[0-9a-f-]{36}$/);
+      expect((await Deno.stat(path)).mode! & 0o777).toBe(0o600);
+    });
+  });
+});

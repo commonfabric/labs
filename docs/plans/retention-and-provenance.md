@@ -11,8 +11,8 @@ started, and nothing should be until that review resolves. The verbs plan does
 not advance any of it, and none of it blocks the verbs plan — the two can be
 read, scheduled, and finished independently.
 
-Size L, and more of it is unknown than settled. It touches `packages/runner`,
-`packages/piece`, `packages/cli`, and `packages/patterns/topics`.
+Size L, and more of it is unknown than settled. It touches `runtime/runner`,
+`runtime/piece`, `runtime/cli`, and `patterns/apps/topics`.
 
 ## What has to resolve first
 

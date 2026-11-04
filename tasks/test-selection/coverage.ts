@@ -1,142 +1,86 @@
 /**
- * Which measured sets a change reaches, and what each of them is called
- * on disk.
+ * Which measured sets a plan chose to run whole, and what measuring them
+ * costs.
  *
- * A measured set is one suite's units over one workspace member's lines.
- * Everything about the coverage gate starts here: the lanes read this to
- * decide what to run whole and what to turn coverage on for, and the job
- * that joins the lanes reads the same function over the same diff rather
- * than trusting what a lane reported.
+ * A measured set is one suite's units over one workspace member's lines,
+ * and its coverage gate is a test the plan chooses by score. The lanes
+ * read what this makes of a plan to decide what to turn coverage on for,
+ * and the job that joins the lanes packs the same plan and reads the same
+ * answer from it rather than trusting what a lane reported.
  */
 
 import { duration } from "./duration.ts";
-import { unitProcesses } from "../test-topology.ts";
+import { type Suite, unavailableUnits } from "../test-topology/suite.ts";
 import {
-  coverageMemberDirectory,
-  type MeasuredSet,
-  reachedByChange,
-  type Suite,
-  unavailableUnits,
-} from "../test-topology/suite.ts";
+  COVERAGE_GATE_SUITE,
+  measuredSetName,
+  type MeasuredSetRef,
+  measuredSets,
+} from "../test-topology/coverage-gates.ts";
 import { memberScope } from "../test-topology/unit.ts";
 import type { Calibration, Manifest, ManifestEntry } from "./manifest.ts";
-import { calibrationFor, chargedTests, chargesOf, testsOf } from "./plan.ts";
+import {
+  aroundIn,
+  chargedTests,
+  type GateChoice,
+  type Selection,
+  testsOf,
+} from "./plan.ts";
 import {
   COST_WINDOW_DAYS,
   EXCLUDED_FROM_COVERAGE_GATE,
   exclusionKind,
   LANE_BUDGET_SECONDS,
-  LANES,
+  LANES_MAX,
   LOCAL_COVERAGE_MAX_SECONDS,
-  LOCAL_COVERAGE_MAX_SETS,
 } from "./policy.ts";
 
-/** One measured set, and the suite that declared it. */
-export interface MeasuredSetRef {
-  suite: string;
-  set: MeasuredSet;
-}
-
-/**
- * Every measured set the topology declares that this configuration can
- * run, in a stable order.
- *
- * A set every one of whose units the suite declares unavailable is left
- * out. Keeping it would mean scoring a set nothing was required to run,
- * so the count would be whatever some other lane happened to leave in
- * the directory.
- */
-export function measuredSets(
-  suites: readonly Suite[],
-): MeasuredSetRef[] {
-  const sets: MeasuredSetRef[] = [];
-  for (const suite of suites) {
-    const unavailable = unavailableUnits(suite);
-    for (const set of suite.measured ?? []) {
-      if (set.units.every((unit) => unavailable.has(unit))) continue;
-      sets.push({ suite: suite.id, set });
-    }
-  }
-  return sets.sort((a, b) =>
-    a.suite.localeCompare(b.suite) || a.set.member.localeCompare(b.set.member)
-  );
-}
-
-/** Where one measured set's coverage profiles and report live. */
-export function measuredSetDirectory(ref: MeasuredSetRef): string {
-  return `${ref.suite}/${coverageMemberDirectory(ref.set.member)}`;
-}
-
-/** How a measured set is named in a summary or a metric. */
-export function measuredSetName(ref: MeasuredSetRef): string {
-  return `${ref.suite}/${ref.set.member}`;
-}
-
-/** What the coverage gate decided about one change. */
+/** What the coverage gates a change could choose came to in one plan. */
 export interface CoverageGateSelection {
-  /** The sets the gate runs and scores. Empty where it does not run. */
+  /**
+   * The sets whose gates the plan chose, which the lanes run whole and
+   * measure, and whose verdicts are reached.
+   */
   sets: MeasuredSetRef[];
 
   /**
-   * Every set the change reached, whether or not the gate runs. The cap
-   * below turns the gate off without changing what the change reached,
-   * and a summary that could not say what it reached would leave nobody
-   * able to tell a capped change from an untouched one.
+   * Every set the change reached, whether or not the plan chose its gate.
+   * A gate the change reached and the plan did not choose forces nothing,
+   * and a summary that could not name it would leave nobody able to tell
+   * a gate passed over from a set the change never touched.
    */
   reached: MeasuredSetRef[];
-
-  /** Why the gate did not run, where it did not. */
-  off?: string;
 }
 
 /**
- * Which measured sets a change reaches, and whether the gate runs.
- *
- * The gate is off entirely past the cap rather than off for some of the
- * sets: gating two of the four a change reached would mean quietly
- * ignoring the other two. A cliff is also predictable, so an author can
- * tell from the diff whether the gate applies without knowing what any
- * set's tests cost.
+ * The measured sets of the gates in `gates`, and of those among them that
+ * `chosen` names, by the coverage-gate unit each gate is.
  */
-export function coverageGateFor(
+export function coverageGateSelection(
   suites: readonly Suite[],
-  changed: ReadonlySet<string>,
+  gates: readonly GateChoice[],
+  chosen: readonly Pick<Selection, "entry">[],
 ): CoverageGateSelection {
-  const reached = measuredSets(suites)
-    .filter((ref) => reachedByChange(ref.set.reachedBy, changed));
-  if (reached.length > LOCAL_COVERAGE_MAX_SETS) {
-    return {
-      sets: [],
-      reached,
-      off: `the change reaches ${reached.length} measured sets, more than ` +
-        `the ${LOCAL_COVERAGE_MAX_SETS} a gated change may reach`,
-    };
-  }
-  return { sets: reached, reached };
-}
-
-/**
- * The units one selection makes mandatory, as `suite\tunit` keys.
- *
- * A unit the suite declares unavailable is left out: it does not run, so
- * requiring it would place an identity no invocation would execute.
- */
-export function measuredUnitKeys(
-  suites: readonly Suite[],
-  selection: CoverageGateSelection,
-): Set<string> {
-  const bySuite = new Map(suites.map((suite) => [suite.id, suite]));
-  const keys = new Set<string>();
-  for (const ref of selection.sets) {
-    const suite = bySuite.get(ref.suite);
-    if (suite === undefined) continue;
-    const unavailable = unavailableUnits(suite);
-    for (const unit of ref.set.units) {
-      if (unavailable.has(unit)) continue;
-      keys.add(`${ref.suite}\t${unit}`);
-    }
-  }
-  return keys;
+  const byName = new Map(
+    measuredSets(suites).map((ref) => [measuredSetName(ref), ref]),
+  );
+  /** The sets, in their own order, whose gates `picked` names. */
+  const setsOf = (picked: readonly ManifestEntry[]) => {
+    const names = new Set(
+      picked
+        .filter((entry) => entry.suite === COVERAGE_GATE_SUITE)
+        .map((entry) => entry.unit),
+    );
+    return [...byName].filter(([name]) => names.has(name)).map(([, ref]) =>
+      ref
+    );
+  };
+  return {
+    sets: setsOf(chosen.map((selection) => selection.entry)),
+    reached: setsOf(
+      gates.filter((gate) => gate.reached).map((gate) => gate.entry),
+    ),
+  };
 }
 
 /** The members one suite measures under a selection. */
@@ -154,8 +98,8 @@ export function measuredMembersOf(
 /**
  * Whether a run measures any of a suite's members. The full run measures
  * every suite, because the baselines and the repository-wide trend both
- * come out of it; a pull request measures the suites of the sets its gate
- * scores, and no others.
+ * come out of it; a pull request measures the suites of the sets whose
+ * gates its plan chose, and no others.
  */
 export function measuresSuite(
   selection: CoverageGateSelection,
@@ -197,16 +141,8 @@ export interface MeasuredCost {
   units: { overhead: number; entries: number }[];
 
   /**
-   * Each process's setup, over every time it starts, and how many of the
-   * entries run in it. Every lane holding one of those entries starts the
-   * process as many times as the most any of them runs, so a process is
-   * started in at most as many lanes as it holds entries.
-   */
-  processes: { setup: number; entries: number }[];
-
-  /**
    * The most any one entry charges a lane holding nothing else, its
-   * suite's, its unit's and its process's overheads included. All of one
+   * suite's and its unit's overheads included. All of one
    * entry's runs go in one lane, so no number of lanes holds an entry
    * costing more than one lane does.
    */
@@ -224,50 +160,37 @@ export interface MeasuredCost {
 export function measuredCost(
   calibration: Calibration,
   entries: readonly ManifestEntry[],
-  processes: ReadonlyMap<string, string>,
 ): MeasuredCost | undefined {
   const bySuite = new Map<string, ManifestEntry[]>();
   for (const entry of entries) {
     bySuite.set(entry.suite, [...bySuite.get(entry.suite) ?? [], entry]);
   }
-  const charged = calibrationFor(calibration, processes);
   const cost: MeasuredCost = {
     overhead: 0,
     spread: 0,
     units: [],
-    processes: [],
     largest: 0,
   };
   for (const [suite, held] of bySuite) {
-    const fit = charged.suitesWithCoverage?.[suite];
-    if (fit === undefined) return undefined;
-    const fitted = chargesOf(fit);
-    const setup = fitted.setup;
+    const fitted = calibration.suitesWithCoverage?.[suite];
+    if (fitted === undefined) return undefined;
+    const around = aroundIn(held);
     /** What `entries` take, and their overheads past one lane's first. */
     const beyond = (entries: readonly ManifestEntry[]) => {
       const tests = testsOf(
         entries.map((entry) => ({ entry, repeats: entry.repeats })),
+        around,
+        fitted,
       );
       const units = new Set(entries.map((entry) => entry.unit)).size;
       return chargedTests(fitted.correction, tests) +
         fitted.overhead * (tests.longest.length - 1) +
         fitted.unitOverhead * (tests.opened - units);
     };
-    const started = new Map<string, { runs: number; entries: number }>();
     for (const entry of held) {
-      const process = processes.get(`${suite}\t${entry.unit}`);
-      if (process !== undefined) {
-        const was = started.get(process) ?? { runs: 0, entries: 0 };
-        started.set(process, {
-          runs: Math.max(was.runs, entry.repeats),
-          entries: was.entries + 1,
-        });
-      }
       cost.largest = Math.max(
         cost.largest,
-        fitted.overhead + fitted.unitOverhead +
-          (process === undefined ? 0 : setup * entry.repeats) +
-          beyond([entry]),
+        fitted.overhead + fitted.unitOverhead + beyond([entry]),
       );
     }
     cost.spread += beyond(held);
@@ -277,9 +200,6 @@ export function measuredCost(
         overhead: fitted.unitOverhead,
         entries: entries.length,
       });
-    }
-    for (const { runs, entries } of started.values()) {
-      cost.processes.push({ setup: setup * runs, entries });
     }
   }
   return cost;
@@ -293,8 +213,7 @@ export function measuredCost(
  *
  * Spread over some number of lanes, it charges its spread once, its
  * suites' overheads and the setup in every one of them, and each unit's
- * overhead and each process's setup in as many of them as the unit or
- * the process can be split over. Those lanes
+ * overhead in as many of them as the unit can be split over. Those lanes
  * hold it where that fits inside their budgets together and its largest
  * entry, with the setup, fits inside one of them. A lane's prologue is
  * already outside its budget.
@@ -304,15 +223,10 @@ function lanesHolding(
   setup: number,
 ): { lanes: number; seconds: number } | undefined {
   if (cost.largest + setup > LANE_BUDGET_SECONDS) return undefined;
-  for (let lanes = 1; lanes <= LANES; lanes++) {
+  for (let lanes = 1; lanes <= LANES_MAX; lanes++) {
     const seconds = cost.spread + lanes * (cost.overhead + setup) +
       cost.units.reduce(
         (sum, unit) => sum + unit.overhead * Math.min(lanes, unit.entries),
-        0,
-      ) +
-      cost.processes.reduce(
-        (sum, process) =>
-          sum + process.setup * Math.min(lanes, process.entries),
         0,
       );
     if (seconds <= lanes * LANE_BUDGET_SECONDS) return { lanes, seconds };
@@ -343,8 +257,7 @@ function setupCost(
  * units are packed across lanes like any other mandatory work and the
  * totals meet again afterwards. A set spread over several lanes pays its
  * suites' overheads and its capabilities' setup in each of them, and
- * each unit's overhead and each process's setup in each lane holding part
- * of that unit or that process. A set and
+ * each unit's overhead in each lane holding part of that unit. A set and
  * a member alike are charged that over the fewest lanes holding them,
  * with each unit split over as many of those lanes as its entries allow.
  * The units a set's suite declares unavailable are not run, so they are
@@ -363,13 +276,12 @@ export function measuredCostLines(
 ): string[] {
   const lines: string[] = [];
   const unfitted = new Set<string>();
-  const processes = unitProcesses(suites);
   let unjudged = 0;
   const judged = (
     entries: readonly ManifestEntry[],
   ): MeasuredCost | undefined => {
     if (entries.length === 0) return undefined;
-    const cost = measuredCost(manifest.calibration, entries, processes);
+    const cost = measuredCost(manifest.calibration, entries);
     if (cost !== undefined) return cost;
     unjudged += 1;
     for (const { suite } of entries) {
@@ -401,8 +313,8 @@ export function measuredCostLines(
       continue;
     }
     const costs = held === undefined
-      ? `more with coverage on than the run's ${LANES} lanes of ` +
-        `${duration(LANE_BUDGET_SECONDS)} hold`
+      ? `more with coverage on than the ${LANES_MAX} lanes of ` +
+        `${duration(LANE_BUDGET_SECONDS)} a pull request may take hold`
       : `${duration(held.seconds)} with coverage on`;
     lines.push(
       `${measuredSetName(ref)} costs ${costs}, past ` +
@@ -434,8 +346,9 @@ export function measuredCostLines(
     lines.push(
       `${member} is on EXCLUDED_FROM_COVERAGE_GATE for its size, and its ` +
         `tests now cost ${duration(held.seconds)} with coverage on ` +
-        `across ${held.lanes} lane(s), inside the run's ${LANES} lanes of ` +
-        `${duration(LANE_BUDGET_SECONDS)}, so its line can come off.`,
+        `across ${held.lanes} lane(s), inside the ${LANES_MAX} lanes of ` +
+        `${duration(LANE_BUDGET_SECONDS)} a pull request may take, so its ` +
+        `line can come off.`,
     );
   }
   if (unjudged > 0) {

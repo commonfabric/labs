@@ -1,20 +1,20 @@
 ---
 paths:
-  - "packages/api/index.ts"
-  - "packages/api/schema.ts"
-  - "packages/data-model/src/**"
-  - "packages/runner/src/builder/factory.ts"
-  - "packages/runner/src/builder/types.ts"
-  - "packages/memory/v2/sqlite/schema.ts"
+  - "base/api/index.ts"
+  - "base/api/schema.ts"
+  - "base/data-model/src/**"
+  - "runtime/runner/src/builder/factory.ts"
+  - "runtime/runner/src/builder/types.ts"
+  - "runtime/memory/v2/sqlite/schema.ts"
 ---
 
 # The declarations a pattern compiles against
 
-`packages/api/index.ts` is the whole of the `commonfabric` module's type, and
+`base/api/index.ts` is the whole of the `commonfabric` module's type, and
 what the sandbox hands the pattern compiler is
-`packages/static/assets/types/commonfabric.d.ts`, generated from it by
-`packages/static/scripts/generate-commonfabric-types.ts`. So an edit to the
-declarations takes `deno task gen-commonfabric-types` in `packages/static` with
+`base/static/assets/types/commonfabric.d.ts`, generated from it by
+`base/static/scripts/generate-commonfabric-types.ts`. So an edit to the
+declarations takes `deno task gen-commonfabric-types` in `base/static` with
 it, and `check-commonfabric-types` fails the build until it has been run. The
 generator inlines the modules `index.ts` draws its declarations from rather than
 following a specifier out of them, because the compiler that reads the result
@@ -22,10 +22,10 @@ resolves none.
 
 Anything that file describes and does not implement, it describes by declaring a
 second copy of the shape by hand, and the implementation is in
-`packages/runner/src/builder`, `packages/data-model`, or
-`packages/memory/v2/sqlite`.
+`runtime/runner/src/builder`, `base/data-model`, or
+`runtime/memory/v2/sqlite`.
 
-The fabric value types are not among them: `packages/api` re-exports
+The fabric value types are not among them: `base/api` re-exports
 `@commonfabric/data-model/api`, so there is one declaration and each
 implementation asserts against it beside its own definition. What is copied is
 the builder vocabulary, and the compiler compares that too.
@@ -60,7 +60,7 @@ and the reason goes beside the name.
 
 ## `schema.ts` is part of the declared surface
 
-`packages/api/schema.ts` augments several of the interfaces in `index.ts` with
+`base/api/schema.ts` augments several of the interfaces in `index.ts` with
 schema-carrying overloads. Those augmentations are part of what a binding has to
 satisfy, so a signature that looks unimplemented may have its second half
 there.

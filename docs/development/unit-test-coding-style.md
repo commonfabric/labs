@@ -49,8 +49,8 @@ That rule is about a package of interdependent source files. A directory whose
 entries are instead independent components — each self-contained, with no
 shared structure for a parallel tree to mirror — keeps each component's test
 beside it, and that arrangement is correct where it is already in use.
-`packages/ui` is one, a component and its test sitting together in the
-component's own directory. `packages/patterns` is another, where a pattern and
+`runtime/ui` is one, a component and its test sitting together in the
+component's own directory. `patterns` is another, where a pattern and
 its test are a pair; its tests are pattern tests, so nothing else in this guide
 reaches them, but the placement question is the same one. A `test/` tree buys
 nothing in either case: what it would mirror is a flat list of unrelated
@@ -494,7 +494,7 @@ expect(replica.getDocument(id, "space")).toBeUndefined();
 
 `hasDocumentRecord()` reports whether the replica holds a record for the
 document, which is the predicate the absence-reconciliation path in
-`packages/runner/src/storage/v2.ts` decides by. A record appears once the
+`runtime/runner/src/storage/v2.ts` decides by. A record appears once the
 replica has examined the document and also once a local write for it is
 pending, so a case turning on the first of those says in a comment that
 nothing has written the document yet.

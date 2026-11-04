@@ -2,58 +2,68 @@
 
 Status: In progress.
 
-Unknown named files and filename-free source without a recognized shebang use
-plain text, while filename-free transformed compiler output keeps its
-TypeScript default. Piped source can select a language directly or through a
-virtual filename. Declarative metadata can now describe extensions, exact
-names, compound patterns, explicit aliases, direct interpreter shebangs,
-launcher shebangs that a subcommand settles, and extensions that several
-syntaxes share. JSON Lines and NDJSON use the JSON tokenizer with independent
-lexical state for each record. JSON also covers the surveyed names that no
-`.json` suffix announces: web manifests, TLDraw documents, Deno lock files,
-editor workspace files, Swift package resolutions, and the `.cfg` files whose
-source opens a JSON object. Python has syntax highlighting and a structure tree
-of its classes and functions. Swift has syntax highlighting and a structure
+Unknown named files and filename-free source use plain text unless a recognized
+shebang or an XML declaration opens the source, while filename-free transformed
+compiler output keeps its TypeScript default. Piped source can select a language
+directly or through a virtual filename. Declarative metadata can now describe
+extensions, exact names, compound patterns, explicit aliases, direct interpreter
+shebangs, launcher shebangs that a subcommand settles, and extensions that
+several syntaxes share. JSON Lines and NDJSON use the JSON tokenizer with
+independent lexical state for each record. JSON also covers the surveyed names
+that no `.json` suffix announces: web manifests, TLDraw documents, Deno lock
+files, editor workspace files, Swift package resolutions, and the `.cfg` files
+whose source opens a JSON object. Python has syntax highlighting and a structure
+tree of its classes and functions. Swift has syntax highlighting and a structure
 tree of its types, functions, initializers, and type-level properties, and its
 package manifests select it through their `.swift` extension. Kotlin, which
 covers Gradle's Kotlin build scripts, has syntax highlighting and a structure
-tree of its types, objects, functions, constructors, and type-level
-properties. Shell, which covers Bash and POSIX shell, has syntax highlighting
-and a structure tree of its functions; `sh`, `bash`, `dash`, and `ash`
-shebangs select it for Git hooks and other extensionless programs viewed
-directly, and a heredoc's body is a string with the expansions its delimiter
-allows. TOML, which covers Gradle version catalogs and Cargo manifests and
-lock files, has syntax highlighting and a structure tree of tables and keys.
-Java properties files, ProGuard and R8 keep rules, and XML, which covers
-Android manifests and resources, SVG, and Apple property lists, have syntax
+tree of its types, objects, functions, constructors, and type-level properties.
+Shell, which covers Bash and POSIX shell, has syntax highlighting and a
+structure tree of its functions; `sh`, `bash`, `dash`, and `ash` shebangs select
+it for Git hooks and other extensionless programs viewed directly, and a
+heredoc's body is a string with the expansions its delimiter allows. Makefiles
+have syntax highlighting, with recipes and the other commands make passes to the
+shell colored by the shell grammar, and a structure tree of targets and
+variables. TOML, which covers Gradle version catalogs and Cargo manifests and
+lock files, has syntax highlighting and a structure tree of tables and keys. HCL,
+which covers OpenTofu and Terraform configuration, variable definitions files,
+backend configuration files, and dependency lock files, has syntax highlighting
+and a structure tree of blocks and of the attributes that define values, which
+are those at a file's top level and in `locals` blocks; a string's
+interpolations and template directives are code inside the string. Java
+properties files, ProGuard and R8 keep rules, and XML, which covers Android
+manifests and resources, SVG, and Apple property lists, have syntax
 highlighting; properties files list their keys, and XML lists its elements.
+INI, which covers Ansible configuration and inventories and the configuration
+files of Python tools, has syntax highlighting and a structure tree of sections
+and the keys and hosts in each.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
 extension that several syntaxes share. Each of those extensions is paired in
 metadata with the evidence one language claims it on, and a view with no source
-text leaves such a name unclaimed. Recognized shebangs and transformed compiler
-headers remain explicit source selectors. A diff selects the language of each
-side of each file once, and every view of that side uses it. A path no language
-claims defers to that side's content: a hunk that begins at its first line,
-and then its complete file in the workspace or in Git. A side with no such
-evidence takes the other side's language. Binary is a supported, read-only
-language with raw-byte decoding and a hex-dump rendered view. Known binary
-filenames, NUL-containing input, and invalid UTF-8 select it before text
+text leaves such a name unclaimed. Recognized shebangs, XML declarations, and
+transformed compiler headers remain explicit source selectors. A diff selects
+the language of each side of each file once, and every view of that side uses
+it. A path no language claims defers to that side's content: a hunk that begins
+at its first line, and then its complete file in the workspace or in Git. A side
+with no such evidence takes the other side's language. Binary is a supported,
+read-only language with raw-byte decoding and a hex-dump rendered view. Known
+binary filenames, NUL-containing input, and invalid UTF-8 select it before text
 decoding. Interactive binary views use a bounded preview, while redirected
 output streams the complete dump. Text saves use the encoder paired with the
 decoded source, including preservation of a UTF-8 byte order mark. Binary files
 remain outside diff editing and semantic source loading.
 
-Python, Swift, Kotlin, TOML, and shell run on Tree-sitter through a shared,
+Python, Swift, Kotlin, TOML, HCL, and shell run on Tree-sitter through a shared,
 language-neutral adapter, which Go and HTML will use as well. Java
-properties, ProGuard rules, and XML use focused scanners.
+properties, INI, ProGuard rules, XML, and makefiles use focused scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
-JSON, JSONC, JSON Lines, YAML, Python, Swift, Kotlin, TOML, shell, Java
-properties, ProGuard, XML, and diff support to honest
+JSON, JSONC, JSON Lines, YAML, Python, Swift, Kotlin, TOML, HCL, shell,
+makefile, Java properties, INI, ProGuard, XML, and diff support to honest
 handling of every textual syntax in the active
 `commonfabric` repositories.
 
@@ -161,16 +171,16 @@ and a warm dependency cache. Initialization starts at the first statement in a
 fresh Deno process and includes dynamic imports, runtime initialization, the
 selected grammar and query, and one empty highlight.
 
-| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Accepted maximum |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 75 ms |
-| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 50 ms |
-| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 50 ms |
-| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 25 ms |
-| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 650 shipped lines; 200 for a later grammar |
-| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 |
+| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Accepted maximum |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 75 ms |
+| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 50 ms |
+| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 50 ms |
+| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 25 ms |
+| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 650 shipped lines; 200 for a later grammar |
+| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 The Python column is the
 [September 2026 Python measurement](../history/packages/cli/cf-view-python-treesitter-2026-09.md),
@@ -205,6 +215,17 @@ in any round. The report gives the figures measured directly, which exceed the
 document-parse and re-color maximums in some rounds. Shell is over the unpacked
 dependency maximum, for the reason under "Shell over its unpacked-dependency
 maximum".
+
+The HCL column is the
+[October 2026 HCL measurement](../history/packages/cli/cf-view-hcl-2026-10.md),
+made the same way in eight rounds, each between two TOML control runs, on a
+loaded machine. Its timings are estimates in the way the shell column's are:
+TOML's recorded 95th percentiles multiplied by the largest ratio of HCL to TOML
+seen in the six rounds whose controls stayed within 1.22 times TOML's recorded
+medians. The report gives the figures measured directly, which exceed the
+complete-highlight and document-parse maximums in some rounds. The HCL grammar names the node types a
+structure entry can be found inside, which keeps the structure walk out of
+expressions; without that, its document parse was over the maximum.
 
 The binary build leaves out every directory of a grammar package except the
 one holding its WebAssembly grammar, such as generated C source and native
@@ -541,7 +562,9 @@ a scanner covers it, with a structure tree of elements. The
 scanner also selects `.xcprivacy` privacy manifests and `.xcworkspacedata`
 workspace files, which are XML. It colored all 88 XML, SVG, property list,
 entitlement, and privacy manifest files in the local checkouts of the
-organization's repositories without altering their source.
+organization's repositories without altering their source. A file that no name
+claims selects XML when its source starts with an XML declaration, which covers
+Interface Builder documents and project files.
 
 Completion gate: host and embedded syntax ranges preserve the complete input,
 including malformed and partially edited markup.
@@ -569,7 +592,7 @@ selection path.
 
 ## Stage 8: OpenTofu, HCL, and infrastructure templates
 
-- [ ] Add `.tf` and `.tfvars` HCL.
+- [x] Add `.tf` and `.tfvars` HCL.
 - [ ] Layer Terraform interpolation over the shell host in `.tftpl`.
 - [ ] Layer Jinja delimiters over a separately selected host syntax.
 - [ ] Cover the surveyed shell, systemd-unit, authorized-keys, and YAML Jinja
@@ -578,16 +601,79 @@ selection path.
 Completion gate: an extension such as `.j2` does not force one host language,
 and every current Infra template has an explicit tested selection rule.
 
+HCL is implemented ahead of Stages 3 to 7. Outside its own language module it
+needed one optional addition to the shared adapter, the set of node types a
+structure entry can be found inside. The grammar's own npm package ships its
+WebAssembly build, and that grammar parsed every one of the 153 HCL files in the
+Infra repository without an error. HCL runs on the Tree-sitter adapter with the
+[`tree-sitter-grammars/tree-sitter-hcl`](https://github.com/tree-sitter-grammars/tree-sitter-hcl)
+grammar. It selects OpenTofu and Terraform configuration through `.tf` and
+`.tofu`, variable definitions files through `.tfvars`, backend configuration
+files through `.tfbackend`, and test files and dependency lock files through
+`.hcl`. The JSON forms of those files, such as `.tf.json`, remain JSON. It
+colored every character other than white space in those 153 files, and each
+file reconstructed exactly.
+
 ## Stage 9: build and operational configuration
 
 - [ ] Add Dockerfile, including every `Dockerfile.*` variant.
-- [ ] Add Makefile and `.mk`.
+- [x] Add Makefile and `.mk`.
 - [ ] Add Git, Docker, Deno, and Bazel ignore files.
 - [ ] Add Git attributes, modules, hooks, and worktree-include syntax.
 - [ ] Add dotenv files and compound examples.
-- [ ] Add INI, Ansible configuration, and inventory files.
+- [x] Add INI, Ansible configuration, and inventory files.
 - [ ] Add systemd units, tmpfiles configuration, and surveyed directive
   configuration.
+
+Makefiles are implemented ahead of the rest of this stage. An October 20, 2026
+read of the local checkouts of the organization's repositories found 19
+makefiles in 5 repositories, all named `Makefile` or `.mk`, with 56 path-change
+events on them in the six months before the read. `Makefile`, `makefile`,
+`GNUmakefile`, and `.mk` select the language, as do `make` and `gmake`
+shebangs.
+
+The language uses a focused scanner rather than Tree-sitter. The
+[`tree-sitter-grammars/tree-sitter-make`](https://github.com/tree-sitter-grammars/tree-sitter-make)
+grammar's npm package ships its WebAssembly build, but the grammar could not
+parse part of 7 of the 19 files, 133 of the 2,595 lines in all 19. It fails on
+idioms those files use: a `$$(` shell substitution, a `$(shell ...)` call that
+spans continuation lines, and parentheses inside a variable's value. Make's
+lexical syntax is line-oriented, and a scanner reads every one of those files
+and reconstructs each exactly.
+
+Make passes recipe lines, the recipe after a rule's `;`, the command of a `!=`
+assignment, and the argument of the `shell` function to the shell. The scanner
+colors each such stretch through the shell language's grammar as make runs
+it: one logical recipe line at a time, or a rule's whole recipe at a time when
+the makefile names the `.ONESHELL` target. Make's own references inside a
+stretch are hidden from that grammar and colored by the scanner. On 100
+kilobytes of gVisor's makefile, the 95th-percentile full highlight took 10.6
+milliseconds, the document parse 7.2, and the re-color after one edit 6.9, all
+inside the maximums for a parser-backed language.
+
+An October 20, 2026 refresh found nine INI files in the local checkouts of the
+organization's repositories: six Ansible inventories and the Ansible
+configuration in Infra, `pytest.ini` in Loom, and `.codespellrc` in gVisor. The
+six months before the refresh hold 23 path-change events on the Infra files, 9
+on Loom's, and none on gVisor's.
+
+INI uses a focused scanner, in the dialect Python's `configparser` reads by
+default: `;` and `#` start comment lines, the first `=` or `:` separates a key
+from its value, and a line indented further than the line that set a key
+continues that key's value. A line whose first word does not end in `:` and is
+followed by a `name=value` word or a `#` is an Ansible inventory host line,
+split into words as Ansible splits it: the first word is the host, the
+`name=value` words set the host's variables, and a `#` outside quotes starts a
+comment. `.ini` selects INI, and so do `ansible.cfg`, `.ansible.cfg`,
+`setup.cfg`, `.codespellrc`, and the configuration files of Python tools that
+have no extension of their own. Another `.cfg` file is INI when its first line
+other than blank lines and comments heads a section whose name does not start
+the way a JSON array's first value does. TLC configuration and JSON do not open
+that way. Every character other than white space in the nine files has a token
+class. The scanner re-colors 100 kilobytes of inventory and configuration text
+in under 2 milliseconds at the 95th percentile, and each 100-kilobyte input
+built to slow it that was measured, such as unclosed quotes or a single line of
+25,000 words, in under 6. The fixture comes from Infra.
 
 Completion gate: every surveyed exact-name and compound-name operational file
 selects without content guessing.

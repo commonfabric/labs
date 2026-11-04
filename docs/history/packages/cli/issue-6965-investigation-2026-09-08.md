@@ -102,7 +102,7 @@ that check or establish that migration's safety.
 
 ## Reproduction and validation
 
-[The local characterization test](../../../../packages/cli/test/piece-link-input-visibility.test.ts)
+[The local characterization test](../../../../runtime/cli/test/piece-link-input-visibility.test.ts)
 contains four cases: contradictory reads, a fresh before/after preflight,
 source-update-first control, and a fresh actual update. Its passing assertions
 describe the observed bugs and controls; they are investigation evidence, not

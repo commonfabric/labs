@@ -20,8 +20,8 @@
 import {
   DEBUG_STR_SIZE_WORDS,
   DEBUG_STR_WORDS,
-} from "../packages/data-model/src/value-debug/interface.ts";
-import { parseDebugStrDirective } from "../packages/data-model/src/value-debug/parseDebugStrDirective.ts";
+} from "../base/data-model/src/value-debug/interface.ts";
+import { parseDebugStrDirective } from "../base/data-model/src/value-debug/parseDebugStrDirective.ts";
 
 /** The name the rule recognizes the tag by. */
 const TAG_NAME = "debugStr";

@@ -32,6 +32,9 @@ mapped in [`../README.md`](../README.md).
   Contextual Flow Control: where the specification lives, how to classify a
   change, when the specification moves first, and what a pending ruling
   permits
+- [`automated-gates.md`](automated-gates.md) — what `deno task check`
+  type-checks, how the trees it leaves out are recorded, and the gates that
+  fail CI on their own. Read it before you push
 
 ## Dependencies and configuration
 
@@ -70,14 +73,18 @@ mapped in [`../README.md`](../README.md).
   comments on a pull request: the commands that list a reviewer's findings and
   tell you which threads are still open, which automated reviewers post here,
   and why `gh pr view` returns none of it
-- [`deploying.md`](deploying.md) — how a commit reaches a host: which jobs
-  deploy where, and the contract the bastion's deploy wrapper enforces on what
-  they pass it. Read this before editing a deploy step, because that wrapper
-  lives in the infra repository rather than this one
+- [`deploying.md`](deploying.md) — coordinated Rapids releases and manual
+  Estuary deployments: which jobs deploy where, and the contracts the bastion's
+  wrappers enforce. Read this before editing a deploy step; those wrappers are
+  installed from the infra repository
 - [`staging-space-copy.md`](staging-space-copy.md) — how a *space* reaches a
   host: snapshotting one space's store and serving the copy from rapids, what
   installing it commits you to, and the questions a local clone answers more
   cheaply
+- [`space-compaction.md`](space-compaction.md) — compacting one space's
+  revision history on a host: the clone rehearsal, the verification that
+  stands between the result and the install, and the Estuary recipe with its
+  rollback
 - [`CI_PERFORMANCE.md`](CI_PERFORMANCE.md) — how continuous-integration wall
   time is tracked, the dials that govern the lanes, and when to move them
 - [`COVERAGE.md`](COVERAGE.md) — the two coverage mechanisms, which suite

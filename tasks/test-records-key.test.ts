@@ -304,9 +304,9 @@ describe("test-records-key", () => {
 
   async function storeIdentity(): Promise<KeyDeliveryIdentity> {
     const identity = await generateIdentity();
-    await Deno.mkdir(join(home, "common-fabric"), { recursive: true });
+    await Deno.mkdir(join(home, "commonfabric"), { recursive: true });
     await Deno.writeTextFile(
-      join(home, "common-fabric", "test-records-identity.json"),
+      join(home, "commonfabric", "test-records-identity.json"),
       JSON.stringify(identity),
     );
     return identity;
@@ -346,7 +346,7 @@ describe("test-records-key", () => {
 
       await requestCommand(deps);
 
-      const path = join(home, "common-fabric", "test-records-identity.json");
+      const path = join(home, "commonfabric", "test-records-identity.json");
       const identity = JSON.parse(await Deno.readTextFile(path));
       expect(identity.recipient.startsWith("cfr1")).toBe(true);
       expect(Deno.statSync(path).mode! & 0o777).toBe(0o600);
@@ -366,7 +366,7 @@ describe("test-records-key", () => {
 
       const stored = JSON.parse(
         await Deno.readTextFile(
-          join(home, "common-fabric", "test-records-identity.json"),
+          join(home, "commonfabric", "test-records-identity.json"),
         ),
       );
       expect(stored.recipient).toBe(identity.recipient);
@@ -409,7 +409,7 @@ describe("test-records-key", () => {
 
       expect(await collectCommand(deps)).toBe(0);
 
-      const installed = join(home, "common-fabric", "test-records-key.json");
+      const installed = join(home, "commonfabric", "test-records-key.json");
       expect(await Deno.readTextFile(installed)).toBe(KEY_TEXT);
       expect(Deno.statSync(installed).mode! & 0o777).toBe(0o600);
     });
@@ -452,7 +452,7 @@ describe("test-records-key", () => {
       expect(await collectCommand(deps)).toBe(0);
       expect(
         await Deno.readTextFile(
-          join(home, "common-fabric", "test-records-key.json"),
+          join(home, "commonfabric", "test-records-key.json"),
         ),
       ).toBe(KEY_TEXT);
     });
@@ -575,7 +575,7 @@ describe("test-records-key", () => {
         if (name === "SHELL") return "/bin/zsh";
         return inner(name);
       };
-      const line = `export CF_TEST_RECORDS_KEY_FILE="$HOME/common-fabric/` +
+      const line = `export CF_TEST_RECORDS_KEY_FILE="$HOME/commonfabric/` +
         `test-records-key.json"\n`;
       await Deno.writeTextFile(join(home, ".zshenv"), line);
 
@@ -585,11 +585,11 @@ describe("test-records-key", () => {
 
     it("keeps the key beside the identity under a plain home", async () => {
       const identity = await generateIdentity();
-      await Deno.mkdir(join(home, ".config", "common-fabric"), {
+      await Deno.mkdir(join(home, ".config", "commonfabric"), {
         recursive: true,
       });
       await Deno.writeTextFile(
-        join(home, ".config", "common-fabric", "test-records-identity.json"),
+        join(home, ".config", "commonfabric", "test-records-identity.json"),
         JSON.stringify(identity),
       );
       const published = await delivery(identity);
@@ -599,7 +599,7 @@ describe("test-records-key", () => {
       expect(await collectCommand(deps)).toBe(0);
       expect(
         await Deno.readTextFile(
-          join(home, ".config", "common-fabric", "test-records-key.json"),
+          join(home, ".config", "commonfabric", "test-records-key.json"),
         ),
       ).toBe(KEY_TEXT);
     });
@@ -614,7 +614,7 @@ describe("test-records-key", () => {
         if (name === "SHELL") return "/bin/zsh";
         return inner(name);
       };
-      const line = `CF_TEST_RECORDS_KEY_FILE="$HOME/common-fabric/` +
+      const line = `CF_TEST_RECORDS_KEY_FILE="$HOME/commonfabric/` +
         `test-records-key.json"\n`;
       await Deno.writeTextFile(join(home, ".zshenv"), line);
 
@@ -661,7 +661,7 @@ describe("test-records-key", () => {
 
     /** Where the key lands for these tests. */
     function keyPath(): string {
-      return join(home, "common-fabric", "test-records-key.json");
+      return join(home, "commonfabric", "test-records-key.json");
     }
 
     it("passes the key file to an agent harness installed here", async () => {
@@ -678,7 +678,7 @@ describe("test-records-key", () => {
         await Deno.readTextFile(join(home, ".claude", "settings.json")),
       );
       expect(settings.env.CF_TEST_RECORDS_KEY_FILE).toBe(
-        join(home, "common-fabric", "test-records-key.json"),
+        join(home, "commonfabric", "test-records-key.json"),
       );
     });
 
@@ -844,10 +844,10 @@ describe("test-records-key", () => {
 
       expect(await setupCommand(deps)).toBe(0);
 
-      const installed = join(home, "common-fabric", "test-records-key.json");
+      const installed = join(home, "commonfabric", "test-records-key.json");
       expect(await Deno.readTextFile(installed)).toBe(KEY_TEXT);
       expect(await Deno.readTextFile(profile)).toContain(
-        'export CF_TEST_RECORDS_KEY_FILE="$HOME/common-fabric/' +
+        'export CF_TEST_RECORDS_KEY_FILE="$HOME/commonfabric/' +
           'test-records-key.json"',
       );
       expect(urls.some((line) => line.includes("/dispatches"))).toBe(true);
@@ -871,7 +871,7 @@ describe("test-records-key", () => {
       expect(await setupCommand(deps)).toBe(0);
       expect(
         await Deno.readTextFile(
-          join(home, "common-fabric", "test-records-key.json"),
+          join(home, "commonfabric", "test-records-key.json"),
         ),
       ).toBe(KEY_TEXT);
     });
@@ -888,7 +888,7 @@ describe("test-records-key", () => {
       expect(await setupCommand(deps)).toBe(0);
       expect(
         await Deno.readTextFile(
-          join(home, "common-fabric", "test-records-key.json"),
+          join(home, "commonfabric", "test-records-key.json"),
         ),
       ).toBe(KEY_TEXT);
     });
@@ -951,7 +951,7 @@ describe("test-records-key", () => {
       expect(urls.some((line) => line.includes("/dispatches"))).toBe(false);
       expect(
         await Deno.readTextFile(
-          join(home, "common-fabric", "test-records-key.json"),
+          join(home, "commonfabric", "test-records-key.json"),
         ),
       ).toBe(KEY_TEXT);
     });
@@ -999,7 +999,7 @@ describe("test-records-key", () => {
       expect(urls.some((line) => line.includes("/dispatches"))).toBe(false);
       expect(
         await Deno.readTextFile(
-          join(home, "common-fabric", "test-records-key.json"),
+          join(home, "commonfabric", "test-records-key.json"),
         ),
       ).toBe(KEY_TEXT);
     });
@@ -1053,7 +1053,7 @@ describe("test-records-key", () => {
       expect(await setupCommand(deps)).toBe(0);
       expect(
         await Deno.readTextFile(
-          join(home, "common-fabric", "test-records-key.json"),
+          join(home, "commonfabric", "test-records-key.json"),
         ),
       ).toBe(KEY_TEXT);
     });
@@ -1094,9 +1094,9 @@ describe("test-records-key", () => {
     });
 
     it("exports the installed key rather than minting a second one", async () => {
-      await Deno.mkdir(join(home, "common-fabric"), { recursive: true });
+      await Deno.mkdir(join(home, "commonfabric"), { recursive: true });
       await Deno.writeTextFile(
-        join(home, "common-fabric", "test-records-key.json"),
+        join(home, "commonfabric", "test-records-key.json"),
         KEY_TEXT,
       );
       withStub({});
@@ -1117,7 +1117,7 @@ describe("test-records-key", () => {
     it("takes up a run already going even with a key installed", async () => {
       const identity = await storeIdentity();
       await Deno.writeTextFile(
-        join(home, "common-fabric", "test-records-key.json"),
+        join(home, "commonfabric", "test-records-key.json"),
         KEY_TEXT,
       );
       const published = await delivery(identity, OTHER_KEY_TEXT);
@@ -1137,7 +1137,7 @@ describe("test-records-key", () => {
       expect(urls.some((line) => line.includes("/dispatches"))).toBe(false);
       expect(
         await Deno.readTextFile(
-          join(home, "common-fabric", "test-records-key.json"),
+          join(home, "commonfabric", "test-records-key.json"),
         ),
       ).toBe(OTHER_KEY_TEXT);
     });
@@ -1145,7 +1145,7 @@ describe("test-records-key", () => {
     it("mints a replacement for a key that is no longer accepted", async () => {
       const identity = await storeIdentity();
       await Deno.writeTextFile(
-        join(home, "common-fabric", "test-records-key.json"),
+        join(home, "commonfabric", "test-records-key.json"),
         KEY_TEXT,
       );
       const published = await delivery(identity);
@@ -1160,7 +1160,7 @@ describe("test-records-key", () => {
       expect(await setupCommand(deps)).toBe(0);
       expect(
         await Deno.readTextFile(
-          join(home, "common-fabric", "test-records-key.json"),
+          join(home, "commonfabric", "test-records-key.json"),
         ),
       ).toBe(KEY_TEXT);
       expect(urls.some((line) => line.includes("oauth2.googleapis.com"))).toBe(
@@ -1171,7 +1171,7 @@ describe("test-records-key", () => {
     it("replaces a key file that cannot sign", async () => {
       const identity = await storeIdentity();
       await Deno.writeTextFile(
-        join(home, "common-fabric", "test-records-key.json"),
+        join(home, "commonfabric", "test-records-key.json"),
         JSON.stringify({
           client_email: "test-records-gh-octocat@p.iam.gserviceaccount.com",
           private_key: "not a key",
@@ -1186,7 +1186,7 @@ describe("test-records-key", () => {
       expect(await setupCommand(deps)).toBe(0);
       expect(
         await Deno.readTextFile(
-          join(home, "common-fabric", "test-records-key.json"),
+          join(home, "commonfabric", "test-records-key.json"),
         ),
       ).toBe(KEY_TEXT);
       expect(urls.some((line) => line.includes("oauth2.googleapis.com")))
@@ -1194,9 +1194,9 @@ describe("test-records-key", () => {
     });
 
     it("keeps a key the endpoint could not be asked about", async () => {
-      await Deno.mkdir(join(home, "common-fabric"), { recursive: true });
+      await Deno.mkdir(join(home, "commonfabric"), { recursive: true });
       await Deno.writeTextFile(
-        join(home, "common-fabric", "test-records-key.json"),
+        join(home, "commonfabric", "test-records-key.json"),
         KEY_TEXT,
       );
       withStub({});
@@ -1213,9 +1213,9 @@ describe("test-records-key", () => {
     });
 
     it("keeps a key it could not ask about", async () => {
-      await Deno.mkdir(join(home, "common-fabric"), { recursive: true });
+      await Deno.mkdir(join(home, "commonfabric"), { recursive: true });
       await Deno.writeTextFile(
-        join(home, "common-fabric", "test-records-key.json"),
+        join(home, "commonfabric", "test-records-key.json"),
         KEY_TEXT,
       );
       withStub({ keyStatus: 503 });
@@ -1227,7 +1227,7 @@ describe("test-records-key", () => {
     it("mints a replacement when asked to rotate", async () => {
       const identity = await storeIdentity();
       await Deno.writeTextFile(
-        join(home, "common-fabric", "test-records-key.json"),
+        join(home, "commonfabric", "test-records-key.json"),
         KEY_TEXT,
       );
       const published = await delivery(identity);
@@ -1268,7 +1268,7 @@ describe("test-records-key", () => {
     it("installs over a key file that will not parse", async () => {
       const identity = await storeIdentity();
       await Deno.writeTextFile(
-        join(home, "common-fabric", "test-records-key.json"),
+        join(home, "commonfabric", "test-records-key.json"),
         "not a key file",
       );
       const published = await delivery(identity);
@@ -1277,7 +1277,7 @@ describe("test-records-key", () => {
       expect(await setupCommand(deps)).toBe(0);
       expect(
         await Deno.readTextFile(
-          join(home, "common-fabric", "test-records-key.json"),
+          join(home, "commonfabric", "test-records-key.json"),
         ),
       ).toBe(KEY_TEXT);
     });
@@ -1372,6 +1372,304 @@ describe("test-records-key", () => {
     });
   });
 
+  describe("an install in the legacy directory", () => {
+    const MARKER = "# common-fabric test-records reporting key";
+    const legacyLine = 'export CF_TEST_RECORDS_KEY_FILE="$HOME/common-fabric/' +
+      'test-records-key.json"';
+    const sharedLine = 'export CF_TEST_RECORDS_KEY_FILE="$HOME/commonfabric/' +
+      'test-records-key.json"';
+
+    /** A workstation set up while the key tool used the legacy directory. */
+    async function legacyInstall(): Promise<KeyDeliveryIdentity> {
+      const identity = await generateIdentity();
+      const legacy = join(home, "common-fabric");
+      await Deno.mkdir(legacy, { recursive: true });
+      await Deno.writeTextFile(
+        join(legacy, "test-records-identity.json"),
+        JSON.stringify(identity),
+      );
+      await Deno.writeTextFile(
+        join(legacy, "test-records-key.json"),
+        KEY_TEXT,
+        { mode: 0o600 },
+      );
+      withStub({});
+      deps.env = (name) => {
+        if (name === "XDG_CONFIG_HOME" || name === "HOME") return home;
+        if (name === "SHELL") return "/bin/zsh";
+        return undefined;
+      };
+      await Deno.writeTextFile(
+        join(home, ".zshenv"),
+        `alias l=ls\n\n${MARKER}\n${legacyLine}\n`,
+      );
+      await Deno.mkdir(join(home, ".claude"), { recursive: true });
+      await Deno.writeTextFile(
+        join(home, ".claude", "settings.json"),
+        JSON.stringify({
+          env: {
+            CF_TEST_RECORDS_KEY_FILE: join(legacy, "test-records-key.json"),
+          },
+        }),
+      );
+      return identity;
+    }
+
+    it("moves into the shared directory, exports and all", async () => {
+      const identity = await legacyInstall();
+
+      expect(await setupCommand(deps)).toBe(0);
+
+      const shared = join(home, "commonfabric");
+      expect(
+        await Deno.readTextFile(join(shared, "test-records-key.json")),
+      ).toBe(KEY_TEXT);
+      expect(
+        (await Deno.stat(join(shared, "test-records-key.json"))).mode! & 0o777,
+      ).toBe(0o600);
+      expect(
+        JSON.parse(
+          await Deno.readTextFile(join(shared, "test-records-identity.json")),
+        ),
+      ).toEqual(identity);
+      await expect(Deno.stat(join(home, "common-fabric"))).rejects.toThrow(
+        Deno.errors.NotFound,
+      );
+      expect(await Deno.readTextFile(join(home, ".zshenv"))).toBe(
+        `alias l=ls\n\n${MARKER}\n${sharedLine}\n`,
+      );
+      expect(
+        JSON.parse(
+          await Deno.readTextFile(join(home, ".claude", "settings.json")),
+        ),
+      ).toEqual({
+        env: {
+          CF_TEST_RECORDS_KEY_FILE: join(shared, "test-records-key.json"),
+        },
+      });
+      // The key that moved is the one that works; nothing was minted.
+      expect(urls.some((line) => line.includes("/dispatches"))).toBe(false);
+    });
+
+    it("is taken back by uninstall", async () => {
+      await legacyInstall();
+
+      expect(await uninstallCommand(deps)).toBe(0);
+
+      expect(await Deno.readTextFile(join(home, ".zshenv"))).toBe(
+        "alias l=ls\n",
+      );
+      expect(
+        JSON.parse(
+          await Deno.readTextFile(join(home, ".claude", "settings.json")),
+        ),
+      ).toEqual({});
+      await expect(Deno.stat(join(home, "common-fabric"))).rejects.toThrow(
+        Deno.errors.NotFound,
+      );
+      await expect(Deno.stat(join(home, "commonfabric"))).rejects.toThrow(
+        Deno.errors.NotFound,
+      );
+    });
+
+    it("leaves a file the shared directory already has", async () => {
+      await legacyInstall();
+      const shared = join(home, "commonfabric");
+      await Deno.mkdir(shared, { recursive: true });
+      await Deno.writeTextFile(
+        join(shared, "test-records-key.json"),
+        OTHER_KEY_TEXT,
+      );
+
+      await requestCommand(deps);
+
+      expect(
+        await Deno.readTextFile(join(shared, "test-records-key.json")),
+      ).toBe(OTHER_KEY_TEXT);
+      expect(
+        await Deno.readTextFile(
+          join(home, "common-fabric", "test-records-key.json"),
+        ),
+      ).toBe(KEY_TEXT);
+      // What the tool exported names the shared key, which setup checks.
+      expect(await Deno.readTextFile(join(home, ".zshenv"))).toBe(
+        `alias l=ls\n\n${MARKER}\n${sharedLine}\n`,
+      );
+    });
+
+    it("takes back keys in both directories on uninstall", async () => {
+      await legacyInstall();
+      const shared = join(home, "commonfabric");
+      await Deno.mkdir(shared, { recursive: true });
+      await Deno.writeTextFile(
+        join(shared, "test-records-key.json"),
+        OTHER_KEY_TEXT,
+      );
+
+      expect(await uninstallCommand(deps)).toBe(0);
+
+      expect(await Deno.readTextFile(join(home, ".zshenv"))).toBe(
+        "alias l=ls\n",
+      );
+      await expect(Deno.stat(join(home, "common-fabric"))).rejects.toThrow(
+        Deno.errors.NotFound,
+      );
+      await expect(Deno.stat(shared)).rejects.toThrow(Deno.errors.NotFound);
+    });
+
+    it("finishes a move whose files went but whose exports did not", async () => {
+      await legacyInstall();
+      const shared = join(home, "commonfabric");
+      await Deno.mkdir(shared, { recursive: true });
+      for (
+        const name of ["test-records-key.json", "test-records-identity.json"]
+      ) {
+        await Deno.rename(
+          join(home, "common-fabric", name),
+          join(shared, name),
+        );
+      }
+      await Deno.remove(join(home, "common-fabric"));
+
+      await requestCommand(deps);
+
+      expect(await Deno.readTextFile(join(home, ".zshenv"))).toBe(
+        `alias l=ls\n\n${MARKER}\n${sharedLine}\n`,
+      );
+      expect(
+        JSON.parse(
+          await Deno.readTextFile(join(home, ".claude", "settings.json")),
+        ),
+      ).toEqual({
+        env: {
+          CF_TEST_RECORDS_KEY_FILE: join(shared, "test-records-key.json"),
+        },
+      });
+    });
+
+    it("moves out of the legacy directory under a plain home", async () => {
+      const identity = await generateIdentity();
+      const legacy = join(home, ".config", "common-fabric");
+      await Deno.mkdir(legacy, { recursive: true });
+      await Deno.writeTextFile(
+        join(legacy, "test-records-identity.json"),
+        JSON.stringify(identity),
+      );
+      const published = await delivery(identity);
+      withStub({ runPages: [[mintRun(identity.recipient)]], ...published });
+      deps.env = (name) => name === "HOME" ? home : undefined;
+
+      expect(await collectCommand(deps)).toBe(0);
+
+      const shared = join(home, ".config", "commonfabric");
+      expect(
+        JSON.parse(
+          await Deno.readTextFile(join(shared, "test-records-identity.json")),
+        ),
+      ).toEqual(identity);
+      expect(
+        await Deno.readTextFile(join(shared, "test-records-key.json")),
+      ).toBe(KEY_TEXT);
+      await expect(Deno.stat(legacy)).rejects.toThrow(Deno.errors.NotFound);
+    });
+
+    it("finishes a move stopped between the link and the removal", async () => {
+      await legacyInstall();
+      const shared = join(home, "commonfabric");
+      await Deno.mkdir(shared);
+      await Deno.link(
+        join(home, "common-fabric", "test-records-key.json"),
+        join(shared, "test-records-key.json"),
+      );
+
+      await requestCommand(deps);
+
+      expect(
+        await Deno.readTextFile(join(shared, "test-records-key.json")),
+      ).toBe(KEY_TEXT);
+      await expect(Deno.stat(join(home, "common-fabric"))).rejects.toThrow(
+        Deno.errors.NotFound,
+      );
+    });
+
+    it("keeps a legacy key a link in the shared directory points at", async () => {
+      await legacyInstall();
+      const shared = join(home, "commonfabric");
+      const legacyKey = join(home, "common-fabric", "test-records-key.json");
+      await Deno.mkdir(shared);
+      await Deno.symlink(legacyKey, join(shared, "test-records-key.json"));
+
+      await requestCommand(deps);
+
+      expect(await Deno.readTextFile(legacyKey)).toBe(KEY_TEXT);
+      expect(
+        await Deno.readTextFile(join(shared, "test-records-key.json")),
+      ).toBe(KEY_TEXT);
+    });
+
+    it("reports a move whose old name cannot be removed", async () => {
+      await legacyInstall();
+      const legacy = join(home, "common-fabric");
+      await Deno.chmod(legacy, 0o500);
+      try {
+        await expect(requestCommand(deps)).rejects.toThrow(
+          `Cannot move ${join(legacy, "test-records-key.json")}`,
+        );
+      } finally {
+        await Deno.chmod(legacy, 0o700);
+      }
+
+      // The next run finds both names on one file and finishes the move.
+      await requestCommand(deps);
+      await expect(Deno.stat(legacy)).rejects.toThrow(Deno.errors.NotFound);
+      expect(
+        await Deno.readTextFile(
+          join(home, "commonfabric", "test-records-key.json"),
+        ),
+      ).toBe(KEY_TEXT);
+    });
+
+    it("stops, leaving the install where it was, when a move fails", async () => {
+      await legacyInstall();
+      const shared = join(home, "commonfabric");
+      await Deno.mkdir(shared, { mode: 0o500 });
+      try {
+        await expect(requestCommand(deps)).rejects.toThrow(
+          `Cannot move ${join(home, "common-fabric", "test-records-key.json")}`,
+        );
+      } finally {
+        await Deno.chmod(shared, 0o700);
+      }
+
+      expect(
+        await Deno.readTextFile(
+          join(home, "common-fabric", "test-records-key.json"),
+        ),
+      ).toBe(KEY_TEXT);
+      expect(await Deno.readTextFile(join(home, ".zshenv"))).toBe(
+        `alias l=ls\n\n${MARKER}\n${legacyLine}\n`,
+      );
+    });
+
+    it("leaves a workstation with nothing in it alone", async () => {
+      withStub({});
+      deps.env = (name) => {
+        if (name === "XDG_CONFIG_HOME" || name === "HOME") return home;
+        if (name === "SHELL") return "/bin/zsh";
+        return undefined;
+      };
+
+      await requestCommand(deps);
+
+      await expect(Deno.stat(join(home, ".zshenv"))).rejects.toThrow(
+        Deno.errors.NotFound,
+      );
+      await expect(Deno.stat(join(home, "common-fabric"))).rejects.toThrow(
+        Deno.errors.NotFound,
+      );
+    });
+  });
+
   describe("defaultGithubToken()", () => {
     const noCommand = () => {
       throw new Error("no command expected");
@@ -1456,7 +1754,7 @@ describe("test-records-key", () => {
     async function installed(): Promise<string> {
       const identity = await storeIdentity();
       await Deno.writeTextFile(
-        join(home, "common-fabric", "test-records-key.json"),
+        join(home, "commonfabric", "test-records-key.json"),
         KEY_TEXT,
       );
       const published = await delivery(identity);
@@ -1478,10 +1776,10 @@ describe("test-records-key", () => {
       expect(await uninstallCommand(deps)).toBe(0);
 
       await expect(
-        Deno.stat(join(home, "common-fabric", "test-records-key.json")),
+        Deno.stat(join(home, "commonfabric", "test-records-key.json")),
       ).rejects.toThrow();
       await expect(
-        Deno.stat(join(home, "common-fabric", "test-records-identity.json")),
+        Deno.stat(join(home, "commonfabric", "test-records-identity.json")),
       ).rejects.toThrow();
       expect(await Deno.readTextFile(profile)).toBe("alias l=ls\n");
     });
@@ -1498,7 +1796,7 @@ describe("test-records-key", () => {
           env: {
             CF_TEST_RECORDS_KEY_FILE: join(
               home,
-              "common-fabric",
+              "commonfabric",
               "test-records-key.json",
             ),
           },
@@ -1549,14 +1847,14 @@ describe("test-records-key", () => {
     it("leaves the directory when something else is in it", async () => {
       await installed();
       await Deno.writeTextFile(
-        join(home, "common-fabric", "something-else.json"),
+        join(home, "commonfabric", "something-else.json"),
         "{}",
       );
 
       expect(await uninstallCommand(deps)).toBe(0);
       expect(
         await Deno.readTextFile(
-          join(home, "common-fabric", "something-else.json"),
+          join(home, "commonfabric", "something-else.json"),
         ),
       ).toBe("{}");
     });
@@ -1573,7 +1871,7 @@ describe("test-records-key", () => {
       await expect(uninstallCommand(deps)).rejects.toThrow();
 
       expect(
-        (await Deno.stat(join(home, "common-fabric", "test-records-key.json")))
+        (await Deno.stat(join(home, "commonfabric", "test-records-key.json")))
           .isFile,
       ).toBe(true);
     });
@@ -1583,7 +1881,7 @@ describe("test-records-key", () => {
       // A directory where the key file goes is not something a delete
       // of the key file can take away.
       await Deno.mkdir(
-        join(home, "common-fabric", "test-records-key.json", "inside"),
+        join(home, "commonfabric", "test-records-key.json", "inside"),
         { recursive: true },
       );
 

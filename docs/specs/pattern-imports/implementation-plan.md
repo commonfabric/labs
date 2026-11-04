@@ -117,7 +117,7 @@ Reload paths:
 - **pin** — the trailing `@<hash>` selected-module identity on a mutable ref.
 - **hash** — 43 base64url chars (`[A-Za-z0-9_-]`, case-SENSITIVE, no
   padding), the unprefixed output of `hashStringOf`/`hashOf`
-  (`packages/data-model/src/value-hash/impl.ts`). NOT hex — e.g.
+  (`base/data-model/src/value-hash/impl.ts`). NOT hex — e.g.
   `Avcny13Rj8q-2ClANy_-k0ikWWQcXx7QTdsiqGfrC1c`. Never lowercase or
   otherwise normalize a hash.
 - **terminal identity** — the selected-module identity after pointer and
@@ -133,7 +133,7 @@ Reload paths:
 
 ## M0 — Grammar and policy (pure functions, no I/O)
 
-### M0.1 New file: `packages/runner/src/sandbox/fabric-import-specifier.ts`
+### M0.1 New file: `runtime/runner/src/sandbox/fabric-import-specifier.ts`
 
 ```ts
 // Shown for illustration only.
@@ -210,14 +210,14 @@ Parsing algorithm — implement exactly this order:
      match `HASH_RE`):
      - `pattern:<hash>` → `{ scheme: "pattern", hash }`
      - `of:fid1:<hash>` → `{ scheme: "of", hash }` (what `toURI` emits —
-       `toURI` in `packages/runner/src/uri-utils.ts`; the `fid1:` tag is required
+       `toURI` in `runtime/runner/src/uri-utils.ts`; the `fid1:` tag is required
        inside `of:`)
      - `fid1:<hash>` → alias for `of:fid1:<hash>` (the shell's bare piece-id
        form); `formatFabricRef` canonicalizes to `of:fid1:<hash>`.
      Anything else with a colon throws `"unsupported cell URI scheme"`
      (including `of:<hash>` without the `fid1:` tag, and `data:`).
    - No colon → slug form: validate with `validateSlug` from
-     `packages/runner/src/slugs.ts` (re-throw its message wrapped in
+     `runtime/runner/src/slugs.ts` (re-throw its message wrapped in
      FabricRefError).
 7. **Space validation**: if present and not a DID (`/^did:[a-z0-9]+:.+$/`),
    it must validate as a slug (space *names* share the slug grammar — spec
@@ -241,7 +241,7 @@ change fails here first:
 Never lowercase, trim, or re-encode hashes anywhere in parsing or
 formatting — they compare byte-exact.
 
-### M0.2 Policy: `packages/runner/src/sandbox/runtime-module-policy.ts`
+### M0.2 Policy: `runtime/runner/src/sandbox/runtime-module-policy.ts`
 
 Extend `isAllowedAuthoredImportSpecifier` (line 25):
 
@@ -263,7 +263,7 @@ both functions and read each call site; list them in the commit message with
 a one-line "unaffected because…" each. (Expected: the SES compiled-body
 verifier and the authored-import check; if you find more, flag it.)
 
-### M0.3 Tests: `packages/runner/test/fabric-import-specifier.test.ts`
+### M0.3 Tests: `runtime/runner/test/fabric-import-specifier.test.ts`
 
 Table-driven. Minimum cases (✓ = parses, ✗ = throws, ∅ = undefined):
 
@@ -306,7 +306,7 @@ Round-trip: for every ✓ case, `parseFabricRef(formatFabricRef(parse(s)))`
 deep-equals `parse(s)`. Policy tests: each ✓ case is allowed, each ✗/∅
 `cf:`-prefixed case is rejected by `isAllowedAuthoredImportSpecifier`.
 
-**Acceptance M0**: new tests green; full `packages/runner` suite green
+**Acceptance M0**: new tests green; full `runtime/runner` suite green
 (policy change must not break existing import tests).
 
 ---
@@ -321,7 +321,7 @@ Subpaths throw `"subpaths not yet supported (M4)"`.
 
 ### M1.1 js-compiler: specifier aliases for type resolution
 
-File: `packages/js-compiler/typescript/compiler.ts`.
+File: `base/js-compiler/typescript/compiler.ts`.
 
 1. Add to `TypeScriptCompilerOptions` (line 227):
    ```ts
@@ -356,7 +356,7 @@ File: `packages/js-compiler/typescript/compiler.ts`.
    `graph.resolveSource` and never consults the unresolved-module policy.
    Do not touch `resolver.ts`.
 
-Tests: `packages/js-compiler/test/` — find the existing compiler test file
+Tests: `base/js-compiler/test/` — find the existing compiler test file
 and add: a two-file program where `/main.tsx` imports `"x-scheme:thing"` and
 `specifierAliases` maps it to `/dep.tsx`; assert type-checking sees `/dep.tsx`
 exports (a deliberate type error through the alias must be reported), and the
@@ -365,7 +365,7 @@ affects type resolution, NOT emitted specifier text).
 
 ### M1.2 Record graph: alias resolutions
 
-File: `packages/runner/src/sandbox/module-record-compiler.ts`.
+File: `runtime/runner/src/sandbox/module-record-compiler.ts`.
 
 1. Add `specifierAliases?: ReadonlyMap<string, string>` to
    `CompileSourcesOptions`.
@@ -397,7 +397,7 @@ variant surfaces the mounted file's export names.
 
 ### M1.3 Per-subtree identities: `computeFabricModuleIdentities`
 
-File: `packages/runner/src/sandbox/module-record-compiler.ts` (next to
+File: `runtime/runner/src/sandbox/module-record-compiler.ts` (next to
 `computeModuleIdentities`).
 
 ```ts
@@ -465,7 +465,7 @@ Implementation:
    `m.entryIdentity`; throw with both values on mismatch.
 5. Merge all maps. The key sets are disjoint by construction.
 
-Tests (new file `packages/runner/test/fabric-module-identity.test.ts`):
+Tests (new file `runtime/runner/test/fabric-module-identity.test.ts`):
 - Two-file subtree published standalone (compute identities with no prefix),
   then the same files mounted under `/~cf/<entry>/…` inside a host program →
   identities identical to standalone; authored file's identity changes when
@@ -599,7 +599,7 @@ Before enabling a non-empty production fingerprint:
 
 ### M1.4 The resolver wrapper: `FabricAwareResolver`
 
-New file: `packages/runner/src/harness/fabric-resolver.ts`.
+New file: `runtime/runner/src/harness/fabric-resolver.ts`.
 
 ```ts
 // Shown for illustration only.
@@ -640,7 +640,7 @@ export class FabricAwareResolver implements ProgramResolver {
       mounted files' own fabric specifiers).
    d. Fetch: open a read tx exactly like
       `PatternManager.#replicateClosures()` does
-      (`packages/runner/src/pattern-manager.ts` —
+      (`runtime/runner/src/pattern-manager.ts` —
       `runtime.edit()` /
       `finally tx.abort?.(…)`), call `loadVerifiedSourceClosure(runtime,
       ctx.space, hash, tx)`. `undefined` → throw
@@ -674,7 +674,7 @@ export class FabricAwareResolver implements ProgramResolver {
 Pitfalls to encode as comments + tests:
 - The walk calls `resolveSource` with the verbatim specifier text (bare
   specifiers pass through `resolveSpecifier` unchanged —
-  `resolveSpecifier`, `packages/js-compiler/typescript/resolver.ts`). Two files importing the
+  `resolveSpecifier`, `base/js-compiler/typescript/resolver.ts`). Two files importing the
   same text → `sources.has(identifier)` dedupes upstream; two DIFFERENT
   texts pinning the same hash (e.g. `cf:pattern:<h>` and a pinned slug form
   in M2) → step (b) returns the same Source object, and `resolveProgram`
@@ -688,7 +688,7 @@ Pitfalls to encode as comments + tests:
   unprefixed stored names — add an explicit guard in M1.5: any AUTHORED
   input file (pre-resolve) named under `/~cf/` → throw.
 
-Unit tests (`packages/runner/test/fabric-resolver.test.ts`): use an
+Unit tests (`runtime/runner/test/fabric-resolver.test.ts`): use an
 in-process runtime (mirror the setup of existing cell-cache tests — find
 `cell-cache` or `compile-cache` test files and copy their runtime/space
 bootstrap). Seed source docs by running `writeSourceDocs` with a small
@@ -700,10 +700,10 @@ M2/M3/M4 scope errors.
 
 ### M1.5 Engine integration
 
-File: `packages/runner/src/harness/engine.ts`.
+File: `runtime/runner/src/harness/engine.ts`.
 
 1. Add to `TypeScriptHarnessProcessOptions`
-   (`packages/runner/src/harness/types.ts`):
+   (`runtime/runner/src/harness/types.ts`):
    ```ts
    // Shown as interface or class members.
    /**
@@ -714,7 +714,7 @@ File: `packages/runner/src/harness/engine.ts`.
     */
    fabricImports?: { space: MemorySpace };
    ```
-2. `compileToRecordGraph` (`packages/runner/src/harness/engine.ts`):
+2. `compileToRecordGraph` (`runtime/runner/src/harness/engine.ts`):
    - Wrap the resolver:
      ```ts
      // Shown for illustration only.
@@ -824,7 +824,7 @@ File: `packages/runner/src/harness/engine.ts`.
    values. The emitted set contains mounted implementation modules for the
    self-contained cached-module evaluator. It excludes all declarations.
 
-Tests (`packages/runner/test/fabric-imports-engine.test.ts`, in-process
+Tests (`runtime/runner/test/fabric-imports-engine.test.ts`, in-process
 runtime):
 - Seed: compile + write-back a small two-file pattern P (existing engine
   compile helpers; mirror how `esm-*`/cell-cache tests drive
@@ -853,7 +853,7 @@ runtime):
 
 ### M1.6 Cache write-back: source-side link filtering
 
-File: `packages/runner/src/compilation-cache/cell-cache.ts`.
+File: `runtime/runner/src/compilation-cache/cell-cache.ts`.
 
 1. Source-document construction consumes the identity and source-history set,
    including authored and mounted declarations. `storedImportRefs` (line 119)
@@ -914,7 +914,7 @@ dependency, then restores and compiles the importer from its revision manifest.
 
 ### M1.7 Reload paths (warm + cold)
 
-File: `packages/runner/src/pattern-manager.ts`.
+File: `runtime/runner/src/pattern-manager.ts`.
 
 1. Locate the by-identity load (`loadPatternByIdentity`, ~line 985) and read
    it END TO END before changing anything. Identify:
@@ -949,9 +949,9 @@ File: `packages/runner/src/pattern-manager.ts`.
 
 ### M1.8 CLI surfacing
 
-Files: `packages/cli/lib/dev.ts`, `packages/cli/commands/dev.ts`.
+Files: `runtime/cli/lib/dev.ts`, `runtime/cli/commands/dev.ts`.
 
-- `cf check` compiles via `engine.compileToRecordGraph` (`packages/cli/lib/dev.ts`).
+- `cf check` compiles via `engine.compileToRecordGraph` (`runtime/cli/lib/dev.ts`).
   Thread `fabricImports: { space }` only when the dev session has a space
   (inspect how `dev.ts` builds the runtime and whether a space/identity is
   configured; if none, leave the option absent — the M1.5 friendly error then
@@ -963,7 +963,7 @@ Files: `packages/cli/lib/dev.ts`, `packages/cli/commands/dev.ts`.
   not a raw `Could not resolve` error.
 
 **Acceptance M1** (run all): new test files green; full
-`packages/runner`, `packages/js-compiler`, `packages/cli` suites green;
+`runtime/runner`, `base/js-compiler`, `runtime/cli` suites green;
 the M1.5 end-to-end test demonstrates: compile, type-check, evaluate,
 write-back, warm reload, cold reload, cross-runtime resume, tamper rejection.
 
@@ -973,22 +973,22 @@ write-back, warm reload, cold reload, cross-runtime resume, tamper rejection.
 
 ### M2.1 Generic slug→cell resolution in runner
 
-`resolveSlugTargetCell` in `packages/piece/src/slugs.ts` is the model; it
+`resolveSlugTargetCell` in `runtime/piece/src/slugs.ts` is the model; it
 uses only `runtime` + `space`. Lift it:
 
-- New: `packages/runner/src/slug-resolution.ts` —
+- New: `runtime/runner/src/slug-resolution.ts` —
   `resolveSlugTargetCell(runtime: Runtime, space: MemorySpace, slug: string):
   Promise<Cell<unknown>>` — copy the body, replacing `manager.runtime`/
   `manager.getSpace()`; move `SlugResolutionError` here and re-export from
   the piece package for compatibility.
-- `packages/piece/src/slugs.ts` delegates to it (keep its piece-specific
+- `runtime/piece/src/slugs.ts` delegates to it (keep its piece-specific
   `resolvePieceAddress` checks where they are).
 - Tests: move/duplicate the existing piece slug-resolution tests' generic
   cases to a runner test; piece suite must stay green untouched otherwise.
 
 ### M2.2 The chase: ref → terminal identity
 
-New: `packages/runner/src/fabric-ref-resolution.ts`.
+New: `runtime/runner/src/fabric-ref-resolution.ts`.
 
 ```ts
 // Shown for illustration only.
@@ -1033,7 +1033,7 @@ Algorithm (spec § Resolution rule — implement hops exactly):
      short-circuit via `pinnedIdentity` and never get here).
 4. Piece hop: if the cell has pattern metadata — use the SAME accessor the
    runner uses, `getPatternIdentityRef`, already exported from
-   `packages/runner/src/runner.ts`:
+   `runtime/runner/src/runner.ts`:
    - `patternIdentity` present → its `.identity` IS the terminal identity;
      append hops; done.
    - absent → throw `"cf:… does not resolve to a pattern (chain: …)"`.
@@ -1043,7 +1043,7 @@ Algorithm (spec § Resolution rule — implement hops exactly):
 
 No cycle guard needed (≤3 hops, no recursion).
 
-Tests (`packages/runner/test/fabric-ref-resolution.test.ts`): build, in an
+Tests (`runtime/runner/test/fabric-ref-resolution.test.ts`): build, in an
 in-process runtime: a fake piece cell carrying `meta("patternIdentity")` (use
 the real setter — `Runner.#applySetupState` writes `meta("patternIdentity")` —
 and mirror it); slug → piece; slug → plain data cell (error + chain); missing
@@ -1054,7 +1054,7 @@ subpath rather than writing the slug target's entry identity.
 
 ### M2.3 Pin rewriting (byte-precise source surgery)
 
-New: `packages/runner/src/fabric-pin-rewrite.ts`.
+New: `runtime/runner/src/fabric-pin-rewrite.ts`.
 
 ```ts
 // Shown for illustration only.
@@ -1075,7 +1075,7 @@ export async function rewriteFabricPins(
 Implementation: `ts.createSourceFile`, walk EXACTLY the three node shapes
 `collectImportSpecifiers` walks (import decl / export-from / ImportTypeNode —
 copy that visitor, `collectImportSpecifiers` in
-`packages/js-compiler/typescript/resolver.ts`),
+`base/js-compiler/typescript/resolver.ts`),
 collect `{ literal.getStart()+1, literal.end-1, text }` spans, compute
 replacements with `formatFabricRef(withPin(ref, pin))`, apply BACK TO FRONT
 on the original string. Skip non-fabric specifiers; skip refs where
@@ -1125,7 +1125,7 @@ the slug cell after pinning, recompile → still works).
 
 ### M2.5 CLI: pin-on-deploy + `cf deps update`
 
-Read `packages/cli/` command structure first (mirror an existing command's
+Read `runtime/cli/` command structure first (mirror an existing command's
 file layout, e.g. how `dev.ts` registers).
 
 - **Deploy pinning**: `getPinnedProgramFromFile()` currently calls
@@ -1148,7 +1148,7 @@ file layout, e.g. how `dev.ts` registers).
   `resolvedPins` ("resolved cf:… → <hash> (not pinned — run cf deps update)").
 
 Tests: CLI-level tests follow whatever harness existing cli tests use (look
-in `packages/cli` for test conventions; if commands are thin over lib
+in `runtime/cli` for test conventions; if commands are thin over lib
 functions, test the lib functions and add one smoke test per command). Add
 pin-on-deploy regressions for an unpinned value import, `import type`, a
 type-only export, and an inline import type. Each unpinned reference must reach

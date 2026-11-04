@@ -1,0 +1,6 @@
+{
+  "name": "deno-web-test-late-registration-project",
+  "tasks": {
+    "test": "<@see deno-web-test/test/utils.ts#runDenoWebTest>"
+  }
+}

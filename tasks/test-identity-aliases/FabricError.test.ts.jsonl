@@ -1,0 +1,1 @@
+{"date": "2026-10-13", "from": {"k": "unit", "s": "data-model", "n": "FabricError > instance members > deepClone() > returns a mutable clone that currently SHARES the nested `cause` reference (known gap)"}, "to": {"k": "unit", "s": "data-model", "n": "FabricError > instance members > deepClone() > returns a mutable clone with independently mutable nested state"}}

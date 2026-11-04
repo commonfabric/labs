@@ -18,7 +18,7 @@ carries the rollback, authority, and lifecycle detail.
 ## The rule
 
 `combineSchemaForLink(parentSchema, linkSchema)` in
-[`packages/runner/src/traverse.ts`](../../packages/runner/src/traverse.ts)
+[`runtime/runner/src/traverse.ts`](../../runtime/runner/src/traverse.ts)
 resolves every crossing. It is precedence, not intersection:
 
 - A `false` reader schema stays `false`: the reader selected nothing, and
@@ -72,6 +72,42 @@ within its array, where the array's traversal crosses the same link under
 the reader's item schema; and a renderer reading a link slot by its own
 schema reads the target's UI whatever narrower view the link was written
 from.
+
+A keyed cell's reader schema is its parent's narrowed to the key
+(`Cell.key()`). Where the parent refuses the key — a property declared
+`false`, `items: false`, an undeclared key beside
+`additionalProperties: false`, any key below a false schema or below a
+scalar — the keyed cell carries `false` and selects nothing, the same as one
+whose parent declares the child `{ "not": true }`. It is not left agnostic,
+which would read the raw value and adopt the stored schema at a link. The one
+refused key that reads with no schema is `length` under a schema admitting an
+array or a string and no object, since the store reads an array's or a
+string's `length` as a value. A schema that also admits an object refuses
+`length` as that object's key, and a keyed cell cannot tell which value it
+will meet, so the refusal stands: `key("length")` under
+`{ "anyOf": [{ "type": "string" }, { "type": "object", "additionalProperties": false }] }`,
+or under a closed object that declares no type, carries `false`.
+
+A key under an `allOf` that declares no `type` carries `false` as well,
+because narrowing does not read a child out of a conjunction
+([`json_schema.md`](json_schema.md#how-a-step-narrows)). A read of the parent
+evaluates the conjunction whole and reaches a property a part declares, so
+over `{ "x": 5 }` under
+`{ "allOf": [{ "type": "object", "properties": { "x": { "type": "number" } } }] }`
+the parent reads `{ "x": 5 }` while `key("x")` selects nothing. Leaving the
+keyed cell agnostic instead would read the property with no schema, dropping
+the constraints and labels the part declares on it.
+
+Under an `allOf` beside a declared `type` the disagreement runs the other
+way. Narrowing reads the keywords beside the conjunction and not its parts,
+so a key those keywords admit narrows to what they say about it, whatever a
+part declares. Over `{ "x": 5, "y": 1 }` under
+`{ "type": "object", "properties": { "y": { "type": "number" } }, "allOf": [{ "type": "object", "properties": { "x": { "type": "string" } } }] }`,
+`key("x")` carries the wildcard and reads `5`, which a read of the parent does
+not return, and the part's constraints and labels on `x` do not reach the
+keyed cell. Both cases close when narrowing reads a child out of each part of
+a conjunction; until then, a schema that has to hold for keyed reads states
+its constraints beside the `allOf` rather than only inside it.
 
 What the entry crossing compares against is the reader's own schema. An
 agnostic reader whose read passes through one link to reach a slot
@@ -160,7 +196,7 @@ stored cfc metadata and label views rather than combined schemas.
 
 What replaces combination is the **crossing seam**
 (`markIfcBearingLinkCrossing` in
-[`packages/runner/src/schema-ifc.ts`](../../packages/runner/src/schema-ifc.ts)):
+[`runtime/runner/src/schema-ifc.ts`](../../runtime/runner/src/schema-ifc.ts)):
 a transaction is marked cfc-relevant at every actual link crossing whose
 stored schema carries `ifc` anywhere (`schemaHasIfc`), independently of
 which side won the combination.
@@ -245,35 +281,35 @@ is the authority on the lifecycle and the removal path.
 
 ## Test anchors
 
-`packages/runner/test/combine-schema.test.ts` pins each precedence arm,
+`runtime/runner/test/combine-schema.test.ts` pins each precedence arm,
 the strict-union contrast, the default-inheritance arms, and the rollback
-arm. `packages/runner/test/link-ifc-read-relevance.test.ts` pins the
+arm. `runtime/runner/test/link-ifc-read-relevance.test.ts` pins the
 crossing seam: entry, nested, resolution-chain, handle-hop, cold-closure,
 cold-closure narrowing, narrowed-away-ancestor, proxy, raw-read,
 `set()`-resolution, array-element, and root-asCell-mint marking, plus the
 broken-declaration rule (an unresolvable stored schema selects nothing —
 a shaped reader reads on, and what it legibly declares still marks).
-`packages/runner/test/schema-ifc.test.ts` pins the closure loader's
+`runtime/runner/test/schema-ifc.test.ts` pins the closure loader's
 broken-declaration arms.
-`packages/runner/test/stored-link-schema-precedence.test.ts` pins the
+`runtime/runner/test/stored-link-schema-precedence.test.ts` pins the
 cell-level reads — the entry rule (by path the same as within the array, a
 `false` reader, a renderer's read past a narrower stored view, an agnostic
 reader along a chain, a link into another space) and the four cases that
 keep the stored schema (a stored `false`, both `unknown` directions, the
 rollback), the asCell handle regression, and the inherited default.
-`packages/runner/test/render-read-link-schema.test.ts` pins a render read
-under the entry rule, `packages/html/test/in-process-link-schema.test.ts`
+`runtime/runner/test/render-read-link-schema.test.ts` pins a render read
+under the entry rule, `runtime/html/test/in-process-link-schema.test.ts`
 the reconciler's root mount, and
-`packages/runner/test/view-render-reads.test.ts` the walk of a view's roots.
-`packages/runner/test/cross-space-cid-schema.test.ts` pins the crossing's
+`runtime/runner/test/view-render-reads.test.ts` the walk of a view's roots.
+`runtime/runner/test/cross-space-cid-schema.test.ts` pins the crossing's
 recomposition route by route, and
-`packages/patterns/collection-naming/board.test.tsx` pins a lift's view
+`patterns/product/collection-naming/board.test.tsx` pins a lift's view
 holding a `Record<string, unknown>` map's members as references.
-`packages/runner/test/reader-schema-precedence-config.test.ts`
+`runtime/runner/test/reader-schema-precedence-config.test.ts`
 and the ambient-flag family in
-`packages/runner/test/experimental-options.test.ts` pin the
+`runtime/runner/test/experimental-options.test.ts` pin the
 construction-set ambient lifecycle (no teardown reset);
-`packages/runner/test/runtime-presets.test.ts` pins adoption and the
+`runtime/runner/test/runtime-presets.test.ts` pins adoption and the
 legacy-absent rule. The traverse-replay goldens carry the
 serving-behavior consequences.
 

@@ -11,7 +11,7 @@ LLM-powered patterns have test coverage at three layers:
 
 ## Test-environment guard
 
-`packages/llm/src/client.ts` includes a test-environment check (evaluated once
+`base/llm/src/client.ts` includes a test-environment check (evaluated once
 at module load) which detects:
 
 - `CI=true` (CI runners)
@@ -73,7 +73,7 @@ answer, a provider that turns the request down, a stream that stops early —
 drive `generateText` with a stand-in language model instead.
 
 `findModel` reads the exported `MODELS` registry in
-`packages/toolshed/routes/ai/llm/models.ts`, and that registry is a plain
+`runtime/toolshed/routes/ai/llm/models.ts`, and that registry is a plain
 mutable object. A test registers a model under a name of its own, runs the
 generation, and takes the entry back out afterwards:
 
@@ -117,7 +117,7 @@ inline `addMockResponse()` calls.
 ### Fixture format
 
 ```jsonc
-// packages/runner/test/fixtures/my-conversation.json
+// runtime/runner/test/fixtures/my-conversation.json
 {
   "description": "Two-turn chat with tool call",
   "responses": [
@@ -207,25 +207,25 @@ in `beforeEach` to reset between tests.
 
 | File | What it tests |
 |------|--------------|
-| `packages/llm/src/client.test.ts` | Guard behavior, mock mode API, fixture loading |
-| `packages/toolshed/routes/ai/llm/generateText.test.ts` | JSON mode config, response cleaning, failure reporting against a mock model |
-| `packages/toolshed/routes/ai/llm/generateObject.test.ts` | Model resolution, error paths |
-| `packages/toolshed/routes/ai/llm/llm.status.test.ts` | The HTTP status a failed generation answers with, through the real router |
-| `packages/toolshed/routes/ai/llm/errors.test.ts` | Sorting a failure into a status, including shapes the routes cannot produce |
-| `packages/runner/test/llm-pattern-smoke.test.ts` | generateText, generateObject, and tool-calling through runtime |
-| `packages/runner/test/llm-conversation-fixture.test.ts` | Multi-turn conversations and tool chains via fixtures |
+| `base/llm/src/client.test.ts` | Guard behavior, mock mode API, fixture loading |
+| `runtime/toolshed/routes/ai/llm/generateText.test.ts` | JSON mode config, response cleaning, failure reporting against a mock model |
+| `runtime/toolshed/routes/ai/llm/generateObject.test.ts` | Model resolution, error paths |
+| `runtime/toolshed/routes/ai/llm/llm.status.test.ts` | The HTTP status a failed generation answers with, through the real router |
+| `runtime/toolshed/routes/ai/llm/errors.test.ts` | Sorting a failure into a status, including shapes the routes cannot produce |
+| `runtime/runner/test/llm-pattern-smoke.test.ts` | generateText, generateObject, and tool-calling through runtime |
+| `runtime/runner/test/llm-conversation-fixture.test.ts` | Multi-turn conversations and tool chains via fixtures |
 
 ## Running tests
 
 ```bash
 # LLM client tests (guard + mock + fixtures)
-cd packages/llm && deno task test
+cd base/llm && deno task test
 
 # Toolshed server tests
-cd packages/toolshed && deno task test
+cd runtime/toolshed && deno task test
 
 # Runner tests (includes smoke tests + fixture tests)
-cd packages/runner && deno task test
+cd runtime/runner && deno task test
 ```
 
 ## Related documentation
@@ -233,6 +233,6 @@ cd packages/runner && deno task test
 - [TESTING.md](../development/TESTING.md) — running the suites and the general unit and
   integration test structure.
 - [COVERAGE.md](../development/COVERAGE.md) — how the runtime coverage these tests produce feeds
-  the coverage trend. Of `packages/llm`, `packages/toolshed` and
-  `packages/runner`, only `packages/llm` carries a measured set, so only its
+  the coverage trend. Of `base/llm`, `runtime/toolshed` and
+  `runtime/runner`, only `base/llm` carries a measured set, so only its
   tests feed the measured-set gate.

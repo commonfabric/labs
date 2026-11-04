@@ -1,0 +1,105 @@
+name: Notify Rapids
+
+on:
+  workflow_run:
+    workflows: [CI, Deploy Rapids release]
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  notify-infra:
+    if: >-
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'main' &&
+      ((github.event.workflow_run.path == '.github/workflows/deno.yml' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push') ||
+       (github.event.workflow_run.path == '.github/workflows/rapids-release.yml' &&
+        github.event.workflow_run.event == 'workflow_dispatch'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📋 Check notification configuration
+        id: config
+        env:
+          APP_ID: ${{ vars.RAPIDS_APP_ID }}
+          APP_KEY: ${{ secrets.RAPIDS_APP_PRIVATE_KEY }}
+        run: |
+          if [ -n "$APP_ID" ] && [ -n "$APP_KEY" ]; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::Rapids notifications need RAPIDS_APP_ID and RAPIDS_APP_PRIVATE_KEY; see commonfabric/infra releases/rapids.md.'
+          fi
+      - name: 🔑 Create infra-only dispatch token
+        if: steps.config.outputs.enabled == 'true'
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.RAPIDS_APP_ID }}
+          private-key: ${{ secrets.RAPIDS_APP_PRIVATE_KEY }}
+          owner: commonfabric
+          repositories: infra
+          permission-actions: write
+          permission-contents: read
+      - name: 📤 Notify the infra coordinator
+        if: steps.config.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PRODUCER_RUN: ${{ github.event.workflow_run.id }}
+          WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
+        run: |
+          if [[ "$WORKFLOW_PATH" == '.github/workflows/deno.yml' ]]; then
+            gh api --method POST \
+              repos/commonfabric/infra/actions/workflows/rapids.yml/dispatches \
+              -f ref=main -f 'inputs[producer]=commonfabric/labs' \
+              -f "inputs[run_id]=$PRODUCER_RUN"
+          else
+            gh api --method POST \
+              repos/commonfabric/infra/actions/workflows/rapids.yml/dispatches \
+              --input - <<<'{"ref":"main","inputs":{}}'
+          fi
+
+  notify-loom:
+    if: >-
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.path == '.github/workflows/deno.yml' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📋 Check notification configuration
+        id: config
+        env:
+          APP_ID: ${{ vars.RAPIDS_APP_ID }}
+          APP_KEY: ${{ secrets.RAPIDS_APP_PRIVATE_KEY }}
+        run: |
+          if [ -n "$APP_ID" ] && [ -n "$APP_KEY" ]; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::Rapids notifications need RAPIDS_APP_ID and RAPIDS_APP_PRIVATE_KEY; see commonfabric/infra releases/rapids.md.'
+          fi
+      - name: 🔑 Create Loom-only dispatch token
+        if: steps.config.outputs.enabled == 'true'
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.RAPIDS_APP_ID }}
+          private-key: ${{ secrets.RAPIDS_APP_PRIVATE_KEY }}
+          owner: commonfabric
+          repositories: loom
+          permission-actions: write
+          permission-contents: read
+      - name: 📤 Notify Loom dependency integration
+        if: steps.config.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PRODUCER_RUN: ${{ github.event.workflow_run.id }}
+        run: |
+          gh api --method POST \
+            repos/commonfabric/loom/actions/workflows/rapids-dependencies.yml/dispatches \
+            -f ref=main -f 'inputs[producer]=commonfabric/labs' \
+            -f "inputs[run_id]=$PRODUCER_RUN"

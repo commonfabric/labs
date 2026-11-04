@@ -21,7 +21,8 @@
  * the toolshed makes that list every operation rather than the ones over
  * 100 ms.
  */
-import { renderProfileReport } from "../../../packages/integration/cdp-profiler.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { renderProfileReport } from "../../../runtime/integration/cdp-profiler.ts";
 
 const args = [...Deno.args];
 const out = args.shift();
@@ -171,9 +172,7 @@ try {
   // A command that could not start is reported below, after the profiler
   // has been stopped, as the exit-2 case.
   console.error(
-    `profile-toolshed.ts: ${
-      error instanceof Error ? error.message : String(error)
-    }`,
+    `profile-toolshed.ts: ${describeFailure(error)}`,
   );
 } finally {
   // Whatever became of the command, the toolshed stops being sampled: a

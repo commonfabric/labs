@@ -29,7 +29,7 @@ change a cell in the browser, the file updates within ~1 second.
 brew install --cask fuse-t          # macOS only, requires sudo
 
 # Identity (reuse existing, or create a unique one with `id new`)
-ls cf.key || deno run -A packages/cli/mod.ts id new > cf.key
+ls cf.key || deno run -A runtime/cli/mod.ts id new > cf.key
 
 # Environment
 export CF_API_URL=http://localhost:8000
@@ -109,14 +109,14 @@ The power is in combining FUSE, CLI, and browser simultaneously:
 
 ```bash
 # 1. Develop a pattern
-deno task cf check packages/patterns/my-app/main.tsx --no-run
+deno task cf check patterns/my-app/main.tsx --no-run
 
 # 2. Run its automated pattern tests
-deno task cf test packages/patterns/my-app/main.test.tsx
+deno task cf test patterns/my-app/main.test.tsx
 
 # 3. Deploy to a space with the tests attached
-deno task cf piece new packages/patterns/my-app/main.tsx \
-  --test packages/patterns/my-app/main.test.tsx -s my-space
+deno task cf piece new patterns/my-app/main.tsx \
+  --test patterns/my-app/main.test.tsx -s my-space
 # => Created piece bafyreia...
 
 # 4. Mount and interact via filesystem
@@ -128,8 +128,8 @@ echo -n "Updated content" > /tmp/cf/my-space/pieces/my-app/input/title
 # => Browser shows the change within ~1 second
 
 # 6. Iterate on the pattern and retain its tests
-deno task cf piece setsrc packages/patterns/my-app/main.tsx \
-  --test packages/patterns/my-app/main.test.tsx --cell bafyreia...
+deno task cf piece setsrc patterns/my-app/main.tsx \
+  --test patterns/my-app/main.test.tsx --cell bafyreia...
 # => Result updates in both browser AND filesystem
 ```
 
@@ -191,14 +191,14 @@ render rather than reading a single scalar.
 Combine pattern-dev with FUSE for a tight feedback loop:
 
 ```bash
-# 1. Write pattern in packages/patterns/my-pattern/main.tsx
+# 1. Write pattern in patterns/my-pattern/main.tsx
 # 2. Type check
-deno task cf check packages/patterns/my-pattern/main.tsx --no-run
+deno task cf check patterns/my-pattern/main.tsx --no-run
 # 3. Write and run automated pattern tests
-deno task cf test packages/patterns/my-pattern/main.test.tsx
+deno task cf test patterns/my-pattern/main.test.tsx
 # 4. Deploy with every test entry attached
-deno task cf piece new packages/patterns/my-pattern/main.tsx \
-  --test packages/patterns/my-pattern/main.test.tsx -s dev-space
+deno task cf piece new patterns/my-pattern/main.tsx \
+  --test patterns/my-pattern/main.test.tsx -s dev-space
 # 5. Mount
 deno task cf fuse mount /tmp/cf
 # 6. Set input via filesystem (faster than cf cell set for complex data)
@@ -267,7 +267,7 @@ milliseconds, with sub-second transients while a subtree rebuilds. If a mount
 was created with `--attrcache-timeout 0` (untuned), a path stat'd while absent
 can keep reporting `NotFound` for up to a minute and `ls` can be tens of seconds
 stale; remount with the default before debugging "missing" files. See
-`packages/fuse/README.md` "macOS: NFS client cache tuning".
+`runtime/fuse/README.md` "macOS: NFS client cache tuning".
 
 ### Large Pieces
 
@@ -281,7 +281,7 @@ The FUSE daemon can crash if patterns throw uncaught errors during reactive
 updates. If the mount stops responding but the process is still running:
 
 ```bash
-pkill -f "packages/fuse/mod.ts"
+pkill -f "runtime/fuse/mod.ts"
 umount /tmp/cf 2>/dev/null
 # Remount
 deno task cf fuse mount /tmp/cf
@@ -421,9 +421,9 @@ cat "MOUNT/SPACE/pieces/My Piece/.src/error.log"
 
 ## Reference
 
-- `packages/fuse/mod.ts` — FUSE daemon entry point
-- `packages/fuse/cell-bridge.ts` — cell-to-filesystem bridge
-- `packages/fuse/tree-builder.ts` — JSON-to-tree conversion
+- `runtime/fuse/mod.ts` — FUSE daemon entry point
+- `runtime/fuse/cell-bridge.ts` — cell-to-filesystem bridge
+- `runtime/fuse/tree-builder.ts` — JSON-to-tree conversion
 - `docs/specs/fuse-filesystem/` — 7-part specification
 - Use the `cf` skill, or read `skills/cf/SKILL.md`, for CLI command reference
 - Use the `pattern-dev` skill, or read `skills/pattern-dev/SKILL.md`, for

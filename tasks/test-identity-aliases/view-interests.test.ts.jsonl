@@ -1,0 +1,2 @@
+{"date":"2026-10-23","from":{"k":"unit","s":"runner","n":"view-interests > reads the list once and answers later publishes from what it holds"},"to":{"k":"unit","s":"runner","n":"view-interests > reads the list once and returns what it holds to later publishes"}}
+{"date":"2026-10-23","from":{"k":"unit","s":"runner","n":"view-interests > reads again after a read that failed, and keeps the list it held until then"},"to":{"k":"unit","s":"runner","n":"view-interests > reads again on the next publish after a read that failed"}}

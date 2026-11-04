@@ -20,9 +20,12 @@ of two kinds of reason:
   anti-replay checks: an expired, already-used, or mismatched challenge, or a
   stale signed `exp`. Each reconnect attempt discards the failed transport
   connection before running `hello` on a fresh one that issues a new challenge,
-  so a token-refresh window or a challenge race can heal on the next attempt.
-  A transport without connection-reset support terminates recovery with the
-  original failure instead of retrying a handshake it cannot renew.
+  so a token-refresh window or a challenge race can heal on the next attempt. A
+  transport without connection-reset support terminates recovery with the
+  original failure instead of retrying a handshake it cannot renew. A Mode A
+  router also marks a refusal retriable when it rests on a condition that
+  passes, such as the space's toolshed being down; that heals by waiting, not by
+  a new connection.
 - **Permanent.** An audience or protocol mismatch, a malformed invocation, or an
   ACL capability shortfall (the principal lacks `READ`, a malformed or ownerless
   ACL, a genesis requirement). The same configuration or ACL state produces the
@@ -37,7 +40,7 @@ is read as permanent — the safe default for an authorization decision.
 
 ## Memory client: terminate rather than loop
 
-`packages/memory/v2/client.ts` acts on the classification during reconnect:
+`runtime/memory/v2/client.ts` acts on the classification during reconnect:
 
 - A **permanent** authorization denial reopening a session terminates just that
   session with the real error, the same way a `session/revoked` does: its
@@ -51,6 +54,13 @@ is read as permanent — the safe default for an authorization decision.
 - A **retriable** authorization race or transport-level disconnect can recover
   on a transport that supports resetting its connection. If restoration fails
   and the transport cannot reset, the client terminates with the original error.
+  A retriable denial of a session that authenticates through `connection.auth`,
+  such as a router's while its toolshed is down, instead holds that session
+  alone (`SpaceSession.held`): it keeps its commits and waiters and retries its
+  reopen on the same connection with the reconnect backoff, while the
+  connection's other sessions keep running. A retried reopen that fails for a
+  reason only a new connection heals restarts the connection, after a backoff
+  that grows until no session is held.
 - A **server that cannot take declared holdings** (no `sessionHoldings` in its
   hello) terminates a session whose consumer installed a holdings provider, the
   same per-session way: the declaration is what makes skipping the older
@@ -68,13 +78,14 @@ a connection-authentication denial, client-wide for a handshake mismatch), and
 only recoverable and transport-level conditions retry, on transports that can
 discard a failed connection.
 
-`SpaceSession.subscribeAccessLoss` also delivers an authoritative
-`AuthorizationError` immediately when an established session loses access. An
-`unauthorized` revocation carries that error. A `taken-over` revocation closes
-with `SessionRevokedError` and does not emit access loss. Normal close,
-disconnect, protocol failure, and a recoverable challenge race do not emit it
-either. A late subscriber receives the retained authorization verdict until the
-session is replaced successfully.
+`SpaceSession.subscribeTermination` delivers the error that ends an established
+session immediately, and the runner's replica reports it as access loss when it
+is a permanent (non-retriable) `AuthorizationError`. An `unauthorized` revocation carries
+that error. A `taken-over` revocation closes with `SessionRevokedError`, which
+is a termination but not access loss. A recoverable challenge race that ends the
+session is likewise not access loss. Normal close and an ordinary disconnect do
+not terminate the session. A late subscriber receives the retained error until
+the session is replaced successfully.
 
 `StorageManager.subscribeSpaceAccessChange` observes both a new authoritative
 denial and its clearance after a successful authorized reopen. Renderers use
@@ -83,11 +94,12 @@ session replacement. `subscribeSpaceAccessLoss` remains loss-only.
 
 ## Runner storage: record it per space, keep the barrier silent
 
-`packages/runner/src/storage/v2.ts` preserves the failure and exposes it without
+`runtime/runner/src/storage/v2.ts` preserves the failure and exposes it without
 changing what the sync barrier does:
 
 - `toPullError` keeps a real `AuthorizationError` — its name, message, and the
-  `retriable` marker — rather than flattening it to a `ConnectionError`.
+  server's markers, `retriable` and `deleted` among them — rather than
+  flattening it to a `ConnectionError`.
   `PullError` admits `AuthorizationError`.
 - Each replica holds its current authorization status: a permanent
   (non-retriable) `AuthorizationError` from a watch refresh is remembered, and a
@@ -109,8 +121,14 @@ The storage provider exposes `subscribeSpaceAccessLoss` and `spaceAccessError`
 for consumers of already-rendered cells. An authoritative session loss updates
 the affected space immediately, without waiting for another document watch. An
 explicit successful session replacement after a new grant clears the old
-verdict. The runtime client forwards `spaceaccesslost` with the affected space;
-it does not send the server's diagnostic error text to the UI.
+verdict. The runtime client forwards `spaceaccesslost` with the affected space,
+and `spaceaccessrestored` with the space once a retry admits the principal
+again; it does not send the server's diagnostic error text to the UI. For a
+deleted space
+([`space-access.md`](space-access.md#a-deleted-space)) `spaceaccesslost` also
+carries `deleted: true`, the one marker of the refusal it forwards. A space
+already refused that turns out to be deleted is reported again, with the
+marker, to the storage provider's loss and access-change observers alike.
 
 The worker renderer subscribes at cell boundaries. Revoking a foreign target
 removes that target's content and event handlers while retaining the authorized
@@ -121,12 +139,53 @@ content and do not masquerade as revoked authority. What stands in for revoked
 content reads "Access unavailable" beside a Retry button, which asks for the
 revoked space once more, and the status reads "Retrying…" until the answer
 comes; an
-admission restores the content.
+admission restores the content. Content of a deleted space is replaced by a
+placeholder reading "Deleted", marked `data-space-deleted`, with no Retry
+button.
 
 A `cf-render` or `cf-picker` bound to content of a revoked space shows the same
 placeholder as revoked content shown directly, while its binding is withheld,
 and the binding is made again, mounting the content, once the space is in reach
 again.
+
+## Runtime incompatibility: replace the client
+
+An admission refusal marked `clientUpdateRequired: true` says that this runtime
+cannot mount until its code is replaced. It is independent of the error name;
+the expression-result identity check sends it on a `SessionRevokedError`. A
+`session/revoked` with the reason `instance-names` (INV-16) carries no message,
+so the memory client ends that session with a `SessionRevokedError` that carries
+the marker and a message made from the space.
+A refused restore keeps the server's actual reason. The memory client remembers
+the update requirement across mounts, and the storage manager retains it across
+spaces and route changes. Reads, access Retry, and ACL notices cannot trigger
+fresh admission attempts from that runtime. A permission denial without the
+marker remains per-space and can be reconsidered after an access event.
+
+An initial permanent authorization or update-required refusal is retained just
+like a terminated session. A failed access Retry retains its permission refusal
+too, so ordinary reads do not each open another session. An unmarked
+`SessionRevokedError` on a failed open discards that mount, allowing a later
+operation to attempt admission again. This does not reopen an established
+session that was taken over. Transient failures remain recoverable.
+
+`StorageManager.clientUpdateRequired()` returns the retained explanation and
+whether writes were unconfirmed when the refusal was observed.
+`subscribeClientUpdateRequired()` reports changes and immediately replays the
+current status. The uncertainty stays recorded after rejected writes leave the
+pending set, and subsequent writes in that runtime also set it. This is a
+conservative warning, not proof that a write was lost or saved.
+
+The worker reports this status with `RuntimeErrorCode.ClientUpdateRequired` to
+its connected clients and replays it to clients that attach later. The shell
+shows persistent reload guidance, including a request to copy recent edits
+when writes were unconfirmed. The guidance fits every refusal it shows: a reload
+loads the runtime the deployment serves, retrying access cannot change the
+runtime, and a refusal that comes back after a reload means that the deployment
+cannot open that space. It preserves the browser's leave-page warning
+for those writes and never reloads automatically. Updating the CLI checkout
+and starting a new process is the equivalent recovery for a command-line host.
+This recovery mechanism does not enable client-generation retirement.
 
 ## CLI: surface the denial for the space it was asked to reach
 

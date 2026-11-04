@@ -13,8 +13,8 @@ import { recordCoverage } from "./coverage-records.ts";
 describe("recordCoverage()", () => {
   const metrics = [
     [coverageMetricForGroup("workspace"), 900],
-    [coverageMetricForGroup("packages/memory"), 40],
-    [measuredSetCoverageMetric("workspace-unit/packages/memory"), 12],
+    [coverageMetricForGroup("runtime/memory"), 40],
+    [measuredSetCoverageMetric("workspace-unit/runtime/memory"), 12],
     ["ci duration: Test", 300],
   ] as const;
 
@@ -27,8 +27,8 @@ describe("recordCoverage()", () => {
     try {
       recordCoverage(metrics, true, naming(spool));
       expect(coverageFiguresOf((await readSpool(spool)).records)).toEqual({
-        groups: new Map([["workspace", 900], ["packages/memory", 40]]),
-        sets: new Map([["workspace-unit/packages/memory", 12]]),
+        groups: new Map([["workspace", 900], ["runtime/memory", 40]]),
+        sets: new Map([["workspace-unit/runtime/memory", 12]]),
         cold: true,
       });
     } finally {

@@ -15,7 +15,7 @@ import { patternTestListLine } from "../integration.ts";
 import { PATTERN_TREES } from "../pattern-files.ts";
 import { SERVER_EXECUTION_ON_SKIPS } from "../server-execution-on-skips.ts";
 import { serverExecutionCiLane } from "../server-execution-ci.ts";
-import { taskEnvironment } from "./deno-task.ts";
+import { memberTestFiles, taskEnvironment } from "./deno-task.ts";
 import {
   type CommandContext,
   fileSuite,
@@ -74,12 +74,12 @@ async function patternTestFiles(root: string): Promise<string[]> {
   return found.sort();
 }
 
-/** The integration suites over `packages/patterns/integration/`. */
+/** The integration suites over `patterns/integration/`. */
 async function patternIntegrationSuites(
   root: string,
   defaultEnabled: boolean,
 ): Promise<Suite[]> {
-  const packageDir = "packages/patterns";
+  const packageDir = "patterns";
   const files = await filesIn(root, `${packageDir}/integration`);
   const flags = [
     "-A",
@@ -118,7 +118,7 @@ async function patternIntegrationSuites(
       parts: [{
         packageDir,
         flags,
-        env,
+        env: { ...env, ...defaultLane.environment },
         junit,
         files: defaultLane.enabled
           ? files.filter((file) => !on.excluded.has(file))
@@ -139,10 +139,7 @@ async function patternIntegrationSuites(
       parts: [{
         packageDir,
         flags,
-        env: {
-          ...env,
-          EXPERIMENTAL_SERVER_EXECUTION: String(oppositeLane.enabled),
-        },
+        env: { ...env, ...oppositeLane.environment },
         junit,
         files: oppositeLane.enabled
           ? files.filter((file) => !on.excluded.has(file))
@@ -156,14 +153,51 @@ async function patternIntegrationSuites(
       // Catalog conflict and receipt behavior is exercised by the compiled
       // Home integration, including cases the authored test cannot observe.
       const catalogChanged = reachedByChange([
-        `${packageDir}/system/home.tsx`,
-        `${packageDir}/system/shared-space-catalog.ts`,
+        `${packageDir}/system/home/home.tsx`,
+        `${packageDir}/system/shared-space/shared-space-catalog.ts`,
       ], changed);
+      // Where the Topics board stores its mention pivot, and so whether a
+      // session that never runs the board reads it, is decided by the board's
+      // source; a topic's source computes the backlinks read out of it. The
+      // pivot integration reads both by path.
+      const boardChanged = reachedByChange([
+        `${packageDir}/apps/topics/main.tsx`,
+        `${packageDir}/apps/topics/topic.tsx`,
+      ], changed);
+      // The measurement fixtures reach authored lifts by name and attribute
+      // measurements to their source locations. Renaming or removing a lift
+      // can therefore break these fixtures without a test edit. This
+      // declaration covers the board, topic, and listed measurement inputs;
+      // their other imports remain subject to selection by score.
+      const measurementsChanged = boardChanged || reachedByChange([
+        `${packageDir}/integration/topics-headless-fixture.ts`,
+        `${packageDir}/integration/topics-cost-cases.ts`,
+        `${packageDir}/integration/topics-read-budget.ts`,
+        `${packageDir}/integration/topics-read-budget-limits.ts`,
+        `${packageDir}/integration/topics-read-budget-suite.ts`,
+        `${packageDir}/integration/topics-browser-measurement.ts`,
+        `${packageDir}/integration/topics-browser-measurement-core.ts`,
+        `${packageDir}/integration/topics-browser-posture.ts`,
+        `${packageDir}/integration/topics-navigation-helpers.ts`,
+      ], changed);
+      const measurements = new Set([
+        "topics-headless-fixture",
+        "topics-lazy-lookup-reruns",
+        "topics-read-budget-small-and-threads",
+        "topics-read-budget-single-bucket",
+        "topics-read-budget-high-degree",
+        "topics-read-budget-mentions-16",
+        "topics-browser-measurement",
+      ].map((name) => `${packageDir}/integration/${name}.test.ts`));
       return suite.units.filter((unit) =>
         changed.has(unit) ||
         (catalogChanged &&
           unit ===
-            `${packageDir}/integration/home-shared-space-catalog.test.ts`)
+            `${packageDir}/integration/home-shared-space-catalog.test.ts`) ||
+        (boardChanged &&
+          unit ===
+            `${packageDir}/integration/topic-board-pivot-sessions.test.ts`) ||
+        (measurementsChanged && measurements.has(unit))
       );
     },
   }));
@@ -200,8 +234,11 @@ function coverageEnv(
  * hard-codes the directory it runs, so a lane can ask for the suite or
  * not ask for it, and nothing finer.
  */
-function patternReloadSuite(): Suite {
-  const unit = "packages/patterns/integration/reload";
+async function patternReloadSuite(root: string): Promise<Suite> {
+  const unit = "patterns/integration/reload";
+  const directory = path.join(root, unit);
+  const sources = (await memberTestFiles(directory, { paths: [], ignores: [] }))
+    .map((file) => path.relative(root, path.resolve(directory, file)));
   return {
     id: "pattern-reload",
     recordSurfaces: [{ kind: "integration", scope: "patterns" }],
@@ -212,6 +249,7 @@ function patternReloadSuite(): Suite {
     // development stack around that run. A lane runs the whole suite or none of
     // it.
     whole: [unit],
+    sourcesOf: (asked) => asked === unit ? sources : [],
     locate(record): Location | undefined {
       if (record.test.v !== undefined) return undefined;
       if (record.test.k !== "integration" || record.test.s !== "patterns") {
@@ -239,7 +277,7 @@ function patternReloadSuite(): Suite {
           path: path.join(context.outputDir, "patterns-reload.xml"),
           kind: "integration",
           scope: "patterns",
-          filePrefix: "packages/patterns",
+          filePrefix: "patterns",
         }],
       }]);
     },
@@ -262,9 +300,6 @@ async function patternUnitSuite(root: string): Promise<Suite> {
     unavailable: [],
     // Each file is one identity, so a unit holds nothing to leave out.
     whole: units,
-    // Every file runs in one pool, which marks its units as begun before it
-    // compiles their programs.
-    processes: new Map(units.map((unit) => [unit, "pool"])),
     locate(record): Location | undefined {
       if (record.test.v !== undefined) return undefined;
       if (record.test.k !== "pattern" || record.test.s !== "patterns") {
@@ -293,7 +328,6 @@ async function patternUnitSuite(root: string): Promise<Suite> {
         ],
         cwd: context.root,
         env: coverageEnv(context, "pattern-unit"),
-        process: "pool",
       }];
     },
   };
@@ -301,7 +335,7 @@ async function patternUnitSuite(root: string): Promise<Suite> {
 
 /** The generated-pattern integration tests. */
 async function generatedPatternSuite(root: string): Promise<Suite> {
-  const packageDir = "packages/generated-patterns";
+  const packageDir = "runtime/generated-patterns";
   return fileSuite({
     id: "generated-patterns",
     needs: ["deno", "compile-cache"],
@@ -326,7 +360,7 @@ export async function loadPatternSuites(
 ): Promise<Suite[]> {
   return [
     ...await patternIntegrationSuites(root, defaultEnabled),
-    patternReloadSuite(),
+    await patternReloadSuite(root),
     await patternUnitSuite(root),
     await generatedPatternSuite(root),
   ];

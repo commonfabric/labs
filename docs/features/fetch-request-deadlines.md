@@ -228,7 +228,7 @@ claims, including requests waiting for outbox dispatch. Claim cleanup and
 completion guards read under the identity that issued each request. Aborting
 suppresses writeback; it does not stop the resolver's network requests.
 
-`packages/runner/test/fetch-claim-takeover.test.ts` pins what makes the residual
+`runtime/runner/test/fetch-claim-takeover.test.ts` pins what makes the residual
 risk survivable: a slow resolution running in this replica still reaches its
 result, a failing request does not erase a result recorded for the same inputs,
 and the staleness branch itself leaves a fresh claim alone while taking over an

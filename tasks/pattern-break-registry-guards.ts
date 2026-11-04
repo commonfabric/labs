@@ -61,7 +61,7 @@ export interface BreakRegistryEntry {
   /** Which registry the entry sits in, for reporting. */
   registry: string;
 
-  /** Pattern key: the path relative to `packages/patterns`. */
+  /** Pattern key: the path relative to `patterns`. */
   pattern: string;
 
   /** Repo-relative path of the entry's decision record. */
@@ -129,9 +129,9 @@ function recordPathProblem(record: string): string | undefined {
  * Asked in BOTH directions, because the consumer anchors its suffix on the
  * manifest path while a required pattern arrives here as a key. A key
  * SHORTER than the required one claims it by being a suffix of it
- * (`home.tsx` for `system/home.tsx`), and a key LONGER than it claims it by
+ * (`home.tsx` for `system/home/home.tsx`), and a key LONGER than it claims it by
  * carrying a path prefix the manifest also carries
- * (`packages/patterns/system/home.tsx`, or the `api/patterns/` route a
+ * (`patterns/system/home/home.tsx`, or the `api/patterns/` route a
  * manifest's `main` may name). Either spelling reaches the same pattern, so
  * the floor has to refuse both.
  *

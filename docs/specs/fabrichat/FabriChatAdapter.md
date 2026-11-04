@@ -23,13 +23,18 @@ surface, so the room's own `[UI]` keeps the draft and the reply target (see
 ## How a container holds it
 
 A container holds the adapter, the way it holds any piece it renders. For
-example, the `loom` pattern (`packages/patterns/loom/`) holds it as a piece
+example, the `loom` pattern (`patterns/system/loom/`) holds it as a piece
 panel. The adapter links to its placement, and the placement to its room:
 
 ```text
   container ──► FabriChatAdapter ──► FabriChatPlacement ──► FabriChatRoom
                (renders)            (what a viewer may see)  (the conversation)
 ```
+
+A container that names its own chat, as the `loom` pattern's root does with
+its `chatRoom`, names the room itself, not an adapter or a placement: the
+room is the container's own conversation, in its own space, while the adapter
+and the placement are how it shows a room, its own or another's.
 
 A client that draws natively ignores the adapter's rendering and reads the
 placement's `chat` group, which the adapter re-exports in its own `[VIEWS]` (see

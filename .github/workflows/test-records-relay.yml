@@ -5,10 +5,12 @@
 # per run. Its Google Cloud identity comes from a Workload Identity
 # Federation provider pinned to exactly this workflow file on main, so no
 # other workflow, ref, or repository can mint it (infra:
-# tofu/test-records). Records arrive minutes after the run; nothing gates
-# on the store, and a relay failure loses at most one workflow run's
-# records — rerunning it re-ships idempotently, and a manual dispatch can
-# re-ship any run by id.
+# tofu/test-records). Each run attempt's completion triggers one relay,
+# which ships that attempt's artifacts and no other's. Records arrive
+# minutes after the attempt; nothing gates on the store, and a relay
+# failure loses at most one attempt's records — rerunning it re-ships
+# idempotently, and a manual dispatch can re-ship any attempt by run id
+# and attempt number.
 
 name: Test Records Relay
 
@@ -22,6 +24,9 @@ on:
       run-id:
         description: Workflow run id whose test-records artifacts to re-ship
         required: true
+      attempt:
+        description: The run's attempt to re-ship; its latest when empty
+        required: false
 
 permissions:
   contents: read
@@ -63,18 +68,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DISPATCH_RUN_ID: ${{ inputs.run-id }}
+          DISPATCH_ATTEMPT: ${{ inputs.attempt }}
           EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           if [ -n "$DISPATCH_RUN_ID" ]; then
-            case "$DISPATCH_RUN_ID" in
+            case "$DISPATCH_RUN_ID$DISPATCH_ATTEMPT" in
               *[!0-9]*)
-                echo "run-id must be numeric" >&2
+                echo "run-id and attempt must be numeric" >&2
                 exit 1
                 ;;
             esac
             run_id="$DISPATCH_RUN_ID"
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
-              > run.json
+            # The run itself describes its latest attempt; an attempt's own
+            # endpoint describes that attempt, start included.
+            run_path="repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            if [ -n "$DISPATCH_ATTEMPT" ]; then
+              run_path="${run_path}/attempts/${DISPATCH_ATTEMPT}"
+            fi
+            gh api "$run_path" > run.json
           else
             run_id="$EVENT_RUN_ID"
           fi

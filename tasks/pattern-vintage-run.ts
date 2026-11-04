@@ -11,19 +11,20 @@
  */
 
 import { exists } from "@std/fs";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { FragmentWriter } from "@commonfabric/test-support/records";
 import type { Identity } from "@commonfabric/identity";
-import { runTestPattern } from "../packages/cli/lib/test-runner.ts";
+import { runTestPattern } from "../runtime/cli/lib/test-runner.ts";
 import {
   AUTO,
   autoGenerationsToPrune,
   collectVintages,
-  describeError,
   hoistSupersessionReason,
   newestAutoGeneration,
   patternKeyFromMain,
   PINNED,
+  programAsRecorded,
   promoteVintage,
   relativeToRepo,
   removeVintages,
@@ -49,8 +50,8 @@ import {
   vintageRootCause,
   vintageRootHasState,
   writeVintageManifest,
-} from "../packages/piece/test/state-continuity-harness.ts";
-import { vintageCompanionDir } from "../packages/piece/test/vintage-layout.ts";
+} from "../runtime/piece/test/state-continuity-harness.ts";
+import { vintageCompanionDir } from "../runtime/piece/test/vintage-layout.ts";
 import {
   acceptedDropKey,
   acceptedDropsFor,
@@ -604,7 +605,7 @@ export async function replayVintage(
 
     for (const entry of targets) {
       // A recorded `main` is either a repo path or the ROUTE the toolshed
-      // serves the pattern at; both name a file under `packages/patterns/`.
+      // serves the pattern at; both name a file under `patterns/`.
       const key = patternKeyFromMain(entry.main, patternsPrefix(roots));
       // RECORDED before any skip, including the presence control below. The
       // manifest names this pattern whatever happens next, and that is what
@@ -631,16 +632,20 @@ export async function replayVintage(
       const source = `${roots.patternsRoot}/${key}`;
       let program;
       try {
-        program = await resolveLocalProgram(
-          (r) => runtimeVintage.runtime.harness.resolve(r),
-          { main: source, root: roots.repoRoot },
+        program = programAsRecorded(
+          await resolveLocalProgram(
+            (r) => runtimeVintage.runtime.harness.resolve(r),
+            { main: source, root: roots.repoRoot },
+          ),
+          entry.main,
+          patternsPrefix(roots),
         );
       } catch (error) {
         report.failures.push({
           ...where,
           detail:
             `${entry.main} no longer resolves: ${
-              describeError(error)
+              describeFailure(error)
             }. If it moved deliberately, the fixture records a path that is no ` +
             `longer there: ${remedy}`,
         });
@@ -674,13 +679,13 @@ export async function replayVintage(
         report.failures.push({
           ...where,
           detail: `${entry.main} no longer compiles: ${
-            describeError(error)
+            describeFailure(error)
           }. Fix the source; if it was removed deliberately, ${remedy}`,
         });
         continue;
       }
       // A pattern loaded BY URL compiles to a different identity than the same
-      // file compiled locally — measured, `system/profile-create.tsx` records
+      // file compiled locally — measured, `system/profile-create/profile-create.tsx` records
       // `T-01iegivM23Be` when served and `B_VWt7zYJWHbCS` from the repo. So an
       // identity comparison would call it changed on every run forever, and
       // "changed" would stop meaning anything for it. Counted and reported
@@ -1144,9 +1149,9 @@ export function testPathFor(roots: GateRoots, testKey: string): string {
  * Keyed by the TEST, not by a pattern. The earlier shape went the other way —
  * take a pattern key and derive `<pattern>.test.tsx` — which only works where a
  * test is named after the single pattern it drives. Measured, that holds for 91
- * of 120 tests in `packages/patterns` and not for the interesting ones:
- * `topics/main.tsx` is tested by `topics/topics.test.tsx`, and
- * `lunch-poll/multi-user.test.tsx` drives several patterns and is named after
+ * of 120 tests in `patterns` and not for the interesting ones:
+ * `apps/topics/main.tsx` is tested by `apps/topics/topics.test.tsx`, and
+ * `apps/lunch-poll/multi-user.test.tsx` drives several patterns and is named after
  * none of them.
  *
  * Running the test and recording what it instantiates needs no naming
@@ -1260,12 +1265,12 @@ export async function captureVintage(
     // session-only by construction and can never be an update target, which is
     // exactly why `isUpgradeTarget` already rejects it. Refusing a whole
     // capture because one appeared would block any test that builds a pattern
-    // in hand; `topics/topics.test.tsx` has six.
+    // in hand; `apps/topics/topics.test.tsx` has six.
     // Asked with the SAME question the replay asks — `patternKeyFromMain` —
     // rather than the weaker "starts with a slash". The two disagreeing is the
     // defect this capture guard exists to prevent, and it had drifted back in
-    // on a new axis: a pattern instantiated from outside `packages/patterns/`
-    // (a `/packages/home-schemas/...` path) satisfied the slash test, captured
+    // on a new axis: a pattern instantiated from outside `patterns/`
+    // (a `/base/home-schemas/...` path) satisfied the slash test, captured
     // fine, and then hard-failed EVERY replay with "neither a repo path nor a
     // served pattern route". A capture the gate accepts must be a replay it
     // accepts.
@@ -1371,7 +1376,7 @@ export async function captureMissing(
       // Report every failure rather than dying on the first: a run that
       // captures 9 of 10 and then throws leaves the tree half-seeded with no
       // statement about which one is the problem.
-      problems.push(`  ${key}: ${describeError(error)}`);
+      problems.push(`  ${key}: ${describeFailure(error)}`);
     }
   }
   return { captured, problems };
@@ -1456,7 +1461,7 @@ export async function captureChangedGenerations(
       kind: "captured",
       captured,
       pruned,
-      problems: [...problems, `  retention: ${describeError(error)}`],
+      problems: [...problems, `  retention: ${describeFailure(error)}`],
     };
   }
   return { kind: "captured", captured, pruned, problems };
@@ -1498,7 +1503,7 @@ export async function pinNewestGeneration(
     return {
       kind: "failed",
       from: newest.path,
-      detail: describeError(error),
+      detail: describeFailure(error),
     };
   }
 }
@@ -1529,7 +1534,7 @@ export async function captureGenerations(
     try {
       captured.push(await captureVintage(roots, key, now, AUTO));
     } catch (error) {
-      problems.push(`  ${key}: ${describeError(error)}`);
+      problems.push(`  ${key}: ${describeFailure(error)}`);
     }
   }
   return { captured, problems };

@@ -62,7 +62,7 @@ function baseline(
   commit: string,
   days: number,
   uncoveredLines: number,
-  member = "packages/a",
+  member = "runtime/a",
 ): CoverageBaseline {
   return {
     suite: "workspace-unit",
@@ -76,16 +76,16 @@ function baseline(
 describe("baselines", () => {
   describe("naming a measured set", () => {
     it("splits at the first slash, however deep the member sits", () => {
-      expect(splitMeasuredSet("workspace-unit/packages/connectors/github"))
+      expect(splitMeasuredSet("workspace-unit/connectors/github"))
         .toEqual({
           suite: "workspace-unit",
-          member: "packages/connectors/github",
+          member: "connectors/github",
         });
     });
 
     it("refuses a name with no member or no suite", () => {
       expect(splitMeasuredSet("workspace-unit")).toBeUndefined();
-      expect(splitMeasuredSet("/packages/memory")).toBeUndefined();
+      expect(splitMeasuredSet("/runtime/memory")).toBeUndefined();
       expect(splitMeasuredSet("workspace-unit/")).toBeUndefined();
     });
   });
@@ -95,21 +95,21 @@ describe("baselines", () => {
       expect(
         baselinesOf(
           report({
-            "workspace-unit/packages/connectors/github": 12,
-            "memory-e2e/packages/memory": 800,
+            "workspace-unit/connectors/github": 12,
+            "memory-e2e/runtime/memory": 800,
           }),
         ),
       ).toEqual([
         {
           suite: "workspace-unit",
-          member: "packages/connectors/github",
+          member: "connectors/github",
           commit: "c1",
           createdAt: daysAgo(1),
           uncoveredLines: 12,
         },
         {
           suite: "memory-e2e",
-          member: "packages/memory",
+          member: "runtime/memory",
           commit: "c1",
           createdAt: daysAgo(1),
           uncoveredLines: 800,
@@ -121,7 +121,7 @@ describe("baselines", () => {
       const ci = { ...context().ci!, event: "pull_request" };
       expect(
         baselinesOf(
-          report({ "workspace-unit/packages/a": 5 }, context({ ci })),
+          report({ "workspace-unit/runtime/a": 5 }, context({ ci })),
         ),
       ).toEqual([]);
     });
@@ -129,7 +129,7 @@ describe("baselines", () => {
     it("returns nothing for a push to another branch", () => {
       expect(
         baselinesOf(
-          report({ "workspace-unit/packages/a": 5 }, context({ branch: "x" })),
+          report({ "workspace-unit/runtime/a": 5 }, context({ branch: "x" })),
         ),
       ).toEqual([]);
     });
@@ -138,20 +138,20 @@ describe("baselines", () => {
       const ci = { ...context().ci!, fork: true };
       expect(
         baselinesOf(
-          report({ "workspace-unit/packages/a": 5 }, context({ ci })),
+          report({ "workspace-unit/runtime/a": 5 }, context({ ci })),
         ),
       ).toEqual([]);
     });
 
     it("returns nothing for a report with no context", () => {
-      const { records } = report({ "workspace-unit/packages/a": 5 });
+      const { records } = report({ "workspace-unit/runtime/a": 5 });
       expect(baselinesOf({ context: undefined, records })).toEqual([]);
     });
 
     it("never reads a source group as a measured set", () => {
       expect(
         baselinesOf(
-          report({}, context(), { "packages/memory": 40 }),
+          report({}, context(), { "runtime/memory": 40 }),
         ),
       ).toEqual([]);
     });
@@ -159,9 +159,9 @@ describe("baselines", () => {
     it("passes over a set name that names no member", () => {
       expect(
         baselinesOf(
-          report({ "workspace-unit": 3, "workspace-unit/packages/a": 5 }),
+          report({ "workspace-unit": 3, "workspace-unit/runtime/a": 5 }),
         ).map((base) => base.member),
-      ).toEqual(["packages/a"]);
+      ).toEqual(["runtime/a"]);
     });
   });
 
@@ -234,12 +234,12 @@ describe("baselines", () => {
         mergeBaselines(
           [],
           [
-            baseline("shared", 1, 7, "packages/a"),
-            baseline("shared", 1, 5, "packages/b"),
+            baseline("shared", 1, 7, "runtime/a"),
+            baseline("shared", 1, 5, "runtime/b"),
           ],
           NOW,
         ).map((base) => [base.member, base.uncoveredLines]),
-      ).toEqual([["packages/a", 7], ["packages/b", 5]]);
+      ).toEqual([["runtime/a", 7], ["runtime/b", 5]]);
     });
   });
 });

@@ -37,7 +37,7 @@ import {
   type CoverageDebtMetric,
 } from "./coverage-metrics.ts";
 import { addLcovReport, type LcovFileCoverage } from "./lcov.ts";
-import { collectSetReports } from "./coverage-gate.ts";
+import { collectSetReports, markedSets } from "./coverage-gate.ts";
 import { appendSummary } from "./step-summary.ts";
 import { readWorkspaceMembers } from "./workspace-tests.ts";
 import { loadTopology } from "./test-topology.ts";
@@ -45,12 +45,8 @@ import {
   measuredSetDirectory,
   measuredSetName,
   measuredSets,
-} from "./test-selection/coverage.ts";
-import {
-  COMPILE_CACHE_STATE_FILE,
-  COVERAGE_FAILURE_MARKER,
-  measuredSetOfReport,
-} from "./ci-lane.ts";
+} from "./test-topology/coverage-gates.ts";
+import { COMPILE_CACHE_STATE_FILE } from "./ci-lane.ts";
 
 /** What the command line asked for. */
 export interface ReportOptions {
@@ -234,34 +230,6 @@ export async function measuredSetFigures(
     });
   }
   return figures;
-}
-
-/**
- * The measured sets some lane marked as measured through a failing test,
- * by the directory a lane writes a set's report under.
- *
- * Walked for rather than looked for beside a report, because a lane
- * writes the marker whether or not it also wrote a report there: a lane
- * that ran a set's unit and saw it fail may have collected no profile
- * for it, and the set's baseline still must not be published from
- * another lane's report.
- */
-export async function markedSets(reportsDir: string): Promise<Set<string>> {
-  const marked = new Set<string>();
-  try {
-    for await (
-      const entry of walk(reportsDir, { includeDirs: false, exts: [".txt"] })
-    ) {
-      if (path.basename(entry.path) !== COVERAGE_FAILURE_MARKER) continue;
-      const set = measuredSetOfReport(entry.path);
-      if (set !== undefined) marked.add(set);
-    }
-  } catch (error) {
-    // Nothing was downloaded, which the caller reads the same way
-    // `collectReports` does.
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
-  }
-  return marked;
 }
 
 /** Says what this run measured, in the job summary. */

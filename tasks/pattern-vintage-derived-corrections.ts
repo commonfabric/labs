@@ -13,11 +13,11 @@ import { sha256 } from "@commonfabric/content-hash";
 import type {
   StateFinding,
   VintageManifestEntry,
-} from "../packages/piece/test/state-continuity-harness.ts";
-import { vintageCompanionDir } from "../packages/piece/test/vintage-layout.ts";
+} from "../runtime/piece/test/state-continuity-harness.ts";
+import { vintageCompanionDir } from "../runtime/piece/test/vintage-layout.ts";
 import type { VintageRef } from "./pattern-vintage-lib.ts";
 
-const TEST_KEY = "lunch-poll/main.test.tsx";
+const TEST_KEY = "apps/lunch-poll/main.test.tsx";
 const STAMP = "2026-07-30T21-32-46.548Z";
 const IDENTITY = "vKpn8ERxJNomhrTLevYIZ5cL3qg_QKk73pMRtnPKJwM";
 const DIGEST =
@@ -66,7 +66,8 @@ export async function derivedCorrectionsFor(
     grade(entry, findings) {
       if (
         entry.space !== SPACE || !ROOTS.includes(entry.cellId) ||
-        entry.main !== "/packages/patterns/lunch-poll/poll-option-card.tsx" ||
+        entry.main !==
+          "/packages/patterns/lunch-poll/poll-option-card.tsx" ||
         entry.symbol !== "default" ||
         entry.identity !== "iJLndA3hnQHY1W_revxrP3ENer9VYf2tIFNCOjoPV6Y"
       ) return [...findings];

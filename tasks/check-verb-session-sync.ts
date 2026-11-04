@@ -38,19 +38,19 @@
 import { dirname, fromFileUrl, join } from "@std/path";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
-export const DEMO_PATH = "packages/cli/integration/verb-session-demo.sh";
+export const DEMO_PATH = "runtime/cli/integration/verb-session-demo.sh";
 export const WALKTHROUGH_PATH = "docs/common/verbs/session-walkthrough.md";
 export const TOUR_PATH = "docs/common/verbs/the-verb-session.md";
 
 /** The demo that runs the bulk piece operations, act by act. */
-export const BULK_DEMO_PATH = "packages/cli/integration/bulk-ops-demo.sh";
+export const BULK_DEMO_PATH = "runtime/cli/integration/bulk-ops-demo.sh";
 
 /** The tour written from that demo, and held to it below. */
 export const BULK_TOUR_PATH = "docs/common/workflows/bulk-operations.md";
 
 /** The demo that reads and writes a piece's cells, act by act. */
 export const READ_WRITE_DEMO_PATH =
-  "packages/cli/integration/read-write-demo.sh";
+  "runtime/cli/integration/read-write-demo.sh";
 
 /** The tour written from that demo, and held to it below. */
 export const READ_WRITE_TOUR_PATH =

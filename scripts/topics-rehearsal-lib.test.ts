@@ -1,6 +1,6 @@
 /** Unit coverage for the pure halves of the Topics export/restore pair; the
  * live halves are exercised by the rehearsal drill
- * (`packages/cli/integration/topics-restore-drill.sh`). */
+ * (`runtime/cli/integration/topics-restore-drill.sh`). */
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";

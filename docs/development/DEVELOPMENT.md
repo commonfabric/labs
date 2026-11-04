@@ -49,7 +49,7 @@ about one aspect of the runtime, are indexed in
   `@commonfabric/api/interface` (external API), but not both.
 - Collate a package's imports. Every specifier naming the same top-level
   package, or the same namespace-and-package pair, sits in one contiguous run:
-  `@commonfabric/utils/base64url` next to `@commonfabric/utils/types`,
+  `@commonfabric/bytes/base64url` next to `@commonfabric/bytes/buffers`,
   `@std/testing/bdd` next to `@std/testing/time`. A package that appears in two
   places in the list reads as two dependencies, and the second appearance hides
   from anyone scanning for what the file rests on.
@@ -97,7 +97,7 @@ about one aspect of the runtime, are indexed in
   the pair — a namespace imported only so its `typeof` names the whole module,
   against a list of names the file uses throughout — the two statements stay,
   with a `deno-lint-ignore` saying which case it is.
-  `packages/runner/src/builder/types.ts` is the one file in that position
+  `runtime/runner/src/builder/types.ts` is the one file in that position
   today. A bare `import "x";` counts toward the total.
 
   The `cf-import-list/one-statement-per-kind` lint rule
@@ -363,7 +363,10 @@ different answer:
   touches a `#` member of a receiver that is not a real instance, so the test
   wants rewriting to build one.
 - **A helper that uses no instance state.** Make it `static #` behind the
-  static getter, or a module-level function the test imports.
+  static getter, or a module-level function the test imports. A test in
+  another package imports such a function through the package's
+  `./for-testing-only` entry, which § Offering test-only code to other packages
+  describes.
 
 ### Comments
 
@@ -434,6 +437,13 @@ come up.
   what the verb selects for. And `meet` is the lattice operation the Contextual
   Flow Control code is built on, a technical term with test files named after it,
   where a stray prose use costs a search.
+- **`social space`**, not `shared space`, for a space with more than one member
+  or participant, as [the glossary](../common/concepts/glossary.md#social-space)
+  defines it. `share` already names other things here — the share inbox where a
+  principal receives offers, share links, a user's shared profiles — and none of
+  them is about how many people a space has. As with spelling, an identifier
+  named for shared spaces, `sharedSpaceCatalog` among them, keeps its name:
+  changing it is a rename, not a word-choice fix.
 
 ## Code Design & Principles
 
@@ -537,10 +547,34 @@ For import-map placement and dependency boundaries, follow
   only e.g. types are needed.
   - If needed, environment specific exports can be provided e.g.
     `@workspace/module/browser` | `@workspace/module/deno`.
-- Consider leaf nodes in the graph: A `utils` module should not be heavy with
-  dependencies, external or otherwise.
+- Consider leaf nodes in the graph: a package that many others import, such as
+  `js-values`, should not be heavy with dependencies, external or otherwise.
 - Clean separation of public and private facing interfaces: only export what's
   needed.
+
+### Offering test-only code to other packages
+
+What a package offers only to other packages' tests — examples of its values, a
+fake, an internal step or count its public surface cannot reach dependably —
+goes behind an export-map entry named `./for-testing-only`, pointing at
+`src/for-testing-only.ts` or at a `src/for-testing-only/` directory's
+`index.ts`. `base/data-model` is the worked example. This is
+the package-level counterpart of a class's `accessForTestingOnly` getter
+(§ Classes).
+
+- No barrel re-exports it and no other entry reaches it, so the package's
+  ordinary use loads none of it.
+- Each value it exports carries a `ForTestingOnly` suffix, or
+  `_FOR_TESTING_ONLY` for an upper-case constant, so the name says what it is
+  wherever it is used. A type keeps its own name.
+- An internal stays out of every barrel and is re-exported here under a
+  suffixed name, whose doc comment says why a test of the public surface cannot
+  reach it.
+- Only tests and benchmarks import it, as `tasks/test-files.ts` defines them.
+  No gate checks this; review does.
+
+Such code belongs beside what it depends on. In `base/test-support` it
+would make that package import the package it serves.
 
 ### Avoid Ambiguous Types
 
@@ -612,14 +646,14 @@ export function isEvent(value: unknown): boolean {
 > **✅ Prefer**
 
 ```ts
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 export function isEvent(value: unknown): boolean {
   return isObjectNotArray(value) && typeof value.type === "string";
 }
 ```
 
-The predicates live in `@commonfabric/utils/types`, and each name settles the
+The predicates live in `@commonfabric/js-values/types`, and each name settles the
 array question in its own final word. `isObjectOrArray()` admits any non-`null`
 value whose `typeof` is `"object"`, arrays included. `isObjectNotArray()` asks
 the same question with arrays removed. `isPlainObject()` additionally requires
@@ -1012,13 +1046,13 @@ hundred thousand the call throws `RangeError: Maximum call stack size
 exceeded`. A collection whose size the code does not fix can reach that. Append
 it in a loop, `for (const record of more) records.push(record);`, and take its
 largest or smallest value with `maxOf` or `minOf` from
-`@commonfabric/utils/math`, which walk the collection and otherwise return what
+`@commonfabric/collections/math`, which walk the collection and otherwise return what
 `Math.max` and `Math.min` would. An array cell is the exception to the loop:
 each `push()` on a cell rebuilds the cell's local copy of the array and records
 an append of its own, so pass the list to `pushAll()` instead, which does that
 once for the whole list.
 
-Replace a range with `spliceAll` from `@commonfabric/utils/arrays`, which gives
+Replace a range with `spliceAll` from `@commonfabric/collections/splice`, which gives
 what `splice` would.
 
 The `cf-spread/no-spread-arguments` lint rule (`tasks/lint-spread-arguments.ts`,
@@ -1046,7 +1080,15 @@ that has to stay, such as one in a test that shows the overflow, sits under a
 - Run all tests using `deno task test` (NOT `deno test`). It is not a
   substitute for `deno task check`: every package's tests run under
   `--no-check`.
-- To run a single test file use `deno test --no-check path/to/test.ts`.
+- To run one test, `cd` into its package and run
+  `deno task test --filter "test name"`.
+  [Running one test by name](TESTING.md#running-one-test-by-name) describes
+  which name the pattern has to match. A bare
+  `deno test --no-check path/to/test.ts` drops the `--preload` and
+  permissions that the package's `deno-test` task passes. In
+  `runtime/runner`, for example, the preload installs the global fake
+  `clock`, and without it a test that calls `clock.settle()` fails with
+  `ReferenceError: clock is not defined`.
 - To test a specific package, `cd` into the package directory and run
   `deno task test`.
 
@@ -1055,7 +1097,7 @@ that has to stay, such as one in a test that shows the overflow, sits under a
 Every workspace package must be registered and configured correctly, or the test
 suite will break.
 
-1. **Register the package.** Add its path (e.g., `./packages/my-package`) to the
+1. **Register the package.** Add its path (e.g., `./runtime/my-package`) to the
    `"workspace"` array in the root `deno.jsonc`.
 
 2. **Include a test task.** The package's `deno.jsonc` **must** have a `"tasks"`
@@ -1088,7 +1130,7 @@ suite will break.
    }
    ```
 
-See `packages/utils` and `packages/leb128` for real examples.
+See `base/text` and `base/async` for real examples.
 If the new package needs registry dependencies, follow
 [Adding dependencies](DEPENDENCIES.md#adding-dependencies).
 
@@ -1123,8 +1165,8 @@ deno task integration patterns counter
 
 **Log files:** After servers start, check these if something goes wrong:
 
-- `packages/shell/local-dev-shell.log`
-- `packages/toolshed/local-dev-toolshed.log`
+- `runtime/shell/local-dev-shell.log`
+- `runtime/toolshed/local-dev-toolshed.log`
 
 **Advanced usage with --port-offset:**
 

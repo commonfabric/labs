@@ -13,9 +13,9 @@ running commands.
 
 Match the implementation mode to the task.
 
-For Pattern Factory Build, implement the top-level pattern deliverable described
-by the brief, spec, UX design, and UI design. Use sub-patterns only when they
-make the implementation clearer.
+For a top-level pattern, implement what the brief or spec describes, and any UX
+or UI design that comes with it. Use sub-patterns only when they make the
+implementation clearer.
 
 For an isolated sub-pattern task, write one sub-pattern with minimal UI first so
 data flow can be verified before polish.
@@ -33,9 +33,8 @@ testability.
 
 - The reads mandated by pattern-dev:
   `docs/common/ai/pattern-development-guide.md` (especially the SES authoring
-  limits and escape-hatch guidance), `docs/common/concepts/reactivity.md`,
-  `docs/common/patterns/new-cells.md`, and — in a Pattern Factory Build
-  workspace — `docs/common/ai/pattern-factory-build-guide.md`
+  limits and escape-hatch guidance), `docs/common/concepts/reactivity.md`, and
+  `docs/common/patterns/new-cells.md`
 - `docs/common/patterns/` - generalizable pattern idioms
 - `docs/common/concepts/action.md` - action() for local state
 - `docs/common/concepts/handler.md` - handler() for reusable logic
@@ -45,9 +44,6 @@ testability.
   their stored profile cell — `cf-avatar` + snapshot only as an offline
   fallback, roster built by join storing the live profile cell) when the pattern
   has multiple people or a current-user concept
-
-For Pattern Factory Build, do not start implementation until you have read the
-Build guide plus the two foundational reactivity/local-cell references above.
 
 ## Key Patterns
 
@@ -67,8 +63,8 @@ reactive value into `new Writable()`. If the pattern receives writable state,
 use that input cell directly; if a draft needs to copy from input state, copy in
 an action or another valid reactive/event context.
 
-For Pattern Factory Build, this rule applies to the top-level pattern input
-object too. Do not initialize local state with `new Writable(input.name || "")`,
+This rule applies to the top-level pattern input object too. Do not initialize
+local state with `new Writable(input.name || "")`,
 `new Writable(input.items || [])`, `new Cell(input.field)`, or helper calls
 around `input.field`. First decide whether each field is primary pattern state,
 static local UI state, or draft/editing state:

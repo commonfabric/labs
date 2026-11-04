@@ -10,15 +10,16 @@ import {
   decodeBaseline,
   encodeBaseline,
   type Finding,
-  incompatibilityPaths,
   parseArgs,
   partitionAcceptedBreaks,
   type PatternContract,
   readBaselines,
   selectItems,
   shouldRecord,
+  unusedAcceptances,
   writeBaseline,
 } from "./pattern-compat-lib.ts";
+import type { AcceptedContractBreak } from "./pattern-compat-accepted-breaks.ts";
 import {
   collectBaselineKeys,
   collectCompatibilityPaths,
@@ -52,7 +53,7 @@ const RESULT_WITHOUT_TITLE: JSONSchema = {
 describe("checkPattern", () => {
   it("rejects a result schema that drops a previously promised field", () => {
     const current = contract(EMPTY_ARGUMENT, RESULT_WITHOUT_TITLE);
-    const findings = checkPattern("system/home.tsx", current, [
+    const findings = checkPattern("system/home/home.tsx", current, [
       baseline("v1", EMPTY_ARGUMENT, RESULT_WITH_TITLE),
     ]);
 
@@ -60,25 +61,76 @@ describe("checkPattern", () => {
     expect(incompatible.length).toBe(1);
     expect(incompatible[0]).toMatchObject({
       kind: "incompatible",
-      pattern: "system/home.tsx",
+      pattern: "system/home/home.tsx",
       baseline: "v1",
     });
   });
 
+  it("reports each issue against a baseline as a finding of its own, two in one role included", () => {
+    const current = contract(EMPTY_ARGUMENT, {
+      type: "object",
+      properties: {},
+    });
+    const findings = checkPattern("system/home.tsx", current, [
+      baseline("v1", EMPTY_ARGUMENT, {
+        type: "object",
+        properties: { title: { type: "string" }, body: { type: "string" } },
+      }),
+    ]);
+
+    expect(findings.filter((f) => f.kind === "incompatible")).toEqual([
+      {
+        kind: "incompatible",
+        pattern: "system/home.tsx",
+        baseline: "v1",
+        path: "result.title",
+        detail: "result.title: existing result field was removed",
+      },
+      {
+        kind: "incompatible",
+        pattern: "system/home.tsx",
+        baseline: "v1",
+        path: "result.body",
+        detail: "result.body: existing result field was removed",
+      },
+    ]);
+  });
+
+  it("reports the whole path of a field whose name holds `: `", () => {
+    const current = contract(EMPTY_ARGUMENT, {
+      type: "object",
+      properties: {},
+    });
+    const findings = checkPattern("system/home.tsx", current, [
+      baseline("v1", EMPTY_ARGUMENT, {
+        type: "object",
+        properties: { "foo: bar": { type: "string" } },
+      }),
+    ]);
+
+    expect(findings.filter((f) => f.kind === "incompatible")).toEqual([{
+      kind: "incompatible",
+      pattern: "system/home.tsx",
+      baseline: "v1",
+      path: "result.foo: bar",
+      detail: "result.foo: bar: existing result field was removed",
+    }]);
+  });
+
   it("reports a missing baseline for a contract no file records", () => {
     const current = contract(EMPTY_ARGUMENT, RESULT_WITH_TITLE);
-    const findings = checkPattern("system/home.tsx", current, []);
+    const findings = checkPattern("system/home/home.tsx", current, []);
 
     expect(findings).toEqual([{
       kind: "missing-baseline",
-      pattern: "system/home.tsx",
+      pattern: "system/home/home.tsx",
       hash: contractHash(current),
     }]);
   });
 
   it("passes a contract that is recorded and compatible with every baseline", () => {
     const current = contract(EMPTY_ARGUMENT, RESULT_WITH_TITLE);
-    const findings = checkPattern("system/home.tsx", current, [
+    const findings = checkPattern("system/home/home.tsx", current, [
       baseline("v1", EMPTY_ARGUMENT, RESULT_WITH_TITLE),
     ]);
 
@@ -89,7 +141,7 @@ describe("checkPattern", () => {
     // v2 dropped `title` behind a declared break; v3 must still be proven
     // against v1, which is what a piece that has not opened since v1 holds.
     const current = contract(EMPTY_ARGUMENT, RESULT_WITHOUT_TITLE);
-    const findings = checkPattern("system/home.tsx", current, [
+    const findings = checkPattern("system/home/home.tsx", current, [
       baseline("v1", EMPTY_ARGUMENT, RESULT_WITH_TITLE),
       baseline("v2", EMPTY_ARGUMENT, RESULT_WITHOUT_TITLE),
     ]);
@@ -108,13 +160,13 @@ describe("checkPattern", () => {
       type: "undefined",
       scope: "bogus",
     } as unknown as JSONSchema);
-    const findings = checkPattern("system/home.tsx", current, []);
+    const findings = checkPattern("system/home/home.tsx", current, []);
 
     const invalid = findings.filter((f) => f.kind === "invalid-schema");
     expect(invalid.length).toBe(1);
     expect(invalid[0]).toMatchObject({
       kind: "invalid-schema",
-      pattern: "system/home.tsx",
+      pattern: "system/home/home.tsx",
       role: "result",
     });
   });
@@ -203,7 +255,7 @@ describe("baselineFileName", () => {
 
 describe("baseline encoding", () => {
   const stored = {
-    pattern: "system/home.tsx",
+    pattern: "system/home/home.tsx",
     argumentSchema: EMPTY_ARGUMENT,
     resultSchema: RESULT_WITH_TITLE,
   };
@@ -268,7 +320,7 @@ describe("baseline store", () => {
     await withTree(async ({ baselines }) => {
       const name = await writeBaseline(
         baselines,
-        "system/home.tsx",
+        "system/home/home.tsx",
         contractOf(),
         new Date("2026-07-28T15:45:00Z"),
       );
@@ -276,7 +328,7 @@ describe("baseline store", () => {
         `20260728T154500Z-${contractHash(contractOf())}.json`,
       );
 
-      const read = await readBaselines(baselines, "system/home.tsx");
+      const read = await readBaselines(baselines, "system/home/home.tsx");
       expect(read.length).toBe(1);
       expect(contractHash(read[0].contract)).toBe(contractHash(contractOf()));
     });
@@ -304,21 +356,21 @@ describe("baseline store", () => {
     await withTree(async ({ baselines }) => {
       await writeBaseline(
         baselines,
-        "system/home.tsx",
+        "system/home/home.tsx",
         contractOf(),
         new Date(),
       );
       await writeBaseline(
         baselines,
-        "notes/note.tsx",
+        "system/notes/note.tsx",
         contractOf(),
         new Date(),
       );
       await writeBaseline(baselines, "top.ts", contractOf(), new Date());
 
       expect(await collectBaselineKeys(baselines)).toEqual([
-        "notes/note.tsx",
-        "system/home.tsx",
+        "system/home/home.tsx",
+        "system/notes/note.tsx",
         "top.ts",
       ]);
     });
@@ -328,7 +380,7 @@ describe("baseline store", () => {
     await withTree(async ({ baselines }) => {
       await writeBaseline(
         baselines,
-        "system/home.tsx",
+        "system/home/home.tsx",
         contractOf(),
         new Date(),
       );
@@ -338,10 +390,10 @@ describe("baseline store", () => {
         contractOf(),
         new Date(),
       );
-      const files = ["packages/patterns/system/home.tsx"];
+      const files = ["patterns/system/home/home.tsx"];
       expect(await collectCompatibilityPaths(files, baselines, [])).toEqual([
-        "packages/patterns/system/home.tsx",
-        "packages/patterns/system/gone.tsx",
+        "patterns/system/home/home.tsx",
+        "patterns/system/gone.tsx",
       ]);
     });
   });
@@ -354,16 +406,16 @@ describe("baseline store", () => {
         contractOf(),
         new Date(),
       );
-      const files = ["packages/patterns/system/home.tsx"];
+      const files = ["patterns/system/home/home.tsx"];
       const paths = await collectCompatibilityPaths(files, baselines, [
-        "system/home.tsx",
+        "system/home/home.tsx",
         "system/gone.tsx",
         "system/removed.tsx",
       ]);
       expect(paths).toEqual([
-        "packages/patterns/system/home.tsx",
-        "packages/patterns/system/gone.tsx",
-        "packages/patterns/system/removed.tsx",
+        "patterns/system/home/home.tsx",
+        "patterns/system/gone.tsx",
+        "patterns/system/removed.tsx",
       ]);
     });
   });
@@ -392,10 +444,10 @@ describe("baseline store", () => {
 
 describe("selectItems", () => {
   const ITEMS = [
-    "packages/patterns/notes/extra.tsx",
-    "packages/patterns/notes/gone.tsx",
-    "packages/patterns/notes/note.tsx",
-    "packages/patterns/notes/other.tsx",
+    "patterns/system/notes/extra.tsx",
+    "patterns/system/notes/gone.tsx",
+    "patterns/system/notes/note.tsx",
+    "patterns/system/notes/other.tsx",
   ];
 
   it("selects every item when unfiltered", () => {
@@ -406,41 +458,12 @@ describe("selectItems", () => {
     expect(
       selectItems(ITEMS, ["notes/gone.tsx", "notes/other.tsx"]),
     ).toEqual([
-      "packages/patterns/notes/gone.tsx",
-      "packages/patterns/notes/other.tsx",
+      "patterns/system/notes/gone.tsx",
+      "patterns/system/notes/other.tsx",
     ]);
-    expect(selectItems(ITEMS, ["notes/note.tsx"])).toEqual([
-      "packages/patterns/notes/note.tsx",
+    expect(selectItems(ITEMS, ["system/notes/note.tsx"])).toEqual([
+      "patterns/system/notes/note.tsx",
     ]);
-  });
-});
-
-describe("incompatibilityPaths", () => {
-  it("reads the path off each issue line", () => {
-    expect(incompatibilityPaths(
-      "Pattern schemas are not backward compatible:\n" +
-        "- argument.topics[]: defaults changed below a constraint\n" +
-        "- result.crossrefs: existing result field was removed",
-    )).toEqual(["argument.topics[]", "result.crossrefs"]);
-  });
-
-  it("returns an unparseable issue line whole, so it matches no accepted path", () => {
-    expect(incompatibilityPaths("- previous argument has an invalid schema"))
-      .toEqual(["previous argument has an invalid schema"]);
-  });
-
-  it("returns nothing for a detail with no issue lines", () => {
-    expect(incompatibilityPaths("something else entirely")).toEqual([]);
-  });
-
-  it("reads a root issue as the bare role", () => {
-    // `schemaSubsetIssue` appends `.<property>` as it descends, so an issue
-    // about the schema itself carries the role it started with and no pointer.
-    // An entry forgiving one has to name it the same way.
-    expect(incompatibilityPaths(
-      "Pattern schemas are not backward compatible:\n" +
-        "- result: ifc changed",
-    )).toEqual(["result"]);
   });
 });
 
@@ -448,14 +471,13 @@ describe("partitionAcceptedBreaks", () => {
   const incompatible = (
     pattern: string,
     baseline: string,
-    ...issues: string[]
+    issue: string,
   ): Finding => ({
     kind: "incompatible",
     pattern,
     baseline,
-    detail: `Pattern schemas are not backward compatible:\n${
-      issues.map((issue) => `- ${issue}`).join("\n")
-    }`,
+    path: issue.slice(0, issue.indexOf(": ")),
+    detail: issue,
   });
   const REMOVED = "result.crossrefs: existing result field was removed";
   const UNRELATED =
@@ -464,7 +486,7 @@ describe("partitionAcceptedBreaks", () => {
     [acceptedBreakKey("a.tsx", "old"), new Set(["result.crossrefs"])],
   ]);
 
-  it("forgives a finding blaming only paths the entry names", () => {
+  it("forgives a finding blaming a path the entry names", () => {
     const finding = incompatible("a.tsx", "old", REMOVED);
     const { standing, forgiven } = partitionAcceptedBreaks(
       [finding],
@@ -474,27 +496,29 @@ describe("partitionAcceptedBreaks", () => {
     expect(forgiven).toEqual([finding]);
   });
 
-  it("keeps a finding that also blames a path the entry does not name", () => {
-    // One finding carries every issue found against that baseline. Forgiving by
-    // pair alone would suppress an unintended break landing beside the accepted
+  it("keeps an issue the entry does not name beside the one it forgives", () => {
+    // The proof reports every issue against the baseline. Forgiving by pair
+    // alone would suppress an unintended break landing beside the accepted
     // one, and `--update` would record the broken contract as the new baseline.
-    const finding = incompatible("a.tsx", "old", REMOVED, UNRELATED);
+    const named = incompatible("a.tsx", "old", REMOVED);
+    const unnamed = incompatible("a.tsx", "old", UNRELATED);
     const { standing, forgiven } = partitionAcceptedBreaks(
-      [finding],
+      [named, unnamed],
       accepted,
     );
-    expect(standing).toEqual([finding]);
-    expect(forgiven).toEqual([]);
+    expect(standing).toEqual([unnamed]);
+    expect(forgiven).toEqual([named]);
   });
 
-  it("keeps a finding whose detail names no path at all", () => {
-    // Fails closed: an unrecognised message shape is not forgiven on the
-    // strength of a format assumption.
+  it("keeps a finding that blames no path at all", () => {
+    // An issue at no path, such as a baseline schema invalid on its own
+    // terms, names nothing an entry could accept.
     const finding: Finding = {
       kind: "incompatible",
       pattern: "a.tsx",
       baseline: "old",
-      detail: "something this parser cannot read",
+      path: undefined,
+      detail: "previous result has an invalid schema: bad",
     };
     const { standing } = partitionAcceptedBreaks([finding], accepted);
     expect(standing).toEqual([finding]);
@@ -567,7 +591,82 @@ describe("shouldRecord", () => {
       kind: "incompatible",
       pattern: "a.tsx",
       baseline: "v1",
-      detail: "result.x removed",
+      path: "result.x",
+      detail: "result.x: existing result field was removed",
     }])).toBe(false);
+  });
+});
+
+describe("unusedAcceptances", () => {
+  const entry = (
+    baselines: string[],
+    paths: string[],
+  ): AcceptedContractBreak => ({
+    pattern: "a.tsx",
+    baselines,
+    paths,
+    reason: "decided",
+    record: "docs/history/a-break.md",
+  });
+  const forgivenAt = (baseline: string, path: string): Finding => ({
+    kind: "incompatible",
+    pattern: "a.tsx",
+    baseline,
+    path,
+    detail: `${path}: existing result field was removed`,
+  });
+  const examined = new Set(["a.tsx"]);
+
+  it("returns nothing when every pair and every named path forgave an issue", () => {
+    const entries = [entry(["v1", "v2"], ["result.x", "result.y"])];
+    expect(unusedAcceptances(entries, examined, [
+      forgivenAt("v1", "result.x"),
+      forgivenAt("v2", "result.y"),
+    ])).toEqual({ pairs: [], paths: [] });
+  });
+
+  it("returns a pair no issue was forgiven against", () => {
+    const entries = [entry(["v1", "v2"], ["result.x"])];
+    expect(unusedAcceptances(entries, examined, [
+      forgivenAt("v1", "result.x"),
+    ])).toEqual({ pairs: [acceptedBreakKey("a.tsx", "v2")], paths: [] });
+  });
+
+  it("returns a named path none of the entry's pairs blames", () => {
+    const entries = [entry(["v1", "v2"], ["result.x", "result.gone"])];
+    expect(unusedAcceptances(entries, examined, [
+      forgivenAt("v1", "result.x"),
+      forgivenAt("v2", "result.x"),
+    ])).toEqual({
+      pairs: [],
+      paths: [{
+        pattern: "a.tsx",
+        record: "docs/history/a-break.md",
+        paths: ["result.gone"],
+      }],
+    });
+  });
+
+  it("judges a path by the entry's own pairs, not by another entry's", () => {
+    const entries = [
+      entry(["v1"], ["result.x"]),
+      entry(["v2"], ["result.y"]),
+    ];
+    expect(
+      unusedAcceptances(entries, examined, [
+        forgivenAt("v1", "result.x"),
+        forgivenAt("v2", "result.x"),
+      ]).paths,
+    ).toEqual([{
+      pattern: "a.tsx",
+      record: "docs/history/a-break.md",
+      paths: ["result.y"],
+    }]);
+  });
+
+  it("judges no entry for a pattern this run did not examine", () => {
+    const entries = [entry(["v1"], ["result.x"])];
+    expect(unusedAcceptances(entries, new Set(["b.tsx"]), []))
+      .toEqual({ pairs: [], paths: [] });
   });
 });

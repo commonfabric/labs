@@ -10,7 +10,7 @@ derivation itself: which CFC section each `AH-CFC` clause rests on, which
 clauses go beyond the authority, which if any are narrower than it, and which CFC
 obligations no `AH-CFC` clause carries.
 
-It exists because the audit in `packages/cf-harness/audit` cites `AH-CFC`
+It exists because the audit in `runtime/cf-harness/audit` cites `AH-CFC`
 clauses as its authority. A reader following that citation should be able to
 reach the specification that actually governs, and should be able to tell when
 a finding rests on a CFC requirement and when it rests on a labs decision.

@@ -1,0 +1,2 @@
+{"date": "2026-12-01", "from": {"k": "unit", "s": "utils", "n": "framework-result-keys > spells each reserved key"}, "to": {"k": "unit", "s": "pattern-contract", "n": "framework-result-keys > spells each reserved key"}}
+{"date": "2026-12-01", "from": {"k": "unit", "s": "utils", "n": "framework-result-keys > enumerates every reserved key"}, "to": {"k": "unit", "s": "pattern-contract", "n": "framework-result-keys > enumerates every reserved key"}}

@@ -9,10 +9,10 @@ enforcement-mode vocabulary. The clauses below are the complete harness-facing
 obligations; the runner owns broader label, policy, and release semantics.
 
 The public transport types include the
-[prompt-slot binding](../../../packages/cf-harness/src/contracts/prompt-slot.ts),
-[invocation context](../../../packages/cf-harness/src/contracts/cfc-invocation-context.ts),
-[mediated observation](../../../packages/cf-harness/src/contracts/observation.ts),
-and [policy trace](../../../packages/cf-harness/src/contracts/policy-trace.ts)
+[prompt-slot binding](../../../runtime/cf-harness/src/contracts/prompt-slot.ts),
+[invocation context](../../../runtime/cf-harness/src/contracts/cfc-invocation-context.ts),
+[mediated observation](../../../runtime/cf-harness/src/contracts/observation.ts),
+and [policy trace](../../../runtime/cf-harness/src/contracts/policy-trace.ts)
 contracts.
 
 ## 1. Architectural split

@@ -93,5 +93,5 @@ hold the ones only a reviewer will catch.
 | `documentation.md`                | everything under `docs/`                       |
 | `github-workflows.md`             | `.github/workflows/`                           |
 | `skills.md`                       | `skills/`                                      |
-| `pattern-visible-declarations.md` | `packages/api`, and what mirrors it            |
+| `pattern-visible-declarations.md` | `base/api`, and what mirrors it                |
 | `cfc.md`                          | the CFC runtime sources and tests, the render boundaries, the harness's CFC enforcement, and `docs/specs/cfc-*.md` |

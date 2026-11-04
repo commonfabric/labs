@@ -1,0 +1,1 @@
+{"date":"2026-10-12","from":{"k":"unit","s":"runner","n":"wish commit-failure reporting > persists a link-origin label entry under `[UI]` when a wish resolves"},"to":{"k":"unit","s":"runner","n":"wish commit-failure reporting > stores no entry of its own for the resolved link under `[UI]` and reaches the wished-for label through it"}}

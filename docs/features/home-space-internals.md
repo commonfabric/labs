@@ -27,7 +27,8 @@ request-time readiness for browser, server, and CLI callers.
 
 The authenticated browser worker starts a read-only subscription to
 `Home.defaultPattern.profiles` during initialization. Its schema reads only
-`name`, `avatar`, and `initialNameApplied` from each profile. Roster changes warm
+`name`, `picture` (the picture's bytes), `avatar`, and `initialNameApplied`
+from each profile. Roster changes warm
 new entries; unrelated profile content is outside the subscription.
 
 The subscription belongs to the worker's authenticated identity, independently
@@ -46,7 +47,7 @@ session to write `{ [space]: "OWNER" }`. It closes that bootstrap session and
 mounts a fresh normal session so local sequence numbers and user/session scope
 partitions are not shared with bootstrap work. `session.open` remains
 read-only; the claim is an ordinary, conflict-checked ACL transaction. See
-`packages/runner/src/storage/v2.ts`.
+`runtime/runner/src/storage/v2.ts`.
 
 A populated Home space with no ACL document is left as it stands: the memory
 server grants a space's own DID OWNER only while the space has no history, so

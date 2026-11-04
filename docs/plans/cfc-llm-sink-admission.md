@@ -18,7 +18,7 @@ any confidentiality — a secret as much as a risk caveat — reaches the llm
 sinks without a policy evaluation running for them. The sink registry records
 that gap as a published deviation with a reason, an owner, and a retirement
 condition (`SINK_UNGATED_RATIONALES` in
-`packages/runner/src/cfc/sink-inventory.ts`), and the retirement condition is
+`runtime/runner/src/cfc/sink-inventory.ts`), and the retirement condition is
 this plan's subject: a public-only ceiling paired with an exchange rule that
 admits the material-risk family at llm-class boundaries.
 
@@ -35,7 +35,7 @@ Everything below is in the tree today; the mechanism is a composition of
 built parts plus policy decisions.
 
 - **The egress gate runs exchange rules.** `verifySinkRequestCeilings`
-  (`packages/runner/src/cfc/prepare.ts`) gates every recorded `sink-request`
+  (`runtime/runner/src/cfc/prepare.ts`) gates every recorded `sink-request`
   input whose sink declares a ceiling: it mints boundary atoms
   (`BoundaryContext{key:"sink"}` with the sink name, and
   `BoundaryContext{key:"sinkClass", value:"network"}`), runs the full
@@ -48,12 +48,12 @@ built parts plus policy decisions.
   access-time only (spec §8.12.7 route 1 — nothing persists), before the
   membership test.
 - **Public-only-plus-evidence already admits at a fetch-class sink.**
-  `packages/runner/test/max-enforcement-posture.test.ts` pins "admits a
+  `runtime/runner/test/max-enforcement-posture.test.ts` pins "admits a
   screened value: the §10.1 discharge is what fits the public-only ceiling"
   and its negative. The composition works end to end today where a ceiling is
   declared.
 - **The rule vocabulary.** `STANDARD_PROMPT_CAVEAT_POLICY`
-  (`packages/runner/src/cfc/standard-profile.ts`), shipped as the posture's
+  (`runtime/runner/src/cfc/standard-profile.ts`), shipped as the posture's
   `cfcPolicyRecords`, carries the §10.1 machinery: material-risk discharge on
   `InjectionSafe` integrity (sanitizer-only, path-local — the module doc says
   why those must not run at a transaction-wide boundary), tier upgrades
@@ -61,11 +61,11 @@ built parts plus policy decisions.
   `CaveatScreened{verdict:"pass"}` evidence, value-screened discharge, and the
   influence discharges scoped by `sinkClass` and `fieldRole` boundary guards.
 - **The class-scoped precedent.** The display-sink release ceiling (spec
-  §8.10.6; `packages/runner/src/cfc/render-ceiling.ts`) mints
+  §8.10.6; `runtime/runner/src/cfc/render-ceiling.ts`) mints
   `sinkClass:"display"` boundary atoms and the profile's display rules match
   them — the same shape this mechanism needs at an llm class.
 - **A total governance registry.** `MAX_ENFORCEMENT_SINK_GOVERNANCE`
-  (`packages/runner/src/runtime-presets.ts`) decides every sink `KNOWN_SINKS`
+  (`runtime/runner/src/runtime-presets.ts`) decides every sink `KNOWN_SINKS`
   names — a ceiling, or an explicit ungated release carrying its rationale —
   and a sink added without a decision is a compile error. The posture record
   every surface publishes carries the ungated set as a deviation, and the CFC
@@ -134,7 +134,7 @@ and sink classes) govern the shapes below.
   their `SINK_UNGATED_RATIONALES` rows.
 - [ ] An llm sink class. The gate reads each sink's class off the
   `SINK_CLASSES` table beside the inventory
-  (`packages/runner/src/cfc/sink-inventory.ts`, `sinkClassOf`), which the
+  (`runtime/runner/src/cfc/sink-inventory.ts`, `sinkClassOf`), which the
   `agent` sink minted its own class through; the four llm sinks still class
   `network`, so a rule scoped there would fire at the fetch sinks too. Give
   them a class of their own in that table; fetch and stream stay `network`.
@@ -150,7 +150,7 @@ and sink classes) govern the shapes below.
   `MAX_ENFORCEMENT_SINK_GOVERNANCE` comment,
   `docs/development/EXPERIMENTAL_OPTIONS.md`, the posture-record and audit
   goldens that assert the ungated set, and — once #6740 is in —
-  `docs/specs/cfc-enforcement-matrix.md` §4 and `packages/cf-harness/README.md`.
+  `docs/specs/cfc-enforcement-matrix.md` §4 and `runtime/cf-harness/README.md`.
 
 ## Spec references
 

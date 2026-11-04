@@ -22,7 +22,7 @@ for easier review and iteration.
 
 These are improvements that make the spec easier to implement and verify without changing core design goals:
 
-- Keep the Capabilities/API section aligned with the Memory v2 protocol (`docs/specs/memory-v2/04-protocol.md`, `packages/memory/v2.ts`) for endpoint names, selector shapes, and error semantics.
+- Keep the Capabilities/API section aligned with the Memory v2 protocol (`docs/specs/memory-v2/04-protocol.md`, `runtime/memory/v2.ts`) for endpoint names, selector shapes, and error semantics.
 - Clarify that labels are schema-derived and may vary by JSON path (`docs/specs/json_schema.md#ifc`), while `Labels.classification` remains a coarse/legacy summary.
 - Make “Receipt” vs “Commit” terminology explicit (current implementation centers on commit facts; richer receipts are described as future work).
 - Specify a canonical form for “label maps” (path addressing, ordering/canonicalization, and what must be committed vs what can be derived from schemas).

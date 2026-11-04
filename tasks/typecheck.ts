@@ -17,100 +17,193 @@ import { expandGlob, walkSync } from "@std/fs";
 import { parse as parseJsonc } from "@std/jsonc";
 import * as path from "@std/path";
 import { FragmentWriter } from "@commonfabric/test-support/records";
+import { packageDirOf, withoutPackageParent } from "./package-layout.ts";
 import { readWorkspaceMembers } from "./workspace-tests.ts";
 
 // Directory paths (no glob expansion needed).
 const DIRS = [
   ".claude/scripts",
+  "base/async",
+  "base/bytes",
+  "base/collections",
   "docs",
-  "packages/agent-runner",
-  "packages/api",
-  "packages/cf-harness",
-  "packages/cli",
-  "packages/connectors/agents/connector",
-  "packages/connectors/agents/debug-view",
-  "packages/connectors/agents/host",
-  "packages/connectors/github/activity-view",
-  "packages/connectors/github/connector",
-  "packages/connectors/github/host",
-  "packages/content-hash",
-  "packages/dashboard",
-  "packages/data-model",
-  "packages/data-model-schema",
-  "packages/deno-web-test",
-  "packages/felt",
-  "packages/fuse",
-  "packages/generated-patterns",
-  "packages/home-schemas",
-  "packages/html",
-  "packages/identity",
-  "packages/iframe-sandbox",
-  "packages/integration",
-  "packages/js-compiler",
-  "packages/leb128",
-  "packages/lib-shell",
-  "packages/llm",
-  "packages/memory",
-  "packages/navigation",
-  "packages/patterns/battleship",
-  "packages/patterns/budget-tracker",
-  "packages/patterns/contacts",
-  "packages/patterns/examples",
-  "packages/patterns/gideon-tests",
-  "packages/patterns/integration",
-  "packages/patterns/notes",
-  "packages/patterns/scrabble",
-  "packages/patterns/system",
-  "packages/patterns/test",
-  "packages/patterns/tools",
-  "packages/patterns/weekly-calendar",
-  "packages/piece",
-  "packages/pure-json",
-  "packages/runner",
-  "packages/runtime-client",
-  "packages/schema-generator/src",
-  "packages/shell",
-  "packages/spec-model",
-  "packages/state-inspector",
-  "packages/static/scripts",
-  "packages/static/test",
-  "packages/test-support",
-  "packages/toolshed",
-  "packages/ts-transformers/lint-plugins",
-  "packages/ts-transformers/src",
-  "packages/ts-transformers/test/diagnostics",
-  "packages/ts-transformers/test/reactive",
-  "packages/ui",
-  "packages/utils",
+  "runtime/agent-runner",
+  "base/api",
+  "runtime/cf-harness",
+  "runtime/cli",
+  "connectors/agents/connector",
+  "connectors/agents/debug-view",
+  "connectors/agents/host",
+  "connectors/github/activity-view",
+  "connectors/github/connector",
+  "connectors/github/host",
+  "base/content-hash",
+  "dashboard",
+  "base/data-model",
+  "base/data-model-schema",
+  "runtime/deno-web-test",
+  "base/felt",
+  "runtime/fuse",
+  "runtime/generated-patterns",
+  "base/home-schemas",
+  "runtime/html",
+  "base/identity",
+  "base/iframe-sandbox",
+  "runtime/integration",
+  "base/js-compiler",
+  "base/js-values",
+  "base/json",
+  "runtime/lib-shell",
+  "base/llm",
+  "base/logger",
+  "runtime/memory",
+  "runtime/navigation",
+  "base/pattern-contract",
+  "patterns/apps/annotation",
+  "patterns/apps/annotation-manager",
+  "patterns/apps/bookmarks",
+  "patterns/apps/budget-tracker",
+  "patterns/apps/cheeseboard",
+  "patterns/apps/contacts",
+  "patterns/apps/deep-research",
+  "patterns/apps/image-analysis",
+  "patterns/apps/self-improving-classifier",
+  "patterns/apps/shopping-list",
+  "patterns/apps/store-mapper",
+  "patterns/apps/topics/tools",
+  "patterns/apps/weekly-calendar",
+  "patterns/dev/cell-link",
+  "patterns/dev/default-app-ben",
+  "patterns/dev/checks",
+  "patterns/dev/factory-outputs/vehicles.ts",
+  "patterns/dev/gideon-tests",
+  "patterns/dev/nested-map-ifelse-test",
+  "patterns/dev/render-test",
+  "patterns/dev/self-reference-test",
+  "patterns/dev/test",
+  "patterns/examples/arbitrary-wish-example",
+  "patterns/examples/array-in-cell-with-remove-editable",
+  "patterns/examples/aside",
+  "patterns/examples/cf-chart-demo",
+  "patterns/examples/cf-checkbox-cell",
+  "patterns/examples/cf-code-editor-cell",
+  "patterns/examples/cf-picker",
+  "patterns/examples/cf-render",
+  "patterns/examples/cf-render-subpath",
+  "patterns/examples/cf-tags",
+  "patterns/examples/clock",
+  "patterns/examples/compiler",
+  "patterns/examples/drag-drop-demo",
+  "patterns/examples/examples.test.tsx",
+  "patterns/examples/fetch-json",
+  "patterns/examples/fetch-program-test",
+  "patterns/examples/form-demo",
+  "patterns/examples/group-chat-lobby",
+  "patterns/examples/group-chat-room",
+  "patterns/examples/image",
+  "patterns/examples/instantiate-pattern",
+  "patterns/examples/link-preview",
+  "patterns/examples/llm",
+  "patterns/examples/map-demo",
+  "patterns/examples/mobile-app-demo",
+  "patterns/examples/multi-option-selection",
+  "patterns/examples/nested-counter",
+  "patterns/examples/nested-mentionables",
+  "patterns/examples/output_schema",
+  "patterns/examples/pattern-index",
+  "patterns/examples/phonetic-speller",
+  "patterns/examples/profile-aware-writer",
+  "patterns/examples/profile-roster-live-demo",
+  "patterns/examples/queue-test",
+  "patterns/examples/reactive-now",
+  "patterns/examples/suggestion-test",
+  "patterns/examples/summary-index-tester",
+  "patterns/examples/text-swapper",
+  "patterns/examples/ui-variants",
+  "patterns/examples/wish-note-example",
+  "patterns/examples/write-and-run",
+  "patterns/integration",
+  "patterns/showcase/battleship",
+  "patterns/showcase/dice",
+  "patterns/showcase/scrabble",
+  "patterns/system/agent-queue",
+  "patterns/system/agent-run",
+  "patterns/system/backlinks-index",
+  "patterns/system/chatbot",
+  "patterns/system/common-fabric",
+  "patterns/system/default-app",
+  "patterns/system/favorites-manager",
+  "patterns/system/home",
+  "patterns/system/journal",
+  "patterns/system/knowledge-graph",
+  "patterns/system/link-tool",
+  "patterns/system/mentionables-inspector",
+  "patterns/system/notes",
+  "patterns/system/omnibox-fab",
+  "patterns/system/piece-grid",
+  "patterns/system/private-inbox",
+  "patterns/system/profile-create",
+  "patterns/system/profile-embed",
+  "patterns/system/profile-home",
+  "patterns/system/profile-look",
+  "patterns/system/profile-picker",
+  "patterns/system/quick-capture",
+  "patterns/system/self",
+  "patterns/system/shared-space",
+  "patterns/system/space-overview",
+  "patterns/system/suggestion",
+  "patterns/system/suggestion-history",
+  "patterns/system/summary-index",
+  "patterns/system/system-patterns.test.tsx",
+  "patterns/tools",
+  "runtime/pattern-index",
+  "runtime/piece",
+  "base/platform",
+  "runtime/runner",
+  "runtime/runtime-client",
+  "base/schema-generator/src",
+  "runtime/shell",
+  "base/spec-model",
+  "runtime/state-inspector",
+  "base/static/scripts",
+  "base/static/test",
+  "base/test-support",
+  "base/text",
+  "runtime/toolshed",
+  "base/ts-transformers/lint-plugins",
+  "base/ts-transformers/src",
+  "base/ts-transformers/test/diagnostics",
+  "base/ts-transformers/test/reactive",
+  "runtime/ui",
   "skills",
+  "scripts/implementation-progress",
+  "scripts/server-execution-topics",
   "tasks",
-  "tools",
 ];
 
 // Paths reached by pattern rather than named outright.
 const GLOBS = [
-  "packages/connectors/*.ts",
+  "connectors/*.ts",
   "scripts/*.ts",
-  "packages/static/*.ts",
-  "packages/patterns/*.ts",
-  "packages/patterns/*.tsx",
+  "base/static/*.ts",
+  "patterns/*.ts",
   // Iframe guests and the contracts they are written against compile as
   // ordinary browser modules, and `isPatternSource()` excludes them for
-  // exactly that reason, so this task is what checks them. Their generated
-  // pattern wrappers remain under the classic JSX environment owned by
+  // exactly that reason, so this task is what checks them. The patterns that
+  // host them remain under the classic JSX environment owned by
   // `deno task cfcheck`. The depth is open because a guest sits wherever the
   // pattern that hosts it puts it; the `iframe-` prefix is not, because that
   // is the condition under which the exclusion applies. A file of the same
   // name elsewhere is a pattern source cfcheck compiles, and checking it here
   // as well would put one file through two incompatible JSX environments.
-  "packages/patterns/iframe-*/**/guest.ts",
-  "packages/patterns/iframe-*/**/guest.tsx",
-  "packages/patterns/iframe-*/**/contract.ts",
+  "patterns/*/iframe-*/**/guest.ts",
+  "patterns/*/iframe-*/**/guest.tsx",
+  "patterns/*/iframe-*/**/contract.ts",
   // The tests of the pattern tree's plain modules. A `.test.ts` runs under
   // `deno test --no-check`, and a `.browser.test.ts` reaches its browser
   // through `deno bundle`, which transpiles rather than type-checks, so this
   // task is the only thing that opens either.
-  "packages/patterns/**/*.test.ts",
+  "patterns/**/*.test.ts",
   // `deno check` takes no exclusion, so a tree holding a `test/fixtures`
   // subtree it must not open is reached by glob rather than as one directory
   // entry: per tree, a pattern for the test files at any depth and another
@@ -118,10 +211,10 @@ const GLOBS = [
   // fixtures needs none of that and is named in `DIRS` above, which is where
   // the transformer's `test/diagnostics` and `test/reactive` sit;
   // `UNCHECKED_TREES` records the fixtures these patterns leave behind.
-  "packages/ts-transformers/test/*.ts",
-  "packages/ts-transformers/test/**/*.test.ts",
-  "packages/schema-generator/test/*.ts",
-  "packages/schema-generator/test/**/*.test.ts",
+  "base/ts-transformers/test/*.ts",
+  "base/ts-transformers/test/**/*.test.ts",
+  "base/schema-generator/test/*.ts",
+  "base/schema-generator/test/**/*.test.ts",
 ];
 
 /** Whether a repository-relative path is a test rather than a source file. */
@@ -158,7 +251,7 @@ export interface UncheckedTree {
  */
 export const UNCHECKED_TREES: readonly UncheckedTree[] = [
   {
-    tree: "packages/patterns",
+    tree: "patterns",
     matches: (file) => !isTestModule(file),
     because:
       "authored patterns compile under the classic-`h` JSX runtime rather " +
@@ -169,7 +262,7 @@ export const UNCHECKED_TREES: readonly UncheckedTree[] = [
       "a claim that coverage lives elsewhere cannot drift from where it is.",
   },
   {
-    tree: "packages/patterns",
+    tree: "patterns",
     matches: (file) => file.endsWith(".test.tsx"),
     because: "a pattern test: a pattern driven through `action(...)` that " +
       "`cf test` compiles through the runtime harness, as a pattern is " +
@@ -180,7 +273,7 @@ export const UNCHECKED_TREES: readonly UncheckedTree[] = [
       "so `deno task cfcheck` walks none of them.",
   },
   {
-    tree: "packages/schema-generator/test/fixtures",
+    tree: "base/schema-generator/test/fixtures",
     because:
       "the generator's fixture corpus: inputs the tests feed it, and the " +
       "outputs they compare against. These are data for the tests beside " +
@@ -191,38 +284,46 @@ export const UNCHECKED_TREES: readonly UncheckedTree[] = [
       "earns the exemption is being corpus, not being uncompilable.",
   },
   {
-    tree: "packages/ts-transformers/test/fixtures",
+    tree: "base/ts-transformers/test/fixtures",
     because: "the transformer's fixture corpus, exempt for the reason the " +
       "generator's is: inputs and expected outputs that are data for the " +
       "tests beside them, not modules the repository builds.",
   },
   {
-    tree: "packages/static/assets/types",
+    tree: "runtime/runner/test/fixtures/compile-cache-corpus",
+    because: "the compile-cache version's corpus: frozen copies of pattern " +
+      "sources that a build compiles through the runtime harness, under " +
+      "the classic-`h` JSX runtime patterns compile under, to hash what the " +
+      "compiler emits. They are data for that build step rather than " +
+      "modules the repository builds, and they stand as they were copied " +
+      "rather than as the tree now authors them.",
+  },
+  {
+    tree: "base/static/assets/types",
     because:
       "the declaration bundles handed to the in-memory pattern compiler. " +
       "The set is the ambient environment a pattern compiles against rather " +
       "than modules this repository builds, and it does not compile beside " +
-      "the tree it describes, since it redeclares what `packages/html` " +
+      "the tree it describes, since it redeclares what `runtime/html` " +
       "declares.",
   },
 ];
 
 /**
  * The owning scope of a checked path: the workspace member's name, or the
- * top-level directory of a path no member owns.
+ * top-level directory of a path no package owns.
  */
 export function scopeOfPath(checkPath: string): string {
+  const dir = packageDirOf(checkPath);
+  if (dir === undefined) return checkPath.split("/")[0] || "repo";
+  // A connector's members sit two levels under `connectors`. A module directly
+  // under it belongs to no member, and all such modules share the `connectors`
+  // scope.
   const parts = checkPath.split("/");
-  if (parts[0] === "packages") {
-    // A connector's members sit two levels under `packages/connectors`. A
-    // module directly under it belongs to no member, and all such modules
-    // share the `connectors` scope.
-    if (parts[1] === "connectors" && parts.length >= 4) {
-      return parts.slice(1, 4).join("/");
-    }
-    return parts[1] ?? "repo";
+  if (dir === "connectors" && parts.length >= 3) {
+    return parts.slice(0, 3).join("/");
   }
-  return parts[0] ?? "repo";
+  return withoutPackageParent(dir);
 }
 
 /** Every checked path, repository-relative, grouped by owning scope. */
@@ -373,7 +474,7 @@ interface GraphModule {
  * graph is read from the working tree alone, and a module Deno cannot parse
  * contributes no imports of its own.
  */
-function localImporters(
+export function localImporters(
   root: string,
   files: readonly string[],
 ): Map<string, string[]> {
@@ -431,26 +532,110 @@ function localImporters(
   }
 }
 
+/** The files that decide how every module in the tree resolves. */
+const ROOT_CONFIGURATION = ["deno.json", "deno.jsonc", "deno.lock"];
+
+/** Whether a path names a manifest, at the root or in a member. */
+function isManifest(file: string): boolean {
+  return /(^|\/)deno\.jsonc?$/.test(file);
+}
+
+/**
+ * What a change reaches through the local modules `roots` returns and
+ * everything they import, in the tree at `root`: every path the change
+ * reaches against the number of steps between it and the nearest changed
+ * path, or `everything` where the change touches what decides how every
+ * module resolves.
+ *
+ * A step is an import, from a module to the module importing it. A change
+ * reaches the path it touches, at no steps, and every module importing a
+ * reached module, one step further out. A manifest decides how the modules
+ * under it resolve, what they export, and which declaration files every
+ * check of them loads, so a reached member manifest reaches every module of
+ * the graph in its scope one step further out, and a declaration file it
+ * names in `compilerOptions.types` reaches the manifest one step further
+ * out. The root manifest and the lock file decide that for every module.
+ *
+ * The returned function answers from the imports as they stand in the
+ * tree; the graph is read, once, the first time it is asked about a change
+ * that touches something.
+ */
+export async function changeReach(
+  root: string,
+  roots: () => readonly string[],
+): Promise<
+  (changed: ReadonlySet<string>) => Map<string, number> | "everything"
+> {
+  const members = (await readWorkspaceMembers(path.join(root, "deno.jsonc")))
+    .map((member) => member.replace(/^\.\//, ""));
+  // Each declaration file a manifest names, against that manifest.
+  const ambient = new Map<string, string>();
+  for (const directory of ["", ...members]) {
+    const read = await readManifest(root, directory);
+    if (read === undefined) continue;
+    for (const types of read.manifest.compilerOptions?.types ?? []) {
+      ambient.set(path.join(directory, types), read.file);
+    }
+  }
+
+  let read:
+    | { importers: Map<string, string[]>; inScope: Map<string, string[]> }
+    | undefined;
+  const graph = () => {
+    if (read !== undefined) return read;
+    const importers = localImporters(root, [...roots(), ...ambient.keys()]);
+    const modules = new Set(roots());
+    for (const [file, importing] of importers) {
+      modules.add(file);
+      for (const importer of importing) modules.add(importer);
+    }
+    const inScope = new Map<string, string[]>();
+    for (const file of modules) {
+      const scope = scopeOfPath(file);
+      const held = inScope.get(scope);
+      if (held === undefined) inScope.set(scope, [file]);
+      else held.push(file);
+    }
+    read = { importers, inScope };
+    return read;
+  };
+
+  return (changed) => {
+    const hops = new Map<string, number>();
+    if (changed.size === 0) return hops;
+    const { importers, inScope } = graph();
+    let frontier = [...changed];
+    for (let distance = 0; frontier.length > 0; distance++) {
+      const next: string[] = [];
+      for (const at of frontier) {
+        if (hops.has(at)) continue;
+        if (ROOT_CONFIGURATION.includes(at)) return "everything";
+        hops.set(at, distance);
+        if (isManifest(at)) {
+          for (const file of inScope.get(scopeOfPath(at)) ?? []) {
+            next.push(file);
+          }
+        }
+        const naming = ambient.get(at);
+        if (naming !== undefined) next.push(naming);
+        for (const importer of importers.get(at) ?? []) next.push(importer);
+      }
+      frontier = next;
+    }
+    return hops;
+  };
+}
+
 /**
  * How a change maps onto the scopes whose check it can alter, for the paths
  * `byScope` holds in the tree at `root`.
  *
  * A scope's check opens the files its paths name and every local module
- * those import, so a change reaches the scope when it touches one of them:
- * the file itself, or any module it imports, directly or through other
- * modules, whatever package that module sits in. A changed path the scope
- * owns reaches it too, module or not, since a manifest the check reads or a
- * module that was deleted alters it as surely as an edit does.
- *
- * A manifest decides how the modules under it resolve, what they export,
- * and which declaration files every check of them loads, so a change to a
- * member's manifest, or to a declaration file it names in
- * `compilerOptions.types`, reaches whatever imports the member's modules as
- * well. The root manifest and the lock file decide that for every module,
- * and reach every scope.
- *
- * The returned function answers from the imports as they stand in the
- * tree; the graph is read, once, the first time it is asked.
+ * those import, so a change reaches the scope when it reaches one of them,
+ * as `changeReach()` reads reach. A changed path the scope owns reaches it
+ * too, module or not, since a manifest the check reads or a module that was
+ * deleted alters it as surely as an edit does. A change that reaches
+ * everything reaches every scope.
  */
 export async function scopesReached(
   root: string,
@@ -459,27 +644,17 @@ export async function scopesReached(
   const members = (await readWorkspaceMembers(path.join(root, "deno.jsonc")))
     .map((member) => member.replace(/^\.\//, ""));
   const excluded = await excludedByManifest(root, members);
-  // Each declaration file a manifest names, against that manifest.
-  const ambient = new Map<string, string>();
-  for (const directory of ["", ...members]) {
-    const read = await readManifest(root, directory);
-    for (const types of read?.manifest.compilerOptions?.types ?? []) {
-      ambient.set(path.join(directory, types), read!.file);
-    }
-  }
   const everyScope = [...byScope.keys()].sort();
 
-  let read:
-    | { scopeOf: Map<string, string>; importers: Map<string, string[]> }
-    | undefined;
-  const graph = () => {
-    if (read !== undefined) return read;
-    const scopeOf = new Map<string, string>();
+  let walked: Map<string, string> | undefined;
+  const scopeOf = () => {
+    if (walked !== undefined) return walked;
+    walked = new Map<string, string>();
     for (const [scope, paths] of byScope) {
       for (const checkPath of paths) {
         const absolute = path.join(root, checkPath);
         if (Deno.statSync(absolute).isFile) {
-          scopeOf.set(checkPath, scope);
+          walked.set(checkPath, scope);
           continue;
         }
         for (
@@ -490,46 +665,24 @@ export async function scopesReached(
         ) {
           const file = path.relative(root, entry.path);
           if (excluded.some((pattern) => pattern.test(file))) continue;
-          scopeOf.set(file, scope);
+          walked.set(file, scope);
         }
       }
     }
-    read = {
-      scopeOf,
-      importers: localImporters(root, [...scopeOf.keys(), ...ambient.keys()]),
-    };
-    return read;
+    return walked;
   };
+  const reach = await changeReach(root, () => [...scopeOf().keys()]);
 
   return (changed) => {
-    if (changed.size === 0) return [];
-    const { scopeOf, importers } = graph();
-    const reached = new Set<string>();
-    const seen = new Set<string>();
-    const pending = [...changed];
-    while (pending.length > 0) {
-      const at = pending.pop()!;
-      if (seen.has(at)) continue;
-      seen.add(at);
-      if (["deno.json", "deno.jsonc", "deno.lock"].includes(at)) {
-        return everyScope;
-      }
-      const manifest = /(^|\/)deno\.jsonc?$/.test(at);
-      const scope = scopeOf.get(at) ??
-        (changed.has(at) || manifest ? scopeOfPath(at) : undefined);
-      if (scope !== undefined && byScope.has(scope)) {
-        reached.add(scope);
-        if (manifest) {
-          for (const [file, owner] of scopeOf) {
-            if (owner === scope) pending.push(file);
-          }
-        }
-      }
-      const naming = ambient.get(at);
-      if (naming !== undefined) pending.push(naming);
-      for (const importer of importers.get(at) ?? []) pending.push(importer);
+    const reached = reach(changed);
+    if (reached === "everything") return everyScope;
+    const scopes = new Set<string>();
+    for (const at of reached.keys()) {
+      const scope = scopeOf().get(at) ??
+        (changed.has(at) || isManifest(at) ? scopeOfPath(at) : undefined);
+      if (scope !== undefined && byScope.has(scope)) scopes.add(scope);
     }
-    return [...reached].sort();
+    return [...scopes].sort();
   };
 }
 

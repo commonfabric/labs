@@ -1,0 +1,179 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "ShoppingItem": {
+        "properties": {
+          "aisleOverride": {
+            "default": "",
+            "type": "string"
+          },
+          "aisleSeed": {
+            "default": 0,
+            "type": "number"
+          },
+          "done": {
+            "default": false,
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "done",
+          "aisleSeed",
+          "aisleOverride"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "items": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/ShoppingItem"
+        },
+        "type": "array"
+      },
+      "storeLayout": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      }
+    },
+    "required": [
+      "items",
+      "storeLayout"
+    ],
+    "type": "object"
+  },
+  "pattern": "shopping-list.tsx",
+  "resultSchema": {
+    "$defs": {
+      "ShoppingItem": {
+        "properties": {
+          "aisleOverride": {
+            "default": "",
+            "type": "string"
+          },
+          "aisleSeed": {
+            "default": 0,
+            "type": "number"
+          },
+          "done": {
+            "default": false,
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "done",
+          "aisleSeed",
+          "aisleOverride"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Shopping list with AI-powered aisle sorting. #shoppingList",
+    "properties": {
+      "addItem": {
+        "asCell": [
+          "stream",
+          "stream"
+        ],
+        "properties": {
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "type": "object"
+      },
+      "addItemForOmnibot": {
+        "asCell": [
+          "stream",
+          "stream"
+        ],
+        "properties": {
+          "itemText": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "itemText"
+        ],
+        "type": "object"
+      },
+      "addItems": {
+        "asCell": [
+          "stream",
+          "stream"
+        ],
+        "properties": {
+          "itemNames": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "itemNames"
+        ],
+        "type": "object"
+      },
+      "doneCount": {
+        "type": "number"
+      },
+      "items": {
+        "items": {
+          "$ref": "#/$defs/ShoppingItem"
+        },
+        "type": "array"
+      },
+      "remainingCount": {
+        "type": "number"
+      },
+      "storeLayout": {
+        "type": "string"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "totalCount": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "items",
+      "summary",
+      "totalCount",
+      "doneCount",
+      "remainingCount",
+      "storeLayout",
+      "addItem",
+      "addItemForOmnibot",
+      "addItems"
+    ],
+    "type": "object"
+  }
+}

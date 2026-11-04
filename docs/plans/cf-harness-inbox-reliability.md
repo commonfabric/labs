@@ -280,7 +280,7 @@ pieces.
 Before each PR, run relevant tests and the package suite, mutate every new
 assertion and record what makes it fail, and run repository-wide
 `deno fmt --check`, `deno lint`, and applicable type and documentation checks
-with Deno 2.9.4. Run cf-harness suites unsandboxed. Update the live harness
-documentation and system map with behavior changes and review through
-`cf-review`. Readiness requires current-main ancestry, green CI on that head,
-and zero unanswered Cubic findings. Ben merges.
+with the Deno version pinned in `mise.toml`. Run cf-harness suites unsandboxed.
+Update the live harness documentation and system map with behavior changes and
+review through `cf-review`. Readiness requires current-main ancestry, green CI
+on that head, and zero unanswered Cubic findings. Ben merges.

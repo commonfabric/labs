@@ -5,19 +5,22 @@ import {
   unjustifiedDeletions,
 } from "./check-baselines-append-only.ts";
 
-const BASE = "packages/patterns/baselines";
+const BASE = "patterns/baselines";
 
 describe("baselineKeyOf", () => {
   it("recovers the pattern key a baseline belongs to", () => {
-    expect(baselineKeyOf(`${BASE}/system/home.tsx/20260101T000000Z-a.json`))
-      .toBe("system/home.tsx");
+    expect(
+      baselineKeyOf(`${BASE}/system/home/home.tsx/20260101T000000Z-a.json`),
+    )
+      .toBe("system/home/home.tsx");
     expect(baselineKeyOf(`${BASE}/top.tsx/20260101T000000Z-a.json`))
       .toBe("top.tsx");
   });
 
   it("ignores paths that are not baselines", () => {
-    expect(baselineKeyOf("packages/patterns/system/home.tsx")).toBeUndefined();
-    expect(baselineKeyOf(`${BASE}/system/home.tsx/README.md`)).toBeUndefined();
+    expect(baselineKeyOf("patterns/system/home/home.tsx")).toBeUndefined();
+    expect(baselineKeyOf(`${BASE}/system/home/home.tsx/README.md`))
+      .toBeUndefined();
     expect(baselineKeyOf("tasks/pattern-compat.ts")).toBeUndefined();
   });
 });
@@ -27,20 +30,20 @@ describe("unjustifiedDeletions", () => {
     // This is the laundering path the gate's safety argument depends on being
     // impossible: drop the baseline that proves the break, then --update.
     const offenders = unjustifiedDeletions(
-      [`${BASE}/system/home.tsx/20260101T000000Z-a.json`],
+      [`${BASE}/system/home/home.tsx/20260101T000000Z-a.json`],
       new Set(),
     );
     expect(offenders.length).toBe(1);
-    expect(offenders[0].key).toBe("system/home.tsx");
+    expect(offenders[0].key).toBe("system/home/home.tsx");
   });
 
   it("allows baselines to go when the pattern is retired in the same change", () => {
     const offenders = unjustifiedDeletions(
       [
         `${BASE}/system/gone.tsx/20260101T000000Z-a.json`,
-        "packages/patterns/system/gone.tsx",
+        "patterns/system/gone.tsx",
       ],
-      new Set(["packages/patterns/system/gone.tsx"]),
+      new Set(["patterns/system/gone.tsx"]),
     );
     expect(offenders).toEqual([]);
   });
@@ -50,7 +53,7 @@ describe("unjustifiedDeletions", () => {
       [
         `${BASE}/agent-sessions-debug/main.tsx/20260101T000000Z-a.json`,
       ],
-      new Set(["packages/connectors/agents/debug-view/main.tsx"]),
+      new Set(["connectors/agents/debug-view/main.tsx"]),
     );
     expect(offenders).toEqual([]);
   });
@@ -59,12 +62,12 @@ describe("unjustifiedDeletions", () => {
     const offenders = unjustifiedDeletions(
       [
         `${BASE}/system/gone.tsx/20260101T000000Z-a.json`,
-        `${BASE}/system/home.tsx/20260101T000000Z-b.json`,
+        `${BASE}/system/home/home.tsx/20260101T000000Z-b.json`,
       ],
-      new Set(["packages/patterns/system/gone.tsx"]),
+      new Set(["patterns/system/gone.tsx"]),
     );
     expect(offenders.length).toBe(1);
-    expect(offenders[0].key).toBe("system/home.tsx");
+    expect(offenders[0].key).toBe("system/home/home.tsx");
   });
 
   it("ignores unrelated deletions", () => {

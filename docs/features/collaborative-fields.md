@@ -41,7 +41,7 @@ by the server, beside the client-supplied display name.
 
 `cf-code-editor` joins only while collaborative editing is active and a
 `participantName` is set, through `RuntimeClient.joinPresenceRoom()`
-([`../../packages/runtime-client/README.md`](../../packages/runtime-client/README.md)).
+([`../../runtime/runtime-client/README.md`](../../runtime/runtime-client/README.md)).
 A room belongs to a field, not to a person: each editor joins the room of the
 field it is bound to, and everyone editing that field meets there, with one
 entry per browser tab. A tab with editors for two different fields is in both
@@ -81,6 +81,21 @@ changes; any other is tried again on the next editor focus. The editor fires
 `cf-presence-join`, with no detail, each time it joins its room, so a host that
 shows a presence failure can clear it once the editor has joined again.
 
+`cf-iframe` is the second consumer. A context name whose `resourceKinds` entry
+is `presence` grants the sandboxed guest the room of that context cell's
+resolved field, derived exactly as an editor's room is, and none of the cell's
+data. The guest chooses its own facets, such as a pointer position or a shape
+held mid-drag, and sets its own display name. What it is told of another
+member is that member's relay-assigned id, name, and facets; the DID the relay
+stamps on a record does not cross into the guest. A relay's refusal of the
+guest's join or of its publication reaches the guest in the relay's words,
+since it concerns what the guest did, and any other failure reaches it as a
+category alone.
+[`../../base/iframe-sandbox/README.md`](../../base/iframe-sandbox/README.md)
+covers the guest API, and
+[`../common/ai/iframe-pattern-guide.md`](../common/ai/iframe-pattern-guide.md)
+the authoring contract.
+
 ## Authority and lifecycle
 
 Memory is the only integration authority. A client submits an `apply-op` with a
@@ -89,10 +104,31 @@ same transaction stores the submitted projection, appends canonical integrated
 operations, advances the field cursor, and writes the ordinary materialized
 revision.
 
+Pattern code edits a collaborative field with `Writable<string>.applyChanges()`,
+which takes changes in the shape of a CodeMirror change spec against the value
+the handler read. The handler's commit carries them as an `apply-op` with no
+base, carrying the hash of the value read, beside the handler's read of the
+field. The edit lands only while the field still holds the value the handler
+read, at the field's current version with nothing to rebase over. Otherwise
+the read refuses the commit as an ordinary conflict, and the scheduler runs the
+handler again against the new text. Under server execution a wave drops the
+reads of what it seals, and the hash is what refuses a stale edit there.
+
+The commit's ordinary patch of the document leaves the edited field as it was,
+so that only the `apply-op` changes it, and Memory writes the field's new value
+when it integrates the edit. The handler's own view and the replica's pending
+layer show the changed text from the start. An `applyChanges()` on a field no
+editor has opened activates it from the value read.
+
 `cf-code-editor` submits every unconfirmed local update in one apply, and
 edits made while that apply is in flight go out in the next one, until none
 remain. A local update is confirmed by Memory or reported through the editor's
 error and reconciliation events; it is never dropped silently.
+
+Disabling collaboration keeps the editor read-only while it confirms pending
+operations and refreshes the bound Cell's materialized value. The operation
+stream remains the editor's display authority until that read completes. A
+failed refresh leaves the editor read-only and emits `cf-error`.
 
 One collaborative epoch owns a field until it is explicitly released or its
 entity is deleted. An ordinary write may change other paths, but it cannot
@@ -101,6 +137,42 @@ one ordered commit. Reopening the field creates a new epoch.
 
 The current implementation supports only the default branch. Collaborative
 queries, applies, and releases on child branches fail explicitly.
+
+## Anchors
+
+A collaborative field carries **anchors**: ranges of its value, each under a
+client-chosen id, that Memory moves with the text. Whenever an edit integrates,
+the codec maps every anchor of the field through it in the same transaction,
+so the stored set is always the set at the field head. Text inserted at either
+end of a range stays outside it, text inserted inside grows it, a replacement
+of the covered text keeps the range over the replacement, and a deletion that
+covers it leaves a point (`from === to`) where the text was. Anchors survive
+history pruning, since they ride the field head and every checkpoint rather
+than the operation log.
+
+A client adds or removes anchors on the `apply-op` that writes the field
+([`../specs/memory-v2/07-op-views-and-annotations.md`](../specs/memory-v2/07-op-views-and-annotations.md),
+§7.7.4). The ranges it adds are stated against the document the client holds,
+the field at the operation's base with the operation's own edits applied, so
+an editor anchors text its user has just typed in the edit that inserts it,
+and Memory maps the ranges through the operations integrated since before
+storing them: a stale base is merged the way a stale edit is. An operation
+whose payload changes nothing is how a client changes anchors alone; it
+advances no version, and an anchor is not an operation: the submitted and
+integrated projections hold nothing for it.
+
+Anchors reach readers two ways. Every operation snapshot an editor receives
+carries the field's current set, which can change at a cursor the editor has
+already applied. And Memory writes an **anchors document**, an ordinary entity
+at an id derived from the field's address (`of:op-anchors:` plus a hash of the
+entity id, scope and path) in the field's own scope, holding
+`{ epoch, version, anchors }`, in the transaction that changes the set; graph
+queries, watches, point-in-time reads and server-executed handlers read
+anchors from it as plain state. The document is deleted with the field's
+release or its entity, and a client cannot write it.
+
+An annotation on the field, a comment, a highlight or a bookmark, is an
+ordinary entity that names an anchor id and stores no position of its own.
 
 ## Checkpoints, reconnect, and reset
 

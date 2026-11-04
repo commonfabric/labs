@@ -16,7 +16,7 @@ is still ~1.4 s when every document's decoded form is already cached —
 schema narrowing dominates (~1.1 s inside the traverser), not decoding.
 
 The query evaluation cache (`QueryEvaluationCache`,
-`packages/memory/v2/query.ts`) removes that cost for one shape of repeat:
+`runtime/memory/v2/query.ts`) removes that cost for one shape of repeat:
 the same query, unchanged corpus, between two commits — a hit is ~2.5 ms at
 the same measurement level. Any commit rotates it, different query shapes
 share nothing through it, and the per-session refresh and extension paths
@@ -44,7 +44,7 @@ another traversal's recorded effects.
 - **The revision is known at load time.** Every read resolves a row
   carrying `row.seq` (and `op_index`) — the revision of the document's
   current state (`readState` → `readRowForBranch`,
-  `packages/memory/v2/engine.ts`). No watermark bookkeeping needs to be
+  `runtime/memory/v2/engine.ts`). No watermark bookkeeping needs to be
   added for the consult: the load the walk performs anyway supplies the
   key component.
 - **Revision-keyed caching at this seam has working precedent.** The
@@ -53,7 +53,7 @@ another traversal's recorded effects.
   idea one level up: the narrowing computed from that decoded form.
 - **The generic traversal has a single choke point.** Its schema narrowing
   funnels through one memo consult in `traverseWithSchema`
-  (`packages/runner/src/traverse.ts`), today keyed by document address
+  (`runtime/runner/src/traverse.ts`), today keyed by document address
   plus schema hash and scoped to a single traversal. The cross-evaluation
   layer is consulted at the same point. The schema-typed traversal is a
   separate path and does not pass this seam; Study 3 in #6473 found that it

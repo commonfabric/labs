@@ -40,19 +40,19 @@ the identity DID already is the home space DID.
 
 When a client opens a memory session it sends a signed `session.open`
 invocation. The server verifies the signature and returns the issuer DID, which
-becomes the session's `principal` (`packages/memory/v2/server.ts`,
+becomes the session's `principal` (`runtime/memory/v2/server.ts`,
 `openSession`). The principal is held on the session state and is fixed for the
 life of the session: resuming a session under a different principal is rejected
-(`packages/memory/v2/session-registry.ts`, `SessionRegistry.open`). The value is
+(`runtime/memory/v2/session-registry.ts`, `SessionRegistry.open`). The value is
 established by signature verification, so it is not something a client can
 assert on its own.
 
 ## The Available Signal
 
 Tracing produces nothing unless `OTEL_ENABLED` is set. It defaults to false
-(`packages/toolshed/env.ts`), and both the tracer provider and the HTTP
-middleware are gated on it (`packages/toolshed/lib/otel.ts`,
-`packages/toolshed/lib/create-app.ts`). While it is unset the tracer is a no-op
+(`runtime/toolshed/env.ts`), and both the tracer provider and the HTTP
+middleware are gated on it (`runtime/toolshed/lib/otel.ts`,
+`runtime/toolshed/lib/create-app.ts`). While it is unset the tracer is a no-op
 and none of the spans below exist, so enabling it on a deployment is a
 precondition for counting anything there.
 
@@ -63,10 +63,10 @@ alongside `space.did`:
 - `memory.subscriber.sync`, on session resume and on write-driven fanout.
 
 Both spans are exported through the OTLP collector
-(`packages/toolshed/lib/otel.ts`). Privileged first-party HTTP routes also
+(`runtime/toolshed/lib/otel.ts`). Privileged first-party HTTP routes also
 record the verified caller: the auth middleware stores it on the Hono context as
 `verifiedUserDid` and sets the same `user.did` span attribute
-(`packages/toolshed/middlewares/first-party-http-auth.ts`). Most other HTTP
+(`runtime/toolshed/middlewares/first-party-http-auth.ts`). Most other HTTP
 routes are unauthenticated and carry no user attribution at all.
 
 ## The Signal Does Not Cover Readers
@@ -93,13 +93,13 @@ the intent to be active is expressed.
 
 - **Trace sampling changes the meaning of the count.** `OTEL_TRACES_SAMPLER`
   defaults to `always_on` with `OTEL_TRACES_SAMPLER_ARG` of `1.0`
-  (`packages/toolshed/env.ts`), and nothing in the repository overrides them, so
+  (`runtime/toolshed/env.ts`), and nothing in the repository overrides them, so
   a deployment samples everything unless its environment says otherwise. Head
   sampling below 1.0 does not scale a distinct count the way it scales a volume
   metric, because an identity whose few spans are all dropped leaves the count
   entirely, and the loss cannot be corrected afterwards. `samplerFromEnv` falls
   back to `always_on` for an unknown sampler name and to a ratio of 1 for a
-  malformed argument (`packages/toolshed/lib/otel-sampler.ts`), so the count
+  malformed argument (`runtime/toolshed/lib/otel-sampler.ts`), so the count
   degrades only through a deliberate, valid ratio sampler.
 - **Readers are missing entirely.** See the section above. This is the largest
   known error in the count, and unlike the others its size is not knowable from

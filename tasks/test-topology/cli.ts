@@ -18,6 +18,7 @@
  * that are its own.
  */
 
+import { walk } from "@std/fs";
 import * as path from "@std/path";
 import type { CapabilityId } from "../ci-capabilities.ts";
 import {
@@ -30,13 +31,16 @@ import {
 } from "./suite.ts";
 
 /** Where the scripts live, repository-relative. */
-const CLI_DIR = "packages/cli/integration";
+const CLI_DIR = "runtime/cli/integration";
+
+/** The module `cf` runs, repository-relative. */
+const CLI_ENTRY = "runtime/cli/mod.ts";
 
 /** The one record surface all three suites share. */
 const SURFACE = [{ kind: "integration", scope: "cli" }] as const;
 
 /** Where a script's dispatch runs, repository-relative. */
-const PACKAGE_DIR = "packages/cli";
+const PACKAGE_DIR = "runtime/cli";
 
 /**
  * The arms of a script's `case "$SECTION" in` table, against whatever the
@@ -313,7 +317,8 @@ function cliFuseSuite(script: string): Suite {
     arms,
     unitOf: (arm) =>
       arm === WHOLE_SCRIPT_ARM ? undefined : `${FUSE_SCRIPT} ${arm}`,
-    sources: [`${CLI_DIR}/${FUSE_SCRIPT}`],
+    // The script runs the memory proxy beside it as well.
+    sources: [`${CLI_DIR}/${FUSE_SCRIPT}`, `${CLI_DIR}/fuse-memory-proxy.ts`],
   });
 }
 
@@ -323,25 +328,61 @@ function cliDenoSuite(): Suite {
     id: "cli-deno",
     needs: ["deno", "toolshed", "cf"],
     parts: [{
-      packageDir: "packages/cli",
+      packageDir: "runtime/cli",
       flags: ["-A"],
       junit: {
         kind: "integration",
         scope: "cli",
-        filePrefix: "packages/cli",
+        filePrefix: "runtime/cli",
       },
-      files: ["packages/cli/test/piece-integration.test.ts"],
+      files: ["runtime/cli/test/piece-integration.test.ts"],
     }],
   });
 }
 
 /** Every command-line suite, read from the working tree. */
 export async function loadCliSuites(root: string): Promise<Suite[]> {
+  const files = await cliFiles(root);
   return [
-    await cliCoreSuite(root),
-    cliFuseSuite(
-      await Deno.readTextFile(path.join(root, CLI_DIR, FUSE_SCRIPT)),
+    runningFiles(await cliCoreSuite(root), files),
+    runningFiles(
+      cliFuseSuite(
+        await Deno.readTextFile(path.join(root, CLI_DIR, FUSE_SCRIPT)),
+      ),
+      files,
     ),
     cliDenoSuite(),
   ];
+}
+
+/**
+ * Every file in the directory the shell scripts are in, repository-relative:
+ * the scripts, what they source, the patterns their steps deploy, and the
+ * programs they run.
+ */
+async function cliFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+  for await (
+    const entry of walk(path.join(root, CLI_DIR), { includeDirs: false })
+  ) {
+    files.push(path.relative(root, entry.path));
+  }
+  return files.sort();
+}
+
+/**
+ * Like `suite`, except that each of its units runs `files` and the module
+ * `cf` runs. A step can reach any file beside the scripts, by sourcing,
+ * calling, or deploying it, and every step runs the command line. Reading
+ * the scripts for the files each names would narrow this, but they name
+ * them in more than one way, and a name the reading missed would leave a
+ * test unrun without saying so, where a file claimed too widely costs only
+ * the time of the units it adds.
+ */
+function runningFiles(suite: Suite, files: readonly string[]): Suite {
+  const known = new Set(suite.units);
+  return {
+    ...suite,
+    sourcesOf: (unit) => known.has(unit) ? [...files, CLI_ENTRY] : [],
+  };
 }

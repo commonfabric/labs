@@ -166,6 +166,36 @@ describe("test-records", () => {
       ).toBeUndefined();
     });
 
+    it("follows a key moved out of the legacy directory", async () => {
+      const env = (name: string) =>
+        name === "CF_TEST_RECORDS_KEY_FILE"
+          ? join(root, "common-fabric", "test-records-key.json")
+          : undefined;
+      // Nothing at either place: still no key.
+      expect(readPersonalKey(env)).toBeUndefined();
+      await Deno.mkdir(join(root, "commonfabric"), { recursive: true });
+      await Deno.writeTextFile(
+        join(root, "commonfabric", "test-records-key.json"),
+        JSON.stringify(KEY),
+      );
+      expect(readPersonalKey(env)).toEqual(KEY);
+    });
+
+    it("follows no other missing path to the shared directory", async () => {
+      await Deno.mkdir(join(root, "commonfabric"), { recursive: true });
+      await Deno.writeTextFile(
+        join(root, "commonfabric", "test-records-key.json"),
+        JSON.stringify(KEY),
+      );
+      expect(
+        readPersonalKey((name) =>
+          name === "CF_TEST_RECORDS_KEY_FILE"
+            ? join(root, "elsewhere", "test-records-key.json")
+            : undefined
+        ),
+      ).toBeUndefined();
+    });
+
     it("returns undefined for a file that is not a key", async () => {
       const path = join(root, "not-a-key.json");
       await Deno.writeTextFile(path, "{}");

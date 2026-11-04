@@ -1,0 +1,198 @@
+{
+  "type": "cf-harness.run-report",
+  "runId": "cfc-audit-fixture.subagent.1",
+  "generatedAt": "2026-09-02T02:06:50.442Z",
+  "status": "completed",
+  "model": "fixture-model",
+  "cacheAffinity": "custom",
+  "modelProvider": "openai-compatible-gateway",
+  "modelAuthSource": "api-key",
+  "modelTurns": 1,
+  "cfcEnforcementMode": "enforce-explicit",
+  "createdAt": "2026-09-02T02:06:50.437Z",
+  "updatedAt": "2026-09-02T02:06:50.442Z",
+  "endedAt": "2026-09-02T02:06:50.442Z",
+  "terminalReason": "assistant_completed",
+  "finalAssistantText": "The child summarized the notes.",
+  "artifactRoot": "/Users/ben/.bb/worktrees/env_7rq66gp6pp/labs/runtime/cf-harness/audit/test/fixtures/runs/cfc-audit-fixture.subagent.1",
+  "transcriptPath": "/Users/ben/.bb/worktrees/env_7rq66gp6pp/labs/runtime/cf-harness/audit/test/fixtures/runs/cfc-audit-fixture.subagent.1/transcript.json",
+  "promptSlotBinding": {
+    "type": "https://commonfabric.org/cfc/atom/PromptSlotBound",
+    "source": {
+      "type": "cf-harness.cli-input",
+      "surface": "cfc-audit-fixture"
+    },
+    "role": "direct-command",
+    "kernelName": "cf-harness",
+    "surface": "cfc-audit-fixture",
+    "subject": "cfc-audit-fixture",
+    "eventId": "cfc-audit-fixture-prompt"
+  },
+  "cfcPolicySnapshot": {
+    "type": "cf-harness.cfc-policy-snapshot",
+    "version": 1,
+    "generatedAt": "2026-09-02T02:06:50.439Z",
+    "runId": "cfc-audit-fixture.subagent.1",
+    "cfc": {
+      "enforcementMode": "enforce-explicit",
+      "enforcementModeSource": "explicit-config",
+      "absenceBehavior": "permissive-if-absent",
+      "substrateStatus": "not-attested"
+    },
+    "runManifest": {
+      "present": false
+    },
+    "promptSlot": {
+      "present": true,
+      "bindingSource": "run-options",
+      "binding": {
+        "type": "https://commonfabric.org/cfc/atom/PromptSlotBound",
+        "source": {
+          "type": "cf-harness.cli-input",
+          "surface": "cfc-audit-fixture"
+        },
+        "role": "direct-command",
+        "kernelName": "cf-harness",
+        "surface": "cfc-audit-fixture",
+        "subject": "cfc-audit-fixture",
+        "eventId": "cfc-audit-fixture-prompt"
+      }
+    },
+    "parentTools": {
+      "allowance": "restricted",
+      "allowedToolIds": [
+        "bash",
+        "read_file",
+        "view_image",
+        "edit_file",
+        "write_file"
+      ]
+    },
+    "skillScripts": {
+      "allowedScripts": []
+    },
+    "subagents": {
+      "allowedProfiles": [],
+      "profileConfigs": []
+    },
+    "substrate": {
+      "sandbox": {
+        "kind": "docker-runsc-cfc",
+        "defaultWorkingDirectory": "/workspace",
+        "cfc": {
+          "runtimeRequested": true,
+          "workspaceMountPath": "/workspace"
+        }
+      },
+      "protectedXattrs": {
+        "expectedSandboxVisible": false,
+        "sandboxVisibility": "not-probed"
+      }
+    }
+  },
+  "policyTrace": {
+    "type": "cf-harness.policy-trace",
+    "version": 1,
+    "generatedAt": "2026-09-02T02:06:50.442Z",
+    "runId": "cfc-audit-fixture.subagent.1",
+    "cfcEnforcementMode": "enforce-explicit",
+    "cfcPolicySnapshotPath": "/Users/ben/.bb/worktrees/env_7rq66gp6pp/labs/runtime/cf-harness/audit/test/fixtures/runs/cfc-audit-fixture.subagent.1/policy-snapshot.json",
+    "cfcPolicySnapshotDigest": "sha256:bbfec8a8df53139e5d758e1cdaa2344a03747c5e506af7e0111737e8602316cb",
+    "decisionCounts": {
+      "total": 0,
+      "allowed": 0,
+      "warned": 0,
+      "denied": 0
+    },
+    "decisions": []
+  },
+  "policyTracePath": "/Users/ben/.bb/worktrees/env_7rq66gp6pp/labs/runtime/cf-harness/audit/test/fixtures/runs/cfc-audit-fixture.subagent.1/policy-trace.json",
+  "failureRecords": [],
+  "policyEventCounts": {
+    "total": 0,
+    "warnings": 0,
+    "denied": 0
+  },
+  "policyDecisionCounts": {
+    "total": 0,
+    "allowed": 0,
+    "warned": 0,
+    "denied": 0
+  },
+  "policyEvents": [],
+  "policyDecisions": [],
+  "timeline": [
+    {
+      "type": "cf-harness.timeline-entry",
+      "sequence": 1,
+      "kind": "run_started",
+      "at": "2026-09-02T02:06:50.437Z",
+      "status": "created"
+    },
+    {
+      "type": "cf-harness.timeline-entry",
+      "sequence": 2,
+      "kind": "transcript_message",
+      "at": "2026-09-02T02:06:50.440Z",
+      "transcriptIndex": 0,
+      "role": "system"
+    },
+    {
+      "type": "cf-harness.timeline-entry",
+      "sequence": 3,
+      "kind": "transcript_message",
+      "at": "2026-09-02T02:06:50.440Z",
+      "transcriptIndex": 1,
+      "role": "user"
+    },
+    {
+      "type": "cf-harness.timeline-entry",
+      "sequence": 4,
+      "kind": "transcript_message",
+      "at": "2026-09-02T02:06:50.441Z",
+      "transcriptIndex": 2,
+      "role": "assistant",
+      "modelTurn": 1
+    },
+    {
+      "type": "cf-harness.timeline-entry",
+      "sequence": 5,
+      "kind": "run_finished",
+      "at": "2026-09-02T02:06:50.442Z",
+      "status": "completed",
+      "terminalReason": "assistant_completed"
+    }
+  ],
+  "toolActivity": [],
+  "modelAttempts": [
+    {
+      "type": "cf-harness.model-attempt",
+      "operation": "chat.completions",
+      "endpoint": "https://llm.stage.commontools.dev/v1/chat/completions",
+      "attempt": 1,
+      "maxTransportAttempts": 2,
+      "startedAt": "2026-09-02T02:06:50.441Z",
+      "endedAt": "2026-09-02T02:06:50.441Z",
+      "durationMs": 0,
+      "request": {
+        "model": "fixture-model",
+        "messageCount": 2,
+        "toolCount": 5,
+        "nativeModelToolCount": 0,
+        "serializedBytes": 2848
+      },
+      "outcome": "http_response",
+      "httpStatus": 200,
+      "httpStatusText": "",
+      "responseHeaders": {
+        "content-type": "text/plain;charset=UTF-8"
+      },
+      "responseCompleteDurationMs": 0,
+      "providerId": "openai-compatible-gateway",
+      "runId": "cfc-audit-fixture.subagent.1",
+      "sequence": 1,
+      "modelTurn": 1
+    }
+  ],
+  "toolOutputs": []
+}

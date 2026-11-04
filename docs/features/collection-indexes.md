@@ -188,7 +188,7 @@ edit need not rebuild membership. A left-side key edit retargets that left
 occurrence's lookup. Removing a shared right match makes every participating
 left output unmatched while retaining those left occurrences.
 
-The [join acceptance tests](../../packages/runner/test/collection-index-join.test.ts)
+The [join acceptance tests](../../runtime/runner/test/collection-index-join.test.ts)
 exercise these transitions with local and cross-space right rows, and restart
 the composed join in an independent
 runtime before editing its right collection. Their observer counts demonstrate

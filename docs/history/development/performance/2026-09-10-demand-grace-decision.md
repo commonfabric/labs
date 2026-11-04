@@ -77,7 +77,7 @@ an adjacency heuristic, not proof that one notification caused one commit.
 
 ## Evidence and limits
 
-[Captured scripts, manifests, compact raw results, and replay instructions](../../../../tools/server-execution-topics/evidence/2026-09-10-demand-grace/README.md)
+[Captured scripts, manifests, compact raw results, and replay instructions](../../../../scripts/server-execution-topics/evidence/2026-09-10-demand-grace/README.md)
 bind each run to its head, helper, exact patch, runtime, command, and load. The
 runtime emission comparison verifies that the two source-file edits only
 change comments. Full outputs have durable retrieval paths and hashes; no

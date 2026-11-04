@@ -1,1 +1,3 @@
 {"date":"2026-09-18","from":{"k":"unit","s":"runner","n":"compile-cache version axis > CI compile-cache key mirrors the fingerprint input set"},"to":{"k":"unit","s":"tasks","n":"every compile byte cache is keyed on the compiler fingerprint"}}
+{"date":"2026-10-15","from":{"k":"unit","s":"tasks","n":"Status holds a pull request's measured sets to their baselines"},"to":{"k":"unit","s":"tasks","n":"Status judges the coverage gates of every run"}}
+{"date":"2026-10-15","from":{"k":"unit","s":"tasks","n":"Status records no tests, and ships the run's coverage from a push"},"to":{"k":"unit","s":"tasks","n":"Status ships its gates' records from every run, and the run's coverage from a push"}}

@@ -19,9 +19,9 @@ This block is LIVE: the change that moves a stage updates it here.
 | S2b — assignment refuses by default | on main (#6898) |
 | S3 — the shell opens `/<space>/top/42` | on main (#6896) |
 | S4 — `#42` in text | on main (#6887) |
-| S6 — graft onto Topics | items 1, 2, 3, 5 on main (#6937); item 4's numbering is done on the deployed board, and what remains of it is the operator source push that makes those topics publish the numbers they store |
+| S6 — graft onto Topics | items 1, 2, 3, 5 on main (#6937); item 4 done on the deployed board, its source push [on 2026-10-06](../history/topics-number-rollout-2026-10-06.md) |
 | S6b — a Topic stores its own number | on main (#7774) |
-| S6c — a Topic publishes the number it stores | built; awaiting review and merge |
+| S6c — a Topic publishes the number it stores | on main (#8214); deployed 2026-10-06 |
 | S5 — deferred, not scheduled | — |
 
 ### Built 2026-09-17: a Topic stores its own number
@@ -33,7 +33,7 @@ account of its own number. Dropping a declared input that deployed topics have
 a link bound at is accepted rather than refused — the candidate declares no
 path there, so the link is neither proved against anything nor written, and it
 stays in the raw argument document unreachable through the new projection. That
-is measured in `packages/cli/test/piece-link-input-visibility.test.ts`, beside
+is measured in `runtime/cli/test/piece-link-input-visibility.test.ts`, beside
 the case that bounds it: a candidate may not stop PUBLISHING a path, and a
 topic never published this one.
 
@@ -74,7 +74,7 @@ procedure. The procedure that ran, including what it had not been rehearsed
 for, is recorded at
 [`namespace-backfill.md`](../history/skills/topics/references/namespace-backfill.md);
 the library's general procedure is in
-`packages/patterns/collection-naming/README.md`.
+`patterns/product/collection-naming/README.md`.
 
 Two things it leaves as they were, and one it leaves behind. The namespace is
 still what a number is allocated over, and `namesTable` is still the reverse
@@ -91,7 +91,7 @@ Topics now does too.
 The stages the table marks on main give a collection that adopts `naming.ts`
 member names end to end: allocation, resolution at the CLI, the shell opening
 `/<space>/top/42`, `#42` in the editor. **That is not the same as the work
-being finished.** Five things are outstanding, and each still needs
+being finished.** Four things are outstanding, and each still needs
 execution.
 
 **Decided 2026-09-15: each member stores its own member name.** Built for the
@@ -148,8 +148,8 @@ by any of this: the board allocates a number on every create, records it in
 `names`, lists it beside its topic in `namesTable`, `addTopic` returns the name
 it allocated, and `top/<n>` resolves. Decision 5 governs how a number renders.
 
-Updating the topics on the deployed board is an operator step, not part of the
-change that lands this in the repository.
+The deployed board and every topic on it run this source as of 2026-10-06, and
+[the rollout record](../history/topics-number-rollout-2026-10-06.md) says how they got there.
 
 1. **Decision 14 — a member takes one input naming its board.** Ruled, and
    measured buildable in
@@ -174,28 +174,13 @@ change that lands this in the repository.
    so the two belong in one pass. `boardNames` is no longer among them on a
    Topic; `boardCrossrefs` and `mentionable` are.
 
-3. **S6 item 4 — the operator source push.** The numbering half is done: the
-   deployed board holds a complete namespace over 1 through 555, the `top` slug
-   is bound, and every topic stores the number the namespace holds for it. What
-   remains is pushing the pattern source that makes those topics publish what
-   they store — a source update for the board and one per topic, and the step
-   this stage enables rather than performs. Until it runs, a deployed topic
-   stores its number and publishes none, so that board shows no badge, no pill
-   number and nothing for `#42`. The sequence, and the contract breaks it
-   needs, are recorded under S6 below; #6969 was closed by #7178, and the
-   patched check accepted the board source retrieved from a local snapshot of
-   the Topics board taken August 31; an optional `unknown` member demand no
-   longer refuses. The
-   [issue 6969 gates record](../history/development/issue-6969-upgrade-gates-2026-09-09.md)
-   records both.
-
-4. **The `naming` declaration has no reader** (#6986, #6994). Every collection
+3. **The `naming` declaration has no reader** (#6986, #6994). Every collection
    publishes `NamingPolicy`; nothing consumes it. Member resolution applies no
    grammar, no renderer reads `compact`, and `name` is never set. It is an
    extension point with nothing extending through it, recorded in the spec's
    "Deliberately open" rather than claimed as working.
 
-5. **The citation surfaces are partial.** A mention pill shows the name carried
+4. **The citation surfaces are partial.** A mention pill shows the name carried
    by the universe row standing for its destination, so what it shows means
    something only through the collection whose universe is being read, and a
    destination no row stands for shows none whatever it publishes (#6985); a URL
@@ -227,7 +212,7 @@ ruled. A later reversal is a decision recorded here, not a discovery.
    personal binding is built. What the deferral accepts: a space-level name
    whose path selects a member stamps that member's root —
    `cf piece set-slug two /top/2`, which
-   `packages/cli/test/setPieceSlug.test.ts` covers as "names the member a
+   `runtime/cli/test/setPieceSlug.test.ts` covers as "names the member a
    slug's path selects, and stamps that member with the name" — so a member
    answers to `<space>/two` and `<space>/top/2` at once, and a visit by
    identity is rewritten to the first. The spec's step 1 records the same
@@ -258,9 +243,9 @@ ruled. A later reversal is a decision recorded here, not a discovery.
 10. **Estuary is untouched**, read-only calls included, until Mike directs.
     Deployment and the production backfill are Mike's steps, rehearsed on a
     clone first.
-11. **The work lands in `packages/patterns/collection-naming/`**: `naming.ts`
+11. **The work lands in `patterns/product/collection-naming/`**: `naming.ts`
     (the library a collection pattern calls), `board.tsx` and `item.tsx` (the
-    exemplar the demos run on), and tests. `packages/patterns/topics` is not
+    exemplar the demos run on), and tests. `patterns/apps/topics` is not
     edited until S6.
 12. **The Topics-shape rehearsal is a test-only board** in that directory,
     composing the real `Topic` from `../topics/topic.tsx` unmodified through
@@ -315,7 +300,7 @@ round through `stage-loop`. Nothing merges without Mike.
 
 ### S1 — The library and the exemplar board own a member namespace
 
-Scope: `packages/patterns/collection-naming/` (new): `naming.ts`, `board.tsx`,
+Scope: `patterns/product/collection-naming/` (new): `naming.ts`, `board.tsx`,
 `item.tsx`, `topics-shape.test.tsx`, unit tests, `README.md`.
 
 1. `naming.ts` exports what a collection pattern calls: allocate the next
@@ -357,7 +342,7 @@ Scope: `packages/patterns/collection-naming/` (new): `naming.ts`, `board.tsx`,
 10. The Topics-shape rehearsal passes: a test-only board over the unmodified
     `Topic` pattern, wired through `naming.ts`, allocates on create,
     backfills a pre-existing list, and proves the names-table lookup and the
-    reverse lookup for a given topic. `topic.tsx` and `topics/main.tsx` are
+    reverse lookup for a given topic. `topic.tsx` and `apps/topics/main.tsx` are
     untouched by the stage.
 11. `README.md` describes the library and the exemplar; `cfcheck`, pattern
     tests, and coverage green.
@@ -368,8 +353,8 @@ Topics-shape test is green in the same run.
 
 ### S2 — `top/42` resolves at the CLI
 
-Scope: `packages/piece/src/slugs.ts`, `packages/runner/src/slug-resolution.ts`,
-`packages/cli` (`set-slug`, README, completion table).
+Scope: `runtime/piece/src/slugs.ts`, `runtime/runner/src/slug-resolution.ts`,
+`runtime/cli` (`set-slug`, README, completion table).
 
 1. `cf piece set-slug top <board>/names` writes a slug at a non-root path,
    and `cf piece slugs` lists it, naming the containing piece. Both demos run
@@ -386,7 +371,7 @@ Scope: `packages/piece/src/slugs.ts`, `packages/runner/src/slug-resolution.ts`,
 3. A slug resolving to a non-piece with no further path fails with a message
    naming the containing piece.
 4. `//<space>/top/999` fails with "no member 999 in top".
-5. Unit tests in `packages/piece/test/slug.test.ts` and `packages/cli/test`.
+5. Unit tests in `runtime/piece/test/slug.test.ts` and `runtime/cli/test`.
 
 Demo: `cf cell get //<space>/top/2 title` on the local exemplar board.
 
@@ -412,7 +397,7 @@ The first half of the spec's step 2.
    cross-session pair: the claim's read joins the commit's read set, so a
    commit another writer overtakes is rejected and `editWithRetry` re-runs
    the body against what that writer left, which then declines. That is the
-   shape `packages/runner/src/ensure-space-root.ts` states for the space
+   shape `runtime/runner/src/ensure-space-root.ts` states for the space
    root.
 2. Whether a synced read inside `editWithRetry` becomes a commit precondition
    is settled by that test and recorded in the spec's open-questions list.
@@ -436,10 +421,10 @@ that map, so those two shape what it can say about a member.
 
 ### S3 — The shell opens `/<space>/top/42`
 
-Scope: `packages/navigation` (the member in a view and its URL),
-`packages/runtime-client` (the resolution the worker answers),
-`packages/lib-shell` (the hop that carries it, and the piece cache it keys),
-`packages/shell`, and shell integration tests.
+Scope: `runtime/navigation` (the member in a view and its URL),
+`runtime/runtime-client` (the resolution the worker answers),
+`runtime/lib-shell` (the hop that carries it, and the piece cache it keys),
+`runtime/shell`, and shell integration tests.
 
 1. `/<space>/top/42` opens the member piece; the tab shows its title. The
    exemplar item is the member; the Topics-shape test covers the board side
@@ -456,7 +441,7 @@ Scope: `packages/navigation` (the member in a view and its URL),
 
 ### S4 — `#42` in text
 
-Scope: `packages/ui` cf-code-editor mention completion and pill; the exemplar
+Scope: `runtime/ui` cf-code-editor mention completion and pill; the exemplar
 (mentionable rows and the item output both carry the member's name as
 `shortName`, which is the one property the editor reads at both ends of a
 mention).
@@ -474,7 +459,7 @@ mention).
 
 Mike's call, after S4.
 
-1. `topics/main.tsx` adopts `naming.ts` with the wiring the rehearsal board
+1. `apps/topics/main.tsx` adopts `naming.ts` with the wiring the rehearsal board
    already carries; the diff is the rehearsal board's diff against today's
    board and nothing more.
 2. `topic.tsx` gains the item-side display the exemplar item proved: the
@@ -488,7 +473,7 @@ Mike's call, after S4.
    survivor is the one both boards derive their universe through.
 
    Recorded: the survivor is one derivation, `mentionableIndex` and
-   `mentionableRowsOf` in `packages/patterns/collection-naming/mentionable.ts`,
+   `mentionableRowsOf` in `patterns/product/collection-naming/mentionable.ts`,
    which both boards import; `MentionableRow` is the row type both publish, and
    `TopicMentionableRow` and `ItemMentionableRow` are gone. Neither board could
    import the other's copy: a pattern module carries its imports into its own
@@ -499,101 +484,34 @@ Mike's call, after S4.
 4. The production backfill has run on the deployed board: the namespace is
    complete over 1 through 555 with no duplicates and no gaps, the `top` slug
    is bound, and every topic stores the number the namespace holds for it
-   (audited 2026-09-28). What that board does not yet do is publish those
-   numbers, which is a source push per topic and one for the board, held to the
-   same rehearsal and authorization rules as the sequence below.
+   (audited 2026-09-28). The source push that makes the board's topics publish
+   those numbers ran on 2026-10-06, topics first and the board after them;
+   [the rollout record](../history/topics-number-rollout-2026-10-06.md) has how
+   it ran and what it checked.
 
-   The backfill is rehearsed on a clone per
-   `../development/space-clone-rehearsal.md`; the deployed vintage includes
-   #6827 before the backfill runs. The decision items 1-3 could not make for it
-   is made by the 2026-09-17 entry above: a topic stores its own number, and
-   `backfillNames` asks each topic filed before the namespace to store the one
-   the namespace holds for it, so no per-topic `cf piece link` remains in the
-   sequence. Both rehearsals ran the link-bind shape — the first of 2026-09-05,
-   recorded at
-   `../history/plans/collection-naming-s6-backfill-rehearsal-2026-09-05.md`, and
-   its rerun below — so what they measured of the numbering step itself no
-   longer describes it; what they measured of the two source legs does, and
-   those legs are unchanged. The procedure that ran, and which of its steps
-   have a clone run behind them, is recorded at
-   `docs/history/skills/topics/references/namespace-backfill.md`.
+   Both halves of this item are done, and the procedures they ran are records
+   rather than steps to repeat. The numbering backfill's rehearsals are at
+   `../history/plans/collection-naming-s6-backfill-rehearsal-2026-09-05.md` and
+   `../history/plans/collection-naming-s6-backfill-rehearsal-rerun-2026-09-06.md`,
+   the procedure that ran at
+   `docs/history/skills/topics/references/namespace-backfill.md`, and the board
+   check behind its contract decisions in the
+   [issue 6969 gates record](../history/development/issue-6969-upgrade-gates-2026-09-09.md).
+   The source push is in
+   [the rollout record](../history/topics-number-rollout-2026-10-06.md). A later
+   update to the deployed topics follows
+   `skills/topics/references/pattern-updates.md` and
+   `../development/space-clone-rehearsal.md`, which govern every Topics source
+   change.
 
-   **What the rehearsals measured.** The step is rehearsed
-   twice; the second run, after the positional-link fix, is recorded at
-   `../history/plans/collection-naming-s6-backfill-rehearsal-rerun-2026-09-06.md`
-   and measured what the first could not. On a clone holding three topics, the
-   forced board deploy verified `removed 0`, moved the board's argument
-   document by one key (`names: {}`), and left those topics' titles and bodies
-   intact; the mention-index transition cost eleven commits and one written key
-   per topic. Three topics is not 125, and the record says which of its figures
-   scale and which are counts of that run.
-
-   The sequence that makes running it routine rather than a one-way door:
-
-   1. Check the deployed board with `setsrc --check` before writing to it.
-      #6969, that check exhausting the heap against the deployed board, was
-      closed by #7178. The
-      [issue 6969 gates record](../history/development/issue-6969-upgrade-gates-2026-09-09.md)
-      ran the patched check over a local snapshot of the board taken August
-      31, where it accepted the retrieved board source; production was not
-      contacted.
-   2. Deploy the board leg, which is refused over topics filed before the
-      namespace and needs `--dangerously-allow-incompatible-schema` until a
-      general mechanism for adding a property to existing data exists.
-   3. Update each topic to a pattern that declares the `shortName` input and
-      the `recordName` verb, then run `backfillNames` until its `pending` list
-      comes back empty. An empty `pending` says every listed topic publishes
-      the number the namespace holds for it, and an empty `assigned` says the
-      namespace holds every listed topic; the step reads a topic's published
-      `shortName` to tell a stored number from none. The
-      operator procedure has the whole of it. Every topic takes the source
-      update BEFORE the step runs: a send to a path holding no stream is an
-      ordinary write, so the step's event lands as data in an un-updated
-      topic's result. Run the source updates from a host: laptop runs died 4-6
-      minutes in during the 2026-08-28 migration.
-   4. Verify by reading both the board's index and the member addresses. In
-      the rerun the fixed board's index agreed with its members at all three
-      reads; the two reads that disagreed were on the instrument board
-      carrying the walk #6987 replaced, and no run there attributed the
-      staleness to a mechanism. So the rerun establishes no divergence for the
-      code this graft deploys, and no cause for the one it saw. Reading both
-      is what would show a divergence if one appeared, and costs a command.
-
-   **The board leg of the deploy needs
-   `--dangerously-allow-incompatible-schema`.** `setsrc --check` refuses it over
-   a board holding topics filed before the namespace, because the typed
-   `topics.0.shortName` demand constrains an unconstrained producer. An open
-   producer contract permits any value at an undeclared
-   property. A new string demand narrows that contract even when optional:
-   absence is allowed, but a present non-string value is not. An optional
-   `unknown` demand adds no value restriction and is compatible. The retained
-   link proof uses producer-owned durable metadata; a schema carried by the
-   alias is not a producer guarantee. The
-   [issue 6969 gates record](../history/development/issue-6969-upgrade-gates-2026-09-09.md)
-   replays the August 31 snapshot and separates this refusal, which stands,
-   from the two false ones the checker no longer raises. The flag is held
-   behind explicit team authorization by
-   `skills/topics/references/pattern-updates.md`, so this step
-   carries a decision it did not carry before. What the forced deploy leaves
-   behind is measured, in the 2026-09-06 rerun below.
-
-   **Why the gates said otherwise.** `deno task pattern-compat` and
-   `deno task pattern-vintage` are both clean and neither can see this: the
-   first judges a pattern's declared contract against the contracts it has
-   declared before, the second replays the pattern's own stored documents, and
-   neither examines the schema recorded on a link into a SIBLING piece — which
-   is the check that fires. A gate passing is not the claim; the claim is what
-   the gate examines, and the only instrument that examines this one is
-   `setsrc --check` against the deployment itself.
-
-   The board moves FIRST, which is what clears the topic leg's own
-   `mentionable[].shortName` refusal; the topic leg then needs the flag once
-   itself, for the mention universe narrowing to a readable handle
-   (`../history/topics-mentionable-readonly-break.md`), and is proven on every
-   update after that one. The deploy also needs
-   `--root` at or above `packages/patterns`, because the board imports the
-   naming library from a sibling directory and the default program root is the
-   entry's own.
+   **What the gates cannot see.** `deno task pattern-compat` and
+   `deno task pattern-vintage` can both be clean over an update that
+   `setsrc --check` refuses: the first judges a pattern's declared contract
+   against the contracts it has declared before, the second replays the
+   pattern's own stored documents, and neither examines the schema recorded on
+   a link into a SIBLING piece. The only instrument that examines that is
+   `setsrc --check` against the deployment itself, so a Topics update runs it
+   before writing.
 5. `skills/topics/references/naming.md` describes `top/42` addressing.
 
 ### S5 — Deferred, not scheduled

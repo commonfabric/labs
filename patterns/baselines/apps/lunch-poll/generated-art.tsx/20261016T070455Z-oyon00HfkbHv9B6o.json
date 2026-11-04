@@ -1,0 +1,64 @@
+{
+  "argumentSchema": {
+    "description": "Inputs for the generated thumbnail sub-pattern.\n\nUse JSX when embedding only the UI: `<GeneratedArt prompt={title} />`.\nInstantiate with a function call when the parent needs `imageDataUrl` or\n`fetchState`.",
+    "properties": {
+      "prompt": {
+        "description": "Text used to build the food-illustration art-director prompt.",
+        "type": "string"
+      },
+      "shouldGenerate": {
+        "default": true,
+        "description": "Whether this instance may call the image generation endpoint.",
+        "type": "boolean"
+      },
+      "sourceUrl": {
+        "default": "",
+        "description": "Safe persisted image URL or data URI; when present, generation is skipped.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "prompt"
+    ],
+    "type": "object"
+  },
+  "pattern": "lunch-poll/generated-art.tsx",
+  "resultSchema": {
+    "$defs": {
+      "GeneratedArtFetchState": {
+        "enum": [
+          "stored",
+          "generated",
+          "pending",
+          "error",
+          "requested",
+          ""
+        ]
+      }
+    },
+    "description": "Outputs for the generated thumbnail sub-pattern.\n\n`[UI]` is a static VNode. The fallback image remains a static CSS\n`background-image`; the generated (`cf-image`) or stored (`<img>`) overlay\nshows only once real image data is available.",
+    "properties": {
+      "$NAME": {
+        "description": "Human-readable pattern name.",
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json",
+        "description": "Static VNode rendering the fallback-backed square thumbnail."
+      },
+      "fetchState": {
+        "$ref": "#/$defs/GeneratedArtFetchState",
+        "description": "Current image source/generation state (see `imageDataUrl` on optionality)."
+      },
+      "imageDataUrl": {
+        "description": "The generated image as a `data:` URL (`\"\"` until generated). The\npersistence-friendly form: a parent stores this string in shared state\n(e.g. an option's `imageUrl`) and passes it back as `sourceUrl`, after\nwhich every viewer serves the stored value and no instance generates.\n\nOptional ON PURPOSE (as is `fetchState`): these are fetch-derived, so\nthey are absent until the fetch machinery has written its cells. A\nrequired declaration makes boundary readers lower with a required input\nschema and gate silently on instances whose fetch never ran (stored /\ngated / empty-prompt) — the CT-1811-family required-gating leg.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

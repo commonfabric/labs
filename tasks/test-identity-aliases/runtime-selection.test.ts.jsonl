@@ -1,0 +1,1 @@
+{"date":"2026-10-07","from":{"k":"unit","s":"cf-harness","n":"a run that names no runtime, or docker, gets no runsc companions"},"to":{"k":"unit","s":"cf-harness","n":"a run that names `docker`, or no runtime where there is no default, is refused before any file is looked at"}}

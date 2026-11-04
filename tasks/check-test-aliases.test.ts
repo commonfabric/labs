@@ -246,6 +246,7 @@ describe("check-test-aliases", () => {
         committed: new Map([["glaze.test.ts.jsonl", ALIAS_LINE + "\n"]]),
         mergeBase: "0123456789abcdef",
         strayFile: false,
+        pathExists: () => true,
         ...overrides,
       };
     }
@@ -272,6 +273,56 @@ describe("check-test-aliases", () => {
       }));
       expect(problems).toEqual([]);
       expect(aliases).toHaveLength(3);
+    });
+
+    it("returns a problem for an added moved path that names nothing in the tree", () => {
+      const moved = JSON.stringify({
+        date: "2026-08-17",
+        from: { p: "kitchen/oven" },
+        to: { p: "bakery/oven" },
+      });
+      const { problems } = aliasDirectoryProblems(state({
+        current: {
+          files: [
+            { name: "glaze.test.ts.jsonl", text: ALIAS_LINE + "\n" },
+            { name: "moved-paths.jsonl", text: moved + "\n" },
+          ],
+          unread: [],
+        },
+        pathExists: (path) => path === "patterns/bakery/kept",
+      }));
+      expect(problems).toEqual([
+        "moved-paths.jsonl moves a path to bakery/oven, which names nothing " +
+        "in the tree; a moved path names a repository path or a pattern key",
+      ]);
+    });
+
+    it("returns no problem for an added moved path naming a pattern key, or a committed one naming nothing", () => {
+      const toKey = JSON.stringify({
+        date: "2026-08-17",
+        from: { p: "oven" },
+        to: { p: "bakery/oven" },
+      });
+      const gone = JSON.stringify({
+        date: "2026-08-16",
+        from: { p: "kitchen/sink" },
+        to: { p: "kitchen/basin" },
+      });
+      const { problems } = aliasDirectoryProblems(state({
+        current: {
+          files: [
+            { name: "glaze.test.ts.jsonl", text: ALIAS_LINE + "\n" },
+            { name: "moved-paths.jsonl", text: gone + "\n" + toKey + "\n" },
+          ],
+          unread: [],
+        },
+        committed: new Map([
+          ["glaze.test.ts.jsonl", ALIAS_LINE + "\n"],
+          ["moved-paths.jsonl", gone + "\n"],
+        ]),
+        pathExists: (path) => path === "patterns/bakery/oven",
+      }));
+      expect(problems).toEqual([]);
     });
 
     it("returns a problem naming a committed file that was edited", () => {

@@ -36,24 +36,37 @@ that a room exists.
 A client MUST NOT place a direct room in a container that admits anyone besides
 the room's two members. Even an unreadable link to it tells the container's
 other members that the conversation exists. A client learns whom a container
-admits from its member set (see [shared spaces](README.md#shared-spaces)). A
-client that can't learn it MUST treat the container as admitting others.
+admits from its access list, through `spaceMembers()`: its members, and the
+`*` entry, which admits people the list doesn't name (see
+[social spaces](README.md#social-spaces)). A client that can't learn it MUST
+treat the container as admitting others.
 
 ## Outputs
 
 - `room`: the link, so a client can reach the room's own streams.
 - `[VIEWS]`: a `chat` group, the placement's whole data face:
   - `state`: `"member"` (the room space admits the viewer, at any level),
-    `"not-member"`, or `"unavailable"` (the room can't be read right now). A
+    `"not-member"`, `"deleted"` (the room's space is
+    [deleted](../random-space-identities.md#deleting-a-space), so no one can
+    read it again, and every fact read through it is empty), or
+    `"unavailable"` (the room can't be read right now). `spaceDeleted(room)` is
+    read first, and `true` makes the state `"deleted"` whatever the viewer's
+    level, which for a deleted space is `"none"`. A
     member with READ only sees the room but can't send to it (see
     [`ChatRoomOutput`](ChatRoomOutput.md#membership)).
   - `messages` and `canSend`, from the room (see
-    [`ChatRoomOutput`](ChatRoomOutput.md#facts)). Through `messages` the reader
-    reaches their own windows onto the room's messages.
-  - `about`, `recentActivity`, `participants`, and `reactionTallies` (per
-    message in `messages.latest` and in the session's windows: emoji, count,
+    [`ChatRoomOutput`](ChatRoomOutput.md#facts)). `canSend` is the reader's own,
+    per session, as the room's is (see
+    [`ChatRoomOutput`](ChatRoomOutput.md#scopes)).
+  - `about`, `participants`, and `reactionTallies` (per
+    message in `messages.latest`: emoji, count,
     whether the viewer is among them, and the reactors' profiles), each read
     through the link. They're empty unless `state` is `"member"`.
+
+`reactionTallies.mine` reports profile membership: a reactor's profile equals
+the viewer's `#profile`, compared with `equals()`. It is not removal
+authorization. The rendered room's reaction controls use the author-attestation
+rule described in [`ChatReaction`](ChatReaction.md#uniqueness).
 
 A placement offers no stream that sends or reacts. A client sends to the room's
 own `sendMessage` and `sendReaction` streams, reached through `room`. If a

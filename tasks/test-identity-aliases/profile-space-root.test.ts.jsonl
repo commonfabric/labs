@@ -1,0 +1,1 @@
+{"date":"2026-10-12","from":{"k":"unit","s":"cli","n":"profileSpaceRoot() > what a run writes > writes the space cell of a space it repairs, and one empty content-addressed document"},"to":{"k":"unit","s":"cli","n":"profileSpaceRoot() > what a run writes > writes only the space cell of a space it repairs"}}

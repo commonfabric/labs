@@ -1,0 +1,2 @@
+{"date":"2026-08-28","from":{"k":"browser","s":"iframe-sandbox","n":"read and writes"},"to":{"k":"browser","s":"iframe-sandbox","n":"pulls and sets"}}
+{"date":"2026-08-28","from":{"k":"browser","s":"iframe-sandbox","n":"a subscription is cancelled against the context that issued it"},"to":{"k":"browser","s":"iframe-sandbox","n":"a subscription is cancelled against the bridge that issued it"}}

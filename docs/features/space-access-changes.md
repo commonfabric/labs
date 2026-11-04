@@ -7,8 +7,8 @@ space: the first sets `principal`'s entry in the space's access list to exactly
 second removes the entry. They are what a pattern such as a chat room uses to
 add or remove a member once the space exists. They work in a handler a client
 runs and in one the serving loop runs. The implementation is
-`packages/runner/src/builder/space-access-change.ts`. A client's change ends in
-`writeAcl()` in `packages/runner/src/acl-manager.ts`, the same write
+`runtime/runner/src/builder/space-access-change.ts`. A client's change ends in
+`writeAcl()` in `runtime/runner/src/acl-manager.ts`, the same write
 `ACLManager` and `cf acl` go through, and a served change ends in the memory
 server's `commitServedAclChange()`. Both apply the staged changes to the list
 through `applyAccessListChanges()`, beside `writeAcl()`.
@@ -69,15 +69,19 @@ runtime do directly, outside the delegated carriage its served writes go
 through, is not settled, and a refusal at the memory server of an access list
 that names either kind is the way to close it.
 
-The trusted gesture is the renderer's mark on an event a person caused on a
-rendered surface, the test `commitSnapshotShare()` and `commitCustodySeal()`
-apply without their match on which surface. The runner records it on the handler's frame when the run
-starts, from the event object the renderer marked. A handler that sends its
-event on to another stream does not pass the mark along, so the handler it
+The trusted gesture is the renderer-trust mark on an event a person caused on
+a trusted surface: a DOM event on a pattern's rendered surface, which the
+renderer marks, or an action on a control a native host draws itself, which
+the host marks through `bindNativeUiControl()` or `sendReviewed()`
+([host embedding, §10](host-embedding.md#10-native-reviewed-controls)). It is
+the test `commitSnapshotShare()` and `commitCustodySeal()` apply without their
+match on which surface. The runner records it on the handler's frame when the
+run starts, from the event object that carries the mark. A handler that sends
+its event on to another stream does not pass the mark along, so the handler it
 reaches cannot change a list. The check does not follow the CFC enforcement
 dial: it holds in every mode.
 
-A gesture shows that a person acted on the pattern's surface, not what the
+A gesture shows that a person acted on a trusted surface, not what the
 pattern did with the act, since the principal and the level are the
 pattern's. A pattern with a button can grant someone its data on the next
 click, which is the same ceiling every write gated on a trusted gesture has.
@@ -172,15 +176,26 @@ change goes through the memory server instead:
    Each space's changes are one authored commit of the list, made under the
    run's delegated carriage (the event's actor and the grant), with the serving
    loop's session as its envelope (`commitServedAclChange()`), and checked again
-   there.
+   there: on the host's own memory server, or, where the host has a route to
+   each space's owner and the space is not the home, on that owner
+   ([owner routing](../specs/server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally)).
 
 So a member a served handler adds is in the list before anything the handler
-sent on reaches its target, which is what a target checking the sender's
-access needs. A change the seal admitted and the commit refuses, because the
-list changed in between, requeues the run's event, and its replay is decided
-against the list as it then stands. A change that landed stands whatever the
-wave does after it, as on a client: a replay of the event finds nothing left to
-change and sends nothing.
+sent on reaches its target, which is what a target checking the sender's access
+needs. A change the seal admitted and the commit refuses, because the list
+changed in between, requeues the run's event, and its replay is decided against
+the list as it then stands. Where the change commits on the space's owner, the
+owner decides it against its own store, so its refusal on any admission ground,
+the actor's level there included, requeues the event the same way, and so does a
+failure to reach the owner at all, until the owner answers. The one refusal that
+requeues nothing is of a change to the serving space's own list because that
+space is deleted: the wave aborts, and the tenure ends for good, as it does when
+the home commit is refused for the deletion
+([a deleted space](../specs/server-side-execution/serving-loop.md#a-deleted-space)).
+A change that landed stands whatever the wave does after it, as on a client: a
+replay of the event finds nothing left to change and sends nothing, which is
+also what a replay finds when the owner applied the change and its answer was
+lost.
 
 A client runs a served event's handler as well, as its speculative echo. The
 echo checks and stages the change like any run, and commits nothing: the

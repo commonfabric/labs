@@ -4,7 +4,7 @@ The Contextual Flow Control specification in `commonfabric/specs` under `cfc/`
 says, in §18.6.4 of `18-runtime-implementation-profiles.md`, that a deployment
 claiming the reactive-runtime profile MUST document eight things. This document
 is this runtime's answer, one section per item. Each section names the adapter
-code under `packages/runner/src/` that implements the item, by file and
+code under `runtime/runner/src/` that implements the item, by file and
 symbol, and states every known non-conformance with its direction: an
 _over-taint_ refuses or labels more than the specification would, which is the
 fail-closed direction; an _under-taint_ admits or labels less, which is a
@@ -12,15 +12,15 @@ soundness defect. Where neither the code nor a labs document establishes an
 answer, the section says "not established" and what would establish it.
 
 The statement is written against the specification at the commit the spec
-snapshot at `packages/runner/src/cfc/kernel/spec-snapshot.json` records,
-`9e751d58`. It describes the runtime's shipped defaults: the dial values
+snapshot at `runtime/runner/src/cfc/kernel/spec-snapshot.json` records,
+`0c12ccf3`. It describes the runtime's shipped defaults: the dial values
 `RUNTIME_CFC_DIAL_DEFAULTS` in `cfc/posture-report.ts` applies to every
 `Runtime`, and `presetCfcOptions` in `runtime-presets.ts` pins for every host
 preset. A host that sets a dial lower is described by
 [`cfc-enforcement-matrix.md`](cfc-enforcement-matrix.md) rather than here.
 
 The runtime holds no kernel function yet: every row of
-`packages/runner/src/cfc/kernel/manifest.ts` reads `missing`, and the symbols
+`runtime/runner/src/cfc/kernel/manifest.ts` reads `missing`, and the symbols
 named below are the adapters that make each decision today. The procedure for
 changing any of it is
 [`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md);
@@ -29,7 +29,7 @@ this document changes in the same pull request as the behavior it describes.
 ## Maintaining this statement
 
 This is a live document pinned to the specs commit
-`packages/runner/src/cfc/kernel/spec-snapshot.json` records. It is re-read,
+`runtime/runner/src/cfc/kernel/spec-snapshot.json` records. It is re-read,
 and changed in the same pull request, whenever an adapter symbol it cites is
 renamed, moved or changes what it decides; whenever a dial default in
 `RUNTIME_CFC_DIAL_DEFAULTS` or a preset's pin moves; whenever a §18.6.4 bullet
@@ -67,7 +67,11 @@ minted metadata and `cid:` documents. `storedCfcMetadataAppliesToPath` in
 reason: `schema.ts` on a read through an `ifc`-bearing schema
 (`schema-ifc-read`); `cell.ts` on a write through one (`schema-ifc-write`) and
 on a SQLite row label (`sqlite-row-label`); `data-updating.ts` on a link write
-(`link-write`); `schema-ifc.ts` on a link crossing an `ifc`-bearing hop
+whose link schema declares policy, whose handle carries a restriction, or
+whose slot carries stored or arriving policy (`link-write`; a bare pointer is
+recorded as a policy input without forcing relevance, and the flow-label probe
+marks the transaction when the attempt read labeled data); `schema-ifc.ts` on
+a link crossing an `ifc`-bearing hop
 (`schema-ifc-hop`); `cfc/external-ingest.ts` on external ingest; and, inside
 `extended-storage-transaction.ts`, the unprivileged writes to label metadata
 and its siblings, label-metadata and external-content observations, runtime
@@ -111,7 +115,11 @@ verifier-internal and scheduler-dependency reads, reads of `cid:` documents,
 reads of a document's own `cfc` and `source` members (which
 `canonicalizeDocumentPath` in `cfc/canonical.ts` maps to no payload path),
 link probes carrying `machineryRead`, probes a dereference trace covers other
-than the probe of the followed slot, and write-destination reads.
+than the probe of the followed slot, and write-destination reads. The
+per-write input gate in `verifyInputRequirements` in `cfc/prepare.ts`
+(through `buildGatedInputReads`),
+which checks a protected entry's `requiredIntegrity` and `maxConfidentiality`
+over its read prefix, skips write-destination reads too.
 
 **The write-destination marking sites:** `normalizeAndDiff` and the preserved
 output attempt read in `data-updating.ts`; `CellImpl.isStream` as called from
@@ -131,7 +139,9 @@ class.
 
 **Non-conformances, with direction.**
 
-- The conditional exclusions apply to the flow join. The egress and sink
+- The conditional exclusions apply to the flow join, and write-destination
+  reads are excluded from the per-write input gate as well; that gate still
+  counts wiring reads, which over-gates. The egress and sink
   consumed set (`collectConsumedLabel` in `cfc/prepare.ts`) excludes only
   verifier-internal reads, so it still counts write-destination and wiring
   reads: an over-taint, stated in
@@ -182,7 +192,48 @@ content arrives through ordinary reads. For label views,
 `cfcLabelViewForDereferenceTraces` in `cfc/label-view-state.ts` carry the
 class-less confidentiality of every entry resolving at the slot, wildcard
 templates included, and the render path reads them through
-`cfcLabelViewForResolvedTarget` in `packages/html/src/worker/reconciler.ts`.
+`cfcLabelViewForResolvedTarget` in `runtime/html/src/worker/reconciler.ts`.
+
+**What a link write persists.** `linkSlotLabel` in `cfc/prepare.ts` persists
+at the receiving slot the reference's own label as §8.2.3 and §8.12.8 state
+it: the link schema's declarations, the restriction the written handle
+carries at its root, and, where flow labels persist, the creating attempt's
+flow join, stamped at the slot as a pointer-class `structure` entry beside
+the link entry, or carried to the slot by the `*` template of a container the
+transaction stamps as a whole. No evidence atom is minted for the reference:
+§15.4 retires `LinkReference`. The atom stays non-authorable, and one in a
+label stored before the retirement stays what it was, provenance that
+endorses nothing. A writer's stamp at a slot describes the reference the
+committed document holds there in an envelope that says so, with
+`stampPlacement: "committed"`: the runtime re-derives an attempt's labels
+against the committed placement (§8.10.2.2,
+`SpaceReplica.#commitReadActivities`), and writes the member when the
+envelope's stamps at reference slots were all placed that way. A stamp at a
+reference slot of an envelope that does not say it is not an input witness
+(§18.7, `slotStampPlacementUnknown`). The member is beside the ones the
+envelope's version defines, so a reader that predates it reads the envelope
+all the same. Nothing of the source's labels is copied to the slot,
+and the write takes no dependency on the source's envelope. A write floor on
+the slot, including a floor declared under a wildcard on every element of a
+list, resolves the source's current evidence through `linkedSourceEvidence`,
+as §8.2.6 requires, and persists none of it. A stamp the writer's schema mints
+at the slot's path credits no reference written there, since the store keeps
+no stamp at a position holding a reference; a stamp at a container the write
+persists covers the references beneath it. In that evidence the source's
+stored integrity stands as stored, and only the link schema's integrity and
+a schema the transaction writes the source under are gated against
+runtime-minted atoms. A refusal the floor reaches from documents the
+transaction holds is terminal, and the refused run then depends on what the
+floor read there, the source's envelope among it, so a writer runs again when
+that evidence changes. A handle's carried view is the reference restrictions
+of the slots its resolution left (`cfcAcquisitionViewForDereferenceTraces`
+in `cfc/label-view-state.ts`, `referenceRestrictionsOf` for the schema
+traversal's crossings), confidentiality alone, and nothing of the document
+it names, whose labels are read from that document when the handle is
+followed; the resolution reads those labels all the same, so that a
+subscription depends on them. The reading attempt's own join reaches a
+written reference through the slot stamp of the writing transaction rather
+than through the handle.
 
 **This runtime does not claim the precise reference profile.** No labs
 document claims it, and the following is not established:
@@ -200,7 +251,7 @@ document claims it, and the following is not established:
 - The remaining §18.7 rows at every boundary: row-set retention under
   §8.17.6, a target changing between verification and commit, deletion and
   inaccessible-target normalization, cross-space multi-hop, and rewrite or
-  removal of a reference. `packages/runner/test/cfc-probe-slot-anchoring.test.ts`
+  removal of a reference. `runtime/runner/test/cfc-probe-slot-anchoring.test.ts`
   covers the "private query selects public targets" case for the flow join,
   dereferenced alone and after resolving the container.
 
@@ -225,17 +276,41 @@ statement.
   empty: an under-claim of integrity, the fail-safe direction, stated in
   [`cfc-transformed-by-input-witnesses.md`](cfc-transformed-by-input-witnesses.md)
   under "What fails closed".
+- A schema declaration carrying `TransformedBy` is admitted as declared,
+  where §15.4 requires the runtime to refuse or strip the atom at admission.
+  The input-witness reader takes no witness from it (§8.10.2.2); whether any
+  other integrity consumer reads it as a claim is not established, and if
+  one does, the declaration over-claims integrity, an under-taint.
 - The atom carries an input-witness summary in place of the pseudocode's
   `inputs` array, the conservative summary §8.9.3 permits; `SC-43` in
   [`cfc-spec-changes.md`](cfc-spec-changes.md) is the open ruling.
 - The hereditary meet is empty until every input carries the certified atom,
   an under-claim stated in `cfc-observation-classes.md` §5 as the fail-safe
   direction.
-- One guard matched on a consumed read releases another writer's value in
-  the same document at the release gate, stated in
-  `cfc-transformed-by-input-witnesses.md` under "What this does not cover" as
-  a release under a witnessed guard; it is not phrased there in taint terms,
-  and whether it under-taints is not established.
+- `atomPropagationClass` classes `ExternalIngest` as provenance where §15.4
+  registers it value-bound, so a verified projection does not carry a scoped
+  form of it: an under-claim of integrity, which §15.1.1 holds sound.
+- The release gates (`verifyInputRequirements` and
+  `verifySinkRequestCeilings` in `cfc/prepare.ts`, `readRefusal` in
+  `runtime/html/src/worker/display-fit.ts`) evaluate the value-intrinsic
+  rules at each location an access consumed and the other rules over the
+  join (`evaluateAccessExchange`, and `exchangeEachObservation` in
+  `cfc/access-integrity.ts`), per §5.3, §4.6.3 and §8.10.1.1. An observation
+  that consumed no label, a document with no CFC metadata or a location no
+  entry labels, never enters the join, so a hereditary atom every labeled
+  location carries survives where §3.1.6.2 would empty the join: an
+  over-claim of integrity, an under-taint. A cell's stored label at the
+  display, which `cellLabelRefusal` fits on its root's integrity, is not
+  resolved location by location: a root stamp's evidence can release a clause
+  a child entry carries, an under-taint.
+- Within one location, `labelForEntriesAtPath` in `cfc/prepare.ts` unions
+  integrity across the label components resolving there, where §8.12.8 asks
+  for the class-aware join of §3.1.6.2. Where two components carry integrity
+  that over-claims, an under-taint. Read with every applicable component an
+  input of the join, §8.12.8 drops each per-value claim wherever a component
+  carries none, and against that reading the runtime over-claims wherever any
+  does. Which reading holds is open in
+  [commonfabric/specs#60](https://github.com/commonfabric/specs/pull/60).
 
 ## 5. Position in the §18.6.3 matrix and the auxiliary dials
 
@@ -275,9 +350,49 @@ dials.
   to `observe` when a caller lowers flow labels, and leaves the enforcement
   mode as given. `cfc-enforcement-matrix.md` §3 asks for a deploy check; none
   exists.
-- Under strict, writer-fit misfits on runtime-owned stores are admitted by a
-  declared policy, an over-taint another writer can impose, stated in
-  `cfc-enforcement-matrix.md` §4 under "Runtime-owned-store declaration".
+- A space-scoped store's residency ceiling includes its own space as both
+  `Space(S)` and `PersonalSpace(S)`, alongside the declared policy. This
+  implements the own-space proposal in
+  [specs#71](https://github.com/commonfabric/specs/pull/71), which is closed
+  without merging; no successor ruling is incorporated in the pin. The
+  pinned §8.12.4 has no residency term, and the proposed base rule in
+  [specs#68](https://github.com/commonfabric/specs/pull/68) admits only the
+  `Space(S)` form on an unbound store. The own-space addition admits writes
+  those texts refuse and runs at strict without a default-off dial or a
+  separate `SPEC-PENDING` marker; the three slots are occupied and the
+  residency marker names #68. This is a nonconforming semantic gap and does
+  not satisfy the correspondence procedure's step 4. @danfuzz's authorization
+  to proceed ahead of unresolved specs dependencies does not supply a ruling;
+  the gap still needs one and a reconciled pin. This entry and
+  `cfc-enforcement-matrix.md` §4 record the additional gap.
+  The new clause is absent on `user` and `session` stores, even when their
+  scoped principal is unavailable. No foreign-space clause or unbound
+  `User` clause is added. Full derived labels still persist and taint readers;
+  no declaration or frozen existence label is released.
+- Under strict, an authorized runtime-owned store with a live enrollment or
+  an authenticated piece-setup claim admits eligible writer-fit misfits and
+  records them only in the derived component.
+  This is a slice of the proposed §8.12.5 change in
+  [specs#78](https://github.com/commonfabric/specs/pull/78), not the pinned
+  rule: the pin requires declaring those misfits, so a later clean overwrite can
+  carry less taint here than under the pin. The strict default implements the
+  proposal ahead of its ruling; the specification dependency remains open until
+  the ruling and pin are reconciled. Against the proposal, the
+  authored-declaration, read-failed and foreign-container refusals remain
+  fail-closed residuals. Piece setup supplies a separate transaction-local
+  claim for its argument, result and internal stores, so
+  `PiecesController.setupPersistent()` can commit their setup with derived-only
+  persistence before starting the piece. This claim establishes no lifetime
+  enrollment and grants no authority to a later transaction. A generic
+  transaction-local ownership marker alone still takes the pinned declaration
+  route: one-shot handoffs and marker-only anchored children retain that
+  ratchet. Lazy scoped-default seeding on a later transaction before enrollment
+  also retains the generic marker and declaration route. Existing declarations
+  and frozen existence stamps remain. Clean
+  creation records no empty existence entry, so even a path created clean keeps
+  the first labeled write's existence label after a clean overwrite. No
+  automatic data repair is performed. See
+  `cfc-enforcement-matrix.md` §4, "Runtime-owned-store derived admission".
   `isDeclarablePolicyStore` in `cfc/prepare.ts` exempts the raw meta seam,
   `computed:` cells, stream entry documents and compilation-cache documents
   from the writer-fit refusal at every rung; the meta seam's residual, a
@@ -329,7 +444,11 @@ causes to `ExtendedStorageTransaction.addCfcTriggerReads`, which drops `cid:`
 and document-member paths and invalidates a prepared transaction;
 `forEachFlowObservation` in `cfc/prepare.ts` consumes them as recursive value
 reads, with a shape read of a `length` parent, at prepare-time metadata, which
-is their current labels, whatever the gating dial says. With
+is their current labels, whatever the gating dial says. A trigger at the
+sub-path where a link exposes its recognizable form is the invalidation of a
+link probe, and is read as a shallow read of the slot the probe asked about,
+since that sub-path's segments are not child segments (§4.6.3)
+(`triggerReadAt`). With
 `cfcTriggerReadGating` on, the shipped default, `triggerReadSources` adds them
 to the egress and sink consumed set and to the `requiredIntegrity` input gate
 as well. `cfc-enforcement-matrix.md` §2, item 4, records that multi-hop closure
@@ -369,6 +488,48 @@ enforce`. [`cfc-template-population.md`](cfc-template-population.md),
 [`cfc-observation-classes.md`](cfc-observation-classes.md) and
 [`cfc-label-metadata-confidentiality.md`](cfc-label-metadata-confidentiality.md)
 are the designs.
+
+An owner release (§8.12.7 route 2c) is the one operation that lowers a
+still-existing path's existence entry. `releaseCellConfidentiality` in
+`cfc/confidentiality-release.ts` is the host operation, the transaction's
+`releaseCfcConfidentiality` in `storage/extended-storage-transaction.ts` the
+privileged write, and `planConfidentialityRelease` in
+`cfc/confidentiality-release-plan.ts` the decision. It implements the route as
+stated, its recommended refusal of a request the path would still show an
+unkept clause after included; the request is an authenticated host command
+and the record a create-only receipt
+([`cfc-persisted-declassification.md`](cfc-persisted-declassification.md)
+§3.3). A release at a link slot lowers the link-carried component stored
+there, and its refusal reads the path without the link's target, whose content
+labels §8.12.8 excludes from that component.
+
+Whether a release at a path holding a write redirect conforms is an open
+question pending a ruling. By default the release follows the redirect, as a
+write follows it, and lowers the document it leads to; it addresses the link
+slot itself only when the request asks for that. Route 2c requires the
+document and path to come from the request "and from nothing a computation
+derived", and a write redirect stored at the path is data a computation wrote,
+so the default lets that data choose the document a release lowers. This
+statement does not claim the default conforms.
+
+A release path holding a `*` segment reaches every stored position the segment
+matches at its depth, the wildcard entry there and each concrete position's
+entries, in one release whose receipt names each position. The pinned route
+removes clauses "from exactly the one path", and does not say whether a
+wildcard entry's path is one a request may name. This implements the proposal
+in [specs#86](https://github.com/commonfabric/specs/pull/86), which the pin
+does not incorporate.
+Against the pin it errs toward under-taint: it lowers clauses at positions no
+release under the pin reaches, since the route's recommended refusal reads a
+wildcard entry and the concrete positions it matches as labeling each other,
+so a release of either alone refuses while the other holds the clause. Every
+clause removed still passes the route's home-space and
+`canReleaseStoredClause` gates. It runs at strict without a default-off dial
+or a separate `SPEC-PENDING` marker; the three slots are occupied. This is a
+nonconforming semantic gap and does not satisfy the correspondence procedure's
+step 4. @danfuzz's authorization to proceed ahead of unresolved specs
+dependencies does not supply a ruling; the gap still needs one and a
+reconciled pin.
 
 **Residuals, with direction.**
 

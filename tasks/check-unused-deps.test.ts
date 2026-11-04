@@ -176,34 +176,34 @@ Deno.test("importsAlias counts a commented-out import as used", () => {
 //
 
 Deno.test("owningMember attributes a file to its member", () => {
-  const members = ["packages/memory", "packages/runner"];
+  const members = ["runtime/memory", "runtime/runner"];
   assertEquals(
-    owningMember("packages/memory/interface.ts", members),
-    "packages/memory",
+    owningMember("runtime/memory/interface.ts", members),
+    "runtime/memory",
   );
 });
 
 Deno.test("owningMember prefers the nested member over its container", () => {
-  const members = ["packages/patterns", "packages/patterns/nested"];
+  const members = ["patterns", "patterns/nested"];
   assertEquals(
-    owningMember("packages/patterns/nested/mod.ts", members),
-    "packages/patterns/nested",
+    owningMember("patterns/nested/mod.ts", members),
+    "patterns/nested",
   );
   assertEquals(
-    owningMember("packages/patterns/other.ts", members),
-    "packages/patterns",
+    owningMember("patterns/other.ts", members),
+    "patterns",
   );
 });
 
 Deno.test("owningMember returns undefined for a file under no member", () => {
-  assertEquals(owningMember("tasks/check.ts", ["packages/memory"]), undefined);
+  assertEquals(owningMember("tasks/check.ts", ["runtime/memory"]), undefined);
 });
 
 Deno.test("owningMember does not match a member that is only a path-segment prefix", () => {
-  // "packages/mem" must not own a file under "packages/memory".
+  // "runtime/mem" must not own a file under "runtime/memory".
 
   assertEquals(
-    owningMember("packages/memory/interface.ts", ["packages/mem"]),
+    owningMember("runtime/memory/interface.ts", ["runtime/mem"]),
     undefined,
   );
 });
@@ -228,8 +228,8 @@ Deno.test("parseImportMap tolerates a missing imports block", () => {
 });
 
 Deno.test("parseWorkspaceMembers normalizes leading ./ and trailing /", () => {
-  const text = `{ "workspace": ["./packages/a", "packages/b/"] }`;
-  assertEquals(parseWorkspaceMembers(text), ["packages/a", "packages/b"]);
+  const text = `{ "workspace": ["./runtime/a", "runtime/b/"] }`;
+  assertEquals(parseWorkspaceMembers(text), ["runtime/a", "runtime/b"]);
 });
 
 Deno.test("parseWorkspaceMembers returns empty when there is no workspace array", () => {
@@ -316,9 +316,9 @@ async function fixtureTree(
   const root = await Deno.makeTempDir({ prefix: "check-unused-deps-" });
   await Deno.writeTextFile(
     join(root, "deno.jsonc"),
-    JSON.stringify({ workspace: ["./packages/foo"], imports: {} }, null, 2),
+    JSON.stringify({ workspace: ["./runtime/foo"], imports: {} }, null, 2),
   );
-  const member = join(root, "packages", "foo");
+  const member = join(root, "runtime", "foo");
   await Deno.mkdir(member, { recursive: true });
   await Deno.writeTextFile(
     join(member, "deno.jsonc"),
@@ -385,7 +385,7 @@ Deno.test("main returns 1 and names the offender on an unused entry", async () =
       code = await main(root);
     });
     assertEquals(code, 1);
-    assert(err.includes("packages/foo/deno.jsonc: left-pad"));
+    assert(err.includes("runtime/foo/deno.jsonc: left-pad"));
     assert(!err.includes(": zod"));
   } finally {
     await Deno.remove(root, { recursive: true });
@@ -400,9 +400,9 @@ Deno.test("main checks a member whose config is deno.json", async () => {
   try {
     await Deno.writeTextFile(
       join(root, "deno.jsonc"),
-      JSON.stringify({ workspace: ["./packages/foo"], imports: {} }, null, 2),
+      JSON.stringify({ workspace: ["./runtime/foo"], imports: {} }, null, 2),
     );
-    const member = join(root, "packages", "foo");
+    const member = join(root, "runtime", "foo");
     await Deno.mkdir(member, { recursive: true });
     await Deno.writeTextFile(
       join(member, "deno.json"),
@@ -415,7 +415,7 @@ Deno.test("main checks a member whose config is deno.json", async () => {
       code = await main(root);
     });
     assertEquals(code, 1);
-    assert(err.includes("packages/foo/deno.json: left-pad"));
+    assert(err.includes("runtime/foo/deno.json: left-pad"));
   } finally {
     await Deno.remove(root, { recursive: true });
   }
@@ -433,14 +433,14 @@ Deno.test("main reads a deno.json root's own import map", async () => {
       join(root, "deno.json"),
       JSON.stringify(
         {
-          workspace: ["./packages/foo"],
+          workspace: ["./runtime/foo"],
           imports: { "left-pad": "npm:left-pad@^1" },
         },
         null,
         2,
       ),
     );
-    const member = join(root, "packages", "foo");
+    const member = join(root, "runtime", "foo");
     await Deno.mkdir(member, { recursive: true });
     await Deno.writeTextFile(
       join(member, "deno.jsonc"),
@@ -471,13 +471,13 @@ Deno.test("main flags a member alias imported only by another member", async () 
     await Deno.writeTextFile(
       join(root, "deno.jsonc"),
       JSON.stringify(
-        { workspace: ["./packages/a", "./packages/b"], imports: {} },
+        { workspace: ["./runtime/a", "./runtime/b"], imports: {} },
         null,
         2,
       ),
     );
-    const a = join(root, "packages", "a");
-    const b = join(root, "packages", "b");
+    const a = join(root, "runtime", "a");
+    const b = join(root, "runtime", "b");
     await Deno.mkdir(a, { recursive: true });
     await Deno.mkdir(b, { recursive: true });
     // Member "a" declares the alias but never imports it.
@@ -498,7 +498,7 @@ Deno.test("main flags a member alias imported only by another member", async () 
       code = await main(root);
     });
     assertEquals(code, 1);
-    assert(err.includes("packages/a/deno.jsonc: shared"));
+    assert(err.includes("runtime/a/deno.jsonc: shared"));
   } finally {
     await Deno.remove(root, { recursive: true });
   }
@@ -512,9 +512,9 @@ Deno.test("main counts an importer under an output-named directory", async () =>
   try {
     await Deno.writeTextFile(
       join(root, "deno.jsonc"),
-      JSON.stringify({ workspace: ["./packages/foo"], imports: {} }, null, 2),
+      JSON.stringify({ workspace: ["./runtime/foo"], imports: {} }, null, 2),
     );
-    const member = join(root, "packages", "foo");
+    const member = join(root, "runtime", "foo");
     await Deno.mkdir(join(member, "build"), { recursive: true });
     await Deno.writeTextFile(
       join(member, "deno.jsonc"),
@@ -544,19 +544,19 @@ Deno.test("main tolerates a workspace member with no config file", async () => {
     await Deno.writeTextFile(
       join(root, "deno.jsonc"),
       JSON.stringify(
-        { workspace: ["./packages/foo", "./packages/nocfg"], imports: {} },
+        { workspace: ["./runtime/foo", "./runtime/nocfg"], imports: {} },
         null,
         2,
       ),
     );
-    const foo = join(root, "packages", "foo");
+    const foo = join(root, "runtime", "foo");
     await Deno.mkdir(foo, { recursive: true });
     await Deno.writeTextFile(
       join(foo, "deno.jsonc"),
       JSON.stringify({ imports: { zod: "npm:zod@^3" } }, null, 2),
     );
     await Deno.writeTextFile(join(foo, "mod.ts"), 'import { z } from "zod";\n');
-    const nocfg = join(root, "packages", "nocfg");
+    const nocfg = join(root, "runtime", "nocfg");
     await Deno.mkdir(nocfg, { recursive: true });
     await Deno.writeTextFile(join(nocfg, "mod.ts"), "export const x = 1;\n");
 
@@ -578,9 +578,9 @@ Deno.test("main skips a tracked file missing from the working tree", async () =>
   try {
     await Deno.writeTextFile(
       join(root, "deno.jsonc"),
-      JSON.stringify({ workspace: ["./packages/foo"], imports: {} }, null, 2),
+      JSON.stringify({ workspace: ["./runtime/foo"], imports: {} }, null, 2),
     );
-    const member = join(root, "packages", "foo");
+    const member = join(root, "runtime", "foo");
     await Deno.mkdir(member, { recursive: true });
     await Deno.writeTextFile(
       join(member, "deno.jsonc"),
@@ -614,12 +614,12 @@ Deno.test("main treats a root alias as used when any member imports it", async (
     await Deno.writeTextFile(
       join(root, "deno.jsonc"),
       JSON.stringify(
-        { workspace: ["./packages/a"], imports: { shared: "npm:shared@^1" } },
+        { workspace: ["./runtime/a"], imports: { shared: "npm:shared@^1" } },
         null,
         2,
       ),
     );
-    const a = join(root, "packages", "a");
+    const a = join(root, "runtime", "a");
     await Deno.mkdir(a, { recursive: true });
     await Deno.writeTextFile(
       join(a, "deno.jsonc"),

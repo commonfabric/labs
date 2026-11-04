@@ -129,6 +129,32 @@ Deno.test(
 );
 
 Deno.test(
+  "Deno setup keeps the compiler runtime in a versioned cache",
+  async () => {
+    const action = await Deno.readTextFile(ACTION_PATH);
+    const step = actionStep(
+      action,
+      "📦 Cache Deno compiler runtime ${{ steps.resolve.outputs.version }}",
+    );
+
+    assertStringIncludes(step, "if: inputs.cache == 'true'");
+    assertStringIncludes(
+      step,
+      "~/.cache/deno/dl/release/v${{ steps.resolve.outputs.version }}",
+    );
+    assertStringIncludes(
+      step,
+      "~/Library/Caches/deno/dl/release/v${{ steps.resolve.outputs.version }}",
+    );
+    assertStringIncludes(
+      step,
+      "key: denort-v1-${{ runner.os }}-${{ runner.arch }}-" +
+        "${{ steps.resolve.outputs.version }}",
+    );
+  },
+);
+
+Deno.test(
   "Deno setup leaves V8's code cache out of the dependency cache",
   async () => {
     // A process that loads a module from V8's code cache reports that module's

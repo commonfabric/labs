@@ -305,7 +305,7 @@ and rebuild the transaction using the new causes (and re-issue any dependent
 
 **Current implementation:** Conflicts are returned as a structured
 `ConflictError` including `expected` and `actual` facts (and may include a
-history) as defined in `packages/memory/interface.ts`.
+history) as defined in `runtime/memory/interface.ts`.
 
 ---
 

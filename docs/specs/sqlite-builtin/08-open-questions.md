@@ -20,7 +20,7 @@ during design are marked **[resolved]** with the decision.
 3. **[resolved] Transformer support for `sqliteQuery<Row>`.** Routine: the
    transformer already lowers type arguments to schemas for `toSchema<T>`,
    `generateObject`, and `lift`. Add a registry entry + a schema-injection rule —
-   see [`packages/ts-transformers/docs/adding-type-arg-schema-lowering.md`](../../../packages/ts-transformers/docs/adding-type-arg-schema-lowering.md)
+   see [`base/ts-transformers/docs/adding-type-arg-schema-lowering.md`](../../../base/ts-transformers/docs/adding-type-arg-schema-lowering.md)
    and Phase 5 of the
    [implementation plan](../../history/specs/sqlite-builtin/implementation-plan.md).
    Not a gating risk.
@@ -171,9 +171,9 @@ during design are marked **[resolved]** with the decision.
     one presence bit and is permitted only as a declared opt-in
     (`onExceed: "skip"`), with the table's policy permitting the existence
     release and skips auditable; it never applies to aggregates. Per-user
-    views become useful with reader-enumeration ceilings (`any([...])`) once
-    OR-clause labels land (CFC spec §3.1.8, §8.10.3). What remains here is
-    implementation (phase 3.b), not the principle.
+    views are useful with reader-enumeration ceilings (`any([...])`) over
+    OR-clause labels (CFC spec §3.1.8, §8.10.3). The principle is settled; the
+    implementation is phase 3.b.
 
 ## Authorization of the SQLite verbs
 

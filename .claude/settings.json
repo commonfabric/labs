@@ -22,10 +22,6 @@
           {
             "type": "command",
             "command": "deno run --allow-read --allow-env \"$CLAUDE_PROJECT_DIR/.claude/scripts/block-legacy-cli.ts\""
-          },
-          {
-            "type": "command",
-            "command": "deno run --allow-read --allow-env \"$CLAUDE_PROJECT_DIR/.claude/scripts/deno-test-filter.ts\""
           }
         ]
       },

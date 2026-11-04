@@ -283,9 +283,9 @@ A value that a codec claims is encoded as a three-element array:
 [marker, tag, state]
 ```
 
-`tag` is the wire type tag (`3-json-encoding.md` Section 2 defines the
-`<Type>@<Version>` syntax, which is shared). `state` is the codec's encoded
-state — final for a terminal codec, and itself walked for a nonterminal one.
+`tag` is the wire type tag, of the syntax every interchange format shares
+(`1-fabric-values.md` Section 2.5). `state` is the codec's encoded state —
+final for a terminal codec, and itself walked for a nonterminal one.
 
 **A terminal state is opaque, and that bounds every other rule here.** The walk
 hands it to its codec without descending, so nothing inside one is traversed
@@ -430,7 +430,7 @@ mutable values. Which containers a caller sees returned by identity therefore
 varies with what needed decoding; whether any of them is mutable does not.
 
 An engine constructed with `mutable` as `true` (`1-fabric-values.md` Section
-2.9) freezes none of them instead, and copies a container that needed no
+2.10) freezes none of them instead, and copies a container that needed no
 decoding when it arrived frozen, that being the one way to hand it back
 mutable. A frozen container can arrive only from a decode in the realm that
 built the tree, since cloning produces none.
@@ -482,9 +482,9 @@ leniency:
   it is legitimate only as the state under a byte-carrying tag.
 - A key this runtime reserves, per Section 3.2, in a plain container it
   traverses.
-- A tag that is not syntactically a tag, per Section 9 of
-  [3-json-encoding.md](./3-json-encoding.md), whose tag syntax this format
-  shares.
+- A tag that is not syntactically a tag, per Section 2.5 of
+  [1-fabric-values.md](./1-fabric-values.md), whose tag syntax this format
+  shares with every other.
 - A cycle, per Section 4, among the values it traverses.
 
 A tag that is *syntactically* a tag but that no codec claims is not a refusal:
@@ -555,21 +555,20 @@ would otherwise be free to disagree — one ignoring, one refusing — over data
 that cloning carries perfectly well and that a peer can send.
 
 **An absent field is not the same as one present holding `undefined`.** Where a
-codec gives a field a default, the default applies to a field that is *absent*;
-a field that is present and not of the type the codec requires is a
-malformation, `undefined` included. The distinction is worth stating because
-this format carries `undefined` directly, so unlike under JSON a peer can send
-one on purpose — and defaulting it would silently answer a question the wire
-did ask.
+codec's state has an optional field, what its absence means applies to a field
+that is *absent*; a field that is present and not of the type the codec
+requires is a malformation, `undefined` included. The distinction is worth
+stating because this format carries `undefined` directly, so unlike under JSON
+a peer can send one on purpose — and reading it as absent would silently answer
+a question the wire did ask.
 
-`RegExp@1` is the codec this reaches. All three of its fields default: `flavor`
-to `es2025`, and `source` and `flags` to the empty string, so `{}` decodes to
-an empty `es2025` pattern. That is what lets a narrower encoder omit what it
-has nothing to say about. `{ source: undefined }` is refused, being a `source`
-that is present and not a string.
-
-`Unavailable@1` has the same distinction on its two optional fields. An absent
+`Unavailable@1` is the codec this reaches, on its two optional fields. An absent
 `errorKind` is the state of a transient reason and an absent `errorMessage`
 that of an error with no stored message; `{ reason: "error", errorKind:
 undefined }` and `{ reason: "error", errorKind: "sync", errorMessage:
 undefined }` are refused, each being a field that is present and not a string.
+
+`RegExp@1` has no optional field. `source`, `flags` and `flavor` are all
+required, as they are under JSON (`3-json-encoding.md` Section 3), and there is
+no default flavor, so `{}`, `{ source: "a", flags: "g" }` and
+`{ source: undefined, flags: "g", flavor: "es2025" }` are all refused.

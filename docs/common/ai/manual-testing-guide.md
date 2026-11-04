@@ -18,9 +18,10 @@ For handler-based checks:
 3. run `piece step`
 4. inspect resulting state
 
-Always remember that `cf cell set` and `cf piece call` do not trigger recomputation
-on their own. The follow-up `piece step` is part of the test, not optional
-cleanup.
+With server execution off, `cf cell set` and `cf piece call` do not trigger
+recomputation on their own, and the follow-up `piece step` is part of the test,
+not optional cleanup. Under server execution a read pulls the current value from
+the server, and the step adds nothing.
 
 ## Browser Validation Loop
 
@@ -84,17 +85,14 @@ the canonical workflow.
 Before debugging "missing" data, compare the CLI DID:
 
 ```bash
-deno run -A packages/cli/mod.ts id did "$CF_IDENTITY"
+deno run -A runtime/cli/mod.ts id did "$CF_IDENTITY"
 ```
 
-with the browser console line:
-
-```text
-[Identity] User DID: did:key:...
-```
+with the DID the page is signed in as, which
+`globalThis.app.state().identity?.did()` returns in the page's console.
 
 When using `agent-browser`, import the CLI key into the browser session under
-test and then inspect the console:
+test and then evaluate that expression:
 
 ```bash
 agent-browser --session cf-shared open http://localhost:8000/<space>/<piece>
@@ -102,11 +100,12 @@ agent-browser --session cf-shared snapshot -i
 # Click Login, then Import CLI Key.
 agent-browser --session cf-shared upload @<choose-file-ref> "$CF_IDENTITY"
 agent-browser --session cf-shared click @<import-key-ref>
-agent-browser --session cf-shared console
+agent-browser --session cf-shared wait --fn "globalThis.app.state().identity"
+agent-browser --session cf-shared eval "globalThis.app.state().identity?.did()"
 ```
 
-Use separate `agent-browser --session` names for different users and verify the
-`shell.identity` log in each session. Do not assume a fresh session has the
+Use separate `agent-browser --session` names for different users and evaluate
+the expression in each session. Do not assume a fresh session has the
 identity you intended; stale stored credentials are a common source of false
 test results.
 
@@ -142,7 +141,7 @@ When behavior is unclear:
 - inspect rendered VDOM state
 - check for non-idempotent updates
 - verify action schema expectations
-- compare the CLI DID with the browser `shell.identity` log before treating
+- compare the CLI DID with the DID the page is signed in as before treating
   scoped defaults as missing storage
 - confirm that any identity-sensitive logic is not being masked by a CLI-only
   test path

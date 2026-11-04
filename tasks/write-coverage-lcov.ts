@@ -1,5 +1,6 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-run
 import * as path from "@std/path";
+import { PACKAGE_ROOTS } from "./package-layout.ts";
 
 // Taken from this file's own location rather than the working directory, which
 // the conversion inherits from its caller.
@@ -109,7 +110,7 @@ export function parseFilesWithNoSource(stderr: string): string[] {
 // `--allow-read --allow-write --allow-run`, and a wider graph has to keep
 // within that. `write-coverage-lcov.test.ts` fails if these stop agreeing with
 // `isTrackedSourcePath`, which is the metric's own answer to the same question.
-const TRACKED_SOURCE_ROOTS = ["packages", "tasks"];
+const TRACKED_SOURCE_ROOTS = [...PACKAGE_ROOTS, "tasks"];
 const TRACKED_SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx"]);
 const UNTRACKED_PATH_PARTS = new Set([
   ".cache",
@@ -132,10 +133,9 @@ const UNTRACKED_FILE_SUFFIXES = [
   ".test.tsx",
 ];
 const UNTRACKED_RELATIVE_PREFIXES = [
-  "packages/generated-patterns/integration/",
-  "packages/patterns/factory-outputs/",
-  "packages/patterns-saves-backup/",
-  "packages/static/assets/",
+  "runtime/generated-patterns/integration/",
+  "patterns/dev/factory-outputs/",
+  "base/static/assets/",
 ];
 
 /**

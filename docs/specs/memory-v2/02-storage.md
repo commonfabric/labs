@@ -432,6 +432,23 @@ retain a short historical tail for faster point-in-time reads.
 The revision log is append-only and forms the audit trail. Revisions are not
 deleted during ordinary GC.
 
+An operator may compact a space's revision history offline with
+`cf space compact` ([the compaction plan](../../plans/compact-space.md)). A
+compaction keeps every head's `(seq, op_index)` but the ACL document's,
+makes each selected instance's oldest kept row its base at the cut (a `patch`
+boundary is rewritten as a `set` holding the engine's reconstruction at that
+row; a `set` or `delete` boundary keeps its operation, so a deleted document
+stays deleted) and attributes that row, whatever its operation, to a
+`system`-class compaction commit (session `compaction:<run id>`), deletes
+the rows and snapshots behind it, and replaces the payload of every commit
+outside a retention window with a marker carrying a hash of what it held;
+commit 1, the commits an `op_*` row references, and the compaction commits
+themselves keep theirs. Every commit row survives. The compacted range is
+readable only from the archive the operator took before the run, and the
+engine treats a read basis below an instance's compacted boundary as
+unknown rather than as a genuine absence (`03-commit-model.md` §3.6.1's
+identity exemption does not apply across it).
+
 ### 7.2 Old Snapshots
 
 Snapshots older than the configured retention policy may be deleted.

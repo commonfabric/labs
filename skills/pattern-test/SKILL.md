@@ -17,9 +17,9 @@ deno task cf test <pattern>.test.tsx
 ```
 
 Imports resolve from the nearest ancestor whose `deno.json(c)` declares a
-package name (`packages/patterns` for repo patterns). A failure naming an import
-that "escapes the program root" means the test imports from above that root —
-pass `--root` naming a common ancestor of every imported file.
+package name (`patterns` for repo patterns). A failure naming an import that
+"escapes the program root" means the test imports from above that root — pass
+`--root` naming a common ancestor of every imported file.
 
 Keep the complete list of test entry paths for deployment. A deployed source
 revision carries those tests only when each entry is supplied with a repeatable
@@ -33,10 +33,6 @@ deno task cf piece setsrc <pattern>.tsx --test <pattern>.test.tsx --cell <piece-
 Repeat `--test` for multiple entry files and repeat the complete flag set on
 every `setsrc`. The deployment command packages and type-checks attached tests
 but does not execute them, so a successful `cf test` run remains required.
-
-When working in a Pattern Factory Build workspace, also follow
-`docs/common/ai/pattern-factory-build-guide.md` (as mandated by pattern-dev). It
-defines Pattern Factory's build completion gate and expected coverage shape.
 
 For patterns that stamp timestamps or IDs, prefer deterministic assertions over
 recomputing time/random values inside the test itself.

@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { parse as parseJsonc } from "@std/jsonc";
+import { dirname, fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import { DOC_DEMOS } from "../check-verb-session-sync.ts";
 import { namedBenchmarkFiles } from "../check-bench-workflow.ts";
@@ -29,7 +30,7 @@ const TREE_SHARE_DIVISOR = 8;
 /** The most gates one file may reach. */
 const GATES_PER_FILE = 4;
 
-const root = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
+const root = dirname(dirname(dirname(fromFileUrl(import.meta.url))));
 
 const suites = await loadGateSuites(root);
 const byId = (id: string): Suite => suites.find((s) => s.id === id)!;
@@ -81,6 +82,7 @@ describe("the repository's gate suites", () => {
     }
     expect(reading.toSorted()).toEqual([
       "check-baselines-append-only",
+      "check-cause-assignments",
       "check-test-aliases",
     ]);
     expect(declared.toSorted()).toEqual(reading.toSorted());
@@ -135,18 +137,18 @@ describe("the repository's gate suites", () => {
     ]);
     // The baselines and the patterns beside them reach one gate each,
     // rather than both reaching both.
-    expect(reached("packages/patterns/baselines/system/home.tsx/a.json"))
+    expect(reached("patterns/baselines/system/home/home.tsx/a.json"))
       .toEqual(["check-baselines-append-only"]);
-    expect(reached("packages/patterns/system/home.tsx")).toEqual([
+    expect(reached("patterns/system/home/home.tsx")).toEqual([
       "check-pattern-tiers",
     ]);
     // A `**` segment stands for any run of directories, so every
     // package's integration tree reaches the gate reading them.
-    expect(reached("packages/cli/integration/verb-session-demo.sh")).toEqual([
+    expect(reached("runtime/cli/integration/verb-session-demo.sh")).toEqual([
       "check-no-waitfor",
       "check-verb-session-sync",
     ]);
-    expect(reached("packages/static/assets/types/dom.d.ts")).toEqual([
+    expect(reached("base/static/assets/types/dom.d.ts")).toEqual([
       "check-cfc-types",
       "check-commonfabric-types",
       "check-withheld-globals",
@@ -158,21 +160,32 @@ describe("the repository's gate suites", () => {
     ]);
     expect(reached("mise.toml")).toEqual(["check-deno-pins"]);
     expect(reached("deno.lock")).toEqual(["check-single-copy-deps"]);
+    // The compiler a pattern's numbering is built by reaches the gate
+    // comparing it with the base revision's, and the patterns it builds do
+    // not: an edited pattern is never compared.
+    expect(
+      reached("base/ts-transformers/src/transformers/opaque-roots.ts"),
+    ).toEqual(["check-cause-assignments"]);
+    expect(reached("runtime/runner/src/builder/pattern.ts")).toEqual([
+      "check-cause-assignments",
+    ]);
+    expect(reached("runtime/runner/src/builtins/sqlite/query-node.ts"))
+      .toEqual(["check-cause-assignments"]);
     // An ordinary source file reaches no gate. What runs for it is what
     // the score chose, which is what keeps this feature a fraction of a
     // lane rather than the bulk of one.
-    expect(reached("packages/runner/src/cell.ts")).toEqual([]);
+    expect(reached("runtime/runner/src/cell.ts")).toEqual([]);
     expect(reached("elsewhere/thing.txt")).toEqual([]);
   });
 
   it("holds a gate to little of the tree, and a file to few gates", async () => {
-    // The two bounds that keep this feature a fraction of what a lane
-    // runs. A declaration wide enough to break either places its gate in
-    // every lane on the strength of what it says rather than of what it
-    // has caught, which is the decision the score exists to make. Every
-    // entry is held to naming something as well, so one whose directory
-    // the tree no longer has fails here rather than going quiet behind a
-    // sibling entry that still matches.
+    // The two bounds that keep this feature a fraction of what a lane runs. A
+    // declaration wide enough to break either places its gate in every lane on
+    // the strength of what it says rather than of its new real test failures,
+    // which is the decision the score exists to make. Every entry is held to
+    // naming something as well, so one whose directory the tree no longer has
+    // fails here rather than going quiet behind a sibling entry that still
+    // matches.
     const listed = await new Deno.Command("git", {
       args: ["-C", root, "ls-files", "-z"],
     }).output();
@@ -228,6 +241,7 @@ describe("the repository's gate suites", () => {
       "check-address-examples",
       "check-conflict-markers",
       "check-control-characters",
+      "check-dependency-direction",
       "check-local-program",
       "check-package-cycles",
       "check-skill-facts",
@@ -354,7 +368,7 @@ describe("the repository's gate suites", () => {
       [{ unit: "check-cfc-types", skip: [] }],
       context,
     );
-    expect(invocation!.cwd).toBe("/repo/packages/static");
+    expect(invocation!.cwd).toBe("/repo/base/static");
   });
 
   it("locates a gate by the name its record carries", () => {
@@ -393,20 +407,55 @@ describe("the repository's gate suites", () => {
     // Nothing imports a test, so its own group is the only one it reaches.
     expect(
       typecheck.unitsForChange!(
-        new Set(["packages/memory/test/commit-telemetry.test.ts"]),
+        new Set(["runtime/memory/test/commit-telemetry.test.ts"]),
       ),
     ).toEqual(["memory"]);
     // A module other packages import reaches their groups too, and no
     // group it imports from.
     const shared = typecheck.unitsForChange!(
-      new Set(["packages/runner/src/cell.ts"]),
+      new Set(["runtime/runner/src/cell.ts"]),
     );
     expect(shared).toContain("runner");
     expect(shared).toContain("shell");
-    expect(shared).not.toContain("utils");
+    expect(shared).not.toContain("js-values");
     // A path no group checks makes nothing mandatory, rather than making
     // every group mandatory or throwing.
     expect(typecheck.unitsForChange!(new Set(["README.md"]))).toEqual([]);
+  });
+
+  it("returns a pattern's source as what its compatibility unit runs", () => {
+    const compat = byId("pattern-compat");
+    expect(compat.sourcesOf?.("system/fabrichat/room.tsx")).toEqual([
+      "patterns/system/fabrichat/room.tsx",
+    ]);
+    expect(compat.sourcesOf?.("no/such-pattern.tsx")).toEqual([]);
+  });
+
+  it("maps a changed path to the patterns whose contract it can change", () => {
+    const compat = byId("pattern-compat");
+    const reached = (at: string) => compat.unitsForChange!(new Set([at]));
+    // A pattern's own source, though its unit is a key and not that path.
+    expect(reached("patterns/system/fabrichat/room.tsx")).toContain(
+      "system/fabrichat/room.tsx",
+    );
+    // A module the pattern imports, which is not a pattern itself.
+    expect(reached("patterns/system/fabrichat/room-records.tsx")).toContain(
+      "system/fabrichat/room.tsx",
+    );
+    // One of its recorded contracts.
+    expect(
+      reached("patterns/baselines/system/fabrichat/room.tsx/x.json"),
+    ).toEqual(["system/fabrichat/room.tsx"]);
+    // The accepted breaks reach every pattern, since removing an entry
+    // changes the verdict of a pattern the list no longer names.
+    expect(reached("tasks/pattern-compat-accepted-breaks.ts")).toEqual(
+      [...compat.units].sort(),
+    );
+    // A runtime module every pattern builds on is left to a lane's choice
+    // rather than making every pattern mandatory, and a path the gate
+    // never reads reaches nothing.
+    expect(reached("runtime/runner/src/cell.ts")).toEqual([]);
+    expect(reached("README.md")).toEqual([]);
   });
 
   it("keeps the type check and the pattern check apart by name", () => {
@@ -545,7 +594,7 @@ describe("the repository's gate suites", () => {
     const cfcheck = byId("cfcheck");
     expect(cfcheck.unitsForChange).toBeUndefined();
     const listed = await new Deno.Command("git", {
-      args: ["-C", root, "ls-files", "-z", "packages"],
+      args: ["-C", root, "ls-files", "-z", "connectors", "patterns"],
     }).output();
     const tracked = new Set(
       new TextDecoder().decode(listed.stdout).split("\0"),

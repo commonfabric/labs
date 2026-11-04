@@ -17,7 +17,6 @@ import {
   main,
   proseOf,
   readDocuments,
-  refusalMessage,
 } from "./check-address-examples.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
@@ -100,8 +99,8 @@ describe("check-address-examples", () => {
     });
 
     it("returns `source` for TypeScript", () => {
-      expect(governedKind("packages/cli/lib/callable.ts")).toBe("source");
-      expect(governedKind("packages/patterns/notes/notes.tsx")).toBe("source");
+      expect(governedKind("runtime/cli/lib/callable.ts")).toBe("source");
+      expect(governedKind("patterns/system/notes/notes.tsx")).toBe("source");
     });
 
     it("returns `null` for a file under `docs/history/`", () => {
@@ -110,7 +109,7 @@ describe("check-address-examples", () => {
 
     it("returns `null` for a file of another kind", () => {
       expect(governedKind("deno.jsonc")).toBe(null);
-      expect(governedKind("packages/cli/README.txt")).toBe(null);
+      expect(governedKind("runtime/cli/README.txt")).toBe(null);
     });
   });
 
@@ -243,7 +242,7 @@ describe("check-address-examples", () => {
     it("returns `null` for a token that is not rooted", () => {
       expect(addressExample("items/0/title")).toBe(null);
       expect(addressExample("./title")).toBe(null);
-      expect(addressExample("packages/cli/lib/callable.ts")).toBe(null);
+      expect(addressExample("runtime/cli/lib/callable.ts")).toBe(null);
     });
 
     it("returns `null` for a span holding whitespace", () => {
@@ -304,21 +303,6 @@ describe("check-address-examples", () => {
     it("returns the same key for the same pair", () => {
       expect(exemptionKey("docs/a.md", "/@x/y"))
         .toBe(exemptionKey("docs/a.md", "/@x/y"));
-    });
-  });
-
-  describe("refusalMessage()", () => {
-    it("returns the message of an `Error`", () => {
-      expect(refusalMessage(new Error("the prefix is retired")))
-        .toBe("the prefix is retired");
-    });
-
-    it("returns a value of another kind whole", () => {
-      // Reaching into such a value for a `message` would put `undefined` in
-      // the report, which says less than the value does.
-
-      expect(refusalMessage("refused")).toBe("refused");
-      expect(refusalMessage(undefined)).toBe("undefined");
     });
   });
 

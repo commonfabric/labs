@@ -3,12 +3,13 @@ import * as path from "@std/path";
 import { hasExecutableCode } from "./executable-source.ts";
 import { type LcovFileCoverage, parseLcovReports } from "./lcov.ts";
 import { normalizeLcovInstancePaths } from "./write-coverage-lcov.ts";
+import { PACKAGE_ROOTS, packageDirOf } from "./package-layout.ts";
 
 export const COVERAGE_PROFILE_ARTIFACT_PREFIX = "coverage-profile-";
 export const COVERAGE_METRIC_PREFIX = "coverage-debt:";
 
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx"]);
-const SOURCE_ROOTS = ["packages", "tasks"];
+const SOURCE_ROOTS = [...PACKAGE_ROOTS, "tasks"];
 const EXCLUDED_PATH_PARTS = new Set([
   ".cache",
   "build",
@@ -22,10 +23,9 @@ const EXCLUDED_PATH_PARTS = new Set([
 ]);
 
 const EXCLUDED_RELATIVE_PREFIXES = [
-  "packages/generated-patterns/integration/",
-  "packages/patterns/factory-outputs/",
-  "packages/patterns-saves-backup/",
-  "packages/static/assets/",
+  "runtime/generated-patterns/integration/",
+  "patterns/dev/factory-outputs/",
+  "base/static/assets/",
 ];
 
 const EXCLUDED_FILE_SUFFIXES = [
@@ -469,11 +469,7 @@ export function shouldTrackSourceFile(relativePath: string): boolean {
 
 export function metricGroupFor(relativePath: string): string {
   const normalized = toPosix(relativePath);
-  const parts = normalized.split("/");
-  if (parts[0] === "packages" && parts[1]) {
-    return `packages/${parts[1]}`;
-  }
-  return parts[0] ?? "workspace";
+  return packageDirOf(normalized) ?? normalized.split("/")[0] ?? "workspace";
 }
 
 export function countTrackedSourceLines(content: string): number {
