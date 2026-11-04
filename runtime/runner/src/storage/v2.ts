@@ -5510,6 +5510,8 @@ export class SpaceReplica
    *  replace. */
   #aclChangedSinceMount = false;
 
+  #restoringWatches = false;
+
   readonly #docs = new Map<string, DocumentRecord>();
 
   /** The sizes read's running measurement of `#docs`; it reads nothing else. */
@@ -6476,36 +6478,69 @@ export class SpaceReplica
   }
 
   /**
-   * THE SESSION REMOUNT's latch (the fifth face of profile starvation).
+   * Records that an ACL change may admit a session whose authorization ended.
    *
-   * An admitted commit touched this space's ACL document, or a host that
-   * has word of a grant retried the space (`Provider.retryAccess()`), so the
-   * AUTHORIZATION VERDICT that terminated this replica's session may have
-   * changed. Record it; `#memoizedSessionHandle()` consumes it on the next
-   * load.
-   *
-   * Why a latch instead of tearing the session down right here: the memory
-   * server emits the admitted-commit notice BEFORE it runs
-   * `#revokeDeauthorizedSessions` (both inside one `transact` — server.ts,
-   * `#notifyCommitAdmitted` then the `aclTouched` sweep). At notification
-   * time the session that the very same commit is about to revoke is still
-   * OPEN, so an eager teardown would inspect a live session, decline, and
-   * the revocation landing a moment later would starve exactly as before.
-   * Latching makes the fix independent of that ordering rather than
-   * dependent on it.
-   *
-   * Consumption is event-driven, not timed: the next load attempt calls
-   * `#memoizedSessionHandle()`, and the serving loop already re-attempts a
-   * deferred event's load every drain (see the scheduler's `failHeadEventLoadPark`
-   * and the SpaceServer's deferral backstop), so the heal arrives on the
-   * cadence the deferral machinery already runs at. A watch request in
-   * flight when the revocation lands consumes it as the request fails, and
-   * is made once more on the remounted session.
+   * The notice and termination may arrive in either order. Once both have
+   * arrived, the replica opens through ordinary server admission and restores
+   * its standing watches. A healthy session stays mounted; a refused reopen
+   * waits for another notice. Loads in flight also consume the same latch.
    */
   noteAclChanged(): void {
     if (this.#closed) return;
     this.#aclChangedSinceMount = true;
     this.#reaskForeignScopedReadGrants();
+    this.#restoreWatchesAfterAclChange();
+  }
+
+  /**
+   * Restores retained watches and refused loads after an owed remount, with
+   * the work included in the input barrier even when no reader pulls again.
+   */
+  #restoreWatchesAfterAclChange(): void {
+    if (this.#restoringWatches) return;
+    const previous = this.#sessionHandle;
+    this.#consumeOwedSessionRemount();
+    if (previous === this.#sessionHandle) return;
+    this.#restoringWatches = true;
+    const restore = (async (): Promise<Result<Unit, PullError>> => {
+      try {
+        while (true) {
+          const entries = new Map(this.#refusedPulls);
+          for (const root of this.#rootWatches.values()) {
+            for (const selector of root.watches.values()) {
+              entries.set(watchIdForEntry(root.address, selector), [
+                root.address,
+                selector,
+              ]);
+            }
+          }
+          // Each entry crosses its own admission gate. A refused actor's
+          // scoped watch must not block an admitted space-scoped watch.
+          const results = await Promise.all(
+            [...entries].map(async ([id, entry]) => {
+              const result = await this.pull([entry]);
+              if (!result.error && this.#refusedPulls.get(id) === entry) {
+                this.#refusedPulls.delete(id);
+              }
+              return result;
+            }),
+          );
+          // A new ACL notice can arrive while an older admission decision is
+          // in flight. Consume it after those pulls finish their cleanup, so
+          // the next pass cannot join the failed task. Each additional pass
+          // requires another notice and stays within this input barrier.
+          const previous = this.#sessionHandle;
+          this.#consumeOwedSessionRemount();
+          if (previous === this.#sessionHandle) {
+            return results.find((result) => result.error) ?? { ok: {} };
+          }
+        }
+      } finally {
+        this.#restoringWatches = false;
+      }
+    })().catch((error) => ({ error: toPullError(error) }));
+    this.#syncPromises.add(restore);
+    void restore.finally(() => this.#syncPromises.delete(restore));
   }
 
   /**
@@ -12682,6 +12717,7 @@ export class SpaceReplica
                 this.#onAccessChange?.(error);
               }
               if (reported) this.#onSessionError?.(error);
+              this.#restoreWatchesAfterAclChange();
             },
           );
           // Session replacement resets the marker epoch: markers for the
