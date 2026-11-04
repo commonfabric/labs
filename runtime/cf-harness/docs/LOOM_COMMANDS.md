@@ -192,8 +192,10 @@ smallest form of every call after it; one that does not fit drops its
 marked `summaryOmitted: true`, so later calls shrink first. The answers are
 measured smallest-first by body size against what the summaries leave: an answer
 that would have fit alone can be left out of its result, which is then marked
-truncated, and `truncated` says whether any was. And an answer without a label
-of its own takes the label of the batch's input as a whole, which covers every
+truncated, with a `hint` explaining that no requested values are shown and
+asking for a smaller range, fewer results, or a smaller batch. The batch
+`truncated` says whether any result was cut. And an answer without a label of
+its own takes the label of the batch's input as a whole, which covers every
 call's arguments: for a call whose own arguments carried less, that is the
 conservative choice.
 

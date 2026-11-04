@@ -919,6 +919,9 @@ describe("loom-commands tools", () => {
         const results = output.results.map(executed);
         expect(results[0].entry?.status).toBe("admitted");
         expect(results.at(-1)?.entry).toBeUndefined();
+        expect(results.at(-1)?.hint).toBe(
+          "The result body was omitted to fit the tool output limit. No requested values are shown. Read a smaller date range, fewer results, or a smaller batch.",
+        );
         expect(results.at(-1)?.truncated).toBe(true);
         expect(output.truncated).toBe(true);
         expect(JSON.stringify(output).length).toBeLessThanOrEqual(
@@ -1347,6 +1350,9 @@ describe("loom-commands tools", () => {
         LOOM_RETRIEVAL_MAX_OUTPUT_CHARS,
       );
       expect(output.entry).toBeUndefined();
+      expect(output.hint).toBe(
+        "The result body was omitted to fit the tool output limit. No requested values are shown. Read a smaller date range, fewer results, or a smaller batch.",
+      );
       expect(output.truncated).toBe(true);
     });
   });

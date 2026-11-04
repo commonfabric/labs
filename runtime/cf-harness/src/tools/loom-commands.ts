@@ -242,13 +242,13 @@ export type RunCommandCallOutput =
     notice: typeof LOOM_COMMAND_UNTRUSTED_NOTICE;
     outcome: LoomCommandOutcome;
 
-    /** The answer, measured; absent when even alone it passed the bound. */
+    /** The answer, measured; absent when the remaining output space is too small. */
     entry?: LoomRetrievalEntry;
 
     /** Whether the answer was cut to a bound or left out. */
     truncated: boolean;
 
-    /** What to do instead, when the run may not run the command. */
+    /** Guidance for a refused command or a body omitted by the output bound. */
     hint?: string;
 
     /** The command's signature, when the host refused its args. */
@@ -671,6 +671,14 @@ const sendCall = async (
   };
 };
 
+/** Guidance when the output bound leaves a command's body out. */
+const OMITTED_BODY_HINT =
+  "The result body was omitted to fit the tool output limit. No requested values are shown. Read a smaller date range, fewer results, or a smaller batch.";
+
+/** Space reserved for an omitted body's guidance, including JSON wrapping. */
+const OMITTED_BODY_HINT_SIZE =
+  JSON.stringify({ hint: OMITTED_BODY_HINT }).length;
+
 /**
  * Helper for command tools, which measures an answer against the run's
  * ceiling and the output bound, `reserved` being the size of everything the
@@ -700,7 +708,7 @@ const measureAnswer = async (
   const [entry] = measured.entries;
   return {
     ...answered.skeleton,
-    ...(entry !== undefined ? { entry } : {}),
+    ...(entry !== undefined ? { entry } : { hint: OMITTED_BODY_HINT }),
     truncated: measured.truncated,
     cfc: {
       version: 1,
@@ -857,7 +865,8 @@ export const runCommandTool: HarnessToolDefinition<
     return await measureAnswer(
       context,
       sent,
-      JSON.stringify(sent.skeleton).length + LABEL_JOIN_ALLOWANCE,
+      JSON.stringify(sent.skeleton).length + LABEL_JOIN_ALLOWANCE +
+        OMITTED_BODY_HINT_SIZE,
     );
   },
 };
@@ -948,8 +957,9 @@ const measureBatch = async (
 ): Promise<RunCommandBatchOutput> => {
   // Each result costs its serialized size, escapes included, the comma
   // that separates it from the next, and an answered one its `truncated`
-  // turning from `true` to `false`.
-  const charge = (result: object) => JSON.stringify(result).length + 2;
+  // turning from `true` to `false`. Reserve room for an omission hint too.
+  const charge = (result: object) =>
+    JSON.stringify(result).length + 2 + OMITTED_BODY_HINT_SIZE;
   const smallest = (call: AnsweredCall | RunCommandCallOutput) =>
     isAnswered(call) ? skeletonForms(call.skeleton).smallest : call;
   let later = sent.reduce((sum, call) => sum + charge(smallest(call)), 0);
