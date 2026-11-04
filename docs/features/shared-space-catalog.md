@@ -349,6 +349,14 @@ the other commands, the whole of what the handler does is
 `markSharedSpaceDeletedIn()`, exported beside it, so a Home-space handler
 holding the catalog cell can record the deletion in its own transaction.
 
+The same runtime retires a deleted profile with Home's `retireProfile`, where
+the deleted space is one of the person's profiles
+([`HOME_SPACE.md`](../common/conventions/HOME_SPACE.md)): both are sent by
+`PiecesController.markDeletedSpace`, each whatever becomes of the other. A
+Home older than `retireProfile` is sent the mark alone, and a Home-space
+handler that records a deletion through `markSharedSpaceDeletedIn()` retires
+nothing.
+
 A runtime hears of a deletion only from the memory server's answer for the
 space. One refused the space before it was deleted learns of the deletion only
 when it asks again, with `retrySpaceAccess(space)`, since the server sends no

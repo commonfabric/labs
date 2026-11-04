@@ -25,6 +25,9 @@ import {
   getDerivedInternalCellLink,
   getPatternIdentityRef,
   type IExtendedStorageTransaction,
+  isLink,
+  type MemorySpace,
+  parseLink,
   Runtime,
   sendEvent,
 } from "@commonfabric/runner";
@@ -87,6 +90,9 @@ interface HomeSurface {
   addSpace: { did: string; name: string };
   spaces: { did: string; name: string }[];
   createProfile: { name?: string };
+  profiles: unknown[];
+  retiredProfiles: unknown[];
+  restoreProfile: { profile?: unknown };
   chatManager: {
     createGroup: { requestId: string; title: string; members: string[] };
     openDirect: { requestId: string; counterpart: string };
@@ -125,6 +131,69 @@ async function compileHome(runtime: Runtime, revision?: string) {
   });
   homeCompiled = true;
   return compiled;
+}
+
+/**
+ * Runs the profile picker in `runtime` over `home`'s profile lists, as Home's
+ * Profile tab does, and returns its result.
+ */
+async function runProfilePicker(runtime: Runtime, home: Cell<HomeSurface>) {
+  const program = await resolveLocalProgram(
+    (resolver) => runtime.harness.resolve(resolver),
+    {
+      main: fromFileUrl(
+        new URL("../system/profile-picker/profile-picker.tsx", import.meta.url),
+      ),
+      root: fromFileUrl(new URL("..", import.meta.url)),
+    },
+  );
+  const compiled = await runtime.patternManager.compilePattern(program, {
+    space: owner.did(),
+  });
+  const picker = runtime.getCell<{ $UI: unknown }>(
+    owner.did(),
+    "home profile picker",
+    compiled.resultSchema,
+  );
+  const tx = runtime.edit();
+  runtime.run(tx, compiled, {
+    profiles: home.key("profiles"),
+    retiredProfiles: home.key("retiredProfiles"),
+    mru: home.key("mru" as keyof HomeSurface),
+    defaultProfile: home.key("defaultProfile" as keyof HomeSurface),
+    legacyDefaultProfileSpace: home.key(
+      "legacyDefaultProfileSpace" as keyof HomeSurface,
+    ),
+    privateInbox: home.key("privateInbox" as keyof HomeSurface),
+    offersSetDefault: true,
+  }, picker);
+  expect((await tx.commit().settled).error).toBeUndefined();
+  return picker;
+}
+
+/**
+ * The text of the view `root` holds, in document order: each element's
+ * children, strings and the views links name, followed as a renderer does.
+ * Props are not followed, so a link to a profile's document is not read.
+ */
+async function renderedText(runtime: Runtime, root: Cell<unknown>) {
+  const text: string[] = [];
+  const visit = async (value: unknown, base: Cell<unknown>): Promise<void> => {
+    if (isLink(value)) {
+      const cell = runtime.getCellFromLink(parseLink(value, base));
+      await cell.pull();
+      return visit(cell.getRaw(), cell);
+    }
+    if (typeof value === "string") text.push(value);
+    else if (Array.isArray(value)) {
+      for (const each of value) await visit(each, base);
+    } else if (isObjectNotArray(value) && "children" in value) {
+      await visit(value.children, base);
+    }
+  };
+  await root.pull();
+  await visit(root.getRaw(), root);
+  return text;
 }
 
 /** Opens the stored Home root, retaining its constructor-owned cells. */
@@ -2259,6 +2328,96 @@ describe("Home catalog deletion marks", () => {
             deleted: [{ space: gone }],
             byKind: { loom: { deleted: [{ space: gone }] } },
           });
+        },
+        undefined,
+        (server) => {
+          const refusing = refusingServer(server);
+          refuse = refusing.refuse;
+          return refusing.server as Server;
+        },
+      );
+    });
+  }
+});
+
+describe("Home profile retirement on deletion", () => {
+  for (const serving of [false, true]) {
+    it(`retires a profile whose space is deleted, the one \`#profile\` returns, and keeps it retired with serving ${serving}`, async () => {
+      let refuse: ReturnType<typeof refusingServer>["refuse"] | undefined;
+      await withHome(
+        serving,
+        async (runtime, home, _peer, server) => {
+          const links = { type: "array", items: { asCell: ["cell"] } } as const;
+          const spacesIn = async (key: "profiles" | "retiredProfiles") =>
+            ((await home.key(key).asSchema(links).pull()) ?? []).map((link) =>
+              link.getAsNormalizedFullLink().space
+            );
+          for (const name of ["Ada", "Bea"]) {
+            await sendReviewed(
+              runtime,
+              home.key("createProfile"),
+              { name },
+              "ProfileCreateSurface",
+              "CreateProfile",
+            );
+          }
+          await waitForCellValue<unknown[]>(
+            runtime,
+            home.key("profiles"),
+            (value) => (value?.length ?? 0) === 2,
+            { stuckLabel: "both profiles" },
+          );
+          // The first profile is the one `#profile` returns, which an
+          // ordinary retirement refuses; its runtime holds its document from
+          // creating it.
+          const [gone, kept] = await spacesIn("profiles");
+          writeDeletionTombstone(
+            await server.engineForSpace(gone),
+            gone,
+            owner.did(),
+          );
+          refuse!(gone, "deleted");
+          const controller = new PiecesController(
+            createSession({ identity: owner, spaceDid: owner.did() }),
+            runtime,
+          );
+          expect(await controller.markDeletedSpace(gone as MemorySpace)).toBe(
+            "not-listed",
+          );
+          await runtime.idle();
+          await waitForCellValue<unknown[]>(
+            runtime,
+            home.key("retiredProfiles"),
+            (value) => (value?.length ?? 0) === 1,
+            { stuckLabel: "the deleted profile retired" },
+          );
+          expect(await spacesIn("retiredProfiles")).toEqual([gone]);
+          // Neither a second deletion nor a restore brings it back, and the
+          // live profile is left as it is.
+          expect(await controller.markDeletedSpace(gone as MemorySpace)).toBe(
+            "not-listed",
+          );
+          const [listed] = await home.key("profiles").asSchema(links).pull();
+          await rejectInvocation(
+            runtime,
+            home.key("restoreProfile"),
+            { profile: listed },
+            server,
+            serving,
+            "Cannot restore a profile whose space is deleted.",
+          );
+          await runtime.idle();
+          expect(await spacesIn("retiredProfiles")).toEqual([gone]);
+          expect(await spacesIn("profiles")).toEqual([gone, kept]);
+          // This runtime still holds the deleted profile's document from
+          // creating it, which counts it as the user's own; the picker lists
+          // it only as deleted, with nothing to restore.
+          const picker = await runProfilePicker(runtime, home);
+          const shown = await renderedText(runtime, picker.key("$UI"));
+          expect(shown).toContain("Deleted profiles");
+          expect(shown).toContain(gone);
+          expect(shown).not.toContain("Removed profiles");
+          expect(shown).not.toContain("Restore");
         },
         undefined,
         (server) => {

@@ -131,6 +131,7 @@ import {
 import {
   type DeletionMarkDecision,
   markDeletedSpaceOf,
+  retireDeletedProfileOf,
 } from "./mark-deleted-space.ts";
 import {
   advertisedSystemRelease,
@@ -2597,13 +2598,15 @@ export class PiecesController<T = unknown> {
   }
 
   /**
-   * Records in Home's shared-space catalog that `space` is deleted, as
-   * `markDeletedSpaceOf()` says, for a Home the identity has: a Home is not
-   * created for it, and `no-home` is answered where there is none. This
-   * controller must be over the identity's Home space.
+   * Records in Home that `space` is deleted, for a Home the identity has: in
+   * its shared-space catalog, as `markDeletedSpaceOf()` says, and, where the
+   * space is a profile's, among its retired profiles, as
+   * `retireDeletedProfileOf()` says. A Home is not created for it, and
+   * `no-home` is answered where there is none. This controller must be over
+   * the identity's Home space.
    *
-   * Resolves with what was decided, once any mark is sent, which is before
-   * Home has handled it.
+   * Resolves with what was decided for the catalog, once anything is sent,
+   * which is before Home has handled it.
    */
   async markDeletedSpace(
     space: MemorySpace,
@@ -2611,7 +2614,15 @@ export class PiecesController<T = unknown> {
     this.#assertHomeSpace("mark a deleted space");
     const home = await this.getDefaultPattern(false);
     if (home === undefined) return "no-home";
-    return await markDeletedSpaceOf(home, space);
+    // Each is sent whatever becomes of the other, since nothing sends either
+    // again; a failure of either is still reported.
+    const [mark, retirement] = await Promise.allSettled([
+      markDeletedSpaceOf(home, space),
+      retireDeletedProfileOf(home, space),
+    ]);
+    if (mark.status === "rejected") throw mark.reason;
+    if (retirement.status === "rejected") throw retirement.reason;
+    return mark.value;
   }
 
   #assertHomeSpace(operation: string): void {
