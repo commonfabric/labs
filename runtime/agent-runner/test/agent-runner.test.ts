@@ -83,7 +83,13 @@ describe("agent runner", () => {
   let requests: number;
 
   /** A runtime of its own on the toolshed at `host`, as the requester. */
-  const connect = (host: string, options: { agentBuiltin?: boolean } = {}) => {
+  const connect = (
+    host: string,
+    options: {
+      agentBuiltin?: boolean;
+      readCeiling?: readonly CfcConfClause[];
+    } = {},
+  ) => {
     const storageManager = EmulatedStorageManager.connectTo(servers[host], {
       as: signer,
     });
@@ -91,6 +97,12 @@ describe("agent runner", () => {
       apiUrl: new URL(host),
       storageManager,
       ...(options.agentBuiltin ? { experimental: { agentBuiltin: true } } : {}),
+      ...(options.readCeiling !== undefined
+        ? {
+          cfcReadMaxConfidentiality: options.readCeiling,
+          cfcEnforcementMode: "enforce-strict" as const,
+        }
+        : {}),
     });
     managers.push(storageManager);
     runtimes.push(runtime);
@@ -1592,6 +1604,86 @@ describe("agent runner", () => {
     );
     expect(ended.attempts).toBe(1);
     expect(cloudRecord.get()?.state).toBe("queued");
+  });
+
+  it("reads later progress within its ceiling after intermediate reports were hidden", async () => {
+    const admitted = { type: CFC_ATOM_TYPE.User, subject: home };
+    const hidden = {
+      type: CFC_ATOM_TYPE.User,
+      subject: (await Identity.generate()).did(),
+    };
+    const started = defer<ClaimedAgentRun>();
+    const finished = defer<AgentRunExecution>();
+    await startRunner((run) => {
+      started.resolve(run);
+      return finished.promise;
+    }, { progress: true });
+    const result = await submit({ progress: true });
+    const run = await started.promise;
+    const reader = connect(CLOUD, { readCeiling: [admitted] });
+    const visible = reader.getCellFromLink(result.getAsNormalizedFullLink());
+    const message = visible.key("progress").key("message");
+    const reports: [Cell<unknown>, string, boolean][] = [];
+    try {
+      for (
+        const [sequence, clauses, text, readable] of [
+          [1, [admitted], "Started", true],
+          [2, [admitted, hidden], "Private intermediate result", false],
+          [3, [hidden], "Another private intermediate result", false],
+          [4, [admitted], "Finished checking", true],
+          [5, [], "Done", true],
+        ] as const
+      ) {
+        // Each report is independently labeled; replacing the current link
+        // must not carry a hidden predecessor's label into its successor.
+        const milestone = patternSide.getCell(
+          home,
+          `ceiling-progress-${sequence}`,
+          {
+            type: "object",
+            properties: {
+              message: { type: "string" },
+              sequence: { type: "integer" },
+            },
+            ifc: { confidentiality: [...clauses] },
+          },
+        );
+        await patternSide.editWithRetry((tx) => {
+          milestone.withTx(tx).set({ message: text, sequence });
+        });
+        reports.push([milestone, text, readable]);
+        expect(await run.publishProgress!(milestone.getAsNormalizedFullLink()))
+          .toBe(true);
+        await waitForCellValue<{ sequence?: number }>(
+          patternSide,
+          result.key("progress"),
+          (value) => value?.sequence === sequence,
+        );
+        await visible.sync();
+        if (readable) {
+          expect(await message.pull()).toBe(text);
+          expect(message.get()).toBe(text);
+        } else {
+          await expect(message.pull()).rejects.toThrow(/read ceiling/);
+          expect(() => message.get()).toThrow(/read ceiling/);
+        }
+      }
+    } finally {
+      finished.resolve({ outcome: "refused" });
+    }
+    await waitForState(result, "refused");
+    await visible.sync();
+    expect(message.get()).toBe("Done");
+    for (const [report, text, readable] of reports) {
+      expect((await report.pull() as { message: string }).message).toBe(text);
+      const original = reader.getCellFromLink(report.getAsNormalizedFullLink())
+        .key("message");
+      if (readable) {
+        expect(await original.pull()).toBe(text);
+      } else {
+        await expect(original.pull()).rejects.toThrow(/read ceiling/);
+      }
+    }
   });
 
   it("rejects a progress callback after the record moves to a later attempt", async () => {

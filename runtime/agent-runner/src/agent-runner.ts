@@ -521,7 +521,7 @@ export class AgentRunner {
       if (current.key("state").get() !== "queued") return false;
       if (current.key("cancelRequestedAt").get() !== undefined) return false;
       current.key("state").set("claimed");
-      current.key("progress").set(undefined);
+      current.key("progress").setRaw(undefined);
       current.key("stateSince").set(stamp);
       current.key("claim").set({ runner: this.#options.runnerId, leaseUntil });
       current.key("attempts").set((current.key("attempts").get() ?? 0) + 1);
@@ -607,8 +607,12 @@ export class AgentRunner {
                     this.#active.get(key)?.token !== active.token ||
                     current.key("progressRequested").get() !== true
                   ) return false;
-                  current.key("progress").set(
-                    followed.runtime.getCellFromLink(link),
+                  // Replace the return link without reading through the prior
+                  // report, whose confidentiality belongs to that report.
+                  current.key("progress").setRawUntyped(
+                    followed.runtime.getCellFromLink(link).getAsLink({
+                      includeSchema: true,
+                    }),
                   );
                   current.key("claim").key("leaseUntil").set(leaseUntil());
                 });
