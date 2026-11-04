@@ -33,7 +33,7 @@ describe("orientation", () => {
     );
     expect(prompt).toContain("A grant's name is a lead, not its contents");
     expect(prompt).toContain("not given does not mean absent");
-    expect(prompt).toContain(
+    expect(prompt).not.toContain(
       "The parent can run an indexed pattern with run_pattern",
     );
     expect(finishTaskTool.descriptor.description).toContain(

@@ -4852,9 +4852,9 @@ Deno.test("resolveCfHarnessCliSystemPrompt offers the pattern index only to a ru
     ),
     false,
   );
-  assertStringIncludes(
-    indexed!,
-    "The parent can run an indexed pattern with run_pattern",
+  assertEquals(
+    indexed?.includes("The parent can run an indexed pattern with run_pattern"),
+    false,
   );
   assertEquals(unindexed?.includes("pattern index"), false);
   assertEquals(unindexed?.includes("indexed pattern"), false);
