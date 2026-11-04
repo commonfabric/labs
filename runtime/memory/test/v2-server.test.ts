@@ -5,6 +5,7 @@ import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { FabricValue } from "@commonfabric/api";
 import { parseClientMessage, Server, SessionRegistry } from "../v2/server.ts";
 import {
+  CODEMIRROR_CHANGESET_CODEC,
   decodeMemoryBoundary,
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
@@ -12,6 +13,8 @@ import {
   type HelloOkMessage,
   MAX_ENTITY_ID_PAGE_SIZE,
   MEMORY_PROTOCOL,
+  operationAnchorsDocId,
+  operationBaselineHash,
   resetOwnWriteEchoConfig,
   type ResponseMessage,
   type ServerMessage,
@@ -19,6 +22,7 @@ import {
   type SessionOpenAuthMetadata,
   type SessionSync,
   setOwnWriteEchoConfig,
+  toValuePath,
 } from "../v2.ts";
 import { createGraphFixture } from "./v2-graph.fixture.ts";
 import { authorizeLoopbackSessionOpen } from "../v2/session-open-auth.ts";
@@ -2924,6 +2928,102 @@ Deno.test("memory v2 server classifies own-write echo by the head-producing op",
     const deleted = assertEffect(shiftMessage(messages));
     assertEquals(deleted.effect.upserts, []);
     assertEquals(deleted.effect.caughtUpLocalSeq, 6);
+    assertEquals(messages, []);
+  } finally {
+    await server.close();
+  }
+});
+
+Deno.test("memory v2 server delivers the anchors document its engine wrote to the writer", async () => {
+  // The writer's commit adds an anchor; the anchors document is the engine's
+  // write from it, which the writer holds nothing of, so the echo carries it
+  // in full where an own `set` head would be elided.
+
+  const server = createServer("memory://memory-v2-server-echo-anchors");
+  const messages: ServerMessage[] = [];
+  const writer = server.connect((message) => messages.push(message));
+  const space = "did:key:z6Mk-memory-v2-echo-anchors";
+  const anchorsId = operationAnchorsDocId({ id: "of:doc:a", path: ["body"] });
+
+  try {
+    await writer.receive(encodeMemoryBoundary(HELLO));
+    const sessionOpen = expectHelloOk(messages);
+    await writer.receive(encodeMemoryBoundary({
+      type: "session.open",
+      requestId: "open",
+      space,
+      session: {},
+      invocation: authInvocation(sessionOpen),
+    }));
+    const sessionId =
+      nextResponse<{ sessionId: string }>(messages).ok!.sessionId;
+    await writer.receive(encodeMemoryBoundary({
+      type: "session.watch.set",
+      requestId: "watch",
+      space,
+      sessionId,
+      watches: [{
+        id: "root",
+        kind: "graph",
+        query: {
+          roots: [
+            { id: "of:doc:a", selector: { path: [], schema: false } },
+            { id: anchorsId, selector: { path: [], schema: false } },
+          ],
+        },
+      }],
+    }));
+    shiftMessage(messages);
+
+    const transact = async (localSeq: number, operations: FabricValue[]) => {
+      await writer.receive(encodeMemoryBoundary({
+        type: "transact",
+        requestId: `commit-${localSeq}`,
+        space,
+        sessionId,
+        commit: {
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations,
+        },
+      }));
+      return nextResponse<any>(messages).ok!.seq;
+    };
+
+    await transact(1, [{
+      op: "set",
+      id: "of:doc:a",
+      value: { value: { body: "hello" } },
+    }]);
+    await server.flushSessions([space]);
+    assertEquals(assertEffect(shiftMessage(messages)).effect.upserts, []);
+
+    const seq = await transact(2, [{
+      op: "apply-op",
+      id: "of:doc:a",
+      path: toValuePath(["body"]),
+      codec: CODEMIRROR_CHANGESET_CODEC,
+      submissionId: "writer:1",
+      base: null,
+      baselineHash: operationBaselineHash("hello"),
+      payload: { updates: [] },
+      anchors: { add: [{ id: "h", from: 0, to: 5 }] },
+    }]);
+    await server.flushSessions([space]);
+    const echoed = assertEffect(shiftMessage(messages));
+    assertEquals(echoed.effect.upserts, [{
+      branch: "",
+      id: anchorsId,
+      scope: "space",
+      seq,
+      doc: {
+        value: {
+          epoch: 1,
+          version: 0,
+          anchors: [{ id: "h", from: 0, to: 5 }],
+        },
+      },
+    }]);
     assertEquals(messages, []);
   } finally {
     await server.close();

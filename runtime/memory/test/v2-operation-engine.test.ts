@@ -2962,6 +2962,111 @@ describe("v2-operation-engine", () => {
       }
     });
 
+    it("changes nothing, activates nothing and refuses nothing for a remove on an inactive field", async () => {
+      // An inactive field holds no anchors, so a remove there, never activated
+      // or released, is a no-op, whatever base or hash it states.
+
+      const { engine, path } = await openTestEngine();
+      try {
+        setup(engine, "of:inactive", "abc");
+        const removes = [
+          anchorsOp("of:inactive", "alice:1", "abc", { remove: ["a"] }),
+          anchorsOp("of:inactive", "alice:2", "stale text", { remove: ["a"] }),
+          anchorsOp("of:inactive", "alice:3", { epoch: 4, version: 2 }, {
+            remove: ["a"],
+          }),
+        ];
+        for (const remove of removes) {
+          const applied = commit(engine, [remove]);
+          expect(applied.operationResolutions).toMatchObject([{
+            from: { epoch: 0, version: 0 },
+            to: { epoch: 0, version: 0 },
+            operations: [],
+            anchors: { added: [], removed: [] },
+          }]);
+          expect(applied.revisions).toEqual([]);
+        }
+        expect(queryOperationField(engine, { id: "of:inactive", path: body }))
+          .toMatchObject({ active: false, anchors: [] });
+        expect(read(engine, { id: anchorsDoc("of:inactive") })).toBeNull();
+        // An operation that also edits takes the ordinary checks, so a base
+        // the inactive field cannot take is refused as one.
+        expect(() =>
+          commit(engine, [
+            anchorsOp(
+              "of:inactive",
+              "alice:refused",
+              { epoch: 4, version: 2 },
+              { remove: ["a"] },
+              changes(3, 3, "x"),
+            ),
+          ])
+        ).toThrow(OpCursorMismatchError);
+        // Nor does it matter what the inactive field holds.
+        commit(engine, [{
+          op: "set",
+          id: "of:inactive",
+          value: { value: { body: 42 } },
+        }]);
+        expect(
+          commit(engine, [
+            anchorsOp("of:inactive", "alice:number", "abc", { remove: ["a"] }),
+          ]).operationResolutions,
+        ).toMatchObject([{ operations: [], anchors: { removed: [] } }]);
+        commit(engine, [{
+          op: "set",
+          id: "of:inactive",
+          value: { value: { body: "abc" } },
+        }]);
+
+        // After a release, the remove reports the ended epoch's cursor.
+        commit(engine, [
+          anchorsOp("of:inactive", "alice:4", "abc", {
+            add: [{ id: "a", from: 0, to: 1 }],
+          }),
+        ]);
+        commit(engine, [{
+          op: "release-op-field",
+          id: "of:inactive",
+          path: body,
+          codec: CODEMIRROR_CHANGESET_CODEC,
+          cursor: { epoch: 1, version: 0 },
+        }]);
+        expect(
+          commit(engine, [
+            anchorsOp("of:inactive", "alice:5", "abc", { remove: ["a"] }),
+          ]).operationResolutions?.[0],
+        ).toMatchObject({ from: { epoch: 1, version: 0 }, operations: [] });
+        expect(queryOperationField(engine, { id: "of:inactive", path: body }))
+          .toMatchObject({ active: false });
+      } finally {
+        close(engine);
+        await Deno.remove(path);
+      }
+    });
+
+    it("activates an inactive field for a remove that also edits the text", async () => {
+      const { engine, path } = await openTestEngine();
+      try {
+        setup(engine, "of:typed-remove", "abc");
+        commit(engine, [
+          anchorsOp(
+            "of:typed-remove",
+            "alice:1",
+            "abc",
+            { remove: ["a"] },
+            changes(3, 3, "d"),
+          ),
+        ]);
+        expect(
+          queryOperationField(engine, { id: "of:typed-remove", path: body }),
+        ).toMatchObject({ active: true, materialized: "abcd" });
+      } finally {
+        close(engine);
+        await Deno.remove(path);
+      }
+    });
+
     it("deletes the anchors document when the field is released or its entity deleted", async () => {
       const { engine, path } = await openTestEngine();
       try {

@@ -5598,6 +5598,38 @@ const applyOperation = (
     operation.path,
   );
   const activeField = priorField?.active === 1 ? priorField : undefined;
+  // An inactive field holds no anchors, so an operation whose payload holds
+  // no change and whose anchors only remove changes nothing there, whatever
+  // the field holds and whatever base or hash it states, and it neither
+  // activates the field nor is refused (§7.7.4): a remove committed after an
+  // add still in flight, or after the field's release, lands as the no-op it
+  // is. Any other operation at an inactive field takes the checks below.
+  if (
+    !activeField && operation.anchors !== undefined &&
+    (operation.anchors.add ?? []).length === 0 &&
+    engine.operationCodecs.get(operation.codec)?.isEmpty?.(
+        operation.payload,
+      ) === true
+  ) {
+    const cursor = {
+      epoch: priorField?.epoch ?? 0,
+      version: priorField?.version ?? 0,
+    };
+    return {
+      resolution: {
+        operationIndex: opIndex,
+        address,
+        codec: operation.codec,
+        submissionId: operation.submissionId,
+        from: cursor,
+        to: cursor,
+        operations: [],
+        duplicate: false,
+        anchors: { added: [], removed: [] },
+      },
+      revisions: [],
+    };
+  }
 
   let epoch: number;
   let currentVersion: number;

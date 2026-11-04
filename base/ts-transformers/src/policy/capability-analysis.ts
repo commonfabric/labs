@@ -266,6 +266,8 @@ const WRITER_METHODS = new Set([
   "update",
   "send",
   "applyChanges",
+  "addAnchor",
+  "removeAnchor",
   ...mergeableMethods("scalar-writer"),
 ]);
 const ARRAY_IDENTITY_WRITER_METHODS = new Set([

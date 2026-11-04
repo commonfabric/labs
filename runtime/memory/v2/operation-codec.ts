@@ -51,6 +51,13 @@ export type OperationCodec = {
   integrate(input: OperationCodecInput): OperationCodecResult;
 
   /**
+   * Whether `payload` holds no change at all, so that it integrates nothing
+   * into any value, whatever that value is. A codec that leaves this out
+   * can say that of no payload.
+   */
+  isEmpty?(payload: FabricValue): boolean;
+
+  /**
    * Maps `anchors` through integrated `operations`, in order, and returns
    * them stated against the value after. Deterministic: the same anchors and
    * operations map to the same ranges in every process, and `integrate` maps
@@ -102,6 +109,11 @@ export class OperationCodecRegistry {
       throw new Error(`operation codec already registered: ${codec.id}`);
     }
     this.#codecs.set(codec.id, codec);
+  }
+
+  /** The codec registered under `id`, or `undefined` for none. */
+  get(id: string): OperationCodec | undefined {
+    return this.#codecs.get(id);
   }
 
   require(id: string): OperationCodec {
@@ -267,6 +279,10 @@ const rebase = (
 
 const codeMirrorChangeSetCodec: OperationCodec = {
   id: CODEMIRROR_CHANGESET_CODEC,
+  isEmpty(payload) {
+    return isObjectNotArray(payload) && Object.keys(payload).length === 1 &&
+      Array.isArray(payload.updates) && payload.updates.length === 0;
+  },
   integrate({ materialized, submitted, intervening, anchors }) {
     if (typeof materialized !== "string") {
       throw new Error("CodeMirror operations require a string field");

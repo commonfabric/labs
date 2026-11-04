@@ -1,8 +1,8 @@
 /**
- * `applyChanges()` from a served handler, whose transaction seals into a wave
- * rather than committing on its own. The wave drops the reads of what it
- * seals, so the edit's own baseline hash is what keeps it off text the handler
- * did not read.
+ * `applyChanges()` and `addAnchor()` from a served handler, whose transaction
+ * seals into a wave rather than committing on its own. The wave drops the
+ * reads of what it seals, so the edit's own baseline hash is what keeps it
+ * off text the handler did not read.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -11,6 +11,8 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
   CODEMIRROR_CHANGESET_CODEC,
+  type Operation,
+  operationAnchorsDocId,
   toValuePath,
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
@@ -106,6 +108,120 @@ describe("collaborative-text-changes-serving", () => {
     await waves.commitWave();
 
     expect(storedBody()).toBe("abcd!");
+  });
+
+  it("commits a served handler's anchors through its wave", async () => {
+    // One anchor is stated against the text the handler's edit leaves, and
+    // one against the version the peer's keystroke made.
+
+    await handle("anchor", (body) => {
+      body.applyChanges({ from: 3, insert: "d" });
+      body.addAnchor("cd", { from: 2, to: 4 });
+      body.addAnchor("b", { from: 1, to: 2 }, {
+        base: { epoch: 1, version: 1 },
+      });
+    });
+    await waves.commitWave();
+
+    const { id } = note.getAsNormalizedFullLink();
+    expect(storedBody()).toBe("abcd");
+    expect(
+      Engine.read(waves.engine, {
+        id: operationAnchorsDocId({ id, path: ["body"] }),
+      }),
+    ).toEqual({
+      value: {
+        epoch: 1,
+        version: 2,
+        anchors: [{ id: "b", from: 1, to: 2 }, { id: "cd", from: 2, to: 4 }],
+      },
+    });
+  });
+
+  it("commits a served handler's anchor that changes no text through its wave", async () => {
+    await handle("anchor", (body) => body.addAnchor("b", { from: 1, to: 2 }));
+    await waves.commitWave();
+
+    const { id } = note.getAsNormalizedFullLink();
+    expect(storedBody()).toBe("abc");
+    expect(
+      Engine.read(waves.engine, {
+        id: operationAnchorsDocId({ id, path: ["body"] }),
+      }),
+    ).toEqual({
+      value: { epoch: 1, version: 1, anchors: [{ id: "b", from: 1, to: 2 }] },
+    });
+  });
+
+  describe("an anchor added against a version", () => {
+    // Another session changes the note straight in the store, so the serving
+    // replica has not seen it when the handler runs. A based anchor depends
+    // on nothing the body holds, but the handler's other reads still count.
+
+    /** Applies `operation` to the note from the editor's own session. */
+    const elsewhere = (operation: Operation) =>
+      Engine.applyCommit(waves.engine, {
+        sessionId: "session:editor",
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [operation],
+        },
+      });
+
+    /** The anchors document of the note's body as the store holds it. */
+    const storedAnchors = () =>
+      Engine.read(waves.engine, {
+        id: operationAnchorsDocId({
+          id: note.getAsNormalizedFullLink().id,
+          path: ["body"],
+        }),
+      });
+
+    it("requeues a served handler whose read of another field of the note went stale", async () => {
+      elsewhere({
+        op: "patch",
+        id: note.getAsNormalizedFullLink().id,
+        patches: [{ op: "replace", path: "/value/title", value: "Agenda" }],
+      });
+      const tx = waves.runtime.edit();
+      stampWaveRunContext(tx, { actionId: "anchor", kind: "event-handler" });
+      expect(note.withTx(tx).key("title").get()).toBe("Notes");
+      note.withTx(tx).key("body").addAnchor("b", { from: 1, to: 2 }, {
+        base: { epoch: 1, version: 1 },
+      });
+      await tx.commit().settled;
+      const outcome = await waves.commitWave();
+
+      expect(outcome.dispositions).toEqual([{ kind: "requeued" }]);
+      expect(storedAnchors()).toBeNull();
+    });
+
+    it("commits a served handler's anchor over a keystroke its replica never saw", async () => {
+      elsewhere({
+        op: "apply-op",
+        id: note.getAsNormalizedFullLink().id,
+        path: toValuePath(["body"]),
+        codec: CODEMIRROR_CHANGESET_CODEC,
+        submissionId: "editor:1",
+        base: { epoch: 1, version: 1 },
+        payload: { updates: [{ clientId: "editor", changes: [3, [0, "d"]] }] },
+      });
+      await handle("anchor", (body) =>
+        body.addAnchor("b", { from: 1, to: 2 }, {
+          base: { epoch: 1, version: 1 },
+        }));
+      const outcome = await waves.commitWave();
+
+      expect(outcome.dispositions).toEqual([{ kind: "committed" }]);
+      expect(storedAnchors()).toEqual({
+        value: {
+          epoch: 1,
+          version: 2,
+          anchors: [{ id: "b", from: 1, to: 2 }],
+        },
+      });
+    });
   });
 
   it("keeps a served handler's edit off a keystroke its replica never saw", async () => {

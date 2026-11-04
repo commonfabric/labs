@@ -1,10 +1,12 @@
 import type {
+  AnchorRange,
   AnyBrandedCell,
   CollectionIndexData,
   CollectionIndexKey,
   CollectionIndexKeyEntry,
   GroupIndex,
   KeyIndex,
+  OpCursor,
   ReadonlyCell,
   TextChange,
 } from "@commonfabric/api";
@@ -204,6 +206,7 @@ import {
   isStorageTransaction,
 } from "./storage/extended-storage-transaction.ts";
 import type {
+  AnchorChange,
   ChangeGroup,
   EventAppendDeliveryOutcome,
   IExtendedStorageTransaction,
@@ -215,6 +218,7 @@ import { usesLocalReads } from "./storage/local-read-policy.ts";
 import {
   allowMutableTransactionRead,
   excludeReadFromConflict,
+  ignoreReadForCommit,
   internalVerifierRead,
   markReadAsAttemptedWrite,
   mergeableOpRead,
@@ -1060,6 +1064,8 @@ const cellMethods = new Set<
   "addUnique",
   "increment",
   "applyChanges",
+  "addAnchor",
+  "removeAnchor",
   "remove",
   "removeAll",
   "removeByValue",
@@ -3588,6 +3594,101 @@ export class CellImpl<T extends FabricValue>
       next,
       this.#frame?.cause,
     );
+  }
+
+  /**
+   * Anchors `range` of this string cell under `id`. Without `base`, the range
+   * refers to the value this transaction holds, and the commit carries a read
+   * of the field, as `applyChanges()` does. With `base`, it refers to the
+   * field's text at that version, and the store maps it from there, whatever
+   * the field holds by then.
+   *
+   * @throws when called outside a transaction, when the cell holds no string,
+   *   when the range does not fit the string, when the transaction already
+   *   wrote the field another way, when `base` is not a version, or when
+   *   another anchor of the field was added against a different version in
+   *   this transaction.
+   */
+  addAnchor(
+    id: string,
+    range: AnchorRange,
+    options?: { base?: OpCursor },
+  ): void {
+    const base = options?.base;
+    this.#recordAnchorChange("addAnchor", {
+      op: "add",
+      id,
+      from: range.from,
+      to: range.to,
+      ...(base !== undefined ? { base } : {}),
+    }, base === undefined);
+  }
+
+  /**
+   * Removes the anchor `id` from this string cell, whatever the field holds.
+   * Removing an id the field does not hold changes nothing, and the commit
+   * carries no read of the field for it.
+   *
+   * @throws when called outside a transaction, or when the cell holds no
+   *   string.
+   */
+  removeAnchor(id: string): void {
+    this.#recordAnchorChange("removeAnchor", { op: "remove", id }, false);
+  }
+
+  /**
+   * Helper for `addAnchor()` and `removeAnchor()`, which records `change` to
+   * this string cell's anchors. `method` names the caller, for its errors. A change `againstText` is
+   * stated against the value the transaction holds, so the commit carries the
+   * transaction's read of the field as its precondition; any other change
+   * resolves against what the store holds, and the read stays out of the
+   * commit's conflict set.
+   */
+  #recordAnchorChange(
+    method: string,
+    change: AnchorChange,
+    againstText: boolean,
+  ): void {
+    if (!this.#tx) {
+      throw new Error(
+        `Cell.${method}() requires a transaction and a string value\n` +
+          "help: use in handlers only, ensure cell is typed as string",
+      );
+    }
+    if (!this.#synced) this.#startLoad();
+
+    const resolvedLink = resolveLink(
+      this.#runtime,
+      this.#tx,
+      this.#link,
+      "value",
+      {
+        markIfcCrossings: true,
+      },
+    );
+    // An anchor change is a write of the field: anchors are stored with it,
+    // and their ranges and ids say what its text holds. The read below is
+    // marked as an attempted write of the field, which is what puts the
+    // field's write policy, its writers and its ceiling, before CFC, as
+    // `applyCfcSchemaToExistingValue()` does for a write that leaves the value
+    // alone.
+    recordRelevantSchemaWritePolicyInput(
+      this.#tx,
+      resolvedLink,
+      resolvedLink.schema ?? this.schema,
+    );
+    const currentValue = this.#tx.readValueOrThrow(resolvedLink, {
+      meta: againstText
+        ? markReadAsAttemptedWrite
+        : { ...markReadAsAttemptedWrite, ...ignoreReadForCommit },
+    });
+    if (typeof currentValue !== "string") {
+      throw new Error(
+        `Cell.${method}() requires a transaction and a string value\n` +
+          "help: use in handlers only, ensure cell is typed as string",
+      );
+    }
+    this.#tx.recordAnchorChanges(resolvedLink, [change]);
   }
 
   /**

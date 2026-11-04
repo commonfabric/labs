@@ -597,6 +597,7 @@ describe("CodeMirror operation collaboration", () => {
           scopeKey: "space",
           path: [],
         },
+        anchors: [],
       },
     ]);
   });
@@ -862,6 +863,106 @@ describe("CodeMirror operation collaboration", () => {
     expect(errors).toEqual([]);
     expect(view.state.doc.toString()).toBe("aXYbc");
     expect(controller.active).toBe(true);
+  });
+
+  it("states the installed snapshot's anchors at the confirmed cursor", async () => {
+    const initial = {
+      ...activeSnapshotAt("abc", 1),
+      anchors: [{ id: "c1", from: 1, to: 3 }],
+    };
+    const { controller, errors } = controllerHarness({
+      initial,
+      apply: resolutionFor,
+    });
+
+    await controller.start();
+
+    expect(errors).toEqual([]);
+    expect(controller.synchronizationSnapshot?.confirmedCursor).toEqual({
+      epoch: 1,
+      version: 1,
+    });
+    expect(controller.synchronizationSnapshot?.anchors).toEqual([
+      { id: "c1", from: 1, to: 3 },
+    ]);
+  });
+
+  it("notifies observers of anchors a snapshot at the unchanged cursor restates", async () => {
+    let subscriber: ((snapshot: OperationFieldSnapshot) => void) | undefined;
+    const initial = activeSnapshotAt("abc", 1);
+    const { controller, errors } = controllerHarness({
+      initial,
+      apply: resolutionFor,
+      subscribe: (callback) => subscriber = callback,
+    });
+    await controller.start();
+    const observed: Array<readonly unknown[] | undefined> = [];
+    controller.observeSynchronization((snapshot) =>
+      observed.push(snapshot?.anchors)
+    );
+
+    subscriber?.({ ...initial, anchors: [{ id: "c1", from: 0, to: 2 }] });
+    subscriber?.({ ...initial, anchors: [{ id: "c1", from: 0, to: 2 }] });
+
+    expect(errors).toEqual([]);
+    expect(observed).toEqual([[], [{ id: "c1", from: 0, to: 2 }]]);
+  });
+
+  it("maps anchors through the operations an apply response integrates", async () => {
+    const initial = {
+      ...activeSnapshotAt("abc", 1),
+      anchors: [
+        { id: "after", from: 1, to: 3 },
+        { id: "point", from: 0, to: 0 },
+      ],
+    };
+    // The follow-up query answers with the older cursor, which the controller
+    // ignores, so only the response moves the anchors.
+    const { controller, view, errors } = controllerHarness({
+      initial,
+      followup: initial,
+      apply: resolutionFor,
+    });
+    await controller.start();
+
+    view.dispatch({ changes: { from: 0, insert: "X" } });
+    await controller.localDocChanged();
+
+    expect(errors).toEqual([]);
+    expect(view.state.doc.toString()).toBe("Xabc");
+    expect(controller.synchronizationSnapshot?.confirmedCursor.version).toBe(
+      2,
+    );
+    expect(controller.synchronizationSnapshot?.anchors).toEqual([
+      { id: "after", from: 2, to: 4 },
+      { id: "point", from: 0, to: 0 },
+    ]);
+  });
+
+  it("takes the anchors of a snapshot that integrates operations", async () => {
+    let subscriber: ((snapshot: OperationFieldSnapshot) => void) | undefined;
+    const initial = {
+      ...activeSnapshotAt("abc", 1),
+      anchors: [{ id: "c1", from: 0, to: 1 }],
+    };
+    const { controller, errors } = controllerHarness({
+      initial,
+      apply: resolutionFor,
+      subscribe: (callback) => subscriber = callback,
+    });
+    await controller.start();
+    const next = acceptedResolutionAt("abc", 1, 3, "!", "bob:2");
+
+    subscriber?.({
+      ...activeSnapshot("abc!", next),
+      operations: next.operations,
+      anchors: [{ id: "c2", from: 3, to: 4 }],
+    });
+
+    expect(errors).toEqual([]);
+    expect(controller.synchronizationSnapshot?.anchors).toEqual([
+      { id: "c2", from: 3, to: 4 },
+    ]);
   });
 
   it("rejects a divergent snapshot at the current cursor", async () => {

@@ -24,6 +24,7 @@
     "__cfHelpers",
     "action",
     "agent",
+    "anchorsOf",
     "assert",
     "cell",
     "cfSqlite",
