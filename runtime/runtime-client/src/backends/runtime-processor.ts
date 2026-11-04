@@ -3344,7 +3344,7 @@ export class RuntimeProcessor {
    * found, or that nothing is there, asks this first.
    */
   #spaceDeletion(space: MemorySpace): Error | undefined {
-    const refusal = this.#runtime.storageManager.spaceAccessError?.(space);
+    const refusal = this.#runtime.storageManager?.spaceAccessError?.(space);
     return isDeletedSpaceError(refusal) ? refusal : undefined;
   }
 
