@@ -5165,6 +5165,8 @@ export class WatchView {
   #subscribers = 0;
   #syncQueue: SessionSync[] = [];
   #syncPending = new Set<PromiseWithResolvers<IteratorResult<SessionSync>>>();
+  /** Callers of `whenSyncsConsumed()`, until the consumer comes back. */
+  #syncsConsumedWaiters: Array<() => void> = [];
   #entities = new Map<string, EntitySnapshot>();
   #orderedEntitiesCache: EntitySnapshot[] | null = null;
   #closed = false;
@@ -5323,9 +5325,33 @@ export class WatchView {
         }
         const pending = Promise.withResolvers<IteratorResult<SessionSync>>();
         this.#syncPending.add(pending);
+        this.#releaseSyncsConsumedWaiters();
         return await pending.promise;
       },
     };
+  }
+
+  /**
+   * Resolves once the consumer of `subscribeSync()` has come back for another
+   * sync with none left to give it, or once this view has closed. A consumer
+   * that finishes with each sync before it asks for the next has then finished
+   * with every sync pushed before this call.
+   */
+  whenSyncsConsumed(): Promise<void> {
+    if (
+      this.#closed ||
+      (this.#syncQueue.length === 0 && this.#syncPending.size > 0)
+    ) {
+      return Promise.resolve();
+    }
+    const { promise, resolve } = Promise.withResolvers<void>();
+    this.#syncsConsumedWaiters.push(resolve);
+    return promise;
+  }
+
+  /** Helper for `subscribeSync()` and `close()`, which ends the waits. */
+  #releaseSyncsConsumedWaiters(): void {
+    for (const resolve of this.#syncsConsumedWaiters.splice(0)) resolve();
   }
 
   push(result: GraphQueryResult): void {
@@ -5367,6 +5393,7 @@ export class WatchView {
     }
     this.#pending.clear();
     this.#subscribers = 0;
+    this.#releaseSyncsConsumedWaiters();
     for (const pending of this.#syncPending) {
       pending.resolve({
         done: true,

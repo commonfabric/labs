@@ -233,6 +233,37 @@ describe("executor-quiescence", () => {
     });
   });
 
+  it("finds a frame already applied once `framesApplied()` resolves", async () => {
+    // The wait reads what a frame set off in one synchronous stretch, so what
+    // the frame carries has to be in the replica by the time this returns.
+    await withPattern(CHAIN_SOURCE, {}, async ({ serving, runtime, space }) => {
+      const reader = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: EmulatedStorageManager.connectTo(serving.server, {
+          as: owner,
+        }),
+        experimental: { serverExecution: true },
+      });
+      try {
+        const schema = { type: "string" } as const;
+        const written = runtime.getCell<string>(space, "written", schema);
+        const read = reader.getCell<string>(space, "written", schema);
+        const cancel = read.sink(() => {});
+        await reader.storageManager.synced();
+        const tx = runtime.edit();
+        written.withTx(tx).set("arrived");
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await serving.server.idle();
+        await reader.storageManager.inputSynced?.();
+        await reader.storageManager.framesApplied?.();
+        expect(read.getRaw()).toBe("arrived");
+        cancel();
+      } finally {
+        await reader.dispose();
+      }
+    });
+  });
+
   it("resolves after an event only a backstop will drain again has its consequence", async () => {
     // The stream belongs to no piece, so each drain defers it and leaves it for
     // the rescan timer, until the deferrals run out and it is dropped. Between

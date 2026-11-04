@@ -600,6 +600,16 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   inputSynced?(): Promise<void>;
 
   /**
+   * Resolves once every frame the connection has handed over has been applied
+   * and has notified its subscribers, so that a synchronous read of the
+   * scheduler's state afterward sees the work those frames set off. Unlike
+   * `inputSynced()`, this rests on an application that nothing parks behind:
+   * a frame's novelty can stay shadowed by a sealed commit, but its application
+   * finishes.
+   */
+  framesApplied?(): Promise<void>;
+
+  /**
    * Issue an ordered-after round trip on every open space connection, so that
    * any subscription fan-out the server has already sent has been received and
    * applied before this resolves. Unlike `synced()`, which waits only on this
@@ -1217,6 +1227,16 @@ export interface IStorageProvider {
    * W advance — see `ISpaceReplica.unappliedForeignSeqFloor` (Phase 2
    * revisit (a)). */
   inputSynced?(): Promise<void>;
+
+  /**
+   * Resolves once every frame the connection has handed over has been applied
+   * and has notified its subscribers, so that a synchronous read of the
+   * scheduler's state afterward sees the work those frames set off. Unlike
+   * `inputSynced()`, this rests on an application that nothing parks behind:
+   * a frame's novelty can stay shadowed by a sealed commit, but its application
+   * finishes.
+   */
+  framesApplied?(): Promise<void>;
 
   /**
    * Destroy the storage provider. Used for tests only.

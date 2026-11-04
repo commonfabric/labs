@@ -2654,9 +2654,7 @@ export class SpaceServer implements TransactionSealDestination {
     await runtime.settled();
     await this.#options.server.idle();
     await runtime.storageManager.inputSynced?.();
-    // A handed-over frame's application schedules work, and this lets it
-    // register, as the wave's own settle does.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await runtime.storageManager.framesApplied?.();
   }
 
   /**

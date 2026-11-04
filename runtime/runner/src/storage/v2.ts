@@ -3105,6 +3105,13 @@ export class StorageManager implements IStorageManager {
     );
   }
 
+  /** See SpaceReplica.framesApplied. */
+  async framesApplied(): Promise<void> {
+    await Promise.all(
+      [...this.#providers.values()].map((provider) => provider.framesApplied()),
+    );
+  }
+
   /**
    * A throwable `AuthorizationError` when `space` is under a permanent
    * authorization denial (an ACL shortfall, an audience or protocol mismatch),
@@ -5155,6 +5162,11 @@ class Provider
     return this.#followReplacement((replica) => replica.inputSynced());
   }
 
+  /** See SpaceReplica.framesApplied. */
+  framesApplied(): Promise<void> {
+    return this.#followReplacement((replica) => replica.framesApplied());
+  }
+
   authorizationError(): Error | undefined {
     return this.replica.authorizationError();
   }
@@ -6349,6 +6361,17 @@ export class SpaceReplica
   async inputSynced(): Promise<void> {
     await this.#sessionClient?.delivered();
     await Promise.all([...this.#syncPromises]);
+  }
+
+  /**
+   * Resolves once this replica has applied every frame its connection has
+   * handed over, what they notified having been told. A frame is applied in
+   * one synchronous stretch by the consumer of the watch view, which then comes
+   * back for the next, so that coming back is the signal.
+   */
+  async framesApplied(): Promise<void> {
+    await this.#sessionClient?.delivered();
+    await this.#subscribedWatchView?.whenSyncsConsumed();
   }
 
   /**
