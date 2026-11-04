@@ -11078,7 +11078,10 @@ export class SpaceReplica
   /**
    * Whether the prospective frame (`overlay`) or the stored replica holds
    * content under `cid:<hash>` that IS the schema document that id names —
-   * the identity check, not presence.
+   * the identity check, not presence. The stored side includes this replica's
+   * pending writes, unlike `isContentAddressedDocPersisted()`: the server counts
+   * a session's own accepted write as held, so a frame can leave it out ahead of
+   * the marker that promotes it (memory-v2/04-protocol.md section 4.3.6).
    */
   #isVerifiedSchemaDocDelivered(
     hash: string,

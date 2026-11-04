@@ -1049,6 +1049,20 @@ type PublishTransactVerdict = (
   response: ResponseMessage<Engine.AppliedCommit>,
 ) => void;
 
+/**
+ * Sends a session's frame, called in the same synchronous step that records
+ * what the frame carries as delivered to the session. A later frame leaves out
+ * the `cid:` documents that record says the session holds, so no other frame
+ * of the session may reach the wire between that step and this frame
+ * (docs/specs/memory-v2/04-protocol.md, section 4.3.6). It is called at most
+ * once, and only for a frame that carries documents. A refusal, and a frame
+ * that carries none, comes back as the caller's return value. A connection's
+ * function holds a failed send until the caller has returned, so that the
+ * failure is not taken for one of the caller's own; a caller that wraps it may
+ * still throw for reasons of its own before it sends anything.
+ */
+type PublishFrame<M> = (message: M) => void;
+
 type TransactDecision = {
   response: ResponseMessage<Engine.AppliedCommit>;
   postCommit?: () => Promise<void>;
@@ -2355,6 +2369,32 @@ class Connection {
     );
   }
 
+  /**
+   * Helper for `#receiveOrdered()`, which runs a request that records a frame
+   * as delivered and sends the frame's response with `send`: in the step that
+   * records it when `run` publishes it, and once `run` has finished otherwise.
+   * A failure to send is thrown from here rather than into `run`, whose own
+   * failures it answers as a refused request, since this request's response
+   * has gone or is lost.
+   */
+  async #answerOnPublication<M extends ServerMessage>(
+    send: (response: M) => void,
+    run: (publish: PublishFrame<M>) => Promise<M>,
+  ): Promise<void> {
+    let published = false;
+    const sendFailures: unknown[] = [];
+    const response = await run((message) => {
+      published = true;
+      try {
+        send(message);
+      } catch (error) {
+        sendFailures.push(error);
+      }
+    });
+    if (sendFailures.length > 0) throw sendFailures[0];
+    if (!published) send(response);
+  }
+
   async #receiveOrdered(
     parsed: ClientMessage | RejectedClientMessage | null,
     payload: string,
@@ -2484,22 +2524,26 @@ class Connection {
           });
           return;
         }
-        const response = await this.#server.openSession(parsed, this);
-        // An open of a session ends the watch set it was staging.
-        if (
-          isFabricPlainObject(response.ok) &&
-          typeof response.ok.sessionId === "string"
-        ) {
-          this.#endStagedWatchSet(
-            sessionKey(parsed.space, response.ok.sessionId),
-          );
-        }
-        this.#send(
-          response,
-          isFabricPlainObject(response.ok) &&
-            typeof response.ok.sessionId === "string"
-            ? { space: parsed.space, sessionId: response.ok.sessionId }
-            : undefined,
+        await this.#answerOnPublication<ResponseMessage<SessionOpenResult>>(
+          (response) => {
+            // An open of a session ends the watch set it was staging.
+            if (
+              isFabricPlainObject(response.ok) &&
+              typeof response.ok.sessionId === "string"
+            ) {
+              this.#endStagedWatchSet(
+                sessionKey(parsed.space, response.ok.sessionId),
+              );
+            }
+            this.#send(
+              response,
+              isFabricPlainObject(response.ok) &&
+                typeof response.ok.sessionId === "string"
+                ? { space: parsed.space, sessionId: response.ok.sessionId }
+                : undefined,
+            );
+          },
+          (publish) => this.#server.openSession(parsed, this, publish),
         );
         return;
       }
@@ -2683,12 +2727,15 @@ class Connection {
           const key = sessionKey(parsed.space, parsed.sessionId);
           const held = this.#endStagedWatchSet(key);
           if (parsed.part === undefined) {
-            const response = await this.#server.watchSet(parsed);
-            this.#sendSessionResponse(
-              parsed.space,
-              parsed.sessionId,
-              parsed.requestId,
-              response,
+            await this.#answerOnPublication(
+              (response) =>
+                this.#sendSessionResponse(
+                  parsed.space,
+                  parsed.sessionId,
+                  parsed.requestId,
+                  response,
+                ),
+              (publish) => this.#server.watchSet(parsed, publish),
             );
             return;
           }
@@ -2743,15 +2790,19 @@ class Connection {
           }
           // The joined set is checked as one set: a view named in two parts
           // is refused as one named twice in one set is.
-          const response = await this.#server.watchSet({
-            ...staged.request,
-            requestId: parsed.requestId,
-          });
-          this.#sendSessionResponse(
-            parsed.space,
-            parsed.sessionId,
-            parsed.requestId,
-            response,
+          await this.#answerOnPublication(
+            (response) =>
+              this.#sendSessionResponse(
+                parsed.space,
+                parsed.sessionId,
+                parsed.requestId,
+                response,
+              ),
+            (publish) =>
+              this.#server.watchSet({
+                ...staged.request,
+                requestId: parsed.requestId,
+              }, publish),
           );
         }
         return;
@@ -2769,15 +2820,16 @@ class Connection {
         // router or a routed host can have left incomplete by refusing its
         // last part itself.
         this.#endStagedWatchSet(sessionKey(parsed.space, parsed.sessionId));
-        {
-          const response = await this.#server.watchAdd(parsed);
-          this.#sendSessionResponse(
-            parsed.space,
-            parsed.sessionId,
-            parsed.requestId,
-            response,
-          );
-        }
+        await this.#answerOnPublication(
+          (response) =>
+            this.#sendSessionResponse(
+              parsed.space,
+              parsed.sessionId,
+              parsed.requestId,
+              response,
+            ),
+          (publish) => this.#server.watchAdd(parsed, publish),
+        );
         return;
       case "session.watch.remove":
         if (
@@ -2793,15 +2845,16 @@ class Connection {
         // router or a routed host can have left incomplete by refusing its
         // last part itself.
         this.#endStagedWatchSet(sessionKey(parsed.space, parsed.sessionId));
-        {
-          const response = await this.#server.watchRemove(parsed);
-          this.#sendSessionResponse(
-            parsed.space,
-            parsed.sessionId,
-            parsed.requestId,
-            response,
-          );
-        }
+        await this.#answerOnPublication(
+          (response) =>
+            this.#sendSessionResponse(
+              parsed.space,
+              parsed.sessionId,
+              parsed.requestId,
+              response,
+            ),
+          (publish) => this.#server.watchRemove(parsed, publish),
+        );
         return;
       case "session.ack":
         if (
@@ -3058,6 +3111,39 @@ class Connection {
         }
       }
       processed += 1;
+      let delivered = false;
+      // Called in the step evaluation records the frame's documents, and on
+      // return for a frame that carries none (`PublishFrame`).
+      const deliver = (effect: SessionEffectMessage): void => {
+        delivered = true;
+        // Evaluation already advanced the session cache past this content;
+        // roll the delivery state back so a later pass (or a resumed
+        // session) recomputes and redelivers it.
+        if (this.#closed) {
+          this.#server.rollbackUndeliveredSync(space, sessionId, effect);
+          return;
+        }
+        // ACL revocation can remove the session while watch evaluation awaits
+        // its engine. Never emit the already-computed effect after that removal
+        // (the session is gone from the registry — nothing to roll back into).
+        if (this.#shouldSuppressSessionSend(space, sessionId)) return;
+        try {
+          this.#send(effect);
+        } catch (error) {
+          // The send boundary is the commit point for sync state. A send
+          // that throws is the only delivery failure visible in-process, so
+          // no buffering pretends otherwise (a dying socket loses frames
+          // silently either way — reconnect hardening owns that case):
+          // roll back exactly what evaluation advanced, so the next pass
+          // recomputes and redelivers from durable state (CT-1927 review,
+          // rounds 5-6).
+          this.#server.rollbackUndeliveredSync(space, sessionId, effect);
+          console.warn(
+            "memory v2: sync send failed; delivery state rolled back for recomputation",
+            error,
+          );
+        }
+      };
       let effect: SessionEffectMessage | null;
       try {
         effect = await this.#server.syncSessionForConnection(
@@ -3066,6 +3152,7 @@ class Connection {
           dirtyIds,
           dirtyOrigins,
           publicationLocked,
+          deliver,
         );
       } catch (error) {
         // A refresh evaluation failure means one of two things: a bad
@@ -3085,39 +3172,8 @@ class Connection {
         this.#server.markSessionForFullResync(space, sessionId);
         continue;
       }
-      if (this.#closed) {
-        // Evaluation already advanced the session cache past this content;
-        // roll the delivery state back so a later pass (or a resumed
-        // session) recomputes and redelivers it.
-        if (effect !== null) {
-          this.#server.rollbackUndeliveredSync(space, sessionId, effect);
-        }
-        return processed;
-      }
-      // ACL revocation can remove the session while watch evaluation awaits
-      // its engine. Never emit the already-computed effect after that removal
-      // (the session is gone from the registry — nothing to roll back into).
-      if (this.#shouldSuppressSessionSend(space, sessionId)) {
-        continue;
-      }
-      if (effect !== null) {
-        try {
-          this.#send(effect);
-        } catch (error) {
-          // The send boundary is the commit point for sync state. A send
-          // that throws is the only delivery failure visible in-process, so
-          // no buffering pretends otherwise (a dying socket loses frames
-          // silently either way — reconnect hardening owns that case):
-          // roll back exactly what evaluation advanced, so the next pass
-          // recomputes and redelivers from durable state (CT-1927 review,
-          // rounds 5-6).
-          this.#server.rollbackUndeliveredSync(space, sessionId, effect);
-          console.warn(
-            "memory v2: sync send failed; delivery state rolled back for recomputation",
-            error,
-          );
-        }
-      }
+      if (effect !== null && !delivered) deliver(effect);
+      if (this.#closed) return processed;
     }
     return processed;
   }
@@ -6362,9 +6418,15 @@ export class Server {
     }
   }
 
+  /**
+   * Opens a session or resumes one. `publish`, when given, receives the
+   * response to a resume whose catch-up carries documents, in the step that
+   * records them as delivered (`PublishFrame`).
+   */
   async openSession(
     message: SessionOpenRequest,
     connection: Connection,
+    publish?: PublishFrame<ResponseMessage<SessionOpenResult>>,
   ): Promise<ResponseMessage<SessionOpenResult>> {
     let opened: ReturnType<SessionRegistry["open"]> | undefined;
     let catchup: SessionEffectMessage | null = null;
@@ -6703,86 +6765,110 @@ export class Server {
           resumed.forceFullResync = true;
         }
       }
-      // A resumed session's catch-up (below) is a FULL watch evaluation
+      const session = opened;
+      // What remains of the open is synchronous, so that a catch-up's frame
+      // can go out in the step that records it as delivered.
+      const finishOpen = (): ResponseMessage<SessionOpenResult> => {
+        if (connection.closed) {
+          return respondTypedError<SessionOpenResult>(
+            message.requestId,
+            toError("SessionError", "The connection closed during catch-up"),
+          );
+        }
+        // A resumed session is registered before catch-up, and catch-up awaits
+        // graph evaluation. An ACL commit (or takeover) can remove or replace it
+        // during that await. In active ACL modes, only the connection that
+        // still owns this exact token may receive its catch-up data.
+        const current = this.#sessions.get(message.space, session.sessionId);
+        if (
+          (connection.routed &&
+            !connection.allowsRoutedSession(
+              message.space,
+              session.sessionId,
+            )) ||
+          (this.isAclActive() &&
+            (current?.ownerConnectionId !== connection.id ||
+              current.sessionToken !== session.sessionToken))
+        ) {
+          return respondTypedError<SessionOpenResult>(
+            message.requestId,
+            toError(
+              "SessionRevokedError",
+              "Session was revoked while opening",
+            ),
+          );
+        }
+        if (principal !== undefined) {
+          this.#admissionWaiters.remove(
+            connection.id,
+            message.space,
+            principal,
+          );
+          // The open proves the principal admitted, so the runtimes still
+          // waiting on a held refusal of it are told before it goes: this open
+          // may be on another device, or may have found a grant another process
+          // wrote before the space's refresh turn would have.
+          // A recipient's own refusal of the space is answered by the same
+          // notice, so it goes too, or the space's refresh would tell it again.
+          if (this.#admissionWaiters.removeHeld(message.space, principal)) {
+            for (const serving of this.#connectionsServing(principal)) {
+              if (serving !== connection) {
+                this.#admissionWaiters.remove(
+                  serving.id,
+                  message.space,
+                  principal,
+                );
+                serving.sendAdmissible(message.space, principal);
+              }
+            }
+          }
+        }
+        const nextSessionOpen = connection.issueSessionOpenAuth();
+        // Activation trigger (serving-loop.md §1): session open makes the
+        // space ACTIVE-eligible; notify the host after the open succeeded.
+        this.#notifySessionOpened(message.space);
+        completed = true;
+        return {
+          type: "response",
+          requestId: message.requestId,
+          ok: {
+            sessionId: session.sessionId,
+            sessionToken: session.sessionToken,
+            serverSeq: session.serverSeq,
+            caughtUpLocalSeq: session.caughtUpLocalSeq,
+            ...(session.resumed === true ? { resumed: true } : {}),
+            ...(catchup ? { sync: catchup.effect } : {}),
+            ...(spaceKind !== undefined ? { spaceKind } : {}),
+            sessionOpen: nextSessionOpen,
+            ...(redemption === undefined ? {} : { invite: redemption }),
+          },
+        };
+      };
+      let response: ResponseMessage<SessionOpenResult> | undefined;
+      // A resumed session's catch-up is a FULL watch evaluation
       // under the session's explicit-instance admission, which the resume
       // carries over (`leaseHolderReads` is the session's for its life):
       // the foreign instances it named are delivered KEYED, in the
       // session's sticky wire vocabulary, and an instance the session
       // lost is retracted KEYED, so the retraction names exactly it and
       // never the session's own instance.
-      catchup = opened.resumed === true
+      const caughtUp = session.resumed === true
         ? await this.syncSessionForConnection(
           message.space,
-          opened.sessionId,
+          session.sessionId,
+          undefined,
+          undefined,
+          false,
+          (effect) => {
+            catchup = effect;
+            response = finishOpen();
+            if (completed) publish?.(response);
+          },
         )
         : null;
-      if (connection.closed) {
-        return respondTypedError<SessionOpenResult>(
-          message.requestId,
-          toError("SessionError", "The connection closed during catch-up"),
-        );
-      }
-      // A resumed session is registered before catch-up, and catch-up awaits
-      // graph evaluation. An ACL commit (or takeover) can remove or replace it
-      // during that await. In active ACL modes, only the connection that
-      // still owns this exact token may receive its catch-up data.
-      const current = this.#sessions.get(message.space, opened.sessionId);
-      if (
-        (connection.routed &&
-          !connection.allowsRoutedSession(message.space, opened.sessionId)) ||
-        (this.isAclActive() &&
-          (current?.ownerConnectionId !== connection.id ||
-            current.sessionToken !== opened.sessionToken))
-      ) {
-        return respondTypedError<SessionOpenResult>(
-          message.requestId,
-          toError(
-            "SessionRevokedError",
-            "Session was revoked while opening",
-          ),
-        );
-      }
-      if (principal !== undefined) {
-        this.#admissionWaiters.remove(connection.id, message.space, principal);
-        // The open proves the principal admitted, so the runtimes still
-        // waiting on a held refusal of it are told before it goes: this open
-        // may be on another device, or may have found a grant another process
-        // wrote before the space's refresh turn would have.
-        // A recipient's own refusal of the space is answered by the same
-        // notice, so it goes too, or the space's refresh would tell it again.
-        if (this.#admissionWaiters.removeHeld(message.space, principal)) {
-          for (const serving of this.#connectionsServing(principal)) {
-            if (serving !== connection) {
-              this.#admissionWaiters.remove(
-                serving.id,
-                message.space,
-                principal,
-              );
-              serving.sendAdmissible(message.space, principal);
-            }
-          }
-        }
-      }
-      const nextSessionOpen = connection.issueSessionOpenAuth();
-      // Activation trigger (serving-loop.md §1): session open makes the
-      // space ACTIVE-eligible; notify the host after the open succeeded.
-      this.#notifySessionOpened(message.space);
-      completed = true;
-      return {
-        type: "response",
-        requestId: message.requestId,
-        ok: {
-          sessionId: opened.sessionId,
-          sessionToken: opened.sessionToken,
-          serverSeq: opened.serverSeq,
-          caughtUpLocalSeq: opened.caughtUpLocalSeq,
-          ...(opened.resumed === true ? { resumed: true } : {}),
-          ...(catchup ? { sync: catchup.effect } : {}),
-          ...(spaceKind !== undefined ? { spaceKind } : {}),
-          sessionOpen: nextSessionOpen,
-          ...(redemption === undefined ? {} : { invite: redemption }),
-        },
-      };
+      if (response !== undefined) return response;
+      catchup = caughtUp;
+      return finishOpen();
     } catch (error) {
       const name = error instanceof Error && error.name === "AuthorizationError"
         ? "AuthorizationError"
@@ -8608,8 +8694,14 @@ export class Server {
     };
   }
 
+  /**
+   * Replaces a session's watches. `publish`, when given, receives a successful
+   * response in the step that records its documents as delivered
+   * (`PublishFrame`).
+   */
   async watchSet(
     message: WatchSetRequest,
+    publish?: PublishFrame<ResponseMessage<WatchSetResult>>,
   ): Promise<ResponseMessage<WatchSetResult>> {
     if (
       message.views !== undefined ||
@@ -8618,22 +8710,25 @@ export class Server {
     ) {
       return await this.#withSpacePublicationLock(
         message.space,
-        () => this.#watchSet(message),
+        () => this.#watchSet(message, "replace", publish),
       );
     }
-    return await this.#watchSet(message);
+    return await this.#watchSet(message, "replace", publish);
   }
 
   /**
    * Removes the named watches from a session and answers with the difference
    * between what the session was delivered and the union that remains.
+   * `publish`, when given, receives a successful response in the step that
+   * records that difference as delivered (`PublishFrame`).
    */
   async watchRemove(
     message: WatchRemoveRequest,
+    publish?: PublishFrame<ResponseMessage<WatchSetResult>>,
   ): Promise<ResponseMessage<WatchSetResult>> {
     const startedAt = performance.now();
     try {
-      return await this.#watchRemove(message);
+      return await this.#watchRemove(message, publish);
     } finally {
       timing.time(startedAt, "memory", "watchRemove", "total");
     }
@@ -8648,6 +8743,7 @@ export class Server {
    */
   async #watchRemove(
     message: WatchRemoveRequest,
+    publish?: PublishFrame<ResponseMessage<WatchSetResult>>,
   ): Promise<ResponseMessage<WatchSetResult>> {
     // Read when the request runs, which for a session with views is once the
     // publication lock is held.
@@ -8666,13 +8762,13 @@ export class Server {
     if (session !== null && session.views.length > 0) {
       return await this.#withSpacePublicationLock(
         message.space,
-        () => this.#watchSet(remaining(), "remove"),
+        () => this.#watchSet(remaining(), "remove", publish),
       );
     }
     if (session === null || session.forceFullResync) {
-      return await this.#watchSet(remaining(), "remove");
+      return await this.#watchSet(remaining(), "remove", publish);
     }
-    return await this.#removeWatchesByRelease(message, session);
+    return await this.#removeWatchesByRelease(message, session, publish);
   }
 
   /**
@@ -8685,6 +8781,7 @@ export class Server {
   async #removeWatchesByRelease(
     message: WatchRemoveRequest,
     session: SessionState,
+    publish?: PublishFrame<ResponseMessage<WatchSetResult>>,
   ): Promise<ResponseMessage<WatchSetResult>> {
     const aclEngine = this.#aclMode() === "off"
       ? undefined
@@ -8899,6 +8996,7 @@ export class Server {
           ...attribution,
         },
       );
+      publish?.(response);
       return response;
     } catch (error) {
       // Evaluation state is staged (the session's graphs and watches are
@@ -8924,6 +9022,7 @@ export class Server {
   async #watchSet(
     message: WatchSetRequest,
     mode: "replace" | "add" | "remove" = "replace",
+    publish?: PublishFrame<ResponseMessage<WatchSetResult>>,
   ): Promise<ResponseMessage<WatchSetResult>> {
     const incremental = mode === "add";
     const session = this.#sessions.get(message.space, message.sessionId);
@@ -9228,7 +9327,7 @@ export class Server {
       if (message.views !== undefined) {
         this.#notifyViewsChanged(message.space, session.id);
       }
-      return {
+      const response: ResponseMessage<WatchSetResult> = {
         type: "response",
         requestId: message.requestId,
         ok: {
@@ -9236,6 +9335,8 @@ export class Server {
           sync,
         },
       };
+      publish?.(response);
+      return response;
     } catch (error) {
       // Evaluation state is staged (the session's graphs and watches are
       // assigned only on success), so a failure answers the requester —
@@ -9316,13 +9417,18 @@ export class Server {
     return { graphs, updates, attribution };
   }
 
-  /** Add session watches, timing admission through the handler's completion. */
+  /**
+   * Add session watches, timing admission through the handler's completion.
+   * `publish`, when given, receives a successful response in the step that
+   * records its documents as delivered (`PublishFrame`).
+   */
   async watchAdd(
     message: WatchAddRequest,
+    publish?: PublishFrame<ResponseMessage<WatchAddResult>>,
   ): Promise<ResponseMessage<WatchAddResult>> {
     const startedAt = performance.now();
     try {
-      return await this.#watchAdd(message);
+      return await this.#watchAdd(message, publish);
     } finally {
       timing.time(startedAt, "memory", "watchAdd", "total");
     }
@@ -9331,6 +9437,7 @@ export class Server {
   /** Helper for watchAdd(), which authorizes, evaluates, and installs watches. */
   async #watchAdd(
     message: WatchAddRequest,
+    publish?: PublishFrame<ResponseMessage<WatchAddResult>>,
   ): Promise<ResponseMessage<WatchAddResult>> {
     const session = this.#sessions.get(message.space, message.sessionId);
     if (session === null) {
@@ -9343,10 +9450,14 @@ export class Server {
       return await this.#withSpacePublicationLock(
         message.space,
         () =>
-          this.#watchSet({
-            ...message,
-            type: "session.watch.set",
-          }, "add"),
+          this.#watchSet(
+            {
+              ...message,
+              type: "session.watch.set",
+            },
+            "add",
+            publish,
+          ),
       );
     }
     const aclEngine = this.#aclMode() === "off"
@@ -9654,6 +9765,7 @@ export class Server {
           ...attribution,
         },
       );
+      publish?.(response);
       return response;
     } catch (error) {
       // Evaluation state is staged (the session's graphs and watches are
@@ -10254,6 +10366,7 @@ export class Server {
     dirtyIds?: ReadonlySet<string>,
     dirtyOrigins?: ReadonlyMap<string, DirtyOrigin>,
     publicationLocked = false,
+    publish?: PublishFrame<SessionEffectMessage>,
   ): Promise<SessionEffectMessage | null> {
     if (
       !publicationLocked &&
@@ -10267,6 +10380,7 @@ export class Server {
             sessionId,
             dirtyIds,
             dirtyOrigins,
+            publish,
           ),
       );
     }
@@ -10275,6 +10389,7 @@ export class Server {
       sessionId,
       dirtyIds,
       dirtyOrigins,
+      publish,
     );
   }
 
@@ -10283,6 +10398,7 @@ export class Server {
     sessionId: string,
     dirtyIds?: ReadonlySet<string>,
     dirtyOrigins?: ReadonlyMap<string, DirtyOrigin>,
+    publish?: PublishFrame<SessionEffectMessage>,
   ): Promise<SessionEffectMessage | null> {
     const session = this.#sessions.get(space, sessionId);
     if (session === null) {
@@ -10734,6 +10850,15 @@ export class Server {
                 // fromSeq is not stale. emptyCatchUp receives the original fromSeq
                 // explicitly, so this does not mutate the bounds of this sync (the
                 // Cubic fix keeps fromSeq pinned to the pre-refresh value).
+                //
+                // What this records can be the session's own writes, `cid:`
+                // documents included, with only a marker to say so, sent on
+                // return. A watch mutation's response may leave such a
+                // document out and reach the wire ahead of that marker. No
+                // frame order protects that: the client holds the document
+                // because it wrote it, keeping the write visible until the
+                // marker promotes it, and it validates an arrival against what
+                // is visible (04-protocol.md section 4.3.6).
                 commitEntities();
                 session.lastSyncedSeq = Math.max(session.lastSyncedSeq, toSeq);
                 return await emptyCatchUp(fromSeq, toSeq);
@@ -10793,6 +10918,7 @@ export class Server {
               commitEntities();
               this.#markCrossingsDelivered(session, newCrossings.keys);
               session.lastSyncedSeq = toSeq;
+              publish?.(message);
               return message;
             } finally {
               timing.timeDetailed(
@@ -10963,6 +11089,7 @@ export class Server {
             crossings: newCrossings.keys,
           });
           commitWatchState();
+          publish?.(message);
           return message;
         } catch (error) {
           // A throwing evaluation may have consumed the marker obligation
