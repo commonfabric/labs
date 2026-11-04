@@ -43,6 +43,7 @@ const DIRS = [
   "base/data-model-schema",
   "runtime/deno-web-test",
   "base/felt",
+  "base/github-webhooks",
   "runtime/fuse",
   "runtime/generated-patterns",
   "base/home-schemas",

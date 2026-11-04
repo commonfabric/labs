@@ -26,7 +26,8 @@ import {
 import {
   blameColumnWidth,
   type DialogButton,
-  dialogButtonAt,
+  dialogControlAt,
+  type DialogField,
   type DialogState,
   DIFF_MARGIN_WIDTH,
   type DiffAnnotation,
@@ -34,6 +35,8 @@ import {
   type DiffTotals,
   diffTotalsDecoration,
   diffTotalsWidth,
+  inputLineColumns,
+  inputLineIndexAt,
   type KeyHint,
   labeledDiffMetadataLine,
   type Match,
@@ -105,6 +108,8 @@ import type {
   SaveOptions,
 } from "./editsource.ts";
 import type { DirEntry, FileGateway } from "./filegateway.ts";
+import { LineEdit } from "./lineedit.ts";
+import type { ViewSettings } from "./settings.ts";
 import {
   type ActiveWrapMode,
   buildWrapPlan,
@@ -141,7 +146,34 @@ interface BlameEntry {
   lines: readonly BlameLine[] | null;
 }
 
-/** A prompt button the mouse went down on, by its prompt and shortcut letter. */
+/** A check box in a dialog that is up, and whether it is checked. */
+interface CheckBoxState {
+  readonly kind: "checkBox";
+  readonly label: string;
+  readonly hotkey: string;
+  checked: boolean;
+}
+
+/** An input line in a dialog that is up, and the text typed into it. */
+interface InputLineState {
+  readonly kind: "inputLine";
+  readonly label: string;
+  readonly hotkey: string;
+  readonly edit: LineEdit;
+}
+
+/** A field of a dialog that is up. */
+type FieldState = CheckBoxState | InputLineState;
+
+/** The settings dialog while it is up: the settings it opened showing, and
+ * its fields. */
+interface SettingsDraft {
+  readonly shown: ViewSettings;
+  readonly quitOnPullRequest: CheckBoxState;
+  readonly webhookRelay: InputLineState;
+}
+
+/** A prompt control the mouse went down on, by its prompt and shortcut letter. */
 interface HeldButton {
   readonly mode: Mode;
   readonly hotkey: string;
@@ -155,6 +187,7 @@ type Mode =
   | "amendPrompt"
   | "revertPrompt"
   | "pushPrompt"
+  | "settingsPrompt"
   | "filePicker"
   | "jumpList";
 
@@ -417,6 +450,16 @@ export class Session {
    * starts the push, calls {@link beginBranchPush}, and clears this. */
   branchPushRequested = false;
 
+  /** The last key asked for the settings dialog. The driver reads the
+   * settings, calls {@link openSettings}, and clears this. */
+  settingsRequested = false;
+
+  /** The settings the settings dialog's OK button asked to save, and those it
+   * opened showing. The driver saves them and clears this. */
+  settingsToSave:
+    | { readonly shown: ViewSettings; readonly settings: ViewSettings }
+    | null = null;
+
   /** The last key set a message that takes itself away again rather than sitting
    * in the bar — Ctrl-L pressed where it is not offered, which changed nothing
    * else. The driver leaves it up for a moment and then calls
@@ -436,6 +479,17 @@ export class Session {
 
   /** How the push ended, once it has. */
   #pushSummary = "";
+
+  /** What the push dialog says, under the push's output, about watching for
+   * the pushed branch's pull request to open, or "" when it says nothing. */
+  #pullRequestWatch = "";
+
+  /** The settings dialog's controls, while it is up. */
+  #settingsDraft: SettingsDraft | null = null;
+
+  /** The address of the pushed branch's pull request, once it has opened
+   * while the push dialog was up, until a quit that it did not ask for. */
+  #pullRequestUrl: string | null = null;
 
   //
   // editing
@@ -1228,12 +1282,30 @@ export class Session {
     else if (this.#mode === "amendPrompt") dialog = this.#amendDialog();
     else if (this.#mode === "revertPrompt") dialog = this.#revertDialog();
     else if (this.#mode === "pushPrompt") dialog = this.#pushDialog();
+    else if (this.#mode === "settingsPrompt") dialog = this.#settingsDialog();
     if (!dialog) return null;
-    // -1 means no button is focused (a prompt with no default, before Tab).
-    const focus = this.#dialogFocus < 0
+    // The focus runs through the fields and then the buttons. -1 means no
+    // control is focused (a prompt with no default, before Tab). While a field
+    // is focused, the default button is the one Enter activates.
+    const fields = dialog.fields?.length ?? 0;
+    const ring = this.#dialogFocus < 0 ? -1 : clamp(
+      this.#dialogFocus,
+      0,
+      Math.max(0, fields + dialog.buttons.length - 1),
+    );
+    const onField = ring >= 0 && ring < fields;
+    const focus = ring < 0
       ? -1
-      : clamp(this.#dialogFocus, 0, Math.max(0, dialog.buttons.length - 1));
-    return { ...dialog, focus, pushed: this.#indexOfHeld(dialog, this.#held) };
+      : onField
+      ? dialog.buttons.findIndex((b) => b.kind === "default")
+      : ring - fields;
+    const held = this.#indexOfHeld(dialog, this.#held);
+    return {
+      ...dialog,
+      focus,
+      fieldFocus: onField ? ring : -1,
+      pushed: held < fields ? -1 : held - fields,
+    };
   }
 
   /** Rest the current prompt's Tab focus on its default button, called as each
@@ -1241,20 +1313,54 @@ export class Session {
    * no focus — an index of -1 — so Space and Enter do nothing until Tab picks a
    * button, keeping a stray Enter from reverting. */
   #focusDefaultButton(): void {
-    const buttons = this.#promptDialog()?.buttons ?? [];
-    this.#dialogFocus = buttons.findIndex((b) => b.kind === "default");
+    const dialog = this.#promptDialog();
+    const index = dialog?.buttons.findIndex((b) => b.kind === "default") ?? -1;
+    this.#dialogFocus = index < 0 ? -1 : (dialog?.fields?.length ?? 0) + index;
+  }
+
+  /** How many characters the input lines of the prompt that is up show. */
+  #inputColumns(): number {
+    const dialog = this.#promptDialog();
+    return dialog ? inputLineColumns(this, dialog) : 1;
+  }
+
+  /** The fields of the prompt that is up, in the order it shows them. */
+  #fieldStates(): FieldState[] {
+    const draft = this.#mode === "settingsPrompt" ? this.#settingsDraft : null;
+    return draft ? [draft.quitOnPullRequest, draft.webhookRelay] : [];
+  }
+
+  /** Move the prompt's focus to its control at `index`, counting its fields
+   * and then its buttons. An input line that the focus moves to has its text
+   * selected, so that typing replaces it, and one it leaves loses its
+   * selection. */
+  #moveDialogFocus(index: number): void {
+    if (index === this.#dialogFocus) return;
+    const fields = this.#fieldStates();
+    const left = fields[this.#dialogFocus];
+    const field = fields[index];
+    if (left?.kind === "inputLine") left.edit.deselect();
+    if (field?.kind === "inputLine") field.edit.selectAll(this.#inputColumns());
+    this.#dialogFocus = index;
   }
 
   /** Whether a modal prompt is up. */
   #prompting(): boolean {
     return this.#mode === "savePrompt" || this.#mode === "amendPrompt" ||
-      this.#mode === "revertPrompt" || this.#mode === "pushPrompt";
+      this.#mode === "revertPrompt" || this.#mode === "pushPrompt" ||
+      this.#mode === "settingsPrompt";
+  }
+
+  /** Whether the push dialog is up. */
+  get pushDialogUp(): boolean {
+    return this.#mode === "pushPrompt";
   }
 
   /** The push dialog: as much of the end of git's output as fits, then how the
-   * push ended, at a fixed size so that it holds still as the output grows.
-   * Abort stops the push; once it ends, Close takes the dialog down and Quit
-   * closes the viewer. */
+   * push ended, at a fixed size so that it holds still as the output grows,
+   * and under that what it says about watching for the pull request. Abort
+   * stops the push; once it ends, Close takes the dialog down and Quit closes
+   * the viewer. */
   #pushDialog(): DialogState {
     const lines = this.#pushLines.at(-1) === ""
       ? this.#pushLines.slice(0, -1)
@@ -1267,7 +1373,7 @@ export class Session {
     // the box is broken. Git pads the lines a server sends with spaces when its
     // output is not a terminal, and those would wrap onto rows of their own.
     const columns = Math.max(1, Math.min(PUSH_COLUMNS, this.width - 8));
-    const wrapped = output.flatMap((line) => {
+    const wrap = (line: string) => {
       let chars = [...line.trimEnd()];
       const rowsOfLine: string[] = [];
       while (chars.length > columns) {
@@ -1278,13 +1384,20 @@ export class Session {
       }
       rowsOfLine.push(chars.join(""));
       return rowsOfLine;
-    });
-    const rows = Math.max(1, Math.min(PUSH_ROWS, this.height - 7));
-    const body = wrapped.slice(-rows);
+    };
+    // The output keeps at least one row, and what the dialog says about the
+    // watch takes as many of the rest as it needs.
+    const total = Math.max(1, Math.min(PUSH_ROWS, this.height - 7));
+    const watch =
+      (this.#pullRequestWatch === ""
+        ? []
+        : ["", ...wrap(this.#pullRequestWatch)]).slice(0, total - 1);
+    const rows = total - watch.length;
+    const body = output.flatMap(wrap).slice(-rows);
     while (body.length < rows) body.push("");
     return {
       title: "Push",
-      body,
+      body: [...body, ...watch],
       output: true,
       width: columns,
       buttons: this.#abortPush
@@ -1293,6 +1406,31 @@ export class Session {
           { label: "Close", hotkey: "c", kind: "cancel" },
           { label: "Quit", hotkey: "Q" },
         ],
+    };
+  }
+
+  /** The settings dialog: a check box that turns on quitting when the pushed
+   * branch's pull request opens, the address of the webhook relay that says
+   * when it does, and OK and Cancel. */
+  #settingsDialog(): DialogState {
+    return {
+      title: "Settings",
+      body: [],
+      fields: this.#fieldStates().map((field): DialogField =>
+        field.kind === "checkBox" ? { ...field } : {
+          kind: "inputLine",
+          label: field.label,
+          hotkey: field.hotkey,
+          value: field.edit.value,
+          cursor: field.edit.cursor,
+          scroll: field.edit.scroll,
+          selected: field.edit.selected,
+        }
+      ),
+      buttons: [
+        { label: "OK", hotkey: "o", kind: "default" },
+        { label: "Cancel", hotkey: "c", kind: "cancel" },
+      ],
     };
   }
 
@@ -1397,6 +1535,7 @@ export class Session {
       this.#handleWheel(key.name === "wheel-up" ? -1 : 1);
       return;
     }
+    if (this.#handleFieldKey(key)) return;
     if (this.#handleDialogNavigation(key)) return;
     if (this.#prompting()) {
       this.#handleDialogKey(key, beforeButtonAction);
@@ -1517,10 +1656,11 @@ export class Session {
       this.#jumpSel = move(this.#jumpSel, this.#jumpEntries.length - 1);
       this.#scrollJumpToSelection(this.#jumpSel);
     } else if (prompt) {
-      this.#dialogFocus = move(
+      const dialog = this.#promptDialog()!;
+      this.#moveDialogFocus(move(
         this.#dialogFocus,
-        this.#promptDialog()!.buttons.length - 1,
-      );
+        (dialog.fields?.length ?? 0) + dialog.buttons.length - 1,
+      ));
     } else if (overlay) {
       if (
         byLine && overlay.mode === "info" &&
@@ -2403,6 +2543,9 @@ export class Session {
         return;
       case "P":
         this.branchPushRequested = true;
+        return;
+      case "O":
+        this.settingsRequested = true;
         return;
       case "escape": {
         const anchor = this.#wrapLines ? this.#viewportAnchor() : null;
@@ -3516,6 +3659,8 @@ export class Session {
     this.#pushLines = [""];
     this.#pushReturned = false;
     this.#pushSummary = "";
+    this.#pullRequestWatch = "";
+    this.#pullRequestUrl = null;
     this.#abortPush = abort;
     this.#dialogFocus = -1;
   }
@@ -3543,6 +3688,54 @@ export class Session {
   finishBranchPush(summary: string): void {
     this.#abortPush = null;
     this.#pushSummary = summary;
+    this.#dialogFocus = 0;
+    if (this.#pullRequestUrl !== null) this.#quitForPullRequest();
+  }
+
+  /** Have the push dialog say `text` about watching for the pushed branch's
+   * pull request, under the push's output. */
+  setPullRequestWatch(text: string): void {
+    this.#pullRequestWatch = text;
+  }
+
+  /**
+   * The pushed branch's pull request has opened, at `url`. While the push
+   * dialog is up, close it and quit, as its Quit button does, once the push
+   * has ended; otherwise do nothing.
+   */
+  quitForPullRequest(url: string): void {
+    if (this.#mode !== "pushPrompt") return;
+    this.#pullRequestUrl = url;
+    if (!this.#abortPush) this.#quitForPullRequest();
+  }
+
+  /** What the driver prints once the viewer has closed: the address of the
+   * pull request whose opening quit it, or null. */
+  get exitMessage(): string | null {
+    return this.quit ? this.#pullRequestUrl : null;
+  }
+
+  /** Open the settings dialog, showing `settings`. */
+  openSettings(settings: ViewSettings): void {
+    this.#overlay = null;
+    this.#overlayStack = [];
+    this.#mode = "settingsPrompt";
+    this.#message = "";
+    this.#settingsDraft = {
+      shown: settings,
+      quitOnPullRequest: {
+        kind: "checkBox",
+        label: "Quit when the pushed branch's pull request opens",
+        hotkey: "q",
+        checked: settings.quitOnPullRequest,
+      },
+      webhookRelay: {
+        kind: "inputLine",
+        label: "Webhook relay (host:port)",
+        hotkey: "w",
+        edit: new LineEdit(settings.webhookRelay),
+      },
+    };
     this.#dialogFocus = 0;
   }
 
@@ -4023,6 +4216,8 @@ export class Session {
   }
 
   #requestQuit(): void {
+    // A quit asked for afresh is not the pull request's.
+    this.#pullRequestUrl = null;
     if (this.#buffer?.dirty()) {
       // A quit signal can arrive with a peek overlay still open; the modal save
       // prompt replaces it rather than drawing over it.
@@ -4072,10 +4267,12 @@ export class Session {
     return willPrompt;
   }
 
-  /** Keys while a modal prompt (save / amend / revert / push) is up. Tab and Shift-Tab
-   * move the focus ring between buttons, wrapping around; Space and Enter
-   * activate the focused button; Esc activates the cancel button; a button's
-   * shortcut letter activates it directly. Any other key leaves the prompt up. */
+  /** Keys while a modal prompt (save / amend / revert / push / settings) is
+   * up, once its focused field has passed them on. Tab and Shift-Tab move the
+   * focus ring through its fields and then its buttons, wrapping around; Space
+   * and Enter activate the focused button, or the default one while a field is
+   * focused; Esc activates the cancel button; a field's shortcut letter presses
+   * it, and a button's activates it. Any other key leaves the prompt up. */
   #handleDialogKey(
     key: Key,
     beforeButtonAction?: () => void,
@@ -4084,20 +4281,21 @@ export class Session {
     // least one button, so the dialog is present and its row is non-empty.
     const dialog = this.#promptDialog()!;
     const buttons = dialog.buttons;
-    const n = buttons.length;
+    const fields = dialog.fields ?? [];
+    const n = fields.length + buttons.length;
 
     // Tab moves the ring forward, Shift-Tab back, both wrapping around. From no
-    // focus (-1) Tab lands on the first button and Shift-Tab on the last.
+    // focus (-1) Tab lands on the first control and Shift-Tab on the last.
     if (key.name === "tab") {
-      this.#dialogFocus = this.#dialogFocus < 0
-        ? 0
-        : (this.#dialogFocus + 1) % n;
+      this.#moveDialogFocus(
+        this.#dialogFocus < 0 ? 0 : (this.#dialogFocus + 1) % n,
+      );
       return;
     }
     if (key.name === "shift-tab") {
-      this.#dialogFocus = this.#dialogFocus < 0
-        ? n - 1
-        : (this.#dialogFocus - 1 + n) % n;
+      this.#moveDialogFocus(
+        this.#dialogFocus < 0 ? n - 1 : (this.#dialogFocus - 1 + n) % n,
+      );
       return;
     }
 
@@ -4110,18 +4308,53 @@ export class Session {
       index = buttons.findIndex((b) => b.kind === "cancel");
     } else {
       const k = key.char ?? key.name;
-      index = buttons.findIndex((b) =>
-        b.hotkey === k || b.hotkey === k.toLowerCase()
-      );
+      const answers = (hotkey: string) =>
+        hotkey === k || hotkey === k.toLowerCase();
+      const field = fields.findIndex((f) => answers(f.hotkey));
+      if (field >= 0) {
+        this.#pressField(field);
+        return;
+      }
+      index = buttons.findIndex((b) => answers(b.hotkey));
     }
-    if (index < 0 || index >= n) return; // an unbound key leaves the prompt up
+    // An unbound key leaves the prompt up.
+    if (index < 0 || index >= buttons.length) return;
     this.#activateButton(dialog, index, beforeButtonAction);
   }
 
   /**
-   * Focuses a prompt's button and holds it pushed when the mouse goes down on
-   * it, and activates it when the mouse comes up on the button it went down on.
-   * The mouse going down or coming up anywhere else does nothing.
+   * Applies `key` to the prompt's focused field when the field takes it, and
+   * returns whether it did. A check box takes Space, which toggles it. An
+   * input line takes every key but those that move the focus or close the
+   * dialog: Tab, Shift-Tab, Enter, Escape, and Alt with a letter.
+   */
+  #handleFieldKey(key: Key): boolean {
+    const field = this.#fieldStates()[this.#dialogFocus];
+    if (field?.kind === "checkBox") {
+      if (key.name !== "space") return false;
+      field.checked = !field.checked;
+      return true;
+    }
+    if (field?.kind !== "inputLine") return false;
+    if (field.edit.handleKey(key, this.#inputColumns())) return true;
+    return !key.alt && key.name !== "tab" && key.name !== "shift-tab" &&
+      key.name !== "enter" && key.name !== "escape";
+  }
+
+  /** Focus the prompt's field at `index`, toggling it when it is a check box,
+   * as its shortcut letter or a click on it does. */
+  #pressField(index: number): void {
+    this.#moveDialogFocus(index);
+    const field = this.#fieldStates()[index];
+    if (field?.kind === "checkBox") field.checked = !field.checked;
+  }
+
+  /**
+   * Focuses a prompt's control and holds it when the mouse goes down on it,
+   * drawing a button pushed, and puts an input line's cursor where the mouse
+   * went down. The mouse coming up on the control it went down on toggles a
+   * check box and activates a button. The mouse going down or coming up
+   * anywhere else does nothing.
    */
   #handleClick(
     mouse: MouseButton,
@@ -4130,23 +4363,40 @@ export class Session {
   ): void {
     const dialog = this.#promptDialog();
     if (!dialog) return;
-    const index = dialogButtonAt(this, dialog, mouse.x, mouse.y);
+    const index = dialogControlAt(this, dialog, mouse.x, mouse.y);
     if (index < 0) return;
+    const controls = [...(dialog.fields ?? []), ...dialog.buttons];
+    const fields = dialog.fields?.length ?? 0;
+    const field = this.#fieldStates()[index];
     if (mouse.down) {
-      this.#dialogFocus = index;
-      this.#held = { mode: this.#mode, hotkey: dialog.buttons[index].hotkey };
-    } else if (index === this.#indexOfHeld(dialog, held)) {
-      this.#activateButton(dialog, index, beforeButtonAction);
+      this.#moveDialogFocus(index);
+      this.#held = { mode: this.#mode, hotkey: controls[index].hotkey };
+      if (field?.kind === "inputLine") {
+        // A click on the line puts its cursor there, and a click on its
+        // label moves the focus to it as its shortcut letter does.
+        const at = inputLineIndexAt(this, dialog, index, mouse.x, mouse.y);
+        if (at === null) field.edit.selectAll(this.#inputColumns());
+        else field.edit.moveTo(at, this.#inputColumns());
+      }
+    } else if (index !== this.#indexOfHeld(dialog, held)) {
+      return;
+    } else if (field?.kind === "checkBox") {
+      this.#pressField(index);
+    } else if (index >= fields) {
+      this.#activateButton(dialog, index - fields, beforeButtonAction);
     }
   }
 
   /**
-   * Returns the index of `held` among the buttons of `dialog`, the prompt now
-   * up, or -1 when that prompt does not show it.
+   * Returns the index of `held` among the controls of `dialog`, the prompt now
+   * up, counting its fields and then its buttons, or -1 when that prompt does
+   * not show it.
    */
   #indexOfHeld(dialog: DialogState, held: HeldButton | null): number {
     if (held?.mode !== this.#mode) return -1;
-    return dialog.buttons.findIndex((b) => b.hotkey === held.hotkey);
+    return [...(dialog.fields ?? []), ...dialog.buttons].findIndex((c) =>
+      c.hotkey === held.hotkey
+    );
   }
 
   /** Capture a prompt button's pushed frame, let the driver paint it, then run
@@ -4158,12 +4408,12 @@ export class Session {
     index: number,
     beforeButtonAction?: () => void,
   ): void {
-    this.#dialogFocus = index;
+    this.#dialogFocus = (dialog.fields?.length ?? 0) + index;
     this.pendingPush = {
       doc: this.displayDoc(),
       view: {
         ...this.view(),
-        dialog: { ...dialog, focus: index, pushed: index },
+        dialog: { ...dialog, focus: index, fieldFocus: -1, pushed: index },
       },
     };
     beforeButtonAction?.();
@@ -4171,6 +4421,7 @@ export class Session {
     if (this.#mode === "savePrompt") this.#applySaveButton(button);
     else if (this.#mode === "amendPrompt") this.#applyAmendButton(button);
     else if (this.#mode === "revertPrompt") this.#applyRevertButton(button);
+    else if (this.#mode === "settingsPrompt") this.#applySettingsButton(button);
     else this.#applyPushButton(button);
   }
 
@@ -4178,12 +4429,41 @@ export class Session {
    * leaves how the push ended in the status line; Quit takes it down and quits,
    * by way of the save prompt when there are unsaved edits. */
   #applyPushButton(button: DialogButton): void {
-    if (this.#abortPush) {
-      this.#abortPush();
-    } else {
-      this.#mode = "normal";
-      this.#message = this.#pushSummary;
-      if (button.hotkey === "Q") this.#requestQuit();
+    if (this.#abortPush) this.#abortPush();
+    else this.#closePushDialog(button.hotkey === "Q");
+  }
+
+  /** Take the push dialog down, leaving how the push ended in the status
+   * line, and quit when `quit` says to, by way of the save prompt when there
+   * are unsaved edits. */
+  #closePushDialog(quit: boolean): void {
+    this.#mode = "normal";
+    this.#message = this.#pushSummary;
+    if (quit) this.#requestQuit();
+  }
+
+  /** Close the push dialog and quit for the pull request that has opened,
+   * keeping its address for the driver to print once the viewer closes. */
+  #quitForPullRequest(): void {
+    const url = this.#pullRequestUrl;
+    this.#closePushDialog(true);
+    this.#pullRequestUrl = url;
+  }
+
+  /** OK takes the settings dialog down and asks the driver to save what it
+   * shows; Cancel takes it down. */
+  #applySettingsButton(button: DialogButton): void {
+    const draft = this.#settingsDraft;
+    this.#mode = "normal";
+    this.#settingsDraft = null;
+    if (button.kind === "default" && draft) {
+      this.settingsToSave = {
+        shown: draft.shown,
+        settings: {
+          quitOnPullRequest: draft.quitOnPullRequest.checked,
+          webhookRelay: draft.webhookRelay.edit.value.trim(),
+        },
+      };
     }
   }
 
@@ -5674,6 +5954,7 @@ export function helpOverlay(hasMultipleCommits: boolean): {
     ["", ""],
     ["Branch", ""],
     ["  P", "push the branch to origin, open the pull request page"],
+    ["  O", "settings: quit when the pushed branch's pull request opens"],
     ["", ""],
     ["View", ""],
     ["  V", "toggle source / rendered view when the language supports it"],

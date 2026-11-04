@@ -5,11 +5,15 @@
  * which is the one the diff workspace reads files from.
  */
 
+/** Runs git for its standard output, which it returns, or null when git
+ * fails. Nothing is shown. */
+export type GitQuery = (args: readonly string[]) => string | null;
+
 /** The git and browser operations a push performs. */
 export interface PushIo {
   /** Runs git for its standard output, which it returns, or null when git
    * fails. Nothing is shown. */
-  query(args: readonly string[]): string | null;
+  readonly query: GitQuery;
 
   /** Runs git with its output shown as it arrives. Resolves to whether git
    * succeeded, and to everything it printed. */
@@ -49,13 +53,15 @@ export interface RealPushIoOptions {
  * unless that branch has commits the checked-out branch has never included,
  * and opens the pull request page when the server offers one. The branch
  * `origin` names as its default is never pushed, so the push refuses when
- * `origin` names none. Returns one line saying how it ended, which says the
- * push was aborted when it failed after `signal` aborted; git's own output has
- * been shown by then.
+ * `origin` names none. When the server offers a page, calls `onOffered` with
+ * the branch's name before the page opens. Returns one line saying how it
+ * ended, which says the push was aborted when it failed after `signal` aborted;
+ * git's own output has been shown by then.
  */
 export async function pushBranch(
   io: PushIo,
   signal?: AbortSignal,
+  onOffered?: (branch: string) => void,
 ): Promise<string> {
   const gitDir = io.query(["rev-parse", "--absolute-git-dir"])?.trim();
   if (!gitDir) return "This is not a git repository.";
@@ -100,6 +106,7 @@ export async function pushBranch(
   }
   const url = offeredPullRequestUrl(push.output);
   if (url === null) return `${pushed}.`;
+  onOffered?.(branch);
   return io.open(url)
     ? `${pushed} and opened ${url}`
     : `${pushed}. Create a pull request at ${url}`;

@@ -209,6 +209,24 @@ export const ui = {
    * glyphs so it reads as a thin edge rather than a full cell. */
   buttonShadow: { fg: C.shadow } as Style,
 
+  /** The highlighted shortcut letter in a dialog control's label. The
+   * renderer supplies the background behind it. */
+  fieldKey: { fg: C.red, bold: true } as Style,
+
+  /** The focused check box, or the label of the focused input line. */
+  fieldFocus: { fg: C.fgBright, bg: C.panelHi, bold: true } as Style,
+
+  /** The line of an input line: a well darker than the dialog around it, where
+   * the text is typed. */
+  inputLine: { fg: C.fgBright, bg: C.editorBg } as Style,
+
+  /** The text of an input line while all of it is selected. */
+  inputSelection: { fg: C.ink, bg: C.cyan } as Style,
+
+  /** The arrows at the ends of an input line that say its text runs on past
+   * them. */
+  inputArrow: { fg: C.green, bg: C.editorBg, bold: true } as Style,
+
   scrollbarTrack: { fg: C.fgDim } as Style,
   scrollbarThumb: { fg: C.cyan } as Style,
 };

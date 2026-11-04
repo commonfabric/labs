@@ -15,9 +15,11 @@ import { Session } from "../lib/view/session.ts";
 import {
   cellOf,
   drawnRows,
+  fakeRelay,
   frameRows,
   mouseKey,
   parseDocument,
+  pullRequestPayload,
 } from "./view-helpers.ts";
 
 /** Query answers for a checkout of `feature` whose `origin` has `main` as its
@@ -166,6 +168,45 @@ function abortCell(): { x: number; y: number } {
   return cellOf(drawnRows(session), "Abort");
 }
 
+const RELAY = "relay.example.test:8081";
+
+const PULL_REQUEST = "https://github.com/commonfabric/labs/pull/7";
+
+/**
+ * A git for the viewer's own questions, which answers as a checkout of
+ * `feature` at `c0ffee` pushing to `origin` on GitHub would, with the
+ * settings `config` holds, as git's configuration variables, and records
+ * each `git config --global` that sets one in `config`. `answers` replaces
+ * its answers.
+ */
+function viewerGit(
+  config: Record<string, string> = {
+    "cf-view.quitOnPullRequest": "true",
+    "cf-view.webhookRelay": RELAY,
+  },
+  answers: Readonly<Record<string, string | null>> = {},
+) {
+  const fixed: Readonly<Record<string, string | null>> = {
+    "remote get-url --push origin": "git@github.com:fork/repo.git\n",
+    "symbolic-ref --quiet HEAD": "refs/heads/feature\n",
+    "rev-parse --verify --quiet HEAD": "c0ffee\n",
+    ...answers,
+  };
+  return (args: readonly string[]): string | null => {
+    const asked = args.join(" ");
+    if (asked in fixed) return fixed[asked];
+    const [command, ...rest] = args;
+    if (command !== "config") return null;
+    if (rest[0] === "--global") {
+      config[rest[1]] = rest[2];
+      return "";
+    }
+    const value = config[rest.at(-1) ?? ""];
+    if (value === undefined) return null;
+    return rest[0] === "--show-scope" ? `global\t${value}\n` : `${value}\n`;
+  };
+}
+
 /**
  * Returns the SGR mouse report of the primary button going down or coming up
  * at a zero-based cell.
@@ -187,10 +228,17 @@ function deferred<T = void>() {
  * runs. `run(steps)` reads each string step as a keystroke and awaits each
  * function step before the next read. `frame(test)` resolves at the first
  * write that passes `test`, which is how a step waits for the push to show
- * something. `handlers` holds the process signal handlers the pager adds, and
+ * something. `git` answers the viewer's questions about the repository,
+ * `relay` connects it to the webhook relay, and `source` makes the document
+ * editable. `handlers` holds the process signal handlers the pager adds, and
  * `exits` the codes it exits with.
  */
-function pagerHarness(pushIo: (signal: AbortSignal) => PushIo) {
+function pagerHarness(
+  pushIo: (signal: AbortSignal) => PushIo,
+  { git = () => null, relay = () => undefined, source }:
+    & Partial<Pick<PagerDeps, "git" | "relay">>
+    & { readonly source?: EditableSource } = {},
+) {
   const writes: string[] = [];
   const watchers: Array<{ test: (text: string) => boolean; done: () => void }> =
     [];
@@ -259,13 +307,15 @@ function pagerHarness(pushIo: (signal: AbortSignal) => PushIo) {
           },
         };
       },
+      git,
+      relay,
       blame: () => Promise.reject(new Error("these tests blame nothing")),
     };
     await runPager(
       parseDocument("const a = 1;\n"),
       { color: false, showLineNumbers: false },
       undefined,
-      undefined,
+      source,
       deps,
     );
   };
@@ -881,6 +931,122 @@ describe("view-push", () => {
       expect(session.quit).toBe(true);
     });
 
+    it("shows what it says about watching for the pull request under the output, at the same size", () => {
+      const session = editableSession();
+      session.beginBranchPush(() => {});
+      const rows = session.view().dialog!.body.length;
+
+      session.appendPushOutput(
+        Array.from({ length: 9 }, (_, i) => `line ${i}\n`).join(""),
+      );
+      session.setPullRequestWatch("Quitting when the pull request opens.");
+
+      expect(session.view().dialog!.body.map((line) => line.trimEnd()))
+        .toEqual([
+          "line 6",
+          "line 7",
+          "line 8",
+          "",
+          "Quitting when the pull request opens.",
+        ]);
+      expect(session.view().dialog!.body.length).toBe(rows);
+      session.beginBranchPush(() => {});
+      expect(session.view().dialog!.body.join("")).toBe("");
+    });
+
+    it("keeps the buttons on a screen too short for the output and what it says about the watch", () => {
+      const session = editableSession();
+      session.resize(30, 11);
+      session.beginBranchPush(() => {});
+      session.appendPushOutput("To origin\n");
+      session.finishBranchPush("Pushed feature to origin.");
+
+      session.setPullRequestWatch(
+        "Not watching for the pull request: no webhook relay is set in the " +
+          "settings.",
+      );
+
+      const dialog = session.view().dialog!;
+      expect(dialog.body.length).toBe(4);
+      expect(dialog.body[0]).not.toBe("");
+      expect(drawnRows(session).join("\n")).toContain(" Close ");
+    });
+
+    it("closes the dialog and quits, keeping the address to print, when the pull request opens while it is up", () => {
+      const session = editableSession();
+      session.beginBranchPush(() => {});
+      session.finishBranchPush("Pushed feature to origin.");
+      expect(session.exitMessage).toBeNull();
+
+      session.quitForPullRequest(PULL_REQUEST);
+
+      expect(session.pushDialogUp).toBe(false);
+      expect(session.view().message).toBe("Pushed feature to origin.");
+      expect(session.quit).toBe(true);
+      expect(session.exitMessage).toBe(PULL_REQUEST);
+    });
+
+    it("waits for a push still running to end before quitting for the pull request", () => {
+      const session = editableSession();
+      session.beginBranchPush(() => {});
+
+      session.quitForPullRequest(PULL_REQUEST);
+      expect(session.pushDialogUp).toBe(true);
+      expect(session.quit).toBe(false);
+      session.finishBranchPush("Pushed feature to origin.");
+
+      expect(session.view().message).toBe("Pushed feature to origin.");
+      expect(session.quit).toBe(true);
+      expect(session.exitMessage).toBe(PULL_REQUEST);
+    });
+
+    it("does nothing when the pull request opens once the dialog is down", () => {
+      const session = editableSession();
+      session.beginBranchPush(() => {});
+      session.finishBranchPush("Pushed feature to origin.");
+      session.handleKey({ name: "c", char: "c" });
+
+      session.quitForPullRequest(PULL_REQUEST);
+
+      expect(session.quit).toBe(false);
+      session.beginBranchPush(() => {});
+      session.finishBranchPush("Pushed feature to origin.");
+      expect(session.quit).toBe(false);
+    });
+
+    it("asks to save unsaved edits before the pull request opening quits", () => {
+      const session = editableSession();
+      session.handleKey({ name: "e", char: "e" });
+      session.handleKey({ name: "X", char: "X" });
+      session.handleKey({ name: "escape" });
+      session.beginBranchPush(() => {});
+      session.finishBranchPush("Pushed feature to origin.");
+
+      session.quitForPullRequest(PULL_REQUEST);
+
+      expect(session.quit).toBe(false);
+      expect(session.view().dialog?.title).toBe("Save Changes");
+      session.handleKey({ name: "d", char: "d" });
+      expect(session.exitMessage).toBe(PULL_REQUEST);
+    });
+
+    it("prints no address on a later quit once the save prompt the pull request raised is cancelled", () => {
+      const session = editableSession();
+      session.handleKey({ name: "e", char: "e" });
+      session.handleKey({ name: "X", char: "X" });
+      session.handleKey({ name: "escape" });
+      session.beginBranchPush(() => {});
+      session.finishBranchPush("Pushed feature to origin.");
+      session.quitForPullRequest(PULL_REQUEST);
+
+      session.handleKey({ name: "c", char: "c" });
+      session.handleKey({ name: "q", char: "q" });
+      session.handleKey({ name: "d", char: "d" });
+
+      expect(session.quit).toBe(true);
+      expect(session.exitMessage).toBeNull();
+    });
+
     it("asks to save unsaved edits before Quit quits", () => {
       const session = editableSession();
       session.handleKey({ name: "e", char: "e" });
@@ -1046,6 +1212,354 @@ describe("view-push", () => {
       await harness.run(["P", () => closable, "c"]);
 
       expect(harness.writes.at(-2)).toContain("Push failed: no git");
+    });
+
+    describe("watching for the pull request", () => {
+      it("connects once the push succeeds and before the page opens, and quits printing the address once the pull request opens", async () => {
+        const relay = fakeRelay();
+        let connectedBeforePush = true;
+        let connectedBeforePage = false;
+        const harness = pagerHarness(
+          () => ({
+            ...fakeIo().io,
+            run: () => {
+              connectedBeforePush = relay.connections === 1;
+              return Promise.resolve({ success: true, output: GITHUB_OFFER });
+            },
+            open: () => {
+              connectedBeforePage = relay.connections === 1;
+              return true;
+            },
+          }),
+          {
+            git: viewerGit(),
+            relay: (address) => address === RELAY ? relay.connect : undefined,
+          },
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run([
+          "P",
+          async () => {
+            await closable;
+            await relay.connected;
+            relay.deliver("pull_request", pullRequestPayload({ branch: "x" }));
+            relay.deliver("pull_request", pullRequestPayload());
+            await relay.closed();
+          },
+        ]);
+
+        expect(connectedBeforePush).toBe(false);
+        expect(connectedBeforePage).toBe(true);
+        const shown = harness.writes.find((text) => text.includes(" Close "))!;
+        expect(shown).toContain("Quitting when the pull request opens.");
+        expect(harness.writes.at(-1)).toMatch(
+          new RegExp(`\\x1b\\[\\?1049l${PULL_REQUEST}\\n$`),
+        );
+      });
+
+      it("asks to save unsaved edits once the pull request opens, and prints the address once they are saved", async () => {
+        const relay = fakeRelay();
+        const saved: string[] = [];
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit(),
+            relay: () => relay.connect,
+            source: {
+              label: "main.ts",
+              editable: true,
+              path: "/work/main.ts",
+              parse: (text) => parseDocument(text, "/work/main.ts"),
+              save: (text) => {
+                saved.push(text);
+                return "saved";
+              },
+            },
+          },
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+        const asked = harness.frame((text) => text.includes("Save Changes"));
+
+        await harness.run([
+          "e",
+          "X",
+          "\x1b",
+          "P",
+          async () => {
+            await closable;
+            await relay.connected;
+            relay.deliver("pull_request", pullRequestPayload());
+            await asked;
+          },
+          "s",
+        ]);
+
+        expect(saved).toHaveLength(1);
+        expect(harness.writes.at(-1)).toMatch(
+          new RegExp(`\\x1b\\[\\?1049l${PULL_REQUEST}\\n$`),
+        );
+      });
+
+      it("connects to nothing when the push fails", async () => {
+        const relay = fakeRelay();
+        const harness = pagerHarness(
+          () => fakeIo({ pushSucceeds: false, pushOutput: GITHUB_OFFER }).io,
+          { git: viewerGit(), relay: () => relay.connect },
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => closable, "c"]);
+
+        expect(relay.connections).toBe(0);
+        expect(harness.writes.join("")).not.toContain("pull request opens");
+      });
+
+      it("connects to nothing when the server offers no page for creating a pull request", async () => {
+        const relay = fakeRelay();
+        const harness = pagerHarness(() => fakeIo().io, {
+          git: viewerGit(),
+          relay: () => relay.connect,
+        });
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => closable, "c"]);
+
+        expect(relay.connections).toBe(0);
+        expect(harness.writes.join("")).not.toContain("pull request opens");
+      });
+
+      it("says it is connecting until the connection opens", async () => {
+        const relay = fakeRelay();
+        const connecting = Promise.withResolvers<void>();
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit(),
+            relay: () => async () => {
+              await connecting.promise;
+              return relay.connect();
+            },
+          },
+        );
+        const waiting = harness.frame((text) =>
+          text.includes("Connecting to the webhook relay.")
+        );
+        const watching = harness.frame((text) =>
+          text.includes("Quitting when the pull request opens.")
+        );
+
+        await harness.run([
+          "P",
+          async () => {
+            await waiting;
+            connecting.resolve();
+            await watching;
+          },
+          "c",
+        ]);
+
+        expect(relay.connections).toBe(1);
+      });
+
+      it("says why it is not watching when git fails as the watch starts, and reports the push as it went", async () => {
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: () => {
+              throw new Error("git is gone");
+            },
+          },
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => closable, "c"]);
+
+        const shown = harness.writes.find((text) => text.includes(" Close "))!;
+        expect(shown).toContain(
+          "Not watching for the pull request: git is gone.",
+        );
+        expect(shown).toContain("Pushed feature to origin and opened");
+      });
+
+      it("stops the watch of a push whose dialog closed in the same read that pushes again, though the second push fails", async () => {
+        const relay = fakeRelay();
+        let pushes = 0;
+        const harness = pagerHarness(
+          () =>
+            fakeIo({ pushOutput: GITHUB_OFFER, pushSucceeds: pushes++ === 0 })
+              .io,
+          { git: viewerGit(), relay: () => relay.connect },
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+        let first: Promise<void> | undefined;
+        const failed = harness.frame((text) =>
+          text.includes("Pushing feature to origin failed.")
+        );
+
+        await harness.run([
+          "P",
+          async () => {
+            await closable;
+            await relay.connected;
+            first = relay.closed();
+          },
+          "cP",
+          async () => {
+            await first;
+            await failed;
+          },
+          "c",
+        ]);
+
+        expect(relay.connections).toBe(1);
+        expect(harness.writes.at(-1)).not.toContain(PULL_REQUEST);
+      });
+
+      it("connects to nothing while the setting is off", async () => {
+        const relay = fakeRelay();
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit({ "cf-view.webhookRelay": RELAY }),
+            relay: () => relay.connect,
+          },
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => closable, "c"]);
+
+        expect(relay.connections).toBe(0);
+        expect(harness.writes.join("")).not.toContain("pull request:");
+      });
+
+      it("says why it is not watching when no relay is set, or origin is not on GitHub", async () => {
+        for (
+          const [git, reason] of [
+            [
+              viewerGit({ "cf-view.quitOnPullRequest": "true" }),
+              "no webhook relay is set",
+            ],
+            [
+              viewerGit(undefined, { "remote get-url --push origin": null }),
+              "origin is not a GitHub",
+            ],
+          ] as const
+        ) {
+          const harness = pagerHarness(
+            () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+            {
+              git,
+              relay: (address) =>
+                address === "" ? undefined : fakeRelay().connect,
+            },
+          );
+          const closable = harness.frame((text) => text.includes(" Close "));
+
+          await harness.run(["P", () => closable, "c"]);
+
+          expect(harness.writes.join("")).toContain(
+            `Not watching for the pull request: ${reason}`,
+          );
+        }
+      });
+
+      it("says it stopped watching when the connection ends", async () => {
+        const relay = fakeRelay();
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit(),
+            relay: () => relay.connect,
+          },
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+        const ended = harness.frame((text) =>
+          text.includes("the webhook relay closed")
+        );
+
+        await harness.run([
+          "P",
+          async () => {
+            await closable;
+            await relay.connected;
+            relay.end();
+            await ended;
+          },
+          "c",
+        ]);
+
+        expect(harness.writes.join("")).toContain(
+          "Not watching for the pull request: the webhook relay closed the",
+        );
+      });
+
+      it("stops watching once the dialog closes, and prints nothing", async () => {
+        const relay = fakeRelay();
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit(),
+            relay: () => relay.connect,
+          },
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run([
+          "P",
+          () => closable,
+          "c",
+          async () => {
+            await relay.closed();
+            relay.deliver("pull_request", pullRequestPayload());
+          },
+        ]);
+
+        expect(harness.writes.at(-1)).not.toContain(PULL_REQUEST);
+      });
+    });
+
+    describe("the settings dialog", () => {
+      it("shows the settings git's configuration holds, and saves what OK shows", async () => {
+        const config: Record<string, string> = {
+          "cf-view.webhookRelay": RELAY,
+        };
+        const harness = pagerHarness(() => fakeIo().io, {
+          git: viewerGit(config),
+        });
+        const shown = harness.frame((text) => text.includes(RELAY));
+
+        await harness.run(["O", () => shown, " ", "\r"]);
+
+        expect(config).toEqual({
+          "cf-view.webhookRelay": RELAY,
+          "cf-view.quitOnPullRequest": "true",
+        });
+        expect(harness.writes.at(-2)).toContain("Settings saved.");
+      });
+
+      it("says so when git fails as the settings dialog opens", async () => {
+        const harness = pagerHarness(() => fakeIo().io, {
+          git: () => {
+            throw new Error("git is gone");
+          },
+        });
+
+        await harness.run(["O"]);
+
+        expect(harness.writes.at(-2)).toContain("Git failed: git is gone");
+      });
+
+      it("says so when git cannot save the settings", async () => {
+        const harness = pagerHarness(() => fakeIo().io, { git: () => null });
+        const shown = harness.frame((text) => text.includes(" Settings "));
+
+        await harness.run(["O", () => shown, " ", "\r"]);
+
+        expect(harness.writes.at(-2)).toContain(
+          "Git could not save the settings.",
+        );
+      });
     });
   });
 });

@@ -602,11 +602,28 @@ Ctrl-F / Ctrl-B also page down / up. Pages follow the dialog's visible height,
 with one row of overlap. While browsing, `j` / `k` and `J` / `K` move down / up,
 Space and `b` / `B` page down / up, and `g` / `G` jump to the top / bottom.
 Ctrl-N / Ctrl-P move down / up, and Ctrl-D / Ctrl-U move half a page.
-Confirmation prompts use navigation keys to move button focus; Space activates
-the focused button. Pressing the primary mouse button on a button pushes it, and
-releasing it over the same button activates that button. Releasing it anywhere
-else, or pressing a key first, lets go of the button without activating it.
-Printable keys enter text while a filter is active.
+Confirmation prompts use navigation keys to move the focus among their controls,
+except while an input line has it; Space activates the focused button. Pressing
+the primary mouse button on a button pushes it, and releasing it over the same
+button activates that button. Releasing it anywhere else, or pressing a key
+first, lets go of the button without activating it. Printable keys enter text
+while a filter is active.
+
+Some dialogs also hold check boxes and input lines, drawn as Turbo Vision draws
+them. Tab and Shift-Tab, like the navigation keys, move the focus through those
+first and then through the buttons. Space toggles the focused check box, and so
+does a click on it. Moving the focus to an input line selects its text, so that
+typing replaces it. While an input line is focused, every key but Tab,
+Shift-Tab, Enter, Escape, and Alt with a letter goes to it: typed text goes in,
+Backspace and Delete (or Ctrl-D) delete a character, Alt-Backspace deletes the
+word before the cursor, and Left, Right, Home, and End (or Ctrl-B, Ctrl-F,
+Ctrl-A, and Ctrl-E) move its cursor. A click on an input line puts its cursor
+where the click lands, and a click on its label selects its text. An arrow at
+either end of the line says that its text runs on past that end. A check box's
+highlighted letter toggles it, an input line's moves the focus to it, and a
+button's activates it; while an input line is focused, Alt with the letter does.
+Enter activates the default button wherever the focus is, unless it is on
+another button.
 
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
@@ -668,6 +685,32 @@ program `SSH_ASKPASS` names, and fails when it names none. `P` refuses to push
 (`git remote set-head origin --auto` finds it). It also refuses a checkout not
 on a branch, and refuses when git started the viewer as its pager for a
 different repository.
+
+Press `O` to open the settings dialog. Its check box, "Quit when the pushed
+branch's pull request opens", has the viewer watch the GitHub webhook relay
+while the push dialog is up. The relay passes on each delivery of the
+organization's GitHub webhook as it arrives, and keeps none for a subscriber
+that was not connected; `github-webhook-relay/README.md` in the infra repository
+describes it. The dialog's input line holds the `host:port` of the relay's
+subscriber listener. When the push succeeds and the server offers a page for
+creating a pull request, the viewer starts connecting to the relay, and then
+opens the page. When a delivery reports that a pull request was opened from the
+pushed branch, at the pushed commit, in the GitHub repository that `origin`
+names, the viewer closes the push dialog and quits as Quit does. Once the screen
+is restored, it prints the pull request's address on the terminal. The address
+is printed only when the viewer quit for it, so a quit after cancelling the save
+prompt it raised prints nothing. With the check box on, the push dialog says
+under git's output whether the viewer is connecting or watching, or why it is
+not watching: no relay is set, `origin` is not on GitHub, or the connection
+failed or ended. Closing the push dialog stops the watch.
+
+The viewer keeps these settings in git's configuration, as the boolean
+`cf-view.quitOnPullRequest` and the string `cf-view.webhookRelay`, so the
+`git config` command can set them too. OK saves each setting that differs from
+what the dialog opened showing. It saves it in the configuration file that git
+read the setting's value from, which may be a file another one includes, so that
+git then reads the new value. A value read from the machine's own configuration
+file, or set nowhere, is saved in the user's global configuration file instead.
 
 In the main view, `b` shows or hides the blame column in place of paging up;
 Page Up and Ctrl-B still page up there. The column takes the right 20 columns of
