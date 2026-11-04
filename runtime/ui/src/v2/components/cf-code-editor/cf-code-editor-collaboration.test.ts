@@ -195,6 +195,10 @@ describe("CFCodeEditor collaboration", () => {
       language: "text/markdown",
       _collaboration: collaboration,
       _publishPresence: () => calls.push("presence"),
+      // What the editor tells its host about the selection and its
+      // highlights is routed the same way, and is not what this pins.
+      _reportSelection: () => {},
+      _trackHighlights: () => {},
       emit: () => calls.push("change"),
       setValue: () => calls.push("value"),
       _updateMentionedFromContent: () => calls.push("mentioned"),

@@ -15,10 +15,13 @@ import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value"
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 
 import {
+  clickCfButton,
   clickTrustedAction,
   fillCfInput,
+  fillCfTextarea,
   waitForActiveSpaceRoot,
   waitForRuntimeIdle,
+  waitForSettledText,
 } from "./cfc-browser-helpers.ts";
 import {
   initializePiecesController,
@@ -57,6 +60,11 @@ const editorEquals = (probe: ProbeApi, expected: string): boolean =>
   (probe.collect("cf-code-editor")[0] as EditorHost | undefined)
     ?._editorView?.state.doc.toString() === expected;
 
+/** The editor's document has `length` characters, whatever they are. */
+const editorLengthIs = (probe: ProbeApi, length: number): boolean =>
+  (probe.collect("cf-code-editor")[0] as EditorHost | undefined)
+    ?._editorView?.state.doc.length === length;
+
 const profileResolved = (probe: ProbeApi, name: string): boolean =>
   (probe.collect("cf-code-editor")[0] as EditorHost | undefined)
       ?.participantName === name &&
@@ -70,6 +78,15 @@ const remoteSelectionVisible = (probe: ProbeApi, name: string): boolean =>
   ) && probe.collect(".cm-remote-presence-selection").some((element) =>
     element.getAttribute("title") === `${name}'s selection`
   );
+
+/**
+ * The editor marks `text` and nothing else. One mark can render as several
+ * spans where another decoration, such as a collaborator's selection, cuts
+ * across it, so the spans are read together.
+ */
+const highlightOver = (probe: ProbeApi, text: string): boolean =>
+  probe.collect(".cm-highlight").map((element) => element.textContent)
+    .join("") === text;
 
 /**
  * The editor has joined the shared field's presence room. The pattern names the
@@ -337,5 +354,112 @@ describe("shared-note", () => {
       (value) => value?.content === settled.content,
       { stuckLabel: "shared note undo materializes" },
     );
+
+    // A comment Ada anchors on "Café" reaches Grace as a highlight over that
+    // text, under Ada's profile.
+    const quoteFrom = settled.content.indexOf("Café");
+    await editorState(adaPage, { anchor: quoteFrom, head: quoteFrom + 4 });
+    await clickCfButton(adaPage, "#shared-note-comment-button");
+    await fillCfTextarea(adaPage, "#shared-note-comment-draft", "Lunch spot?");
+    await clickCfButton(adaPage, "#shared-note-post-button");
+    await Promise.all(pages.map(async (page) => {
+      await waitForSettledText(page, "#shared-note-comments", "Lunch spot?");
+      await waitForSettledText(page, "#shared-note-comments", "Ada Lovelace");
+      await waitForCondition(page, highlightOver, { args: ["Café"] });
+    }));
+
+    // Grace types ahead of the quote. Her editor maps the highlight and
+    // reports the moved range, which the comment's stored anchor follows.
+    await editorState(gracePage, { anchor: 0, head: 0 });
+    await gracePage.keyboard.type("Note: ");
+    const moved = "Note: " + settled.content;
+    await Promise.all(
+      pages.map((page) =>
+        waitForCondition(page, editorEquals, { args: [moved] })
+      ),
+    );
+    await Promise.all(
+      pages.map((page) =>
+        waitForCondition(page, highlightOver, { args: ["Café"] })
+      ),
+    );
+    await waitForCellValue<
+      { comments: { anchor: { from: number; to: number } }[] }
+    >(
+      controller.runtime,
+      result,
+      (value) =>
+        value?.comments?.[0]?.anchor.from === moved.indexOf("Café") &&
+        value.comments[0].anchor.to === moved.indexOf("Café") + 4,
+      { stuckLabel: "the comment's anchor follows Grace's edit" },
+    );
+
+    // Both type ahead of the quote at once. Each editor reports its own
+    // keystroke, then the other's as it lands, so the stored anchor ends on
+    // the merged text whichever report the pattern writes last.
+    await Promise.all(
+      pages.map((page) => editorState(page, { anchor: 0, head: 0 })),
+    );
+    await Promise.all([
+      adaPage.keyboard.type("a"),
+      gracePage.keyboard.type("b"),
+    ]);
+    await waitForCondition(adaPage, editorLengthIs, {
+      args: [moved.length + 2],
+    });
+    const merged = await editorState(adaPage);
+    await waitForCondition(gracePage, editorEquals, { args: [merged] });
+    await Promise.all(
+      pages.map((page) =>
+        waitForCondition(page, highlightOver, { args: ["Café"] })
+      ),
+    );
+    await waitForCellValue<
+      { comments: { anchor: { from: number; to: number } }[] }
+    >(
+      controller.runtime,
+      result,
+      (value) =>
+        value?.comments?.[0]?.anchor.from === merged.indexOf("Café") &&
+        value.comments[0].anchor.to === merged.indexOf("Café") + 4,
+      { stuckLabel: "the comment's anchor follows both editors' edits" },
+    );
+
+    // A verb edits the body from a runtime with no editor open, ahead of
+    // the comment. The verb maps the anchor through its own edit, and each
+    // editor maps the same edit, so the highlight stays on its text in both
+    // and the stored anchor agrees with them.
+    result.key("prependLine").send({ text: "Agenda" });
+    await controller.runtime.idle();
+    const prepended = "Agenda\n" + merged;
+    await Promise.all(
+      pages.map((page) =>
+        waitForCondition(page, editorEquals, { args: [prepended] })
+      ),
+    );
+    await Promise.all(
+      pages.map((page) =>
+        waitForCondition(page, highlightOver, { args: ["Café"] })
+      ),
+    );
+    await waitForCellValue<
+      { comments: { anchor: { from: number; to: number } }[] }
+    >(
+      controller.runtime,
+      result,
+      (value) =>
+        value?.comments?.[0]?.anchor.from === prepended.indexOf("Café") &&
+        value.comments[0].anchor.to === prepended.indexOf("Café") + 4,
+      { stuckLabel: "the comment's anchor follows the verb's edit" },
+    );
+
+    // The highlight is there again for Ada once her editor reloads: the
+    // comment reaches a fresh editor before its document does.
+    await adaPage.reload({ waitUntil: "load" });
+    await adaPage.applyConsoleFormatter();
+    await adaShell.login(ada);
+    await waitForCondition(adaPage, editorReady);
+    await waitForCondition(adaPage, editorEquals, { args: [prepended] });
+    await waitForCondition(adaPage, highlightOver, { args: ["Café"] });
   });
 });
