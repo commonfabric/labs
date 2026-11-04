@@ -1436,12 +1436,20 @@ declare namespace CFDOM {
     extends AllHTMLAttributes<T>, ClassAttributes<T> {
   }
 
+  // An optional attribute given `undefined` is one left unset: the renderer
+  // clears the property or removes the attribute. So it admits `undefined` as
+  // well as being absent, which `exactOptionalPropertyTypes` keeps apart.
   export type DetailedHTMLProps<E extends HTMLAttributes<T>, T> =
     & ClassAttributes<T>
     & {
-      [K in keyof E]: E[K] extends { [CELL_LIKE]: unknown } ? E[K]
-        : (E[K] | CellLike<E[K]>);
+      [K in keyof E]:
+        | (E[K] extends { [CELL_LIKE]: unknown } ? E[K]
+          : (E[K] | CellLike<E[K]>))
+        | UnsetAttribute<E, K>;
     };
+
+  type UnsetAttribute<E, K extends keyof E> = {} extends Pick<E, K> ? undefined
+    : never;
 
   // All the WAI-ARIA 1.1 attributes from https://www.w3.org/TR/wai-aria-1.1/
   interface AriaAttributes {

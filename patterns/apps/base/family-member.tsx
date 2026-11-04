@@ -125,7 +125,10 @@ const selectSameAs = handler<
 
 const clearSameAs = handler<unknown, { member: Writable<FamilyMember> }>(
   (_event, { member }) => {
-    member.update({ sameAs: undefined });
+    // Writing `undefined` would keep `sameAs`, holding `undefined`; the link
+    // is gone only once the object is written without it.
+    const { sameAs: _sameAs, ...rest } = member.get();
+    member.set(rest);
   },
 );
 

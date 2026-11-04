@@ -3,6 +3,7 @@ import {
   computed,
   Default,
   equals,
+  type FactoryInput,
   handler,
   NAME,
   pattern,
@@ -306,7 +307,7 @@ const addFavorite = handler<
       cell: piece,
       tags: tags ?? [],
       userTags: [],
-      spaceName,
+      ...(spaceName !== undefined && { spaceName }),
       id,
     });
   }
@@ -415,7 +416,12 @@ const homeResultSchema = __cf_data(
 );
 
 const Home = pattern(
-  (input: Record<string, never> & { [SELF]: HomeOutput }): HomeOutput => {
+  // The return is checked as `pattern()` checks any pattern's result, against
+  // `FactoryInput<HomeOutput>`, so a computed value may fill an optional
+  // field.
+  (
+    input: Record<string, never> & { [SELF]: HomeOutput },
+  ): FactoryInput<HomeOutput> => {
     const home = input[SELF];
     // OWN the data cells (.for for id stability)
     const favorites = new Writable<Favorite[]>([]).for("favorites");

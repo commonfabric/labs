@@ -106,7 +106,7 @@ const addFavorite = handler<
       cell: piece,
       tags: finalTags,
       userTags: [],
-      spaceName,
+      ...(spaceName !== undefined && { spaceName }),
     });
 
     // Add journal entry for the favorite action
