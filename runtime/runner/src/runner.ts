@@ -1,10 +1,10 @@
 import {
-  FabricUnavailable,
   isUnavailable,
   UNAVAILABLE_SYNCING,
   unavailableError,
   unavailableMismatch,
   type UnavailableObservationKind,
+  type UnavailableVariant,
 } from "@commonfabric/data-model/availability";
 import {
   dataUnavailableFromTransformFailure,
@@ -605,7 +605,7 @@ type InternalCellDescriptor = {
 };
 
 type UnavailableInput = Readonly<{
-  value: FabricUnavailable;
+  value: UnavailableVariant;
   path: readonly string[];
   overlayTarget?: NormalizedFullLink;
 }>;
@@ -638,7 +638,7 @@ function availabilityOverlayKey(address: IMemorySpaceAddress): string {
 /** Presents policy-authorized readiness markers while validating the rest. */
 class AvailabilityOverlayTransaction extends TransactionWrapper {
   readonly #source: IExtendedStorageTransaction;
-  readonly #overlays = new Map<string, FabricUnavailable>();
+  readonly #overlays = new Map<string, UnavailableVariant>();
 
   constructor(
     source: IExtendedStorageTransaction,
@@ -656,7 +656,7 @@ class AvailabilityOverlayTransaction extends TransactionWrapper {
     }
   }
 
-  #overlayFor(address: IMemorySpaceAddress): FabricUnavailable | undefined {
+  #overlayFor(address: IMemorySpaceAddress): UnavailableVariant | undefined {
     return this.#overlays.get(availabilityOverlayKey(address));
   }
 
@@ -737,7 +737,7 @@ function handlerCapturedArgumentSchema(
 function policyAcceptsUnavailableInput(
   policy: readonly UnavailableInputPolicyEntry[] | undefined,
   path: readonly string[],
-  value: UnavailableObservationKind | FabricUnavailable,
+  value: UnavailableObservationKind | UnavailableVariant,
 ): boolean {
   const reason = typeof value === "string" ? value : value.reason;
   return policy?.some((entry) =>
@@ -3683,7 +3683,7 @@ export class Runner {
       result: {
         argument: any;
         isValidArgument: boolean;
-        unavailable?: FabricUnavailable;
+        unavailable?: UnavailableVariant;
         unavailableFromInput?: boolean;
       },
       reads: readonly IReadActivity[],
@@ -3744,7 +3744,7 @@ export class Runner {
         result: {
           argument: any;
           isValidArgument: boolean;
-          unavailable?: FabricUnavailable;
+          unavailable?: UnavailableVariant;
           unavailableFromInput?: boolean;
         },
         reads: readonly IReadActivity[],
@@ -8004,7 +8004,11 @@ export class Runner {
           );
         }
         // Raw outputs and child graph roots are supplied by the server view plan.
-        if (!isModule(module) || module.type !== "javascript") {
+        if (
+          !isModule(module) ||
+          (module.type !== "javascript" &&
+            module.type !== "javascript-availability")
+        ) {
           pending.delete(index);
           continue;
         }
@@ -13814,7 +13818,7 @@ export class Runner {
   ): {
     argument: any;
     isValidArgument: boolean;
-    unavailable?: FabricUnavailable;
+    unavailable?: UnavailableVariant;
     unavailableFromInput?: boolean;
   } {
     const observer = this.#javascriptArgumentObserver;
@@ -13842,7 +13846,7 @@ export class Runner {
   ): {
     argument: any;
     isValidArgument: boolean;
-    unavailable?: FabricUnavailable;
+    unavailable?: UnavailableVariant;
     unavailableFromInput?: boolean;
   } {
     // Inspect only the raw argument surface selected by the declared schema.

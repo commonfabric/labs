@@ -15,7 +15,7 @@ import type {
   FabricPlainObjectPlus,
   FabricPrimitive,
   FabricPrimitiveSchemaType,
-  FabricUnavailable,
+  FabricUnavailableBase,
   FabricValue,
   FabricValuePlus,
   HasError,
@@ -77,8 +77,8 @@ export type AsyncStreamResult<Final, Partial> =
 
 /** Removes unavailable control variants and type-only stream metadata. */
 export type AvailableResult<R> = R extends PartialResultSource<infer Final, any>
-  ? Final
-  : Exclude<R, UnavailableVariant>;
+  ? Exclude<Final, FabricUnavailableBase>
+  : Exclude<R, FabricUnavailableBase>;
 
 /** Exact argument-relative path at which selected reasons may be observed. */
 export type UnavailableInputPolicyEntry = Readonly<{
@@ -1720,14 +1720,14 @@ export type FactoryInput<T> =
  */
 export type FactoryCallInput<T> =
   | FactoryInput<T>
-  | FabricUnavailable
+  | FabricUnavailableBase
   | (T extends Array<infer U> ? Array<FactoryCallInput<U>>
     : T extends ReadonlyArray<infer U> ? ReadonlyArray<FactoryCallInput<U>>
     : T extends object ? { [K in keyof T]: FactoryCallInput<T[K]> }
     : T);
 
 /** Complete value shape retained by `latestComplete()`. */
-export type LatestCompleteValue<T> = T extends FabricUnavailable ? never
+export type LatestCompleteValue<T> = T extends FabricUnavailableBase ? never
   : T extends AnyBrandedCell<infer U> ? LatestCompleteValue<U>
   : T extends readonly unknown[] ? {
       [K in keyof T]: LatestCompleteValue<T[K]>;
@@ -2402,7 +2402,7 @@ export interface BuiltInGenerateObjectStreamState<T> {
   pending: boolean;
   result: AsyncResult<T>;
   messages?: BuiltInLLMMessage[];
-  partial?: string;
+  partial?: AsyncResult<string>;
   error?: string;
   // NOTE: `generateObject` accepts `search`/`nativeModelToolIds` (grounding can
   // improve the structured result), but does NOT surface `groundingSources` —
@@ -2544,7 +2544,7 @@ export interface BuiltInGenerateTextStreamState {
   pending: boolean;
   result: AsyncResult<string>;
   error?: string;
-  partial?: string;
+  partial?: AsyncResult<string>;
   requestHash?: string;
 
   /** Web sources from native search grounding, when `search`/`google_search` was requested. */
@@ -4180,9 +4180,13 @@ export interface ObserveAvailabilityFunction {
 export interface ResultOfFunction {
   <Final, Partial>(
     result: Reactive<AsyncStreamResult<Final, Partial>>,
-  ): Reactive<Final>;
-  <T>(result: Reactive<CompileResult<T>>): Reactive<T>;
-  <T>(result: Reactive<AsyncResult<T>>): Reactive<T>;
+  ): Reactive<Exclude<Final, FabricUnavailableBase>>;
+  <T>(
+    result: Reactive<CompileResult<T>>,
+  ): Reactive<Exclude<T, FabricUnavailableBase>>;
+  <T>(
+    result: Reactive<AsyncResult<T>>,
+  ): Reactive<Exclude<T, FabricUnavailableBase>>;
   <R>(result: R): Reactive<AvailableResult<R>>;
 }
 

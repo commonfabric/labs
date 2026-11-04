@@ -116,7 +116,7 @@ export function registerBuiltins(runtime: Runtime) {
       pending: Cell<boolean>;
       result: Cell<AsyncResult<Record<string, unknown>>>;
       error: Cell<string | undefined>;
-      partial: Cell<string | undefined>;
+      partial: Cell<AsyncResult<string> | undefined>;
       requestHash: Cell<string | undefined>;
     }>(generateObject),
   );
@@ -126,7 +126,7 @@ export function registerBuiltins(runtime: Runtime) {
       pending: Cell<boolean>;
       result: Cell<AsyncResult<string>>;
       error: Cell<string | undefined>;
-      partial: Cell<string | undefined>;
+      partial: Cell<AsyncResult<string> | undefined>;
       requestHash: Cell<string | undefined>;
     }>(generateText),
   );

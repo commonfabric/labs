@@ -51,6 +51,9 @@ import {
   handler,
   hasError,
   type InSpaceGrants,
+  isObsolete,
+  isPending,
+  isSyncing,
   isWellFormedDID,
   NAME,
   pattern,
@@ -1737,6 +1740,9 @@ export interface FabriChatManagerOutput {
   /** Every room this user belongs to and hasn't forgotten, newest first. */
   rooms: PerUser<ChatIndexEntry[]>;
 
+  /** Terminal catalog-root diagnostics, isolated from the usable rooms list. */
+  discoveryErrors?: PerUser<{ space: string; message: string; kind: string }[]>;
+
   /**
    * The stored catalog used for standalone membership and container discovery.
    * `rooms` combines those discoveries with individual `roomMembership` choices;
@@ -1855,6 +1861,9 @@ interface FoundRoomInput {
 interface FoundRoomOutput {
   /** The room; absent until it resolves and its records say it is a room. */
   room?: Cell<ChatRoomLink>;
+
+  /** A terminal root lookup diagnostic, independent of room discovery. */
+  error?: { message: string; kind: string };
 }
 
 /** What knowing a room needs: a link that may reach one. */
@@ -1895,13 +1904,33 @@ const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(
       scope: computed(() => isWellFormedDID(space) ? [space] : []),
     });
     const rootResult = computed(() =>
-      hasError(root.result) ? undefined : resultOf(root.result)
+      hasError(root.result) || isObsolete(root.result)
+        ? undefined
+        : resultOf(root.result)
     );
     const standalone = computed(() => kind === CHAT_ROOM_OFFER_KIND);
     const declared = computed(() =>
       standalone ? rootResult : rootResult?.key("chatRoom").get()
     );
-    return KnownRoom({ room: declared });
+    const known = KnownRoom({ room: declared });
+    const error = computed(() => {
+      if (isPending(root.result) || isSyncing(root.result)) return undefined;
+      if (hasError(root.result)) {
+        return {
+          message: root.result.errorMessage,
+          kind: root.result.errorKind,
+        };
+      }
+      if (isObsolete(root.result)) {
+        return {
+          message: root.result.obsoleteMessage ??
+            "This catalog root is no longer served.",
+          kind: "obsolete",
+        };
+      }
+      return undefined;
+    });
+    return { room: known.room, error };
   },
 );
 
@@ -2011,6 +2040,14 @@ export const FabriChatManagerCore = pattern<
     // document that stores it, so renaming one moves its data.
     const foundForUser = savedRooms.map((entry) =>
       FoundRoom.asScope("user")({ space: entry.space, kind: entry.kind })
+    );
+    const discoveryErrorsForUser = computed(
+      (): PerUser<{ space: string; message: string; kind: string }[]> =>
+        foundForUser.flatMap((found, index) =>
+          found.error
+            ? [{ space: savedRooms[index].space, ...found.error }]
+            : []
+        ),
     );
     // The rooms this user keeps by an explicit choice, each known on its own
     // and per user, as each catalog entry's room is found.
@@ -2221,6 +2258,7 @@ export const FabriChatManagerCore = pattern<
     };
     const view = {
       rooms: roomsForUser,
+      discoveryErrors: discoveryErrorsForUser,
       sharedSpaceCatalog,
       roomMembership,
       direct,
@@ -2404,6 +2442,7 @@ const FabriChatManager = pattern<
     [UI]: core[UI],
     [VIEWS]: core[VIEWS],
     rooms: core.rooms,
+    discoveryErrors: core.discoveryErrors,
     sharedSpaceCatalog: core.sharedSpaceCatalog,
     roomMembership: core.roomMembership,
     direct: core.direct,

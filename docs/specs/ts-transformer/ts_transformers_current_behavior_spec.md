@@ -555,6 +555,10 @@ cell union; authored scope placement restrictions remain unchanged
 `scoped-availability-captures.test.ts`).
 Both node-driven and type-driven narrowing retain this hint when rebuilding
 the same capture slot.
+Exact-path availability overrides retain empty-string keys and statically
+computed property names. Only the selected member widens to include its native
+marker variants; sibling members keep their authored types
+(`type-building.ts`; `type-building-coverage.test.ts`).
 A `.get()` whose result is not resolved to a specific member path retains the
 receiver's complete stored shape, including when the result passes through a
 helper. Optional member reads retain the receiver without imposing a full-shape

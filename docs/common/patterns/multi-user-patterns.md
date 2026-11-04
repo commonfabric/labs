@@ -287,7 +287,7 @@ const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
 const profile = resultOf(profileWish.result);
 const myName = computed(() => resultOf(profileNameWish.result).trim());
 const myPicture = resultOf(profilePictureWish.result);
-const hasProfile = computed(() => myName !== "");
+const hasProfile = computed(() => profile != null);
 ```
 
 **Never** add a "type your name" field and treat that string as the current user.

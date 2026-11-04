@@ -4000,6 +4000,34 @@ type CalculatorRequest = {
       });
     });
 
+    it("formats compatibility aliases as native arms without structural methods", async () => {
+      const generator = new SchemaGenerator();
+      const { type, checker, typeNode } = await getTypeFromFiles(
+        {
+          "/commonfabric.d.ts": `
+            interface FabricUnavailable {
+              readonly reason: "pending" | "obsolete";
+              readonly obsoleteMessage: string | null;
+              isObsolete(): boolean;
+            }
+            type CompatibleUnavailable =
+              Omit<FabricUnavailable, "isObsolete" | "obsoleteMessage"> & {
+                readonly isObsolete?: FabricUnavailable["isObsolete"];
+                readonly obsoleteMessage?: null;
+              };
+            type IsPending = CompatibleUnavailable & { readonly reason: "pending" };
+          `,
+          "/entry.ts": `type Result = string | IsPending;`,
+        },
+        "/entry.ts",
+        "Result",
+      );
+      expect(generator.generateSchema(type, checker, typeNode)).toEqual({
+        anyOf: [{ type: "string" }, { $ref: "#/$defs/IsPending" }],
+        $defs: { IsPending: { type: "FabricUnavailable" } },
+      });
+    });
+
     it("recognizes availability types from ambient Common Fabric modules", async () => {
       const generator = new SchemaGenerator();
       const { type, checker, typeNode } = await getTypeFromFiles(

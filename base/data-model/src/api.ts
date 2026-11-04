@@ -536,14 +536,8 @@ export type UnavailableErrorKind =
   | "provider"
   | "sync";
 
-/**
- * A marker standing in for data that is not available, saying why. It holds
- * no payload of its own: its reason and diagnostic fields are the whole of
- * what it says. Only `error` carries error members; `errorMessage` supplies
- * its kind's default when none was given. Only `obsolete` may carry an
- * `obsoleteMessage`, diagnostic guidance which confers no authority to act.
- */
-export interface FabricUnavailable extends FabricPrimitive {
+/** Native availability members shared by accepted marker implementations. */
+export interface FabricUnavailableBase extends FabricPrimitive {
   /** @inheritDoc */
   readonly schemaType: "FabricUnavailable";
 
@@ -566,17 +560,11 @@ export interface FabricUnavailable extends FabricPrimitive {
    */
   readonly rawErrorMessage: string | null;
 
-  /** Optional guidance about a retired output; `null` otherwise. */
-  readonly obsoleteMessage: string | null;
-
   /** Whether the reason is `pending`. */
   isPending(): boolean;
 
   /** Whether the reason is `syncing`. */
   isSyncing(): boolean;
-
-  /** Whether the output is no longer served. */
-  isObsolete(): boolean;
 
   /**
    * Whether the reason is `error`, narrowing `errorKind` and `errorMessage`
@@ -594,6 +582,21 @@ export interface FabricUnavailable extends FabricPrimitive {
   isTransient(): boolean;
 }
 
+/**
+ * A marker standing in for data that is not available, saying why. It holds
+ * no payload of its own: its reason and diagnostic fields are the whole of
+ * what it says. Only `error` carries error members; `errorMessage` supplies
+ * its kind's default when none was given. Only `obsolete` may carry an
+ * `obsoleteMessage`, diagnostic guidance which confers no authority to act.
+ */
+export interface FabricUnavailable extends FabricUnavailableBase {
+  /** Optional guidance about a retired output; `null` otherwise. */
+  readonly obsoleteMessage: string | null;
+
+  /** Whether the output is no longer served. */
+  isObsolete(): boolean;
+}
+
 export interface FabricUnavailableConstructor {
   new (
     reason: UnavailableReason,
@@ -606,17 +609,28 @@ export interface FabricUnavailableConstructor {
 
 export declare const FabricUnavailable: FabricUnavailableConstructor;
 
+/** Availability members shared by accepted native marker implementations. */
+type CompatibleUnavailable =
+  & FabricUnavailableBase
+  & {
+    /** Retirement predicate, when provided by the native implementation. */
+    readonly isObsolete?: FabricUnavailable["isObsolete"];
+
+    /** No retirement guidance belongs to a non-obsolete reason. */
+    readonly obsoleteMessage?: null;
+  };
+
 /** A pending result whose producer has not completed. */
-export type IsPending = FabricUnavailable & { readonly reason: "pending" };
+export type IsPending = CompatibleUnavailable & { readonly reason: "pending" };
 
 /** A result awaiting replica synchronization. */
-export type IsSyncing = FabricUnavailable & { readonly reason: "syncing" };
+export type IsSyncing = CompatibleUnavailable & { readonly reason: "syncing" };
 
 /** An output that is no longer served, with optional migration guidance. */
 export type IsObsolete = FabricUnavailable & { readonly reason: "obsolete" };
 
 /** A terminal unavailable result with its error kind and message. */
-export type HasError = FabricUnavailable & {
+export type HasError = CompatibleUnavailable & {
   readonly reason: "error";
   readonly errorKind: UnavailableErrorKind;
   readonly errorMessage: string;

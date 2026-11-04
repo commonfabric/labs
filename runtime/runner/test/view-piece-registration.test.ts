@@ -2,14 +2,23 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
+import {
+  isUnavailable,
+  UNAVAILABLE_PENDING,
+  unavailableError,
+} from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
+import type { ViewInterest, ViewPlan } from "@commonfabric/memory/v2";
 
-import type { Pattern } from "../src/builder/types.ts";
+import type { Module, Pattern } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { patternIdentityKey } from "../src/runner.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import type { ISpaceReplica } from "../src/storage/interface.ts";
+import { viewNodeId } from "../src/view-replication.ts";
+import { trustExecutable, trustModule } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("stored view registration");
 const space = signer.did();
@@ -170,6 +179,156 @@ describe("view-piece-registration", () => {
     expect(root.get()).toEqual({ $UI: "confirmed" });
     registration!();
   });
+
+  for (const referenced of [false, true]) {
+    it(`restores ${referenced ? "a referenced" : "an inline"} availability computation with its observation policy`, async () => {
+      const input = runtime.getCell(space, "view availability input");
+      await runtime.editWithRetry((tx) => {
+        input.withTx(tx).setRaw(UNAVAILABLE_PENDING);
+      });
+      const calls: (number | string)[] = [];
+      const implementation = ({ value }: { value: unknown }) => {
+        const observed = isUnavailable(value)
+          ? value.errorMessage ?? "unavailable"
+          : Number(value) + 1;
+        calls.push(observed);
+        return observed;
+      };
+      const contract = {
+        argumentSchema: {
+          type: "object",
+          properties: {
+            value: {
+              anyOf: [{ type: "number" }, { type: "FabricUnavailable" }],
+            },
+          },
+          required: ["value"],
+        },
+        resultSchema: { anyOf: [{ type: "number" }, { type: "string" }] },
+        unavailableInputPolicy: [{ path: ["value"], reasons: ["error"] }],
+      } as const;
+      const availabilityModule = {
+        type: "javascript-availability",
+        implementation,
+        ...contract,
+      } satisfies Module;
+      const registryModule = {
+        type: "javascript-availability",
+        implementation,
+        argumentSchema: {
+          type: "object",
+          properties: { value: { type: "number" } },
+        },
+        resultSchema: { type: "number" },
+        unavailableInputPolicy: [],
+      } satisfies Module;
+      let module: Module = trustModule(runtime, availabilityModule);
+      if (referenced) {
+        runtime.moduleRegistry.addModuleByRef(
+          "view-availability",
+          trustModule(runtime, registryModule),
+        );
+        module = {
+          type: "ref",
+          implementation: "view-availability",
+          ...contract,
+        };
+      }
+      pattern.nodes.push({
+        module,
+        inputs: { value: { $alias: { cell: "argument", path: ["value"] } } },
+        outputs: { $alias: { cell: "result", path: ["observed"] } },
+      });
+      pattern.result = { $UI: "confirmed" };
+      const setup = runtime.edit();
+      runtime.run(
+        setup,
+        trustExecutable(runtime, pattern),
+        { value: input },
+        root,
+      );
+      root.withTx(setup).setMetaRaw(
+        "patternIdentity",
+        source,
+        rawMetaWriteAuthorization,
+      );
+      runtime.prepareTxForCommit(setup);
+      expect((await setup.commit().settled).error).toBeUndefined();
+      await runtime.idle();
+      const storage = runtime.storageManager;
+      const rootLink = root.getAsNormalizedFullLink();
+      const inputLink = input.getAsNormalizedFullLink();
+      const argumentLink = root.getArgumentCell()!.getAsNormalizedFullLink();
+      await runtime.dispose({ closeStorage: false });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage,
+        clientClass: "web",
+        experimental: { serverExecution: true, viewScopedReplication: true },
+      });
+      root = runtime.getCellFromLink(rootLink);
+      const viewingInput = runtime.getCellFromLink(inputLink);
+      trustModule(runtime, availabilityModule);
+      if (referenced) {
+        runtime.moduleRegistry.addModuleByRef(
+          "view-availability",
+          trustModule(runtime, registryModule),
+        );
+      }
+      trustExecutable(runtime, pattern);
+      runtime.patternManager.associatePatternIdentity(pattern, source);
+      const replica = storage.open(space).replica as Required<ISpaceReplica>;
+      let emit!: (plans: readonly ViewPlan[]) => void;
+      let interests: ViewInterest[] = [];
+      using _supports = stub(
+        replica,
+        "supportsViewReplication",
+        () => Promise.resolve(true),
+      );
+      using _supported = stub(replica, "viewReplicationSupported", () => true);
+      using _plans = stub(replica, "subscribeViewPlans", (observer) => {
+        emit = observer;
+        observer([]);
+        return () => {};
+      });
+      using _interested = stub(replica, "setViewInterests", (views) => {
+        interests = views;
+        return Promise.resolve(true);
+      });
+      const unmount = await runtime.viewReplication.mount(root, "screen");
+      expect(unmount).toBeDefined();
+      emit([{
+        id: "screen",
+        revision: interests[0].revision,
+        generation: 1,
+        eligibleActions: [viewNodeId(rootLink, 0)],
+        inputs: [rootLink, inputLink, argumentLink],
+        pieces: [{ ...rootLink, patternIdentity: identity }],
+      }]);
+      const stopOutput = root.key("observed").sink(() => {});
+      try {
+        await runtime.idle();
+        expect(calls).toEqual([]);
+
+        await runtime.editWithRetry((tx) => {
+          viewingInput.withTx(tx).setRaw(
+            unavailableError("source refused", "provider"),
+          );
+        });
+        await runtime.idle();
+        expect(calls).toEqual(["source refused"]);
+
+        await runtime.editWithRetry((tx) => viewingInput.withTx(tx).setRaw(41));
+        await runtime.idle();
+        expect(calls).toEqual(["source refused", 42]);
+        expect(root.get()).toEqual({ $UI: "confirmed", observed: 42 });
+      } finally {
+        stopOutput();
+        unmount?.();
+        await runtime.idle();
+      }
+    });
+  }
 
   it("installs a handler node without reading its stream's document", async () => {
     // A handler registers on the stream its `$event` names; nothing about the

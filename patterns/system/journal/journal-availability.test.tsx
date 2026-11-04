@@ -39,6 +39,7 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           subject.availability === "error" &&
+          subject.errorKind === "network" &&
           subject.error === "journal offline"
         ),
       },
@@ -73,7 +74,8 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          subject.availability === "schemaMismatch" &&
+          subject.availability === "error" &&
+          subject.errorKind === "schemaMismatch" &&
           subject.error === "Journal data has an unexpected format."
         ),
       },

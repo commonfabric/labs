@@ -55,8 +55,10 @@ profiles, `#profile` renders the trusted create surface inline and its result
 channel carries an error availability value; scalar targets do the same.
 Consumers that present the missing-profile UI guard the original result
 channel with `hasError()`. Ordinary consumers use `resultOf(wish.result)` and
-wait. Resolution order among multiple profiles is default-first, then
-most-recently-used, then list order (CT-1829).
+wait. A configured `preferredProfileSpace` selects that profile first and fails
+closed if it is unavailable or no longer listed; it does not switch personas.
+Without that preference, resolution among multiple profiles is default-first,
+then most-recently-used, then list order (CT-1829).
 
 **Test.** `runtime/runner/test/wish.test.ts`,
 `describe("host embedding contract: profile wish targets")`.

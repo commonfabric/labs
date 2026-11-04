@@ -47,6 +47,12 @@ or change after a space is saved, and discovery follows it reactively. Each
 entry is found on its own, and lists its room once the room's records say it
 is one. An entry whose space this replica can't serve, as a space on another
 host is, lists nothing until it can be served, and holds back no other entry.
+The implementation's `discoveryErrors` output reports terminal catalog-root
+failures separately, as the source space, message, and error kind. Retirement
+guidance appears there with kind `obsolete`. Pending and syncing roots report
+no terminal diagnostic. A root's recovery removes its diagnostic without
+interrupting healthy room discovery; this output is derived per user, as each
+root is read under that user's access.
 
 Each entry links the room itself, so opening it displays the full conversation.
 Resolved room identity, compared with `equals()`, deduplicates a conversation

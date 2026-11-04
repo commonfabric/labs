@@ -253,8 +253,9 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   mention values before the join writes any rows. A pending, syncing, or error
   source therefore propagates its native state through the pivot while the
   durable backlinks remain intact. A usable empty mention list removes edges;
-  recovery recomputes them. Identity deduplication retains original positions so
-  duplicate or absent sources do not misalign the two views.
+  recovery recomputes them. Identity deduplication preserves first-occurrence
+  order and omits absent sources. The callback reads these deduplicated handles
+  directly, so duplicates add no extra rows.
 
   Each topic then does a lookup rather than the join: `backlinksOf` scans the
   pivot for the row whose topic is itself, and takes that row's `mentionedBy`.

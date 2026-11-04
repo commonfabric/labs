@@ -103,23 +103,32 @@ export const journalAvailability = lift(
   }) => {
     if (hasSchemaMismatch(journal) || hasSchemaMismatch(nowMs)) {
       return {
-        availability: "schemaMismatch",
+        availability: "error",
+        errorKind: "schemaMismatch",
         error: "Journal data has an unexpected format.",
       };
     }
     if (hasError(journal)) {
-      return { availability: "error", error: journal.errorMessage };
+      return {
+        availability: "error",
+        error: journal.errorMessage,
+        errorKind: journal.errorKind,
+      };
     }
     if (hasError(nowMs)) {
-      return { availability: "error", error: nowMs.errorMessage };
+      return {
+        availability: "error",
+        error: nowMs.errorMessage,
+        errorKind: nowMs.errorKind,
+      };
     }
     if (isPending(journal) || isPending(nowMs)) {
-      return { availability: "pending", error: "" };
+      return { availability: "pending", error: "", errorKind: "" };
     }
     if (isSyncing(journal) || isSyncing(nowMs)) {
-      return { availability: "syncing", error: "" };
+      return { availability: "syncing", error: "", errorKind: "" };
     }
-    return { availability: "ready", error: "" };
+    return { availability: "ready", error: "", errorKind: "" };
   },
 );
 
@@ -201,7 +210,7 @@ export default pattern<Record<string, never>>((_) => {
 
         {/* Debug section */}
         <details style={{ marginBottom: "16px", fontSize: "12px" }}>
-          <summary>Debug: Raw Data</summary>
+          <summary>Debug: Display Snapshot</summary>
           <pre
             style={{
               overflow: "auto",
@@ -333,6 +342,7 @@ export default pattern<Record<string, never>>((_) => {
       </div>
     ),
     availability: availabilityState.availability,
+    errorKind: availabilityState.errorKind,
     error: availabilityState.error,
   };
 });

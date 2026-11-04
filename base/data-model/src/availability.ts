@@ -4,7 +4,15 @@
  * successful payloads remain opaque.
  */
 
-import type { UnavailableErrorKind } from "@/api.ts";
+import type {
+  HasError,
+  HasSchemaMismatch,
+  IsObsolete,
+  IsPending,
+  IsSyncing,
+  UnavailableErrorKind,
+  UnavailableVariant,
+} from "@/api.ts";
 import { FabricError } from "@/fabric-instances/FabricError.ts";
 import { tagOfFabricValueElseNull } from "@/types/tag-of.ts";
 import { VALUE_TAGS } from "@/types/tags.ts";
@@ -16,22 +24,24 @@ import {
 } from "@/fabric-primitives/FabricUnavailable.ts";
 
 export type { UnavailableObservationKind } from "@/api.ts";
-export type IsPending = FabricUnavailable & { readonly reason: "pending" };
-export type IsSyncing = FabricUnavailable & { readonly reason: "syncing" };
-export type IsObsolete = FabricUnavailable & { readonly reason: "obsolete" };
-export type HasError = FabricUnavailable & {
-  readonly reason: "error";
-  readonly errorKind: UnavailableErrorKind;
-  readonly errorMessage: string;
+export type {
+  HasError,
+  HasSchemaMismatch,
+  IsObsolete,
+  IsPending,
+  IsSyncing,
+  UnavailableVariant,
 };
-export type HasSchemaMismatch = HasError & {
-  readonly errorKind: "schemaMismatch";
-};
-export type UnavailableVariant = IsPending | IsSyncing | IsObsolete | HasError;
 export { FabricError, FabricUnavailable };
-export const UNAVAILABLE_PENDING = canonicalPending as IsPending;
-export const UNAVAILABLE_SYNCING = canonicalSyncing as IsSyncing;
-export const UNAVAILABLE_OBSOLETE = canonicalObsolete as IsObsolete;
+export const UNAVAILABLE_PENDING = canonicalPending as
+  & FabricUnavailable
+  & IsPending;
+export const UNAVAILABLE_SYNCING = canonicalSyncing as
+  & FabricUnavailable
+  & IsSyncing;
+export const UNAVAILABLE_OBSOLETE = canonicalObsolete as
+  & FabricUnavailable
+  & IsObsolete;
 
 /** Returns whether the reached root is a canonical unavailable primitive. */
 export function isUnavailable(value: unknown): value is UnavailableVariant {
@@ -55,13 +65,15 @@ export function isObsolete(value: unknown): value is IsObsolete {
 }
 
 /** Marks a retired output with optional diagnostic migration guidance. */
-export function unavailableObsolete(message?: string): IsObsolete {
+export function unavailableObsolete(
+  message?: string,
+): FabricUnavailable & IsObsolete {
   return message === undefined ? UNAVAILABLE_OBSOLETE : new FabricUnavailable(
     "obsolete",
     null,
     null,
     message,
-  ) as IsObsolete;
+  ) as FabricUnavailable & IsObsolete;
 }
 
 /** Returns whether the reached root is a terminal error of any kind. */
@@ -78,24 +90,26 @@ export function hasSchemaMismatch(value: unknown): value is HasSchemaMismatch {
 export function unavailableError(
   error: Error | FabricError | string,
   kind: UnavailableErrorKind = "general",
-): HasError {
+): FabricUnavailable & HasError {
   return new FabricUnavailable(
     "error",
     kind,
     typeof error === "string" ? error : error.message,
-  ) as HasError;
+  ) as FabricUnavailable & HasError;
 }
 
 const SCHEMA_MISMATCH = new FabricUnavailable(
   "error",
   "schemaMismatch",
-) as HasSchemaMismatch;
+) as FabricUnavailable & HasSchemaMismatch;
 
 /** Returns the canonical terminal marker for a schema-invalid result. */
-export function unavailableMismatch(message?: string): HasSchemaMismatch {
+export function unavailableMismatch(
+  message?: string,
+): FabricUnavailable & HasSchemaMismatch {
   return message === undefined ? SCHEMA_MISMATCH : new FabricUnavailable(
     "error",
     "schemaMismatch",
     message,
-  ) as HasSchemaMismatch;
+  ) as FabricUnavailable & HasSchemaMismatch;
 }

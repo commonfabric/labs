@@ -82,9 +82,9 @@ To lower `myBuiltin<Row>(args)` into
   [`runtime/runner/src/builder/factory.ts`](../../../runtime/runner/src/builder/factory.ts).
 - **`generateObject` / `generateObjectStream` / `generate-object`** — both
   public forms share the dedicated call kind which injects a _result_ schema
-  from a type argument; the closest analog to "result row" lowering. See the
-  function-first argument-order handling
-  (`[function, inputSchema, resultSchema]`) in `schema-injection.ts`.
+  from a type argument; the closest analog to "result row" lowering. The
+  injected schema is a `schema` member of the shared options object,
+  `{ schema: generatedSchema, ...authoredOptions }`, in `schema-injection.ts`.
 - **`lift` / `lift-applied`** — input + result schema injection from two type
   arguments.
 - **`sqliteQuery<Row>`** — the canonical _structured-result_ case: the branch

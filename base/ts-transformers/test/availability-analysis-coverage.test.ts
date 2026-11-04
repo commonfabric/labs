@@ -173,6 +173,7 @@ function withContext(source: string, run: (test: TestContext) => void): void {
   const files: Record<string, string> = {
     "/test.ts": source,
     "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"],
+    "/utilities.d.ts": "type Exclude<T, U> = T extends U ? never : T;",
   };
   const options: ts.CompilerOptions = {
     target: ts.ScriptTarget.ESNext,
@@ -206,7 +207,11 @@ function withContext(source: string, run: (test: TestContext) => void): void {
           : undefined
       ),
   };
-  const program = ts.createProgram(["/test.ts"], options, host);
+  const program = ts.createProgram(
+    ["/test.ts", "/utilities.d.ts"],
+    options,
+    host,
+  );
   const sourceFile = program.getSourceFile("/test.ts")!;
   const state = new CrossStageState();
   let transformation!: ts.TransformationContext;
@@ -300,6 +305,7 @@ Deno.test("availability provenance and observations cover retained and invalid f
       import {
         AsyncResult,
         HasError,
+        IsPending,
         SqliteDb,
         compileAndRun,
         fetchJsonUnchecked,
@@ -383,6 +389,7 @@ Deno.test("availability provenance and observations cover retained and invalid f
       declare const plainAny: any;
       declare const plainUnknown: unknown;
       declare const unavailable: HasError;
+      declare const pending: IsPending;
       declare const asyncString: AsyncResult<string>;
       function constrained<T extends Repo | HasError>(value: T) { return value; }
     `,
@@ -605,6 +612,17 @@ Deno.test("availability provenance and observations cover retained and invalid f
       );
       const asyncType = checker.getTypeAtLocation(
         variable(sourceFile, "asyncString").name,
+      );
+      const pendingType = checker.getTypeAtLocation(
+        variable(sourceFile, "pending").name,
+      );
+      assertEquals(
+        typeContainsAvailabilityVariant(pendingType, variant, checker),
+        false,
+      );
+      assertEquals(
+        typeContainsAvailabilityVariant(variant, pendingType, checker),
+        false,
       );
       const anyType = checker.getTypeAtLocation(
         variable(sourceFile, "plainAny").name,

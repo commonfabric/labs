@@ -1,5 +1,6 @@
 import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import {
@@ -460,3 +461,52 @@ function withContextEmit(
 ): void {
   withContext(sourceText, body);
 }
+
+describe("type-building availability overrides", () => {
+  it("widens only selected empty-string and computed static keys", () => {
+    withContext(
+      'type Input = { "": string; ["literal"]: number; untouched: boolean };',
+      (context, sourceFile) => {
+        const alias = sourceFile.statements[0];
+        if (!ts.isTypeAliasDeclaration(alias)) {
+          throw new Error("Expected the authored input type alias.");
+        }
+        const result = applyAvailabilityOverridesToTypeNode(alias.type, [{
+          path: [""],
+          reasons: ["error"],
+          variants: [{ name: "HasError" }],
+        }, {
+          path: ["literal"],
+          reasons: ["pending"],
+          variants: [{ name: "IsPending" }],
+        }], context);
+        if (!ts.isTypeLiteralNode(result)) {
+          throw new Error("Expected the widened object type.");
+        }
+        const printer = ts.createPrinter();
+        const members = result.members.map((member) => {
+          if (!ts.isPropertySignature(member) || !member.type) {
+            throw new Error("Expected a typed property signature.");
+          }
+          return {
+            name: printer.printNode(
+              ts.EmitHint.Unspecified,
+              member.name,
+              sourceFile,
+            ),
+            type: printer.printNode(
+              ts.EmitHint.Unspecified,
+              member.type,
+              sourceFile,
+            ),
+          };
+        });
+        expect(members).toEqual([
+          { name: '""', type: "string | __cfHelpers.HasError" },
+          { name: '["literal"]', type: "number | __cfHelpers.IsPending" },
+          { name: "untouched", type: "boolean" },
+        ]);
+      },
+    );
+  });
+});

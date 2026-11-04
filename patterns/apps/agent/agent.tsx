@@ -6,6 +6,7 @@ import {
   handler,
   hasError,
   hasSchemaMismatch,
+  isObsolete,
   isPending,
   isSyncing,
   NAME,
@@ -107,6 +108,7 @@ export default pattern<AgentInput, AgentOutput>(
       headless: true,
     });
     const activityLog = hasError(activityLogWish.result) ||
+        isObsolete(activityLogWish.result) ||
         isPending(activityLogWish.result) ||
         isSyncing(activityLogWish.result) ||
         hasSchemaMismatch(activityLogWish.result)

@@ -22,6 +22,7 @@ import {
   computed,
   type Default,
   hasError,
+  isObsolete,
   isPending,
   isSyncing,
   NAME,
@@ -71,7 +72,7 @@ export default pattern<Input, Output>(
     const hasAggregator = computed(() => {
       const result = aggregatorWish.result;
       return result != null && !isPending(result) && !hasError(result) &&
-        !isSyncing(result);
+        !isSyncing(result) && !isObsolete(result);
     });
 
     // Shared scope for A and B

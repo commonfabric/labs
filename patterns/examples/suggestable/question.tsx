@@ -1,15 +1,16 @@
 import {
+  type AsyncResult,
   computed,
   Default,
   generateObject,
   handler,
   hasError,
-  hasSchemaMismatch,
   ifElse,
+  isObsolete,
   isPending,
   isSyncing,
+  lift,
   NAME,
-  observeAvailability,
   pattern,
   resultOf,
   UI,
@@ -32,6 +33,7 @@ export type QuestionOutput = {
   options: string[];
   answer: Writable<string>;
   pending: boolean;
+  error: string;
 };
 
 // ===== Handler (module scope) =====
@@ -42,6 +44,39 @@ const onAnswer = handler<
 >(({ detail }, { answer }) => {
   answer.set(detail.answer);
 });
+
+/** Projects generated questions into waiting, diagnostic, and usable states. */
+export const questionResponseState = lift(
+  (
+    { responseRequest }: {
+      responseRequest: AsyncResult<{ question: string; options: string[] }>;
+    },
+  ) => {
+    if (isPending(responseRequest) || isSyncing(responseRequest)) {
+      return {
+        response: { question: "", options: [] },
+        pending: true,
+        error: "",
+      };
+    }
+    if (isObsolete(responseRequest)) {
+      return {
+        response: { question: "", options: [] },
+        pending: false,
+        error: responseRequest.obsoleteMessage ??
+          "This question is no longer served.",
+      };
+    }
+    if (hasError(responseRequest)) {
+      return {
+        response: { question: "", options: [] },
+        pending: false,
+        error: responseRequest.errorMessage,
+      };
+    }
+    return { response: resultOf(responseRequest), pending: false, error: "" };
+  },
+);
 
 // ===== Pattern =====
 
@@ -82,25 +117,7 @@ const Question = pattern<QuestionInput, QuestionOutput>(
       },
       model: "anthropic:claude-haiku-4-5",
     });
-    const observedResponse = observeAvailability(responseRequest);
-    const responseState = computed(() => {
-      if (isPending(observedResponse)) {
-        return {
-          response: { question: "", options: [] },
-          pending: true,
-        };
-      }
-      if (
-        hasError(observedResponse) || isSyncing(observedResponse) ||
-        hasSchemaMismatch(observedResponse)
-      ) {
-        return {
-          response: { question: "", options: [] },
-          pending: false,
-        };
-      }
-      return { response: resultOf(observedResponse), pending: false };
-    });
+    const responseState = questionResponseState({ responseRequest });
 
     const answer = new Writable("");
 
@@ -120,15 +137,19 @@ const Question = pattern<QuestionInput, QuestionOutput>(
               <div style="color: var(--cf-theme-color-text-secondary);">
                 <cf-loader show-elapsed /> Generating question...
               </div>,
-              <cf-question
-                question={computed(
-                  () => responseState.response.question || "",
-                )}
-                options={computed(
-                  () => responseState.response.options || [],
-                )}
-                oncf-answer={onAnswer({ answer })}
-              />,
+              ifElse(
+                responseState.error,
+                <p role="alert">{responseState.error}</p>,
+                <cf-question
+                  question={computed(
+                    () => responseState.response.question || "",
+                  )}
+                  options={computed(
+                    () => responseState.response.options || [],
+                  )}
+                  oncf-answer={onAnswer({ answer })}
+                />,
+              ),
             )}
           </cf-vstack>
         </cf-screen>
@@ -138,6 +159,7 @@ const Question = pattern<QuestionInput, QuestionOutput>(
       options: computed(() => responseState.response.options || []),
       answer,
       pending: responseState.pending,
+      error: responseState.error,
     };
   },
 );

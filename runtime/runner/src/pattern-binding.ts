@@ -905,11 +905,6 @@ export function unwrapOneLevelAndBindToDoc(
       }
     } else if (binding instanceof FabricPrimitive) {
       return binding;
-    } else if (isUnavailable(binding)) {
-      // Runtime-owned availability markers are atomic control values. Unlike
-      // an arbitrary FabricInstance, their closed codec state cannot conceal
-      // a write redirect or another builder binding.
-      return binding;
     } else if (binding instanceof FabricInstance) {
       throw new Error(
         `Cannot yet handle \`${binding.constructor.name}\` (a ` +

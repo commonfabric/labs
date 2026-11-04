@@ -1,9 +1,17 @@
 import { assertEquals } from "@std/assert";
 import type {
   AsyncResult,
+  AsyncStreamResult,
   AvailableResult,
+  BuiltInGenerateObjectStreamState,
+  BuiltInGenerateTextStreamState,
   CompileAndRunFunction,
   CompileResult,
+  FABRIC_PRIMITIVE_BRAND,
+  FabricUnavailable,
+  FabricUnavailableBase,
+  FabricValue,
+  FactoryCallInput,
   FetchBinaryFunction,
   FetchBinaryResult,
   FetchJsonFunction,
@@ -22,6 +30,7 @@ import type {
   IsPending,
   IsPendingFunction,
   IsSyncing,
+  LatestCompleteValue,
   LLMDialogFunction,
   Module,
   ObserveAvailabilityFunction,
@@ -44,6 +53,107 @@ type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends
 interface Repo {
   owner: string;
   name: string;
+}
+
+function nativeCompatibilityTypecheck(
+  current: FabricUnavailable,
+  accepted: UnavailableVariant,
+  pending: IsPending,
+  lookalike: Omit<IsPending, typeof FABRIC_PRIMITIVE_BRAND>,
+  isObsolete: IsObsoleteFunction,
+): void {
+  current.isObsolete();
+  const currentGuidance: string | null = current.obsoleteMessage;
+  accepted.isObsolete?.();
+  // @ts-expect-error Accepted native implementations may omit this method.
+  accepted.isObsolete();
+  // @ts-expect-error Accepted non-obsolete implementations may omit this getter.
+  const requiredGuidance: string | null = accepted.obsoleteMessage;
+  // @ts-expect-error An accepted older marker is not the current concrete API.
+  const concrete: FabricUnavailable = pending;
+  // @ts-expect-error Structural lookalikes lack the native primitive brand.
+  const native: IsPending = lookalike;
+  const fabricValue: FabricValue = pending;
+  const factoryInput: FactoryCallInput<Repo> = pending;
+  const latestIsExact: Equal<LatestCompleteValue<AsyncResult<Repo>>, Repo> =
+    true;
+  if (isObsolete(accepted)) {
+    accepted.isObsolete();
+    const guidance: string | null = accepted.obsoleteMessage;
+    void guidance;
+  }
+  void currentGuidance;
+  void requiredGuidance;
+  void concrete;
+  void native;
+  void fabricValue;
+  void factoryInput;
+  void latestIsExact;
+}
+
+function generationStateTypecheck(): void {
+  const textPartial: Equal<
+    BuiltInGenerateTextStreamState["partial"],
+    AsyncResult<string> | undefined
+  > = true;
+  const objectPartial: Equal<
+    BuiltInGenerateObjectStreamState<Repo>["partial"],
+    AsyncResult<string> | undefined
+  > = true;
+  void textPartial;
+  void objectPartial;
+}
+
+function concreteResultTypecheck(
+  resultOf: ResultOfFunction,
+  current: FabricUnavailable,
+  base: FabricUnavailableBase,
+  mixed: Repo | FabricUnavailable,
+  stream: AsyncStreamResult<FabricUnavailable, string>,
+  async: AsyncResult<Repo>,
+  compiled: CompileResult<Repo>,
+): void {
+  const currentResult = resultOf(current);
+  const baseResult = resultOf(base);
+  const mixedResult = resultOf(mixed);
+  const streamResult = resultOf(stream);
+  const explicitAsync = resultOf<Repo>(async);
+  const explicitCompile = resultOf<Repo>(compiled);
+  const currentIsNever: Equal<typeof currentResult, never> = true;
+  const baseIsNever: Equal<typeof baseResult, never> = true;
+  const baseAliasIsNever: Equal<AvailableResult<FabricUnavailableBase>, never> =
+    true;
+  const latestBaseIsNever: Equal<
+    LatestCompleteValue<FabricUnavailableBase>,
+    never
+  > = true;
+  const baseInput: FactoryCallInput<Repo> = base;
+  const mixedIsExact: Equal<typeof mixedResult, Repo> = true;
+  const streamIsNever: Equal<typeof streamResult, never> = true;
+  const explicitAsyncIsExact: Equal<typeof explicitAsync, Repo> = true;
+  const explicitCompileIsExact: Equal<typeof explicitCompile, Repo> = true;
+  const currentAliasIsNever: Equal<AvailableResult<FabricUnavailable>, never> =
+    true;
+  const mixedAliasIsExact: Equal<
+    AvailableResult<Repo | FabricUnavailable>,
+    Repo
+  > = true;
+  const streamAliasIsNever: Equal<
+    AvailableResult<AsyncStreamResult<FabricUnavailable, string>>,
+    never
+  > = true;
+  void currentIsNever;
+  void baseIsNever;
+  void baseAliasIsNever;
+  void latestBaseIsNever;
+  void baseInput;
+  void mixedIsExact;
+  void streamIsNever;
+  void explicitAsyncIsExact;
+  void explicitCompileIsExact;
+  void currentAliasIsNever;
+  void mixedAliasIsExact;
+  void streamAliasIsNever;
 }
 
 function guardNarrowingTypecheck(
@@ -409,6 +519,9 @@ function llmDialogResultTypecheck(
 }
 
 Deno.test("data-unavailability helper declarations preserve narrowing types", () => {
+  assertEquals(typeof nativeCompatibilityTypecheck, "function");
+  assertEquals(typeof generationStateTypecheck, "function");
+  assertEquals(typeof concreteResultTypecheck, "function");
   assertEquals(typeof guardNarrowingTypecheck, "function");
   assertEquals(typeof asyncResultNarrowingTypecheck, "function");
   assertEquals(typeof observationTypecheck, "function");

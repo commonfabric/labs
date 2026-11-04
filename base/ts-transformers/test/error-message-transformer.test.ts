@@ -62,6 +62,7 @@ describe("createReactiveErrorTransformer", () => {
       expect(result).toContain("isPending(request)");
       expect(result).toContain("hasError(request)");
       expect(result).toContain("partialResultOf(request)");
+      expect(result).toContain("generateObjectStream()");
     }
   });
 

@@ -2501,11 +2501,13 @@ export default pattern<TopicInput, TopicOutput>(
       return resultOf(profileWish.result).avatar ?? "";
     });
     const hasProfile = computed(() => profileName.trim().length > 0);
-    const profilePicture = computed(() =>
-      hasError(profileWish.result)
-        ? undefined
-        : resultOf(profileWish.result).picture
-    );
+    const profilePicture = computed(() => {
+      if (
+        hasError(profileWish.result) || isPending(profileWish.result) ||
+        isSyncing(profileWish.result)
+      ) return undefined;
+      return resultOf(profileWish.result).picture;
+    });
     const profileView = computed(() => ({
       name: profileName,
       avatar: profileAvatar,

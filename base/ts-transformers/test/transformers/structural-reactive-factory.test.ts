@@ -115,6 +115,11 @@ describe("structural-reactive-factory", () => {
         "alias(request)",
       ],
       [
+        "mutable callable alias",
+        `${identity} let alias = identity;`,
+        "alias(request)",
+      ],
+      [
         "reassigned function declaration",
         `${identity} ${factory} identity = make;`,
         "identity(request)",
@@ -164,13 +169,60 @@ describe("structural-reactive-factory", () => {
           .map((diagnostic) => diagnostic.type),
       )
         .toEqual(
-          name === "reassigned callable alias"
+          name === "reassigned callable alias" ||
+            name === "mutable callable alias"
             ? [
               "module-scope:let-declaration",
               "compute-context:local-reactive-use",
             ]
             : ["compute-context:local-reactive-use"],
         );
+    });
+  }
+
+  for (const access of [".result", '["result"]']) {
+    it(`reports a Wish factory hidden behind ${access} in a helper`, async () => {
+      const { diagnostics } = await validateSource(
+        `
+        import { pattern, computed, wish, type AsyncResult } from "commonfabric";
+        function get(): AsyncResult<string> {
+          return wish<string>({ query: "#inner" })${access};
+        }
+        export default pattern(() => ({ value: computed(() => get()) }));
+        `,
+        { types: { "commonfabric.d.ts": commonfabricTypes } },
+      );
+      expect(
+        diagnostics.filter((item) => item.severity === "error")
+          .map((item) => item.type),
+      )
+        .toEqual(["compute-context:local-reactive-use"]);
+    });
+  }
+
+  for (const mutatesGetter of [true, false]) {
+    it(`${mutatesGetter ? "rejects" : "allows"} a stored Wish getter when a handler mutates ${mutatesGetter ? "that getter" : "an unrelated helper"}`, async () => {
+      const { diagnostics } = await validateSource(
+        `
+        import { pattern, computed, handler, wish, type WishState } from "commonfabric";
+        ${identity}
+        ${factory}
+        function other(v: WishState<string>): WishState<string> { return v; }
+        const update = handler<void, {}>(() => {
+          for (${mutatesGetter ? "identity" : "other"} of [make]) {}
+        });
+        export default pattern(() => {
+          const request = wish<string>({ query: "#outer" });
+          return { value: computed(() => identity(request).result) };
+        });
+        `,
+        { types: { "commonfabric.d.ts": commonfabricTypes } },
+      );
+      expect(
+        diagnostics.filter((item) => item.severity === "error")
+          .map((item) => item.type),
+      )
+        .toEqual(mutatesGetter ? ["compute-context:local-reactive-use"] : []);
     });
   }
 });

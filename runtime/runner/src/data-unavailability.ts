@@ -1,5 +1,4 @@
 import {
-  FabricUnavailable,
   isUnavailable,
   UNAVAILABLE_SYNCING,
   unavailableError,
@@ -42,16 +41,16 @@ export function dataUnavailableReasonPrecedes(
  * when both reasons have equal precedence.
  */
 export function preferDataUnavailable(
-  current: FabricUnavailable | undefined,
+  current: UnavailableVariant | undefined,
   candidate: unknown,
 ): UnavailableVariant | undefined {
   if (!isUnavailable(candidate)) {
-    return current as UnavailableVariant | undefined;
+    return current;
   }
   if (current === undefined) return candidate;
   return dataUnavailableReasonPrecedes(candidate.reason, current.reason)
     ? candidate
-    : current as UnavailableVariant;
+    : current;
 }
 
 /** Converts schema traversal's availability status into its control value. */

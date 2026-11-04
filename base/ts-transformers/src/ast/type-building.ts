@@ -1952,19 +1952,6 @@ export function widenTypeNodeForAvailability(
   return result;
 }
 
-function typeElementNameText(
-  name: ts.PropertyName | undefined,
-): string | undefined {
-  if (!name) return undefined;
-  if (
-    ts.isIdentifier(name) || ts.isStringLiteralLike(name) ||
-    ts.isNumericLiteral(name)
-  ) {
-    return name.text;
-  }
-  return undefined;
-}
-
 /**
  * Apply exact relative-path availability overrides to an already constructed
  * type node. This is used for destructured explicit lift inputs, whose observed
@@ -2022,14 +2009,14 @@ export function applyAvailabilityOverridesToTypeNode(
     const byHead = new Map<string, AvailabilityCaptureOverride[]>();
     for (const override of overrides) {
       const [head, ...rest] = override.path;
-      if (!head) continue;
+      if (head === undefined) continue;
       const entries = byHead.get(head) ?? [];
       entries.push({ ...override, path: rest });
       byHead.set(head, entries);
     }
     const members = base.members.map((member) => {
       if (!ts.isPropertySignature(member) || !member.type) return member;
-      const name = typeElementNameText(member.name);
+      const name = getPropertyNameText(member.name, context.checker);
       const nested = name === undefined ? undefined : byHead.get(name);
       if (!nested || nested.length === 0) return member;
       return context.factory.updatePropertySignature(

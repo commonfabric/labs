@@ -1094,6 +1094,14 @@ into data would hide programming errors and is not part of this design.
 
 ## Compatibility and Versioning
 
+Availability guards accept canonical native markers whose implementations omit
+the retirement method and guidance getter. The accepted non-obsolete variants
+therefore expose `isObsolete` and `obsoleteMessage` as optional members. Use the
+free `isObsolete()` guard to recognize retirement and obtain its guidance.
+Constructing a current `FabricUnavailable` always provides both members; the
+compatibility types retain the native primitive brand and do not admit
+structural lookalikes.
+
 This is a source-breaking API migration for patterns that read `.result`,
 `.pending`, or `.error` from fetch and generation state objects. The repository
 must migrate those uses as part of the public-name cutover. Ordinary consumers

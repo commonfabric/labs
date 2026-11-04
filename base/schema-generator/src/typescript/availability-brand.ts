@@ -5,6 +5,7 @@ import { isCommonFabricSymbol } from "./common-fabric-symbols.ts";
 
 const AVAILABILITY_TYPE_NAMES: ReadonlySet<string> = new Set([
   "FabricUnavailable",
+  "FabricUnavailableBase",
   "IsPending",
   "IsSyncing",
   "IsObsolete",

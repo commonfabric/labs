@@ -6,6 +6,7 @@ import {
   hasError,
   ifElse,
   ImageData,
+  isObsolete,
   isPending,
   isSyncing,
   NAME,
@@ -48,22 +49,35 @@ type ImageUploadEvent = {
 /** Presents an image-analysis response and its waiting state. */
 export const ImageAnalysisPresentation = pattern<
   { responseRequest: AsyncResult<string> },
-  { response: string | undefined; pending: boolean; [UI]: VNode }
+  { response: string | undefined; pending: boolean; error: string; [UI]: VNode }
 >(({ responseRequest }) => {
   const observedResponse = observeAvailability(responseRequest);
   const responseState = computed(() => {
     if (isPending(observedResponse) || isSyncing(observedResponse)) {
-      return { response: undefined, pending: true };
+      return { response: undefined, pending: true, error: "" };
     }
     if (hasError(observedResponse)) {
-      return { response: undefined, pending: false };
+      return {
+        response: undefined,
+        pending: false,
+        error: observedResponse.errorMessage,
+      };
     }
-    return { response: resultOf(observedResponse), pending: false };
+    if (isObsolete(observedResponse)) {
+      return {
+        response: undefined,
+        pending: false,
+        error: observedResponse.obsoleteMessage ??
+          "This response is no longer served.",
+      };
+    }
+    return { response: resultOf(observedResponse), pending: false, error: "" };
   });
   const result = responseState.response;
   return {
     response: result,
     pending: responseState.pending,
+    error: responseState.error,
     [UI]: (
       <div style="display: contents;">
         {ifElse(
@@ -72,14 +86,18 @@ export const ImageAnalysisPresentation = pattern<
             <div>Analyzing...</div>
           </cf-card>,
           ifElse(
-            result,
-            <cf-card>
-              <cf-vstack gap="2">
-                <cf-heading level={5}>Response</cf-heading>
-                <div style="white-space: pre-wrap;">{result}</div>
-              </cf-vstack>
-            </cf-card>,
-            null,
+            responseState.error,
+            <p role="alert">{responseState.error}</p>,
+            ifElse(
+              result,
+              <cf-card>
+                <cf-vstack gap="2">
+                  <cf-heading level={5}>Response</cf-heading>
+                  <div style="white-space: pre-wrap;">{result}</div>
+                </cf-vstack>
+              </cf-card>,
+              null,
+            ),
           ),
         )}
       </div>

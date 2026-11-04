@@ -5,6 +5,7 @@ import {
   type AsyncResult,
   FabricUnavailable,
   type HasError,
+  type IsObsolete,
   type IsPending,
   type IsSyncing,
   pattern,
@@ -80,11 +81,37 @@ export default pattern(() => {
           subject.pending === false && subject.response === ""
         ),
       },
+      {
+        action: action(() =>
+          request.set(
+            new FabricUnavailable(
+              "obsolete",
+              null,
+              null,
+              "Use imageOverview.description instead.",
+            ) as IsObsolete,
+          )
+        ),
+      },
+      {
+        assertion: assert(() =>
+          subject.pending === false && subject.response === undefined &&
+          subject.error === "Use imageOverview.description instead."
+        ),
+      },
+      {
+        assertion: assert(() =>
+          textContent(subject[UI]).includes(
+            "Use imageOverview.description instead.",
+          ) &&
+          !textContent(subject[UI]).includes("Analyzing...")
+        ),
+      },
       { action: action(() => request.set("Recovered description")) },
       {
         assertion: assert(() =>
           subject.pending === false &&
-          subject.response === "Recovered description"
+          subject.response === "Recovered description" && subject.error === ""
         ),
       },
       {

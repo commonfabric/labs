@@ -4,6 +4,7 @@ import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 const SYNTHETIC_AVAILABILITY_TYPE_NAMES = new Set([
   "FabricUnavailable",
+  "FabricUnavailableBase",
   "IsPending",
   "HasError",
   "IsSyncing",

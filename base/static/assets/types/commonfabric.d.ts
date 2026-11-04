@@ -579,14 +579,8 @@ export type UnavailableErrorKind =
   | "provider"
   | "sync";
 
-/**
- * A marker standing in for data that is not available, saying why. It holds
- * no payload of its own: its reason and diagnostic fields are the whole of
- * what it says. Only `error` carries error members; `errorMessage` supplies
- * its kind's default when none was given. Only `obsolete` may carry an
- * `obsoleteMessage`, diagnostic guidance which confers no authority to act.
- */
-export interface FabricUnavailable extends FabricPrimitive {
+/** Native availability members shared by accepted marker implementations. */
+export interface FabricUnavailableBase extends FabricPrimitive {
   /** @inheritDoc */
   readonly schemaType: "FabricUnavailable";
 
@@ -609,17 +603,11 @@ export interface FabricUnavailable extends FabricPrimitive {
    */
   readonly rawErrorMessage: string | null;
 
-  /** Optional guidance about a retired output; `null` otherwise. */
-  readonly obsoleteMessage: string | null;
-
   /** Whether the reason is `pending`. */
   isPending(): boolean;
 
   /** Whether the reason is `syncing`. */
   isSyncing(): boolean;
-
-  /** Whether the output is no longer served. */
-  isObsolete(): boolean;
 
   /**
    * Whether the reason is `error`, narrowing `errorKind` and `errorMessage`
@@ -637,6 +625,21 @@ export interface FabricUnavailable extends FabricPrimitive {
   isTransient(): boolean;
 }
 
+/**
+ * A marker standing in for data that is not available, saying why. It holds
+ * no payload of its own: its reason and diagnostic fields are the whole of
+ * what it says. Only `error` carries error members; `errorMessage` supplies
+ * its kind's default when none was given. Only `obsolete` may carry an
+ * `obsoleteMessage`, diagnostic guidance which confers no authority to act.
+ */
+export interface FabricUnavailable extends FabricUnavailableBase {
+  /** Optional guidance about a retired output; `null` otherwise. */
+  readonly obsoleteMessage: string | null;
+
+  /** Whether the output is no longer served. */
+  isObsolete(): boolean;
+}
+
 export interface FabricUnavailableConstructor {
   new (
     reason: UnavailableReason,
@@ -649,17 +652,28 @@ export interface FabricUnavailableConstructor {
 
 export declare const FabricUnavailable: FabricUnavailableConstructor;
 
+/** Availability members shared by accepted native marker implementations. */
+type CompatibleUnavailable =
+  & FabricUnavailableBase
+  & {
+    /** Retirement predicate, when provided by the native implementation. */
+    readonly isObsolete?: FabricUnavailable["isObsolete"];
+
+    /** No retirement guidance belongs to a non-obsolete reason. */
+    readonly obsoleteMessage?: null;
+  };
+
 /** A pending result whose producer has not completed. */
-export type IsPending = FabricUnavailable & { readonly reason: "pending" };
+export type IsPending = CompatibleUnavailable & { readonly reason: "pending" };
 
 /** A result awaiting replica synchronization. */
-export type IsSyncing = FabricUnavailable & { readonly reason: "syncing" };
+export type IsSyncing = CompatibleUnavailable & { readonly reason: "syncing" };
 
 /** An output that is no longer served, with optional migration guidance. */
 export type IsObsolete = FabricUnavailable & { readonly reason: "obsolete" };
 
 /** A terminal unavailable result with its error kind and message. */
-export type HasError = FabricUnavailable & {
+export type HasError = CompatibleUnavailable & {
   readonly reason: "error";
   readonly errorKind: UnavailableErrorKind;
   readonly errorMessage: string;
@@ -948,8 +962,8 @@ export type AsyncStreamResult<Final, Partial> =
 
 /** Removes unavailable control variants and type-only stream metadata. */
 export type AvailableResult<R> = R extends PartialResultSource<infer Final, any>
-  ? Final
-  : Exclude<R, UnavailableVariant>;
+  ? Exclude<Final, FabricUnavailableBase>
+  : Exclude<R, FabricUnavailableBase>;
 
 /** Exact argument-relative path at which selected reasons may be observed. */
 export type UnavailableInputPolicyEntry = Readonly<{
@@ -2591,14 +2605,14 @@ export type FactoryInput<T> =
  */
 export type FactoryCallInput<T> =
   | FactoryInput<T>
-  | FabricUnavailable
+  | FabricUnavailableBase
   | (T extends Array<infer U> ? Array<FactoryCallInput<U>>
     : T extends ReadonlyArray<infer U> ? ReadonlyArray<FactoryCallInput<U>>
     : T extends object ? { [K in keyof T]: FactoryCallInput<T[K]> }
     : T);
 
 /** Complete value shape retained by `latestComplete()`. */
-export type LatestCompleteValue<T> = T extends FabricUnavailable ? never
+export type LatestCompleteValue<T> = T extends FabricUnavailableBase ? never
   : T extends AnyBrandedCell<infer U> ? LatestCompleteValue<U>
   : T extends readonly unknown[] ? {
       [K in keyof T]: LatestCompleteValue<T[K]>;
@@ -3273,7 +3287,7 @@ export interface BuiltInGenerateObjectStreamState<T> {
   pending: boolean;
   result: AsyncResult<T>;
   messages?: BuiltInLLMMessage[];
-  partial?: string;
+  partial?: AsyncResult<string>;
   error?: string;
   // NOTE: `generateObject` accepts `search`/`nativeModelToolIds` (grounding can
   // improve the structured result), but does NOT surface `groundingSources` —
@@ -3415,7 +3429,7 @@ export interface BuiltInGenerateTextStreamState {
   pending: boolean;
   result: AsyncResult<string>;
   error?: string;
-  partial?: string;
+  partial?: AsyncResult<string>;
   requestHash?: string;
 
   /** Web sources from native search grounding, when `search`/`google_search` was requested. */
@@ -5051,9 +5065,13 @@ export interface ObserveAvailabilityFunction {
 export interface ResultOfFunction {
   <Final, Partial>(
     result: Reactive<AsyncStreamResult<Final, Partial>>,
-  ): Reactive<Final>;
-  <T>(result: Reactive<CompileResult<T>>): Reactive<T>;
-  <T>(result: Reactive<AsyncResult<T>>): Reactive<T>;
+  ): Reactive<Exclude<Final, FabricUnavailableBase>>;
+  <T>(
+    result: Reactive<CompileResult<T>>,
+  ): Reactive<Exclude<T, FabricUnavailableBase>>;
+  <T>(
+    result: Reactive<AsyncResult<T>>,
+  ): Reactive<Exclude<T, FabricUnavailableBase>>;
   <R>(result: R): Reactive<AvailableResult<R>>;
 }
 

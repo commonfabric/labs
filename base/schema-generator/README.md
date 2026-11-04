@@ -63,8 +63,9 @@ Implementation: see `src/formatters/object-formatter.ts` and
 ## Availability Marker Union Arms
 
 When a TypeScript union includes a Common Fabric availability marker, such as
-`AsyncResult<string>`, the marker arm is emitted as the native schema
-`{ "type": "FabricUnavailable" }`. This recognizes the canonical primitive, not
+`AsyncResult<string>`, the marker arm resolves to the native schema
+`{ "type": "FabricUnavailable" }`. Named aliases use `$ref` arms with native
+schemas in their `$defs` entries. This recognizes the canonical primitive, not
 an arbitrary object with matching fields. Common Fabric declaration provenance
 distinguishes these types from unrelated local same-named types.
 

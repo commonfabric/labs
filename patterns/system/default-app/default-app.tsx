@@ -4,6 +4,9 @@ import {
   handler,
   hasError,
   ifElse,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
   navigateTo,
   pattern,
@@ -197,6 +200,12 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
   // test on the profile cell reads an absent profile as present.
   const hasProfile = computed(() => profileName.trim() !== "");
   const isParticipant = computed(() => {
+    if (
+      hasError(viewerProfile.result) || isObsolete(viewerProfile.result) ||
+      isPending(viewerProfile.result) || isSyncing(viewerProfile.result)
+    ) {
+      return false;
+    }
     const mine = profile;
     if (!mine) return false;
     return roster.some((entry) => equals(entry, mine));

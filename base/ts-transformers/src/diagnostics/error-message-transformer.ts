@@ -50,7 +50,7 @@ export function createReactiveErrorTransformer(
         "Async built-ins return AsyncResult<T> or AsyncStreamResult<T> directly. Use " +
         "resultOf(request) for usable data, isPending(request) and " +
         "hasError(request) to branch on state, and partialResultOf(request) " +
-        "for intermediate output from generateTextStream() or streamData().";
+        "for intermediate output from generateTextStream(), generateObjectStream(), or streamData().";
       return verbose
         ? `${clarification}\n\nOriginal TypeScript error: ${message}`
         : clarification;

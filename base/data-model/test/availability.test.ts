@@ -63,6 +63,9 @@ describe("availability", () => {
         throw new Error("The legacy concrete marker was not recognized.");
       }
       expect("isObsolete" in legacy).toBe(false);
+      expect(legacy.isObsolete?.()).toBeUndefined();
+      expect(legacy.obsoleteMessage).toBeUndefined();
+      expect(Object.isFrozen(legacy)).toBe(true);
       expect(isObsolete(legacy)).toBe(false);
       expect(isPending(legacy)).toBe(isPending(canonical));
       expect(isSyncing(legacy)).toBe(isSyncing(canonical));

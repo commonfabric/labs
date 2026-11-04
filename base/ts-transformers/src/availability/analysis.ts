@@ -597,7 +597,9 @@ function isCommonFabricDataUnavailableBase(type: ts.Type): boolean {
     (symbol): symbol is ts.Symbol => !!symbol,
   );
   return symbols.some((symbol) =>
-    symbol.getName() === "FabricUnavailable" && isCommonFabricSymbol(symbol)
+    (symbol.getName() === "FabricUnavailable" ||
+      symbol.getName() === "FabricUnavailableBase") &&
+    isCommonFabricSymbol(symbol)
   );
 }
 

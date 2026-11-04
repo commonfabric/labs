@@ -32,6 +32,7 @@ import {
   type Default,
   handler,
   hasError,
+  isObsolete,
   isPending,
   isSyncing,
   lift,
@@ -297,7 +298,8 @@ export const FolksonomyTags = pattern<
     // A missing optional aggregator keeps the pattern in local-only mode.
     const discoveredAggregator = computed(() => {
       const result = aggregatorWish.result;
-      return hasError(result) || isPending(result) || isSyncing(result)
+      return hasError(result) || isObsolete(result) || isPending(result) ||
+          isSyncing(result)
         ? null
         : resultOf(result);
     });
@@ -328,6 +330,7 @@ export const FolksonomyTags = pattern<
 
     // Check if aggregator is connected
     const hasAggregator = aggregator != null;
+    const showTags = hasTags(tags);
 
     // Computed name for display
     const displayName = computed(() => {
@@ -365,7 +368,7 @@ export const FolksonomyTags = pattern<
           />
 
           {/* Current tags */}
-          {hasTags(tags)
+          {showTags
             ? (
               <cf-hstack gap="2" wrap>
                 {tags.map((tag: string, index: number) => (

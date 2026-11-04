@@ -1,12 +1,15 @@
 import {
+  type AsyncResult,
   computed,
   Default,
   generateText,
   hasError,
   hasSchemaMismatch,
   ifElse,
+  isObsolete,
   isPending,
   isSyncing,
+  lift,
   NAME,
   pattern,
   resultOf,
@@ -31,30 +34,14 @@ export type SummaryOutput = {
   error: string;
 };
 
-// ===== Pattern =====
-
-/**
- * Generates a concise summary of provided context using an LLM.
- * Designed as "suggestion fuel" - a lightweight utility pattern that can be
- * instantiated across many different contexts.
- */
-const Summary = pattern<SummaryInput, SummaryOutput>(({ topic, context }) => {
-  // An empty prompt holds the request back: `generateText` clears its state
-  // and makes no call until one arrives. A summary with no topic has nothing
-  // to condense, so the model is asked only once a caller names the subject.
-  const prompt = computed(() => {
-    if (!topic) return "";
-    return `Please provide a concise, well-structured summary of ${topic}`;
-  });
-
-  // Generate the summary
-  const responseRequest = generateText({
-    system:
-      "You are a helpful assistant that creates clear, concise summaries. Focus on the key points and structure your response in a readable way.",
-    prompt,
-    context,
-  });
-  const responseState = computed(() => {
+/** Projects summary generation into explicit presentation states. */
+export const summaryResponseState = lift(
+  (
+    { topic, responseRequest }: {
+      topic: string;
+      responseRequest: AsyncResult<string>;
+    },
+  ) => {
     if (!topic) {
       return {
         response: "",
@@ -90,9 +77,18 @@ const Summary = pattern<SummaryInput, SummaryOutput>(({ topic, context }) => {
     if (isSyncing(responseRequest)) {
       return {
         response: "",
-        pending: false,
+        pending: true,
         availability: "syncing",
-        error: "Waiting for synchronized data.",
+        error: "",
+      };
+    }
+    if (isObsolete(responseRequest)) {
+      return {
+        response: "",
+        pending: false,
+        availability: "obsolete",
+        error: responseRequest.obsoleteMessage ??
+          "This summary is no longer served.",
       };
     }
     return {
@@ -101,7 +97,32 @@ const Summary = pattern<SummaryInput, SummaryOutput>(({ topic, context }) => {
       availability: "ready",
       error: "",
     };
+  },
+);
+
+// ===== Pattern =====
+
+/**
+ * Generates a concise summary of provided context using an LLM.
+ * Designed as "suggestion fuel" - a lightweight utility pattern that can be
+ * instantiated across many different contexts.
+ */
+const Summary = pattern<SummaryInput, SummaryOutput>(({ topic, context }) => {
+  // An empty prompt holds the request back: `generateText` clears its state
+  // and makes no call until one arrives. A summary with no topic has nothing
+  // to condense, so the model is asked only once a caller names the subject.
+  const prompt = computed(() => {
+    if (!topic) return "";
+    return `Please provide a concise, well-structured summary of ${topic}`;
   });
+
+  const responseRequest = generateText({
+    system:
+      "You are a helpful assistant that creates clear, concise summaries. Focus on the key points and structure your response in a readable way.",
+    prompt,
+    context,
+  });
+  const responseState = summaryResponseState({ topic, responseRequest });
 
   return {
     [NAME]: computed(() => (topic ? `Summary: ${topic}` : "Summary")),
