@@ -523,8 +523,9 @@ export async function deploymentForShell(
     logPostureUnread(
       meta,
       params.apiUrl,
-      `the flags its build gives it, by default with ` +
-        serverExecutionWord(SERVER_EXECUTION_DEFAULT_ENABLED),
+      `the flags its build gives it, with ` +
+        serverExecutionWord(SERVER_EXECUTION_DEFAULT_ENABLED) +
+        ` unless the build sets it`,
     );
   }
   return {

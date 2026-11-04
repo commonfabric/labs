@@ -1296,7 +1296,11 @@ describe("deployment-meta", () => {
       const message = errorLog.calls[0].args.join(" ");
       expect(message).toContain("https://deployment.example/api/meta");
       expect(message).toContain("timed out after 5 ms");
-      expect(message).toContain("the flags its build gives it");
+      expect(message).toContain(
+        `the flags its build gives it, with \`serverExecution\` ${
+          SERVER_EXECUTION_DEFAULT_ENABLED ? "on" : "off"
+        } unless the build sets it`,
+      );
     });
 
     it("takes the posture, and no memory URL, from a response a redirect brought off the deployment", async () => {
