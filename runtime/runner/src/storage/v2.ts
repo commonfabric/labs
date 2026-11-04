@@ -5457,12 +5457,6 @@ type ForeignScopedReadVerdictEntry = {
   promise: ReturnType<ForeignScopedReadGrant>;
 };
 
-/**
- * One space's local replica: the documents the server has confirmed, the
- * local writes pending on them, and the session that keeps the two in step.
- * Exported so that a test holding one as `ISpaceReplica` can narrow to the
- * class.
- */
 /** What a replica holds about a document it quarantined. */
 type QuarantinedDocument = {
   readonly id: string;
@@ -5492,6 +5486,12 @@ class DocumentQuarantinedError extends Error {
   }
 }
 
+/**
+ * One space's local replica: the documents the server has confirmed, the
+ * local writes pending on them, and the session that keeps the two in step.
+ * Exported so that a test holding one as `ISpaceReplica` can narrow to the
+ * class.
+ */
 export class SpaceReplica
   implements
     ISpaceReplica,
@@ -7321,9 +7321,10 @@ export class SpaceReplica
     ) {
       await this.#quarantineHeal;
     }
-    // A replica that applied an earlier copy still has that to give.
+    // A replica that applied an earlier value still has that to give. An
+    // earlier deletion leaves it nothing.
     return this.#quarantined.get(key)?.status === "unhealed" &&
-        !this.#delivered.has(key)
+        (this.#delivered.get(key)?.deleted ?? true)
       ? new DocumentQuarantinedError(id)
       : undefined;
   }

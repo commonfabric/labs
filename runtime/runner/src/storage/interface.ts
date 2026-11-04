@@ -3792,7 +3792,7 @@ export interface ISpaceReplica extends ISpace {
   /**
    * Waits for any re-delivery of the document a quarantine holds back, and
    * returns the failure if the replica still cannot apply it and has no earlier
-   * copy to read. `undefined` otherwise, which says nothing of whether the
+   * value to read. `undefined` otherwise, which says nothing of whether the
    * document exists.
    */
   quarantineFailure?(

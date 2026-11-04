@@ -415,6 +415,29 @@ describe("schema-doc-quarantine-redelivery", () => {
     });
   });
 
+  describe("a copy no re-delivery can apply, over an applied deletion", () => {
+    it("fails the load instead of reading as absent", async () => {
+      const { replica, runtime, cellOf } = readerDropping(Infinity);
+      replica.accessForTestingOnly.applySessionSync({
+        type: "sync",
+        fromSeq: 0,
+        toSeq: 1,
+        upserts: [{
+          branch: "",
+          id: DOCUMENT_ID,
+          scope: "space",
+          seq: 1,
+          deleted: true,
+        }],
+        removes: [],
+      }, "integrate");
+
+      await expect(loadDocument(runtime, cellOf(DOCUMENT_ID))).rejects.toThrow(
+        DocumentLoadError,
+      );
+    });
+  });
+
   describe("a quarantine on a server that takes no declared holdings", () => {
     it("fails the load without asking, and logs that it stays quarantined", async () => {
       const before = unhealedErrors();
