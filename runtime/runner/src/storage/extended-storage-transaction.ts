@@ -3912,6 +3912,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
     const address = toMemorySpaceAddress(link);
     this.#noteSystemWrite(address);
+    this.#noteWriteIdentity();
     this.#noteCfcActivity();
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc(`${method}-after-prepare`);

@@ -33,7 +33,7 @@ ids it wants marked, and the editor marks each one where Memory says it is.
 - `cf-highlight-click` fires with `{ id }` when a primary-button press lands on
   a mark, naming the innermost mark under the pointer. The press still places
   the caret.
-- `cf-selection-change` fires with `{ from, to, text, base, restated }` when the
+- `cf-selection-change` fires with `{ from, to, text, base }` when the
   person changes the main selection. The range is stated against the text at
   `base`, which is the field version Memory last confirmed to this editor. A
   handler can pass the range and `base` to `addAnchor()` unchanged, and Memory

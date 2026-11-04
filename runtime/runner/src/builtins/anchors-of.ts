@@ -23,8 +23,9 @@ export const ANCHORS_OF_ARGUMENT_SCHEMA = internSchema({
 
 /**
  * anchorsOf(field) — the anchors document of the string field the `field`
- * input names, `{ epoch, version, anchors }`, or `undefined` while there is
- * none or the input names no cell.
+ * input names, `{ epoch, version, anchors }`, or `undefined` until the field
+ * first holds an anchor or while the input names no cell. Removing the last
+ * anchor leaves the document, with an empty list.
  *
  * An anchor's range and id say what the field's text holds: where text is,
  * how long it is, what was deleted, and whatever its writer put in the id.

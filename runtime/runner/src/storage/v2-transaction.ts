@@ -21,6 +21,7 @@ import {
   CODEMIRROR_CHANGESET_CODEC,
   codeMirrorTextChangesPayload,
   type CommitPrecondition,
+  type FieldAnchor,
   type FieldAnchorChanges,
   getCommitPreconditionsConfig,
   operationBaselineHash,
@@ -337,26 +338,15 @@ const dropAnchor = (intent: FieldChangeIntent, id: string): void => {
   }
 };
 
-/**
- * The `anchors` member of an `apply-op` adding `add` and removing `remove`, or
- * no member when both are empty.
- */
+/** The anchors `add` holds, as an `apply-op` adds them. */
+const anchorAdds = (add: ReadonlyMap<string, AnchorRange>): FieldAnchor[] =>
+  [...add].map(([id, { from, to }]) => ({ id, from, to }));
+
+/** The `anchors` member of an `apply-op` adding `add`, or none for no adds. */
 const anchorsMember = (
   add: ReadonlyMap<string, AnchorRange>,
-  remove: ReadonlySet<string> = new Set(),
-): { anchors?: FieldAnchorChanges } => {
-  if (add.size === 0 && remove.size === 0) return {};
-  return {
-    anchors: {
-      ...(add.size > 0
-        ? {
-          add: [...add].map(([id, { from, to }]) => ({ id, from, to })),
-        }
-        : {}),
-      ...(remove.size > 0 ? { remove: [...remove] } : {}),
-    },
-  };
-};
+): { anchors?: FieldAnchorChanges } =>
+  add.size === 0 ? {} : { anchors: { add: anchorAdds(add) } };
 
 /**
  * Throws when `base` is not a version of a field: an epoch from 1 and a
@@ -1823,6 +1813,9 @@ export class V2StorageTransaction implements IStorageTransaction {
           debugStr`an anchor id must be a non-empty string, not $quote${change.id}`,
         );
       }
+      // A later change to an id replaces any earlier one, so an earlier add
+      // of this id against a version holds no version this one must match.
+      based.delete(change.id);
       if (change.op === "add" && change.base !== undefined) {
         checkAnchorRange(change, Infinity);
         checkOpCursor(change.base);
@@ -1841,7 +1834,6 @@ export class V2StorageTransaction implements IStorageTransaction {
         based.add(change.id);
         continue;
       }
-      based.delete(change.id);
       if (change.op === "add") {
         current ??= this.#currentText(address, intent.edits, "anchor changes");
         checkAnchorRange(change, current.length);
@@ -2250,7 +2242,7 @@ export class V2StorageTransaction implements IStorageTransaction {
             submissionId: based.submissionId,
             base: based.base,
             payload: codeMirrorTextChangesPayload("", [], based.submissionId),
-            ...anchorsMember(based.anchors),
+            anchors: { add: anchorAdds(based.anchors) },
           });
         }
         if (removes !== undefined && removes.ids.size > 0) {
@@ -2258,7 +2250,7 @@ export class V2StorageTransaction implements IStorageTransaction {
             ...field,
             submissionId: removes.submissionId,
             payload: codeMirrorTextChangesPayload("", [], removes.submissionId),
-            ...anchorsMember(new Map(), removes.ids),
+            anchors: { remove: [...removes.ids] },
           });
         }
       }

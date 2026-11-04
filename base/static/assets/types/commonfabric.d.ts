@@ -4681,7 +4681,8 @@ export type NavigateToFunction = (cell: Reactive<any>) => Reactive<boolean>;
 /**
  * `anchorsOf(field)` — the anchors of a collaborative string field, as
  * `addAnchor()` and `removeAnchor()` leave them and every edit moves them, or
- * `undefined` while the field has none.
+ * `undefined` until the field first holds one. Once the field has held
+ * anchors, removing the last leaves an empty list.
  */
 export type AnchorsOfFunction = (
   field: FactoryInput<string>,

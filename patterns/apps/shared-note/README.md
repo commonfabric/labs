@@ -83,13 +83,15 @@ holds exactly once, as `replaceText` does:
 `addComment` and `replyToComment` are refused to a caller with no Fabric
 profile, since a comment and a reply are shown under their author's profile.
 
-Each verb reads the body and edits it through `applyChanges()`, by position in
-the text it read. The edit reaches the open editors as an edit they merge with
-their own typing, and lands only while the body still holds the text the verb
-read: if someone typed in the meantime, the commit is refused and the verb runs
-again against the new text. `replaceText` matches `old` exactly, code unit for
-code unit, so an anchor someone has since edited refuses rather than landing
-somewhere else; read the note again and anchor on what it holds.
+`appendLine`, `prependLine` and `replaceText` each read the body and edit it
+through `applyChanges()`, by position in the text they read. The edit reaches
+the open editors as an edit they merge with their own typing, and lands only
+while the body still holds the text the verb read: if someone typed in the
+meantime, the commit is refused and the verb runs again against the new text.
+`replaceText` matches `old` exactly, code unit for code unit, so text someone
+has since edited refuses rather than matching somewhere else; read the note
+again and name what it holds. Moving the comments' anchors through each of these
+edits is Memory's work, not the verb's.
 
 The pattern includes no notebook, note registry, or automatic backlink creation.
 Space membership controls access through the host's ordinary sharing flow.

@@ -81,8 +81,8 @@ export interface SharedNoteOutput {
 
   /**
    * Where each comment's text is now: the body's anchors, one per comment,
-   * drafts included, under the comment's `id`, or `undefined` while the body
-   * has none.
+   * drafts included, under the comment's `id`, or `undefined` until the body
+   * first holds one.
    */
   commentRanges: FieldAnchors | undefined;
 

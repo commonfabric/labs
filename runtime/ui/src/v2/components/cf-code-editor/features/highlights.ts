@@ -169,12 +169,12 @@ export interface SelectionReport {
 }
 
 /** The report of an empty selection, or of one no confirmed range states. */
-export const NOTHING_SELECTED: SelectionReport = {
+export const NOTHING_SELECTED: Readonly<SelectionReport> = Object.freeze({
   from: 0,
   to: 0,
   text: "",
   base: null,
-};
+});
 
 /**
  * How many versions a reported selection's `base` may fall behind the

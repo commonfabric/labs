@@ -93,7 +93,8 @@
     "SqliteTableSchemas",
     "UnavailableErrorKind",
     "UnavailableReason",
-    "VNode"
+    "VNode",
+    "OpCursor"
   ],
   "collections": [],
   "others": [
