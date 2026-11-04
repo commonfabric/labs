@@ -296,6 +296,9 @@ export interface HarnessToolContext {
     label: IFCLabel,
   ): Promise<string>;
 
+  /** Host-owned milestone return channel, available only when opted in. */
+  reportProgress?: (message: string) => Promise<void>;
+
   /**
    * Where the run's structured result goes, absent when the run was
    * configured with no schema. `record` writes a validated value where the

@@ -17,6 +17,7 @@ import {
   createHarnessFabricSessionFactory,
   type HarnessFabricSession,
 } from "@commonfabric/cf-harness/fabric-session";
+import { createHarnessHandleTable } from "@commonfabric/cf-harness/handle-table";
 import {
   agentObservedHandlesOfTable,
   AgentResultWriteError,
@@ -30,6 +31,7 @@ import type { ACL } from "@commonfabric/memory/acl";
 import { cloneSchemaMutable } from "@commonfabric/data-model-schema";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
+  INVALID_INPUT,
   INVALID_RESULT,
   PROVIDER_FAILURE,
   withAgentInputAccessTools,
@@ -145,6 +147,13 @@ export const createHarnessAgentRunExecutor = (
   }
   return async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
     const { record } = run;
+    if (
+      record.progressRequested === true && run.publishProgress === undefined
+    ) {
+      return { outcome: "failed", errorCode: INVALID_INPUT };
+    }
+    const attempt = record.attempts;
+    let progressSequence = 0;
     const runKey = hashStringOf([run.host, addressKey(run.link)]);
     const runRoot = join(options.workRoot, runKey);
 
@@ -169,6 +178,7 @@ export const createHarnessAgentRunExecutor = (
 
     const job = await runHarnessJob({
       task: record.task,
+      progress: record.progressRequested === true,
       taskRole: "context",
       // The run validates everything but the `asCell` positions, where the
       // model writes a handle token and the writer places a link.
@@ -201,6 +211,73 @@ export const createHarnessAgentRunExecutor = (
       // Each transcript event the harness persists is a durable write, so it
       // renews the lease.
       onEvent: () => run.renewLease(),
+      ...(record.progressRequested === true
+        ? {
+          onProgress: async (
+            message: string,
+            handleTable: Parameters<
+              NonNullable<RunCfHarnessCliDependencies["reportProgress"]>
+            >[1],
+          ) => {
+            run.signal.throwIfAborted();
+            handleTable ??= createHarnessHandleTable(runKey);
+            const sequence = ++progressSequence;
+            let session: HarnessFabricSession | undefined;
+            const ownsSession =
+              options.harnessDeps?.fabricSessionFactory === undefined;
+            try {
+              session = await (options.harnessDeps?.fabricSessionFactory ??
+                createHarnessFabricSessionFactory({
+                  apiUrl: run.host,
+                  identityKeyPath: options.identityKeyPath,
+                  space: run.link.space,
+                }))();
+              const written = await writeAgentResult({
+                session,
+                handleTable,
+                literalStrings: true,
+                structuredResult: {
+                  message,
+                  sequence,
+                  updatedAt: new Date().toISOString(),
+                },
+                resultSchema: {
+                  type: "object",
+                  properties: {
+                    message: { type: "string" },
+                    sequence: { type: "integer" },
+                    updatedAt: { type: "string" },
+                  },
+                  required: ["message", "sequence", "updatedAt"],
+                  additionalProperties: false,
+                },
+                observedHandles: agentObservedHandlesOfTable(handleTable),
+                maxConfidentiality: maxConfidentiality as never,
+                cause: {
+                  agentRunProgress: runKey,
+                  attempt,
+                  sequence,
+                },
+              });
+              run.signal.throwIfAborted();
+              if (!await run.publishProgress!(written.link)) {
+                throw new Error("Progress publication is no longer available");
+              }
+            } catch (error) {
+              options.report?.(
+                `agent runner: progress publication failed: ${
+                  describeFailure(error)
+                }`,
+              );
+              throw new Error("Progress publication failed");
+            } finally {
+              if (ownsSession) {
+                await session?.pieces.runtime.dispose().catch(() => {});
+              }
+            }
+          },
+        }
+        : {}),
       ...(options.harnessDeps !== undefined
         ? { harnessDeps: options.harnessDeps }
         : {}),

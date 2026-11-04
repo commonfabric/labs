@@ -70,6 +70,7 @@ export type AgentRunRecord = Schema<typeof AgentRunRecordSchema>;
 
 /** The fields of the builtin's result cell, each bound to one transaction. */
 type ResultFields = {
+  progress: Cell<unknown>;
   pending: Cell<boolean>;
   result: Cell<unknown>;
   error: Cell<string | undefined>;
@@ -110,6 +111,7 @@ export type AgentQueueIndex = {
   agentRunner?: {
     host: string;
     tools: string[];
+    progress?: boolean;
     registrationId?: string;
     registeredAt: string;
     lastClaimAt?: string;
@@ -210,6 +212,7 @@ function resultFields(
   tx: IExtendedStorageTransaction,
 ): ResultFields {
   return {
+    progress: resultCell.key("progress").withTx(tx),
     pending: resultCell.key("pending").withTx(tx),
     result: resultCell.key("result").withTx(tx),
     error: resultCell.key("error").withTx(tx),
@@ -230,6 +233,7 @@ function settleWithoutRun(
 ): void {
   fields.pending.set(false);
   fields.result.set(undefined);
+  fields.progress.set(undefined);
   fields.run.set(undefined);
   fields.host.set(undefined);
   fields.error.set(error);
@@ -247,7 +251,10 @@ function deriveFromRecord(
   fields: ResultFields,
   resultCell: Cell<any>,
   record: Cell<AgentRunRecord>,
-  value: Pick<AgentRunRecord, "state" | "result" | "outcome" | "errorCode">,
+  value: Pick<
+    AgentRunRecord,
+    "state" | "result" | "progress" | "outcome" | "errorCode"
+  >,
   requestHash: string,
   host: string,
 ): void {
@@ -256,6 +263,14 @@ function deriveFromRecord(
   fields.requestHash.set(requestHash);
   fields.run.setRawUntyped(record.getAsLink({ base: resultCell }), true);
   fields.host.set(host);
+  if (value.progress !== undefined) {
+    fields.progress.setRawUntyped(
+      record.key("progress").getAsLink({ base: resultCell }),
+      true,
+    );
+  } else {
+    fields.progress.set(undefined);
+  }
   if (value.state === "completed" && value.result !== undefined) {
     fields.result.setRawUntyped(
       record.key("result").getAsLink({ base: resultCell }),
@@ -277,7 +292,8 @@ function deriveFromRecord(
  * `task` is context for the run; `inputs` are the cells it may read, passed
  * as links; `resultSchema` is what its structured result is validated
  * against; `maxConfidentiality` bounds what it may observe; `tools` selects
- * from the names the deployment publishes. The result cell holds `pending`,
+ * from the names the deployment publishes. Opt-in `progress` exposes the
+ * latest labeled milestone. The result cell holds `pending`,
  * `result` (a link to the result document), `error`, `requestHash`, and
  * `run` (a link to the `AgentRun` record).
  *
@@ -303,7 +319,7 @@ export function agent(
   const action: Action = (tx: IExtendedStorageTransaction) => {
     tx.resetNarrowestReadScope();
     const params = inputs.withTx(tx).get() ?? {};
-    const { task, resultSchema, maxConfidentiality, tools } = params;
+    const { task, resultSchema, maxConfidentiality, tools, progress } = params;
     const rawInputs = inputs.key("inputs").withTx(tx).get() as
       | Record<string, unknown>
       | undefined;
@@ -352,6 +368,7 @@ export function agent(
       // No request: nothing is in flight to abandon, since a staged request
       // is committed with its record and the record outlives this run.
       state.previousCallHash = undefined;
+      fields.progress.set(undefined);
       fields.pending.set(false);
       fields.result.set(undefined);
       fields.error.set(undefined);
@@ -386,6 +403,7 @@ export function agent(
       resultSchema: resultSchema as JSONSchema,
       ...(maxConfidentiality !== undefined ? { maxConfidentiality } : {}),
       ...(tools !== undefined ? { tools } : {}),
+      ...(progress === true ? { progress: true } : {}),
     });
     const hash = hashOf(requestSnapshot).toString();
     const effectId = `${AGENT_SINK}:${hash}`;
@@ -642,6 +660,7 @@ export function agent(
     takeHandoff();
     state.currentHash = hash;
 
+    fields.progress.set(undefined);
     fields.pending.set(true);
     fields.result.set(undefined);
     fields.error.set(undefined);
@@ -669,6 +688,17 @@ export function agent(
           }),
         );
         return;
+      }
+      if (progress === true) {
+        const runner = queue.key("agentRunner").get();
+        if (runner !== undefined && runner.progress !== true) {
+          await settleAbandoned(
+            new Error(
+              `${INVALID_INPUT}: the registered agent runner does not offer progress`,
+            ),
+          );
+          return;
+        }
       }
       if (tools !== undefined && tools.length > 0) {
         const runner = queue.key("agentRunner").get();
@@ -707,6 +737,7 @@ export function agent(
             ? { maxConfidentiality: live.maxConfidentiality }
             : {}),
           ...(live.tools !== undefined ? { tools: live.tools } : {}),
+          ...(live.progress === true ? { progress: true } : {}),
         });
         const replaced = hashOf(liveSnapshot).toString() !== hash;
         const record = agentRunRecordCell(
@@ -741,6 +772,7 @@ export function agent(
             ? { maxConfidentiality: live.maxConfidentiality }
             : {}),
           ...(live.tools !== undefined ? { tools: live.tools } : {}),
+          ...(live.progress === true ? { progressRequested: true } : {}),
           submittedAt: now,
           state: "queued",
           stateSince: now,

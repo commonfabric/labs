@@ -87,6 +87,9 @@ export interface ClaimedAgentRun {
    * time since the run started.
    */
   renewLease: () => Promise<void>;
+
+  /** Publishes a labeled milestone while this attempt still owns the run. */
+  publishProgress?: (link: NormalizedFullLink) => Promise<boolean>;
 }
 
 export interface AgentRunnerOptions {
@@ -107,6 +110,9 @@ export interface AgentRunnerOptions {
 
   /** The tool names this runner offers. */
   tools: readonly string[];
+
+  /** Whether the executor supports opt-in milestone publication. */
+  progress?: boolean;
 
   /** How many runs this process holds at once. */
   maxConcurrent: number;
@@ -256,6 +262,7 @@ export class AgentRunner {
     return this.#options.registerRunner({
       host: runnerHost,
       tools: [...tools],
+      ...(this.#options.progress === true ? { progress: true } : {}),
       registrationId: this.#options.runnerId,
       registeredAt: this.#registeredAt!,
       ...(lastClaimAt !== undefined ? { lastClaimAt } : {}),
@@ -382,7 +389,12 @@ export class AgentRunner {
         const offered = (value.tools ?? []).every((tool) =>
           this.#options.tools.includes(tool)
         );
-        if (offered) queued.push({ key, followed, at: value.submittedAt });
+        if (
+          offered &&
+          (value.progressRequested !== true || this.#options.progress === true)
+        ) {
+          queued.push({ key, followed, at: value.submittedAt });
+        }
         continue;
       }
 
@@ -509,6 +521,7 @@ export class AgentRunner {
       if (current.key("state").get() !== "queued") return false;
       if (current.key("cancelRequestedAt").get() !== undefined) return false;
       current.key("state").set("claimed");
+      current.key("progress").set(undefined);
       current.key("stateSince").set(stamp);
       current.key("claim").set({ runner: this.#options.runnerId, leaseUntil });
       current.key("attempts").set((current.key("attempts").get() ?? 0) + 1);
@@ -531,7 +544,7 @@ export class AgentRunner {
    */
   async #writeHeld(
     { runtime, record }: FollowedRecord,
-    write: (current: Cell<AgentRunRecord>) => void,
+    write: (current: Cell<AgentRunRecord>) => void | boolean,
   ): Promise<boolean> {
     const { ok } = await runtime.editWithRetry((tx) => {
       const current = record.withTx(tx);
@@ -540,8 +553,7 @@ export class AgentRunner {
       if (current.key("claim").get()?.runner !== this.#options.runnerId) {
         return false;
       }
-      write(current);
-      return true;
+      return write(current) !== false;
     });
     return ok === true;
   }
@@ -573,12 +585,36 @@ export class AgentRunner {
         if (value === undefined) {
           throw new Error("the claimed record does not read");
         }
+        const attempt = value.attempts;
         this.#options.report?.(`agent runner: running ${value.requestHash}`);
         execution = await this.#options.execute({
           record: value,
           link: record.getAsNormalizedFullLink(),
           host,
           signal: abort.signal,
+          ...(this.#options.progress === true
+            ? {
+              publishProgress: async (link: NormalizedFullLink) => {
+                if (
+                  abort.signal.aborted ||
+                  this.#active.get(key)?.token !== active.token
+                ) return false;
+                return await this.#writeHeld(followed, (current) => {
+                  if (
+                    current.key("cancelRequestedAt").get() !== undefined ||
+                    current.key("attempts").get() !== attempt ||
+                    abort.signal.aborted ||
+                    this.#active.get(key)?.token !== active.token ||
+                    current.key("progressRequested").get() !== true
+                  ) return false;
+                  current.key("progress").set(
+                    followed.runtime.getCellFromLink(link),
+                  );
+                  current.key("claim").key("leaseUntil").set(leaseUntil());
+                });
+              },
+            }
+            : {}),
           renewLease: async () => {
             if (this.#active.get(key)?.token !== active.token) return;
             const renewed = await this.#writeHeld(followed, (current) => {

@@ -3071,14 +3071,23 @@ const evaluateToolPolicy = (
         }),
       };
   }
-  if (descriptor.toolId === "submit_result") {
-    // The run's return, admitted at every mode and under every prompt-slot
-    // role. Its authority is the host's: the tool exists only in a run the
-    // host configured with a structured-result schema, and the call reaches
-    // nothing but that run's own result file. A run's final message, which
-    // no policy gates, returns in the same sense.
-    return { allowed: true, reasonCodes: ["structured_result_return"] };
+  if (
+    descriptor.toolId === "submit_result" ||
+    descriptor.toolId === "report_progress"
+  ) {
+    // The host configures the run's own return channels. Each validates its
+    // payload and reaches only the host-selected output destination; the
+    // Fabric writer applies observation labels and commit policy there.
+    return {
+      allowed: true,
+      reasonCodes: [
+        descriptor.toolId === "submit_result"
+          ? "structured_result_return"
+          : "progress_return",
+      ],
+    };
   }
+
   switch (cfcEnforcementMode) {
     case "disabled":
       return { allowed: true, reasonCodes: ["cfc_disabled"] };
@@ -3355,6 +3364,7 @@ export class CfHarnessPromptLoop {
       loomRetrievalAvailable: this.engine.config.loomRetrieval !== undefined,
       loomCommandsAvailable: this.engine.config.loomCommands !== undefined,
       structuredResultAvailable: this.engine.structuredResultAvailable,
+      progressAvailable: this.engine.progressAvailable,
       clientActionsAvailable: this.engine.clientActionsAvailable,
     };
   }
@@ -4603,7 +4613,7 @@ export class CfHarnessPromptLoop {
       toolId === "research" || toolId === "finish_task" ||
       toolId === "weaver_action" ||
       toolId === "loom_compose" || toolId === "run_command" ||
-      toolId === "submit_result"
+      toolId === "report_progress" || toolId === "submit_result"
     ) {
       return input;
     }

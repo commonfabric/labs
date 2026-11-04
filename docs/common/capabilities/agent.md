@@ -16,6 +16,7 @@ and an `error` naming the flag.
 ```typescript
 // Shown inside a pattern body.
 const recommendation = agent<{ picks: { book: string; why: string }[] }>({
+  progress: true,
   task: "Which of the finished books would a reader who likes the listed " +
     "authors enjoy? Return up to five.",
   inputs: { finished: booksRead, likes: favoriteAuthors },
@@ -37,7 +38,7 @@ const recommendation = agent<{ picks: { book: string; why: string }[] }>({
 });
 
 const view = recommendation.pending
-  ? "working"
+  ? recommendation.progress?.message ?? "working"
   : recommendation.error
   ? `failed: ${recommendation.error}`
   : recommendation.result?.picks.map((pick) => pick.book).join(", ");
@@ -69,6 +70,34 @@ const view = recommendation.pending
   `read_value` come with every run and need not be named. A name the user's
   registered runner does not offer fails the request with `INVALID_INPUT`
   before it is staged; with no runner registered the request queues.
+
+## Interim progress
+
+Set `progress: true` to give the run a `report_progress` tool and instructions
+in that tool's description to report short, user-facing milestones. With the
+option absent or false, neither the tool nor its reporting instructions is
+provided. Reports are optional: a short run may finish without one.
+
+Read `request.progress?.message` reactively. The latest report contains
+`message`, a `sequence` starting at 1 for each execution attempt, and an ISO
+`updatedAt` timestamp. Each report replaces the current progress link while `pending`
+remains true; `result` still appears only after completion. The latest report
+remains available after the run finishes. If a lost runner's run is reclaimed,
+progress is cleared and numbering restarts for that attempt. A different
+request starts without progress, and opting in changes the request hash. Explicit false and omission
+identify the same request.
+
+Progress is a labeled model output. Its document goes through the same writer
+as the final result, carrying the run's observed-input labels and the
+`LlmDerived` stamp when enforcement is enabled. A pattern's ordinary display
+policy governs whether it can render the report. Raw tool output, reasoning,
+and child transcripts are not published as progress.
+
+The runner advertises support in its registration's `progress` field. A request
+opting in fails with `INVALID_INPUT` when the registered runner does not
+advertise support. Without a registered runner it queues as usual. Pattern
+authors do not add `report_progress` to `tools`: the option provides the return
+channel independently of the selected task tools.
 
 ## Reading the result
 

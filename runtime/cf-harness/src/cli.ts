@@ -82,7 +82,7 @@ import type {
   HarnessTranscriptEvent,
   HarnessTranscriptMessage,
 } from "./contracts/transcript.ts";
-import { CfHarnessEngine } from "./engine.ts";
+import { CfHarnessEngine, type CreateHarnessEngineOptions } from "./engine.ts";
 import {
   assertContinuationOutputPaths,
   assertHarnessRootSource,
@@ -516,6 +516,9 @@ export interface RunCfHarnessCliDependencies
    */
   sandboxSelectionFlags?: boolean;
 
+  /** Host-owned opt-in progress return channel. */
+  reportProgress?: CreateHarnessEngineOptions["reportProgress"];
+
   writeTextFile?: (path: string, text: string) => Promise<void>;
 
   /** The structured-result validation verdict after a completed prompt loop. */
@@ -867,6 +870,7 @@ const CLI_PARENT_TOOL_IDS = [
   "delegate_task",
   "describe_handle",
   "finish_task",
+  "report_progress",
   "submit_result",
   "loom_compose",
   "loom_inspect",
@@ -4051,6 +4055,7 @@ export const runCfHarnessCli = async (
               },
             }
             : {}),
+          reportProgress: deps.reportProgress,
           ...(deps.fabricSessionFactory !== undefined
             ? { fabricSessionFactory: deps.fabricSessionFactory }
             : {}),
@@ -4246,6 +4251,7 @@ export const runCfHarnessCli = async (
       });
       const engine = new CfHarnessEngine({
         ...sessionOptions,
+        reportProgress: deps.reportProgress,
         modelProvider,
         credentialOwnerKey,
         ...(modelProvider === "openai-compatible-gateway"

@@ -235,6 +235,20 @@ none, and it reaches nothing but that run's own result file. A subagent run is
 not offered it. The model writing the file itself remains available to a run
 that holds a tool able to.
 
+`report_progress` is the opt-in interim return channel. The host supplies its
+publication callback, and the tool is absent without that callback and in child
+runs. It accepts a nonempty message of at most 2,000 characters and continues
+the run. Its description asks for user-facing milestone reports. Like
+`submit_result`, it is admitted under every prompt-slot role, with reason
+`progress_return`, because its destination is fixed by the host. For `agent()`
+requests the callback writes a separate labeled document through the canonical
+agent result writer, retaining literal message text, observed-input influence,
+and the model-derived integrity stamp. Attaching the document's link requires
+the runner still to own the active, uncancelled attempt. These are host-owned
+return boundaries; they grant no general write authority. Their storage writes
+remain subject to ordinary CFC commit admission (§18.2.4 and §18.3.3 of the CFC
+runtime implementation profile).
+
 `describe_handle` reports the referent's structural schema and path segments,
 never its data. It prefers the session Fabric's declared shape when available
 and otherwise uses a harness-captured schema, recursively removes value-bearing

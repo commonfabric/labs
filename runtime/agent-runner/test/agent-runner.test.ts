@@ -16,6 +16,7 @@ import { join } from "@std/path";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type { CfcConfClause } from "@commonfabric/runner/cfc";
+import type { CfHarnessEngine } from "@commonfabric/cf-harness/engine";
 import type { HarnessPromptLoopResult } from "@commonfabric/cf-harness/prompt-loop";
 import { getBuiltinTool } from "@commonfabric/cf-harness/tools";
 import { createToolOutputId } from "@commonfabric/cf-harness/contracts/tool-result";
@@ -1593,6 +1594,62 @@ describe("agent runner", () => {
     expect(cloudRecord.get()?.state).toBe("queued");
   });
 
+  it("rejects a progress callback after the record moves to a later attempt", async () => {
+    const started = defer<ClaimedAgentRun>();
+    const finished = defer<AgentRunExecution>();
+    await startRunner((run) => {
+      started.resolve(run);
+      return finished.promise;
+    }, { progress: true });
+    const result = await submit({ progress: true });
+    const run = await started.promise;
+    const milestone = patternSide.getCell(home, "stale-attempt-progress", {
+      type: "string",
+    });
+    await patternSide.editWithRetry((tx) => {
+      milestone.withTx(tx).set("Stale");
+      recordOf(result).withTx(tx).key("attempts").set(2);
+    });
+    try {
+      expect(await run.publishProgress!(milestone.getAsNormalizedFullLink()))
+        .toBe(false);
+      expect(recordOf(result).key("progress").getRaw()).toBeUndefined();
+    } finally {
+      finished.resolve({ outcome: "refused" });
+    }
+    await waitForState(result, "refused");
+  });
+
+  it("rejects progress after cancellation and after a terminal outcome", async () => {
+    const started = defer<ClaimedAgentRun>();
+    const finished = defer<AgentRunExecution>();
+    await startRunner((run) => {
+      started.resolve(run);
+      return finished.promise;
+    }, { progress: true });
+    const result = await submit({ progress: true });
+    const run = await started.promise;
+    const milestone = patternSide.getCell(home, "late-progress", {
+      type: "string",
+    });
+    await patternSide.editWithRetry((tx) => {
+      milestone.withTx(tx).set("Working");
+      recordOf(result).withTx(tx).key("cancelRequestedAt").set(
+        clock.toISOString(),
+      );
+    });
+    try {
+      expect(await run.publishProgress!(milestone.getAsNormalizedFullLink()))
+        .toBe(false);
+    } finally {
+      finished.resolve({ outcome: "refused" });
+    }
+    await waitForState(result, "cancelled");
+    expect(await run.publishProgress!(milestone.getAsNormalizedFullLink()))
+      .toBe(false);
+    expect(recordOf(result).key("progress").getRaw()).toBeUndefined();
+  });
+
   describe("with the harness executor over a scripted prompt loop", () => {
     let workRoot: string;
 
@@ -1628,6 +1685,7 @@ describe("agent runner", () => {
     const startHarnessRunner = async (
       script: (context: {
         resultPath: string;
+        engine: CfHarnessEngine;
         signal?: AbortSignal;
         emit: () => Promise<void>;
         loomCommands?: unknown;
@@ -1685,6 +1743,8 @@ describe("agent runner", () => {
             ...(options.unnamedSandbox !== undefined
               ? { HOME: options.unnamedSandbox.home }
               : {
+                CF_HARNESS_RUNSC_CFC_POLICY:
+                  "/nonexistent/agent-runner-test/policy.json",
                 CF_HARNESS_SANDBOX_RUNTIME: "runsc",
                 CF_HARNESS_RUNSC_BINARY: "/nonexistent/agent-runner-test/runsc",
                 CF_HARNESS_SANDBOX_ROOTFS:
@@ -1711,6 +1771,7 @@ describe("agent runner", () => {
                   ?.cfcReadMaxConfidentiality,
               };
               return script({
+                engine: options.engine!,
                 resultPath:
                   options.engine!.getRunState().structuredResult!.path,
                 signal: prompt.signal,
@@ -1735,9 +1796,76 @@ describe("agent runner", () => {
       });
       await startRunner(execute, {
         tools: options.runnerTools ?? ["describe_handle", "web_fetch"],
+        progress: true,
       });
       return () => seen;
     };
+
+    it("delivers successive labeled progress links while the result is pending", async () => {
+      const start = defer<void>();
+      const advance = defer<void>();
+      const finish = defer<void>();
+      await startHarnessRunner(async ({ engine, resultPath }) => {
+        await start.promise;
+        await engine.invokeBuiltinTool("report_progress", {
+          message: "Found candidates",
+        });
+        await advance.promise;
+        await engine.invokeBuiltinTool("report_progress", {
+          message: "Checked candidates",
+        });
+        await finish.promise;
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({ answer: "Hyperion" }),
+        );
+        return loopResult("progress-run");
+      });
+      try {
+        const result = await submit({ progress: true });
+        start.resolve();
+        const first = await waitForCellValue<
+          {
+            progress?: { message: string; sequence: number };
+            pending?: boolean;
+          }
+        >(
+          patternSide,
+          result,
+          (value) =>
+            value?.progress?.sequence === 1 || value?.pending === false,
+        );
+        expect(first.progress?.message).toBe("Found candidates");
+        expect(first.pending).toBe(true);
+        const firstLink = recordOf(result).key("progress").resolveAsCell()
+          .getAsNormalizedFullLink();
+        advance.resolve();
+        const second = await waitForCellValue<
+          {
+            progress?: { message: string; sequence: number };
+            pending?: boolean;
+          }
+        >(
+          patternSide,
+          result,
+          (value) =>
+            value?.progress?.sequence === 2 || value?.pending === false,
+        );
+        expect(second.progress?.message).toBe("Checked candidates");
+        expect(second.pending).toBe(true);
+        expect(
+          recordOf(result).key("progress").resolveAsCell()
+            .getAsNormalizedFullLink(),
+        ).not.toEqual(firstLink);
+        finish.resolve();
+        await waitForState(result, "completed");
+        expect(result.key("progress").get()).toMatchObject({ sequence: 2 });
+      } finally {
+        start.resolve();
+        advance.resolve();
+        finish.resolve();
+      }
+    });
 
     it("writes the structured result and the run's usage, turns, and artifact reference", async () => {
       const seen = await startHarnessRunner(async ({ resultPath, emit }) => {
@@ -2197,14 +2325,17 @@ describe("agent runner", () => {
       expect(ended.result).toBeUndefined();
     });
 
-    it("uses distinct workspaces for distinct records with one request hash", async () => {
-      const first = await submit({ task: "the same task" });
-      const second = await submit({ task: "the same task" });
+    it("isolates workspaces and progress for distinct records with one request hash", async () => {
+      const first = await submit({ task: "the same task", progress: true });
+      const second = await submit({ task: "the same task", progress: true });
       const requestHash = recordOf(first).get()!.requestHash;
       await patternSide.editWithRetry((tx) => {
         recordOf(second).withTx(tx).key("requestHash").set(requestHash);
       });
-      const seen = await startHarnessRunner(async ({ resultPath }) => {
+      const seen = await startHarnessRunner(async ({ resultPath, engine }) => {
+        await engine.invokeBuiltinTool("report_progress", {
+          message: resultPath,
+        });
         await Deno.writeTextFile(
           resultPath,
           JSON.stringify({ answer: "Hyperion" }),
@@ -2219,6 +2350,12 @@ describe("agent runner", () => {
         recordOf(second).get()?.requestHash,
       );
       expect(new Set(seen().workspaces).size).toBe(2);
+      const firstProgress = recordOf(first).key("progress").resolveAsCell();
+      const secondProgress = recordOf(second).key("progress").resolveAsCell();
+      expect(firstProgress.getAsNormalizedFullLink()).not.toEqual(
+        secondProgress.getAsNormalizedFullLink(),
+      );
+      expect(firstProgress.get()).not.toEqual(secondProgress.get());
     });
 
     it("fails when the validated result file disappears before the writer reads it", async () => {
