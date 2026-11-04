@@ -54,6 +54,7 @@ const ABSENT_ID = "of:quarantine-redelivery-absent";
 const PLAIN_ID = "of:quarantine-redelivery-plain";
 const OWN_ID = "of:quarantine-redelivery-own";
 const OUTPUT_ID = "of:quarantine-redelivery-output";
+const TRIGGER_ID = "of:quarantine-redelivery-trigger";
 
 const leafSchema = { type: "string", title: "redelivery-leaf" } as const;
 const leafHash = internSchemaAsTaggedHashString(leafSchema);
@@ -397,9 +398,7 @@ describe("storage/v2", () => {
       expect(response.removes).toEqual([]);
     });
 
-    it("applies a marker that arrived ahead of its response", async () => {
-      // The response carries any document a frame ahead of it did, so what only
-      // that frame can bring is the marker covering this replica's own write.
+    it("leaves a commit free to settle while its response is outstanding", async () => {
       await write({ [PLAIN_ID]: { revision: 1 } });
       const { factory, runtime, replica, cellOf, syncOf, revision } =
         readerDropping(0);
@@ -417,9 +416,9 @@ describe("storage/v2", () => {
       const receipt = tx.commit();
       expect((await receipt.verdict).ok).toBeDefined();
       await effect;
+      expect((await receipt.settled).ok).toBeDefined();
 
       factory.releaseResponses();
-      expect((await receipt.settled).ok).toBeDefined();
       await replica.inputSynced();
 
       expect(revision(PLAIN_ID)).toBe(2);
@@ -537,7 +536,7 @@ describe("storage/v2", () => {
       expect(unhealedErrors()).toBe(before);
     });
 
-    it("runs no computed over the document until it arrives, so no absent value is stored", async () => {
+    it("runs no computed while its input's load waits, so no absent value is stored", async () => {
       const { factory, runtime, replica, cellOf } = healingReader();
       const load = loadDocument(runtime, cellOf(DOCUMENT_ID));
       await factory.firstWatchSet.promise;
@@ -597,6 +596,82 @@ describe("storage/v2", () => {
       expect(seen).toEqual([1]);
       expect(shown.at(-1)).toBe(1);
       expect(await stored()).toBe(1);
+      cancel();
+    });
+
+    it("stores nothing from a computed's absent read, and repairs it when the document arrives", async () => {
+      await write({ [TRIGGER_ID]: { revision: 1 } });
+      const { factory, runtime, replica, cellOf } = readerDropping(0);
+      const { commonfabric: cf } = createTrustedBuilder(runtime);
+      // deno-lint-ignore no-explicit-any -- the builder's lift type is untyped
+      const compute = (cf as any).lift(
+        ({ trigger, source }: {
+          trigger?: { revision?: number };
+          source?: { revision?: number };
+        }) => `${trigger?.revision}:${source?.revision ?? "absent"}`,
+      );
+      // deno-lint-ignore no-explicit-any -- the page's input is untyped
+      const page = (cf as any).pattern(({ trigger, source }: any) => ({
+        name: compute({ trigger, source }),
+      }));
+      const tx = runtime.edit();
+      const result = runtime.run(
+        tx,
+        page,
+        {
+          trigger: cellOf(TRIGGER_ID).withTx(tx),
+          source: cellOf(ABSENT_ID).withTx(tx),
+        },
+        runtime.getCell(space, "quarantine-redelivery-two", undefined, tx),
+      );
+      expect((await tx.commit().settled).ok).toBeDefined();
+      const shown: unknown[] = [];
+      const cancel = result.key("name").sink((value: unknown) => {
+        shown.push(value);
+      });
+      const settle = async () => {
+        await runtime.idle();
+        await replica.synced();
+        await server.idle();
+        await runtime.idle();
+      };
+      /** What a runtime with no quarantine finds stored for the computed. */
+      const stored = async (): Promise<unknown> => {
+        const link = result.key("name").resolveAsCell()
+          .getAsNormalizedFullLink();
+        const fresh = readerDropping(0);
+        const cell = fresh.runtime.getCellFromLink({
+          ...link,
+          schema: { type: "unknown" },
+        });
+        await loadDocument(fresh.runtime, cell);
+        return cell.getRaw();
+      };
+      await settle();
+      expect(await stored()).toBe("1:absent");
+
+      // The second input changes while the first is held back, so the computed
+      // runs again and reads the first as absent.
+      factory.dropsLeft = 1;
+      factory.heldTypes.add("session.watch.set");
+      await write({ [ABSENT_ID]: naming(1) });
+      await factory.firstWatchSet.promise;
+      const effect = factory.nextEffect.promise;
+      await write({ [TRIGGER_ID]: { revision: 2 } });
+      await effect;
+      await runtime.idle();
+      await server.idle();
+      await runtime.idle();
+
+      expect(replica.isQuarantined(ABSENT_ID as URI, "space")).toBe(true);
+      expect(shown.at(-1)).toBe("2:absent");
+      expect(await stored()).toBe("1:absent");
+
+      factory.releaseResponses();
+      await settle();
+
+      expect(shown.at(-1)).toBe("2:1");
+      expect(await stored()).toBe("2:1");
       cancel();
     });
 

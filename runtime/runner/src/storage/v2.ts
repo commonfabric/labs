@@ -8530,18 +8530,21 @@ export class SpaceReplica
 
   /**
    * Integrates the answer to a watch mutation: the frames that arrived ahead
-   * of it, then its own, then the view's later frames as they come.
+   * of it, then its own by way of `applyResponse`, then the view's later frames
+   * as they come.
    */
   #integrateWatchMutation(
     view: MemoryV2Client.WatchView,
     precedingSyncs: readonly SessionSync[],
     sync: SessionSync,
+    applyResponse: (frame: SessionSync) => void = (frame) =>
+      this.#applySessionSync(frame, "integrate"),
   ): void {
     this.#watchView = view;
     for (const precedingSync of precedingSyncs) {
       this.#applySessionSync(precedingSync, "integrate");
     }
-    this.#applySessionSync(sync, "integrate");
+    applyResponse(sync);
     this.#consumeWatchView(view);
   }
 
@@ -11319,15 +11322,15 @@ export class SpaceReplica
             return;
           }
           this.#noteAuthorizationStatus({ ok: {} });
-          this.#watchView = view;
-          for (const precedingSync of precedingSyncs) {
-            this.#applySessionSync(precedingSync, "integrate");
-          }
           for (const upsert of sync.upserts) {
             carried.add(this.#docKeyOf(upsertAddress(upsert)));
           }
-          this.#applyPushedFrame(sync);
-          this.#consumeWatchView(view);
+          this.#integrateWatchMutation(
+            view,
+            precedingSyncs,
+            sync,
+            (frame) => this.#applyPushedFrame(frame),
+          );
         } catch (error) {
           if (this.#closed) return;
           const pullError = toPullError(error);
