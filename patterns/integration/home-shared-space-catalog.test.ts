@@ -2306,7 +2306,16 @@ describe("Home chat manager and a deleted room", () => {
         );
         expect(gone.map((entry) => entry.kind)).toEqual(["group", "direct"]);
         expect(gone[1].counterpart).toBe(BOB);
-        expect(await manager.key("rooms").pull()).toEqual([]);
+        // `deletedRooms` reads only the manager's memberships, where `rooms`
+        // reads each room's own records as well, which are in the deleted
+        // spaces. So `rooms` can leave the rooms out some time after
+        // `deletedRooms` lists them, and is waited for in its own right.
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("rooms"),
+          (value) => value?.length === 0,
+          { stuckLabel: "both rooms left out of rooms" },
+        );
         // Home's catalog records the deletions, as the shell's worker has it
         // do, so the catalog no longer finds either room: each stays held by
         // the membership the manager recorded when it created the room.
