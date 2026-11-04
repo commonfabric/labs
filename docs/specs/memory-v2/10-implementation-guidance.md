@@ -298,11 +298,10 @@ For schema-aware live watches, keep the cache lifetimes split:
 
 - keep a persistent doc-plus-selector tracker per watched graph so `watchAdd`
   can stop immediately at already-current frontiers
-- give every walk a fresh traversal memo, additive watch growth as well as
-  write-triggered refreshes. A memo entry holds the walked value of its
-  subtree, so a memo kept with the graph grows with everything the session has
-  ever watched, and stale entries could prune a retarget or another topology
-  change; the tracker already stops growth at current frontiers
+- share a traversal memo only within one evaluation, including additive watch
+  growth, root removal, and write-triggered refreshes; release it when that
+  evaluation finishes. The persistent tracker preserves current coverage
+  without retaining traversal results for removed schemas or old revisions
 
 For one-shot reads, `graph.query` must honor:
 

@@ -2429,7 +2429,7 @@ export const releaseTrackedRoots = (
     state.roots.delete(referrer);
     releaseTrackedReferrer(state, referrer, retirement);
   }
-  // A memo of this release's own, as every walk of the graph takes.
+  // Walks within this release share a memo that ends with the evaluation.
   const sharedMemo = createSchemaMemo();
   const touched = settleRetirement(
     space,
@@ -2755,7 +2755,7 @@ export const extendTrackedGraph = (
   const touched = new Set<QueryDocKey>();
   const changedMisses = new Set<string>();
   const recorders = recordersFor(state, changedMisses);
-  // A memo of this extension's own, as every walk of the graph takes. The
+  // Walks within this extension share one memo for the evaluation. The
   // graph keeps none between walks: an entry holds the walked value of its
   // subtree, so a memo kept for the session's life would grow with everything
   // the session ever watched, while the tracker's coverage already skips what

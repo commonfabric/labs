@@ -4135,11 +4135,10 @@ export function createSchemaMemo(): SchemaMemo {
 // under ONE identity — schema narrowing memoized under one principal's
 // traversal would otherwise leak into another's (value-bleed). Every
 // sharing scope today is single-identity by construction
-// (`TrackedGraphState.memo` is bound to its manager; the query path's
-// sharedMemo instances are per call); this guard is what keeps a future
-// sharing change from silently becoming value-bleed rather than a loud
-// error. Bindings live in a side table so the memo type stays a plain
-// Map.
+// (the query path shares a memo only within one evaluation); this guard
+// is what keeps a future sharing change from silently becoming value-bleed
+// rather than a loud error. Bindings live in a side table so the memo type
+// stays a plain Map.
 const schemaMemoIdentityBindings = new WeakMap<SchemaMemo, string>();
 
 const schemaMemoIdentityKey = (identity: ScopeKeyIdentity): string =>

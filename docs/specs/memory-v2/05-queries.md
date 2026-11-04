@@ -570,9 +570,9 @@ union:
    and the schema context used.
 2. **Watch add**: for new roots, start traversal only from those roots. If the
    traversal reaches an entity-plus-selector pair that is already tracked, stop
-   immediately and reuse the existing downstream result. Additive watch growth
-   may also reuse a persistent traversal memo for already-seen
-   document-path-plus-schema work.
+   immediately and reuse the existing downstream result. Traversal memo entries
+   are shared only within that evaluation and released when it finishes;
+   coverage between evaluations belongs to the persistent tracker.
 3. **On commit**: for each changed entity, determine whether it can affect the
    current tracked graph.
 4. **Re-evaluate affected topology**: if links or source chains changed, re-run
