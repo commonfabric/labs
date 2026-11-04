@@ -29,7 +29,7 @@ of everything the reap removes; keeping it is the space owner's decision.
 ## The host run
 
 The run is one script. It stops at the first command that fails, so no step
-runs on the strength of one that did not finish. The reads open the store
+runs on the strength of one that did not finish. The backup opens the store
 through a URI, which a DID's characters never need escaping in. Set the four names at its top
 first: the space's DID, a date for the file names, the live directory, and
 the directory that receives what the swap replaces, which has to be on the
@@ -44,28 +44,23 @@ REPLACED=/data/replaced
 cd "$LIVE"
 
 # 0. The space is deleted: the dry run refuses any other store. Read the
-#    report, and the cell databases it names beside the live store.
-#    The snapshot is read through the instance's shared memory when one has
-#    the store open; a read-only connection cannot create that, so a store
-#    no instance has open is read as immutable, which nothing then writes.
-sqlite3 "file:$LIVE/$DID.sqlite?mode=ro" \
-  "VACUUM INTO '$REPLACED/$DID.dry-run-$DATE.sqlite'" ||
-  sqlite3 "file:$LIVE/$DID.sqlite?immutable=1" \
-    "VACUUM INTO '$REPLACED/$DID.dry-run-$DATE.sqlite'"
-cf space reap "$REPLACED/$DID.dry-run-$DATE.sqlite" --dry-run \
-  --live "$LIVE/$DID.sqlite"
+#    report, and the cell databases it names beside the live store. It reads
+#    the live store read-only, through the instances' own coordination when
+#    one has it open, and writes nothing.
+cf space reap "$LIVE/$DID.sqlite" --dry-run --live "$LIVE/$DID.sqlite"
 
-# 1. Stop every instance. Nothing writes any space from here on. A
-#    companion beside the store that is not empty holds what an instance did
-#    not write back, so it stops the run; empty ones go.
+# 1. Stop every instance. Nothing writes any space from here on. A log
+#    beside the store that is not empty holds what an instance did not write
+#    back, so it stops the run; an empty one goes, and so does the `-shm`
+#    index, which holds no writes.
 for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
-for companion in -wal -shm -journal; do
-  if [ -s "$DID.sqlite$companion" ]; then
-    echo "$DID.sqlite$companion is not empty: stop here" >&2
+for log in -wal -journal; do
+  if [ -s "$DID.sqlite$log" ]; then
+    echo "$DID.sqlite$log is not empty: stop here" >&2
     exit 1
   fi
-  sudo rm -f "$DID.sqlite$companion"
 done
+sudo rm -f "$DID.sqlite-wal" "$DID.sqlite-shm" "$DID.sqlite-journal"
 
 # 2. The authoritative backup, AFTER the stop, checksummed: the rollback, the
 #    archive, and the source. Read as immutable: nothing writes the file now,
@@ -126,7 +121,7 @@ open. With the same four names set:
 set -euo pipefail
 cd "$LIVE"
 for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
-sudo rm -f "$DID.sqlite-wal" "$DID.sqlite-shm"
+sudo rm -f "$DID.sqlite-wal" "$DID.sqlite-shm" "$DID.sqlite-journal"
 sudo cp -p "$REPLACED/$DID.live-$DATE.sqlite" "$DID.sqlite.restored"
 sudo mv -f "$DID.sqlite.restored" "$DID.sqlite"
 while read -r cell; do

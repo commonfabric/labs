@@ -104,6 +104,27 @@ describe("offline-store", () => {
     });
   });
 
+  describe("fileSize() and entryExists()", () => {
+    it("read a path that is not there as absent, and rethrow any other failure to read it", () => {
+      expect(fileSize(`${dir}/none`)).toBe(0);
+      expect(entryExists(`${dir}/none`)).toBe(false);
+
+      const shut = `${dir}/shut`;
+      Deno.mkdirSync(shut);
+      Deno.chmodSync(shut, 0o000);
+      try {
+        expect(() => fileSize(`${shut}/x`)).toThrow(
+          Deno.errors.PermissionDenied,
+        );
+        expect(() => entryExists(`${shut}/x`)).toThrow(
+          Deno.errors.PermissionDenied,
+        );
+      } finally {
+        Deno.chmodSync(shut, 0o755);
+      }
+    });
+  });
+
   describe("checkRewrittenStore()", () => {
     it("passes a store whose checks hold", () => {
       write("wal");

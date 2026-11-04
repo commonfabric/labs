@@ -238,19 +238,20 @@ export const reapStore = async (
     : resolve(options.out);
   preflightOfflineStore(store, out, (reason) => new ReapRefused(reason));
 
-  // The copy the run rewrites is made on a connection that cannot write, so
-  // the store is never written.
-  const source = new Database(store, { readonly: true });
+  // Nothing was at `out` before the run, so whatever is there once it fails,
+  // a partial copy included, is the run's, and it is removed, so none is left
+  // to install by mistake.
   try {
-    await refuseUnmigratedStore(source);
-    source.prepare(`VACUUM main INTO ?`).run(out);
-  } finally {
-    source.close();
-  }
+    // The copy the run rewrites is made on a connection that cannot write,
+    // so the store is never written.
+    const source = new Database(store, { readonly: true });
+    try {
+      await refuseUnmigratedStore(source);
+      source.prepare(`VACUUM main INTO ?`).run(out);
+    } finally {
+      source.close();
+    }
 
-  // From here a result is on disk, and a run that does not finish removes
-  // it, so none is left to install by mistake.
-  try {
     const result = new Database(out);
     try {
       result.exec("PRAGMA locking_mode = EXCLUSIVE");
