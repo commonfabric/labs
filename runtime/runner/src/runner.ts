@@ -223,7 +223,10 @@ import {
   setCfcTrustSnapshot,
   TransactionWrapper,
 } from "./storage/extended-storage-transaction.ts";
-import { getTransactionReadActivities } from "./storage/transaction-inspection.ts";
+import {
+  getTransactionReadActivities,
+  getTransactionWriteDetails,
+} from "./storage/transaction-inspection.ts";
 import {
   type CommitError,
   type IExtendedStorageTransaction,
@@ -6058,6 +6061,14 @@ export class Runner {
     let instantiatedPatternKey: string | undefined;
     // The swap requested last; only it may step the watcher back.
     let latestSwap: object | undefined;
+    // For a start whose transaction writes the result document, that
+    // transaction, and the pointer the watcher first reads while it is open:
+    // the one the store holds apart from it. Cleared once the watcher reads
+    // anything else, and when the transaction settles. `observePointer()`
+    // says why.
+    let laggingPointer:
+      | { startTx: IExtendedStorageTransaction; key?: string }
+      | undefined;
     // The identity of the pattern whose nodes are LIVE right now — which can
     // differ from `currentPatternKey` (the pointer value last observed): a
     // parent-driven start instantiates its given pattern while the durable
@@ -7103,38 +7114,73 @@ export class Runner {
         followingPointer(watcherLoad);
         this.#trackWatcherPatternLoad(pieceKey, follows, watcherLoad);
       };
-      addCancel(
-        resultCell.sinkMeta("patternIdentity", (newValue) => {
-          if (!active || startLifecycleEpoch !== this.#lifecycleEpoch) return;
-          const newRef = asPatternIdentityRef(newValue);
-          if (!newRef) return;
-          const newKey = patternIdentityKey(newRef);
-          if (newKey === currentPatternKey) return; // No change
-          currentPatternKey = newKey;
+      // The watcher compares the pointer it reads with the pattern the piece
+      // runs, and a difference is a move to follow. That holds once the
+      // start's own pointer write is in the store, but not before: a start
+      // runs inside a transaction its caller commits later, and the
+      // watcher's first run, which is part of the start, reads the store
+      // while that transaction is still open. Until it commits, the store
+      // names the pattern the start replaces, and following that would set
+      // the old pattern up again over what the start just wrote, then the
+      // new one once the write lands. So while the start's transaction is
+      // open, the pointer the first run reads is passed over; any other
+      // value is followed, and once the transaction commits every value is,
+      // a return to the replaced pattern included. The value passed over is
+      // the one the watcher reads, under whatever identity it reads with,
+      // rather than one read apart from it. A start whose transaction
+      // aborts leaves that pointer in place without moving it, so the
+      // watcher follows it then.
+      const observePointer = (newValue: FabricValue): void => {
+        if (!active || startLifecycleEpoch !== this.#lifecycleEpoch) return;
+        const newRef = asPatternIdentityRef(newValue);
+        if (!newRef) return;
+        const newKey = patternIdentityKey(newRef);
+        if (laggingPointer !== undefined) {
+          if (laggingPointer.startTx.status().status === "ready") {
+            laggingPointer.key ??= newKey;
+            if (newKey === laggingPointer.key) return;
+          }
+          laggingPointer = undefined;
+        }
+        if (newKey === currentPatternKey) return; // No change
+        currentPatternKey = newKey;
 
-          // A source update that moves the pointer grants the new pattern the
-          // writer authority of the one before it, and registers the grant
-          // only in the runtime that performed it. Without it, the new
-          // pattern's writes to fields bound to the old one are refused, so
-          // a runtime that does not hold it reads it before swapping.
-          const owed = this.#readInheritedAuthority(resultCell, newRef);
-          if (owed === undefined) {
-            followPointer(newRef, newKey);
+        // A source update that moves the pointer grants the new pattern the
+        // writer authority of the one before it, and registers the grant
+        // only in the runtime that performed it. Without it, the new
+        // pattern's writes to fields bound to the old one are refused, so
+        // a runtime that does not hold it reads it before swapping.
+        const owed = this.#readInheritedAuthority(resultCell, newRef);
+        if (owed === undefined) {
+          followPointer(newRef, newKey);
+          return;
+        }
+        const followed = owed.then(() => {
+          if (
+            !active || startLifecycleEpoch !== this.#lifecycleEpoch ||
+            currentPatternKey !== newKey
+          ) {
             return;
           }
-          const followed = owed.then(() => {
-            if (
-              !active || startLifecycleEpoch !== this.#lifecycleEpoch ||
-              currentPatternKey !== newKey
-            ) {
-              return;
-            }
-            followPointer(newRef, newKey);
-          });
-          followingPointer(followed);
-          this.#trackWatcherPatternLoad(pieceKey, follows, followed);
-        }),
-      );
+          followPointer(newRef, newKey);
+        });
+        followingPointer(followed);
+        this.#trackWatcherPatternLoad(pieceKey, follows, followed);
+      };
+      addCancel(resultCell.sinkMeta("patternIdentity", observePointer));
+      const lagging = laggingPointer;
+      lagging?.startTx.addCommitCallback((_committed, outcome) => {
+        if (laggingPointer !== lagging) return;
+        laggingPointer = undefined;
+        if (!outcome.error) return;
+        const read = this.#runtime.readTx();
+        try {
+          observePointer(resultCell.withTx(read).getMetaRaw("patternIdentity"));
+        } finally {
+          read.clearReadOnly?.();
+          read.abort("stored pattern pointer read complete");
+        }
+      });
     };
 
     // Initial instantiation with a cold-start setup repair for pieces mounted
@@ -7275,11 +7321,13 @@ export class Runner {
     // the session-side entry (the never-durable contract).
     const initialRef = getPatternIdentityRef(resultCellForRead) ??
       this.#sessionPatternPointer(resultCellForRead);
-
     // Determine initial pattern
     if (givenPattern) {
       currentPatternKey = initialRef ? patternIdentityKey(initialRef) : KEYLESS;
       instantiatedPatternKey = currentPatternKey;
+      if (tx !== undefined && this.#writesDocumentOf(tx, resultCell)) {
+        laggingPointer = { startTx: tx };
+      }
       try {
         instantiateInitialPattern(givenPattern, initialRef, tx);
         // Real artifact refs only: setup mints and INDEXES a `keyless:`
@@ -8111,6 +8159,32 @@ export class Runner {
     const tx = this.#runtime.readTx();
     if (identity !== undefined) tx.tx.scopeKeyIdentity = identity;
     return tx;
+  }
+
+  /**
+   * Whether `tx` writes the document `cell` addresses: its space, id and scope
+   * instance, the instance resolved under `tx`'s identity as `tx` resolves
+   * it.
+   *
+   * Every start that reaches the pattern watcher with a transaction today
+   * writes the piece's own document in it, so an id-only match would decide
+   * the same. The full identity is compared anyway: a transaction that wrote
+   * the same id at another scope, or another actor's instance, would
+   * otherwise arm the watcher's guard for a start that writes nothing of the
+   * piece's, and the guard would then pass over a real move.
+   */
+  #writesDocumentOf(tx: IExtendedStorageTransaction, cell: Cell<any>): boolean {
+    const link = cell.getAsNormalizedFullLink();
+    const identity = tx.tx.scopeKeyIdentity ?? this.#runtime.scopeKeyIdentity;
+    if (!canResolveScopeKey(link.scope, identity)) return false;
+    const document = entityKey(link, identity);
+    return [...getTransactionWriteDetails(tx, link.space)].some(
+      ({ address }) =>
+        address.id === link.id &&
+        (address.scopeKey !== undefined ||
+          canResolveScopeKey(address.scope, identity)) &&
+        entityKey(address, identity) === document,
+    );
   }
 
   /**
