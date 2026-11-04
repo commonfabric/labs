@@ -298,7 +298,7 @@ describe("executor-quiescence", () => {
     });
   });
 
-  it("answers the same value until a loop does anything further", async () => {
+  it("resolves with the same value until a loop does anything further", async () => {
     await withChain(async ({ host, start }) => {
       const before = await host.whenQuiescent();
       expect(await host.whenQuiescent()).toBe(before);

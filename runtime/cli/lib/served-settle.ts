@@ -19,9 +19,9 @@ export async function servedConsequences(runtime: Runtime): Promise<void> {
 }
 
 /**
- * Waits until the serving loop has nothing left to do, and answers with a value
- * that stays the same across two calls only if no loop did anything between
- * them; `ExecutorHost.whenQuiescent()` is the source of both.
+ * Waits until the serving loop has nothing left to do, and resolves with a
+ * value that stays the same across two calls only if no loop did anything
+ * between them; `ExecutorHost.whenQuiescent()` is the source of both.
  */
 export type ServedQuiescence = () => Promise<number>;
 

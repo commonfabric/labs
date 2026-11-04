@@ -399,7 +399,7 @@ export class ExecutorHost {
    *
    * Reactions to what the wait delivers belong to whoever reads them. The value
    * is the epoch the wait ended at, so a caller that has since let its own
-   * runtime react waits again and compares: an equal answer says the reactions
+   * runtime react waits again and compares: an equal value says the reactions
    * gave the loops nothing to do. Never resolves while a loop keeps working.
    *
    * Comes from the host, so only a caller on the loop's own thread has it.

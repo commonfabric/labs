@@ -726,7 +726,8 @@ after the event that fired it, or in another space.
 `ExecutorHost.whenQuiescent()` reports the end of all of that. A settle asks for
 it once its own runtime is done, makes a round trip on each connection to
 receive what the loop wrote, settles again, and asks again, and returns once two
-answers are equal, which says the reactions gave the loop nothing further to do.
+of its results are equal, which says the reactions gave the loop nothing further
+to do.
 A multi-user participant asks the orchestrator, which holds the loop, over its
 worker's message channel.
 
