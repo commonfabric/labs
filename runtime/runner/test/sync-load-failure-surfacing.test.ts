@@ -1,5 +1,5 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
@@ -70,6 +70,73 @@ const surfacedErrorCount = (): number =>
     string,
     Record<string, { error?: number }>
   >)["storage.v2"]?.["sync-load-failure"]?.error ?? 0;
+
+const ownInstanceRefusalCount = (): number =>
+  (getLoggerCountsBreakdown() as Record<
+    string,
+    Record<string, { debug?: number }>
+  >)["storage.v2"]?.["own-instance-read-refused"]?.debug ?? 0;
+
+const serviceSigner = await Identity.fromPassphrase("sync load serving");
+const homeSpace = (await Identity.fromPassphrase("sync load home")).did();
+const foreignSpace = (await Identity.fromPassphrase("sync load foreign")).did();
+const actor = (await Identity.fromPassphrase("sync load actor")).did();
+
+/** A serving manager's view of `foreignSpace`, whose list grants no actor. */
+const servingManager = (
+  { withProbe = true }: { withProbe?: boolean } = {},
+): EmulatedStorageManager =>
+  EmulatedStorageManager.emulate({
+    as: serviceSigner,
+    servingHomeSpace: homeSpace,
+    ...(withProbe
+      ? {
+        foreignScopedReadGrant: () =>
+          Promise.resolve({
+            granted: false as const,
+            reason: "the list grants the actor nothing",
+          }),
+      }
+      : {}),
+  });
+
+/** A cell over `foreignSpace`'s document `id`, under `scope`. */
+const foreignCell = (
+  runtime: Runtime,
+  id: string,
+  scope: "user" | "session",
+) =>
+  runtime.getCellFromLink({
+    space: foreignSpace,
+    id: `of:${id}`,
+    path: [],
+    scope,
+  });
+
+/** A cell over an inline value that links to `foreignSpace`'s document `id`. */
+const cellLinkingForeign = (
+  runtime: Runtime,
+  id: string,
+  scope: "user" | "session",
+) =>
+  runtime.getCellFromEntityId(
+    homeSpace,
+    dataUriFromValueWithResolvedLinks({
+      ref: {
+        "/": {
+          [LINK_V1_TAG]: {
+            id: `of:${id}`,
+            path: [],
+            space: foreignSpace,
+            scope,
+            schema: { type: "object" },
+          },
+        },
+      },
+    }),
+    [],
+    undefined,
+  );
 
 describe("sync load failure surfacing", () => {
   it("logs a denied sync once per space and still resolves", async () => {
@@ -280,5 +347,198 @@ describe("sync load failure surfacing", () => {
       await runtime.dispose();
       await storageManager.close();
     }
+  });
+
+  describe("a serving manager's refused foreign scoped read", () => {
+    // A case about a line reads both counters, so a line landing under the
+    // other key or level fails it, whichever way the boundary moved.
+
+    let manager: EmulatedStorageManager;
+    let runtime: Runtime;
+
+    /** The change each counter shows across `read`. */
+    const countsAcross = async (read: () => Promise<unknown>) => {
+      const errorsBefore = surfacedErrorCount();
+      const ownBefore = ownInstanceRefusalCount();
+      await read();
+      return {
+        errors: surfacedErrorCount() - errorsBefore,
+        ownInstance: ownInstanceRefusalCount() - ownBefore,
+      };
+    };
+
+    beforeEach(() => {
+      manager = servingManager();
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: manager,
+      });
+    });
+
+    afterEach(async () => {
+      await runtime.dispose();
+      await manager.close();
+    });
+
+    describe("of the runtime's own instance", () => {
+      it("counts a cell's load under no identity at debug and logs no error", async () => {
+        for (const scope of ["user", "session"] as const) {
+          const cell = foreignCell(runtime, `own-${scope}`, scope);
+          expect(await countsAcross(() => cell.sync())).toEqual({
+            errors: 0,
+            ownInstance: 1,
+          });
+        }
+      });
+
+      it("counts a load naming the runtime's own identity at debug and logs no error", async () => {
+        const read = () =>
+          manager.syncInstance(
+            { space: foreignSpace, id: "of:own-named" as never, scope: "user" },
+            { principal: serviceSigner.did() },
+          );
+        expect(await countsAcross(read)).toEqual({ errors: 0, ownInstance: 1 });
+      });
+
+      it("counts a link target's load at debug and logs no error", async () => {
+        const cell = cellLinkingForeign(runtime, "own-link", "user");
+        expect(await countsAcross(() => cell.sync())).toEqual({
+          errors: 0,
+          ownInstance: 1,
+        });
+      });
+
+      it("logs a real failure once however many of them follow it", async () => {
+        const named = () =>
+          manager.syncInstance(
+            { space: foreignSpace, id: "of:evict" as never, scope: "user" },
+            { principal: actor },
+          );
+        expect(await countsAcross(named)).toEqual({
+          errors: 1,
+          ownInstance: 0,
+        });
+
+        // More than the logged-once set holds.
+        for (let i = 0; i < 300; i++) {
+          await foreignCell(runtime, `evict-${i}`, "user").sync();
+        }
+
+        expect(await countsAcross(named)).toEqual({
+          errors: 0,
+          ownInstance: 0,
+        });
+      });
+
+      it("returns a refusal marked `unnamed`", async () => {
+        const result = await manager.open(foreignSpace).sync(
+          "of:own-mark" as never,
+          { path: [], schema: false },
+          "user",
+        );
+        expect(result.error).toMatchObject({
+          name: "ForeignScopedReadRefusedError",
+          unnamed: true,
+        });
+      });
+    });
+
+    describe("of an actor's instance", () => {
+      it("logs an error naming the actor when the list does not grant the actor", async () => {
+        const emitted: string[] = [];
+        const originalError = console.error;
+        console.error = (...args: unknown[]) => {
+          emitted.push(args.map(String).join(" "));
+        };
+        try {
+          const read = () =>
+            manager.syncInstance(
+              { space: foreignSpace, id: "of:named" as never, scope: "user" },
+              { principal: actor },
+            );
+          expect(await countsAcross(read)).toEqual({
+            errors: 1,
+            ownInstance: 0,
+          });
+        } finally {
+          console.error = originalError;
+        }
+        expect(
+          emitted.some((line) =>
+            line.includes("sync-load-failure") &&
+            line.includes(`the instance is ${actor}'s`)
+          ),
+        ).toBe(true);
+      });
+
+      it("logs an error when the runtime holds no probe to ask", async () => {
+        const unprobed = servingManager({ withProbe: false });
+        try {
+          const read = () =>
+            unprobed.syncInstance(
+              {
+                space: foreignSpace,
+                id: "of:unprobed" as never,
+                scope: "user",
+              },
+              { principal: actor },
+            );
+          expect(await countsAcross(read)).toEqual({
+            errors: 1,
+            ownInstance: 0,
+          });
+        } finally {
+          await unprobed.close();
+        }
+      });
+
+      it("returns a refusal not marked `unnamed` for a key naming no actor", async () => {
+        const result = await manager.open(foreignSpace).sync(
+          "of:bad-key" as never,
+          { path: [], schema: false },
+          "user",
+          "not-a-scope-key" as never,
+        );
+        expect(result.error).toMatchObject({
+          name: "ForeignScopedReadRefusedError",
+          unnamed: false,
+        });
+      });
+    });
+
+    describe("under an actor whose identity cannot resolve its scope", () => {
+      // A run under an actor with no session reads a session-scoped document:
+      // the read names no instance, as the runtime's own does, and the actor's
+      // identity is the whole of the difference between the two.
+
+      const sessionless = { principal: actor };
+
+      it("logs an error for a load by address", async () => {
+        const read = () =>
+          manager.syncInstance(
+            {
+              space: foreignSpace,
+              id: "of:sessionless-address" as never,
+              scope: "session",
+            },
+            sessionless,
+          );
+        expect(await countsAcross(read)).toEqual({ errors: 1, ownInstance: 0 });
+      });
+
+      it("logs an error for a cell's load", async () => {
+        const cell = foreignCell(runtime, "sessionless-cell", "session");
+        const read = () =>
+          manager.syncCell(cell, { scopeKeyIdentity: sessionless });
+        expect(await countsAcross(read)).toEqual({ errors: 1, ownInstance: 0 });
+      });
+
+      it("logs an error for a link target's load", async () => {
+        const cell = cellLinkingForeign(runtime, "sessionless-link", "session");
+        const read = () =>
+          manager.syncCell(cell, { scopeKeyIdentity: sessionless });
+        expect(await countsAcross(read)).toEqual({ errors: 1, ownInstance: 0 });
+      });
+    });
   });
 });

@@ -3685,12 +3685,21 @@ export class StorageManager implements IStorageManager {
    * provider whose teardown has begun is not logged: tearing it down closes
    * its client, which rejects every request in flight, so the failure says
    * nothing about the read. The load's waiters still receive it.
+   *
+   * `identity` is the identity the read ran under, as the caller named it. A
+   * refused read of this serving runtime's own instance of a foreign scoped
+   * document (`#refusesOwnInstanceRead()`) is counted at debug rather than
+   * logged as an error: the refusal holds by construction (protocol.md §2) and
+   * no actor's read went unanswered. It takes no place among the failures
+   * logged once, so however many there are, none of them makes a real failure
+   * log again.
    */
   #logSyncLoadFailure(
     space: MemorySpace,
     id: URI,
     failure: unknown,
     heldProvider: Provider | undefined,
+    identity: ScopeKeyIdentity | undefined,
   ): void {
     if (heldProvider?.destroyed) return;
     // Pull errors arrive as plain result objects (IConnectionError et al.),
@@ -3700,6 +3709,12 @@ export class StorageManager implements IStorageManager {
     const message = typeof named?.message === "string"
       ? named.message
       : String(failure);
+    if (this.#refusesOwnInstanceRead(failure, identity)) {
+      logger.debug("own-instance-read-refused", () => [
+        `sync completed without data for ${id} in ${space}: ${name}: ${message}`,
+      ]);
+      return;
+    }
     const key = `${space}|${name}|${message}`;
     if (this.#loggedSyncFailures.has(key)) return;
     if (this.#loggedSyncFailures.size >= 256) this.#loggedSyncFailures.clear();
@@ -3707,6 +3722,22 @@ export class StorageManager implements IStorageManager {
     logger.error("sync-load-failure", () => [
       `sync completed without data for ${id} in ${space}: ${name}: ${message}`,
     ]);
+  }
+
+  /**
+   * Whether `failure` refuses a read of this runtime's own instance: the read
+   * named no instance, and the identity it ran under is none at all or this
+   * manager's own principal. An actor's run whose scope its identity cannot
+   * resolve also names no instance, but it is that actor's read, so it does not
+   * qualify.
+   */
+  #refusesOwnInstanceRead(
+    failure: unknown,
+    identity: ScopeKeyIdentity | undefined,
+  ): boolean {
+    return isForeignScopedReadRefusal(failure) && failure.unnamed === true &&
+      (identity === undefined ||
+        identity.principal === this.scopeKeyIdentity().principal);
   }
 
   pendingLoadAddresses(): readonly {
@@ -3870,7 +3901,13 @@ export class StorageManager implements IStorageManager {
       // into the same silent undefined. Surface the failure; the pending-load
       // ledger below still carries it to scheduler waiters.
       if (loadFailure !== undefined) {
-        this.#logSyncLoadFailure(space, id, loadFailure, heldProvider);
+        this.#logSyncLoadFailure(
+          space,
+          id,
+          loadFailure,
+          heldProvider,
+          options?.scopeKeyIdentity,
+        );
       }
       return cell;
     } catch (error) {
@@ -3958,11 +3995,17 @@ export class StorageManager implements IStorageManager {
           );
           loadFailure = result.error;
           if (loadFailure !== undefined) {
-            this.#logSyncLoadFailure(space, id, loadFailure, heldProvider);
+            this.#logSyncLoadFailure(
+              space,
+              id,
+              loadFailure,
+              heldProvider,
+              undefined,
+            );
           }
         } catch (error) {
           loadFailure = error;
-          this.#logSyncLoadFailure(space, id, error, heldProvider);
+          this.#logSyncLoadFailure(space, id, error, heldProvider, undefined);
         } finally {
           if (loadFailure !== undefined) {
             this.#crossingKicks.get(target)?.delete(selector);
@@ -4018,6 +4061,7 @@ export class StorageManager implements IStorageManager {
           address.id,
           loadFailure,
           heldProvider,
+          identity,
         );
         this.retractDocPullKick(address.space, address.id, scope, identity);
       }
@@ -4071,7 +4115,8 @@ export class StorageManager implements IStorageManager {
   /**
    * Runs `start` as a pending load of `address`: the load is registered
    * before `start` is called and released when its result settles, with a
-   * resolved error counted as the load's failure and logged.
+   * resolved error counted as the load's failure and logged, as a load read
+   * under `identity`.
    */
   #trackPendingProviderSync(
     address: {
@@ -4080,6 +4125,7 @@ export class StorageManager implements IStorageManager {
       id: URI;
       scopeKey?: ScopeKey;
     },
+    identity: ScopeKeyIdentity | undefined,
     start: () => Promise<Result<Unit, Error>>,
   ): Promise<Result<Unit, Error>> {
     const releaseLoad = this.#registerPendingLoad(address);
@@ -4106,6 +4152,7 @@ export class StorageManager implements IStorageManager {
           address.id,
           result.error,
           heldProvider,
+          identity,
         );
       }
       releaseLoad(result.error);
@@ -4458,6 +4505,7 @@ export class StorageManager implements IStorageManager {
           id: link.id,
           ...(instance !== undefined ? { scopeKey: instance } : {}),
         },
+        identity,
         () =>
           this.open(space).sync(
             link.id,
@@ -5437,7 +5485,9 @@ const docKey = (id: URI, instance: string): string => `${instance}\0${id}`;
 type LocalDocAddress = { id: URI; scope?: CellScope; scopeKey?: ScopeKey };
 
 /** Whether `failure`, as a pull reports it, is a gated read's refusal. */
-const isForeignScopedReadRefusal = (failure: unknown): boolean =>
+const isForeignScopedReadRefusal = (
+  failure: unknown,
+): failure is IForeignScopedReadRefusedError =>
   typeof failure === "object" && failure !== null &&
   (failure as { name?: unknown }).name === "ForeignScopedReadRefusedError";
 
@@ -6656,8 +6706,12 @@ export class SpaceReplica
   ): Promise<IForeignScopedReadRefusedError | undefined> {
     const scope = normalizeCellScope(address.scope) ?? "space";
     if (scope === "space") return undefined;
-    const refusal = (why: string): IForeignScopedReadRefusedError => ({
+    const refusal = (
+      why: string,
+      unnamed = false,
+    ): IForeignScopedReadRefusedError => ({
       name: "ForeignScopedReadRefusedError",
+      unnamed,
       message: `foreign scoped read refused on the serving path: ` +
         `${address.id} (scope "${scope}") in ${this.#space} — ${why} ` +
         "(protocol.md §2's grant-scoped read: a serving runtime reads a " +
@@ -6668,6 +6722,7 @@ export class SpaceReplica
       return refusal(
         "the read names no actor's instance, and the serving runtime's own " +
           "instance of a foreign scoped document is never read",
+        true,
       );
     }
     const actor = identityOfScopeKey(key)?.principal;

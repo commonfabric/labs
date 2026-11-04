@@ -4138,6 +4138,13 @@ export type PullError =
  * `connection` failure. */
 export interface IForeignScopedReadRefusedError extends IStorageError {
   readonly name: "ForeignScopedReadRefusedError";
+
+  /**
+   * Whether the read named no instance at all, leaving the runtime's own
+   * identity as the only thing it could resolve against. A read naming a key,
+   * whether or not the key names an actor, is not one of these.
+   */
+  readonly unnamed: boolean;
 }
 
 /**
