@@ -654,9 +654,12 @@ Two rules force a test in.
   cost for such an identity and charges a lane nothing for it, so every run
   of it after the first would be time no lane was packed for. One run is
   also what [an identity that has never disagreed with
-  itself](#how-many-times-a-lane-runs-one-test) is given. A record a
-  suite writes for itself rather than for one of its units makes no unit
-  known.
+  itself](#how-many-times-a-lane-runs-one-test) is given. A rerun of a
+  failure on the default branch is not one of those repeats: it runs the
+  unit as its first run did, new identities included, so that it asks
+  the same tests the same thing, and the failure it reruns can be a new
+  identity's. A record a suite writes for itself rather than for one of
+  its units makes no unit known.
 
   A unit is not forced in for want of records where it is a file the
   default branch gained after the commit the manifest was published from

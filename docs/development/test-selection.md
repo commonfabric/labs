@@ -2218,8 +2218,9 @@ that adds the test edits it, which makes the unit mandatory. A record that
 belongs to a suite as a whole rather than to one of its units makes no unit
 known.
 
-A lane runs such a test once however many times it runs the unit. A unit runs
-as many times as the most runs any identity the lane holds in it asks for by
+A lane runs such a test once however many times its batch runs the unit. A
+unit runs as many times as the most runs any identity the lane holds in it
+asks for by
 [its flake rate](../specs/test-selection.md#how-many-times-a-lane-runs-one-test),
 and the packer charges each of those runs for the identities the manifest
 holds in the unit and for nothing else. So every pass after the first adds to
@@ -2230,6 +2231,12 @@ would otherwise run ten times with none of them charged, and a few tests of a
 few minutes each are then enough to run a lane past its step's bound. A unit
 that runs whole, or whose first pass left no name map, runs every pass as it
 ran the first.
+
+[Running a failure again](#running-a-failure-again) is the exception. A rerun
+runs its unit as the first pass did, new tests included, so that it asks the
+same tests the same thing, and a new test that failed is one a rerun can be
+for. What the reruns of a lane spend is bounded by `RERUN_BUDGET_SECONDS`
+instead.
 
 Two things are worth knowing while writing one, and both are consequences
 of the identity being the reported name:
