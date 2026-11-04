@@ -918,9 +918,10 @@ export default add(5, "5");`,
     // which it sees as `T | undefined`, to another factory. The type cannot
     // tell that reference from a literal `undefined` or a computation that
     // returns one, so those are admitted too; the table says so, as what is
-    // accepted. Everything else keeps the rule: a required input, an index
-    // signature's key, a `patternTool` prefill of a required key, and a
-    // write into an optional property.
+    // accepted. An optional property's indexed type includes `undefined`,
+    // so `key().set()` admits it too. Required inputs, index-signature values,
+    // required `patternTool()` prefills, and optional-property writes through
+    // `update()` keep the stricter rule.
 
     const SUB = [
       "import { computed, pattern, patternTool, UI } from 'commonfabric';",
@@ -1003,6 +1004,18 @@ export default add(5, "5");`,
           "refuses undefined at a required key of patternTool's extraParams",
         body: "export default patternTool(Strict, { index: undefined });",
         refused: "not assignable to parameter of type 'undefined'",
+      },
+      {
+        name: "admits `undefined` written to an optional key by `key().set()`",
+        body: [
+          "import { handler, type Writable } from 'commonfabric';",
+          "const clear = handler<unknown, { cell: Writable<{ note?: string }> }>(",
+          "  (_event, { cell }) => { cell.key('note').set(undefined); },",
+          ");",
+          "export default pattern<{ cell: Writable<{ note?: string }> }>(({ cell }) => ({",
+          "  clear: clear({ cell }),",
+          "}));",
+        ].join("\n"),
       },
       {
         name: "refuses undefined written into an optional property by update()",
