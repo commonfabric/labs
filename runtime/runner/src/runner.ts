@@ -12915,10 +12915,14 @@ export class Runner {
           inherited
         : inherited;
       if (!isObjectNotArray(resolved)) return false;
+      // The outermost `asCell` entry is the position's own handle, and the
+      // entries after it describe what that handle holds. `Stream<void>` is
+      // `["stream", "opaque"]`: a stream, sent to through its link, whose
+      // payload is what is opaque.
       const isOpaque = (candidate: JSONSchema) =>
-        ContextualFlowControl.getAsCellValues(candidate).some((entry) =>
-          ContextualFlowControl.getAsCellKind(entry) === "opaque"
-        );
+        ContextualFlowControl.getAsCellKind(
+          ContextualFlowControl.getAsCellValues(candidate)[0],
+        ) === "opaque";
       if (isOpaque(schema as JSONSchema) || isOpaque(resolved)) return true;
       const arms = resolved.anyOf ?? resolved.oneOf;
       if (!Array.isArray(arms)) return false;
