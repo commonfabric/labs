@@ -9,7 +9,9 @@
  * by address alone: her manager offers Grace that room through the profile it
  * lists for her, and the room's `addRequests`, read through the room, merges
  * the verdict from Ada's home. Grace, a member of the room now, reads none of
- * Ada's adds.
+ * Ada's adds. An add naming Grace's profile reaches her inbox in either posture,
+ * through a pointer document as a link write stores one, and through one whose
+ * envelope holds a copy of her inbox's label beneath its slot.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -17,6 +19,8 @@
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { cfcAtom } from "@commonfabric/api/cfc";
+import type { FabricValue } from "@commonfabric/data-model";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
@@ -60,6 +64,48 @@ describe("fabrichat add offer across runtimes", () => {
   let harness: MultiRuntimeHarness;
   let ada: MultiRuntimeSession;
   let grace: MultiRuntimeSession;
+
+  /** Whether Grace's private inbox holds an offer whose id is `offerId`. */
+  const graceHolds = async (offerId: string): Promise<boolean> => {
+    const inbox = await grace.link(["privateInbox", "piece"]);
+    return ((await grace.read(["offers"], { piece: inbox })) as
+      | { id: string }[]
+      | undefined ?? []).some(({ id }) => id === offerId);
+  };
+
+  /**
+   * Sends Ada's add of Grace to `room`, by her profile, waits for its verdict,
+   * and holds the send to the posture: under server execution a fired event
+   * travels as an append for the serving loop, and otherwise as none.
+   */
+  const addByProfile = async (
+    requestId: string,
+    room: Awaited<ReturnType<MultiRuntimeSession["link"]>>,
+  ): Promise<void> => {
+    const profile = await grace.link(["profiles", 0]);
+    const admitted = await harness.admittedCommitsDuring(async () => {
+      await ada.send(
+        "addMember",
+        { requestId, profile: linkTo(profile) },
+        ADD_MEMBER_ACTION,
+        { piece: room },
+      );
+      await harness.settleUntil(async () =>
+        (await ada.read(
+          ["$VIEWS", "room", "addRequests", requestId, "delivery"],
+          { piece: room },
+        )) !== undefined
+      );
+    });
+    expect(
+      admitted.some((commit) => (commit.eventAppends?.length ?? 0) > 0),
+    ).toBe(SERVER_EXECUTION);
+    expect(
+      await ada.read(["$VIEWS", "room", "addRequests", requestId], {
+        piece: room,
+      }),
+    ).toEqual({ status: "done", delivery: "offered" });
+  };
 
   /**
    * Gives `session`'s stand-in a profile named `name`, and the private inbox
@@ -123,23 +169,10 @@ describe("fabrichat add offer across runtimes", () => {
     }, START_ACTION);
     await harness.settle();
     const named = await ada.link(["requests", "g-named", "entry", "room"]);
-    await ada.send(
-      "addMember",
-      { requestId: "add-named", profile: linkTo(graceProfile) },
-      ADD_MEMBER_ACTION,
-      { piece: named },
+    await addByProfile("add-named", named);
+    await harness.settleUntil(() =>
+      graceHolds(addMemberOfferId(named.space, "add-named"))
     );
-    await harness.settleUntil(async () =>
-      (await ada.read(
-        ["$VIEWS", "room", "addRequests", "add-named", "delivery"],
-        { piece: named },
-      )) !== undefined
-    );
-    expect(
-      await ada.read(["$VIEWS", "room", "addRequests", "add-named"], {
-        piece: named,
-      }),
-    ).toEqual({ status: "done", delivery: "offered" });
 
     // A second group, of Ada's alone.
     await ada.send("createGroup", {
@@ -184,13 +217,8 @@ describe("fabrichat add offer across runtimes", () => {
     // The offer reached the inbox Grace's profile points at, keyed by the room
     // and the add.
     if (!SERVER_EXECUTION) {
-      const inbox = await grace.link(["privateInbox", "piece"]);
-      await harness.settleUntil(async () =>
-        ((await grace.read(["offers"], { piece: inbox })) as
-          | { id: string }[]
-          | undefined ?? []).some(({ id }) =>
-            id === addMemberOfferId(room.space, "add-grace")
-          )
+      await harness.settleUntil(() =>
+        graceHolds(addMemberOfferId(room.space, "add-grace"))
       );
     }
 
@@ -206,5 +234,49 @@ describe("fabrichat add offer across runtimes", () => {
     expect(
       await grace.read(["$VIEWS", "room", "addRequests"], { piece: room }),
     ).toEqual({});
+  });
+
+  it("offers a room through a profile whose pointer document holds a copy of the inbox's label beneath its slot", async () => {
+    // A link write stores no such copy, but a stored envelope can hold one, as
+    // legacy data. Taking the reference to send to the inbox reads no position
+    // of the inbox, so the copy joins nothing the add writes.
+    const pointer = await grace.link(["profiles", 0, "inbox"]);
+    const copy = {
+      path: ["piece", "offers"],
+      origin: "link",
+      label: {
+        confidentiality: [cfcAtom.personalSpace(grace.identity.did())],
+      },
+    };
+    const stored = (await grace.rawRead(pointer)).value as unknown as {
+      cfc: { labelMap: { entries: unknown[] } };
+    };
+    await grace.rawWrite(pointer, {
+      ...stored,
+      cfc: {
+        ...stored.cfc,
+        labelMap: {
+          ...stored.cfc.labelMap,
+          entries: [...stored.cfc.labelMap.entries, copy],
+        },
+      },
+    } as unknown as FabricValue);
+    await harness.settle();
+    expect(
+      ((await ada.rawRead(pointer)).value as unknown as typeof stored).cfc
+        .labelMap.entries,
+    ).toContainEqual(copy);
+
+    await ada.send("createGroup", {
+      requestId: "g-copied",
+      title: "Copied",
+      members: [],
+    }, START_ACTION);
+    await harness.settle();
+    const room = await ada.link(["requests", "g-copied", "entry", "room"]);
+    await addByProfile("add-copied", room);
+    await harness.settleUntil(() =>
+      graceHolds(addMemberOfferId(room.space, "add-copied"))
+    );
   });
 });
