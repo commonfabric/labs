@@ -87,6 +87,10 @@ reclaimed, progress is cleared and numbering restarts for that attempt. A
 different request starts without progress, and opting in changes the request
 hash. Explicit false and omission identify the same request.
 
+If storing a report fails, the tool returns an error and the run can continue
+with later reports or its final result. Sequence numbers can therefore have
+gaps. Cancellation or loss of the run's ownership still stops publication.
+
 Progress is a labeled model output. Its document goes through the same writer
 as the final result, carrying the run's observed-input labels and the
 `LlmDerived` stamp when enforcement is enabled. A pattern's ordinary display

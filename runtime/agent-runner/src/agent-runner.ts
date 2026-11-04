@@ -150,6 +150,7 @@ type FollowedRecord = {
   runtime: Runtime;
   record: Cell<AgentRunRecord>;
   stopFollowing: () => void;
+  reportedUnsupportedProgress?: boolean;
 };
 
 /** A run this runner holds. */
@@ -389,6 +390,16 @@ export class AgentRunner {
         const offered = (value.tools ?? []).every((tool) =>
           this.#options.tools.includes(tool)
         );
+        if (
+          offered && value.progressRequested === true &&
+          this.#options.progress !== true &&
+          !followed.reportedUnsupportedProgress
+        ) {
+          followed.reportedUnsupportedProgress = true;
+          this.#options.report?.(
+            `agent runner: leaving request ${value.requestHash} queued because this runner does not support progress`,
+          );
+        }
         if (
           offered &&
           (value.progressRequested !== true || this.#options.progress === true)

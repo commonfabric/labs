@@ -1657,6 +1657,7 @@ export const parseCfHarnessCliArgs = async (
     | "sandboxRuntimeNamedBy"
     | "sandboxSelectionFlags"
     | "providerSettingsStore"
+    | "reportProgress"
   > = {},
 ): Promise<CfHarnessCliConfig | { help: true }> => {
   const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
@@ -2206,6 +2207,14 @@ export const parseCfHarnessCliArgs = async (
   if (indexTool !== undefined && patternIndex === undefined) {
     throw new Error(
       `--allow-tool ${indexTool} requires a pattern index; missing --pattern-index-url`,
+    );
+  }
+  if (
+    allowedToolIds?.includes("report_progress") === true &&
+    deps.reportProgress === undefined
+  ) {
+    throw new Error(
+      "--allow-tool report_progress requires a host progress publisher",
     );
   }
   if (

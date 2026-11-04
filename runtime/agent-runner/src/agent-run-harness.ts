@@ -132,7 +132,8 @@ export async function agentRunObservationCeiling(
  * A run ends `completed` with a link to the result document; `cancelled`
  * when its signal aborted; `refused` when the space's policy refused the
  * result write; `failed` as `LIMIT_REACHED` when the model-turn limit ended
- * it; `INVALID_RESULT` when the completed loop supplied no result satisfying
+ * it; `INVALID_INPUT` when progress is requested without a host publisher;
+ * `INVALID_RESULT` when the completed loop supplied no result satisfying
  * its schema; and `PROVIDER_FAILURE` for other model, tool, or storage errors.
  *
  * @throws Error when no ACL reader is supplied for the Fabric lane.
@@ -222,6 +223,7 @@ export const createHarnessAgentRunExecutor = (
             run.signal.throwIfAborted();
             handleTable ??= createHarnessHandleTable(runKey);
             const sequence = ++progressSequence;
+            let publicationLost = false;
             let session: HarnessFabricSession | undefined;
             const ownsSession =
               options.harnessDeps?.fabricSessionFactory === undefined;
@@ -261,6 +263,7 @@ export const createHarnessAgentRunExecutor = (
               });
               run.signal.throwIfAborted();
               if (!await run.publishProgress!(written.link)) {
+                publicationLost = true;
                 throw new Error("Progress publication is no longer available");
               }
             } catch (error) {
@@ -269,7 +272,11 @@ export const createHarnessAgentRunExecutor = (
                   describeFailure(error)
                 }`,
               );
-              throw new Error("Progress publication failed");
+              run.signal.throwIfAborted();
+              if (publicationLost) {
+                throw new Error("Progress publication is no longer available");
+              }
+              return false;
             } finally {
               if (ownsSession) {
                 await session?.pieces.runtime.dispose().catch(() => {});

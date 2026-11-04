@@ -157,16 +157,19 @@ dependency readiness.
   (`src/result-writer.ts`) is a third trusted host path and not a model tool: a
   host caller invokes it for opt-in progress reports and after a run reaches its
   structured result, and it writes those outputs into the same configured space
-  over the same session. Its bounded authority is the session's (AH-TOOL-7):
-  every handle the result names must be one the run's table holds, a cell handle
-  becomes a link and never a copy, a non-cell referent becomes a document under
-  the label its tool reported when the result cites it, and an uncited referent
-  passes the same write admission in an isolated aborted transaction and
-  contributes through an opaque runtime CONTENT-observation receipt. The cells
-  the run observed and the cited referents are read through the writing
-  transaction so the runner derives the inline text's label without making
-  uncited content durable. The write is attributed to the `agent` builtin so the
-  result carries the runtime-minted `LlmDerived` family, and the run's
+  over the same session. Its bounded authority is the session's (AH-TOOL-7). For
+  a final result, every handle the result names must be one the run's table
+  holds, a cell handle becomes a link and never a copy, a non-cell referent
+  becomes a document under the label its tool reported when the result cites it,
+  and an uncited referent passes the same write admission in an isolated aborted
+  transaction and contributes through an opaque runtime CONTENT-observation
+  receipt. Progress reports use `literalStrings: true`: handle tokens remain
+  display text, create no links, and cite no referents. Observed non-cell
+  referents still contribute through the uncited observation path. In both
+  paths, the cells the run observed and any cited referents are read through the
+  writing transaction so the runner derives the inline text's label without
+  making uncited content durable. The write is attributed to the `agent` builtin
+  so the result carries the runtime-minted `LlmDerived` family, and the run's
   observation ceiling is declared as the result document's store policy so the
   runner's commit boundary — not the writer — decides whether the derived join
   fits. A refusal reaches the caller as a typed failure carrying the refusal

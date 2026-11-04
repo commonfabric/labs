@@ -1347,6 +1347,28 @@ describe("agent runner", () => {
     expect(recordOf(result).get()?.state).toBe("queued");
   });
 
+  it("reports unsupported progress once while leaving the request queued", async () => {
+    const result = await submit({ progress: true });
+    const reports: string[] = [];
+    const runner = await startRunner(
+      () => Promise.resolve({ outcome: "refused" }),
+      {
+        report: (message) => reports.push(message),
+      },
+    );
+    await runner.idle();
+    expect(recordOf(result).get()?.state).toBe("queued");
+    const other = await submit();
+    await waitForState(other, "refused");
+    await runner.idle();
+    expect(recordOf(result).get()?.state).toBe("queued");
+    expect(
+      reports.filter((message) =>
+        message.includes("does not support progress")
+      ),
+    ).toHaveLength(1);
+  });
+
   it("leaves a research request queued on the default runner surface", async () => {
     const result = await submit({ tools: ["research"] });
     const runner = await startRunner(
@@ -1785,6 +1807,7 @@ describe("agent runner", () => {
       options: {
         report?: (message: string) => void;
         omitHarnessArgs?: boolean;
+        failFirstProgressSession?: boolean;
 
         /** The command endpoint the runner hands its runs, and the tools it offers. */
         commands?: { url: string; actor: string };
@@ -1812,6 +1835,7 @@ describe("agent runner", () => {
         observationCeiling?: unknown;
         workspaces: string[];
       } = { workspaces: [] };
+      let sessionRequests = 0;
       const execute = createHarnessAgentRunExecutor({
         identityKeyPath: join(workRoot, "unused.key"),
         requester: home,
@@ -1846,7 +1870,13 @@ describe("agent runner", () => {
           ...(options.unnamedSandbox !== undefined
             ? { platform: options.unnamedSandbox.platform, arch: "aarch64" }
             : {}),
-          fabricSessionFactory: () => Promise.resolve({ pieces }),
+          fabricSessionFactory: () => {
+            sessionRequests++;
+            if (options.failFirstProgressSession && sessionRequests === 2) {
+              return Promise.reject(new Error("progress storage unavailable"));
+            }
+            return Promise.resolve({ pieces });
+          },
           createPromptLoop: (options) => ({
             runPrompt: (prompt) => {
               seen = {
@@ -1892,6 +1922,41 @@ describe("agent runner", () => {
       });
       return () => seen;
     };
+
+    it("completes after an interim publication fails and accepts later progress", async () => {
+      const reports: string[] = [];
+      await startHarnessRunner(async ({ engine, resultPath }) => {
+        await engine.invokeBuiltinTool("report_progress", {
+          message: "First milestone",
+        });
+        await engine.invokeBuiltinTool("report_progress", {
+          message: "Recovered milestone",
+        });
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({ answer: "Hyperion" }),
+        );
+        return loopResult("recovered-progress");
+      }, {
+        failFirstProgressSession: true,
+        report: (message) => reports.push(message),
+      });
+      const result = await submit({ progress: true });
+      await waitForState(result, "completed");
+      expect(
+        reports.some((message) =>
+          message.includes("progress storage unavailable")
+        ),
+      ).toBe(true);
+      const settled = await waitForCellValue<
+        { progress?: { message: string; sequence: number } }
+      >(
+        patternSide,
+        result,
+        (value) => value?.progress?.sequence === 2,
+      );
+      expect(settled.progress?.message).toBe("Recovered milestone");
+    });
 
     it("delivers successive labeled progress links while the result is pending", async () => {
       const start = defer<void>();

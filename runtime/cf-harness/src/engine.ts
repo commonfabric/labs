@@ -617,11 +617,11 @@ export interface CreateHarnessEngineOptions
    */
   structuredResult?: HarnessStructuredResultTarget;
 
-  /** Publishes a milestone with the handles observed at the invocation. */
+  /** Publishes a milestone with observed handles; false means publication failed. */
   reportProgress?: (
     message: string,
     table: HarnessHandleTable | undefined,
-  ) => Promise<void>;
+  ) => Promise<void | boolean>;
 
   /**
    * Host-supplied attachments or session-retained targets to mint handles for

@@ -41,11 +41,11 @@ export const reportProgressTool: HarnessToolDefinition<
     if (
       context.reportProgress === undefined ||
       typeof input.message !== "string" ||
-      input.message.trim().length === 0 || input.message.length > 2000
+      input.message.trim().length === 0 || [...input.message].length > 2000
     ) {
       return { outputId, status: "error" };
     }
-    await context.reportProgress(input.message);
-    return { outputId, status: "ok" };
+    const published = await context.reportProgress(input.message);
+    return { outputId, status: published === false ? "error" : "ok" };
   },
 };

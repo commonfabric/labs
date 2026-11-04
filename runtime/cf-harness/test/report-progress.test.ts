@@ -45,6 +45,36 @@ describe("report_progress", () => {
     expect(messages).toEqual(["Checked the sources"]);
   });
 
+  it("counts Unicode code points at the message limit", async () => {
+    const messages: string[] = [];
+    const context = {
+      nextOutputId: () => "unicode-progress",
+      reportProgress: (message: string) => {
+        messages.push(message);
+        return Promise.resolve();
+      },
+    } as unknown as HarnessToolContext;
+    expect(
+      (await reportProgressTool.invoke(context, { message: "😀".repeat(2000) }))
+        .status,
+    ).toBe("ok");
+    expect(
+      (await reportProgressTool.invoke(context, { message: "😀".repeat(2001) }))
+        .status,
+    ).toBe("error");
+    expect(messages).toEqual(["😀".repeat(2000)]);
+  });
+
+  it("reports a recoverable publication failure to the model", async () => {
+    const context = {
+      nextOutputId: () => "failed-progress",
+      reportProgress: () => Promise.resolve(false),
+    } as unknown as HarnessToolContext;
+    expect(
+      (await reportProgressTool.invoke(context, { message: "Working" })).status,
+    ).toBe("error");
+  });
+
   it("refuses a direct invocation without host opt-in", async () => {
     const context = {
       nextOutputId: () => "progress-test",

@@ -296,8 +296,8 @@ export interface HarnessToolContext {
     label: IFCLabel,
   ): Promise<string>;
 
-  /** Host-owned milestone return channel, available only when opted in. */
-  reportProgress?: (message: string) => Promise<void>;
+  /** Opt-in host return channel; false reports a recoverable publication failure. */
+  reportProgress?: (message: string) => Promise<void | boolean>;
 
   /**
    * Where the run's structured result goes, absent when the run was
