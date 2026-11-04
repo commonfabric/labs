@@ -102,7 +102,7 @@ export const TOP_LEVEL_COMMANDS: readonly TopLevelCommand[] = [
     name: "space",
     description:
       "Commands that act on a space: its root and home patterns, access " +
-      "invitations, and rehearsal clones of its store.",
+      "invitations, rehearsal clones of its store, and its deletion.",
     load: async () => (await import("./space.ts")).space,
   },
   {

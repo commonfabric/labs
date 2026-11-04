@@ -241,7 +241,7 @@ import {
 import { assertReadOnly } from "./sqlite/guard.ts";
 import { ReadConnectionPool } from "./sqlite/read-pool.ts";
 import type { TableSchema } from "./sqlite/schema.ts";
-import { resolveSpaceStoreUrl } from "./storage-path.ts";
+import { cellDatabaseFileName, resolveSpaceStoreUrl } from "./storage-path.ts";
 import { compressServerMessageLabels } from "./sync-label-table.ts";
 import {
   compressServerMessageCommitLabels,
@@ -909,17 +909,6 @@ const isSpaceKeyAclGenesis = (
   (commit.branch === undefined || commit.branch === "") &&
   isACL(commit.operations[0].value?.value) &&
   hasConcreteOwner(commit.operations[0].value?.value);
-
-/** Deterministic, collision-resistant-enough token for a filename component
- *  (FNV-1a 32-bit + length). Used to derive cell-db file names from (space,id). */
-function hashToken(s: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return `${(h >>> 0).toString(16).padStart(8, "0")}${s.length.toString(16)}`;
-}
 
 /** Extract the table name from a SQLite "no such table: <name>" error, or
  *  undefined if the error is not that shape. SQLite reports the *unquoted* name,
@@ -5673,7 +5662,8 @@ export class Server {
   /** Path for a cell-derived db file. Sibling of the space db for file stores;
    *  a deterministic temp file for in-memory stores (so it survives the
    *  connection, unlike an `:memory:` attach). The space + id are hashed into
-   *  the filename so distinct (space, id) pairs never collide.
+   *  the filename, with a hash that two pairs can share
+   *  (`cellDatabaseFileName()` says how).
    *
    *  `scopeKey` is the resolved scope key (`Engine.resolveScopeKey`): `space`
    *  for the default scope (left out of the name, so existing space-scoped files
@@ -5685,13 +5675,12 @@ export class Server {
     id: string,
     scopeKey: string = "space",
   ): string {
-    const scopeTag = scopeKey === "space" ? "" : `-${hashToken(scopeKey)}`;
-    const tag = `${hashToken(space)}-${hashToken(id)}${scopeTag}`;
+    const name = cellDatabaseFileName(space, id, scopeKey);
     if (engine.url.protocol === "file:") {
       const dir = Path.dirname(Path.fromFileUrl(engine.url));
-      return Path.join(dir, `cell-${tag}.sqlite`);
+      return Path.join(dir, name);
     }
-    return Path.join(Deno.env.get("TMPDIR") ?? "/tmp", `cf-cell-${tag}.sqlite`);
+    return Path.join(Deno.env.get("TMPDIR") ?? "/tmp", `cf-${name}`);
   }
 
   /**

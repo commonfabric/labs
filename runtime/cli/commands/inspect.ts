@@ -728,6 +728,12 @@ export const inspect = new Command()
       const sum = summarizeSpace(s);
       out(!!options.json, sum, () => {
         console.log(`space: ${sum.path}`);
+        if (sum.deletion !== undefined) {
+          console.log(
+            `deleted: by ${sum.deletion.by}, in the commit at seq ` +
+              sum.deletion.seq,
+          );
+        }
         console.log(
           `commits: ${sum.commits}` +
             (sum.commitSeqRange
