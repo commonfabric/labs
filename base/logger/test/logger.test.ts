@@ -1001,6 +1001,27 @@ describe("logger", () => {
       ]);
     });
 
+    it("returns what an object reporting like an error reports", () => {
+      const logger = disabledLogger("kept-messages-error-like");
+      class DonutFailure {
+        get name() {
+          return "DonutFailure";
+        }
+
+        get message() {
+          return "the fryer went out";
+        }
+      }
+
+      logger.error("a-key", new DonutFailure());
+      logger.error("a-key", { message: "a record with no name" });
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "DonutFailure: the fryer went out",
+        "a record with no name",
+      ]);
+    });
+
     it("returns the contents of records and arrays, to a bounded extent", () => {
       const logger = disabledLogger("kept-messages-record");
 

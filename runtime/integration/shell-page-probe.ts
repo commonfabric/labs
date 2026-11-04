@@ -159,9 +159,9 @@ export interface ShellPageProbe {
   workerErrorMessagesError?: string;
 
   /**
-   * The selectors the condition of the wait named in
-   * {@link ShellPageProbeOptions.waiter} collected, oldest first. Absent for a
-   * read that names no wait.
+   * The selectors the condition of a running `waitForCondition` collected,
+   * oldest first. Absent for a read that names no wait, which only a report of
+   * such a wait does.
    */
   conditionElements?: ConditionElement[];
 
@@ -189,12 +189,6 @@ export interface ShellPageProbeOptions {
    * A case that wants the unanswered worker exercised asks for a short one.
    */
   workerBudgetMs?: number;
-
-  /**
-   * The name of the running `waitForCondition` whose collected elements to
-   * read.
-   */
-  waiter?: string;
 }
 
 /** Read {@link ShellPageProbe} from the document currently in `page`. */
@@ -202,7 +196,7 @@ export async function readShellPageProbe(
   page: Page,
   options: ShellPageProbeOptions = {},
 ): Promise<ShellPageProbe> {
-  const probe = await readPageFields(page, options.waiter);
+  const probe = await readPageFields(page);
   if (!probe.runtime) return probe;
   return {
     ...probe,
@@ -216,11 +210,12 @@ export async function readShellPageProbe(
 /**
  * Helper for {@link readShellPageProbe}, which reads everything but the
  * worker's logs. It needs no worker, so it answers whenever the page's main
- * thread does.
+ * thread does. `waiter` names the running `waitForCondition` whose collected
+ * elements to read as well.
  */
 async function readPageFields(
   page: Page,
-  waiter: string | undefined,
+  waiter?: string,
 ): Promise<ShellPageProbe> {
   return await page.evaluate((
     textLimit: number,

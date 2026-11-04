@@ -9,6 +9,7 @@
  * - Per-logger configuration
  * - Console styling support
  * - Call counting and metrics tracking
+ * - The text of the first few messages logged per key at `error`
  * - Automatic periodic count summaries
  *
  * @example Typical usage - disabled by default with debug level
@@ -880,8 +881,9 @@ const KEPT_ERROR_MESSAGE_ITEMS = 10;
  * Helper for {@link renderErrorMessage}, which renders one part of a message.
  *
  * It calls neither `toJSON()` nor `toString()` on what it reads, because a
- * logger runs inside whatever failed, and a cell's `toJSON()` reads the
- * runtime. So an instance of a class other than an error is named rather than
+ * logger runs inside whatever failed. So anything carrying a string `message`
+ * is rendered by that, which reaches an `Error` of any realm and the classes
+ * that report like one, and an instance of any other class is named rather than
  * rendered.
  */
 function renderMessagePart(part: unknown, depth: number): string {
@@ -890,9 +892,9 @@ function renderMessagePart(part: unknown, depth: number): string {
   if (typeof part !== "object" || part === null) return String(part);
   if (depth >= KEPT_ERROR_MESSAGE_DEPTH) return "…";
 
-  if (Object.prototype.toString.call(part) === "[object Error]") {
-    const { name, message, cause } = part as Error;
-    const text = `${name}: ${message}`;
+  const { name, message, cause } = part as Partial<Error>;
+  if (typeof message === "string") {
+    const text = typeof name === "string" ? `${name}: ${message}` : message;
     return cause === undefined
       ? text
       : `${text} (cause: ${renderMessagePart(cause, depth + 1)})`;

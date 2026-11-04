@@ -159,8 +159,8 @@ const LOGGING_RUNTIME_DOCUMENT = `<!DOCTYPE html>
 </script>
 </body></html>`;
 
-// The same counts' shape from a runtime whose worker answers for the counts and
-// then refuses the request for the messages behind them.
+// A booted shell whose runtime's worker returns its counts, and then refuses the
+// request for the messages behind them.
 const REFUSING_MESSAGES_DOCUMENT = `<!DOCTYPE html>
 <html><head><title>Common Fabric</title></head>
 <body><x-root-view></x-root-view>
