@@ -8,6 +8,7 @@
 import { Identity } from "@commonfabric/identity";
 import { env, type Page, waitForCondition } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { ACLManager, type Cell } from "@commonfabric/runner";
 import { describe, it } from "@std/testing/bdd";
 import {
@@ -103,6 +104,12 @@ describe("fabrichat-deleted-room", () => {
       const manager = home.key("chatManager" as never) as unknown as Cell<{
         direct: Record<string, { room: unknown }>;
       }>;
+      await waitForCellValue(
+        controller.runtime,
+        manager.key("direct").key(goner),
+        (value) => value !== undefined,
+        { stuckLabel: "the first room held in `direct`" },
+      );
       const space = manager.key("direct").key(goner).key("room")
         .resolveAsCell().getAsNormalizedFullLink().space;
 
