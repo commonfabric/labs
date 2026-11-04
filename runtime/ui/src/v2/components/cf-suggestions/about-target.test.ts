@@ -19,8 +19,10 @@ const elsewhere = piece("elsewhere");
 
 /**
  * A handle on the element of a `.map()`, a cell holding a link to `target`.
- * `publish()` moves the link to another thing. Each resolution waits for
- * `resolution`, and fails with `failure` when one is given.
+ * `publish()` moves the link to another thing, and `fail()` makes each later
+ * resolution fail. Each resolution waits for `resolution`, and fails with
+ * `failure` when one is given. `subscriptions()` counts the live
+ * subscriptions on the link.
  */
 function mapElementLinkingTo(
   target: CellHandle,
@@ -35,13 +37,14 @@ function mapElementLinkingTo(
     path: ["element"],
   });
   let current = target;
+  let failing = failure;
   const callbacks = new Set<(value: CellHandle) => void>();
   const signal = new AbortController();
   if (aborted) signal.abort();
   Object.assign(element, {
     resolveAsCell: () =>
       resolution.then(() => {
-        if (failure) throw failure;
+        if (failing) throw failing;
         return current;
       }),
     runtime: () => ({ signal: signal.signal }),
@@ -58,7 +61,10 @@ function mapElementLinkingTo(
     current = next;
     for (const callback of [...callbacks]) callback(next);
   };
-  return { element, publish };
+  const fail = (error: Error) => {
+    failing = error;
+  };
+  return { element, publish, fail, subscriptions: () => callbacks.size };
 }
 
 /** An `AboutTarget` whose owner is connected while `connected.value` is. */
@@ -126,12 +132,14 @@ describe("AboutTarget", () => {
 
       it("clears `target` for an `about` that is no cell", async () => {
         const { target, counts } = aboutTarget();
-        target.resolve(mapElementLinkingTo(here).element);
+        const { element, subscriptions } = mapElementLinkingTo(here);
+        target.resolve(element);
         await target.resolution;
         target.resolve(undefined);
         await target.resolution;
         expect(target.target).toBeUndefined();
         expect(counts.changes).toBe(2);
+        expect(subscriptions()).toBe(0);
       });
 
       it("sets no `target` while the owner is disconnected", async () => {
@@ -148,6 +156,25 @@ describe("AboutTarget", () => {
         target.resolve(mapElementLinkingTo(here, { failure }).element);
         await target.resolution;
         expect(target.target).toBeUndefined();
+        expect(error.calls.map(({ args }) => args)).toEqual([
+          ["Failed to resolve about:", failure],
+        ]);
+      });
+
+      it("stops following a link whose resolution failed after it moved", async () => {
+        const failure = new Error("unreadable");
+        using error = stub(console, "error");
+        const { target } = aboutTarget();
+        const { element, publish, fail, subscriptions } = mapElementLinkingTo(
+          here,
+        );
+        target.resolve(element);
+        await target.resolution;
+        fail(failure);
+        publish(elsewhere);
+        await target.resolution;
+        expect(target.target).toBeUndefined();
+        expect(subscriptions()).toBe(0);
         expect(error.calls.map(({ args }) => args)).toEqual([
           ["Failed to resolve about:", failure],
         ]);

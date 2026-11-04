@@ -15,7 +15,8 @@ function pieceCell(id: string): CellHandle {
 }
 
 /**
- * A cell holding a link to `target`, counting the subscriptions taken on it.
+ * A cell holding a link to `target`, counting the subscriptions taken on it
+ * and those torn down.
  * `beforeSync` runs as each synchronization of the link is answered.
  */
 function linkTo(target: CellHandle, beforeSync: () => void = () => {}) {
@@ -24,7 +25,7 @@ function linkTo(target: CellHandle, beforeSync: () => void = () => {}) {
     space: "did:key:test-space" as CellRef["space"],
     path: ["piece"],
   }) as CellHandle;
-  const counts = { subscribed: 0 };
+  const counts = { subscribed: 0, unsubscribed: 0 };
   Object.defineProperty(link, "asSchema", {
     value: () => ({
       sync: () => {
@@ -34,7 +35,7 @@ function linkTo(target: CellHandle, beforeSync: () => void = () => {}) {
       subscribe(callback: (value: CellHandle) => void) {
         callback(target);
         counts.subscribed++;
-        return () => {};
+        return () => counts.unsubscribed++;
       },
     }),
   });
@@ -115,16 +116,22 @@ describe("LinkTargetWatch", () => {
         watch.cancel();
       });
 
-      it("rethrows a failed synchronization and follows nothing", async () => {
+      it("rethrows a failed synchronization, and subscribes on a later watch", async () => {
         const target = pieceCell("of:fid1:piece");
         const failure = new Error("unreadable");
-        const { link } = linkTo(target, () => {
-          throw failure;
+        let failing = true;
+        const { link, counts } = linkTo(target, () => {
+          if (failing) throw failure;
         });
         const watch = new LinkTargetWatch({ onRetarget: () => {} });
 
         await expect(watch.watch(link, target)).rejects.toBe(failure);
-        expect(watch.accessForTestingOnly.unsubscribe).toBeUndefined();
+        expect(counts.subscribed).toBe(0);
+
+        failing = false;
+        expect(await watch.watch(link, target)).toBe(target);
+        expect(counts.subscribed).toBe(1);
+        watch.cancel();
       });
     });
 
@@ -153,7 +160,7 @@ describe("LinkTargetWatch", () => {
     describe("cancel()", () => {
       it("drops the subscription a watch took", async () => {
         const target = pieceCell("of:fid1:piece");
-        const { link } = linkTo(target);
+        const { link, counts } = linkTo(target);
         const watch = new LinkTargetWatch({ onRetarget: () => {} });
         await watch.watch(link, target);
         expect(watch.accessForTestingOnly.unsubscribe).toBeDefined();
@@ -161,6 +168,7 @@ describe("LinkTargetWatch", () => {
         watch.cancel();
 
         expect(watch.accessForTestingOnly.unsubscribe).toBeUndefined();
+        expect(counts.unsubscribed).toBe(1);
       });
     });
   });

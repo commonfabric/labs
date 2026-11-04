@@ -1,6 +1,7 @@
 /**
- * Resolution of a `cf-suggestions` element's `about` to the thing it names,
- * kept apart from the element so that a Deno unit test can drive it.
+ * Resolution of a `cf-suggestions` element's `about` to the thing it names: a
+ * self-contained state machine that follows a link while its owner is
+ * connected, which a unit test can drive without a DOM.
  */
 
 import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
@@ -24,7 +25,14 @@ interface AboutTargetOptions {
  */
 export class AboutTarget {
   #options: AboutTargetOptions;
+
+  /**
+   * The `about` last handed to `resolve()`. A retarget resolves this copy
+   * again, which cannot be stale: the owner hands each new `about` to
+   * `resolve()`, which supersedes every resolution of the one before.
+   */
   #about: unknown = undefined;
+
   #target: CellHandle | undefined = undefined;
 
   /** Counts resolutions, so a superseded one changes nothing. */
