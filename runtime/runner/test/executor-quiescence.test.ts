@@ -170,12 +170,17 @@ describe("executor-quiescence", () => {
   // time it resolves.
 
   it("resolves after every link of a cascade of handlers' own events has committed", async () => {
-    await withChain(async ({ host, runtime, result, start }) => {
+    // Read from the store: the firing client's own view can show its
+    // speculative run of the cascade whether or not the loop has finished it.
+    await withChain(async ({ serving, host, space, result, start }) => {
       await start("first");
       await quiescence(host);
-      await runtime.storageManager.pullOpenSpacesToHead();
-      await runtime.idle();
-      expect(result.key("landed").get()).toBe("first");
+      const engine = await serving.server.engineForSpace(space);
+      const { id } = result.key("landed").getAsNormalizedFullLink();
+      expect(Engine.selectPendingStreamEventDocs(engine)).toStrictEqual([]);
+      expect(JSON.stringify(Engine.read(engine, { id })?.value)).toContain(
+        "first",
+      );
     });
   });
 
