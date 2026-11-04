@@ -70,10 +70,10 @@ export default pattern(() => {
     identityProvider("email") === "Email" &&
     identityProvider("whatever.new") === "whatever.new"
   );
-  const assert_undated_identity_is_hidden = assert(() =>
-    isShownIdentity({ ...freshLogin, verifiedAt: undefined }, nowMs) ===
-      false
-  );
+  const assert_undated_identity_is_hidden = assert(() => {
+    const { verifiedAt: _verifiedAt, ...undated } = freshLogin;
+    return isShownIdentity(undated, nowMs) === false;
+  });
   const assert_unreadable_date_or_clock_hides_identity = assert(() =>
     isFreshIdentity(freshLogin.verifiedAt, undefined) === false &&
     isFreshIdentity("not a timestamp", nowMs) === false
