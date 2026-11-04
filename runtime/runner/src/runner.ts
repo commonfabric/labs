@@ -8165,6 +8165,13 @@ export class Runner {
    * Whether `tx` writes the document `cell` addresses: its space, id and scope
    * instance, the instance resolved under `tx`'s identity as `tx` resolves
    * it.
+   *
+   * Every start that reaches the pattern watcher with a transaction today
+   * writes the piece's own document in it, so an id-only match would decide
+   * the same. The full identity is compared anyway: a transaction that wrote
+   * the same id at another scope, or another actor's instance, would
+   * otherwise arm the watcher's guard for a start that writes nothing of the
+   * piece's, and the guard would then pass over a real move.
    */
   #writesDocumentOf(tx: IExtendedStorageTransaction, cell: Cell<any>): boolean {
     const link = cell.getAsNormalizedFullLink();
