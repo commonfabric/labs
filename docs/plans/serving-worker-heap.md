@@ -86,15 +86,21 @@ this order. The total is 862 KB.
   shared with the session's watch view, and the watch bookkeeping that remains
   around them, about 80 KB. The board's own derivations read every Topic, so
   `Scheduler.readsEntity()` holds the documents, the release pass keeps their
-  watches, and the trigger index grows by about 50 KB per create. That is the
+  watches (as long as the session still delivers them; one the server retracted
+  gets no watch of its own), and the trigger index grows by about 50 KB per
+  create. That is the
   cost of a demanded board whose computations stay registered after they ran.
   Letting a computation that has run keep only its basis rows, loading its
   inputs again when a change dirties it, is the design in the introduction
   applied to a demanded piece's computations; it is the largest item left and
   a change to what the scheduler keeps, not to storage.
-- `deepFrozenCache` charges about 314 KB per create in a snapshot and holds
-  nothing: those are objects awaiting finalization that a snapshot taken right
-  after a collection still contains. Subtract them before reading a total.
+- `deepFrozenCache`, a `WeakSet` with no finalizer, is charged about 314 KB per
+  create by the snapshot tools, and removing its edge frees that much with
+  nothing else taking it up. A weak set holds nothing, so what keeps those
+  values alive between the forced collection and the snapshot is not
+  established; the values are frozen documents, so the retaining path to check
+  first is the one through the replica's documents. Until it is, read totals
+  with that share set apart.
 - The transaction of the run that started the piece, 55 KB. A node a run starts
   binds its result cell to the run's transaction in `#instantiateNode`
   (`runner.ts`), and the map builtin's element instances of a demanded board are
@@ -104,10 +110,12 @@ this order. The total is 862 KB.
 - The read logs of the active computations, about 42 KB, which grow with the
   index for the same reason.
 - Bounded caches still filling: `watchIds` 30 KB, `DerivedInternalCellIds`
-  35 KB, `sortedKeyCache` 13 KB, `externalRefHashCache` 12 KB,
-  `stringRepCache` 10 KB. Each stops growing at its bound.
-- The provider's `#syncRequests`, 17 KB, and `#documentHolds`, 7 KB, for the
-  documents the board holds.
+  35 KB and `stringRepCache` 10 KB are LRU caches, and each stops growing at
+  its bound. `sortedKeyCache` 13 KB and `externalRefHashCache` 12 KB are weak
+  maps, which grow with the lifetime of their keys, so they fall when the
+  holders above do.
+- The provider's `#syncRequests`, 17 KB, and the storage manager's
+  `#documentHolds`, 7 KB, for the documents the board holds.
 
 Beyond these:
 
