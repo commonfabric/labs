@@ -1,7 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { defer } from "@commonfabric/async/defer";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type { MemorySpace } from "@commonfabric/memory/interface";
@@ -144,9 +143,13 @@ function withChain(
   );
 }
 
-/** Takes enough turns of the event loop for a wait that was going to end to. */
-async function manyTurns(): Promise<void> {
-  for (let turn = 0; turn < 2000; turn++) await Deno.stat(".");
+/**
+ * Takes turns of the event loop for longer than the loop takes to run out of
+ * things to do, its demand grace included. A wait that ends early has ended by
+ * the time this returns.
+ */
+async function longAfterTheLoopRests(): Promise<void> {
+  for (let turn = 0; turn < 30_000; turn++) await Deno.stat(".");
 }
 
 describe("executor-quiescence", () => {
@@ -163,32 +166,46 @@ describe("executor-quiescence", () => {
     });
   });
 
-  it("stays unresolved while a served fetch is out, and resolves after its answer", async () => {
-    const called = defer<void>();
-    const answer = defer<void>();
+  it("resolves after a served fetch has answered and its answer is written", async () => {
+    let answered = false;
     await withPattern(FETCH_SOURCE, {
       fetch: async () => {
-        called.resolve();
-        await answer.promise;
+        await longAfterTheLoopRests();
+        answered = true;
         return new Response('{"v":7}', {
           headers: { "content-type": "application/json" },
         });
       },
     }, async ({ host, runtime, result }) => {
       const cancel = result.sink(() => {});
-      await called.promise;
-      let resolved = false;
-      const waiting = host.whenQuiescent().then(() => {
-        resolved = true;
+      try {
+        await runtime.storageManager.synced();
+        await host.whenQuiescent();
+        expect(answered).toBe(true);
+        await runtime.storageManager.pullOpenSpacesToHead();
+        await runtime.idle();
+        expect(result.key("v").get()).toBe(7);
+      } finally {
+        cancel();
+      }
+    });
+  });
+
+  it("resolves after a lifecycle verb in the loop's cycle has finished", async () => {
+    let finished = false;
+    await withPattern(CHAIN_SOURCE, {}, async ({ host, space }) => {
+      await host.whenQuiescent();
+      const verb = host.runLifecycleVerb(space, {
+        name: "held",
+        run: async () => {
+          await longAfterTheLoopRests();
+          finished = true;
+          return {};
+        },
       });
-      await manyTurns();
-      expect(resolved).toBe(false);
-      answer.resolve();
-      await waiting;
-      await runtime.storageManager.pullOpenSpacesToHead();
-      await runtime.idle();
-      expect(result.key("v").get()).toBe(7);
-      cancel();
+      await host.whenQuiescent();
+      expect(finished).toBe(true);
+      await verb;
     });
   });
 
