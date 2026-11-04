@@ -135,17 +135,25 @@ describe("StandaloneMemoryServer", () => {
     it("reads a close from a socket upgraded with Deno's default, across the same stall", async () => {
       // The control for the case above: it is the stall crossing that
       // deadline which closes a socket, so a stall that stopped doing so would
-      // leave that case passing while showing nothing.
+      // leave that case passing while showing nothing. This server echoes, so
+      // a socket that stayed open ends with a reply rather than with a wait.
 
       using _upgrade = compressIdleDeadlines();
       const server = Deno.serve(
         { hostname: "127.0.0.1", port: 0, onListen: () => {} },
-        (request) => Deno.upgradeWebSocket(request).response,
+        (request) => {
+          const { socket, response } = Deno.upgradeWebSocket(request);
+          socket.addEventListener(
+            "message",
+            (event) => socket.send(event.data),
+          );
+          return response;
+        },
       );
       try {
         const report = await stallPeerOf(
           new URL(`http://127.0.0.1:${server.addr.port}/`),
-          "unanswered",
+          "echoed if the socket stayed open",
         );
 
         expect(report).toEqual({ closeReason: "No response from ping frame." });
