@@ -334,9 +334,9 @@ per-run identities where run contexts carry them):
 
 - the shared schema memo — `schemaMemoAddressKey`
   (`traverse.ts`) has no identity component, and every sharing scope
-  is single-identity today: `TrackedGraphState.memo` is bound to its
-  manager (`runtime/memory/v2/query.ts`), and the query path's
-  `sharedMemo` instances are per-call. Sharing one memo across
+  is single-identity today: the query path's `sharedMemo` instances
+  are per-call (`runtime/memory/v2/query.ts`), and no tracked graph
+  keeps one between walks. Sharing one memo across
   identities is FORBIDDEN — schema narrowing memoized under one
   principal's traversal would leak into another's (value-bleed). The
   guard: `assertSchemaMemoIdentity` (`traverse.ts`) binds a shared
