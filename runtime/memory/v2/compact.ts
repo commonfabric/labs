@@ -38,7 +38,7 @@ import {
 
 /**
  * Which instances a compaction selects. Prefixes match `id` (the namespaces
- * are `of:`, `computed:` and `cid:`); the ACL document, the one id of the
+ * are `of:`, `computed:`, `receipt:` and `cid:`); the ACL document, the one id of the
  * form `of:did:…`, is never selected whatever the prefixes say — its history
  * is the membership audit, and the compaction commit is the one change
  * compaction makes to it. `scope` restricts the selection to one scope kind.

@@ -87,6 +87,7 @@ import type {
 import {
   entityKindOfIdString,
   hashStringForEntityAddress,
+  RECEIPT_URI_SCHEME,
 } from "@commonfabric/runner/entity-kind";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import {
@@ -1058,7 +1059,9 @@ export class PiecesController<T = unknown> {
       ? id
       : this.runtime.getCellFromEntityId(
         this.#space,
-        entityIdFrom(id),
+        // A receipt's id is the whole of its address: a caller reads it off
+        // one command and hands it to another to read the handling's outcome.
+        id.startsWith(`${RECEIPT_URI_SCHEME}:`) ? id : entityIdFrom(id),
         [],
         undefined,
         undefined,

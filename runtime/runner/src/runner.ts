@@ -205,7 +205,7 @@ import {
 } from "./scheduler.ts";
 import {
   deriveEventKey,
-  servedReceiptCause,
+  handlingReceiptLink,
 } from "./scheduler/event-identity.ts";
 import { entityKey, entityNameKey } from "./scheduler/keys.ts";
 import { CooperativeYield } from "./scheduler/cooperative-yield.ts";
@@ -13326,33 +13326,14 @@ export class Runner {
   }
 
   /**
-   * Helper for the handler paths, which returns the result cell of the
-   * handling caused by `cause`: its receipt, in the space of the handler's
-   * own result cell `patternResultCell`.
+   * Helper for the handler paths, which returns the result cell of a handling:
+   * its receipt, at `receiptLink` (`handlingReceiptLink()`).
    */
   #handlingReceiptCell(
-    patternResultCell: Cell<any>,
-    cause: Record<string, any>,
+    receiptLink: NormalizedFullLink,
     tx: IExtendedStorageTransaction,
   ): Cell<unknown> {
-    return this.#runtime.getCell(
-      patternResultCell.space,
-      this.#handlingReceiptCause(cause),
-      undefined,
-      tx,
-    );
-  }
-
-  /**
-   * Helper for the handler paths, which returns the cause a handling's result
-   * cell derives from, given the cause of the handling itself. Under server
-   * execution that is the event alone, so that the sender of an event can name
-   * the receipt without running the handler (`servedReceiptCause()`).
-   */
-  #handlingReceiptCause(cause: Record<string, any>): Record<string, any> {
-    return this.#runtime.experimental.serverExecution === true
-      ? servedReceiptCause(cause.$event)
-      : { resultFor: cause };
+    return this.#runtime.getCellFromLink(receiptLink, undefined, tx);
   }
 
   async #handleJavaScriptHandlerResult(
@@ -13363,9 +13344,9 @@ export class Runner {
     frame: Frame,
     patternResultCell: Cell<any>,
     addCancel: AddCancel,
-    cause: Record<string, any>,
+    receiptLink: NormalizedFullLink,
   ): Promise<any> {
-    const receiptCell = this.#handlingReceiptCell(patternResultCell, cause, tx);
+    const receiptCell = this.#handlingReceiptCell(receiptLink, tx);
     const receiptsEnabled =
       this.#runtime.experimental.commitPreconditions === true &&
       // Events-down (runtime-mapping.md, row N26): receipt create-only
@@ -13404,8 +13385,8 @@ export class Runner {
     // the same fail-closed stance cfc/grants.ts takes when its gate is off.
     //
     // Under EXPERIMENTAL_SERVER_EXECUTION the receipt IS being written — by the
-    // SERVING side (see the write above). The address is
-    // cause-derived, so the client's diverted ECHO of the same event mints the
+    // SERVING side (see the write above). The address derives from the event
+    // and its stream, so the client's diverted ECHO of the event mints the
     // same address the serving run writes; publishing it on the echo's
     // transaction is what hands an unchanged caller (the CLI verb dispatch) a
     // readable handle on the served outcome. The durable-ack coupling (cell.ts)
@@ -13416,6 +13397,34 @@ export class Runner {
       receiptsEnabled || this.#runtime.experimental.serverExecution === true
     ) {
       tx.handlingReceiptLink = receiptCell.getAsNormalizedFullLink();
+    }
+    // Write-once on the serving side is CAS, not a wire precondition: no
+    // markCreateOnly (a create-only mark must not ride a wave commit whose
+    // event the watermark already covers), and a receipt that ALREADY holds a
+    // value is a LOUD NO-OP. A lost CAS means a writer already landed this
+    // handling's receipt — a re-served replay converging on the same id, or a
+    // pre-created cell — and first-writer-wins is the OFF arm's
+    // receipt-collision semantics: never a second write, never a launch over
+    // what is there, never an error that fails the wave (the entry's
+    // consequenced mark and the handler's other consequences still commit; the
+    // read below rides the wave's basis for this doc, so a genuinely concurrent
+    // landing rebases the run and the re-run takes this same no-op arm).
+    if (
+      servedReceiptWrite &&
+      receiptCell.getRaw({ meta: ignoreReadForScheduling }) !== undefined
+    ) {
+      this.#servedReceiptCasLosses += 1;
+      logger.warn("served-receipt", () => [
+        "served receipt write skipped (write-once CAS loss): the " +
+        "handling's result cell already holds a value — a prior " +
+        "serve/replay or a pre-created cell landed it first, and " +
+        "the standing value wins",
+        {
+          receipt: receiptCell.getAsNormalizedFullLink().id,
+          eventId: waveRunContextOf(tx)?.eventId,
+        },
+      ]);
+      return result;
     }
     if (!resultHasReactives && frame.reactives.size === 0) {
       if (receiptsEnabled) {
@@ -13455,45 +13464,18 @@ export class Runner {
         // The serving-side receipt write: the value-less/plain shape is EXACTLY
         // the client-written one — `{}` as the existence witness, the handler's
         // plain return under `plainResultReceipts` — and the cell identity is
-        // the same cause-derived address, so the verb contract's readback
-        // (`cf piece call`'s `.result`) reads a serving-written receipt the
-        // same way it reads a client-written one.
-        //
-        // Write-once is CAS, not a wire precondition: no markCreateOnly (a
-        // create-only mark must not ride a wave commit whose event the
-        // watermark already covers), and a receipt that ALREADY holds a value
-        // is a LOUD NO-OP. A lost CAS means a writer already landed this
-        // handling's receipt — a re-served replay converging on the same
-        // cause-derived id, or a pre-created cell — and first-writer-wins is
-        // the OFF arm's receipt-collision semantics: never a second write,
-        // never an error that fails the wave (the entry's consequenced mark and
-        // the handler's other consequences still commit; the read below rides
-        // the wave's basis for this doc, so a genuinely concurrent landing
-        // rebases the run and the re-run takes this same no-op arm).
-        const existing = receiptCell.getRaw({ meta: ignoreReadForScheduling });
-        if (existing !== undefined) {
-          this.#servedReceiptCasLosses += 1;
-          logger.warn("served-receipt", () => [
-            "served receipt write skipped (write-once CAS loss): the " +
-            "handling's result cell already holds a value — a prior " +
-            "serve/replay or a pre-created cell landed it first, and " +
-            "the standing value wins",
-            {
-              receipt: receiptCell.getAsNormalizedFullLink().id,
-              eventId: waveRunContextOf(tx)?.eventId,
-            },
-          ]);
-        } else {
-          const receiptValue =
-            this.#runtime.experimental.plainResultReceipts === true &&
-              result !== undefined
-              ? result
-              : {};
-          const receipt = receiptCell.withTx(tx);
-          receipt.set(receiptValue);
-          const shape = receiptShapeSchema(receiptValue);
-          if (shape !== undefined) writeResultSchemaMeta(receipt, shape);
-        }
+        // the same address, so the verb contract's readback (`cf piece call`'s
+        // `.result`) reads a serving-written receipt the same way it reads a
+        // client-written one.
+        const receiptValue =
+          this.#runtime.experimental.plainResultReceipts === true &&
+            result !== undefined
+            ? result
+            : {};
+        const receipt = receiptCell.withTx(tx);
+        receipt.set(receiptValue);
+        const shape = receiptShapeSchema(receiptValue);
+        if (shape !== undefined) writeResultSchemaMeta(receipt, shape);
       }
       return result;
     }
@@ -13595,8 +13577,7 @@ export class Runner {
         const setup = this.#setupDeferredHandlerResultPattern(
           tx,
           resultPattern,
-          patternResultCell.space,
-          cause,
+          receiptLink,
           true,
           speculativeConsequence,
           patternResultCell.getAsNormalizedFullLink().id,
@@ -13805,18 +13786,12 @@ export class Runner {
   #setupDeferredHandlerResultPattern(
     tx: IExtendedStorageTransaction,
     resultPattern: Pattern,
-    resultSpace: MemorySpace,
-    cause: Record<string, any>,
+    receiptLink: NormalizedFullLink,
     markCreateOnlyResult = false,
     speculativeConsequence?: { eventId: string },
     parentPieceRootId?: string,
   ): DeferredStartResult<any> {
-    const resultCell = this.#runtime.getCell(
-      resultSpace,
-      this.#handlingReceiptCause(cause),
-      undefined,
-      tx,
-    );
+    const resultCell = this.#handlingReceiptCell(receiptLink, tx);
     // Recorded before the setup instantiates the result's children: a child
     // asks the chain for the piece its handler belongs to
     // (`#ancestorSystemOrigin`), and the deferred start comes too late for it.
@@ -14094,6 +14069,7 @@ export class Runner {
       // from this same id, so it is as stable across retries as the cause is.
       const eventId = tx.dispatchedEventId ?? crypto.randomUUID();
       const cause = { ...causalInputs, $event: eventId };
+      const receiptLink = handlingReceiptLink(eventId, streamLink);
       const policyFacingIdentity = resolvePolicyFacingImplementationIdentity(
         module,
         { implementation: fn },
@@ -14193,7 +14169,7 @@ export class Runner {
               return this.#resolvePendingSpaceNamesAndRetry(
                 frame,
                 tx,
-                this.#handlingReceiptCell(resultCell, cause, tx),
+                this.#handlingReceiptCell(receiptLink, tx),
               );
             }
             if ((frame.pendingSpaceAnswers?.size ?? 0) > 0) {
@@ -14209,7 +14185,7 @@ export class Runner {
                 frame,
                 resultCell,
                 addCancel,
-                cause,
+                receiptLink,
               );
             };
             // Access-list changes commit on their own, ahead of the handler's
@@ -14259,7 +14235,7 @@ export class Runner {
           return this.#resolvePendingSpaceNamesAndRetry(
             frame,
             tx,
-            this.#handlingReceiptCell(resultCell, cause, tx),
+            this.#handlingReceiptCell(receiptLink, tx),
           ).finally(() => popFrame(frame));
         }
         // The body may also throw on the `undefined` a `spaceDeleted()` call
