@@ -34,6 +34,7 @@ import {
   type MessageCell,
   type MessagesCell,
   type ReactionsValue,
+  readableReactions,
   type RepliedMessage,
   type RoomStreamEvent,
   tellManagerJoined,
@@ -86,32 +87,34 @@ export interface ReactionTally extends ChatReactionTally {
 }
 
 /**
- * The reactions `list` holds, tallied as `reactionTalliesOf()` does, each
- * tally with a card id made from `cardIdPrefix`. `mine` and `own` compare
- * each reaction's authenticated author with `profileOwnerOf(viewer)`;
- * counts and reactor lists retain their profile-based identity.
+ * The reactions `list` holds that the room can read (see
+ * `readableReactions()`), tallied as `reactionTalliesOf()` does, each tally
+ * with a card id made from `cardIdPrefix`. `mine` and `own` compare each
+ * reaction's authenticated author with `profileOwnerOf(viewer)`; counts and
+ * reactor lists retain their profile-based identity.
  */
 export const reactionTallies = (
   list: Cell<ReactionsValue> | undefined,
   viewer: ProfileCell | undefined,
   cardIdPrefix: string,
 ): ReactionTally[] => {
-  const reactions = (list?.get() ?? []) as ChatReaction[];
+  const reactions = list === undefined ? [] : readableReactions(list);
   const owner = viewer === undefined ? undefined : profileOwnerOf(viewer);
-  return reactionTalliesOf(reactions, undefined).map((tally, index) => {
-    const own = list === undefined || owner === undefined
-      ? -1
-      : reactions.findIndex((reaction, reactionIndex) =>
-        reaction?.emoji === tally.emoji &&
-        principalOf(list.key(reactionIndex), "authored-by") === owner
-      );
-    return {
-      ...tally,
-      mine: own >= 0,
-      cardId: `${cardIdPrefix}-${index}`,
-      ...(own < 0 || list === undefined ? {} : { own: list.key(own) }),
-    };
-  });
+  return reactionTalliesOf(reactions.map(({ record }) => record), undefined)
+    .map((tally, index) => {
+      const own = owner === undefined
+        ? undefined
+        : reactions.find(({ cell, record }) =>
+          record.emoji === tally.emoji &&
+          principalOf(cell, "authored-by") === owner
+        );
+      return {
+        ...tally,
+        mine: own !== undefined,
+        cardId: `${cardIdPrefix}-${index}`,
+        ...(own === undefined ? {} : { own: own.cell }),
+      };
+    });
 };
 
 /** How a message's body reads, for a quote or a deleted message. */

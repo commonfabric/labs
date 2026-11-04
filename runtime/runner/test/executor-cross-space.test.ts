@@ -2749,7 +2749,7 @@ type Piece = { name?: string };
 type Holder = { piece?: Cell<Piece> };
 const point = handler<void, { holder: Holder; kept: Writable<Holder> }>(
   (_event, { holder, kept }) => {
-    kept.set({ piece: holder.piece?.resolveAsCell() });
+    kept.set({ piece: holder.piece!.resolveAsCell() });
   },
 );
 export default pattern<

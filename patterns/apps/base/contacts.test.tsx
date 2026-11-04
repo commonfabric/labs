@@ -23,11 +23,14 @@ import {
 import {
   findElement,
   findElementByText,
+  findNode,
+  fireClick,
   hasText,
+  isButton,
   propsOf,
   textContent,
 } from "../../tools/test-support/vnode-helpers.ts";
-import type { ContactPiece } from "./contact-types.tsx";
+import type { ContactPiece, Person as PersonRecord } from "./contact-types.tsx";
 import Contacts from "./contacts.tsx";
 import FamilyMember from "./family-member.tsx";
 import Person from "./person.tsx";
@@ -118,6 +121,31 @@ export default pattern(() => {
   });
   const widerPerson = Person({ person: widerCell });
 
+  // A wider record linked to another through `sameAs`. The link is shown once
+  // there is a candidate, the family member above, offered below. Clearing the link writes `sameAs` alone, so the field
+  // `Person` does not declare has to survive it.
+  const linkedCell = new Writable<PersonRecord & { relationship: string }>({
+    firstName: "Ada",
+    lastName: "Lovelace",
+    middleName: "",
+    nickname: "",
+    prefix: "",
+    suffix: "",
+    pronouns: "",
+    birthday: { month: 12, day: 10, year: 1815 },
+    photo: "",
+    email: "ada@example.com",
+    phone: "",
+    notes: "",
+    tags: [],
+    addresses: [],
+    socialProfiles: [],
+    relationship: "cousin",
+    sameAs: { firstName: "Augusta", lastName: "King" },
+  });
+  const linkCandidates = new Writable<ContactPiece[]>([]);
+  const linkedPerson = Person({ person: linkedCell, sameAs: linkCandidates });
+
   // ==========================================================================
   // Actions
   // ==========================================================================
@@ -134,6 +162,14 @@ export default pattern(() => {
   // still be there afterwards.
   const action_edit_wider_tags = action(() => {
     sendChange(widerPerson[UI], "cf-tags", { tags: ["colleague"] });
+  });
+
+  const action_offer_candidate = action(() => {
+    linkCandidates.push(member as ContactPiece);
+  });
+
+  const action_clear_link = action(() => {
+    fireClick(findNode(linkedPerson[UI], isButton("×")), "the link's ×");
   });
 
   const action_rename_person = action(() => {
@@ -184,6 +220,17 @@ export default pattern(() => {
     widerCell.get().email === "ada@example.com"
   );
 
+  const assert_linked = assert(() =>
+    hasText(linkedPerson[UI], "Same as: Augusta King")
+  );
+
+  const assert_link_cleared_and_wider_intact = assert(() =>
+    linkedCell.get().sameAs === undefined &&
+    linkedCell.get().relationship === "cousin" &&
+    linkedCell.get().email === "ada@example.com" &&
+    !hasText(linkedPerson[UI], "Same as:")
+  );
+
   // Each record builds a form with the fields it holds.
   const assert_forms_render = assert(() =>
     hasText(person[UI], "First Name") &&
@@ -210,10 +257,16 @@ export default pattern(() => {
       { assertion: assert_wider_intact },
       { action: action_edit_wider_tags },
       { assertion: assert_tags_written_and_wider_intact },
+
+      { action: action_offer_candidate },
+      { assertion: assert_linked },
+      { action: action_clear_link },
+      { assertion: assert_link_cleared_and_wider_intact },
     ],
     contacts,
     person,
     member,
     widerPerson,
+    linkedPerson,
   };
 });

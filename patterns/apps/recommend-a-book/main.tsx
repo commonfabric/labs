@@ -132,9 +132,10 @@ const ReaderInvitation = pattern<
     const isOwner: PerUser<boolean> | null = computed(
       (): PerUser<boolean> | null => ownerState.get(),
     );
-    const reading = computed((): PerUser<{ value?: LibrarySeed }> => ({
-      value: library.get().value?.get(),
-    }));
+    const reading = computed((): PerUser<{ value?: LibrarySeed }> => {
+      const value = library.get().value?.get();
+      return value === undefined ? {} : { value };
+    });
     const suggestions = computed(
       (): PerUser<{ value?: CandidateAgentOutput }> => {
         const published = library.get().value;

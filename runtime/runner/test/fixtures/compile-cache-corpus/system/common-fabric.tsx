@@ -474,10 +474,10 @@ export const updateProfile = pattern<
 });
 
 export const listMentionable = pattern<
-  { mentionable: Array<MentionablePiece> },
+  { mentionable?: Array<MentionablePiece> },
   { result: Array<{ label: string; piece: MentionablePiece }> }
 >(({ mentionable }) => {
-  const result = mentionable.map((c) => ({
+  const result = (mentionable ?? []).map((c) => ({
     label: c[NAME]!,
     piece: c,
   }));

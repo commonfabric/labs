@@ -179,6 +179,7 @@ function envelopeOf(
   kind: string = OFFER_KIND,
 ): OfferEvent {
   const host = new URL(getPatternEnvironment().apiUrl).origin;
+  const from = currentPrincipal();
   return {
     kind,
     id,
@@ -186,7 +187,7 @@ function envelopeOf(
     host,
     ownerOrigin: host,
     title,
-    from: currentPrincipal(),
+    ...(from !== undefined && { from }),
     sharedAt: Date.now(),
   };
 }

@@ -1694,6 +1694,14 @@ Semantics:
   the changed document (section 4.6.3)
 - watch mutations are applied in order per session; clients must serialize
   `session.watch.set`, `session.watch.add` and `session.watch.remove`
+- a session's frames reach the wire in the order the server records their
+  documents as delivered: a response to a watch mutation or a resume and a
+  `session/effect` each go out in the step that records them, so a frame that
+  leaves out a `cid:` document because the session holds it never precedes the
+  frame carrying that document. A session's own accepted write is the one
+  document no frame carries, and the marker covering it can follow a frame that
+  leaves it out, so a client resolves such a frame's references through its own
+  pending writes
 
 ### 4.3.7 `session.close` — End One Session
 

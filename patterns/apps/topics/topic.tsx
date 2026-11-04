@@ -1093,7 +1093,7 @@ export const appendLink = (
     kind: kind ?? ("web" as const),
     url: trimmedUrl,
     label: (label ?? "").trim() || trimmedUrl,
-    addedBy: author,
+    ...(author !== undefined && { addedBy: author }),
     addedAt: Date.now(),
   };
   links.push(link);
@@ -1317,9 +1317,12 @@ const upgradeLegacyAuthors = (
  * retracted, reordering the board under a reader. A retraction is itself
  * activity, so its own stamp moves the clock forward.
  */
+/** The stamps of one record as its keys read, `undefined` where one is absent. */
+type StampsRead<K extends string> = { readonly [P in K]: number | undefined };
+
 const activityOf = (
-  comments: readonly TopicUpgradeComment[],
-  links: readonly TopicUpgradeLink[],
+  comments: readonly StampsRead<"sentAt" | "editedAt" | "removedAt">[],
+  links: readonly StampsRead<"addedAt" | "removedAt">[],
   createdAt: number,
   bodyUpdatedAt: number,
   titleUpdatedAt: number,

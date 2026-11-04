@@ -3,6 +3,7 @@
     "./base/content-hash",
     "./dashboard",
     "./base/felt",
+    "./base/github-webhooks",
     "./base/test-support",
     "./base/async",
     "./base/bytes",

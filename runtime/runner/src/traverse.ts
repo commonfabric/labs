@@ -289,9 +289,9 @@ function schemaMemoAddressKey(address: IMemorySpaceAddress): string {
  * The part every memo key for the document `address` names opens with,
  * whatever type, path and schema the key goes on to name: the space, the
  * scope and the id, each length-prefixed, through the `t` that starts the
- * type. `forgetSchemaMemoDocuments()` matches memo keys by it.
+ * type.
  */
-export function schemaMemoDocumentPrefix(
+function schemaMemoDocumentPrefix(
   address: { space: string; scope?: IMemorySpaceAddress["scope"]; id: string },
 ): string {
   return `s${keyComponent(address.space)}c${
@@ -301,32 +301,6 @@ export function schemaMemoDocumentPrefix(
       ? memoIdComponent(address.id)
       : `i${keyComponent(address.id)}`
   }t`;
-}
-
-/** The `schemaMemoDocumentPrefix()` a memo key opens with. */
-function schemaMemoKeyDocumentPrefix(key: string): string {
-  let at = 0;
-  for (let component = 0; component < 3; component++) {
-    const colon = key.indexOf(":", at + 1);
-    at = colon + 1 + Number(key.slice(at + 1, colon));
-  }
-  return key.slice(0, at + 1);
-}
-
-/**
- * Drops every entry of `memo` for the documents `prefixes` name, each a
- * `schemaMemoDocumentPrefix()`. An entry stands for a traversal that
- * recorded the document's reads and tracker entries; once those records
- * are gone, a traversal that found the entry would skip the document and
- * record nothing in their place.
- */
-export function forgetSchemaMemoDocuments(
-  memo: SchemaMemo,
-  prefixes: ReadonlySet<string>,
-): void {
-  for (const key of memo.keys()) {
-    if (prefixes.has(schemaMemoKeyDocumentPrefix(key))) memo.delete(key);
-  }
 }
 
 /**
@@ -4161,11 +4135,10 @@ export function createSchemaMemo(): SchemaMemo {
 // under ONE identity — schema narrowing memoized under one principal's
 // traversal would otherwise leak into another's (value-bleed). Every
 // sharing scope today is single-identity by construction
-// (`TrackedGraphState.memo` is bound to its manager; the query path's
-// sharedMemo instances are per call); this guard is what keeps a future
-// sharing change from silently becoming value-bleed rather than a loud
-// error. Bindings live in a side table so the memo type stays a plain
-// Map.
+// (the query path shares a memo only within one evaluation); this guard
+// is what keeps a future sharing change from silently becoming value-bleed
+// rather than a loud error. Bindings live in a side table so the memo type
+// stays a plain Map.
 const schemaMemoIdentityBindings = new WeakMap<SchemaMemo, string>();
 
 const schemaMemoIdentityKey = (identity: ScopeKeyIdentity): string =>
