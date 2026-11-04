@@ -1052,7 +1052,7 @@ export default pattern<LotWatchInput, LotWatchOutput>(
           updated.push({
             ...kv,
             category,
-            name: name ?? kv.name,
+            ...(name !== undefined && { name }),
             org: org ?? kv.org,
             label: label ?? kv.label,
           });

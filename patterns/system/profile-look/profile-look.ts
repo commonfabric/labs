@@ -4,11 +4,13 @@
  * pattern applies the same rule and a unit test can hold it to it.
  */
 
-/** The part of a profile's appearance a snapshot carries. */
+/** The part of a profile's appearance a snapshot carries: a `picture`, an
+ * `avatar`, or neither, and never both. A member typed `?: never` is one that
+ * is absent. */
 export type ProfileLook<Bytes> =
-  | { picture: Bytes; avatar?: undefined }
-  | { avatar: string; picture?: undefined }
-  | { picture?: undefined; avatar?: undefined };
+  | { picture: Bytes; avatar?: never }
+  | { avatar: string; picture?: never }
+  | { picture?: never; avatar?: never };
 
 /**
  * Returns the profile's `picture` when it holds any bytes, or else its

@@ -2440,9 +2440,29 @@ type CellWrappedData<T> =
   | AnyBrandedCell<T>
   | (T extends Array<infer U> ? Array<FactoryInput<U>>
     : T extends ReadonlyArray<infer U> ? ReadonlyArray<FactoryInput<U>>
-    : T extends object ? { [K in keyof T]: FactoryInput<T[K]> }
+    : T extends object
+      ? { [K in keyof T]: FactoryInput<T[K]> | OptionalInputUndefined<T, K> }
     : never);
 export declare const CELL_LIKE: unique symbol;
+
+/**
+ * `undefined` where `K` is an optional key of `T`, and nothing elsewhere.
+ *
+ * A pattern body sees an optional field of its own input as `T | undefined`.
+ * Handing that field to another factory's optional input passes a reference to
+ * it, whether the field is there or not, so the input has to admit the
+ * `undefined` in the field's type. A literal `undefined`, or a computation that
+ * returns one, passes too, because its type cannot be told apart from the
+ * field's. Either is a value, not the property left out.
+ */
+// An index signature's key is not an optional property, though `Pick` over it
+// is satisfied by `{}` too; its values keep their declared type.
+type OptionalInputUndefined<T, K extends keyof T> = string extends K ? never
+  : number extends K ? never
+  : symbol extends K ? never
+  // deno-lint-ignore ban-types
+  : {} extends Pick<T, K> ? undefined
+  : never;
 
 /**
  * Helper type to transform Cell<T> to FactoryInput<T> in pattern/lift/handler inputs.
@@ -2509,7 +2529,8 @@ export type FactoryInput<T> =
   | ([NonNullable<T>] extends [VNode | UIRenderable] ? JSXElement : never)
   | (T extends Array<infer U> ? Array<FactoryInput<U>>
     : T extends ReadonlyArray<infer U> ? ReadonlyArray<FactoryInput<U>>
-    : T extends object ? { [K in keyof T]: FactoryInput<T[K]> }
+    : T extends object
+      ? { [K in keyof T]: FactoryInput<T[K]> | OptionalInputUndefined<T, K> }
     : T);
 
 /**
@@ -3569,7 +3590,9 @@ export type PatternToolFunction = <
   // `sandboxId`); otherwise validate that E (after stripping cells) is a subset
   // of T.
   extraParams?: [keyof E & FrameworkProvidedKeys<T>] extends [never]
-    ? (StripCell<E> extends Partial<T> ? FactoryInput<E> : never)
+    ? (StripCell<E> extends
+      { [K in keyof T]?: T[K] | OptionalInputUndefined<T, K> } ? FactoryInput<E>
+      : never)
     : never,
 ) => PatternToolResult<E>;
 

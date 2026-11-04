@@ -107,6 +107,35 @@ const TESTS: TestDef[] = [
     ].join("\n"),
   },
   {
+    // An optional property may be absent; it may not be written holding
+    // `undefined` (`exactOptionalPropertyTypes`).
+    name: "Throws: undefined written into an optional property when authoring",
+    source: "const o: { a?: number } = { a: undefined }; export default o;",
+    expectedError: "exactOptionalPropertyTypes",
+  },
+  {
+    // Stored source admitted before the flag was the rule loads: it is
+    // checked again without the flag when it fails under it.
+    name:
+      "Undefined written into an optional property compiles under storedSource",
+    source: "const o: { a?: number } = { a: undefined }; export default o;",
+    storedSource: true,
+  },
+  {
+    // Source authored under the flag still loads as stored source: an index
+    // signature beside an optional property type-checks only with the flag
+    // (TS2411 without it), so the fallback must not replace the first check.
+    name:
+      "Index signature beside an optional property compiles under storedSource",
+    source: [
+      "type M = { n: number };",
+      "type C = { doc?: M | null; [k: string]: M | null };",
+      "const c: C = {};",
+      "export default c;",
+    ].join("\n"),
+    storedSource: true,
+  },
+  {
     // storedSource must not weaken real type errors — only hygiene codes.
     name: "Throws: real type error still fatal under storedSource",
     source:
