@@ -243,7 +243,9 @@ Retry button, and the shell does not ask for it again. The worker also sends the
 user's Home catalog its `markDeleted` for the space, where Home exists and holds
 the space as saved or archived, so the person's collection records the deletion
 ([`docs/features/shared-space-catalog.md`](../../docs/features/shared-space-catalog.md#deleted-spaces)),
-and `idle` resolves only once the mark is sent.
+and Home's `retireProfile` where the space is one of the person's profiles
+([`docs/common/conventions/HOME_SPACE.md`](../../docs/common/conventions/HOME_SPACE.md)),
+and `idle` resolves only once both are sent.
 [`docs/features/space-access.md`](../../docs/features/space-access.md) says how
 the answer is kept current.
 

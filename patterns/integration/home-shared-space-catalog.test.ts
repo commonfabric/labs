@@ -25,6 +25,7 @@ import {
   getDerivedInternalCellLink,
   getPatternIdentityRef,
   type IExtendedStorageTransaction,
+  type MemorySpace,
   Runtime,
   sendEvent,
 } from "@commonfabric/runner";
@@ -87,6 +88,9 @@ interface HomeSurface {
   addSpace: { did: string; name: string };
   spaces: { did: string; name: string }[];
   createProfile: { name?: string };
+  profiles: unknown[];
+  retiredProfiles: unknown[];
+  restoreProfile: { profile?: unknown };
   chatManager: {
     createGroup: { requestId: string; title: string; members: string[] };
     openDirect: { requestId: string; counterpart: string };
@@ -2259,6 +2263,87 @@ describe("Home catalog deletion marks", () => {
             deleted: [{ space: gone }],
             byKind: { loom: { deleted: [{ space: gone }] } },
           });
+        },
+        undefined,
+        (server) => {
+          const refusing = refusingServer(server);
+          refuse = refusing.refuse;
+          return refusing.server as Server;
+        },
+      );
+    });
+  }
+});
+
+describe("Home profile retirement on deletion", () => {
+  for (const serving of [false, true]) {
+    it(`retires a profile whose space is deleted, the one \`#profile\` returns, and keeps it retired with serving ${serving}`, async () => {
+      let refuse: ReturnType<typeof refusingServer>["refuse"] | undefined;
+      await withHome(
+        serving,
+        async (runtime, home, _peer, server) => {
+          const links = { type: "array", items: { asCell: ["cell"] } } as const;
+          const spacesIn = async (key: "profiles" | "retiredProfiles") =>
+            ((await home.key(key).asSchema(links).pull()) ?? []).map((link) =>
+              link.getAsNormalizedFullLink().space
+            );
+          for (const name of ["Ada", "Bea"]) {
+            await sendReviewed(
+              runtime,
+              home.key("createProfile"),
+              { name },
+              "ProfileCreateSurface",
+              "CreateProfile",
+            );
+          }
+          await waitForCellValue<unknown[]>(
+            runtime,
+            home.key("profiles"),
+            (value) => (value?.length ?? 0) === 2,
+            { stuckLabel: "both profiles" },
+          );
+          // The first profile is the one `#profile` returns, which an
+          // ordinary retirement refuses; its runtime holds its document from
+          // creating it.
+          const [gone, kept] = await spacesIn("profiles");
+          writeDeletionTombstone(
+            await server.engineForSpace(gone),
+            gone,
+            owner.did(),
+          );
+          refuse!(gone, "deleted");
+          const controller = new PiecesController(
+            createSession({ identity: owner, spaceDid: owner.did() }),
+            runtime,
+          );
+          expect(await controller.markDeletedSpace(gone as MemorySpace)).toBe(
+            "not-listed",
+          );
+          await runtime.idle();
+          await waitForCellValue<unknown[]>(
+            runtime,
+            home.key("retiredProfiles"),
+            (value) => (value?.length ?? 0) === 1,
+            { stuckLabel: "the deleted profile retired" },
+          );
+          expect(await spacesIn("retiredProfiles")).toEqual([gone]);
+          // Neither a second deletion nor a restore brings it back, and the
+          // live profile is left as it is.
+          expect(await controller.markDeletedSpace(gone as MemorySpace)).toBe(
+            "not-listed",
+          );
+          const [listed] = await home.key("profiles").asSchema(links).pull();
+          await rejectInvocation(
+            runtime,
+            home.key("restoreProfile"),
+            { profile: listed },
+            server,
+            serving,
+            "Cannot restore a profile whose space is deleted.",
+          );
+          await runtime.idle();
+          expect(await spacesIn("retiredProfiles")).toEqual([gone]);
+          expect(await spacesIn("profiles")).toEqual([gone, kept]);
         },
         undefined,
         (server) => {
