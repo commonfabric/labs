@@ -32,7 +32,6 @@ import {
   coveringSelector,
   createSchemaMemo,
   createTraversalContext,
-  forgetSchemaMemoDocuments,
   getAtPath,
   type IAttestation,
   type IMemorySpaceValueAttestation,
@@ -41,7 +40,6 @@ import {
   MapSetStringToPathSelectors,
   type ObjectStorageManager,
   type SchemaMemo,
-  schemaMemoDocumentPrefix,
   SchemaObjectTraverser,
   type SchemaPathSelector,
   schemaTrackerCoversSelector,
@@ -58,10 +56,8 @@ export type {
 export {
   coveringSelector,
   createSchemaMemo,
-  forgetSchemaMemoDocuments,
   MapSetStringToPathSelectors,
   type SchemaMemo,
-  schemaMemoDocumentPrefix,
   schemaTrackerCoversSelector,
   schemaTrackerKey,
 };

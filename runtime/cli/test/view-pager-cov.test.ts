@@ -167,6 +167,8 @@ function makeFake(opts: FakeOpts = {}) {
     pushIo: () => {
       throw new Error("these tests push nothing");
     },
+    git: () => null,
+    relay: () => undefined,
     blame: opts.blame ??
       (() => Promise.reject(new Error("these tests blame nothing"))),
   };
@@ -612,6 +614,11 @@ Deno.test("realPagerDeps: the wrappers reach the real primitives", () => {
   // Setting up a push reads the environment and runs nothing that changes a
   // repository.
   d.pushIo(() => {}, new AbortController().signal);
+  // Git runs in the repository the viewer runs in, set up by the first call,
+  // and an empty relay address names no relay.
+  assert(d.git(["--version"])?.startsWith("git version "));
+  assertEquals(d.git(["--version"]), d.git(["--version"]));
+  assertEquals(d.relay(""), undefined);
   // Opening the controlling terminal either succeeds (close it) or throws when
   // the test has none; both reach the wrapper.
   try {

@@ -7,6 +7,7 @@ import {
   linksOf,
   NAME,
   pattern,
+  spaceDeleted,
   spaceOf,
   UI,
   type VNode,
@@ -37,6 +38,9 @@ import type {
 // retires a profile through Remove, which asks to confirm first. Remove is
 // offered on every row but the one `setProfileRetired` refuses: the profile
 // `#profile` returns. Retired profiles are listed apart, each with a Restore.
+// A profile whose space is deleted is listed apart too, by its space and
+// marked deleted, with no name, since a profile's name is kept in its own
+// space, and no control: the runtime that holds Home retires it.
 //
 // The picker is purely the SWITCHING affordance (CT-1829): the wish `.result`
 // does NOT flow through this pattern. The wish builtin resolves `.result`
@@ -142,6 +146,30 @@ const isListedOwn = (
     ownProfileSpaces(profiles, spaceOf(profiles)).includes(space);
 };
 
+// Whether `entry` is one the picker offers to restore: one of the user's own
+// listed profiles (`isListedOwn()`) whose space is not deleted. A runtime that
+// read a deleted profile's document before the deletion still holds it, so
+// `isListedOwn()` alone can count it, and a deleted profile is not restored.
+const isRestorable = (
+  profiles: Cell<BackwardsCompatibleProfile[]>,
+  entry: ProfileLink,
+): boolean => {
+  const space = spaceOf(entry);
+  return space !== undefined && isListedOwn(profiles, entry) &&
+    spaceDeleted(space) !== true;
+};
+
+// Whether the profile row `i` of `profiles` holds is in a deleted space, by
+// the memory server's word (`spaceDeleted()`).
+const isDeletedRow = (
+  profiles: Cell<BackwardsCompatibleProfile[]>,
+  i: number,
+): boolean => {
+  const space = spaceOf(rowLink(profiles, i));
+  return space !== undefined && space !== spaceOf(profiles) &&
+    spaceDeleted(space) === true;
+};
+
 // Asks to confirm the retirement of a row's profile, or, with no profile
 // bound, withdraws the question: records which profile, by its space, the
 // confirmation is showing for. Remove asks first so that a stray click retires
@@ -185,7 +213,7 @@ export default pattern<
 
   // Named, so the rows' documents are keyed by `profileRows` rather than by
   // the map's position among the picker's nodes. A retired profile's row is
-  // empty.
+  // empty, and so is a deleted one's, which `deletedRows` lists.
   const profileRows = profiles.map((p, i) => {
     // Whether this row's profile is the default, matched by the profile's
     // own SPACE (CT-1843): the default's link and this row's list entry name
@@ -219,7 +247,7 @@ export default pattern<
           rowLink(profiles, i),
           linksOf(retiredProfiles) ?? [],
           spaceOf(profiles),
-        )
+        ) || isDeletedRow(profiles, i)
       ),
       null,
       <cf-vstack gap="1">
@@ -315,12 +343,29 @@ export default pattern<
     );
   });
 
-  // The retired profiles that are the user's own listed ones
-  // (`isListedOwn()`), each with a Restore that makes it one of the user's
-  // profiles again. Another entry's row is empty.
+  // The profiles whose space is deleted, retired or not, each by its space and
+  // marked deleted. Another row is empty.
+  const deletedRows = profiles.map((_p, i) =>
+    ifElse(
+      computed(() => isDeletedRow(profiles, i)),
+      <cf-hstack gap="2" align="center">
+        <span
+          style={{ flex: "1", fontFamily: "monospace", fontSize: "12px" }}
+        >
+          {computed(() => spaceOf(rowLink(profiles, i)) ?? "")}
+        </span>
+        <span style={{ color: "#888", fontSize: "12px" }}>deleted</span>
+      </cf-hstack>,
+      null,
+    )
+  );
+
+  // The retired profiles the picker can restore (`isRestorable()`), each with
+  // a Restore that makes it one of the user's profiles again. Another entry's
+  // row is empty; a deleted one is among `deletedRows`.
   const retiredRows = retiredProfiles.map((p, i) =>
     ifElse(
-      computed(() => isListedOwn(profiles, retiredProfiles.key(i))),
+      computed(() => isRestorable(profiles, retiredProfiles.key(i))),
       <cf-hstack gap="2" align="center">
         <div style={{ flex: "1" }}>
           <cf-cell-link $cell={p} />
@@ -359,8 +404,22 @@ export default pattern<
         {profileRows}
         {ifElse(
           computed(() =>
+            (linksOf(profiles) ?? []).some((_entry, i) =>
+              isDeletedRow(profiles, i)
+            )
+          ),
+          <cf-vstack gap="1">
+            <h4 style={{ margin: 0, fontSize: "12px", color: "#888" }}>
+              Deleted profiles
+            </h4>
+            {deletedRows}
+          </cf-vstack>,
+          null,
+        )}
+        {ifElse(
+          computed(() =>
             (linksOf(retiredProfiles) ?? []).some((entry) =>
-              isListedOwn(profiles, entry)
+              isRestorable(profiles, entry)
             )
           ),
           <cf-vstack gap="1">

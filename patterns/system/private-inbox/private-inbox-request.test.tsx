@@ -217,15 +217,15 @@ export default pattern(() => {
   const action_point_the_profiles = action(() => {
     pointHolding.send();
     pointedElsewhere.setInbox.send({
-      inbox: elsewhere.get().piece?.resolveAsCell(),
+      inbox: elsewhere.get().piece!.resolveAsCell(),
     });
     pointedNearby.setInbox.send({
-      inbox: nearby.get().piece?.resolveAsCell(),
+      inbox: nearby.get().piece!.resolveAsCell(),
     });
     advertising.setInbox.send({
-      inbox: elsewhere.get().piece?.resolveAsCell(),
+      inbox: elsewhere.get().piece!.resolveAsCell(),
     });
-    unvetted.setInbox.send({ inbox: elsewhere.get().piece?.resolveAsCell() });
+    unvetted.setInbox.send({ inbox: elsewhere.get().piece!.resolveAsCell() });
   });
   const assert_the_answer_follows_the_pointer_to_the_held_inbox = assert(() =>
     answerOf(holdingAnswers, pointedByHome) === "ensured" &&

@@ -257,9 +257,11 @@ export const FabriChatMessageRow = pattern<
     if (cannotWrite || myProfile?.get() === undefined) return NO_MESSAGE_RIGHTS;
     const record = message.get();
     return messageRightsOf(
-      record === undefined
-        ? undefined
-        : { authorProfile: record.authorProfile, body: record.body },
+      record === undefined ? undefined : {
+        ...(record.authorProfile !== undefined &&
+          { authorProfile: record.authorProfile }),
+        body: record.body,
+      },
       myProfile.resolveAsCell(),
       kind,
       isOwner === true,

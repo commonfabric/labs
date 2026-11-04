@@ -8,6 +8,7 @@ import {
   pattern,
   profileOwnerOf,
   resultOwnerOf,
+  spaceDeleted,
   spaceOf,
   Stream,
   UI,
@@ -307,19 +308,19 @@ export type ProfileLists = {
   profiles: Cell<BackwardsCompatibleProfile[]>;
 
   /** Home's default profile slot, `DefaultProfileSlot`, if bound. */
-  defaultProfile?: Cell<DefaultProfileSlot>;
+  defaultProfile?: Cell<DefaultProfileSlot> | undefined;
 
   /**
    * The space of a default a home chose before `defaultProfile`, Home's
    * `legacyDefaultProfileSpace`, if bound.
    */
-  legacyDefaultProfileSpace?: Cell<string | undefined>;
+  legacyDefaultProfileSpace?: Cell<string | undefined> | undefined;
 
   /** Home's `mru` list. */
   mru: Cell<unknown[]>;
 
   /** Home's `retiredProfiles` list, if bound. */
-  retiredProfiles?: Cell<unknown[]>;
+  retiredProfiles?: Cell<unknown[]> | undefined;
 };
 
 /**
@@ -389,10 +390,22 @@ export const liveProfileSpaces = (
 // one where any is not the field of that name of the result that owns the
 // retired list (`resultOwnerOf()`), as each of Home's is.
 //
+// A profile whose space is deleted is retired too, though it is never one of
+// the user's own: its document cannot be read. It is admitted in place of the
+// ownership test when `profiles` lists it and `spaceDeleted(space)`, asked
+// here, returns `true`, so an event naming a profile that is not deleted
+// meets the usual refusals. The refusals that keep `#profile` from moving
+// without the person choosing do not apply, since a deleted profile is none
+// of the live ones they protect. Where the memory server has not yet answered
+// for the space, the handler runs again once it has. The runtime that holds
+// the person's Home sends the retirement when it hears of the deletion, as it
+// sends the catalog's `markDeleted` (`retireDeletedProfileOf()`).
+//
 // Restoring removes every link in the list into the space of the profile the
 // row binds or the event names, whatever it names, so that a link the list
 // came to hold some other way can be cleared. A profile that is not retired
-// is left as it is.
+// is left as it is. A deleted profile is not restored: its space admits no
+// one.
 export const setProfileRetired = handler<
   ProfileRetirementEvent,
   {
@@ -418,6 +431,9 @@ export const setProfileRetired = handler<
   const { retiredProfiles } = state;
   const retired = linksOf(retiredProfiles) ?? [];
   if (!state.retired) {
+    if (spaceDeleted(space) === true) {
+      throw new Error("Cannot restore a profile whose space is deleted.");
+    }
     const kept = retired.filter((entry) => spaceOf(entry) !== space);
     if (kept.length !== retired.length) retiredProfiles.set(kept);
     return;
@@ -438,6 +454,18 @@ export const setProfileRetired = handler<
         "not one Home's own.",
     );
   }
+  if (retired.some((entry) => spaceOf(entry) === space)) return;
+  // A deleted profile is decided before its document is read, since a
+  // runtime that read it earlier still holds it and would count it live.
+  const listed = (linksOf(profiles) ?? []).find((entry) =>
+    spaceOf(entry) === space
+  );
+  if (listed !== undefined && spaceDeleted(space) === true) {
+    // The list's own link: a deleted profile's document cannot be read, so
+    // no link is followed to it.
+    retiredProfiles.set([...retired, listed]);
+    return;
+  }
   const live = liveProfileSpaces(
     {
       profiles,
@@ -448,7 +476,6 @@ export const setProfileRetired = handler<
     },
     spaceOf(retiredProfiles),
   );
-  if (retired.some((entry) => spaceOf(entry) === space)) return;
   if (!live.includes(space)) {
     throw new Error(
       "Cannot retire a profile that is not one of the profiles this home " +

@@ -780,6 +780,18 @@ type DocumentRecord = {
   readInPass?: number;
 };
 
+/** What one release pass of a replica did (`SpaceReplica.releaseUnread()`). */
+type ReleasePassResult = {
+  /** The roots whose watches it removed. */
+  released: WatchAddress[];
+
+  /**
+   * Whether it kept the watches of a root that nothing holds only because
+   * the root was loaded or read since the previous pass began.
+   */
+  deferred: boolean;
+};
+
 type PendingPatchLogContext = {
   space: MemorySpace;
   id: URI;
@@ -1787,7 +1799,7 @@ export class StorageManager implements IStorageManager {
   #droppedDocuments = 0;
 
   /** The release pass last begun; each begins once the one before ends. */
-  #releasePass: Promise<void> = Promise.resolve();
+  #releasePass: Promise<boolean> = Promise.resolve(false);
 
   readonly #documentsDroppedObservers = new Set<
     (space: MemorySpace, addresses: readonly LocalDocAddress[]) => void
@@ -3428,18 +3440,20 @@ export class StorageManager implements IStorageManager {
   }
 
   /** @inheritDoc */
-  releaseUnreadDocuments(): Promise<void> {
-    this.#releasePass = this.#releasePass.catch(() => {}).then(async () => {
+  releaseUnreadDocuments(): Promise<boolean> {
+    const pass = this.#releasePass.catch(() => false).then(async () => {
       for (const [key, hold] of this.#documentHolds) {
         if (hold.deref() === undefined) this.#documentHolds.delete(key);
       }
-      await Promise.all(
+      const results = await Promise.all(
         [...this.#providers.values()].map((provider) =>
           provider.replica.releaseUnread()
         ),
       );
+      return results.some((result) => result.deferred);
     });
-    return this.#releasePass;
+    this.#releasePass = pass;
+    return pass;
   }
 
   /** @inheritDoc */
@@ -8306,12 +8320,14 @@ export class SpaceReplica
    * any more. A root read or pulled since the previous pass is
    * kept for the next one, so a document loaded for a read not yet made, or
    * read into a value that follows its links later, stays loaded through the
-   * pass that follows. A session whose server cannot remove a watch by id
-   * (`watchRemoveV1`) keeps every watch.
+   * pass that follows; the result says whether any root was kept for that
+   * reason alone (`deferred`), which a later pass may release. A session
+   * whose server cannot remove a watch by id (`watchRemoveV1`) keeps every
+   * watch, and defers nothing.
    */
-  async releaseUnread(): Promise<WatchAddress[]> {
+  async releaseUnread(): Promise<ReleasePassResult> {
     const pass = this.#releasePasses++;
-    if (this.#closed) return [];
+    if (this.#closed) return { released: [], deferred: false };
     for (const remove of this.#owedWatches.values()) {
       if (this.#holds(removedAddress(remove))) this.#watchAgain(remove);
       else this.#dropReleased(remove);
@@ -8321,16 +8337,30 @@ export class SpaceReplica
       this.#retractedHeld.delete(key);
       this.#dropReleased(remove);
     }
-    if (this.#sessionClient === undefined) return [];
+    if (this.#sessionClient === undefined) {
+      return { released: [], deferred: false };
+    }
+    const recent = (root: RootWatches) =>
+      root.pulledInPass >= pass ||
+      (this.#docs.get(root.key)?.readInPass ?? -1) >= pass;
     const releasable = (root: RootWatches) =>
-      root.pulledInPass < pass &&
-      (this.#docs.get(root.key)?.readInPass ?? -1) < pass &&
-      !this.#holds(root.address, root.key);
-    if (![...this.#rootWatches.values()].some(releasable)) return [];
+      !recent(root) && !this.#holds(root.address, root.key);
+    // A root kept only for having been loaded or read since the previous
+    // pass began is one the next pass may release.
+    let deferred = false;
+    let anyReleasable = false;
+    for (const root of this.#rootWatches.values()) {
+      if (this.#holds(root.address, root.key)) continue;
+      if (recent(root)) deferred = true;
+      else anyReleasable = true;
+    }
+    if (!anyReleasable) return { released: [], deferred };
     let session: MemoryV2Client.SpaceSession;
     try {
       const { client } = await this.#activeSessionHandle();
-      if (client.serverFlags?.watchRemoveV1 !== true) return [];
+      if (client.serverFlags?.watchRemoveV1 !== true) {
+        return { released: [], deferred: false };
+      }
       const unwatched: LocalDocAddress[] = [];
       for (const [key, delivered] of this.#delivered) {
         if ((this.#rootWatches.get(key)?.watches.size ?? 0) > 0) continue;
@@ -8357,13 +8387,18 @@ export class SpaceReplica
           error,
         ]);
       }
-      return [];
+      return { released: [], deferred };
     }
     // From here to the removal request nothing awaits, so a pull that finds
     // a released root untracked asks for its watch after the removal.
     const released: RootWatches[] = [];
     for (const root of this.#rootWatches.values()) {
-      if (!releasable(root)) continue;
+      if (!releasable(root)) {
+        // A root read while the pass waited above is kept for the next pass,
+        // as one read before it began is.
+        if (!this.#holds(root.address, root.key)) deferred = true;
+        continue;
+      }
       released.push(root);
       this.#rootWatches.delete(root.key);
       const baseAddress = {
@@ -8380,7 +8415,7 @@ export class SpaceReplica
       }
     }
     const watchIds = released.flatMap((root) => [...root.watches.keys()]);
-    if (watchIds.length === 0) return [];
+    if (watchIds.length === 0) return { released: [], deferred };
     const roots = released.map((root) => root.address);
     this.#onWatchesReleased?.(roots);
     try {
@@ -8389,7 +8424,7 @@ export class SpaceReplica
       );
       if (this.#closed) {
         view.close();
-        return roots;
+        return { released: roots, deferred };
       }
       // A document something began to hold while the removal was on its way
       // keeps its value and is watched again on its own; the answer to that
@@ -8415,9 +8450,9 @@ export class SpaceReplica
           this.#rootWatches.set(root.key, root);
         }
       }
-      return [];
+      return { released: [], deferred };
     }
-    return roots;
+    return { released: roots, deferred };
   }
 
   /**
@@ -11149,7 +11184,10 @@ export class SpaceReplica
   /**
    * Whether the prospective frame (`overlay`) or the stored replica holds
    * content under `cid:<hash>` that IS the schema document that id names —
-   * the identity check, not presence.
+   * the identity check, not presence. The stored side includes this replica's
+   * pending writes, unlike `isContentAddressedDocPersisted()`: the server counts
+   * a session's own accepted write as held, so a frame can leave it out ahead of
+   * the marker that promotes it (memory-v2/04-protocol.md section 4.3.6).
    */
   #isVerifiedSchemaDocDelivered(
     hash: string,

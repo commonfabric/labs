@@ -107,5 +107,6 @@ export function reconcilePositionCommit<PositionType extends XYPosition>(
   if (!settlePositionDraft(draftsRef, nodeId, draft)) {
     return { settled: false };
   }
-  return { settled: true, position: committed ?? authoritative };
+  const position = committed ?? authoritative;
+  return { settled: true, ...(position !== undefined && { position }) };
 }

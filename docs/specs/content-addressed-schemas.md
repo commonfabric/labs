@@ -634,7 +634,10 @@ documents available alongside their declarations:
   frame the server sends, in order, retaining delivered `cid:`
   documents for the session's life; a frame is validated against the
   prospective frame PLUS the stored replica precisely because the
-  replica is expected to hold what earlier frames delivered. An
+  replica is expected to hold what earlier frames delivered. The server's
+  side of that is order: a frame goes on the wire in the step that records
+  its documents as delivered, so no frame eliding a `cid:` document can
+  overtake the frame carrying it (memory-v2/04-protocol.md §4.3.6). An
   arrival whose ref cannot resolve therefore indicates a CLIENT-side
   absorb/ordering defect (a dropped, reordered, or un-retained earlier
   delivery) — the defect class OW61's investigation owns — never a

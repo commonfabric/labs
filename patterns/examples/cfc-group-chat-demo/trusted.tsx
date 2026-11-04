@@ -388,7 +388,8 @@ export const adminParticipantRowsValue = (
     .map((participant) => ({
       name: participant.name,
       accentColor: participant.accentColor,
-      profile: participant.profile,
+      ...(participant.profile !== undefined &&
+        { profile: participant.profile }),
       isAdmin: everyoneIsAdmin ||
         subjectHasAdminRole(adminRoles, participant.profile),
       everyoneIsAdmin,

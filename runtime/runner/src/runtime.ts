@@ -3331,6 +3331,13 @@ export class Runtime {
    * something that read documents through this runtime has gone, such as a
    * client whose subscriptions it cancelled. Calls made while a pass waits
    * for the scheduler share it.
+   *
+   * A pass keeps a document loaded or read since the previous pass began, so
+   * that a read still under way finishes with it. Where it kept one for that
+   * reason alone, a second pass runs once the scheduler is next idle, and the
+   * call resolves when that has run too: the documents a stopped piece read
+   * are released by the pass after the one its stop asked for, which nothing
+   * else may ever ask for. The second pass asks for no third.
    */
   releaseUnreadDocuments(): Promise<void> {
     this.#documentRelease ??= (async () => {
@@ -3340,6 +3347,9 @@ export class Runtime {
         // A request made from here on asks for a pass of its own.
         this.#documentRelease = undefined;
       }
+      const deferred = await this.storageManager.releaseUnreadDocuments?.();
+      if (deferred !== true) return;
+      await this.scheduler.idle();
       await this.storageManager.releaseUnreadDocuments?.();
     })().catch((error) => {
       documentReleaseLogger.warn("release-failed", () => [

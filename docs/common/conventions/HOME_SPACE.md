@@ -139,9 +139,13 @@ most-recently-used (MRU) ordering:
   profile, `#profile` reports an error rather than opening profile creation
   ([`wish.md`](wish.md)). Retiring it records the deletion: a retired profile
   is skipped before it is read, so once it is retired and no live profile is
-  left, the roster is empty and `#profile` opens profile creation. The picker
-  sends `retireProfile` for a profile `profiles` lists whose
-  `spaceDeleted(space)` returns `true`. `setProfileRetired` admits such a
+  left, the roster is empty and `#profile` opens profile creation. The
+  runtime that holds the person's Home sends `retireProfile` for a profile
+  `profiles` lists when it is refused that profile's space with the `deleted`
+  marker, as it sends the catalog's `markDeleted`
+  ([`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces)),
+  through the same `PiecesController.markDeletedSpace`
+  (`retireDeletedProfileOf()`). `setProfileRetired` admits such a
   profile in place of the ownership test it can no longer pass: its link is in
   `profiles` and `spaceDeleted(space)` returns `true` in the handler, asked by
   the handler itself, so an event naming a profile that is not deleted is held
@@ -151,10 +155,9 @@ most-recently-used (MRU) ordering:
   space, the handler runs again once it has, under the conditions
   [`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces)
   gives for `markDeleted`. The picker lists a deleted profile apart, by its
-  link and marked deleted, with no Restore. It shows no name, since a
+  space and marked deleted, with no control. It shows no name, since a
   profile's name is kept in its own space, which is gone. `restoreProfile`
-  refuses a deleted profile. Retiring a deleted profile, and the picker's
-  handling of one, are not implemented yet.
+  refuses a deleted profile.
 
 Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with
