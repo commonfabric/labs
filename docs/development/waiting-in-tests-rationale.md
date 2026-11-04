@@ -710,7 +710,7 @@ way before adding a wait here.
 
 The "wait on an event, not a poll" principle of
 [waiting-in-tests.md](waiting-in-tests.md) applies to production code too. The
-four studies below are where the shape is worth knowing: two deliberate
+five studies below are where the shape is worth knowing: three deliberate
 exceptions where no event exists to await, and two readiness handshakes that
 stay event-driven across process boundaries that look like they rule an event
 out.
@@ -773,6 +773,54 @@ the release. Nor does the wait count
 wall-clock time. It counts its own firings, so a main thread that itself stalled,
 or a process that was suspended, fires it once on waking, and a clock jump moves
 nothing.
+
+### A deployed client's wait on its server
+
+A client that is not built alongside its server takes the deployment's posture
+from `/api/meta` before it constructs a `Runtime`, and then asks each host's
+`/_health`. A server that accepts a connection and then says nothing sends no
+event, so each wait needs a bound for the client to ever report it. Everything
+else about the wait is shaped so that the bound decides as little as possible.
+
+The read stays outstanding, because a server that is only slow still gives the
+right answer, and a client that gave up early would run on the wrong
+server-execution arm. So the first thing to happen at five seconds is a log
+line, and the read goes on. The bound is `DEPLOYMENT_RESPONSE_BOUND_MS`, 60
+seconds, and an early fire costs a real result: on the read, a client on its own
+flags, with an error saying so; on the health check, a startup that fails. By
+the test in [Wall-clock time is not a measure of
+progress](waiting-in-tests.md#wall-clock-time-is-not-a-measure-of-progress),
+that makes it the kind of bound the repository accepts for want of an event,
+sized to sit well above what is measured.
+
+The measurement probed both routes in sequence, each request timed to its end,
+against a local toolshed from its process start, with its compile cache cleared,
+while four `cf piece new` runs deployed the largest patterns in the repository
+at once, and at background priority eight as well. The machine was a shared
+18-core Mac, with a load average between 8 and 14 from other work. "Background"
+runs the toolshed under `taskpolicy -b`. The slowest response, in milliseconds,
+for either route:
+
+| Toolshed                                    | Normal priority | Background |
+| ------------------------------------------- | --------------- | ---------- |
+| Server execution off                        | 296             | 1,598      |
+| Server execution on, serving worker         | 311             | 2,485      |
+| Server execution on, serving on main thread | 833             | 3,330      |
+
+The two routes rise and fall together, since both wait on the toolshed's main
+thread, and an idle toolshed responds within 100 milliseconds. Sixty seconds is
+18 times the slowest of these. The five-second log line is above all of them,
+and costs nothing if a slower server reaches it. A browser test against a
+toolshed at background priority has been seen past five seconds, which this
+measurement did not reproduce, and it did not cover a store holding a lot of
+data.
+
+The two waits run one after the other, so a server that says nothing fails a
+client 120 seconds after it asked, with `Could not connect to "..."`. An aborted
+signal from the caller still ends either wait at once. The read's request and
+timers hold a Deno process up until the read settles, so a process that returns
+from `main` with the read still going lives for up to 60 seconds; `cf` and the
+Topics tool end with `Deno.exit`.
 
 ### The FUSE mount handshake
 

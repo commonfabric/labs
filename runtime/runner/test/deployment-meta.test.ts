@@ -7,6 +7,7 @@ import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server
 
 import {
   type DeployedClientParams,
+  DEPLOYMENT_RESPONSE_BOUND_MS,
   deploymentForShell,
   memoryHostForForeignOrigin,
   memoryHostNote,
@@ -719,13 +720,13 @@ describe("deployment-meta", () => {
         expect((await settings).memoryHost).toBe(apiUrl);
       });
 
-      it("gives up on an attempt that takes longer than its timeout, and asks again", async () => {
+      it("ends the read at its bound, and does not ask again", async () => {
         using warn = stub(console, "warn");
         let attempts = 0;
         const settings = await settingsForDeployedClient({
           apiUrl,
           env: () => undefined,
-          attemptTimeoutMs: 5,
+          boundMs: 5,
           retryDelaysMs: [0, 0],
           fetch: (input, init) => {
             attempts++;
@@ -733,17 +734,17 @@ describe("deployment-meta", () => {
           },
         });
         expect(settings.memoryHost).toBe(apiUrl);
-        expect(attempts).toBe(3);
+        expect(attempts).toBe(1);
         expect(warn.calls.length).toBe(1);
       });
 
-      it("asks again when an attempt times out while the body is read", async () => {
+      it("ends the read at its bound while the body is read, and does not ask again", async () => {
         using _warn = stub(console, "warn");
         let attempts = 0;
         const settings = await settingsForDeployedClient({
           apiUrl,
           env: () => undefined,
-          attemptTimeoutMs: 5,
+          boundMs: 5,
           retryDelaysMs: [0, 0],
           fetch: (_input, init) => {
             attempts++;
@@ -764,19 +765,19 @@ describe("deployment-meta", () => {
           },
         });
         expect(settings.memoryHost).toBe(apiUrl);
-        expect(attempts).toBe(3);
+        expect(attempts).toBe(1);
       });
 
-      it("gives an attempt its timeout when the caller passes a signal", async () => {
-        // The caller's signal is joined with the attempt's own timeout rather
-        // than standing in for it: a caller that never aborts still gets a
-        // read that ends.
+      it("gives the read its bound when the caller passes a signal", async () => {
+        // The caller's signal is joined with the read's own bound rather than
+        // standing in for it: a caller that never aborts still gets a read
+        // that ends.
         using warn = stub(console, "warn");
         const settings = await settingsForDeployedClient({
           apiUrl,
           env: () => undefined,
           signal: new AbortController().signal,
-          attemptTimeoutMs: 5,
+          boundMs: 5,
           retryDelaysMs: [],
           fetch: stalled,
         });
@@ -784,7 +785,8 @@ describe("deployment-meta", () => {
         expect(warn.calls.length).toBe(1);
       });
 
-      it("clears an attempt's timeout once the attempt completes", async () => {
+      it("clears the read's timers once it completes", async () => {
+        const slow = counter("read-slow", "error");
         let passed: AbortSignal | undefined;
         await settingsForDeployedClient({
           apiUrl,
@@ -794,10 +796,11 @@ describe("deployment-meta", () => {
             return Promise.resolve(metaResponse({ experimental: {} }));
           },
         });
-        // Past the five seconds the attempt was given: a timeout left armed
-        // would abort the signal the request carried.
-        await clock.tick(10_000);
+        // Past the read's bound: a timer left armed would log, or abort the
+        // signal the request carried.
+        await clock.tick(DEPLOYMENT_RESPONSE_BOUND_MS * 2);
         expect(passed?.aborted).toBe(false);
+        expect(slow()).toBe(0);
       });
 
       it("cancels the body of a response it does not read", async () => {
@@ -922,107 +925,117 @@ describe("deployment-meta", () => {
       });
     });
 
-    describe("a server that does not respond in time", () => {
+    describe("a server that is slow or says nothing", () => {
       const apiUrl = new URL("https://deployment.example/");
       const metaUrl = "https://deployment.example/api/meta";
 
-      /** Reads settings with no real wait: the attempts time out at once. */
-      const settingsFrom = (
-        fetch: typeof globalThis.fetch,
+      /** A read of a server whose one response the test releases. */
+      const heldRead = (
         env: (name: string) => string | undefined = () => undefined,
-      ) =>
-        settingsForDeployedClient({
+      ) => {
+        const response = Promise.withResolvers<Response>();
+        const requests = { count: 0 };
+        const settings = settingsForDeployedClient({
           apiUrl,
           env,
-          attemptTimeoutMs: 5,
-          retryDelaysMs: [0, 0],
-          fetch,
+          fetch: () => {
+            requests.count++;
+            return response.promise;
+          },
         });
-
-      /** A `fetch` stalling for the first `stalls` requests, then answering. */
-      const stallingThenAnswering = (
-        stalls: number,
-        answer: () => Response,
-      ) => {
-        const requests = { count: 0 };
-        const fetch: typeof globalThis.fetch = (input, init) =>
-          ++requests.count <= stalls
-            ? stalled(input, init)
-            : Promise.resolve(answer());
-        return { fetch, requests };
+        return { response, requests, settings };
       };
 
-      it("adopts the posture of a server on either arm, with a warning and no error, when a later attempt reads it", async () => {
+      it("adopts the posture of a server on either arm that responds after six seconds, logged while waiting and on landing", async () => {
         for (const serverExecution of [true, false]) {
-          const warnings = counter("read-after-retry", "warn");
-          const errors = counter("posture-unread", "error");
-          const { fetch, requests } = stallingThenAnswering(
-            1,
-            () => metaResponse({ experimental: { serverExecution } }),
+          errorLog.calls.length = 0;
+          using warn = stub(console, "warn");
+          const slow = counter("read-slow", "error");
+          const late = counter("read-late", "warn");
+          const unread = counter("posture-unread", "error");
+          const { response, requests, settings } = heldRead();
+          await clock.settle();
+          await clock.tick(4_999);
+          expect(slow()).toBe(0);
+          await clock.tick(1);
+          expect(slow()).toBe(1);
+          expect(errorLog.calls.length).toBe(1);
+          const waiting = errorLog.calls[0].args.join(" ");
+          expect(waiting).toContain("read-slow");
+          expect(waiting).toContain(
+            `No response from ${metaUrl} after 5000 ms`,
           );
-          const { experimental } = await settingsFrom(fetch);
+          expect(waiting).toContain(
+            `for up to ${DEPLOYMENT_RESPONSE_BOUND_MS} ms`,
+          );
+
+          await clock.tick(1_000);
+          response.resolve(
+            metaResponse({ experimental: { serverExecution } }),
+          );
+          const { experimental } = await settings;
           expect(experimental.serverExecution).toBe(serverExecution);
-          expect(requests.count).toBe(2);
-          expect(warnings()).toBe(1);
-          expect(errors()).toBe(0);
+          expect(requests.count).toBe(1);
+          expect(late()).toBe(1);
+          expect(warn.calls.length).toBe(1);
+          const landed = warn.calls[0].args.join(" ");
+          expect(landed).toContain("read-late");
+          expect(landed).toContain(`Read ${metaUrl} on attempt 1`);
+          expect(landed).toContain("6000 ms");
+          expect(unread()).toBe(0);
         }
+      });
+
+      it("logs nothing for a server that responds within five seconds", async () => {
+        using warn = stub(console, "warn");
+        const { response, requests, settings } = heldRead();
+        await clock.settle();
+        await clock.tick(4_999);
+        response.resolve(
+          metaResponse({ experimental: { serverExecution: true } }),
+        );
+        const { experimental } = await settings;
+        expect(experimental.serverExecution).toBe(true);
+        expect(requests.count).toBe(1);
+        expect(warn.calls.length).toBe(0);
         expect(errorLog.calls.length).toBe(0);
       });
 
-      it("names the failures in the warning when the third attempt reads the document", async () => {
-        using warn = stub(console, "warn");
-        const { fetch } = stallingThenAnswering(
-          2,
-          () => metaResponse({ experimental: { serverExecution: true } }),
-        );
-        const { experimental } = await settingsFrom(fetch);
-        expect(experimental.serverExecution).toBe(true);
-        expect(warn.calls.length).toBe(1);
-        const message = warn.calls[0].args.join(" ");
-        expect(message).toContain("read-after-retry");
-        expect(message).toContain(`Read ${metaUrl} on attempt 3`);
-        expect(message).toContain(
-          "timed out after 5 ms; timed out after 5 ms",
-        );
-      });
-
-      it("logs nothing about a retry when the first attempt reads the document", async () => {
-        const warnings = counter("read-after-retry", "warn");
-        const errors = counter("posture-unread", "error");
-        const { fetch, requests } = stallingThenAnswering(
-          0,
-          () => metaResponse({ experimental: { serverExecution: true } }),
-        );
-        const { experimental } = await settingsFrom(fetch);
-        expect(experimental.serverExecution).toBe(true);
-        expect(requests.count).toBe(1);
-        expect(warnings()).toBe(0);
-        expect(errors()).toBe(0);
-      });
-
-      it("falls back to the environment and logs one error, naming the fallback and why, when every attempt times out", async () => {
+      it("falls back to the environment at the bound, with one more error naming the fallback and why", async () => {
         using _warn = stub(console, "warn");
-        const errors = counter("posture-unread", "error");
-        const { fetch, requests } = stallingThenAnswering(
-          Infinity,
-          () => metaResponse({}),
-        );
-        const settings = await settingsFrom(
-          fetch,
-          (name) =>
+        const slow = counter("read-slow", "error");
+        const unread = counter("posture-unread", "error");
+        let requests = 0;
+        let settled = false;
+        const settings = settingsForDeployedClient({
+          apiUrl,
+          env: (name) =>
             name === "EXPERIMENTAL_MODERN_CELL_REP" ? "true" : undefined,
-        );
-        expect(requests.count).toBe(3);
-        expect(settings.experimental).toEqual({ modernCellRep: true });
-        expect(settings.memoryHost).toBe(apiUrl);
-        expect(errors()).toBe(1);
+          fetch: (input, init) => {
+            requests++;
+            return stalled(input, init);
+          },
+        }).finally(() => {
+          settled = true;
+        });
+        await clock.settle();
+        await clock.tick(DEPLOYMENT_RESPONSE_BOUND_MS - 1);
+        expect(settled).toBe(false);
+        expect(unread()).toBe(0);
+        await clock.tick(1);
+        const resolved = await settings;
+        expect(requests).toBe(1);
+        expect(resolved.experimental).toEqual({ modernCellRep: true });
+        expect(resolved.memoryHost).toBe(apiUrl);
+        expect(slow()).toBe(1);
+        expect(unread()).toBe(1);
         // What reached the console, not only what the logger counted.
-        expect(errorLog.calls.length).toBe(1);
-        const message = errorLog.calls[0].args.join(" ");
+        expect(errorLog.calls.length).toBe(2);
+        const message = errorLog.calls[1].args.join(" ");
         expect(message).toContain("posture-unread");
         expect(message).toContain(metaUrl);
         expect(message).toContain(
-          "timed out after 5 ms; timed out after 5 ms; timed out after 5 ms",
+          `(no response within ${DEPLOYMENT_RESPONSE_BOUND_MS} ms)`,
         );
         expect(message).toContain(
           '{"modernCellRep":true} from the environment',
@@ -1034,15 +1047,41 @@ describe("deployment-meta", () => {
         );
       });
 
+      it("throws the abort reason at once when the caller stops a read that is waiting", async () => {
+        const slow = counter("read-slow", "error");
+        const unread = counter("posture-unread", "error");
+        const controller = new AbortController();
+        const settings = settingsForDeployedClient({
+          apiUrl,
+          env: () => undefined,
+          signal: controller.signal,
+          fetch: stalled,
+        }).then(() => "resolved", (error: Error) => error.message);
+        await clock.settle();
+        await clock.tick(6_000);
+        expect(slow()).toBe(1);
+        controller.abort(new Error("stopped"));
+        // Settled without moving the clock: the read ended on the abort.
+        await clock.settle();
+        expect(await Promise.race([settings, Promise.resolve("pending")]))
+          .toBe("stopped");
+        // Past the bound: the timers went with the read.
+        await clock.tick(DEPLOYMENT_RESPONSE_BOUND_MS * 2);
+        expect(slow()).toBe(1);
+        expect(unread()).toBe(0);
+      });
+
       it("names the environment's server-execution arm in the error when it sets one", async () => {
         using _warn = stub(console, "warn");
         for (const arm of ["true", "false"]) {
           errorLog.calls.length = 0;
-          await settingsFrom(
-            stalled,
-            (name) =>
+          await settingsForDeployedClient({
+            apiUrl,
+            env: (name) =>
               name === "EXPERIMENTAL_SERVER_EXECUTION" ? arm : undefined,
-          );
+            boundMs: 5,
+            fetch: stalled,
+          });
           expect(errorLog.calls.length).toBe(1);
           expect(errorLog.calls[0].args.join(" ")).toContain(
             `\`serverExecution\` ${arm === "true" ? "on" : "off"}`,
@@ -1052,91 +1091,143 @@ describe("deployment-meta", () => {
 
       it("logs one error, naming the status, for a failure that is not asked again", async () => {
         using _warn = stub(console, "warn");
-        const errors = counter("posture-unread", "error");
-        const { fetch, requests } = stallingThenAnswering(
-          0,
-          () => metaResponse({}, 401),
-        );
-        const { experimental } = await settingsFrom(fetch);
+        const unread = counter("posture-unread", "error");
+        let requests = 0;
+        const { experimental } = await settingsForDeployedClient({
+          apiUrl,
+          env: () => undefined,
+          fetch: () => {
+            requests++;
+            return Promise.resolve(metaResponse({}, 401));
+          },
+        });
         expect(experimental).toEqual({});
-        expect(requests.count).toBe(1);
-        expect(errors()).toBe(1);
+        expect(requests).toBe(1);
+        expect(unread()).toBe(1);
         expect(errorLog.calls[0].args.join(" ")).toContain("(status 401)");
       });
 
       it("names each attempt's failure in the error when attempts fail differently", async () => {
         using _warn = stub(console, "warn");
         let requests = 0;
-        await settingsFrom((input, init) => {
-          requests++;
-          return requests === 1
-            ? Promise.reject(new TypeError("connection refused"))
-            : requests === 2
-            ? stalled(input, init)
-            : Promise.resolve(metaResponse({}, 503));
+        await settingsForDeployedClient({
+          apiUrl,
+          env: () => undefined,
+          boundMs: 5,
+          retryDelaysMs: [0, 0],
+          fetch: (input, init) => {
+            requests++;
+            return requests === 1
+              ? Promise.reject(new TypeError("connection refused"))
+              : requests === 2
+              ? Promise.resolve(metaResponse({}, 503))
+              : stalled(input, init);
+          },
         });
         expect(requests).toBe(3);
         expect(errorLog.calls.length).toBe(1);
         const message = errorLog.calls[0].args.join(" ");
         expect(message).toContain("connection refused");
-        expect(message).toContain("; timed out after 5 ms; status 503)");
+        expect(message).toContain("; status 503; no response within 5 ms)");
       });
 
-      it("logs the error only when the client would adopt the posture", async () => {
+      it("ends a read whose bound passes during a wait between attempts", async () => {
+        using _warn = stub(console, "warn");
+        const unread = counter("posture-unread", "error");
+        let requests = 0;
+        await settingsForDeployedClient({
+          apiUrl,
+          env: () => undefined,
+          boundMs: 5,
+          retryDelaysMs: [1_000],
+          fetch: () => {
+            requests++;
+            return Promise.reject(new TypeError("refused"));
+          },
+        });
+        expect(requests).toBe(1);
+        expect(unread()).toBe(1);
+        expect(errorLog.calls[0].args.join(" ")).toContain(
+          "refused; no response within 5 ms",
+        );
+      });
+
+      it("warns, naming the failures, and logs no error when a retry reads the document", async () => {
+        using warn = stub(console, "warn");
+        const late = counter("read-late", "warn");
+        const slow = counter("read-slow", "error");
+        const unread = counter("posture-unread", "error");
+        let requests = 0;
+        const { experimental } = await settingsForDeployedClient({
+          apiUrl,
+          env: () => undefined,
+          retryDelaysMs: [0, 0],
+          fetch: () =>
+            ++requests < 3
+              ? Promise.resolve(metaResponse({}, 503))
+              : Promise.resolve(
+                metaResponse({ experimental: { serverExecution: true } }),
+              ),
+        });
+        expect(experimental.serverExecution).toBe(true);
+        expect(late()).toBe(1);
+        expect(slow()).toBe(0);
+        expect(unread()).toBe(0);
+        expect(warn.calls.length).toBe(1);
+        const message = warn.calls[0].args.join(" ");
+        expect(message).toContain(`Read ${metaUrl} on attempt 3`);
+        expect(message).toContain("after: status 503; status 503");
+      });
+
+      it("logs nothing when the first attempt reads the document promptly", async () => {
+        using warn = stub(console, "warn");
+        const { experimental } = await settingsForDeployedClient({
+          apiUrl,
+          env: () => undefined,
+          fetch: () =>
+            Promise.resolve(
+              metaResponse({ experimental: { serverExecution: true } }),
+            ),
+        });
+        expect(experimental.serverExecution).toBe(true);
+        expect(warn.calls.length).toBe(0);
+        expect(errorLog.calls.length).toBe(0);
+      });
+
+      it("logs the posture error only when the client would adopt the posture", async () => {
         // The memory URL's warning still says the document went unread.
         using warn = stub(console, "warn");
-        const errors = counter("posture-unread", "error");
-        await settingsFrom(
-          stalled,
-          (name) => name === ADOPT_SERVER_FLAGS_ENV ? "false" : undefined,
+        const unread = counter("posture-unread", "error");
+        const read = (env: (name: string) => string | undefined) =>
+          settingsForDeployedClient({
+            apiUrl,
+            env,
+            boundMs: 5,
+            fetch: stalled,
+          });
+        await read((name) =>
+          name === ADOPT_SERVER_FLAGS_ENV ? "false" : undefined
         );
         expect(warn.calls.length).toBe(1);
-        expect(errors()).toBe(0);
-        await settingsFrom(stalled);
-        expect(errors()).toBe(1);
+        expect(unread()).toBe(0);
+        await read(() => undefined);
+        expect(unread()).toBe(1);
       });
 
       it("logs no error for a server that says it has no document", async () => {
-        const errors = counter("posture-unread", "error");
-        const { fetch, requests } = stallingThenAnswering(
-          0,
-          () => metaResponse({}, 404),
-        );
-        const { experimental } = await settingsFrom(fetch);
-        expect(experimental).toEqual({});
-        expect(requests.count).toBe(1);
-        expect(errors()).toBe(0);
-      });
-
-      it("gives each of three attempts five seconds by default, and resolves after 16.25 seconds", async () => {
-        using _warn = stub(console, "warn");
-        let attempts = 0;
-        let resolved = false;
-        const settings = settingsForDeployedClient({
+        const unread = counter("posture-unread", "error");
+        let requests = 0;
+        const { experimental } = await settingsForDeployedClient({
           apiUrl,
           env: () => undefined,
-          fetch: (input, init) => {
-            attempts++;
-            return stalled(input, init);
+          fetch: () => {
+            requests++;
+            return Promise.resolve(metaResponse({}, 404));
           },
-        }).finally(() => {
-          resolved = true;
         });
-        await clock.settle();
-        expect(attempts).toBe(1);
-        await clock.tick(5_249);
-        expect(attempts).toBe(1);
-        await clock.tick(1);
-        expect(attempts).toBe(2);
-        await clock.tick(5_999);
-        expect(attempts).toBe(2);
-        await clock.tick(1);
-        expect(attempts).toBe(3);
-        await clock.tick(4_999);
-        expect(resolved).toBe(false);
-        await clock.tick(1);
-        expect((await settings).memoryHost).toBe(apiUrl);
-        expect(attempts).toBe(3);
+        expect(experimental).toEqual({});
+        expect(requests).toBe(1);
+        expect(unread()).toBe(0);
       });
     });
   });
@@ -1231,7 +1322,7 @@ describe("deployment-meta", () => {
         deploymentForShell({
           apiUrl,
           retryDelaysMs: [],
-          attemptTimeoutMs: 5,
+          boundMs: 5,
           fetch,
         });
       for (
@@ -1261,24 +1352,27 @@ describe("deployment-meta", () => {
       }
     });
 
-    it("takes the flags from a later attempt, with a warning and no error, when an attempt times out", async () => {
-      const warnings = counter("read-after-retry", "warn");
-      const errors = counter("posture-unread", "error");
-      let requests = 0;
-      const read = await deploymentForShell({
+    it("takes the flags from a server that responds after six seconds, logged both ways", async () => {
+      using warn = stub(console, "warn");
+      const slow = counter("read-slow", "error");
+      const unread = counter("posture-unread", "error");
+      const response = Promise.withResolvers<Response>();
+      const reading = deploymentForShell({
         apiUrl,
-        attemptTimeoutMs: 5,
-        retryDelaysMs: [0, 0],
-        fetch: (input, init) =>
-          ++requests === 1 ? stalled(input, init) : Promise.resolve(
-            metaResponse({ experimental: { serverExecution: true } }),
-          ),
+        fetch: () => response.promise,
       });
+      await clock.settle();
+      await clock.tick(6_000);
+      expect(slow()).toBe(1);
+      response.resolve(
+        metaResponse({ experimental: { serverExecution: true } }),
+      );
+      const read = await reading;
       expect(read.experimental).toEqual({ serverExecution: true });
       expect(read.transient).toBe(false);
-      expect(requests).toBe(2);
-      expect(warnings()).toBe(1);
-      expect(errors()).toBe(0);
+      expect(warn.calls.length).toBe(1);
+      expect(warn.calls[0].args.join(" ")).toContain("read-late");
+      expect(unread()).toBe(0);
     });
 
     it("logs one error, naming the fallback and why, when the document cannot be read", async () => {
@@ -1286,7 +1380,7 @@ describe("deployment-meta", () => {
       const errors = counter("posture-unread", "error");
       const read = await deploymentForShell({
         apiUrl,
-        attemptTimeoutMs: 5,
+        boundMs: 5,
         retryDelaysMs: [],
         fetch: stalled,
       });
@@ -1295,7 +1389,7 @@ describe("deployment-meta", () => {
       expect(errorLog.calls.length).toBe(1);
       const message = errorLog.calls[0].args.join(" ");
       expect(message).toContain("https://deployment.example/api/meta");
-      expect(message).toContain("timed out after 5 ms");
+      expect(message).toContain("no response within 5 ms");
       expect(message).toContain(
         `the flags its build gives it, with \`serverExecution\` ${
           SERVER_EXECUTION_DEFAULT_ENABLED ? "on" : "off"
@@ -1396,7 +1490,7 @@ describe("deployment-meta", () => {
       memoryHostForForeignOrigin({
         apiUrl: origin,
         retryDelaysMs: [],
-        attemptTimeoutMs: 5,
+        boundMs: 5,
         fetch,
       });
 
@@ -1490,24 +1584,26 @@ describe("deployment-meta", () => {
       expect(_warn.calls.length).toBe(0);
     });
 
-    it("returns the memory URL from a later attempt, and logs no posture error, when an attempt times out", async () => {
-      const warnings = counter("read-after-retry", "warn");
-      const errors = counter("posture-unread", "error");
+    it("returns the memory URL from a later attempt, and logs no posture error, when an attempt fails", async () => {
+      using _warn = stub(console, "warn");
+      const late = counter("read-late", "warn");
+      const unread = counter("posture-unread", "error");
       let requests = 0;
       const host = await memoryHostForForeignOrigin({
         apiUrl: origin,
-        attemptTimeoutMs: 5,
         retryDelaysMs: [0, 0],
-        fetch: (input, init) =>
-          ++requests === 1 ? stalled(input, init) : Promise.resolve(
-            metaResponse({ memoryUrl: "https://router.foreign.example" }),
-          ),
+        fetch: () =>
+          ++requests === 1
+            ? Promise.reject(new TypeError("refused"))
+            : Promise.resolve(
+              metaResponse({ memoryUrl: "https://router.foreign.example" }),
+            ),
       });
       expect(host).toEqual({
         memoryHost: new URL("https://router.foreign.example/"),
       });
-      expect(warnings()).toBe(1);
-      expect(errors()).toBe(0);
+      expect(late()).toBe(1);
+      expect(unread()).toBe(0);
     });
 
     it("logs no posture error for an origin it cannot read", async () => {

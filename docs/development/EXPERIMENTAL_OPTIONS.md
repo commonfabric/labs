@@ -2680,20 +2680,33 @@ that names it. The posture's fallback is also logged at error level (logger
 the client runs on instead, because such a client can sit on the other
 server-execution arm from its server while its real work goes on succeeding.
 `CF_ADOPT_SERVER_FLAGS=false` omits that error, since such a client does not
-take the posture anyway. A transient failure (the server is unreachable, an
-attempt takes more than five seconds, or it returns 408, 429, 502, 503 or 504)
-is asked again first: three attempts in all, a quarter of a second and then a
-second apart, so a server that stalls costs 16.25 seconds. A document read after
-a retry logs a warning (key `read-after-retry`) naming the failures. A failure
-that would come out the same, such as a 401, a 403, a 500 or a body that is not
-a JSON object, is not asked again. The bound covers the read alone: the health
-check has no timeout. A redirect that leaves the API URL's
+take the posture anyway. A transient failure (the server is unreachable, or it
+returns 408, 429, 502, 503 or 504) is asked again first: three attempts in all,
+a quarter of a second and then a second apart. A failure that would come out the
+same, such as a 401, a 403, a 500 or a body that is not a JSON object, is not
+asked again.
+
+A request stays outstanding until the server responds, since a slow server's
+answer is the posture the client needs. At five seconds that is logged at error
+level (key `read-slow`), and the client holds its startup for the answer. When
+a document arrives after that error or after a failed attempt, a warning (key
+`read-late`) says how long it took. A server that says nothing ends the whole
+read at 60 seconds (`DEPLOYMENT_RESPONSE_BOUND_MS`), and the client then takes
+the fallback above and goes on to its health check. `Runtime.healthCheck` has
+the same bound, and a host with no response by then counts as unreachable, so
+that server fails with `Could not connect to "..."`, 120 seconds after the
+client asked. A server that refuses the connection fails in about 1.25 seconds.
+[A deployed client's wait on its
+server](./waiting-in-tests-rationale.md#a-deployed-clients-wait-on-its-server)
+says what those bounds are measured from.
+
+A redirect that leaves the API URL's
 deployment (anything but its own origin, or the same host on https where the
 API URL names http) still gives the posture, as before, but no memory URL; a
 warning names where the redirect ended.
 
 A caller whose startup can be cancelled passes its `AbortSignal`, and the
-request carries it, joined with each attempt's timeout. An aborted signal is
+request carries it, joined with the read's bound. An aborted signal is
 the one failure that does not resolve to the environment: it throws the abort
 reason, because the caller has stopped wanting settings at all.
 
