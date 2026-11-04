@@ -328,6 +328,42 @@ describe("session frame order", () => {
       expect(frames[1].ids).toEqual([NAMING_ID]);
     });
 
+    it("reaches the wire ahead of an effect built after a staged `watch.set` recorded it", async () => {
+      const hold = holdFirstReturn(server.watchSet.bind(server));
+      server.watchSet = hold.wrapped;
+
+      const frames = await framesAroundHeldMutation(
+        hold,
+        () =>
+          send({
+            type: "session.watch.set",
+            watches: [watchOn(NAMING_ID, "w-naming")],
+            part: 0,
+            stage: "frame-order-stage",
+          }),
+      );
+
+      expect(frames.map(({ kind }) => kind)).toEqual(["response", "effect"]);
+      expect(frames[0].ids).toContain(LEAF_ID);
+      expect(frames[1].ids).toEqual([NAMING_ID]);
+    });
+
+    it("reaches the wire ahead of an effect built after a `watch.remove` re-evaluated the set", async () => {
+      await addWatch(NAMING_ID, "w-naming");
+      await addWatch(PLAIN_ID, "w-plain");
+      server.markSessionForFullResync(SPACE, readerSession);
+      const hold = holdFirstReturn(server.watchRemove.bind(server));
+      server.watchRemove = hold.wrapped;
+
+      const frames = await framesAroundHeldMutation(
+        hold,
+        () => send({ type: "session.watch.remove", watchIds: ["w-plain"] }),
+      );
+
+      expect(frames.map(({ kind }) => kind)).toEqual(["response", "effect"]);
+      expect(frames[1].ids).toEqual([NAMING_ID]);
+    });
+
     it("is answered after the call returns when it records nothing", async () => {
       await addWatch(NAMING_ID, "w-naming");
       const from = reader.messages.length;
