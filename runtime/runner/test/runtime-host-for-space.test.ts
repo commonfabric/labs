@@ -8,6 +8,7 @@ import {
   type SpaceHostRegistration,
   SpaceHostValidationError,
 } from "@commonfabric/runner";
+import { DEPLOYMENT_RESPONSE_BOUND_MS } from "../src/deployment-meta.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 
 const signer = await Identity.fromPassphrase("runtime-host-for-space");
@@ -1008,6 +1009,122 @@ describe("Runtime.hostForSpace", () => {
     }
   });
 
+  /** Runs `body` with `fetch` answering each host through `respond`. */
+  const withFetch = async (
+    respond: (host: string, init?: RequestInit) => Promise<Response>,
+    body: () => Promise<void>,
+  ) => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch =
+      ((input: RequestInfo | URL, init?: RequestInit) =>
+        respond(new URL(String(input)).host, init)) as typeof fetch;
+    try {
+      await body();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  };
+
+  /** A request a host never responds to, ended only by its signal. */
+  const stalled = (init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener(
+        "abort",
+        () => reject(init.signal!.reason),
+      );
+    });
+
+  it("healthCheck is false at its bound when a host says nothing", async () => {
+    await withFetch(
+      (host, init) =>
+        host === "host-b.test"
+          ? stalled(init)
+          : Promise.resolve(new Response("ok", { status: 200 })),
+      async () => {
+        const runtime = makeRuntime({ [spaceB]: "http://host-b.test" });
+        try {
+          let settled = false;
+          const check = runtime.healthCheck().finally(() => {
+            settled = true;
+          });
+          await clock.settle();
+          await clock.tick(DEPLOYMENT_RESPONSE_BOUND_MS - 1);
+          expect(settled).toBe(false);
+          await clock.tick(1);
+          expect(await check).toBe(false);
+        } finally {
+          await runtime.dispose();
+        }
+      },
+    );
+  });
+
+  it("healthCheck is true for a host that responds just before its bound", async () => {
+    const response = Promise.withResolvers<Response>();
+    await withFetch(
+      () => response.promise,
+      async () => {
+        const runtime = makeRuntime();
+        try {
+          const check = runtime.healthCheck();
+          await clock.settle();
+          await clock.tick(DEPLOYMENT_RESPONSE_BOUND_MS - 1);
+          response.resolve(new Response("ok", { status: 200 }));
+          expect(await check).toBe(true);
+        } finally {
+          await runtime.dispose();
+        }
+      },
+    );
+  });
+
+  it("healthCheck clears its bound once it completes", async () => {
+    const signals: (AbortSignal | null | undefined)[] = [];
+    await withFetch(
+      (_host, init) => {
+        signals.push(init?.signal);
+        return Promise.resolve(new Response("ok", { status: 200 }));
+      },
+      async () => {
+        const runtime = makeRuntime();
+        try {
+          expect(await runtime.healthCheck()).toBe(true);
+          await clock.tick(DEPLOYMENT_RESPONSE_BOUND_MS * 2);
+          expect(signals.map((signal) => signal?.aborted)).toEqual([false]);
+        } finally {
+          await runtime.dispose();
+        }
+      },
+    );
+  });
+
+  it("an earlier healthCheck that reaches its bound leaves a newer call's capture", async () => {
+    let call = 0;
+    await withFetch(
+      (_host, init) =>
+        ++call === 1 ? stalled(init) : Promise.resolve(
+          new Response("ok", {
+            status: 200,
+            headers: { "x-cf-git-sha": "second" },
+          }),
+        ),
+      async () => {
+        const runtime = makeRuntime();
+        try {
+          const first = runtime.healthCheck();
+          expect(await runtime.healthCheck()).toBe(true);
+          expect(runtime.serverGitSha).toBe("second");
+          await clock.settle();
+          await clock.tick(DEPLOYMENT_RESPONSE_BOUND_MS);
+          expect(await first).toBe(false);
+          expect(runtime.serverGitSha).toBe("second");
+        } finally {
+          await runtime.dispose();
+        }
+      },
+    );
+  });
+
   it("healthCheck is false when any host is unreachable", async () => {
     const realFetch = globalThis.fetch;
     globalThis.fetch = ((input: RequestInfo | URL) =>
@@ -1065,12 +1182,16 @@ describe("Runtime.hostForSpace", () => {
         ),
       ]);
       expect(requestState).toBe("started");
-      expect(receivedSignals).toEqual([
-        controller.signal,
-        controller.signal,
+      expect(receivedSignals.map((signal) => signal?.aborted)).toEqual([
+        false,
+        false,
       ]);
       controller.abort(reason);
       await expect(check).rejects.toBe(reason);
+      expect(receivedSignals.map((signal) => signal?.reason)).toEqual([
+        reason,
+        reason,
+      ]);
     } finally {
       controller.abort(reason);
       for (const rejectRequest of rejectRequests) rejectRequest(reason);
