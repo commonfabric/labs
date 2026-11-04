@@ -53,20 +53,24 @@ creates each, at load 77-269.
 
 ## What is left
 
-These come from snapshots at 101 and 301 Topics, per create, taken before node
-bindings were dropped. Run the process below again before relying on any of them.
+These come from snapshots at 101 and 301 Topics, per create, removing holders in
+this order. The total is about 1.27 MB, and a transaction no longer stays per create.
 
-- `deepFrozenCache` and `sortedKeyCache`, about 630 KB. Both are weak tables, so
+- `ImmutableCellStore.#snapshots`, 285 KB: a child's immutable inputs documents,
+  which outlive the stopped piece. `getImmutableCell()` makes them owned by their
+  frozen values and live handles, yet they stay in the runtime's root store, so start
+  from what puts them there. `bindImmutableCells()` in `traverse-recorder.ts` and
+  `#retainValue()` are the first places to read.
+- `deepFrozenCache`, 252 KB, and `sortedKeyCache`, 83 KB. Both are weak tables, so
   their size should follow the live objects they name and fall as those do. Check
-  this first: the rest of the list may shrink it.
-- A transaction per create, about 490 KB, held through the node bindings. Confirm
-  that it is gone.
-- `SpaceReplica.#docs`, about 175 KB: the worker's copy of the documents a create
-  wrote, which nothing evicts. A piece's documents are the largest entries.
-- `ImmutableCellStore.#snapshots`, about 150-200 KB: a child's immutable inputs
-  documents, which outlive the stopped piece.
-- The event preflight's trigger index, about 65 KB, and `Provider.#syncRequests`,
-  about 32 KB.
+  them again after the holders above and below shrink.
+- `SpaceReplica.#docs`, 175 KB: the worker's copy of the documents a create wrote,
+  which nothing evicts.
+- `DerivedInternalCellIds`, 45 KB, a bounded cache that is still filling.
+- `stringRepCache`, `#documentHolds` and `Provider.#syncRequests`, about 15-35 KB
+  each.
+- About 255 KB in no one holder, led by the scheduler's trigger index, which grows
+  because the board's own derivations read every Topic.
 
 Beyond these:
 
