@@ -608,7 +608,13 @@ Default slot for cf-tab elements
 - `default-size` - number (percentage)
 - `min-size` - number (percentage)
 - `max-size` - number (percentage)
-- `collapsible` - boolean **Slots**: Default slot for content
+- `collapsible` - boolean
+- `hide-when-stacked` (`hideWhenStacked` in JSX) - boolean: while the group is
+  stacked by its `stackBelow`, the panel and the handles beside it are not
+  drawn, and the other panels take its room; it comes back, at its size, when
+  the group widens. For example, a detail panel with nothing open:
+  `<cf-resizable-panel defaultSize={64} hideWhenStacked={!open}>` **Slots**:
+  Default slot for content
 
 ### 31. cf-resizable-handle
 

@@ -4546,6 +4546,10 @@ interface CFResizablePanelAttributes<T> extends CFHTMLAttributes<T> {
   "defaultSize"?: number | CellLike<number>;
   "maxSize"?: number | CellLike<number>;
   "collapsible"?: boolean | CellLike<boolean>;
+  /** While the group is stacked (narrower than its `stackBelow`), this panel
+   * and the handles beside it are not drawn, and the other panels share its
+   * room. */
+  "hideWhenStacked"?: boolean | CellLike<boolean>;
 }
 
 interface CFResizablePanelGroupAttributes<T> extends CFHTMLAttributes<T> {
