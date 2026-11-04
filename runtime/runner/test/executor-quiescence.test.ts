@@ -176,7 +176,8 @@ describe("executor-quiescence", () => {
       await start("first");
       await quiescence(host);
       const engine = await serving.server.engineForSpace(space);
-      const { id } = result.key("landed").getAsNormalizedFullLink();
+      const { id } = result.key("landed").resolveAsCell()
+        .getAsNormalizedFullLink();
       expect(Engine.selectPendingStreamEventDocs(engine)).toStrictEqual([]);
       expect(JSON.stringify(Engine.read(engine, { id })?.value)).toContain(
         "first",
