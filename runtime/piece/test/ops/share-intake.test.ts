@@ -91,7 +91,7 @@ const registerSharedSpace = handler<
 
 const accept = handler<
   Acceptance,
-  { accepted: Writable<{ space?: string; keepArchived?: boolean }[]> }
+  { accepted: Writable<{ space?: string | undefined; keepArchived?: boolean | undefined }[]> }
 >((event, { accepted }) => {
   accepted.push({
     space: spaceOf(event.room),
@@ -106,7 +106,7 @@ export default pattern(() => {
   const sharedSpaceCatalog = new Writable<Catalog>({ entries: {}, offers: {} })
     .for("sharedSpaceCatalog");
   const registered = new Writable<Registration[]>([]).for("registered");
-  const accepted = new Writable<{ space?: string; keepArchived?: boolean }[]>(
+  const accepted = new Writable<{ space?: string | undefined; keepArchived?: boolean | undefined }[]>(
     [],
   ).for("accepted");
   return {
