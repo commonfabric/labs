@@ -251,6 +251,26 @@ describe("served-handler-child", () => {
     cancel();
   });
 
+  it("asks for the documents nothing reads to be released once the transaction commits", async () => {
+    // The release pass is what lets go of the watches a stopped piece's
+    // documents were loaded under; a stop requests one, and so must this.
+    const pieces = await clientPieces();
+    const releases = await host.runLifecycleVerb(space, {
+      name: "stub release",
+      run: (runtime) =>
+        Promise.resolve(
+          stub(runtime, "releaseUnreadDocuments", () => Promise.resolve()),
+        ),
+    });
+    try {
+      await addChildOnServer(pieces, "first");
+
+      expect(releases.calls.length).toBeGreaterThan(0);
+    } finally {
+      releases.restore();
+    }
+  });
+
   it("indexes no pattern per event once the transaction commits", async () => {
     const pieces = await clientPieces();
     await addChildOnServer(pieces, "first");

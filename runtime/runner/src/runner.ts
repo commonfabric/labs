@@ -5463,7 +5463,8 @@ export class Runner {
    * anything its nodes write: that demand has already made its one attempt to load
    * the piece, and nothing would make another. A stopped piece's index entry goes
    * with it, since it holds the cells of the run that started it, and those hold its
-   * transaction.
+   * transaction; and the documents only the stopped pieces read are released, as
+   * a stop releases them.
    */
   #releaseServedHandlerResult<T>(
     resultCell: Cell<T>,
@@ -5477,11 +5478,13 @@ export class Runner {
     } finally {
       this.#releasingServedResult = false;
     }
+    const stopped = !this.#cancels.has(this.#getDocKey(resultCell));
+    if (stopped) void this.#runtime.releaseUnreadDocuments();
     if (pointer === undefined) return;
-    if (this.#cancels.has(this.#getDocKey(resultCell))) {
-      this.#runtime.patternManager.keepKeylessPattern(resultPattern);
-    } else {
+    if (stopped) {
       this.#runtime.patternManager.forgetKeylessPattern(pointer.identity);
+    } else {
+      this.#runtime.patternManager.keepKeylessPattern(resultPattern);
     }
   }
 

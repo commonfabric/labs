@@ -55,7 +55,11 @@ released loads them again when its next event arrives.
 
 A release pass runs when something that read documents has gone: when a piece
 is stopped (`Runner.stop()`, which also runs when the runtime restarts a
-piece), and when a host's client departs
+piece), when a serving runtime stops the pieces a handler's result started once
+the handler's transaction commits (`#releaseServedHandlerResult` in
+`runtime/runner/src/runner.ts`; "A piece a handler starts" in
+[`../specs/server-side-execution/serving-loop.md`](../specs/server-side-execution/serving-loop.md)),
+and when a host's client departs
 (`RuntimeProcessor.disposeClient()` in `runtime/runtime-client`). A host may
 also call `Runtime.releaseUnreadDocuments()` itself. The pass waits until the
 scheduler is idle. Passes run one after another, never two at once.
