@@ -217,6 +217,19 @@ notice at all, so a subscribed client saw them only on its next own
 sync. Beneficial (staleness removed), never load-bearing: no client in
 the ruled flows subscribes to setup docs before activation.
 
+**A piece a handler starts.** A handler's result pattern runs on the serving
+runtime so that its setup stages into the wave, and each pattern it starts
+registers its nodes there. Nothing demands those nodes, so once the handler's
+transaction commits the result is released (`#releaseServedHandlerResult` in
+`runner.ts`), and what remains is what the store holds, with the basis rows of
+any of its actions that ran. A demand for one of its values, or an event to one
+of its streams, starts the piece as either starts a piece on a fresh runtime. A
+piece whose document a client session tracks at that commit keeps running,
+because that session's demand has already made its attempt to load it. The result
+pattern's index entry goes with the release, and so do the watches of the
+documents only the stopped pieces read: the release asks for the pass a stop
+asks for (`docs/features/document-release.md`).
+
 **Parking.** A park releases the lease and stops the loop. A park for a
 failed loop, a failed initialization or a closing host disposes the runtime. An IDLE park (§3's "on idle") that abandoned no
 open wave and left no effect unretired in its outbox (§4: an effect

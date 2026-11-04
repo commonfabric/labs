@@ -691,7 +691,8 @@ export class PatternManager {
    * whose module evaluated this session. Entries are live builder artifacts of
    * evaluated modules — the same order of retention the engine's strong
    * implementation index already committed to for their implementation
-   * functions.
+   * functions. A keyless pattern has no module, and a serving runtime drops its
+   * entry through {@link forgetKeylessPattern} when it releases the piece.
    *
    * The forward value → `{identity, symbol}` map lives at module level in
    * `builder/pattern-metadata.ts`
@@ -699,6 +700,9 @@ export class PatternManager {
    * sites can carry refs onto derived copies without a `PatternManager` handle.
    */
   readonly #addressableByIdentity = new Map<string, Map<string, unknown>>();
+
+  /** See {@link keepKeylessPattern}. */
+  readonly #keptKeylessIdentities = new Set<string>();
 
   /**
    * Bound for the module-_namespace_ cache (`#modulesByIdentity`) only; its
@@ -1368,7 +1372,14 @@ export class PatternManager {
   ): { identity: string; symbol: string } {
     const root = resolveOriginal(pattern);
     const existing = getArtifactEntryRef(root);
-    if (existing) return existing;
+    if (existing) {
+      // An identity another pattern of the same structure was released under.
+      if (
+        PatternManager.isKeylessPatternIdentity(existing.identity) &&
+        !this.#addressableByIdentity.has(existing.identity)
+      ) this.associatePatternIdentity(root, existing);
+      return existing;
+    }
     // Mint-site tripwire: the sanctioned keyless population is runtime-BUILT
     // pattern values — the transformer hoists all source-authored
     // lift()/handler() code to cf:module, so a COMPILED pattern reaching this
@@ -1391,6 +1402,30 @@ export class PatternManager {
     const ref = { identity, symbol: "default" };
     this.associatePatternIdentity(root, ref);
     return ref;
+  }
+
+  /**
+   * Drops a keyless pattern's index entry once nothing will ask for it. A start
+   * that later names the identity finds what a fresh session finds. An identity
+   * that is not keyless stays, since a module's artifacts last the session, and
+   * so does one {@link keepKeylessPattern} names.
+   */
+  forgetKeylessPattern(identity: string): void {
+    if (
+      PatternManager.isKeylessPatternIdentity(identity) &&
+      !this.#keptKeylessIdentities.has(identity)
+    ) this.#addressableByIdentity.delete(identity);
+  }
+
+  /**
+   * Indexes a keyless pattern a piece that keeps running was started from, for
+   * the rest of the session. Results of one structure share an identity, so
+   * another such result's release would otherwise take the entry away.
+   */
+  keepKeylessPattern(pattern: Pattern): void {
+    this.#keptKeylessIdentities.add(
+      this.ensureKeylessPatternIdentity(pattern).identity,
+    );
   }
 
   /**
