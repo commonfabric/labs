@@ -196,7 +196,7 @@ export const cellDatabaseFileName = (
   scopeKey: string = "space",
 ): string => {
   // TODO(danfuzz): This naming lets one space reach another's cell databases
-  // (Topics top/2495), and getting past it is a major migration. A name is
+  // (`top/2495`), and getting past it is a major migration. A name is
   // `cell-<h(space)>-<h(id)>[-<h(scopeKey)>].sqlite`, where `h` is
   // `hashToken()`: FNV-1a 32-bit plus the input's length in hex, unkeyed.
   // Every `did:key` DID has the same length, so the space part carries 32
