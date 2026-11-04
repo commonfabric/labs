@@ -1437,13 +1437,16 @@ the run waits out the full minute and reports nothing that names the cause.
 `waitForCondition` carries the same block, and carries it for every wait rather
 than for a wrapped few. A wait that reaches the stuck-condition net renders the
 source the page ran, the arguments it was handed one to a line, the last throw
-the predicate itself made where it made one, and the page it ran out against;
-`describeConditionWaitFailure` in `runtime/integration/utils.ts` assembles
-that. The source is usually what names the wait, waits carrying no names of
-their own, and where several sites share one predicate the arguments are what
-tell them apart. The predicate's own throw is the part nothing else can supply:
-a predicate that throws on every evaluation leaves a page identical to one a
-predicate merely reads as false.
+the predicate itself made where it made one, what the loggers of the test's own
+process have recorded at `error`, and the page it ran out against;
+`describeConditionWaitFailure` in `runtime/integration/utils.ts` assembles that.
+The source is usually what names the wait, waits carrying no names of their own,
+and where several sites share one predicate the arguments are what tell them
+apart. The predicate's own throw is the part nothing else can supply: a
+predicate that throws on every evaluation leaves a page identical to one a
+predicate merely reads as false. The test process's errors are the other part: a
+test's own runtime logs there rather than in any page's worker, so a page can
+sit idle over a refusal that only that process recorded.
 
 The predicate is an opaque function, so the probe it is handed records the
 selectors it asks `collect()` for, and the report gives each one's matches at

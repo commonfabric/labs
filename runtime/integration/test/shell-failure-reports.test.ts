@@ -1,9 +1,17 @@
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  it,
+} from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { getLogger, resetAllLoggerCounts } from "@commonfabric/logger";
 import { RequestType } from "@commonfabric/runtime-client";
 
 import { Browser } from "../browser.ts";
@@ -11,6 +19,7 @@ import type { Page } from "../page.ts";
 import {
   assertShellDocument,
   describeShellPage,
+  describeTestProcessLoggerErrors,
   readAndDescribeShellPage,
   readShellPageProbe,
   type ShellPageProbe,
@@ -809,6 +818,44 @@ describe("shell-failure-reports", () => {
       expect(message).not.toContain("predicate threw:");
     });
 
+    it("names the test process's own logger errors, apart from the worker's", async () => {
+      await load("/logging-runtime");
+      resetAllLoggerCounts();
+      getLogger("test-process-report", { enabled: false }).error(
+        "schema-doc-quarantine",
+        "the document was refused",
+      );
+
+      try {
+        const lines = (await shortNetRejectionMessage(() =>
+          waitForCondition(page, () =>
+            false)
+        )).split("\n");
+
+        const testProcess = lines.indexOf(
+          "  test process logger errors, over its whole run (1 kind, most " +
+            "errors first):",
+        );
+        expect(testProcess).toBeGreaterThan(-1);
+        expect(lines[testProcess + 1]).toBe(
+          "    test-process-report schema-doc-quarantine: 1 error, 0 warn",
+        );
+        expect(lines[testProcess + 2]).toBe(
+          "      error 1 of 1: the document was refused",
+        );
+        // The worker's block stays its own, and carries none of them.
+        const worker = lines.indexOf(
+          "  worker warnings and errors (3 kinds, most errors first):",
+        );
+        expect(worker).toBeGreaterThan(testProcess + 2);
+        expect(lines.slice(worker).join("\n")).not.toContain(
+          "schema-doc-quarantine",
+        );
+      } finally {
+        resetAllLoggerCounts();
+      }
+    });
+
     it("names the throw a predicate made, which the page cannot show", async () => {
       await load("/booted-shell");
 
@@ -1252,6 +1299,50 @@ describe("shell-failure-reports", () => {
             "Error: the worker did not answer within 30000ms",
         );
       });
+    });
+  });
+
+  describe("describeTestProcessLoggerErrors()", () => {
+    // These count against every logger in this process, so each case starts
+    // from none, and asserts a whole line.
+
+    beforeEach(() => resetAllLoggerCounts());
+
+    afterEach(() => resetAllLoggerCounts());
+
+    it("reports that a process with no logger error has none", () => {
+      expect(describeTestProcessLoggerErrors()).toStrictEqual([
+        "  test process logger errors, over its whole run: none",
+      ]);
+    });
+
+    it("returns each error-level kind with its text, most errors first", () => {
+      const logger = getLogger("test-process-errors", { enabled: false });
+      logger.warn("noisy", "a warning");
+      logger.error("noisy", "the first error");
+      logger.error("quarantine", "the document was refused");
+      logger.error("quarantine", "another was refused");
+
+      expect(describeTestProcessLoggerErrors()).toStrictEqual([
+        "  test process logger errors, over its whole run (2 kinds, most " +
+        "errors first):",
+        "    test-process-errors quarantine: 2 error, 0 warn",
+        "      error 1 of 2: the document was refused",
+        "      error 2 of 2: another was refused",
+        "    test-process-errors noisy: 1 error, 1 warn",
+        "      error 1 of 1: the first error",
+      ]);
+    });
+
+    it("returns nothing for a kind recorded only below `error`", () => {
+      getLogger("test-process-warnings", { enabled: false }).warn(
+        "noisy",
+        "a warning",
+      );
+
+      expect(describeTestProcessLoggerErrors()).toStrictEqual([
+        "  test process logger errors, over its whole run: none",
+      ]);
     });
   });
 

@@ -1,3 +1,7 @@
+import {
+  getLoggerCountsBreakdown,
+  getLoggerErrorMessagesBreakdown,
+} from "@commonfabric/logger";
 import type { PendingRequestDiagnostic } from "@commonfabric/runtime-client";
 
 import { describeThrown } from "./describe-thrown.ts";
@@ -26,17 +30,17 @@ const CONSOLE_TAIL_LIMIT = 40;
  */
 const WORKER_LOG_BUDGET_MS = 30_000;
 
-// How many kinds of worker warning and error a report lists.
-const WORKER_PROBLEM_LIMIT = 20;
+// How many kinds of logged warning and error a report lists, for one process.
+const LOG_PROBLEM_LIMIT = 20;
 
 // How many of the selectors a wait's condition collected a report lists.
 const CONDITION_ELEMENT_LIMIT = 20;
 
 /**
- * One message a logger in the page's runtime worker has recorded at `warn` or
- * `error`, with how many times it did at each.
+ * One message a logger has recorded at `warn` or `error`, with how many times
+ * it did at each.
  */
-export interface WorkerLogProblem {
+export interface LogProblem {
   /** The name of the logger that recorded it. */
   logger: string;
 
@@ -50,10 +54,9 @@ export interface WorkerLogProblem {
   error: number;
 
   /**
-   * The earliest messages it was recorded with at `error`, as the worker's
-   * logger kept them. There are at most a few, however large `error` is. Absent
-   * where it was never recorded at `error`, and where the runtime does not
-   * report them.
+   * The earliest messages it was recorded with at `error`, as the logger kept
+   * them. There are at most a few, however large `error` is. Absent where it
+   * was never recorded at `error`, and where the process does not report them.
    */
   errorMessages?: string[];
 }
@@ -145,7 +148,7 @@ export interface ShellPageProbe {
    * trouble. Absent where there is no runtime to ask, and where the runtime is
    * one that does not report them.
    */
-  workerProblems?: WorkerLogProblem[];
+  workerProblems?: LogProblem[];
 
   /**
    * Why those could not be read, when asking threw or the worker did not
@@ -374,7 +377,7 @@ async function readWorkerProblemsInPage(
         };
       };
     }).commonfabric?.rt;
-    let workerProblems: WorkerLogProblem[] | undefined;
+    let workerProblems: LogProblem[] | undefined;
     let workerProblemsError: string | undefined;
     let workerErrorMessagesError: string | undefined;
     if (rt?.getLoggerCounts) {
@@ -472,6 +475,65 @@ function describePendingRequests(probe: ShellPageProbe): string[] {
 }
 
 /**
+ * Renders `problems` under `heading`, one line per message with the text of what
+ * was recorded at `error` beneath it, up to {@link LOG_PROBLEM_LIMIT}.
+ */
+function describeLogProblems(
+  heading: string,
+  problems: LogProblem[],
+): string[] {
+  const shown = problems.slice(0, LOG_PROBLEM_LIMIT);
+  const lines = [
+    `${heading} (${problems.length} ` +
+    `${problems.length === 1 ? "kind" : "kinds"}, most errors first):`,
+    ...shown.flatMap((problem) => [
+      `    ${problem.logger} ${problem.message}: ` +
+      `${problem.error} error, ${problem.warn} warn`,
+      ...(problem.errorMessages ?? []).map((message, index) =>
+        `      error ${index + 1} of ${problem.error}: ` +
+        message.replace(/\s+/g, " ")
+      ),
+    ]),
+  ];
+  if (problems.length > shown.length) {
+    lines.push(`    and ${problems.length - shown.length} more`);
+  }
+  return lines;
+}
+
+/**
+ * Renders what the loggers of the process running the test have recorded at
+ * `error`, most errors first.
+ *
+ * The test's own runtime logs here and not in any page's worker, so nothing else
+ * in a report reads it. A logger's counts cover the whole process, so an error
+ * listed here may come from an earlier test in the same file.
+ */
+export function describeTestProcessLoggerErrors(): string[] {
+  const heading = "  test process logger errors, over its whole run";
+  const messages = getLoggerErrorMessagesBreakdown();
+  const problems: LogProblem[] = [];
+  for (
+    const [logger, byMessage] of Object.entries(getLoggerCountsBreakdown())
+  ) {
+    if (typeof byMessage !== "object") continue;
+    for (const [message, levels] of Object.entries(byMessage)) {
+      if (typeof levels !== "object" || levels.error === 0) continue;
+      problems.push({
+        logger,
+        message,
+        warn: levels.warn,
+        error: levels.error,
+        errorMessages: messages[logger]?.[message],
+      });
+    }
+  }
+  if (problems.length === 0) return [`${heading}: none`];
+  problems.sort((a, b) => b.error - a.error || b.warn - a.warn);
+  return describeLogProblems(heading, problems);
+}
+
+/**
  * Helper for {@link describeShellPage}, which renders the warnings and errors
  * the page's runtime worker has recorded, one line per message, most errors
  * first, with the text of what was recorded at `error` beneath its line.
@@ -493,22 +555,7 @@ function describeWorkerProblems(probe: ShellPageProbe): string[] {
     return [`${heading}: this runtime does not report them`];
   }
   if (problems.length === 0) return [`${heading}: none`];
-  const shown = problems.slice(0, WORKER_PROBLEM_LIMIT);
-  const lines = [
-    `${heading} (${problems.length} ` +
-    `${problems.length === 1 ? "kind" : "kinds"}, most errors first):`,
-    ...shown.flatMap((problem) => [
-      `    ${problem.logger} ${problem.message}: ` +
-      `${problem.error} error, ${problem.warn} warn`,
-      ...(problem.errorMessages ?? []).map((message, index) =>
-        `      error ${index + 1} of ${problem.error}: ` +
-        message.replace(/\s+/g, " ")
-      ),
-    ]),
-  ];
-  if (problems.length > shown.length) {
-    lines.push(`    and ${problems.length - shown.length} more`);
-  }
+  const lines = describeLogProblems(heading, problems);
   if (probe.workerErrorMessagesError !== undefined) {
     lines.push(
       `    reading the errors' messages failed: ` +

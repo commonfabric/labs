@@ -3,6 +3,7 @@ import { describeThrown } from "./describe-thrown.ts";
 import type { Page } from "./page.ts";
 import {
   type ConditionElement,
+  describeTestProcessLoggerErrors,
   readAndDescribeShellPage,
 } from "./shell-page-probe.ts";
 
@@ -57,7 +58,8 @@ function oneLine(value: string): string {
 }
 
 /**
- * Render what a wait was waiting for and what `page` held while it waited.
+ * Render what a wait was waiting for, what the test's own process logged as
+ * errors, and what `page` held while it waited.
  *
  * `predicateSource` is the source the page ran, and it is usually what names
  * the wait, waits carrying no names of their own. Where several waits share
@@ -105,6 +107,7 @@ export async function describeConditionWaitFailure(
   if (predicateError !== undefined) {
     lines.push(`  predicate threw: ${oneLine(predicateError)}`);
   }
+  for (const line of describeTestProcessLoggerErrors()) lines.push(line);
   lines.push(await readAndDescribeShellPage(page, waiter));
   return lines.join("\n");
 }
