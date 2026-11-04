@@ -1704,6 +1704,12 @@ const pieceOwnedStores = (
  * identity is addressing alone: a bookkeeping run acts as no principal
  * (serving-loop.md §3d).
  */
+/** Whether a transaction has neither committed nor aborted yet. */
+const isOpenTransaction = (tx: IExtendedStorageTransaction): boolean => {
+  const { status } = tx.status();
+  return status === "ready" || status === "pending";
+};
+
 const stampDeferredStart = (
   runtime: Runtime,
   from: IExtendedStorageTransaction,
@@ -6032,21 +6038,29 @@ export class Runner {
       onInitialCommit?: (settlement: PieceInstantiationSettlement) => void;
     } = {},
   ): Cancel {
+    // Every option is taken out of `options` here, and nothing below names
+    // `options` again: a closure that did would keep the object, and through
+    // its `tx` the start's transaction, for as long as the piece runs.
     const {
       tx,
       givenPattern,
       doNotUpdateOnPatternChange,
+      variantRegistration,
+      schedulerRehydration: givenSchedulerRehydration,
+      awaitSyncBeforeInitialRun,
+      parentPieceRootId,
+      onInitialCommit,
     } = options;
     if (
-      options.variantRegistration === undefined &&
+      variantRegistration === undefined &&
       this.#usesScopedPrograms(resultCell)
     ) {
       return this.#startScopedPrograms(resultCell, options);
     }
     const registrations: Map<string, PieceRegistration> =
-      options.variantRegistration?.registrations ?? this.#cancels;
+      variantRegistration?.registrations ?? this.#cancels;
     const pieceKey = this.#getDocKey(resultCell);
-    const key = options.variantRegistration?.selection.key ??
+    const key = variantRegistration?.selection.key ??
       this.#getDocKey(resultCell);
     // Before the registration below is set, so that a listener reads the
     // registry as it stood when this install began.
@@ -6083,7 +6097,7 @@ export class Runner {
       // recovery each tear that group down and re-instantiate, so the
       // enrollment would survive only while every such site happened to cancel
       // before instantiating.
-      if (options.variantRegistration === undefined) {
+      if (variantRegistration === undefined) {
         this.#runtime.releaseRuntimeOwnedStores(
           resultCell.getAsNormalizedFullLink(),
           runtimeWritePolicyAuthorization,
@@ -6236,17 +6250,17 @@ export class Runner {
       // patternIdentity hot-swap must register fresh under the same durable
       // piece identity rather than replaying the old implementation's cache.
       const schedulerRehydration = initialSchedulerRehydrationAvailable
-        ? options.schedulerRehydration ?? this.#schedulerRehydrationOptions(
+        ? givenSchedulerRehydration ?? this.#schedulerRehydrationOptions(
           resultCell,
-          options.awaitSyncBeforeInitialRun,
-          options.parentPieceRootId,
+          awaitSyncBeforeInitialRun,
+          parentPieceRootId,
         )
         : this.#schedulerRehydrationOptions(
           resultCell,
           undefined,
-          options.parentPieceRootId,
+          parentPieceRootId,
         );
-      schedulerRehydration.implementationSelection = options.variantRegistration
+      schedulerRehydration.implementationSelection = variantRegistration
         ?.selection;
       initialSchedulerRehydrationAvailable = false;
       let commitSettlement: PieceInstantiationSettlement | undefined;
@@ -7222,19 +7236,26 @@ export class Runner {
         this.#trackWatcherPatternLoad(pieceKey, follows, followed);
       };
       addCancel(resultCell.sinkMeta("patternIdentity", observePointer));
-      const lagging = laggingPointer;
-      lagging?.startTx.addCommitCallback((_committed, outcome) => {
-        if (laggingPointer !== lagging) return;
-        laggingPointer = undefined;
-        if (!outcome.error) return;
-        const read = this.#runtime.readTx();
-        try {
-          observePointer(resultCell.withTx(read).getMetaRaw("patternIdentity"));
-        } finally {
-          read.clearReadOnly?.();
-          read.abort("stored pattern pointer read complete");
-        }
-      });
+      // The record is passed in rather than kept in a variable of this scope:
+      // the closures of one scope share what it holds, and the session swap
+      // handler among them lives as long as the piece, which would keep the
+      // start's transaction, and all it touched, with it.
+      ((lagging) => {
+        lagging?.startTx.addCommitCallback((_committed, outcome) => {
+          if (laggingPointer !== lagging) return;
+          laggingPointer = undefined;
+          if (!outcome.error) return;
+          const read = this.#runtime.readTx();
+          try {
+            observePointer(
+              resultCell.withTx(read).getMetaRaw("patternIdentity"),
+            );
+          } finally {
+            read.clearReadOnly?.();
+            read.abort("stored pattern pointer read complete");
+          }
+        });
+      })(laggingPointer);
     };
 
     // Initial instantiation with a cold-start setup repair for pieces mounted
@@ -7367,7 +7388,7 @@ export class Runner {
         };
       }
       const settlement = instantiatePattern(pattern, useTx);
-      if (settlement !== undefined) options.onInitialCommit?.(settlement);
+      if (settlement !== undefined) onInitialCommit?.(settlement);
     };
 
     const resultCellForRead = tx ? resultCell.withTx(tx) : resultCell;
@@ -7379,7 +7400,16 @@ export class Runner {
     if (givenPattern) {
       currentPatternKey = initialRef ? patternIdentityKey(initialRef) : KEYLESS;
       instantiatedPatternKey = currentPatternKey;
-      if (tx !== undefined && this.#writesDocumentOf(tx, resultCell)) {
+      // Only for a start that arms the watcher, which is what reads the
+      // pointer, and only while that transaction is open: once it has
+      // settled, the store holds what it wrote, or what it left in place,
+      // and there is no lag. The watcher clears the pointer when the
+      // transaction settles; a start without one would keep it, and the
+      // transaction with it, for as long as the piece runs.
+      if (
+        tx !== undefined && !doNotUpdateOnPatternChange &&
+        this.#writesDocumentOf(tx, resultCell) && isOpenTransaction(tx)
+      ) {
         laggingPointer = { startTx: tx };
       }
       try {
@@ -14171,18 +14201,17 @@ export class Runner {
     // runs once rather than per event.
     const causalInputs = causalFormOfBinding(inputs) as Record<string, any>;
 
-    const handlerResultCell = schedulerRehydration.viewLocalOnly
-      ? resultCell.withTx()
-      : resultCell;
+    // Without the start's transaction: the handler runs on transactions of
+    // its own, and a closure that kept the start's would keep what it read
+    // and wrote for as long as the piece runs.
+    const handlerResultCell = resultCell.withTx();
     // Each run gets a frame context of its own, so its frame, which stays
     // pushed until an async result settles, is invisible to anything that runs
     // while it awaits.
     const handler = (tx: IExtendedStorageTransaction, event: any) =>
       runInFrameContext(() => runHandler(tx, event));
     const runHandler = (tx: IExtendedStorageTransaction, event: any) => {
-      const resultCell = schedulerRehydration.viewLocalOnly
-        ? handlerResultCell.withTx(tx)
-        : handlerResultCell;
+      const resultCell = handlerResultCell.withTx(tx);
       if (event?.preventDefault) event.preventDefault();
 
       // The dispatch-side closed-world gate. A present payload that cannot
@@ -14448,7 +14477,7 @@ export class Runner {
             $event: event,
           };
           const inputsCell = this.#runtime.getImmutableCell(
-            resultCell.space,
+            handlerResultCell.space,
             eventInputs,
             module.argumentSchema,
             tx,
@@ -14517,12 +14546,15 @@ export class Runner {
       : reads.filter((read) =>
         !forwarded.some((link) => areNormalizedLinksSame(link, read))
       );
+    // Through `handlerResultCell`, as in the handler: these closures live as
+    // long as the node, and the destructured parameters sit in a scope of
+    // their own that any closure naming `resultCell` would keep.
     const populateDependencies = reads.length > 0
       ? (depTx: IExtendedStorageTransaction, event: any) => {
         this.#populateDeclaredSchedulerReads(declaredSchedulerReads, depTx);
         this.#populateHandlerEventSchedulerReads(
           module.argumentSchema,
-          resultCell,
+          handlerResultCell,
           event,
           depTx,
         );
@@ -14534,7 +14566,7 @@ export class Runner {
           $event: event,
         };
         const inputsCell = this.#runtime.getImmutableCell(
-          resultCell.space,
+          handlerResultCell.space,
           eventInputs,
           undefined,
           depTx,
@@ -14584,18 +14616,18 @@ export class Runner {
       fn: fnSource,
     };
 
-    const actionResultCell = schedulerRehydration.viewLocalOnly
-      ? resultCell.withTx()
-      : resultCell;
+    // Without the start's transaction, as for a handler. The inputs cell too:
+    // the action reads it on its own transaction.
+    const actionResultCell = resultCell.withTx();
+    const actionInputsCell = inputsCell.withTx();
     const action: Action & {
       ignoredSchedulingWrites?: NormalizedFullLink[];
     } = (tx: IExtendedStorageTransaction) =>
       // A frame context of its own, as for a handler.
       runInFrameContext(() => runAction(tx));
     const runAction = (tx: IExtendedStorageTransaction) => {
-      const resultCell = schedulerRehydration.viewLocalOnly
-        ? actionResultCell.withTx(tx)
-        : actionResultCell;
+      const resultCell = actionResultCell.withTx(tx);
+      const runInputsCell = actionInputsCell.withTx(tx);
       action.ignoredSchedulingWrites = [];
       if (schedulerRehydration.implementationSelection?.matches(tx) === false) {
         return;
@@ -14665,7 +14697,7 @@ export class Runner {
           try {
             return this.#readJavaScriptArgument(
               module,
-              inputsCell,
+              runInputsCell,
               tx,
               { bindTxToSchema: true },
             );
@@ -14678,7 +14710,7 @@ export class Runner {
           name,
           isValidArgument,
           module,
-          inputsCell,
+          runInputsCell,
         );
 
         if (!isValidArgument || previouslyInvalidArgument) {
@@ -14688,7 +14720,7 @@ export class Runner {
               isValidArgument
                 ? "action argument is valid now -- running"
                 : "action argument is undefined (potential schema mismatch) -- not running",
-              this.#getJavaScriptInputState(module, inputsCell),
+              this.#getJavaScriptInputState(module, runInputsCell),
             ],
           );
           previouslyInvalidArgument = !isValidArgument;
@@ -14875,9 +14907,13 @@ export class Runner {
       ...writes,
       ...staticRedirectWriteTargets,
     ]);
+    // The closures below name `actionResultCell`, not the `resultCell`
+    // parameter: this function's parameters are destructured, so they live in
+    // a scope of their own that every closure made here keeps, and a closure
+    // that named `resultCell` would keep the start's transaction with it.
     const structuralMetaLinks = module.completeSchedulerScopeSummary === true
       ? META_LINK_FIELDS
-        .map((field) => getMetaLink(resultCell, field))
+        .map((field) => getMetaLink(actionResultCell, field))
         .filter((link): link is NormalizedFullLink => link !== undefined)
       : [];
     const internalMetaLink = module.completeSchedulerScopeSummary === true
@@ -14886,7 +14922,7 @@ export class Runner {
       : undefined;
     const derivedInternalLinks = module.completeSchedulerScopeSummary === true
       ? (pattern.derivedInternalCells ?? []).map((descriptor) =>
-        getDerivedInternalCellLink(resultCell, descriptor)
+        getDerivedInternalCellLink(actionResultCell, descriptor)
       )
       : [];
     const wrappedAction = Object.assign(action, {
@@ -14939,6 +14975,28 @@ export class Runner {
     );
   }
 
+  /**
+   * The cells a node's inputs write through, resolved under the
+   * machinery-read boundary. A method rather than a closure at the call
+   * site: that closure would share its scope with the node's action, and
+   * the result cell it captured, bound to the start's transaction, would be
+   * kept for as long as the piece runs.
+   */
+  #writeRedirectCellsUnderMachineryRead(
+    tx: IExtendedStorageTransaction,
+    inputs: unknown,
+    resultCell: Cell<any>,
+    options?: {
+      skipTopLevelKeys?: ReadonlySet<string>;
+      followRedirectChains?: boolean;
+    },
+  ): NormalizedFullLink[] {
+    return tx.runWithAmbientReadMeta(
+      machineryRead,
+      () => findAllWriteRedirectCells(inputs, resultCell, options),
+    );
+  }
+
   #instantiateJavaScriptNode(
     tx: IExtendedStorageTransaction,
     plan: NodePlan & { kind: "javascript" },
@@ -14951,12 +15009,11 @@ export class Runner {
     // Pre-sync reads the inputs document under the module's schema. Only
     // instantiation needs the scheduler's static read links, so resolve them
     // here, under the same machinery-read boundary as the bound plan.
-    const reads = tx.runWithAmbientReadMeta(
-      machineryRead,
-      () =>
-        findAllWriteRedirectCells(inputs, resultCell, {
-          followRedirectChains: !usesLocalReads(cellTx(resultCell)),
-        }),
+    const reads = this.#writeRedirectCellsUnderMachineryRead(
+      tx,
+      inputs,
+      resultCell,
+      { followRedirectChains: !usesLocalReads(cellTx(resultCell)) },
     );
     const { fn, name } = this.#resolveJavaScriptFunction(module);
     const context: JavaScriptNodeContext = {
@@ -15254,17 +15311,19 @@ export class Runner {
     // so the scheduler does not pull their writers. Resume pre-sync uses
     // inputsCell directly and does not need this scheduler read list.
     const opaqueInputKeys = opaqueArgumentKeys(module.argumentSchema);
-    const inputCells = tx.runWithAmbientReadMeta(
-      machineryRead,
-      () =>
-        findAllWriteRedirectCells(
-          plan.inputs,
-          resultCell,
-          opaqueInputKeys.size > 0
-            ? { skipTopLevelKeys: opaqueInputKeys }
-            : undefined,
-        ),
+    const inputCells = this.#writeRedirectCellsUnderMachineryRead(
+      tx,
+      plan.inputs,
+      resultCell,
+      opaqueInputKeys.size > 0
+        ? { skipTopLevelKeys: opaqueInputKeys }
+        : undefined,
     );
+    // The result cell without the start's transaction, for the closures
+    // below: they share this scope with the node's action, which lives as
+    // long as the piece, and a closure naming `resultCell` would keep the
+    // start's transaction with it for that long.
+    const nodeResultCell = resultCell.withTx();
     if (typeof module.implementation !== "function") {
       throw new Error(
         `Raw module is not a function, got: ${module.implementation}`,
@@ -15289,6 +15348,7 @@ export class Runner {
       builtinResult = module.implementation(
         inputsCell,
         (tx: IExtendedStorageTransaction, result: any) => {
+          const resultCell = nodeResultCell.withTx(tx);
           const outputBindingSchema = schemaForRawBuiltinRootOutputBinding(
             tx,
             this.#runtime,
