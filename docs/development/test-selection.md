@@ -2235,8 +2235,10 @@ ran the first.
 [Running a failure again](#running-a-failure-again) is the exception. A rerun
 runs its unit as the first pass did, new tests included, so that it asks the
 same tests the same thing, and a new test that failed is one a rerun can be
-for. What the reruns of a lane spend is bounded by `RERUN_BUDGET_SECONDS`
-instead.
+for. A rerun starts only where the packer's charge for its unit fits in what
+is left of `RERUN_BUDGET_SECONDS`, and that charge leaves new tests out, so a
+rerun of a unit holding them can take longer than it was charged; the lane's
+step timeout is what bounds that.
 
 Two things are worth knowing while writing one, and both are consequences
 of the identity being the reported name:
