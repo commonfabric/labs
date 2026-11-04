@@ -2691,7 +2691,8 @@ answer is the posture the client needs. At five seconds that is logged at error
 level (key `read-slow`), and the client holds its startup for the answer. When
 a document arrives after that error or after a failed attempt, a warning (key
 `read-late`) says how long it took. A server that says nothing ends the whole
-read at 60 seconds (`DEPLOYMENT_RESPONSE_BOUND_MS`), and the client then takes
+read, retries included, at 60 seconds (`DEPLOYMENT_RESPONSE_BOUND_MS`), having
+been asked once, and the client then takes
 the fallback above and goes on to its health check. `Runtime.healthCheck` has
 the same bound, and a host with no response by then counts as unreachable, so
 that server fails with `Could not connect to "..."`, 120 seconds after the
