@@ -1,9 +1,17 @@
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  it,
+} from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { getLogger, resetAllLoggerCounts } from "@commonfabric/logger";
 import { RequestType } from "@commonfabric/runtime-client";
 
 import { Browser } from "../browser.ts";
@@ -11,6 +19,7 @@ import type { Page } from "../page.ts";
 import {
   assertShellDocument,
   describeShellPage,
+  describeTestProcessLoggerErrors,
   readAndDescribeShellPage,
   readShellPageProbe,
   type ShellPageProbe,
@@ -148,9 +157,47 @@ const LOGGING_RUNTIME_DOCUMENT = `<!DOCTYPE html>
           },
         },
       }),
+      getLoggerErrorMessages: () => Promise.resolve({
+        "storage.v2": {
+          "sync-load-failure": ["the first load failed", "the second did too"],
+        },
+        scheduler: { "schedule-error": ["the action threw"] },
+      }),
     },
   };
 </script>
+</body></html>`;
+
+// A booted shell whose runtime's worker returns its counts, and then refuses the
+// request for the messages behind them.
+const REFUSING_MESSAGES_DOCUMENT = `<!DOCTYPE html>
+<html><head><title>Common Fabric</title></head>
+<body><x-root-view></x-root-view>
+<script>
+  globalThis.commonfabric = {
+    rt: {
+      getLoggerCounts: () => Promise.resolve({
+        counts: {
+          total: 1,
+          runner: {
+            total: 1,
+            "action-failed": { debug: 0, info: 0, warn: 0, error: 1, total: 1 },
+          },
+        },
+      }),
+      getLoggerErrorMessages: () =>
+        Promise.reject(new Error("the worker has gone")),
+    },
+  };
+</script>
+</body></html>`;
+
+// A document holding an element that is laid out and one that is not.
+const ELEMENTS_DOCUMENT = `<!DOCTYPE html>
+<html><head><title>Common Fabric</title></head>
+<body><x-root-view></x-root-view>
+<div id="hidden" style="display: none">hidden</div>
+<div id="shown">shown</div>
 </body></html>`;
 
 // A booted shell whose runtime still reports its requests, but whose worker
@@ -250,6 +297,14 @@ function handle(request: Request): Response {
       });
     case "/logging-runtime":
       return new Response(LOGGING_RUNTIME_DOCUMENT, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    case "/refusing-messages":
+      return new Response(REFUSING_MESSAGES_DOCUMENT, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    case "/elements":
+      return new Response(ELEMENTS_DOCUMENT, {
         headers: { "content-type": "text/html; charset=utf-8" },
       });
     case "/wedged-worker":
@@ -438,11 +493,29 @@ describe("shell-failure-reports", () => {
           message: "sync-load-failure",
           warn: 1,
           error: 3,
+          errorMessages: ["the first load failed", "the second did too"],
         },
         { logger: "runner", message: "action-failed", warn: 4, error: 2 },
-        { logger: "scheduler", message: "schedule-error", warn: 0, error: 2 },
+        {
+          logger: "scheduler",
+          message: "schedule-error",
+          warn: 0,
+          error: 2,
+          errorMessages: ["the action threw"],
+        },
       ]);
       expect(probe.workerProblemsError).toBeUndefined();
+    });
+
+    it("returns the counts and the reason when the worker refuses the messages behind them", async () => {
+      await load("/refusing-messages");
+
+      const probe = await readShellPageProbe(page);
+      expect(probe.workerProblems).toEqual([
+        { logger: "runner", message: "action-failed", warn: 0, error: 1 },
+      ]);
+      expect(probe.workerProblemsError).toBeUndefined();
+      expect(probe.workerErrorMessagesError).toContain("the worker has gone");
     });
 
     it("returns an empty list for a worker that has logged no warning or error", async () => {
@@ -745,6 +818,44 @@ describe("shell-failure-reports", () => {
       expect(message).not.toContain("predicate threw:");
     });
 
+    it("names the test process's own logger errors, apart from the worker's", async () => {
+      await load("/logging-runtime");
+      resetAllLoggerCounts();
+      getLogger("test-process-report", { enabled: false }).error(
+        "schema-doc-quarantine",
+        "the document was refused",
+      );
+
+      try {
+        const lines = (await shortNetRejectionMessage(() =>
+          waitForCondition(page, () =>
+            false)
+        )).split("\n");
+
+        const testProcess = lines.indexOf(
+          "  test process logger errors, over its whole run (1 kind, most " +
+            "errors first):",
+        );
+        expect(testProcess).toBeGreaterThan(-1);
+        expect(lines[testProcess + 1]).toBe(
+          "    test-process-report schema-doc-quarantine: 1 error, 0 warn",
+        );
+        expect(lines[testProcess + 2]).toBe(
+          "      error 1 of 1: the document was refused",
+        );
+        // The worker's block stays its own, and carries none of them.
+        const worker = lines.indexOf(
+          "  worker warnings and errors (3 kinds, most errors first):",
+        );
+        expect(worker).toBeGreaterThan(testProcess + 2);
+        expect(lines.slice(worker).join("\n")).not.toContain(
+          "schema-doc-quarantine",
+        );
+      } finally {
+        resetAllLoggerCounts();
+      }
+    });
+
     it("names the throw a predicate made, which the page cannot show", async () => {
       await load("/booted-shell");
 
@@ -756,6 +867,141 @@ describe("shell-failure-reports", () => {
       expect(message).toContain(
         "predicate threw: Error: the predicate itself is broken",
       );
+    });
+
+    it("prints the messages behind the worker's errors", async () => {
+      await load("/logging-runtime");
+
+      const message = await shortNetRejectionMessage(() =>
+        waitForCondition(page, () => false)
+      );
+      expect(message.split("\n")).toContain(
+        "      error 1 of 3: the first load failed",
+      );
+      expect(message.split("\n")).toContain(
+        "      error 1 of 2: the action threw",
+      );
+    });
+
+    describe("what the condition collected", () => {
+      // Each case runs a real wait, since what it reports is what the probe
+      // recorded in the page while the predicate ran. `describeShellPage()`'s
+      // own cases cover the wording.
+
+      it("reports that an element the condition collected never existed", async () => {
+        await load("/elements");
+
+        const message = await shortNetRejectionMessage(() =>
+          waitForCondition(
+            page,
+            (probe) =>
+              probe.collect("#absent").some((element) =>
+                probe.isRendered(element)
+              ),
+          )
+        );
+        expect(message.split("\n")).toContain(
+          '    "#absent": no match now, or at any check during the wait',
+        );
+      });
+
+      it("reports an element that exists and failed the rest of the condition", async () => {
+        await load("/elements");
+
+        const message = await shortNetRejectionMessage(() =>
+          waitForCondition(
+            page,
+            (probe) =>
+              probe.collect("#hidden").some((element) =>
+                probe.isRendered(element)
+              ),
+          )
+        );
+        expect(message.split("\n")).toContain(
+          '    "#hidden": 1 matched now, 0 rendered, at most 1 at any check ' +
+            "during the wait",
+        );
+      });
+
+      it("reports a rendered element, whose absence is not what the wait is stuck on", async () => {
+        await load("/elements");
+
+        const message = await shortNetRejectionMessage(() =>
+          waitForCondition(page, (probe) => probe.collect("#shown").length > 1)
+        );
+        expect(message.split("\n")).toContain(
+          '    "#shown": 1 matched now, 1 rendered, at most 1 at any check ' +
+            "during the wait",
+        );
+      });
+
+      it("reports an element that was there and has gone", async () => {
+        await load("/elements");
+
+        // The predicate removes what it finds, so its first check matches one
+        // element and every later one matches none.
+        const message = await shortNetRejectionMessage(() =>
+          waitForCondition(page, (probe) => {
+            for (const element of probe.collect("#shown")) element.remove();
+            return false;
+          })
+        );
+        expect(message.split("\n")).toContain(
+          '    "#shown": 0 matched now, 0 rendered, at most 1 at any check ' +
+            "during the wait",
+        );
+      });
+
+      it("does not count writing the report as a check", async () => {
+        await load("/elements");
+
+        // The first check finds nothing and adds the element, and no later
+        // check collects, so only the report's own read could find it.
+        const message = await shortNetRejectionMessage(() =>
+          waitForCondition(page, (probe) => {
+            if (document.querySelector("#late") === null) {
+              probe.collect("#late");
+              const late = document.createElement("div");
+              late.id = "late";
+              late.textContent = "late";
+              document.body.append(late);
+            }
+            return false;
+          })
+        );
+        expect(message.split("\n")).toContain(
+          '    "#late": 1 matched now, 1 rendered, at most 0 at any check ' +
+            "during the wait",
+        );
+      });
+
+      it("reports a condition that collected nothing", async () => {
+        await load("/elements");
+
+        const message = await shortNetRejectionMessage(() =>
+          waitForCondition(page, () => false)
+        );
+        expect(message.split("\n")).toContain(
+          "  elements the condition collected: none, it asked the probe to " +
+            "collect nothing",
+        );
+      });
+
+      it("reports a wait whose document a navigation replaced", async () => {
+        await load("/elements");
+
+        const message = await shortNetRejectionMessage(() =>
+          waitForCondition(page, (probe) => {
+            probe.collect("#shown");
+            location.assign("/shell");
+            return false;
+          })
+        );
+        expect(message).toContain(
+          "elements the condition collected: the wait is not installed in " +
+            "this document",
+        );
+      });
     });
   });
 
@@ -827,10 +1073,148 @@ describe("shell-failure-reports", () => {
       );
     });
 
+    describe("elements the condition collected", () => {
+      // These assert a whole line, as the pending-request cases do: the point of
+      // each is which of a few near-identical lines it chose.
+
+      it("says nothing for a report about no wait", () => {
+        expect(
+          describedLines({}).filter((line) =>
+            line.includes("elements the condition collected")
+          ),
+        ).toStrictEqual([]);
+      });
+
+      it("tells an element that never existed from one that failed the rest of the condition", () => {
+        const lines = describedLines({
+          conditionElements: [
+            { selector: "#never", matched: 0, rendered: 0, mostMatched: 0 },
+            { selector: "#gone", matched: 0, rendered: 0, mostMatched: 2 },
+            { selector: "#hidden", matched: 1, rendered: 0, mostMatched: 1 },
+          ],
+        });
+        expect(lines).toContain(
+          "  elements the condition collected (3 selectors):",
+        );
+        expect(lines).toContain(
+          '    "#never": no match now, or at any check during the wait',
+        );
+        expect(lines).toContain(
+          '    "#gone": 0 matched now, 0 rendered, at most 2 at any check ' +
+            "during the wait",
+        );
+        expect(lines).toContain(
+          '    "#hidden": 1 matched now, 0 rendered, at most 1 at any check ' +
+            "during the wait",
+        );
+      });
+
+      it("does not call an element that exists now one with no match", () => {
+        expect(
+          describedLines({
+            conditionElements: [
+              { selector: "#late", matched: 1, rendered: 1, mostMatched: 0 },
+            ],
+          }),
+        ).toContain(
+          '    "#late": 1 matched now, 1 rendered, at most 0 at any check ' +
+            "during the wait",
+        );
+      });
+
+      it("names a single selector without a plural", () => {
+        expect(
+          describedLines({
+            conditionElements: [
+              { selector: "#one", matched: 1, rendered: 1, mostMatched: 1 },
+            ],
+          }),
+        ).toContain("  elements the condition collected (1 selector):");
+      });
+
+      it("lists twenty selectors and counts the rest", () => {
+        const lines = describedLines({
+          conditionElements: Array.from({ length: 23 }, (_, index) => ({
+            selector: `#element-${index}`,
+            matched: 0,
+            rendered: 0,
+            mostMatched: 0,
+          })),
+        });
+        expect(lines).toContain(
+          '    "#element-19": no match now, or at any check during the wait',
+        );
+        expect(lines).not.toContain(
+          '    "#element-20": no match now, or at any check during the wait',
+        );
+        expect(lines).toContain("    and 3 more");
+      });
+
+      it("reports that a condition collected nothing", () => {
+        expect(describedLines({ conditionElements: [] })).toContain(
+          "  elements the condition collected: none, it asked the probe to " +
+            "collect nothing",
+        );
+      });
+
+      it("reports why the elements could not be read", () => {
+        expect(
+          describedLines({ conditionElementsError: "reading them threw: x" }),
+        ).toContain(
+          "  elements the condition collected: reading them threw: x",
+        );
+      });
+    });
+
     describe("worker warnings and errors", () => {
       // These render a probe built here, as the pending-request cases do, and
       // assert a whole line for the same reason: the lines they choose between
       // differ by a few words.
+
+      it("prints the messages behind an error beneath its counts, each on one line", () => {
+        const lines = describedLines({
+          workerProblems: [
+            {
+              logger: "runner",
+              message: "deferred-start-catchup-failed",
+              warn: 0,
+              error: 7,
+              errorMessages: ["the piece has\n  no context", "and again"],
+            },
+          ],
+        });
+        const counts = lines.indexOf(
+          "    runner deferred-start-catchup-failed: 7 error, 0 warn",
+        );
+        expect(counts).toBeGreaterThan(-1);
+        expect(lines[counts + 1]).toBe(
+          "      error 1 of 7: the piece has no context",
+        );
+        expect(lines[counts + 2]).toBe("      error 2 of 7: and again");
+      });
+
+      it("prints only counts for a kind holding no messages", () => {
+        const lines = describedLines({
+          workerProblems: [
+            { logger: "runner", message: "warned", warn: 3, error: 0 },
+          ],
+        });
+        expect(lines).toContain("    runner warned: 0 error, 3 warn");
+        expect(lines.filter((line) => line.includes("error 1 of"))).toEqual([]);
+      });
+
+      it("keeps the counts and says why the messages behind them could not be read", () => {
+        const lines = describedLines({
+          workerProblems: [
+            { logger: "runner", message: "action-failed", warn: 0, error: 1 },
+          ],
+          workerErrorMessagesError: "Error: the worker has gone",
+        });
+        expect(lines).toContain("    runner action-failed: 1 error, 0 warn");
+        expect(lines).toContain(
+          "    reading the errors' messages failed: Error: the worker has gone",
+        );
+      });
 
       it("names each warning or error the worker logged, and its counts", () => {
         const lines = describedLines({
@@ -915,6 +1299,50 @@ describe("shell-failure-reports", () => {
             "Error: the worker did not answer within 30000ms",
         );
       });
+    });
+  });
+
+  describe("describeTestProcessLoggerErrors()", () => {
+    // These count against every logger in this process, so each case starts
+    // from none, and asserts a whole line.
+
+    beforeEach(() => resetAllLoggerCounts());
+
+    afterEach(() => resetAllLoggerCounts());
+
+    it("reports that a process with no logger error has none", () => {
+      expect(describeTestProcessLoggerErrors()).toStrictEqual([
+        "  test process logger errors, over its whole run: none",
+      ]);
+    });
+
+    it("returns each error-level kind with its text, most errors first", () => {
+      const logger = getLogger("test-process-errors", { enabled: false });
+      logger.warn("noisy", "a warning");
+      logger.error("noisy", "the first error");
+      logger.error("quarantine", "the document was refused");
+      logger.error("quarantine", "another was refused");
+
+      expect(describeTestProcessLoggerErrors()).toStrictEqual([
+        "  test process logger errors, over its whole run (2 kinds, most " +
+        "errors first):",
+        "    test-process-errors quarantine: 2 error, 0 warn",
+        "      error 1 of 2: the document was refused",
+        "      error 2 of 2: another was refused",
+        "    test-process-errors noisy: 1 error, 1 warn",
+        "      error 1 of 1: the first error",
+      ]);
+    });
+
+    it("returns nothing for a kind recorded only below `error`", () => {
+      getLogger("test-process-warnings", { enabled: false }).warn(
+        "noisy",
+        "a warning",
+      );
+
+      expect(describeTestProcessLoggerErrors()).toStrictEqual([
+        "  test process logger errors, over its whole run: none",
+      ]);
     });
   });
 

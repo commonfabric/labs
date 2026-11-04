@@ -1415,12 +1415,12 @@ read, and what the page held at the moment it gave up: the document's URL,
 title, and HTTP status, whether the shell's `x-root-view` element is in it,
 whether `globalThis.app` is there and which view it holds, the requests its
 runtime has sent the worker and has no reply to, the messages that worker has
-logged at `warn` or `error` with how often, and the tail of console messages
-`Page.applyConsoleFormatter` retains in the page. Reading the worker's logs is
-a round trip the others do not need, so a worker that has stopped answering
-costs the report that one line, which says so, and nothing else. The page half
-of that is `readShellPageProbe` in
-`runtime/integration/shell-page-probe.ts`; `describeStateWaitFailure` in
+logged at `warn` or `error` with how often, the text of the earliest few it
+logged at `error`, and the tail of console messages `Page.applyConsoleFormatter`
+retains in the page. Reading the worker's logs is a round trip the others do not
+need, so a worker that has stopped answering costs the report that one line,
+which says so, and nothing else. The page half of that is `readShellPageProbe`
+in `runtime/integration/shell-page-probe.ts`; `describeStateWaitFailure` in
 `shell-utils.ts` assembles the whole block, and a test may call it directly to
 report a wait of its own the same way.
 
@@ -1437,13 +1437,26 @@ the run waits out the full minute and reports nothing that names the cause.
 `waitForCondition` carries the same block, and carries it for every wait rather
 than for a wrapped few. A wait that reaches the stuck-condition net renders the
 source the page ran, the arguments it was handed one to a line, the last throw
-the predicate itself made where it made one, and the page it ran out against;
-`describeConditionWaitFailure` in `runtime/integration/utils.ts` assembles
-that. The source is usually what names the wait, waits carrying no names of
-their own, and where several sites share one predicate the arguments are what
-tell them apart. The predicate's own throw is the part nothing else can supply:
-a predicate that throws on every evaluation leaves a page identical to one a
-predicate merely reads as false.
+the predicate itself made where it made one, what the loggers of the test's own
+process have recorded at `error`, and the page it ran out against;
+`describeConditionWaitFailure` in `runtime/integration/utils.ts` assembles that.
+The source is usually what names the wait, waits carrying no names of their own,
+and where several sites share one predicate the arguments are what tell them
+apart. The predicate's own throw is the part nothing else can supply: a
+predicate that throws on every evaluation leaves a page identical to one a
+predicate merely reads as false. The test process's errors are the other part: a
+test's own runtime logs there rather than in any page's worker, so a page can
+sit idle over a refusal that only that process recorded.
+
+The predicate is an opaque function, so the probe it is handed records the
+selectors it asks `collect()` for, and the report gives each one's matches at
+the moment of the report, how many of those are rendered, and the most it
+matched at any check during the wait. That tells apart an element that never
+existed, one that came and went, and one that exists and failed the rest of the
+condition. A predicate that reads the page without `collect()` gets a line
+saying it collected nothing. A waiter is installed in one document, so a wait
+whose document a navigation replaced has no predicate left to run, and the
+report says that too.
 
 The net is five minutes and no test can sit through one, so its length for a
 single wait is read from `CF_WAIT_FOR_CONDITION_TIMEOUT_MS`. That exists for

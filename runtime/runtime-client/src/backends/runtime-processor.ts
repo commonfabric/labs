@@ -142,6 +142,7 @@ import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   getLogger,
   getLoggerCountsBreakdown,
+  getLoggerErrorMessagesBreakdown,
   getLoggerFlagsBreakdown,
   getTimingStatsBreakdown,
   Logger,
@@ -218,6 +219,7 @@ import {
   GetGraphSnapshotRequest,
   type GetHomeSpaceCellRequest,
   type GetLoggerCountsRequest,
+  type GetLoggerErrorMessagesRequest,
   type GetPatternCoverageRequest,
   type GetPatternSourcesRequest,
   type GetSettleStatsHistoryRequest,
@@ -235,6 +237,7 @@ import {
   type JoinVisitedRoomResponse,
   type ListEventAttentionRequest,
   type LoggerCountsResponse,
+  type LoggerErrorMessagesResponse,
   type LoggerMetadata,
   type LogLevel,
   NotificationType,
@@ -3836,6 +3839,12 @@ export class RuntimeProcessor {
     };
   }
 
+  getLoggerErrorMessages(
+    _: GetLoggerErrorMessagesRequest,
+  ): LoggerErrorMessagesResponse {
+    return { messages: getLoggerErrorMessagesBreakdown() };
+  }
+
   setLoggerLevel(request: SetLoggerLevelRequest): void {
     const loggers = this.#getLoggers(request.loggerName);
     for (const logger of loggers) {
@@ -4246,6 +4255,8 @@ export class RuntimeProcessor {
         };
       case RequestType.GetLoggerCounts:
         return this.getLoggerCounts(request);
+      case RequestType.GetLoggerErrorMessages:
+        return this.getLoggerErrorMessages(request);
       case RequestType.GetPatternCoverage:
         return this.getPatternCoverage(request);
       case RequestType.SetLoggerLevel:

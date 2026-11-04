@@ -9,6 +9,7 @@
  * - Per-logger configuration
  * - Console styling support
  * - Call counting and metrics tracking
+ * - The text of the first few messages logged per key at `error`
  * - Automatic periodic count summaries
  *
  * @example Typical usage - disabled by default with debug level
@@ -177,8 +178,11 @@
 import { isDeno } from "@commonfabric/platform/env";
 
 /**
- * A message argument: either the value to log, or a function returning it,
- * which is called only when the message is actually going to be emitted.
+ * A message argument: either the value to log, or a function returning it. The
+ * function is called only when the message is actually going to be emitted,
+ * with one exception: at `error`, it is also called while a logger still has
+ * room to keep that key's text, emitted or not, so a call that does both
+ * evaluates it twice.
  */
 export type LogMessage = unknown | (() => unknown);
 
@@ -860,6 +864,84 @@ function resolveMessages(messages: LogMessage[]): unknown[] {
   });
 }
 
+/**
+ * How many messages a logger keeps for each key it logs at `error`. It keeps
+ * the earliest, since a failure's first report is the one the later ones
+ * usually follow from.
+ */
+const KEPT_ERROR_MESSAGES_PER_KEY = 3;
+
+/** How many characters of one error message a logger keeps. */
+const KEPT_ERROR_MESSAGE_LENGTH = 1000;
+
+/** How far into a logged value the text of a kept error message reaches. */
+const KEPT_ERROR_MESSAGE_DEPTH = 3;
+
+/** How many items of one logged array or record a kept error message names. */
+const KEPT_ERROR_MESSAGE_ITEMS = 10;
+
+/**
+ * Helper for {@link renderErrorMessage}, which renders one part of a message.
+ *
+ * It calls neither `toJSON()` nor `toString()` on what it reads, because a
+ * logger runs inside whatever failed. So anything carrying a string `message`
+ * is rendered by that, which reaches an `Error` of any realm and the classes
+ * that report like one, and an instance of any other class is named rather than
+ * rendered.
+ */
+function renderMessagePart(part: unknown, depth: number): string {
+  if (typeof part === "string") return part;
+  if (typeof part === "function") return "[function]";
+  if (typeof part !== "object" || part === null) return String(part);
+  if (depth >= KEPT_ERROR_MESSAGE_DEPTH) return "…";
+
+  const { name, message, cause } = part as Partial<Error>;
+  if (typeof message === "string") {
+    const text = typeof name === "string" ? `${name}: ${message}` : message;
+    return cause === undefined
+      ? text
+      : `${text} (cause: ${renderMessagePart(cause, depth + 1)})`;
+  }
+  if (Array.isArray(part)) {
+    const shown = part.slice(0, KEPT_ERROR_MESSAGE_ITEMS)
+      .map((item) => renderMessagePart(item, depth + 1));
+    if (part.length > shown.length) shown.push("…");
+    return `[${shown.join(", ")}]`;
+  }
+  const prototype = Object.getPrototypeOf(part);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return `[${prototype.constructor?.name ?? "object"}]`;
+  }
+  const keys = Object.keys(part);
+  const shown = keys.slice(0, KEPT_ERROR_MESSAGE_ITEMS).map((key) =>
+    `${key}: ${
+      renderMessagePart((part as Record<string, unknown>)[key], depth + 1)
+    }`
+  );
+  if (keys.length > shown.length) shown.push("…");
+  return `{${shown.join(", ")}}`;
+}
+
+/**
+ * Returns the text a logger keeps of an error message, cut to
+ * {@link KEPT_ERROR_MESSAGE_LENGTH}. It never throws, since it runs on the way
+ * to reporting a failure: a lazy message or a value that throws is kept as a
+ * sentence saying so.
+ */
+function renderErrorMessage(messages: LogMessage[]): string {
+  let text: string;
+  try {
+    text = resolveMessages(messages)
+      .map((part) => renderMessagePart(part, 0))
+      .join(" ");
+  } catch {
+    text = "(this message could not be rendered)";
+  }
+  return text.length > KEPT_ERROR_MESSAGE_LENGTH
+    ? `${text.slice(0, KEPT_ERROR_MESSAGE_LENGTH)}…`
+    : text;
+}
+
 /** Options for creating a logger. */
 export interface GetLoggerOptions {
   /** Whether this logger should be enabled. Defaults to `true`. */
@@ -938,6 +1020,7 @@ export class Logger {
     string,
     { debug: number; info: number; warn: number; error: number }
   >;
+  #errorMessagesByKey: Map<string, string[]> = new Map();
   #logCountEvery: number;
   #lastLoggedAt: number;
   #timingsByKey: Map<string, TimingDataStore> = new Map();
@@ -1033,6 +1116,19 @@ export class Logger {
   }
 
   /**
+   * The earliest messages logged at `error`, by message key, as text. A key
+   * keeps a few, each cut to a bounded length, so this stays small however
+   * often a key is logged. As with the counts, a message is kept even when the
+   * logger is disabled or the level filters it out, which is when nothing else
+   * records what it said. It can quote whatever the code logging it held.
+   */
+  get errorMessagesByKey(): Record<string, string[]> {
+    return Object.fromEntries(
+      [...this.#errorMessagesByKey].map(([key, kept]) => [key, [...kept]]),
+    );
+  }
+
+  /**
    * Returns all timing statistics for this logger.
    * Returns a flat map with "/" joined keys.
    */
@@ -1066,13 +1162,17 @@ export class Logger {
     return result;
   }
 
-  /** Resets all call counts to zero, both the overall and the by-key ones. */
+  /**
+   * Resets all call counts to zero, both the overall and the by-key ones, and
+   * drops the kept error messages.
+   */
   resetCounts(): void {
     this.#counts.debug = 0;
     this.#counts.info = 0;
     this.#counts.warn = 0;
     this.#counts.error = 0;
     this.#countsByKey = {};
+    this.#errorMessagesByKey.clear();
     this.#lastLoggedAt = 0;
   }
 
@@ -1145,6 +1245,7 @@ export class Logger {
   error(key: string, ...messages: LogMessage[]): void {
     this.#counts.error++;
     this.#incrementKeyCount(key, "error");
+    this.#keepErrorMessage(key, messages);
     if (this.#disabled) return;
     this.#maybeLogCountSummary();
     if (shouldLog("error", this.#level)) {
@@ -1383,6 +1484,21 @@ export class Logger {
     }
     this.#countsByKey[key][level]++;
     _countObserver?.(this.#moduleName, key, level);
+  }
+
+  /**
+   * Keeps the text of an error message, while `key` has room for another. A
+   * lazy message is evaluated to do that, whether or not it then prints.
+   */
+  #keepErrorMessage(key: string, messages: LogMessage[]): void {
+    let kept = this.#errorMessagesByKey.get(key);
+    if (kept === undefined) {
+      kept = [];
+      this.#errorMessagesByKey.set(key, kept);
+    }
+    if (kept.length < KEPT_ERROR_MESSAGES_PER_KEY) {
+      kept.push(renderErrorMessage(messages));
+    }
   }
 
   /**
@@ -1704,6 +1820,27 @@ export function getLoggerCountsBreakdown(): Record<string, LoggerBreakdown> & {
   return { ...breakdown, total } as Record<string, LoggerBreakdown> & {
     total: number;
   };
+}
+
+/**
+ * Returns the messages each logger has kept of what it logged at `error`, by
+ * logger name and message key. A logger that has kept none is omitted.
+ */
+export function getLoggerErrorMessagesBreakdown(): Record<
+  string,
+  Record<string, string[]>
+> {
+  const global = globalThis as unknown as {
+    commonfabric?: { logger?: Record<string, Logger> };
+  };
+  const breakdown: Record<string, Record<string, string[]>> = {};
+  for (
+    const [name, logger] of Object.entries(global.commonfabric?.logger ?? {})
+  ) {
+    const messages = logger.errorMessagesByKey;
+    if (Object.keys(messages).length > 0) breakdown[name] = messages;
+  }
+  return breakdown;
 }
 
 /** Breakdown of timing stats by logger name. */

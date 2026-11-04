@@ -59,6 +59,7 @@ import {
   InitializationData,
   type LoggerCountsData,
   type LoggerCountsResponse,
+  type LoggerErrorMessagesData,
   type LoggerFlagsData,
   type LoggerMetadata,
   type LoggerTimingData,
@@ -1569,6 +1570,17 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       compileCache: res.compileCache,
       sizes: res.sizes,
     };
+  }
+
+  /**
+   * The earliest messages the worker's loggers logged at `error`, which a
+   * browser test's failure report prints. The text can quote a value.
+   */
+  async getLoggerErrorMessages(): Promise<LoggerErrorMessagesData> {
+    const res = await this.#conn.request<RequestType.GetLoggerErrorMessages>({
+      type: RequestType.GetLoggerErrorMessages,
+    });
+    return res.messages;
   }
 
   /**

@@ -37,8 +37,12 @@ the old one. Two rules drive that comparison, in opposite directions:
 
 - What a pattern **accepts**, it may accept more of, never less. Accepting
   less breaks whoever was sending the thing you dropped.
-- What a pattern **provides**, it may provide more of, never less. Providing
-  less breaks whoever was reading the thing you dropped.
+- What a pattern **provides**, it may provide more of, never less of what it
+  guarantees. Providing less breaks whoever was reading the thing you
+  dropped. A data field it publishes as optional guarantees nothing about
+  presence, so it may stop publishing one: whoever reads it already handles
+  its absence. A verb is not such a field, optional or not, because a holder
+  cannot read its absence.
 
 Sound in principle. Measured against the current runtime — not inferred —
 here is what it does to a verb's author:
@@ -118,12 +122,16 @@ a stream, which cannot carry a default, so a newly required verb is the same
 refusal arriving from the other direction.
 
 Giving a demand up is narrowing, and the gate reads it as narrowing. A field
-the pattern stopped reading leaves a writer's value unread rather than
-breaking a reader, so the argument side drops named fields freely; what it
-still proves is that the candidate can hold the value the piece already
-carries, which a closed candidate object fails as `source field is rejected
-by the target object`. The result side preserves every named field it
-published.
+the pattern stopped reading leaves a writer's value unread rather than breaking
+a reader, so the argument side drops named fields freely; what it still proves
+is that the candidate can hold the value the piece already carries, which a
+closed candidate object fails as `source field is rejected by the target
+object`. The result side preserves every required field it published, every
+verb, and every field that holds a verb at any depth. An optional data field it
+may stop publishing, since whoever reads it already reads its absence. An
+optional verb it may not: a stream handle reads as itself when nothing is
+stored, so a holder still bound to a removed verb keeps sending to it, and each
+event is dropped for want of a handler.
 
 Stated plainly, because much of the design rests on it: **a deployed
 holder's demands can be given up freely, and added only where an existing
@@ -204,13 +212,13 @@ A verb is declared as something a piece definitely has, not something it may
 have. Code that holds a piece and calls a verb writes no check: the
 declaration says the verb is there, and the compiler agrees.
 
-Names are stable by default. The gate refuses a shape that removes or renames
-a verb — the one rule in today's gate genuinely protecting callers, and it
-stays — so a verb does not vanish by accident. The ordinary way to retire one
-is to add its replacement and mark the old one `@deprecated`, which hides it
-from listings while keeping it callable. A verb whose contract must change
-incompatibly gets a new name, spelled `append_v2`, introduced when the second
-generation actually appears.
+Names are stable by default. The gate refuses a shape that removes or renames a
+verb, optional or not — the one rule in today's gate genuinely protecting
+callers, and it stays — so a verb does not vanish by accident. The ordinary way
+to retire one is to add its replacement and mark the old one `@deprecated`,
+which hides it from listings while keeping it callable. A verb whose contract
+must change incompatibly gets a new name, spelled `append_v2`, introduced when
+the second generation actually appears.
 
 What this is not is an invariant. A pattern's owner may deliberately break
 their own pattern — retire a verb for real, change what one means — and the
