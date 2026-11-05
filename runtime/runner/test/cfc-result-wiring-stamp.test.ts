@@ -111,6 +111,10 @@ describe("cfc-result-wiring-stamp", () => {
         [NAME]: title(x),
         a: double(x),
       })),
+      mixed: cf.pattern<{ x: number }>(({ x }) => ({
+        a: double(x),
+        note: "fixed",
+      })),
     };
   };
 
@@ -160,6 +164,12 @@ describe("cfc-result-wiring-stamp", () => {
         ((entry.path.length === 0 && entry.observes === "enumerate") ||
           (entry.path.length === 1 && entry.path[0] === "*"))
       )
+      .flatMap((entry) => entry.label.confidentiality ?? []);
+
+  /** The confidentiality of the derived entries anywhere on `cell`. */
+  const derivedOf = (cell: Cell<unknown>): unknown[] =>
+    entriesOf(cell)
+      .filter((entry) => entry.origin === "derived")
       .flatMap((entry) => entry.label.confidentiality ?? []);
 
   /** The confidentiality of the root's existence entry. */
@@ -253,6 +263,18 @@ describe("cfc-result-wiring-stamp", () => {
       await setUp("named-reads-bob", named, bobs);
 
       expect(membershipOf(result)).toContain(BOB);
+    });
+
+    it("stamps nothing of it on an unchanged result that holds data beside its references", async () => {
+      const { mixed } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("mixed-reads-bob", mixed);
+      expect(derivedOf(result)).not.toContain(BOB);
+
+      await setUp("mixed-reads-bob", mixed, bobs);
+
+      expect(derivedOf(result)).not.toContain(BOB);
+      expect(membershipOf(result)).not.toContain(BOB);
     });
   });
 

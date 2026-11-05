@@ -4573,8 +4573,11 @@ const resultWiringsByTarget = (
  * slots that changed, while the wiring's membership is the root container's:
  * taking the root as written is what re-mints that membership either way.
  * What the root holds is read as the transaction leaves it, through a
- * verifier read that consumes nothing. A document the transaction does not
- * hold a value for is left out.
+ * verifier read that consumes nothing. Only a root holding nothing but
+ * references is taken: the restatement re-mints membership, and a root holding
+ * data as well would take a value stamp from what the setup read, which no
+ * write of that data made. A document the transaction does not hold a value
+ * for is left out.
  */
 // SPEC-PENDING https://github.com/commonfabric/specs/pull/88
 const withRestatedResultWirings = (
@@ -4595,7 +4598,7 @@ const withRestatedResultWirings = (
       type: "application/json",
       path: ["value"],
     }, { meta: internalVerifierRead }).ok?.value;
-    if (value === undefined) continue;
+    if (value === undefined || !isPureLinkStructure(value)) continue;
     const root = pathKey([]);
     result.set(key, {
       space,

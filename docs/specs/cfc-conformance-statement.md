@@ -589,10 +589,11 @@ runtime-internal reads contribute nothing to a join. The stamp carries no
 `TransformedBy`. Every other entry of the document, its frozen existence entry
 among them, keeps the attempt's join.
 
-`withRestatedResultWirings` takes every recorded wiring as written at the root
-of its document, whatever the setup wrote, so the root's membership is
-re-minted at each setup: when setup finds the wiring unchanged and writes
-nothing, and when it writes only the slots that changed.
+`withRestatedResultWirings` takes every recorded wiring whose document holds
+nothing but references as written at the root of that document, whatever the
+setup wrote, so the root's membership is re-minted at each setup: when setup
+finds the wiring unchanged and writes nothing, and when it writes only the
+slots that changed.
 `ownRestampContainerPaths` includes those containers, so a setup's reads of
 its own stored membership do not feed the join it re-mints from. A container
 reached only through the restatement mints no existence entry.
@@ -609,6 +610,8 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
   join, an over-taint where the name was itself build-decided.
 - A result wiring at a path below its document's root is restated and
   narrowed only at the root.
-- Restating the root also clears derived entries beneath it and re-mints a
-  covering one from the attempt's join where the wiring holds anything other
-  than references, which is what writing the root would do.
+- A result document holding data beside its references is not restated, so
+  a setup that leaves it unchanged re-mints none of its membership: an
+  over-taint where an earlier attempt's stamp is wider than the setup's own.
+  Restating it would take a value stamp from what the setup read onto data no
+  write of the setup made.
