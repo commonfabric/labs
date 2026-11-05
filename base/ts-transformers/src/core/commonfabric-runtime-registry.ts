@@ -128,6 +128,14 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // Resolves its argument's links in the running computation or handler, as
+  // `equals` does, and returns a plain string or `undefined`. It builds no
+  // graph node.
+  {
+    exportName: "equalsKey",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   // A predicate over its argument alone, returning a plain boolean rather than
   // a reactive value.
   {
