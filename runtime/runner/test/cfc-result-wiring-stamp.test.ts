@@ -173,12 +173,13 @@ describe("cfc-result-wiring-stamp", () => {
 
   /**
    * Adds to `cell`'s stored label map a membership stamp naming `atom` and an
-   * existence entry naming {@link CAROL}, as a stamp left by an earlier
-   * attempt would.
+   * existence entry naming `existence`, as a stamp left by an earlier attempt
+   * would.
    */
   const plantStamp = async (
     cell: Cell<unknown>,
     atom: string,
+    existence = CAROL,
   ): Promise<void> => {
     const tx = runtime.edit();
     const link = cell.getAsNormalizedFullLink();
@@ -212,7 +213,7 @@ describe("cfc-result-wiring-stamp", () => {
           },
           {
             path: [],
-            label: { confidentiality: [CAROL] },
+            label: { confidentiality: [existence] },
             origin: "structure",
             observes: "shape",
           },
@@ -228,7 +229,7 @@ describe("cfc-result-wiring-stamp", () => {
     runtime.prepareTxForCommit(tx);
     expect((await tx.commit().settled).ok).toBeDefined();
     expect(membershipOf(cell)).toContain(atom);
-    expect(existenceOf(cell)).toEqual([CAROL]);
+    expect(existenceOf(cell)).toEqual([existence]);
   };
 
   describe("a setup that reads another principal's data", () => {
@@ -256,16 +257,18 @@ describe("cfc-result-wiring-stamp", () => {
   });
 
   describe("a stamp an earlier attempt left on the membership", () => {
-    it("comes off at a setup that rewrites the wiring, though that setup reads the same data", async () => {
-      const { plain, wider } = patterns();
-      const bobs = await seedBobsDocument();
-      const result = await setUp("rewritten", plain);
-      await plantStamp(result, BOB);
+    it("comes off at a setup that rewrites the wiring, though that setup reads Bob's clause on the existence entry", async () => {
+      // The setup reads the result document it rewrites, and so consumes
+      // the existence entry there, which names Bob as well.
 
-      await setUp("rewritten", wider, bobs);
+      const { plain, wider } = patterns();
+      const result = await setUp("rewritten", plain);
+      await plantStamp(result, BOB, BOB);
+
+      await setUp("rewritten", wider);
 
       expect(membershipOf(result)).not.toContain(BOB);
-      expect(existenceOf(result)).toEqual([CAROL]);
+      expect(existenceOf(result)).toEqual([BOB]);
     });
 
     it("comes off at a setup that finds the wiring unchanged", async () => {
