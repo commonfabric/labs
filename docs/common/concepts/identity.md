@@ -125,7 +125,7 @@ const distinctItems = lift<{ items: Item[] }>(({ items }) => {
 });
 ```
 
-Like `equals()`, it follows links first inside a handler or a reactive computation, so there an alias and the document it names share a key; elsewhere, as `equals()` does, it compares links as given. A value with no place in the graph has no key, and `equalsKey()` returns `undefined` for it; the `?? item` above keeps such a value apart from every other, as `equals()` does. A key holds for the run that made it: compare keys made in the same handler or computation, and do not store one.
+Inside a handler or a reactive computation it follows links first, as `equals()` does, so an alias and the document it names share a key; elsewhere it compares links as given. A value with no place in the graph has no key, and `equalsKey()` returns `undefined` for it; the `?? item` above keeps such a value apart from every other, as `equals()` does. A key holds for the run that made it: compare keys made in the same handler or computation, and do not store one.
 
 ### In `.map()` Callbacks
 
