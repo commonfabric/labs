@@ -39,8 +39,10 @@ GitHub's Team plan allows the organization
 That capacity is shared by every workflow and repository in the organization.
 Keep the first dependency-free wave of this workflow below half the limit so
 two overlapping runs do not queue behind one another and later jobs can start
-as soon as their dependencies finish. `LANES_MAX` holds every run's lanes to the
-same half. `tasks/ci-workflow.test.ts` checks both.
+as soon as their dependencies finish. `LANES_MAX` holds every run's lanes to two
+thirds of the limit, so that one run leaves room for what runs beside it, and
+two runs at that size overlap only by queueing. `tasks/ci-workflow.test.ts`
+checks both.
 
 ## Required Pull Request Checks
 

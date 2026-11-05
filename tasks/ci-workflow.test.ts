@@ -289,8 +289,13 @@ Deno.test("the first CI wave leaves runner capacity for another run", async () =
       `two overlapping runs must fit within GitHub's ` +
       `${githubParallelRunnerLimit}-runner limit`,
   );
-  // Every run's lanes are held to the same limit by the cap on them.
-  assert(LANES_MAX <= githubParallelRunnerLimit / 2);
+  // A run's lanes wait for the job counting them, so what holds them is the
+  // cap, which leaves a third of the limit for whatever runs beside them.
+  assert(
+    LANES_MAX <= githubParallelRunnerLimit * 2 / 3,
+    `a run may take ${LANES_MAX} lanes, which leaves less than a third of ` +
+      `GitHub's ${githubParallelRunnerLimit}-runner limit for anything else`,
+  );
 });
 
 Deno.test("every step we name carries a phase marker", async () => {
