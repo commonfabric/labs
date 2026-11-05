@@ -1585,6 +1585,7 @@ export function validateAndTransform(
           [],
           {
             synced: options?.synced,
+            materializeFactories: options?.materializeFactories,
             mismatchThrows: options?.mismatchThrows,
             viewChild: true,
           },
@@ -1631,6 +1632,7 @@ export function validateAndTransform(
           cfcLabelView,
           options?.synced ?? false,
           options?.mismatchThrows !== true,
+          options?.materializeFactories ?? true,
         );
       }
       selector.schema = viewSchema;

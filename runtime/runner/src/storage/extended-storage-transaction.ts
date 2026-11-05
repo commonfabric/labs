@@ -3179,10 +3179,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * and `schema` members carrying external refs, expands each to its closure
    * through the realm registry (the link writer registered the documents
    * when it stamped the reference), and blind-writes the documents at the
-   * canonical space scope. The staging happens eagerly, as each carrying
-   * write stages (`#stageSchemaDocsForValue` from write()/writeOrThrow()),
-   * so the transaction is self-consistent and a same-transaction read
-   * through the staged link resolves its references. This full scan runs
+   * canonical space scope. The staging happens synchronously after each
+   * carrying write succeeds (`#stageSchemaDocsForValue` from
+   * write()/writeOrThrow()), so the transaction is self-consistent when the
+   * write returns and a same-transaction read through the staged link resolves
+   * its references. This full scan runs
    * before CFC prepare (so the writes are part of the prepared digest) and
    * again at commit for transactions that never prepare — a backstop for
    * values staged past the write choke points; the dedupe set makes
@@ -4042,9 +4043,6 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.#invalidateReadResultCache();
     if (options?.delete !== true) {
       this.#refuseMalformedSchemaMeta(address, value);
-      // Keep speculative visibility causal: the closure is observable before
-      // the carrier can wake a reader that immediately follows its schema.
-      this.#stageSchemaDocsForValue(address.space, address, value);
     }
     const result = this.tx.write(address, value, options);
     if (result.ok) {

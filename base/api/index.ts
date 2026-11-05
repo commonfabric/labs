@@ -1109,7 +1109,6 @@ export interface IDerivable<T> {
       T extends Array<infer U> ? U : T,
       { isCell: boolean; value: K | null | undefined }
     >,
-    params: Record<string, unknown>,
   ): GroupIndex<K, T extends Array<infer U> ? U : T>;
 
   /**
@@ -1130,7 +1129,6 @@ export interface IDerivable<T> {
       T extends Array<infer U> ? U : T,
       { isCell: boolean; value: K | null | undefined }
     >,
-    params: Record<string, unknown>,
   ): KeyIndex<K, T extends Array<infer U> ? U : T>;
 
   map<S>(

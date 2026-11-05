@@ -338,6 +338,71 @@ describe("typed Factory@1 Cell round trips", () => {
     }
   });
 
+  it("keeps nested cold factory atoms inert in non-materializing synchronous reads", async () => {
+    const fixture = fixtures.pattern;
+    const stored = await store("pattern", "cold-non-materializing-get");
+    makeCold("pattern");
+
+    const readTx = runtime.edit();
+    readTx.markLazyMaterialize(true);
+    const value = stored.withTx(readTx)
+      .getWithoutFactoryMaterialization() as StoredFactories;
+    for (const factory of leaves(value)) {
+      expectInertFactory(factory, fixture.state);
+    }
+  });
+
+  it("keeps linked cold factory atoms inert in lazy non-materializing reads", async () => {
+    const fixture = fixtures.pattern;
+    const write = runtime.edit();
+    const factory = runtime.getCell<FabricValue>(
+      space,
+      "cold-linked-factory-target",
+      undefined,
+      write,
+    );
+    factory.set(fixture.shell);
+    runtime.getCell<{ nested: { factory: unknown } }>(
+      space,
+      "cold-linked-factory-holder",
+      undefined,
+      write,
+    ).set({ nested: { factory } });
+    runtime.prepareTxForCommit(write);
+    expect((await write.commit().settled).error).toBeUndefined();
+    makeCold("pattern");
+
+    const readTx = runtime.edit();
+    readTx.markLazyMaterialize(true);
+    const holder = runtime.getCell<{
+      nested: { factory: FabricValue };
+    }>(
+      space,
+      "cold-linked-factory-holder",
+      {
+        type: "object",
+        properties: {
+          nested: {
+            type: "object",
+            properties: {
+              factory: {
+                asFactory: CONTRACTS.pattern,
+                allOf: [true],
+              },
+            },
+            required: ["factory"],
+            additionalProperties: false,
+          },
+        },
+        required: ["nested"],
+        additionalProperties: false,
+      },
+      readTx,
+    );
+    const value = holder.getWithoutFactoryMaterialization();
+    expectInertFactory(value.nested.factory, fixture.state);
+  });
+
   it("rejects a Cell write when its factory artifact is unavailable in the destination space", () => {
     const tx = runtime.edit();
     const destination = runtime.getCell<{ nested: { factory: FabricValue } }>(

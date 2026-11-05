@@ -133,6 +133,16 @@ type SchemaPatternOverloadAcceptsFactoryInput = PatternFunction extends {
 } ? true
   : never;
 
+type OneSchemaPatternOverloadAcceptsFactoryInput = PatternFunction extends {
+  <IS extends JSONSchema, Result>(
+    fn: (
+      input: Reactive<Schema<IS>> & { [SELF]: Reactive<any> },
+    ) => FactoryInput<Result>,
+    argumentSchema: IS,
+  ): PatternFactory<SchemaWithoutCell<IS>, Result>;
+} ? true
+  : never;
+
 type SchemaWishOverloadAcceptsFactoryInput = WishFunction extends {
   <S extends JSONSchema = JSONSchema>(
     target: FactoryInput<WishParams>,
@@ -143,6 +153,10 @@ type SchemaWishOverloadAcceptsFactoryInput = WishFunction extends {
 
 const _schemaPatternOverload: MustBeTrue<
   SchemaPatternOverloadAcceptsFactoryInput
+> = true;
+
+const _oneSchemaPatternOverload: MustBeTrue<
+  OneSchemaPatternOverloadAcceptsFactoryInput
 > = true;
 
 const _schemaWishOverload: MustBeTrue<

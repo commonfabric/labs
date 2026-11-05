@@ -18,12 +18,24 @@ function stripFrameworkProvidedPath(
   path: readonly string[],
 ): JSONSchema {
   if (!isObjectNotArray(schema) || path.length === 0) return schema;
+  let result = schema;
+  for (const keyword of ["anyOf", "oneOf", "allOf"] as const) {
+    const branches = result[keyword];
+    if (Array.isArray(branches)) {
+      result = {
+        ...result,
+        [keyword]: branches.map((branch) =>
+          stripFrameworkProvidedPath(branch, path)
+        ),
+      };
+    }
+  }
   const [head, ...tail] = path;
-  if (!head || !isObjectNotArray(schema.properties)) return schema;
-  const existing = schema.properties[head] as JSONSchema | undefined;
-  if (existing === undefined) return schema;
+  if (!head || !isObjectNotArray(result.properties)) return result;
+  const existing = result.properties[head] as JSONSchema | undefined;
+  if (existing === undefined) return result;
 
-  const properties = { ...schema.properties };
+  const properties = { ...result.properties };
   let removeFromRequired = tail.length === 0;
   if (tail.length === 0) {
     delete properties[head];
@@ -38,13 +50,13 @@ function stripFrameworkProvidedPath(
     }
   }
   return {
-    ...schema,
+    ...result,
     properties,
-    ...(Array.isArray(schema.required)
+    ...(Array.isArray(result.required)
       ? {
         required: removeFromRequired
-          ? schema.required.filter((key) => key !== head)
-          : schema.required,
+          ? result.required.filter((key) => key !== head)
+          : result.required,
       }
       : {}),
   };

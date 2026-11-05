@@ -5,8 +5,11 @@ import type { BaselineRetirement } from "./pattern-compat-lib.ts";
  *
  * Never delete the corresponding baseline JSON. A retirement is permitted
  * only after the stored population has been migrated, expired, or explicitly
- * approved for a wipe, with the decision recorded in live documentation.
+ * approved for a wipe, with the decision recorded in indexed history.
  */
+const FACTORY_SHIPPING_DECISION =
+  "docs/history/plans/first-class-serializable-factories.md";
+
 export const PATTERN_BASELINE_RETIREMENTS: readonly BaselineRetirement[] = [
   {
     pattern: "apps/deep-research/deep-research.tsx",
@@ -117,4 +120,7 @@ export const PATTERN_BASELINE_RETIREMENTS: readonly BaselineRetirement[] = [
     reason:
       "Pre-launch patternTool-to-Factory@1 migration replaced the stored search callable contract; owner-approved data wipe is recorded in the factory shipping spec.",
   },
-];
+].map((retirement) => ({
+  ...retirement,
+  decision: FACTORY_SHIPPING_DECISION,
+}));

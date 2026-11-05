@@ -67,3 +67,27 @@ Deno.test("storage differential rejects arbitrary function values", () => {
     "arbitrary function",
   );
 });
+
+Deno.test("storage differential rejects an arbitrary function in an inserted root", () => {
+  const arbitrary = (() => undefined) as unknown as FabricValue;
+  const before = fact(undefined);
+  const after = fact({ value: { callable: arbitrary } });
+
+  assertThrows(
+    () => compare(before, after),
+    Error,
+    "arbitrary function",
+  );
+});
+
+Deno.test("storage differential rejects an arbitrary function in a deleted root", () => {
+  const arbitrary = (() => undefined) as unknown as FabricValue;
+  const before = fact({ value: { callable: arbitrary } });
+  const after = fact(undefined);
+
+  assertThrows(
+    () => compare(before, after),
+    Error,
+    "arbitrary function",
+  );
+});

@@ -173,7 +173,9 @@ const normalizeSlotLabel = (value: unknown, fallback: string): string => {
   return fallback;
 };
 
-const sanitizeSlots = (value: readonly SlotInput[]): SlotDefinition[] => {
+const sanitizeSlots = (
+  value: readonly (SlotInput | string)[],
+): SlotDefinition[] => {
   if (!Array.isArray(value) || value.length === 0) {
     return structuredClone(defaultSlots);
   }

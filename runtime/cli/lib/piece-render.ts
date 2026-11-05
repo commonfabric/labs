@@ -92,6 +92,10 @@ export function renderVDomToHtml(
     if (reading || cancelled) return;
     reading = true;
     settle().then(() => {
+      if (cancelled) {
+        reading = false;
+        return;
+      }
       let html: string;
       try {
         html = flushAndRead();
@@ -182,9 +186,10 @@ async function idleWithNothingLoading(runtime: Runtime): Promise<void> {
  * Without `options.watch`, returns the HTML of the tree the runtime settles to
  * once the piece has loaded and computed and no commit that produced is
  * pending, so a caller may exit on the result without abandoning a commit in
- * flight. With `options.watch`, the render stays mounted, `options.onUpdate`
- * receives the HTML each time the runtime goes idle with nothing loading, and
- * the return value is the function that unmounts.
+ * flight. With `options.watch`, the render stays mounted. Its first
+ * `options.onUpdate` waits for pending commits as well as loads; later updates
+ * wait only until the runtime is idle with nothing loading, and the return
+ * value is the function that unmounts.
  *
  * Neither mode waits for builtin I/O in flight, such as a fetch or a
  * language-model call.

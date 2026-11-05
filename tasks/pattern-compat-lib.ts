@@ -63,6 +63,8 @@ export interface BaselineRetirement {
   pattern: string;
   baseline: string;
   reason: string;
+  /** Repo-relative path to the indexed decision record authorizing removal. */
+  decision: string;
 }
 
 /** Keep every baseline except exact, explicitly retired pattern/label pairs. */
@@ -83,6 +85,7 @@ export function filterRetiredBaselines(
 export function retirementConfigurationIssues(
   retirements: readonly BaselineRetirement[],
   baselinesByPattern: ReadonlyMap<string, readonly Baseline[]>,
+  recordExists: (repoRelativePath: string) => boolean,
 ): string[] {
   const issues: string[] = [];
   const seen = new Set<string>();
@@ -96,9 +99,20 @@ export function retirementConfigurationIssues(
     if (retirement.reason.trim().length === 0) {
       issues.push(`retirement ${key} has no reason`);
     }
+    if (retirement.decision.trim().length === 0) {
+      issues.push(`retirement ${key} has no decision record`);
+    }
     const baselines = baselinesByPattern.get(retirement.pattern) ?? [];
     if (!baselines.some((baseline) => baseline.label === retirement.baseline)) {
       issues.push(`retirement ${key} does not name a recorded baseline`);
+    }
+    if (
+      retirement.decision.trim().length > 0 &&
+      !recordExists(retirement.decision)
+    ) {
+      issues.push(
+        `retirement ${key} decision record does not exist: ${retirement.decision}`,
+      );
     }
   }
   return issues;

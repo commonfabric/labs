@@ -87,7 +87,7 @@ const sanitizeMilestone = (
   return { label, weight, completed };
 };
 
-const sanitizeMilestoneMap = (value: MilestoneInputRecord): MilestoneRecord => {
+const sanitizeMilestoneMap = (value: unknown): MilestoneRecord => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }

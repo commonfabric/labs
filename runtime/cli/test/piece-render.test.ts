@@ -321,6 +321,33 @@ describe("piece-render", () => {
         }
       });
 
+      it("does not report when cancelled while settlement is pending", async () => {
+        const runtime = makeRuntime();
+        try {
+          const vdom = await cellHolding(
+            runtime,
+            "cancel-pending-root",
+            vnode("div", {}, ["before"]),
+          );
+          const settled = defer<void>();
+          const updates: string[] = [];
+          const cancel = renderVDomToHtml(
+            vdom,
+            () => settled.promise,
+            (html) => updates.push(html),
+          ) as () => void;
+
+          cancel();
+          settled.resolve();
+          await settled.promise;
+          await Promise.resolve();
+
+          expect(updates).toEqual([]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
       it("keeps reporting after a settle fails", async () => {
         const runtime = makeRuntime();
         let cancel: (() => void) | undefined;

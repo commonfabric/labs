@@ -2414,9 +2414,10 @@ export abstract class BaseObjectTraverser {
         // We can follow all the links, since we don't need to track cells
         const [valueDoc, _] = this.getDocAtPath(redirDoc, [], DEFAULT_SELECTOR);
         this.tx.read(valueDoc.address, READ_FOR_SCHEDULING);
-        // Same entry gate as followPointer: an unresolvable ref names a
-        // corrupt or malformed declaration (the loader logs it), and such
-        // a declaration selects nothing.
+        // Same entry gate as followPointer: a schema closure that is not
+        // locally available yet selects nothing for this pass. Its tracked
+        // document read schedules the traversal again when the closure
+        // arrives.
         const linkSchemaCollected = link?.schema === undefined ||
           loadExternalSchemaDocs(
             this.tx,

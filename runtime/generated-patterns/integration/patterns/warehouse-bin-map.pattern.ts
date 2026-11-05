@@ -52,7 +52,7 @@ const sanitizeId = (value: unknown): string | null => {
   return trimmed.length > 0 ? trimmed.toUpperCase() : null;
 };
 
-const sanitizeBins = (value: readonly BinDefinition[]): BinDefinition[] => {
+const sanitizeBins = (value: unknown): BinDefinition[] => {
   if (!Array.isArray(value)) {
     return structuredClone(defaultBins);
   }

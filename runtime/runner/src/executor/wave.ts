@@ -2337,28 +2337,22 @@ export class WaveAccumulator
 
     // Every semantic write is already visible in its replica's optimistic
     // overlay. Cold artifact publication is the wire-only half of the same
-    // commit: resolve it before constructing any space batch, preserving seal
-    // order so no later contribution can pass a lower causal position.
-    try {
-      await Promise.all(
-        this.#contributions.flatMap((contribution) =>
-          contribution.spaces.map(async (space) => {
-            space.wireOperations = await space.sealed.wireOperations;
-          })
-        ),
-      );
-    } catch (error) {
-      const message = `wave artifact publication failed: ${String(error)}`;
-      for (const contribution of this.#contributions) {
-        this.#withdraw(contribution, message);
-        outcome.dispositions[contribution.index] =
-          contribution.context.kind === "event-handler"
-            ? { kind: "requeued" }
-            : { kind: "dropped" };
+    // commit: resolve contributions and their spaces in seal order so no later
+    // contribution can pass a lower causal position. A preparation belongs to
+    // one contribution; its failure withdraws that contribution through the
+    // ordinary closure below instead of discarding unrelated work.
+    const publicationFailures = new Map<number, string>();
+    for (const contribution of this.#contributions) {
+      try {
+        for (const space of contribution.spaces) {
+          space.wireOperations = await space.sealed.wireOperations;
+        }
+      } catch (error) {
+        publicationFailures.set(
+          contribution.index,
+          `wave artifact publication failed: ${String(error)}`,
+        );
       }
-      this.#reportRequeuedEvents(outcome, () => true);
-      outcome.aborted = "rejected";
-      return outcome;
     }
 
     // per-doc conflict resolution, per write class (§3d)
@@ -2396,6 +2390,13 @@ export class WaveAccumulator
     const conflicted = new Set<string>();
     const requeued = new Set<number>();
     const droppedWhole = new Set<number>();
+    for (const [index] of publicationFailures) {
+      if (this.#contributions[index].context.kind === "event-handler") {
+        requeued.add(index);
+      } else {
+        droppedWhole.add(index);
+      }
+    }
 
     /** Event-handler contributions requeued for a stale recorded read, and
      * those folded in behind one of them for stream order (§3d): the
@@ -3161,6 +3162,7 @@ export class WaveAccumulator
           foreignSeqs,
           orphanRefused,
           staleReadRequeued,
+          publicationFailures,
         );
         return outcome;
       }
@@ -3181,6 +3183,7 @@ export class WaveAccumulator
           foreignSeqs,
           orphanRefused,
           staleReadRequeued,
+          publicationFailures,
         );
         // A doc this wave field-merged sits at a merge the replica never
         // held, so it is left out: a successor's write to it conflicts.
@@ -4319,6 +4322,7 @@ export class WaveAccumulator
     foreignSeqs: ReadonlyMap<string, number>,
     orphanRefused: ReadonlySet<number> = new Set(),
     staleReadRequeued: ReadonlySet<number> = new Set(),
+    publicationFailures: ReadonlyMap<number, string> = new Map(),
   ): void {
     this.#reportRequeuedEvents(outcome, (idx) => requeued.has(idx));
     // Counted per EVENT, as the requeue is reported: an event sealing
@@ -4351,24 +4355,26 @@ export class WaveAccumulator
         // the same deterministic ids (protocol.md §2b).
         this.#withdraw(
           contribution,
-          "raced consequence requeued: rolled back to unconsequenced, " +
-            "retried in a later wave (serving-loop.md §3d)",
+          publicationFailures.get(idx) ??
+            "raced consequence requeued: rolled back to unconsequenced, " +
+              "retried in a later wave (serving-loop.md §3d)",
         );
         continue;
       }
       if (droppedWhole.has(idx)) {
         outcome.dispositions[idx] = { kind: "dropped" };
-        const message = orphanRefused.has(idx)
-          ? "orphan delivery refused: the event's durable entry rode an " +
-            "emitter write this wave withdrew, so no entry exists behind " +
-            "this run and nothing re-emits it (events.md §4 — one " +
-            "durable entry, one completed run; stage C build W3, (α3))"
-          : contribution.readDependencyWithdrawn
-          ? "pure derivation dropped: a read depended on a withdrawn " +
-            "contribution; the current scheduled instance re-arms after " +
-            "rollback (serving-loop.md §3d)"
-          : "contribution dropped from the wave commit " +
-            "(serving-loop.md §3d)";
+        const message = publicationFailures.get(idx) ??
+          (orphanRefused.has(idx)
+            ? "orphan delivery refused: the event's durable entry rode an " +
+              "emitter write this wave withdrew, so no entry exists behind " +
+              "this run and nothing re-emits it (events.md §4 — one " +
+              "durable entry, one completed run; stage C build W3, (α3))"
+            : contribution.readDependencyWithdrawn
+            ? "pure derivation dropped: a read depended on a withdrawn " +
+              "contribution; the current scheduled instance re-arms after " +
+              "rollback (serving-loop.md §3d)"
+            : "contribution dropped from the wave commit " +
+              "(serving-loop.md §3d)");
         this.#warnDropped(
           contribution,
           message,

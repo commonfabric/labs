@@ -102,13 +102,16 @@ export type ResolvedFullLink = NormalizedFullLink & {
  * selects nothing, which is information. Nor is a schema that declares a
  * stream: it selects every value too, but the document behind a stream holds
  * nothing, so the declaration is the only thing that says what the position
- * is, and a carried schema that lacks it cannot say so. Any other `asCell`
- * entry keeps carrying: its document holds a value, which the carried schema
- * is there to read.
+ * is, and a carried schema that lacks it cannot say so. A factory declaration
+ * likewise carries the callable's public contract even though it gives the
+ * stored value no object shape. Any other `asCell` entry keeps carrying: its
+ * document holds a value, which the carried schema is there to read.
  */
 const schemaConstrainsNothing = (schema: JSONSchema | undefined): boolean =>
   cfcSchemaGivesNoShape(schema) &&
-  !ContextualFlowControl.declaresStream(schema);
+  !ContextualFlowControl.declaresStream(schema) &&
+  !(typeof schema === "object" && schema !== null &&
+    Object.hasOwn(schema, "asFactory"));
 
 /**
  * `schema` with its references resolved against the documents `space` holds,

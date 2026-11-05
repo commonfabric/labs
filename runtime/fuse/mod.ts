@@ -25,6 +25,10 @@ import {
   type WritePath,
 } from "./cell-bridge.ts";
 import {
+  decodeFactoryProjections,
+  decodeHandlerWritePayload,
+} from "./callables.ts";
+import {
   applyPreparedCreate,
   applyPreparedExistingWrite,
   applyPreparedMetadataMutation,
@@ -1742,15 +1746,7 @@ export async function main(argv: string[] = Deno.args) {
 
       if (writeTarget?.kind === "handler") {
         const text = new TextDecoder().decode(buffer);
-        const trimmed = text.trim();
-        let value: unknown;
-        try {
-          value = JSON.parse(trimmed);
-        } catch {
-          // Bare string — treat as string value so callers don't need
-          // to double-quote (e.g. `echo book > addItem.handler`).
-          value = trimmed;
-        }
+        const value = decodeHandlerWritePayload(text);
         await bridge.sendToHandlerTarget(writeTarget.target, value);
         // Don't invalidate here — sendToHandlerTarget waits for
         // runtime.idle() + synced(), but the downstream reactive graph
@@ -1930,7 +1926,7 @@ export async function main(argv: string[] = Deno.args) {
       if (writePath.isJsonFile) {
         // .json file: parse as JSON
         try {
-          value = JSON.parse(text);
+          value = decodeFactoryProjections(JSON.parse(text));
         } catch {
           return EINVAL;
         }

@@ -568,7 +568,7 @@ declare module "commonfabric" {
     <IS extends JSONSchema, Result>(
       fn: (
         input: Reactive<Schema<IS>> & { [SELF]: Reactive<any> },
-      ) => Result,
+      ) => FactoryInput<Result>,
       argumentSchema: IS,
     ): PatternFactory<SchemaWithoutCell<IS>, Result>;
   }

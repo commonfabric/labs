@@ -3773,6 +3773,7 @@ describe("cf cell get transforms", () => {
       const selection = { projection: await parseSelectionProjection("id") };
 
       const first = await readWithCell(runtime, source, selection);
+      using sync = spy(runtime.runner, "syncStoredPieceCells");
       const second = await readWithCell(runtime, source, selection);
 
       expect(first.value).toEqual([{ id: 1 }, { id: 2 }]);
@@ -3780,6 +3781,9 @@ describe("cf cell get transforms", () => {
       // The same cell, not a fresh one per read: the repeat reuses the
       // transform the first read installed rather than minting its own.
       expect(second.cell).toBe(first.cell);
+      // One pre-load and one post-setup start sync are the established repeat
+      // path. The fresh-projection pre-sync must not add a third pass.
+      expect(sync.calls).toHaveLength(2);
     });
 
     it("returns the repeat with a source change made between the reads", async () => {

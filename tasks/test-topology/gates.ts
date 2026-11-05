@@ -728,16 +728,18 @@ async function patternCompatSuite(root: string): Promise<Suite> {
 
 /** The list of contract breaks the compatibility gate forgives. */
 const ACCEPTED_BREAKS_FILE = "tasks/pattern-compat-accepted-breaks.ts";
+/** The list of historical contracts the compatibility proof excludes. */
+const RETIREMENTS_FILE = "tasks/pattern-compat-retirements.ts";
 
 /**
  * Helper for `patternCompatSuite()`, which names the patterns among `units` a
  * change reaches: one whose source changed, one importing a changed module of
  * a pattern tree directly or through other such modules, and one whose
  * recorded contracts changed. A change to the list of accepted breaks reaches
- * every pattern: removing an entry changes the verdict of a pattern the list
- * no longer names, and what the list named before is not visible here. `files`
- * are the pattern sources the tree holds, which the import graph is read from
- * on the first change that needs it.
+ * every pattern. Removing an accepted break or retirement changes the verdict
+ * of a pattern the registry no longer names, and what the registry named
+ * before is not visible here. `files` are the pattern sources the tree holds,
+ * which the import graph is read from on the first change that needs it.
  *
  * Imports are followed only within the pattern trees. A contract is also
  * built from what lies outside them, the schema generator and the API's
@@ -756,7 +758,7 @@ function patternsReached(
     const reached = new Set<string>();
     const pending: string[] = [];
     for (const at of changed) {
-      if (at === ACCEPTED_BREAKS_FILE) {
+      if (at === ACCEPTED_BREAKS_FILE || at === RETIREMENTS_FILE) {
         return [...units].sort();
       } else if (at.startsWith(`${BASELINES_DIR}/`)) {
         // A baseline is `<key>/<label>.json` under the baselines directory.

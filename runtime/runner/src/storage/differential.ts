@@ -2,6 +2,7 @@ import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import {
   isFabricObjectOrArray,
   isFabricSpecialObject,
+  isValidFabricValue,
   valueEqual,
   valueEqualByWalk,
 } from "@commonfabric/data-model";
@@ -289,6 +290,14 @@ const addStateChange = (
   before: State["is"] | undefined,
   after: State["is"] | undefined,
 ): void => {
+  if (
+    (before !== undefined && !isValidFabricValue(before)) ||
+    (after !== undefined && !isValidFabricValue(after))
+  ) {
+    throw new Error(
+      "Cannot compare an arbitrary function or other invalid Fabric value.",
+    );
+  }
   // Identity alone: `collectChangedPaths()` compares each pair of containers
   // before descending into it, the roots included, and records nothing for
   // a pair that is equal.

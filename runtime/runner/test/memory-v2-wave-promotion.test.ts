@@ -260,6 +260,86 @@ describe("memory-v2-wave-promotion", () => {
     }
   });
 
+  it("withdraws only the contribution whose artifact publication fails", async () => {
+    const server = newSharedServer();
+    const manager = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: manager,
+      experimental: { serverExecution: true },
+    });
+    const space = signer.did();
+    const engine = await server.engineForSpace(space);
+    const holder = executionLeaseHolder(`wave-artifact-failure:${space}`);
+    const lease = new ExecutionLeaseCycle({
+      leases: engine.executionLeases,
+      space,
+      holder,
+    });
+    expect(await lease.acquire()).toBe(true);
+    const wave = new WaveAccumulator({
+      space,
+      basisSeq: Engine.serverSeq(engine),
+      lease,
+      scopeKeyIdentity: runtime.scopeKeyIdentity,
+      replicaFor: (target) => manager.open(target).replica,
+    });
+    const sink = new EngineWaveCommitSink({
+      engineFor: () => engine,
+      sessionId: holder,
+    });
+    const refused = runtime.getCell<number>(space, "refused-publication");
+    const survivor = runtime.getCell<number>(space, "surviving-publication");
+    try {
+      runtime.installSealDestination(wave);
+      const refusedTx = runtime.edit();
+      stampWaveRunContext(refusedTx, {
+        actionId: "refused-publication",
+        kind: "derivation",
+      });
+      refused.withTx(refusedTx).set(1);
+      refusedTx.tx.addNativeCommitPreparation!(space, {
+        key: "artifact:refused",
+        prepare: () => Promise.reject(new Error("artifact unavailable")),
+      });
+      expect((await refusedTx.commit().settled).error).toBeUndefined();
+
+      const survivorTx = runtime.edit();
+      stampWaveRunContext(survivorTx, {
+        actionId: "surviving-publication",
+        kind: "derivation",
+      });
+      survivor.withTx(survivorTx).set(2);
+      expect((await survivorTx.commit().settled).error).toBeUndefined();
+      runtime.clearSealDestination();
+
+      const outcome = await wave.commitWave(sink);
+      await wave.settled();
+      expect(outcome.aborted).toBeUndefined();
+      expect(outcome.dispositions).toEqual([
+        { kind: "dropped" },
+        { kind: "committed" },
+      ]);
+      expect(
+        Engine.readState(
+          engine,
+          { id: refused.getAsNormalizedFullLink().id },
+        )?.document,
+      ).toBeUndefined();
+      expect(
+        Engine.readState(
+          engine,
+          { id: survivor.getAsNormalizedFullLink().id },
+        )?.document?.value,
+      ).toBe(2);
+    } finally {
+      runtime.clearSealDestination();
+      wave.abandon("test cleanup");
+      await runtime.dispose();
+      await server.close();
+    }
+  });
+
   for (const scope of ["space", "user", "session"] as const) {
     it(`retains both ${scope} writes accepted at the same wave sequence`, async () => {
       const manager = StorageManager.emulate({ as: signer });

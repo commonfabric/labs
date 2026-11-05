@@ -168,6 +168,29 @@ describe("resolveCellPath through linked slots", () => {
     await storageManager?.close();
   });
 
+  it("reads through a root asCell handle when the requested path is empty", () => {
+    const source = runtime.getCell(
+      space,
+      "root asCell source",
+      undefined,
+      tx,
+    );
+    source.set({ label: "root payload" });
+    const handle = runtime.getCell(
+      space,
+      "root asCell handle",
+      {
+        type: "object",
+        properties: { label: { type: "string" } },
+        asCell: ["cell"],
+      },
+      tx,
+    );
+    handle.set(source as never);
+
+    expect(resolveCellPath(handle, [])).toEqual({ label: "root payload" });
+  });
+
   it("reads a leaf through multiple sparse projections with repeated path segments", () => {
     const raw = runtime.getCell(
       space,

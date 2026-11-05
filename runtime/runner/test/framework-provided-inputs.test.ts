@@ -32,6 +32,40 @@ Deno.test("FrameworkProvided schema stripping prunes system-only parent objects"
   );
 });
 
+Deno.test("FrameworkProvided schema stripping descends through schema composition", () => {
+  const systemRequest = {
+    type: "object",
+    properties: {
+      request: {
+        type: "object",
+        properties: { sandboxId: { type: "string" } },
+        required: ["sandboxId"],
+      },
+    },
+    required: ["request"],
+  } as const;
+  const schema = {
+    anyOf: [systemRequest, { type: "null" }],
+    oneOf: [systemRequest, { type: "string" }],
+    allOf: [systemRequest],
+  } as const;
+
+  assertEquals(
+    stripFrameworkProvidedPaths(schema, [["request", "sandboxId"]]),
+    {
+      anyOf: [
+        { type: "object", properties: {}, required: [] },
+        { type: "null" },
+      ],
+      oneOf: [
+        { type: "object", properties: {}, required: [] },
+        { type: "string" },
+      ],
+      allOf: [{ type: "object", properties: {}, required: [] }],
+    },
+  );
+});
+
 Deno.test("FrameworkProvided injection overwrites nested authored values", () => {
   const authored = {
     request: { query: "tea", sandboxId: "authored" },

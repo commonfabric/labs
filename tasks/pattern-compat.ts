@@ -26,8 +26,6 @@
  * A contract whose stored population has been explicitly retired remains in
  * the append-only baseline tree but is excluded by the exact pairs in
  * `pattern-compat-retirements.ts`.
- * forgives the paths it names over the `(pattern, baseline)` pairs it names,
- * and nothing else.
  */
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -218,6 +216,7 @@ async function main() {
   const retirementIssues = retirementConfigurationIssues(
     PATTERN_BASELINE_RETIREMENTS,
     retirementBaselines,
+    recordExistsUnder(),
   );
   if (retirementIssues.length > 0) {
     console.error(

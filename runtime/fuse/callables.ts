@@ -57,7 +57,7 @@ export function decodeHandlerWritePayload(text: string): unknown {
   } catch {
     // Bare strings remain convenient for shell callers such as
     // `echo book > addItem.handler`.
-    return trimmed;
+    return decodeFactoryProjections(trimmed);
   }
   return decodeFactoryProjections(parsed);
 }

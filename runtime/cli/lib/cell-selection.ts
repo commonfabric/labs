@@ -3673,22 +3673,24 @@ export async function deriveSelectedValue(
   // compared with durable state instead of being rebuilt from an empty cache.
   // The post-setup pass below then has the committed argument it needs to name
   // the list coordinator's per-row children.
-  try {
-    await timeSelectionPhase(
-      "preSetup",
-      () =>
-        runtime.runner.syncStoredPieceCells(
-          resultCell.withTx(),
-          installedPattern ?? mainPattern,
-          { allowMissingArgument: true },
-        ),
-    );
-  } catch (error) {
-    throw new CellSelectionError(
-      `Could not apply get transform: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
+  if (installedPattern === undefined) {
+    try {
+      await timeSelectionPhase(
+        "preSetup",
+        () =>
+          runtime.runner.syncStoredPieceCells(
+            resultCell.withTx(),
+            mainPattern,
+            { allowMissingArgument: true },
+          ),
+      );
+    } catch (error) {
+      throw new CellSelectionError(
+        `Could not apply get transform: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
   const result = await runtime.setup(
     tx,

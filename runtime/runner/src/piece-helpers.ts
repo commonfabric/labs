@@ -64,7 +64,10 @@ export function resolveCellPath<T>(
     options.materializeFactories === false
       ? current.getWithoutFactoryMaterialization()
       : current.get();
-  if (path.length === 0) return read(cell as Cell<unknown>);
+  if (path.length === 0) {
+    const value = read(cell as Cell<unknown>);
+    return isCell(value) ? read(value) : value;
+  }
   let currentCell: Cell<unknown> = cell;
   let value: unknown = options.requireProjection
     ? read(cell as Cell<unknown>)

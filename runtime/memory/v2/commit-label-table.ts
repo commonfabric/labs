@@ -225,7 +225,7 @@ function mapCommitMetadata(
 ): Record<string, unknown> {
   const operations = mapArray(commit.operations, (operation) => {
     if (!isPlainObject(operation)) throw new Error("Invalid commit operation");
-    if (operation.op === "set") {
+    if (operation.op === "set" || operation.op === "ensure") {
       const value = mapLabelMetadataAtPath(operation.value, [], map);
       return Object.is(value, operation.value)
         ? operation

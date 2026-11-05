@@ -25,8 +25,9 @@ import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
-import type { JSONSchema } from "../src/builder/types.ts";
+import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
+import { ContextualFlowControl } from "../src/cfc.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import { isCellResult } from "../src/query-result-proxy.ts";
 import {
@@ -204,6 +205,29 @@ describe("stored-link-schema-precedence", () => {
       };
 
       expect(resolveLink(runtime, tx, readerLink).schema).toEqual(typedStream);
+    });
+  });
+
+  describe("a stored schema that declares a factory", () => {
+    it("governs in place of a reader schema that lacks the factory contract", () => {
+      const factorySchema = (): JSONSchema => ({
+        asFactory: {
+          kind: "module",
+          argumentSchema: { type: "object" },
+          resultSchema: { type: "object" },
+        },
+      });
+      const holder = holderOverLinkCarrying(factorySchema());
+      const readerLink = {
+        ...holder.getAsNormalizedFullLink(),
+        path: ["rows", "0"],
+        schema: rowSchema as JSONSchema,
+      };
+
+      const resolved = resolveLink(runtime, tx, readerLink).schema;
+      expect(
+        ContextualFlowControl.resolveSchemaRefs(resolved as JSONSchemaObj),
+      ).toEqual(factorySchema());
     });
   });
 

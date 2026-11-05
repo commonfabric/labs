@@ -1,9 +1,18 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import type { JSONSchema } from "@commonfabric/api";
-import { createFactoryShell } from "@commonfabric/data-model/fabric-factory";
+import {
+  createFactoryShell,
+  factoryStateOf,
+} from "@commonfabric/data-model/fabric-factory";
 
-import { classifyCallableEntry, isHandlerCell } from "../callables.ts";
+import {
+  classifyCallableEntry,
+  decodeFactoryProjections,
+  decodeHandlerWritePayload,
+  encodeFactoryProjection,
+  isHandlerCell,
+} from "../callables.ts";
 
 describe("callables", () => {
   describe("isHandlerCell()", () => {
@@ -59,6 +68,29 @@ describe("callables", () => {
         type: "object",
         properties: { pattern: { type: "object" } },
       })).toBeNull();
+    });
+  });
+
+  describe("factory projection writes", () => {
+    const state = {
+      kind: "module" as const,
+      ref: {
+        identity: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        symbol: "projected",
+      },
+    };
+    const encoded = encodeFactoryProjection(createFactoryShell(state))!;
+
+    it("decodes factory leaves in handler and JSON payloads", () => {
+      expect(factoryStateOf(decodeHandlerWritePayload(encoded))).toEqual(state);
+      const decoded = decodeFactoryProjections({ nested: [encoded] }) as {
+        nested: unknown[];
+      };
+      expect(factoryStateOf(decoded.nested[0])).toEqual(state);
+    });
+
+    it("rejects malformed tagged bare handler payloads", () => {
+      expect(() => decodeHandlerWritePayload("fvj1:not-valid")).toThrow();
     });
   });
 });

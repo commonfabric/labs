@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { JSONSchemaObj } from "@commonfabric/api";
@@ -348,6 +349,45 @@ describe("schema-doc-writer", () => {
       await other.dispose();
       await otherStorage.close();
     }
+  });
+
+  it("does not stage a schema closure when the carrier write is refused", () => {
+    const sigil = sigilFor({
+      type: "object",
+      properties: { refusedField: { type: "string" } },
+    });
+    const tx = writer.edit();
+    const carrierId = "of:refused-carrier" as URI;
+    const originalWrite = tx.tx.write.bind(tx.tx);
+    using _refusedCarrier = stub(
+      tx.tx,
+      "write",
+      (address, value, options) =>
+        address.id === carrierId
+          ? {
+            error: {
+              name: "StorageTransactionAborted",
+              message: "forced carrier refusal",
+              reason: new Error("forced carrier refusal"),
+            },
+          } as never
+          : originalWrite(address, value, options),
+    );
+    const result = tx.write(
+      {
+        space,
+        id: carrierId,
+        scope: "space",
+        path: [],
+      },
+      { person: sigil },
+    );
+
+    expect(result.error).toBeDefined();
+    const staged = [...tx.getWriteDetails?.(space) ?? []].map((detail) =>
+      detail.address.id
+    );
+    expect(staged.some((id) => id.startsWith("cid:"))).toBe(false);
   });
 
   it("re-stages a schema document that is visible only through speculation", async () => {

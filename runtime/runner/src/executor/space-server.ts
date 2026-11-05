@@ -3420,11 +3420,14 @@ export class SpaceServer implements TransactionSealDestination {
         return Promise.resolve({ ok: {} });
       },
     };
-    const result = await inner.sealInto(collector);
-    if (result.error !== undefined) return result;
     const rejectHandedPreparations = (reason: unknown): void => {
       for (const entry of handed) entry.store?.rejectPreparations(reason);
     };
+    const result = await inner.sealInto(collector);
+    if (result.error !== undefined) {
+      rejectHandedPreparations(result.error);
+      return result;
+    }
     if (handed.length === 0) {
       // An all-no-op transaction handed over nothing.
       return result;

@@ -199,10 +199,12 @@ describe("filterRetiredBaselines", () => {
         pattern: "system/home.tsx",
         baseline: "v1",
         reason: "Pre-launch data was wiped.",
+        decision: "docs/history/wipe.md",
       }, {
         pattern: "system/other.tsx",
         baseline: "v2",
         reason: "Different pattern.",
+        decision: "docs/history/other.md",
       }],
     );
 
@@ -214,14 +216,17 @@ describe("filterRetiredBaselines", () => {
       pattern: "system/home.tsx",
       baseline: "v1",
       reason: "",
+      decision: "",
     }, {
       pattern: "system/home.tsx",
       baseline: "v1",
       reason: "Duplicate.",
+      decision: "docs/history/duplicate.md",
     }, {
       pattern: "system/home.tsx",
       baseline: "missing",
       reason: "No matching evidence.",
+      decision: "docs/history/missing.md",
     }];
     const issues = retirementConfigurationIssues(
       retirements,
@@ -229,12 +234,15 @@ describe("filterRetiredBaselines", () => {
         "system/home.tsx",
         [baseline("v1", EMPTY_ARGUMENT, RESULT_WITH_TITLE)],
       ]]),
+      (record) => record === "docs/history/duplicate.md",
     );
 
     expect(issues).toEqual([
       "retirement system/home.tsx/v1 has no reason",
+      "retirement system/home.tsx/v1 has no decision record",
       "duplicate retirement system/home.tsx/v1",
       "retirement system/home.tsx/missing does not name a recorded baseline",
+      "retirement system/home.tsx/missing decision record does not exist: docs/history/missing.md",
     ]);
   });
 });

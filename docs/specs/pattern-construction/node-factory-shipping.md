@@ -615,6 +615,9 @@ the intentional shell-returning boundary.
 An `asFactory`-only schema is an executable leaf contract, not an open `true`
 schema. Schema traversal must therefore dispatch that leaf before its generic
 flag-only-schema fast path, including for nested array and object positions.
+Stored-link schema precedence makes the same distinction: a stored
+`asFactory` declaration replaces a shaped reader schema that lacks the factory
+contract rather than being discarded as non-constraining metadata.
 Contextual-flow joins likewise treat the callable as the atomic value at that
 leaf. They do not descend into its argument, result, event, or context schemas:
 those contracts describe values exchanged by a later invocation, not fields of
@@ -703,6 +706,11 @@ Publication preserves the memory system's optimistic local-commit contract:
    every builder artifact already indexed under that identity to its canonical
    durable ref.
 
+If a direct-commit seal fails after handing one or more space commits to their
+stores, the seal rejects every publication preparation already started by
+those handoffs before returning the error. No failed handoff retains an
+unsettled publication owner.
+
 Ordinary runtime commits, scheduler waves, effect completions, and direct
 server commits all preserve this split for the same logical commit. Semantic
 operations seal into the optimistic local overlay immediately, while wire-only
@@ -710,6 +718,15 @@ artifact publication remains outside that overlay. Each server submission
 awaits and prepends the publication operations to the containing atomic batch;
 later submissions cannot pass a cold predecessor, and publication confirmation
 or rejection follows the durable verdict for that batch.
+
+A scheduler wave resolves publication preparations in contribution and
+per-contribution space order. A preparation failure withdraws only the
+contribution that owns it: an event contribution requeues, a non-event
+contribution drops with an explicit warning, and the ordinary withdrawn-read
+closure also withdraws work that consumed its speculative writes. Unrelated
+contributions remain eligible for the same wave commit. This failure isolation
+does not let a later contribution pass an earlier cold preparation; the earlier
+preparation settles before the later one begins.
 
 Verified module evaluation assigns every indexed builder callable its complete
 content-addressed artifact ref immediately; exact-space artifact availability
@@ -930,10 +947,18 @@ must preserve `Factory@1` as an atomic value at its document path (normally
 `value` or a descendant). They use the same Fabric freeze, equality, and
 arbitrary-function rejection rules as generic reads and writes; no raw-state
 reader or root-function document representation is part of this contract.
+Fabric admission runs before equal/absent root fast paths, so inserting or
+deleting a document that contains an arbitrary function is rejected just as a
+nested differential is.
 Path-addressed readers narrow to the requested child before materializing a
 containing object, so an unrelated cold factory sibling cannot block an
-already-readable field. An empty path still materializes and returns the root;
-child-first narrowing applies only when at least one path segment exists. An
+already-readable field. An empty path still materializes and returns the root.
+When the root schema declares an `asCell` boundary, that materialization reads
+through the declared Cell rather than returning the handle itself. A raw read
+with factory materialization disabled carries that choice through every object
+and array child it materializes, so a nested cold factory remains an inert
+callable shell.
+Child-first narrowing applies only when at least one path segment exists. An
 unresolved Cell handle at the selected child falls back to the parent
 projection so an absent property remains distinguishable from a present
 property whose value is explicitly `undefined`. When a correlated schema
@@ -1019,6 +1044,11 @@ When a stored link carries a factory contract by content-addressed schema ref,
 link resolution registers that schema closure from the referring document
 before carrying the contract across the hop, even when the factory occupies the
 exact requested path.
+The write side stages such a schema closure only after the carrier write has
+succeeded. On success, staging remains synchronous before the write call
+returns, and the native commit orders the closure before the carrier that names
+it. A refused carrier therefore publishes neither the carrier nor an orphaned
+schema closure.
 In the legacy decomposed-link representation, finding a `link@1` payload below
 a location is only a probe result. The complete value at that location must
 still satisfy canonical link admission before the resolver follows a hop. An
@@ -2099,6 +2129,9 @@ every invocation adapter strips them from its authored/model-facing schema,
 injects them from the stable callable or tool instance identity, and overwrites
 any authored value before the synthetic forwarding path carries the trusted
 value to the ultimate call. This includes LLM, CLI, and FUSE entry points.
+Stripping descends independently through every `anyOf`, `oneOf`, and `allOf`
+branch before pruning the corresponding ordinary object path; a composition
+keyword cannot preserve an authored copy of a protected field.
 Wrapper chains repeat the same transitive forwarding. A nested shorthand
 proven to originate from callback argument 0 is forwarded as one trusted
 subtree alias. The transformer does not enumerate its static type, so ordinary,
