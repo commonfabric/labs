@@ -222,6 +222,7 @@ const p = pattern<{ items: string[] }>((state) => {
     const declaration = fontSizeBinding.parent.parent;
     assert(
       ts.isVariableDeclaration(declaration) &&
+        declaration.initializer !== undefined &&
         ts.isIdentifier(declaration.initializer) &&
         declaration.initializer.text === "style",
       "expected the computed binding source to be `style`",
