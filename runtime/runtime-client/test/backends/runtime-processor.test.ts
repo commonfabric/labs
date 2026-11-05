@@ -7586,6 +7586,7 @@ describe("runtime-processor", () => {
           patternManager: { getCompileCacheStats: () => compileCacheStats },
           getSizes: () => runtimeSizes,
           getCellFromLink: () => ({ sink: () => () => {} }),
+          releaseUnreadDocuments: () => Promise.resolve(),
         },
       });
     }
@@ -10499,6 +10500,8 @@ describe("runtime-processor", () => {
       function subscriptionHarness() {
         const cancelled: number[] = [];
         const sinks: Array<(value: unknown, cfcLabel: unknown) => void> = [];
+        // What had been cancelled each time a release was asked for.
+        const releases: number[][] = [];
         const processor = buildProcessor({
           runtime: {
             getCellFromLink: () => ({
@@ -10509,9 +10512,13 @@ describe("runtime-processor", () => {
                 return () => cancelled.push(nth);
               },
             }),
+            releaseUnreadDocuments: () => {
+              releases.push([...cancelled]);
+              return Promise.resolve();
+            },
           },
         });
-        return { processor, sinks, cancelled };
+        return { processor, sinks, cancelled, releases };
       }
 
       const subscribe = (
@@ -10578,6 +10585,25 @@ describe("runtime-processor", () => {
           value: false,
         });
         expect(cancelled).toEqual([]);
+      });
+
+      it("asks the runtime to release what nothing reads once the unsubscribed feed is gone", () => {
+        const { processor, releases } = subscriptionHarness();
+        subscribe(processor, testClient(1).client);
+        subscribe(processor, testClient(2).client);
+
+        unsubscribe(processor, testClient(1).client);
+
+        expect(releases).toEqual([[1]]);
+      });
+
+      it("asks for no release for an unsubscribe that cancels nothing", () => {
+        const { processor, releases } = subscriptionHarness();
+        subscribe(processor, testClient(1).client);
+
+        unsubscribe(processor, testClient(2).client);
+
+        expect(releases).toEqual([]);
       });
     });
 

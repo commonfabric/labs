@@ -459,6 +459,35 @@ describe("document-release", () => {
     expect(failed()).toBe(before + 1);
   });
 
+  it("answers every call made while a pass is under way with one pass after it", async () => {
+    // Each call comes once the scheduler is idle again, as the unsubscribes of
+    // a closing pane arrive one message at a time.
+    const passBegan = defer();
+    const passMayEnd = defer();
+    const release = readerStorage.releaseUnreadDocuments.bind(readerStorage);
+    let passes = 0;
+    readerStorage.releaseUnreadDocuments = async () => {
+      passes++;
+      if (passes === 1) {
+        passBegan.resolve();
+        await passMayEnd.promise;
+      }
+      return await release();
+    };
+
+    const first = reader.releaseUnreadDocuments();
+    await passBegan.promise;
+    const later: Promise<void>[] = [];
+    for (let call = 0; call < 10; call++) {
+      later.push(reader.releaseUnreadDocuments());
+      await reader.scheduler.idle();
+    }
+    expect(passes).toBe(1);
+    passMayEnd.resolve();
+    await Promise.all([first, ...later]);
+    expect(passes).toBe(2);
+  });
+
   it("keeps a document a refresh retracts while something reads it, unwatched, and drops it once nothing does", async () => {
     await write("child", 1);
     const tx = writer.edit();

@@ -2456,6 +2456,13 @@ export class RuntimeProcessor {
     return { value: true };
   }
 
+  /**
+   * Cancels `client`'s subscription to the cell `request` names, and asks the
+   * runtime to release the documents nothing reads once it has gone
+   * (`Runtime.releaseUnreadDocuments()`), as a client's departure does. A
+   * pane closing cancels each of its subscriptions in turn, and those
+   * requests share the runtime's passes rather than costing one each.
+   */
   handleCellUnsubscribe(
     request: CellUnsubscribeRequest,
     client: WorkerClient = ownerClient,
@@ -2465,6 +2472,7 @@ export class RuntimeProcessor {
     if (cancel) {
       cancel();
       this.#subscriptions.delete(key);
+      void this.#runtime.releaseUnreadDocuments();
       return { value: true };
     }
     return { value: false };
