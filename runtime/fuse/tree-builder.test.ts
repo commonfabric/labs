@@ -540,7 +540,7 @@ Deno.test("buildFsProjection - text/markdown quotes strings and writes other pri
       'year: "2026"',
       "count: 7",
       "published: false",
-      "note: ",
+      "note: null",
       "---",
       "",
       "Body",

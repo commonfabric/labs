@@ -2675,6 +2675,31 @@ describe("cell-bridge", () => {
             });
           }
 
+          it("writes a null value back as null", async () => {
+            const writes = await save(
+              project({ title: "Hello", note: null }, "Hello body"),
+              { title: "Hello", note: null },
+            );
+
+            expect(writes).toStrictEqual([
+              { path: ["$FS", "frontmatter", "title"], value: "Hello" },
+              { path: ["$FS", "frontmatter", "note"], value: null },
+              { path: ["$FS", "content"], value: "Hello body" },
+            ]);
+          });
+
+          it("writes a body holding CRLF line endings back as saved", async () => {
+            const writes = await save(
+              project({ title: "Hello" }, "line one\r\nline two"),
+              { title: "Hello" },
+            );
+
+            expect(writes).toStrictEqual([
+              { path: ["$FS", "frontmatter", "title"], value: "Hello" },
+              { path: ["$FS", "content"], value: "line one\r\nline two" },
+            ]);
+          });
+
           it("keeps a hand-written bare value as text", async () => {
             const writes = await save(
               "---\ntitle: Hello there\n---\n\nHello body",
@@ -2688,26 +2713,26 @@ describe("cell-bridge", () => {
           });
 
           it("finds the frontmatter of a save with CRLF line endings", async () => {
-            const text = project({ title: "Hello" }, "Hello body")
+            const text = project({ title: "Hello" }, "line one\nline two")
               .replaceAll("\n", "\r\n");
 
             const writes = await save(text, { title: "Hello" });
 
             expect(writes).toStrictEqual([
               { path: ["$FS", "frontmatter", "title"], value: "Hello" },
-              { path: ["$FS", "content"], value: "Hello body" },
+              { path: ["$FS", "content"], value: "line one\r\nline two" },
             ]);
           });
 
           it("finds the frontmatter of a save with CR line endings", async () => {
-            const text = project({ title: "Hello" }, "Hello body")
+            const text = project({ title: "Hello" }, "line one\nline two")
               .replaceAll("\n", "\r");
 
             const writes = await save(text, { title: "Hello" });
 
             expect(writes).toStrictEqual([
               { path: ["$FS", "frontmatter", "title"], value: "Hello" },
-              { path: ["$FS", "content"], value: "Hello body" },
+              { path: ["$FS", "content"], value: "line one\rline two" },
             ]);
           });
 

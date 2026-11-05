@@ -151,21 +151,26 @@ function displayCallableInputType(
  * number, boolean, or `null` is taken as such, and any other is kept as text.
  * Returns the fields and the body after the closing line, with one blank
  * separator line dropped; text with no frontmatter is all body. A leading
- * byte-order mark is dropped and CRLF and CR line endings are read as LF, so
- * an editor that saves either way still has its frontmatter found.
+ * byte-order mark is dropped, and the fences and the field lines are found
+ * under LF, CRLF, or CR line endings alike, so an editor that saves either
+ * way still has its frontmatter found. The body is returned as saved, line
+ * endings included.
  */
 function parseFrontmatter(
   rawText: string,
 ): { frontmatter: Record<string, unknown>; body: string } {
   const fm: Record<string, unknown> = {};
-  const text = rawText.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
-  if (!text.startsWith("---\n")) return { frontmatter: fm, body: text };
-  const end = text.indexOf("\n---\n", 4);
-  if (end === -1) return { frontmatter: fm, body: text };
-  const fmText = text.slice(4, end);
-  let body = text.slice(end + 5); // skip "\n---\n"
-  if (body.startsWith("\n")) body = body.slice(1); // strip blank separator line
-  for (const line of fmText.split("\n")) {
+  const text = rawText.replace(/^\uFEFF/, "");
+  const open = /^---(?:\r\n|\r|\n)/.exec(text);
+  if (!open) return { frontmatter: fm, body: text };
+  const closeFence = /(?:\r\n|\r|\n)---(?:\r\n|\r|\n)/g;
+  closeFence.lastIndex = open[0].length;
+  const close = closeFence.exec(text);
+  if (!close) return { frontmatter: fm, body: text };
+  const fmText = text.slice(open[0].length, close.index);
+  const body = text.slice(close.index + close[0].length)
+    .replace(/^(?:\r\n|\r|\n)/, "");
+  for (const line of fmText.split(/\r\n|\r|\n/)) {
     const colonIdx = line.indexOf(":");
     if (colonIdx === -1) continue;
     const key = line.slice(0, colonIdx).trim();
