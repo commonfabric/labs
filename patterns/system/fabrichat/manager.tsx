@@ -453,27 +453,42 @@ function addDeliveryStreamOf(room: Cell<ChatRoomLink>): unknown {
 }
 
 /**
- * Tells `room` how the member of the add that `offerId` offers was told, if
- * `offerId` is an add's in that room. It holds the verdict alone, so that it
- * carries nothing into the room that the room's own documents wouldn't admit,
- * however this user's manager is labeled. A room with no such stream, whose
- * code is older, is sent nothing, and reads `requests` instead: a send to a
- * path holding no stream would write there.
+ * Tells `room` how the member of the add that `offerId` offers was told, as
+ * `outcome` records it, if `offerId` is an add's in that room and the outcome
+ * is decided. It holds the verdict alone, so that it carries nothing into the
+ * room that the room's own documents wouldn't admit, however this user's
+ * manager is labeled. A room with no such stream, whose code is older, is sent
+ * nothing, and reads `requests` instead: a send to a path holding no stream
+ * would write there.
  */
 const reportDelivery = (
   room: Cell<ChatRoomLink> | undefined,
   offerId: string,
-  report: Omit<AddDeliveryReport, "requestId">,
+  outcome: ChatRequestOutcome | undefined,
 ): void => {
   if (room === undefined) return;
   const requestId = addMemberRequestIdOf(offerId, spaceOf(room));
   if (requestId === undefined) return;
+  const report: Omit<AddDeliveryReport, "requestId"> | undefined =
+    outcome?.status === "refused"
+      ? { delivery: "access-only", deliveryRefusal: outcome.reason ?? "" }
+      : outcome?.status === "done" && outcome.delivery !== undefined
+      ? { delivery: outcome.delivery }
+      : undefined;
+  if (report === undefined) return;
   const stream = addDeliveryStreamOf(room).key("recordAddDelivery");
   if (!isStreamHandle(stream.get())) return;
   stream.send({ requestId, ...report });
 };
 
-/** `outcome`, recorded as {@link recordOutcome} does, and reported to `room`. */
+/**
+ * `outcome`, recorded as {@link recordOutcome} does, for an add's offer that
+ * offers no one, and reported to `room` by an `offerRooms` event of its own,
+ * which offers no one either. The report is sent from that later event rather
+ * than this one: this event runs just after the add granted its member access
+ * to the room's space, and under server execution a send into that space can
+ * meet a session the grant revoked and hold up the sends queued behind it.
+ */
 const recordOffer = (
   state: ManagerActState,
   requestId: string,
@@ -484,13 +499,14 @@ const recordOffer = (
   },
 ): void => {
   recordOutcome(state, requestId, outcome as ChatRequestOutcome);
-  reportDelivery(
+  if (room === undefined) return;
+  state.offerRooms.send({
     room,
-    requestId,
-    outcome.status === "refused"
-      ? { delivery: "access-only", deliveryRefusal: outcome.reason ?? "" }
-      : { delivery: outcome.delivery ?? "offered" },
-  );
+    id: requestId,
+    title: "",
+    members: [],
+    recordsDelivery: true,
+  });
 };
 
 /** The origin of the host serving this pattern, and so the rooms it creates. */
@@ -809,8 +825,12 @@ const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
       );
       if (event.recordsDelivery === true && delivery === "noticed") {
         state.requests.key(event.id).set({ status: "done", delivery });
-        reportDelivery(event.room, event.id, { delivery });
       }
+    }
+    // The verdict goes to the room once every offer has been sent, so that a
+    // report the room's space can't take yet holds up none of them.
+    if (event.recordsDelivery === true) {
+      reportDelivery(event.room, event.id, state.requests.key(event.id).get());
     }
   },
 );
@@ -1494,7 +1514,7 @@ const performManagerAct = (
       members: [{ recipient: member, profiles }],
       recordsDelivery: true,
     });
-    recordOffer(state, requestId, room, {
+    recordOutcome(state, requestId, {
       status: "done",
       delivery: "offered",
     });
