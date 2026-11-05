@@ -332,7 +332,11 @@ the space is deleted. Only that change sends it again: a deleted space refused
 again sends nothing more. The renderer's placeholder for content of a deleted
 space reads "Deleted" and has no Retry button, since no retry can admit anyone,
 and the shell asks again neither when the person navigates into a deleted space
-nor when the page regains focus.
+nor when the page regains focus. Asking the worker to open a deleted space,
+whether its root, a piece in it, or a slug it held, fails with
+`RuntimeErrorCode.SpaceDeleted`, and starts nothing and fetches no pattern. The
+shell says on that failure that the space was deleted, in place of its load
+error and with nothing to try.
 
 A consumer that keeps a list of spaces, Home's shared-space catalog among
 them, uses `spaceDeleted(target)` to put away an entry whose space is gone

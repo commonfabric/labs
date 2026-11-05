@@ -609,6 +609,24 @@ const inboxPointerOf = (
   // own is a cell whether or not anything is stored there.
   profile?.key("inbox").get()?.piece;
 
+/**
+ * Whether the share inbox `pointer` points at takes offers, as this run finds
+ * it: its space isn't deleted, and something is at its `receive`. A pointer can
+ * name a piece with nothing there, or an inbox in a space this run can't read. A
+ * send to a path holding no stream writes the event there, and in another space
+ * that write throws, which takes the handler's other sends with it.
+ *
+ * This is as far as a read here can tell. Through this cell, stored data at
+ * `receive` reads as a stored stream does, so a pointer naming such data still
+ * fails that way. A runtime still holding an inbox it read before its space
+ * stopped admitting this user finds the stream, and the offer it sends is lost.
+ */
+const takesOffers = (pointer: Cell<ShareInboxPiece>): boolean => {
+  const inbox = pointer.resolveAsCell();
+  return spaceDeleted(inbox) !== true &&
+    inboxOf(inbox).key("receive").get() !== undefined;
+};
+
 /** A share inbox, and the first of a member's profiles pointing at it. */
 interface ProfileInboxEntry {
   /** The inbox, as the profile points at it. */
@@ -621,7 +639,8 @@ interface ProfileInboxEntry {
 /**
  * The share inboxes `profiles` point at, each once, in the order of the first
  * profile pointing at each, with that profile. A profile pointing at no inbox
- * is left out.
+ * is left out, and so is one whose pointer finds nothing to send to (see
+ * `takesOffers()`).
  */
 const distinctInboxes = (
   profiles: readonly Cell<ChatManagerProfile>[],
@@ -629,7 +648,8 @@ const distinctInboxes = (
   profiles.reduce<ProfileInboxEntry[]>((found, profile) => {
     const pointer = inboxPointerOf(profile);
     return pointer === undefined ||
-        found.some((known) => equals(known.pointer, pointer))
+        found.some((known) => equals(known.pointer, pointer)) ||
+        !takesOffers(pointer)
       ? found
       : [...found, { pointer, profile }];
   }, []);
@@ -666,9 +686,9 @@ const offerEnvelope = (
  * the inboxes `offer` has gone to already, which it adds to. It adds to the
  * room's participants the first profile it offered the room through, so that
  * the member is listed once however many inboxes they have. A member whose
- * profiles point at no inbox is offered nothing, and a notice for them, keyed
- * by the offer's `id`, is queued instead, unless `noticeWaiting` says one
- * waits already. Returns which of the two it did.
+ * profiles point at no inbox that takes offers is offered nothing, and a notice
+ * for them, keyed by the offer's `id`, is queued instead, unless `noticeWaiting`
+ * says one waits already. Returns which of the two it did.
  */
 const offerToMember = (
   offer: RoomOffer,
@@ -700,7 +720,8 @@ const offerToMember = (
  * more than one member point at is sent the offer once, and each of those
  * members is offered the room through it. For a request that
  * `recordsDelivery`, a member offered nothing, since no profile of theirs
- * points at an inbox, turns the request's delivery to `noticed`.
+ * points at an inbox that takes offers, turns the request's delivery to
+ * `noticed`.
  *
  * It runs as an event of its own, queued by the act that creates or offers
  * the room, so that it reads the room's space once the room's creation has
