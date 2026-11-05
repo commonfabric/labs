@@ -89,6 +89,21 @@ const olderProgram: RuntimeProgram = {
   }],
 };
 
+/**
+ * The same Home with its commands, and no catalog or profile list to read, as a
+ * read finds nothing while a Home is still producing them.
+ */
+const unreadableProgram: RuntimeProgram = {
+  main: "/unreadable-home.tsx",
+  files: [{
+    name: "/unreadable-home.tsx",
+    contents: catalogSource.replace("    sharedSpaceCatalog,\n", "").replace(
+      "    profiles,\n",
+      "",
+    ),
+  }],
+};
+
 const markedSchema = {
   type: "array",
   items: {
@@ -179,6 +194,16 @@ describe("mark-deleted-space", () => {
       expect(await marked(home)).toEqual([]);
     });
 
+    it("sends nothing, and says so, when the read of the catalog gives nothing", async () => {
+      const home = await installCustomRoot(
+        runtime,
+        controller,
+        unreadableProgram,
+      );
+      expect(await markDeletedSpaceOf(home, GONE)).toBe("unread");
+      expect(await marked(home)).toEqual([]);
+    });
+
     it("sends nothing to a Home older than the command", async () => {
       const home = await installCustomRoot(runtime, controller, olderProgram);
       expect(await markDeletedSpaceOf(home, GONE)).toBe("no-command");
@@ -205,6 +230,16 @@ describe("mark-deleted-space", () => {
     it("sends nothing to a Home older than the command", async () => {
       const home = await installCustomRoot(runtime, controller, olderProgram);
       expect(await retireDeletedProfileOf(home, PROFILE)).toBe("no-command");
+    });
+
+    it("sends nothing, and says so, when the read of the profiles gives nothing", async () => {
+      const home = await installCustomRoot(
+        runtime,
+        controller,
+        unreadableProgram,
+      );
+      expect(await retireDeletedProfileOf(home, PROFILE)).toBe("unread");
+      expect(await retirements(home)).toEqual([]);
     });
   });
 

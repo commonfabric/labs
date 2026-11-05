@@ -1428,6 +1428,24 @@ describe("share-intake", () => {
   });
 
   describe("an offer that is refused", () => {
+    it("is refused when its space is deleted, and stays out of the catalog", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const acl = new ACLManager(runtime, space);
+      await acl.remove(sender);
+      await acl.delete(identity.did());
+      const intake = start();
+
+      const rows = await deliverThenBarrier(
+        offerOf(space, "of a deleted room"),
+      );
+
+      expect(registeredIds(rows)).toEqual(["barrier"]);
+      expect(
+        intake.accessForTestingOnly.decisionsFor(sender, "of a deleted room"),
+      )
+        .toEqual(["recipient-access-refused"]);
+    });
+
     // Each case delivers the refused offer ahead of one that passes, and
     // reads what was registered once the second is: the intake decides an
     // inbox's offers in order, so the first was decided by then.

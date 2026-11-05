@@ -652,6 +652,22 @@ export class MultiRuntimeSession {
   }
 
   /**
+   * Removes `user`, a principal's DID or `*`, from the access list of `space`,
+   * as an OWNER of it, by this session's identity.
+   */
+  async removeFromAccessList(space: string, user: string): Promise<void> {
+    await this.#client.call("removeFromAccessList", { space, user });
+  }
+
+  /**
+   * Deletes `space`, whose sole member this session's identity is. The memory
+   * server refuses the space to everyone from then on.
+   */
+  async deleteSpace(space: string): Promise<void> {
+    await this.#client.call("deleteSpace", { space });
+  }
+
+  /**
    * Whether this runtime retains a refusal of `space`, asked without opening
    * the space, so the answer is the runtime's own and no retry of this
    * call's.

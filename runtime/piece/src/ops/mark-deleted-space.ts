@@ -16,13 +16,15 @@ import { sendEvent } from "@commonfabric/runner";
 /**
  * What a runtime decided about marking a space deleted in Home's catalog:
  * `sent` when it sent the mark; `no-command` for a Home older than the
- * command; `not-listed` when the catalog has no entry for the space; and
- * `not-saved` when the entry is in a state a mark does not apply to, deleted
- * already among them.
+ * command; `unread` when the catalog read gave nothing, which says nothing
+ * about the space, as for a Home still producing its catalog; `not-listed` when
+ * the catalog has no entry for the space; and `not-saved` when the entry is in a
+ * state a mark does not apply to, deleted already among them.
  */
 export type DeletionMarkDecision =
   | "sent"
   | "no-command"
+  | "unread"
   | "not-listed"
   | "not-saved";
 
@@ -64,7 +66,8 @@ export async function markDeletedSpaceOf(
   if (markDeleted.getRaw() === undefined) return "no-command";
   const catalog = await home.key("sharedSpaceCatalog").asSchema(catalogSchema)
     .pull();
-  const entry = catalog?.entries[space];
+  if (catalog === undefined) return "unread";
+  const entry = catalog.entries[space];
   if (entry === undefined) return "not-listed";
   if (entry.state !== "saved" && entry.state !== "archived") {
     return "not-saved";
@@ -76,12 +79,14 @@ export async function markDeletedSpaceOf(
 /**
  * What a runtime decided about retiring the profile whose space is deleted:
  * `sent` when it sent the retirement; `no-command` for a Home older than
- * `retireProfile`; `not-listed` when Home's `profiles` name no profile in the
- * space; and `retired` when that profile is retired already.
+ * `retireProfile`; `unread` when the read of `profiles` gave nothing, which says
+ * nothing about the space; `not-listed` when Home's `profiles` name no profile
+ * in the space; and `retired` when that profile is retired already.
  */
 export type ProfileRetirementDecision =
   | "sent"
   | "no-command"
+  | "unread"
   | "not-listed"
   | "retired";
 
@@ -111,7 +116,8 @@ export async function retireDeletedProfileOf(
   ]);
   const inSpace = (link: Cell<unknown>) =>
     link.getAsNormalizedFullLink().space === space;
-  const profile = (profiles ?? []).find(inSpace);
+  if (profiles === undefined) return "unread";
+  const profile = profiles.find(inSpace);
   if (profile === undefined) return "not-listed";
   if ((retired ?? []).some(inSpace)) return "retired";
   sendEvent(retire, { profile });
