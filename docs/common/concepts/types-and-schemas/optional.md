@@ -97,3 +97,35 @@ so in the type: `x?: T | undefined`. The schema then carries `undefined` as
 one of the values the property admits. This is rarely what a pattern means: a
 property that may not be there is `x?: T`, and one that can be cleared is
 better typed `x?: T | null`.
+
+Where such a property exists, leaving it out is a different request from
+writing `undefined` into it. Here an event's `replacing` has three states, and
+each asks for a different write:
+
+```typescript
+// Shown at module scope.
+interface FeatureDonutEvent {
+  donut: string;
+
+  /**
+   * Left out, `donut` is featured whatever is featured now. Present and
+   * `undefined`, it is featured only while no donut is. A donut's name, only
+   * while that donut is.
+   */
+  replacing?: string | undefined;
+}
+
+function shouldFeature(
+  event: FeatureDonutEvent,
+  featured: string | undefined,
+): boolean {
+  return !("replacing" in event) || featured === event.replacing;
+}
+```
+
+`{ donut: "glazed", replacing: undefined }` asks to feature glazed only while
+nothing is featured, and `{ donut: "glazed" }` asks to feature it regardless.
+Dropping `replacing: undefined` from that object, say while fixing the check's
+refusal of another key in it, turns a conditional write into an unconditional
+one, and nothing reports the change. So before removing a `k: undefined`, read what
+receives it: a key declared `| undefined` and read with `in` holds a value.

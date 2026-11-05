@@ -867,6 +867,36 @@ describe("stranded-state comparison", () => {
       expect(strandedKeys({ schema: after }, { schema: before })).toEqual([]);
     });
 
+    it("reports nothing when the note differs after a comment the schema already held", () => {
+      const held = "Conflicting docs across declarations; using first";
+      const before = rowsWith(row, `${held} ${note}`);
+      const after = refTo(
+        rowsWith(row, `${held} ${NOTE} for: { summary?: string; }.`),
+      );
+      expect(strandedKeys({ schema: before }, { schema: after })).toEqual([]);
+    });
+
+    it("grades a difference in the comment before the note as lost", () => {
+      const after = refTo(
+        rowsWith(row, `Conflicting docs for index signatures; ${note}`),
+      );
+      const findings = strandedKeys({
+        schema: rowsWith(row, `Conflicting docs across declarations; ${note}`),
+      }, {
+        schema: after,
+      });
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
+
+    it("reports nothing when only a `description` differs", () => {
+      const before = { ...rowsWith(row), description: "Glazed rows." };
+      const after = refTo({ ...rowsWith(row), description: "Frosted rows." });
+      expect(strandedKeys({ schema: before }, { schema: after })).toEqual([]);
+      expect(strandedKeys({ schema: after }, { schema: before })).toEqual([]);
+    });
+
     it("grades a dropped field as lost, with the note differing as well", () => {
       const { note: _note, ...fewer } = row;
       const after = refTo(
