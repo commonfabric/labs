@@ -2700,6 +2700,21 @@ describe("cell-bridge", () => {
             ]);
           });
 
+          it("reads an empty frontmatter block as no fields", async () => {
+            const writes = await save(
+              "---\n---\n\nkey: value\n\n---\n\nHello body",
+              { title: "Hello" },
+            );
+
+            expect(writes).toStrictEqual([
+              { path: ["$FS", "frontmatter", "title"], value: undefined },
+              {
+                path: ["$FS", "content"],
+                value: "key: value\n\n---\n\nHello body",
+              },
+            ]);
+          });
+
           it("keeps a hand-written bare value as text", async () => {
             const writes = await save(
               "---\ntitle: Hello there\n---\n\nHello body",

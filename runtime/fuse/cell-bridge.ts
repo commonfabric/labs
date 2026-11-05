@@ -164,7 +164,9 @@ function parseFrontmatter(
   const open = /^---(?:\r\n|\r|\n)/.exec(text);
   if (!open) return { frontmatter: fm, body: text };
   const closeFence = /(?:\r\n|\r|\n)---(?:\r\n|\r|\n)/g;
-  closeFence.lastIndex = open[0].length;
+  // The search starts at the opening line's terminator, which doubles as the
+  // line break before the closing fence when the block is empty.
+  closeFence.lastIndex = open[0].length - 1;
   const close = closeFence.exec(text);
   if (!close) return { frontmatter: fm, body: text };
   const fmText = text.slice(open[0].length, close.index);
