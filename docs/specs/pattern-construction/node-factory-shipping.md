@@ -1429,7 +1429,8 @@ context type parameter. A `HandlerFactory` must not be mistaken
 for an `asCell: ["stream"]` merely because calling it returns a stream. Its
 displayed callable type is `(context) => (event) => void`, and an
 `eventSchema: false` call site still constructs a triggerable stream by using
-the runner's unconstrained internal event schema.
+the runner's unconstrained internal event schema. That internal schema keeps
+the trigger path live; it does not declare event payload data to authored code.
 
 `asFactory` has one schema meaning and two execution-context exposures. In an
 eager pattern-building root it describes a symbolic binding. In a scheduled
