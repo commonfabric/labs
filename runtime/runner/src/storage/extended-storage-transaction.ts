@@ -4285,13 +4285,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.#assertWritable("abort()");
     this.#statusOverride = undefined;
     this.#clearPostCommitOutbox();
-    this.#cfcState.prepare = { status: "unprepared" };
-    this.#activitySnapshotMemo = undefined;
-    this.#preparedSnapshot = undefined;
     this.#preparationRefused = false;
-    this.#cfcState.dereferenceTraces = [];
-    this.#cfcState.structureContainers = [];
-    this.#cfcState.assertedValueRoots = [];
+    this.#releasePreparationInputs();
     const result = this.tx.abort(reason);
     // An abort is a terminal outcome, and it discards the staged writes the
     // same way a rejected commit does. Settle callbacks compensate for writes
@@ -4300,6 +4295,37 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       this.#runCommitCallbacks({ error: TransactionAborted(reason) });
     }
     return result;
+  }
+
+  /**
+   * Drops the records this transaction accumulated for preparation: the
+   * write-policy inputs and the identities that recorded them, the
+   * dereference traces, trigger reads, structure containers, asserted value
+   * roots, consulted grants and manifests, the observations, and the
+   * preparation that verified them, whose input holds the same records. A
+   * transaction that has settled runs no further gate over them, so a
+   * reference to it that outlives it, from the piece its start ran in for
+   * one, keeps none of them. The one reader after settlement is a post-commit
+   * effect's release check, so `#commit` releases them only once the effects
+   * have flushed, and not at all when a seal destination took the effects
+   * over to flush after its wave lands.
+   */
+  #releasePreparationInputs(): void {
+    const state = this.#cfcState;
+    state.prepare = { status: "unprepared" };
+    state.dereferenceTraces = [];
+    state.structureContainers = [];
+    state.assertedValueRoots = [];
+    state.triggerReads = [];
+    state.writePolicyInputs = [];
+    state.writePolicyInputIdentities = new Map();
+    state.consultedGrants = [];
+    state.consultedPolicyManifests = [];
+    state.labelMetadataObservations = [];
+    state.externalContentObservations = [];
+    this.#schemaPolicyInputs = new Map();
+    this.#activitySnapshotMemo = undefined;
+    this.#preparedSnapshot = undefined;
   }
 
   #runCommitCallbacks(result: Result<Unit, CommitError>): void {
@@ -4599,6 +4625,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // the stage. The storage receipt supplies a settlement backstop when a
     // backend cannot report a separate verdict.
     const verdict = receipt.verdict;
+    let effectsHandedOff = false;
     const effects = verdict.then(
       async (result) => {
         this.#runVerdictCallbacks(result);
@@ -4620,6 +4647,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
                 [...this.#cfcState.outbox],
               ) === true;
           if (deferred) {
+            effectsHandedOff = true;
             this.#clearPostCommitOutbox(true);
             return;
           }
@@ -4675,6 +4703,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // Observing its verdict never waits for these effects.
     const result = await promise;
     await effects;
+    // The commit callbacks have run and the inline effects have flushed, so
+    // no callback and no release check reads the prepared inputs after this.
+    // Effects a destination owns flush on its schedule, and their checks read
+    // the inputs then.
+    if (!effectsHandedOff) this.#releasePreparationInputs();
 
     return result;
   }
