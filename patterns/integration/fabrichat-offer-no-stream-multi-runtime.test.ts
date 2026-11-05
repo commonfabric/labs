@@ -63,6 +63,7 @@ describe("fabrichat offers to an inbox that takes none", () => {
   let carol: MultiRuntimeSession;
   let carolInbox: CellAddress;
   let pieceless: MultiRuntimeSession;
+  let marked: MultiRuntimeSession;
   let closed: MultiRuntimeSession;
   let closedInbox: CellAddress;
   let deleted: MultiRuntimeSession;
@@ -232,17 +233,19 @@ describe("fabrichat offers to an inbox that takes none", () => {
         "fabrichat-no-stream-ada",
         "fabrichat-no-stream-carol",
         "fabrichat-no-stream-pieceless",
+        "fabrichat-no-stream-marked",
         "fabrichat-no-stream-closed",
         "fabrichat-no-stream-deleted",
       ],
       aclMode: "enforce",
     });
-    [ada, carol, pieceless, closed, deleted] = harness.sessions;
+    [ada, carol, pieceless, marked, closed, deleted] = harness.sessions;
     await setUpHome(ada, "Ada");
     for (
       const [session, name] of [
         [carol, "Carol"],
         [pieceless, "Pieceless"],
+        [marked, "Marked"],
         [closed, "Closed"],
         [deleted, "Deleted"],
       ] as const
@@ -266,6 +269,21 @@ describe("fabrichat offers to an inbox that takes none", () => {
     );
     await harness.settleUntil(async () =>
       (await pieceless.read(["profiles", 0, "inbox", "piece"])) !== undefined
+    );
+
+    // The profile points at a document holding a stream's marker at `receive`.
+    await marked.send(
+      "setInbox",
+      {
+        inbox: await marked.createCell("stored-stream", {
+          receive: { $stream: true },
+        }),
+      },
+      undefined,
+      { piece: await marked.link(["profiles", 0]) },
+    );
+    await harness.settleUntil(async () =>
+      (await marked.read(["profiles", 0, "inbox", "piece"])) !== undefined
     );
 
     closedInbox = await setUpInbox(closed);
@@ -292,7 +310,7 @@ describe("fabrichat offers to an inbox that takes none", () => {
     expect(await noticeWaits(carol, offerId)).toBe(false);
   });
 
-  describe("a member whose inbox pointer names a piece with no `receive`", () => {
+  describe("a member whose inbox pointer names a piece with nothing at `receive`", () => {
     it("reads `noticed` for an add, with a notice for them", async () => {
       await expectAddNoticed("pieceless", pieceless);
     });
@@ -300,6 +318,15 @@ describe("fabrichat offers to an inbox that takes none", () => {
     it("leaves a group's other member offered the room", async () => {
       await expectGroupNoticed("pieceless", pieceless);
     });
+  });
+
+  it("reads `offered` for a member whose inbox pointer names a stored stream marker at `receive`", async () => {
+    const { room, requestId, offerId } = await addToNewRoom("marked", marked);
+    await harness.settleUntil(async () =>
+      await rosterLists(room, await marked.link(["profiles", 0]))
+    );
+    expect(await deliveryOf(requestId, room)).toBe("offered");
+    expect(await noticeWaits(marked, offerId)).toBe(false);
   });
 
   describe("a member whose inbox is in a deleted space", () => {
