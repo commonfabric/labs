@@ -6,7 +6,7 @@
 
 import { internSchema } from "@commonfabric/data-model-schema";
 
-import { type Cell, isCell } from "../cell.ts";
+import type { Cell } from "../cell.ts";
 import { anchorsDocumentLink } from "../field-anchors.ts";
 import type { Runtime } from "../runtime.ts";
 import type { Action } from "../scheduler.ts";
@@ -23,10 +23,9 @@ export const ANCHORS_OF_ARGUMENT_SCHEMA = internSchema({
 
 /**
  * anchorsOf(field) — a write redirect to the anchors document of the string
- * field the `field` input names, or `undefined` while the input names no
- * cell. A read of the result reads the document, a map from anchor id to
- * offset, or `undefined` until something writes it, and a write of the result
- * writes the document.
+ * field the `field` input names. A read of the result reads the document, a
+ * map from anchor id to offset, or `undefined` until something writes it, and
+ * a write of the result writes the document.
  *
  * The node reads where the field is stored and nothing of what it holds, so
  * it runs again only when the input names a different field. What a reader of
@@ -41,15 +40,10 @@ export function anchorsOf(
   runtime: Runtime,
 ): Action {
   return (tx: IExtendedStorageTransaction) => {
-    const field = inputsCell.asSchema(ANCHORS_OF_ARGUMENT_SCHEMA).withTx(tx)
-      .get()?.field;
-    if (!isCell(field)) {
-      sendResult(tx, undefined);
-      return;
-    }
-    // Resolution follows the link chain to the stored field, whose address
-    // the document's id is derived from.
-    const stored = field.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
+    // Resolution follows the link chain from the input to the stored field,
+    // whose address the document's id is derived from.
+    const stored = inputsCell.withTx(tx).key("field").resolveAsCell()
+      .getAsNormalizedFullLink();
     sendResult(
       tx,
       runtime.getCellFromLink(anchorsDocumentLink(stored), undefined, tx)

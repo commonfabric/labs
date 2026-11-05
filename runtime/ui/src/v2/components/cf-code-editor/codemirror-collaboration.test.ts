@@ -110,6 +110,20 @@ describe("CodeMirror operation collaboration", () => {
     expect(sendableUpdates(final)).toHaveLength(0);
   });
 
+  it("returns no submission for a state with no unconfirmed edit", () => {
+    const state = EditorState.create({
+      doc: "abc",
+      extensions: [codeMirrorCollaboration(3, "alice")],
+    });
+
+    expect(codeMirrorSubmission(state)).toBeUndefined();
+    expect(
+      codeMirrorSubmission(
+        state.update({ selection: { anchor: 2 } }).state,
+      ),
+    ).toBeUndefined();
+  });
+
   it("serializes deterministic rewrite dedupe metadata", () => {
     const initial = EditorState.create({
       doc: "old",
@@ -216,6 +230,30 @@ describe("CodeMirror operation collaboration", () => {
     expect(() =>
       codeMirrorIntegratedUpdates(snapshot, { epoch: 1, version: 0 })
     ).toThrow("history ends at 0");
+  });
+
+  it("throws for an integrated update whose dedupe id is not a string", () => {
+    const accepted = acceptedResolution("abc", 1, "X");
+    const snapshot: OperationFieldSnapshot = {
+      ...activeSnapshot("aXbc", accepted),
+      operations: [{
+        opId: "op:bob-1",
+        cursor: { epoch: 1, version: 1 },
+        submissionId: "bob-1",
+        payload: {
+          updates: [{
+            clientId: "bob",
+            changes: ChangeSet.of({ from: 1, insert: "X" }, 3).toJSON(),
+            dedupeId: 7,
+          }],
+        },
+      }],
+    };
+
+    expect(() =>
+      codeMirrorIntegratedUpdates(snapshot, { epoch: 1, version: 0 })
+    )
+      .toThrow("requires a string dedupeId");
   });
 
   it("requires canonical reinstallation for a retention reset", () => {
@@ -352,6 +390,39 @@ describe("CodeMirror operation collaboration", () => {
     expect(controller.active).toBe(false);
     expect(subscriptions).toBe(0);
     expect(closes).toBeGreaterThanOrEqual(1);
+  });
+
+  it("installs nothing, and closes its operation session, when disposed while its first query is in flight", async () => {
+    const querying = Promise.withResolvers<void>();
+    const queried = Promise.withResolvers<void>();
+    let subscriptions = 0;
+    let closes = 0;
+    const { controller, view, errors } = controllerHarness({
+      initial: { ...inactiveSnapshot("abc"), anchors: { from: 1, to: 3 } },
+      apply: resolutionFor,
+      subscribe: () => subscriptions++,
+      close: () => closes++,
+      holdQuery: () => {
+        querying.resolve();
+        return queried.promise;
+      },
+    });
+    const untouched = view.state;
+
+    const starting = controller.start();
+    await querying.promise;
+    controller.dispose();
+    const closedByDisposal = closes;
+    queried.resolve();
+    await starting;
+
+    expect(errors).toEqual([]);
+    expect(view.state).toBe(untouched);
+    expect(controller.active).toBe(false);
+    expect(controller.synchronizationSnapshot).toBeNull();
+    expect(subscriptions).toBe(0);
+    expect(closedByDisposal).toBe(1);
+    expect(closes).toBe(2);
   });
 
   it("unsubscribes when a remote snapshot fails", async () => {
@@ -819,6 +890,66 @@ describe("CodeMirror operation collaboration", () => {
     await expect(controller.release()).rejects.toThrow("is not active");
   });
 
+  it("stays active, and can be released later, when the runtime refuses a release", async () => {
+    let releases = 0;
+    const applies: ApplyRequest[] = [];
+    const { controller, view, errors } = controllerHarness({
+      initial: activeSnapshotAt("abc", 1),
+      followup: activeSnapshotAt("abcX", 2),
+      apply: (request) => {
+        applies.push(request);
+        return resolutionFor(request);
+      },
+      release: () => {
+        releases++;
+        return releases === 1
+          ? Promise.reject(new Error("release refused"))
+          : undefined;
+      },
+    });
+    await controller.start();
+
+    await expect(controller.release()).rejects.toThrow("release refused");
+
+    expect(controller.active).toBe(true);
+    expect(controller.synchronizationSnapshot?.confirmedCursor).toEqual({
+      epoch: 1,
+      version: 1,
+    });
+    // An edit made after the refusal is still submitted and confirmed.
+    view.dispatch({ changes: { from: 3, insert: "X" } });
+    await controller.localDocChanged();
+    expect(applies).toHaveLength(1);
+    expect(sendableUpdates(view.state)).toHaveLength(0);
+    expect(errors).toEqual([]);
+
+    await controller.release();
+    expect(releases).toBe(2);
+    expect(controller.active).toBe(false);
+  });
+
+  it("refuses to release a field while an edit Memory would not confirm is pending", async () => {
+    let releases = 0;
+    const { controller, view, errors } = controllerHarness({
+      initial: activeSnapshotAt("abc", 1),
+      apply: () => Promise.reject(new Error("apply failed")),
+      release: () => {
+        releases++;
+      },
+    });
+    await controller.start();
+    view.dispatch({ changes: { from: 3, insert: "X" } });
+
+    await expect(controller.release()).rejects.toThrow(
+      "cannot be released with local edits pending",
+    );
+
+    expect(errors.map((error) => error.message)).toEqual(["apply failed"]);
+    expect(releases).toBe(0);
+    expect(sendableUpdates(view.state)).toHaveLength(1);
+    expect(view.state.doc.toString()).toBe("abcX");
+  });
+
   it("stops accepting local edits before an active field release settles", async () => {
     const releasing = Promise.withResolvers<void>();
     const releaseStarted = Promise.withResolvers<void>();
@@ -1142,6 +1273,40 @@ describe("CodeMirror operation collaboration", () => {
 
     expect(errors[0]?.message).toContain("disagrees at the current");
     expect(controller.active).toBe(false);
+  });
+
+  it("returns `false` from `prepareExternalChange()` while it is not active, and submits nothing", async () => {
+    const applies: ApplyRequest[] = [];
+    const { controller, view } = controllerHarness({
+      initial: activeSnapshotAt("abc", 1),
+      apply: (request) => {
+        applies.push(request);
+        return resolutionFor(request);
+      },
+    });
+
+    // Not started yet.
+    expect(await controller.prepareExternalChange()).toBe(false);
+
+    await controller.start();
+    view.dispatch({ changes: { from: 3, insert: "X" } });
+    controller.dispose();
+    expect(await controller.prepareExternalChange()).toBe(false);
+    expect(applies).toEqual([]);
+    expect(sendableUpdates(view.state)).toHaveLength(1);
+  });
+
+  it("returns `false` from `prepareExternalChange()` once an apply has failed", async () => {
+    const { controller, view, errors } = controllerHarness({
+      initial: activeSnapshotAt("abc", 1),
+      apply: () => Promise.reject(new Error("apply failed")),
+    });
+    await controller.start();
+    view.dispatch({ changes: { from: 3, insert: "X" } });
+    await controller.localDocChanged();
+
+    expect(errors.map((error) => error.message)).toEqual(["apply failed"]);
+    expect(await controller.prepareExternalChange()).toBe(false);
   });
 
   it("prepares an external rewrite by flushing every pending edit", async () => {
@@ -1563,6 +1728,65 @@ describe("CodeMirror operation collaboration", () => {
     expect(view.state).toBe(untouched);
   });
 
+  it("leaves the editor alone once disposed during the query that follows an apply", async () => {
+    // The follow-up snapshot carries another client's operation, which a
+    // controller still in use would bring into the editor.
+
+    const following = Promise.withResolvers<void>();
+    const followed = Promise.withResolvers<void>();
+    const other = acceptedResolutionAt("abcX", 2, 4, "!", "bob:3");
+    const { controller, view, errors } = controllerHarness({
+      initial: activeSnapshotAt("abc", 1),
+      followup: {
+        ...activeSnapshot("abcX!", other),
+        operations: other.operations,
+      },
+      apply: resolutionFor,
+      holdQuery: (index) => {
+        if (index === 0) return undefined;
+        following.resolve();
+        return followed.promise;
+      },
+    });
+    await controller.start();
+    view.dispatch({ changes: { from: 3, insert: "X" } });
+    const sending = controller.localDocChanged();
+    await following.promise;
+    expect(sendableUpdates(view.state)).toHaveLength(0);
+
+    controller.dispose();
+    const untouched = view.state;
+    followed.resolve();
+    await sending;
+
+    expect(errors).toEqual([]);
+    expect(view.state).toBe(untouched);
+    expect(view.state.doc.toString()).toBe("abcX");
+  });
+
+  it("reports no error for an apply that fails after the controller is disposed", async () => {
+    const applying = Promise.withResolvers<void>();
+    const applied = Promise.withResolvers<ApplyOpResolution>();
+    const { controller, view, errors } = controllerHarness({
+      initial: activeSnapshotAt("abc", 1),
+      apply: () => {
+        applying.resolve();
+        return applied.promise;
+      },
+    });
+    await controller.start();
+    view.dispatch({ changes: { from: 3, insert: "X" } });
+    const sending = controller.localDocChanged();
+    await applying.promise;
+
+    controller.dispose();
+    applied.reject(new Error("the connection closed"));
+    await sending;
+
+    expect(errors).toEqual([]);
+    expect(controller.active).toBe(false);
+  });
+
   it("isolates synchronization observers from the Memory operation path", async () => {
     const accepted = acceptedResolution("abc", 1, "X");
     const { controller, view, errors } = controllerHarness({
@@ -1733,6 +1957,13 @@ function controllerHarness(options: {
   cancel?: () => void;
   release?: () => void | Promise<void>;
   close?: () => void;
+
+  /**
+   * Called as each query of the field starts, with the query's position in
+   * the order they are made. A promise it returns holds that query's snapshot
+   * back until the promise resolves.
+   */
+  holdQuery?: (index: number) => Promise<void> | undefined;
 }) {
   const compartment = new Compartment();
   let state = EditorState.create({
@@ -1754,12 +1985,16 @@ function controllerHarness(options: {
   const runtime = {
     operationCodecs: () =>
       Promise.resolve(options.codecs ?? ["codemirror-changeset@1"]),
-    queryOperationField: () =>
-      Promise.resolve(
-        queryCount++ === 0
-          ? options.initial
-          : followups[Math.min(queryCount - 2, followups.length - 1)],
-      ),
+    queryOperationField: () => {
+      const index = queryCount++;
+      const snapshot = index === 0
+        ? options.initial
+        : followups[Math.min(index - 1, followups.length - 1)];
+      const held = options.holdQuery?.(index);
+      return held === undefined
+        ? Promise.resolve(snapshot)
+        : held.then(() => snapshot);
+    },
     subscribeOperationField: (
       _cell: CellHandle<string>,
       callback: (snapshot: OperationFieldSnapshot) => void,

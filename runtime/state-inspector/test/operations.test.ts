@@ -587,7 +587,7 @@ describe("operation field inspection", () => {
       }
     });
 
-    it("reports no anchors for a field whose document was never written or was deleted, and the anchors a released field keeps", async () => {
+    it("reports no anchors for a field whose document was never written, was deleted or holds no value, and the anchors a released field keeps", async () => {
       const path = await Deno.makeTempFile({ suffix: ".sqlite" });
       const anchorsOf = (id: string) =>
         operationAnchorsDocId({ id, path: ["body"] });
@@ -599,7 +599,12 @@ describe("operation field inspection", () => {
             commit: {
               localSeq: 1,
               reads: { confirmed: [], pending: [] },
-              operations: ["of:unwritten", "of:released", "of:cleared"]
+              operations: [
+                "of:unwritten",
+                "of:released",
+                "of:cleared",
+                "of:valueless",
+              ]
                 .flatMap((id) => [{
                   op: "set" as const,
                   id,
@@ -624,13 +629,21 @@ describe("operation field inspection", () => {
             commit: {
               localSeq: 3,
               reads: { confirmed: [], pending: [] },
-              operations: [{
-                op: "release-op-field",
-                id: "of:released",
-                path: body,
-                codec: CODEMIRROR_CHANGESET_CODEC,
-                cursor: { epoch: 1, version: 1 },
-              }, { op: "delete", id: anchorsOf("of:cleared") }],
+              operations: [
+                {
+                  op: "release-op-field",
+                  id: "of:released",
+                  path: body,
+                  codec: CODEMIRROR_CHANGESET_CODEC,
+                  cursor: { epoch: 1, version: 1 },
+                },
+                { op: "delete", id: anchorsOf("of:cleared") },
+                {
+                  op: "set",
+                  id: anchorsOf("of:valueless"),
+                  value: {},
+                },
+              ],
             },
           });
         } finally {
@@ -649,6 +662,12 @@ describe("operation field inspection", () => {
           consistency: { anchorsDocumentValid: null, healthy: true },
         });
         expect(cleared.anchors).toEqual({});
+        const valueless = inspectOnly(path, "of:valueless");
+        expect(valueless).toMatchObject({
+          active: true,
+          consistency: { anchorsDocumentValid: true, healthy: true },
+        });
+        expect(valueless.anchors).toEqual({});
         const released = inspectOnly(path, "of:released");
         expect(released).toMatchObject({
           active: false,

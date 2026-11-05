@@ -5168,25 +5168,6 @@ const requireOperationCodec = (engine: Engine, id: string): OperationCodec => {
 };
 
 /**
- * The anchors a field's anchors document holds, given the document. An
- * absent document, and one with no value, hold none.
- *
- * @throws ProtocolError when the document holds anything but anchors
- *   ({@link parseFieldAnchors}).
- */
-const anchorsOfDocument = (
-  id: EntityId,
-  document: EntityDocument | null,
-): FieldAnchors => {
-  if (document === null || document.value === undefined) return {};
-  const parsed = parseFieldAnchors(document.value);
-  if ("fault" in parsed) {
-    throw new ProtocolError(`anchors document ${id} ${parsed.fault}`);
-  }
-  return parsed.anchors;
-};
-
-/**
  * What the codec `codecId` returned for the anchors `prior`, checked before
  * the engine stores it: anchors, under the ids `prior` holds and no others.
  * The next edit to the field reads what is stored here, so a codec's mistake
@@ -5874,11 +5855,10 @@ const writeAnchorsDocument = (
  * Checks the anchors document a commit's operation just wrote (§7.8): a
  * client writes it as it writes any entity, and what it leaves there is what
  * the next edit to the field maps, so the write is refused unless the
- * document then holds anchors and nothing else. A deleted document holds
- * none.
+ * document then holds anchors and nothing else ({@link parseFieldAnchors}).
+ * A deleted document, and one written with no value, hold none.
  *
- * @throws ProtocolError naming the operation, when the document does not pass
- *   {@link anchorsOfDocument}.
+ * @throws ProtocolError naming the operation and what the document holds.
  */
 const assertAnchorsDocument = (
   engine: Engine,
@@ -5889,19 +5869,18 @@ const assertAnchorsDocument = (
   },
 ): void => {
   const { branch, opIndex, revision } = options;
-  try {
-    anchorsOfDocument(
-      revision.id,
-      readStateForScopeKey(engine, {
-        branch,
-        id: revision.id,
-        scope: revision.scope,
-        scopeKey: revision.scopeKey,
-      })?.document ?? null,
+  const document = readStateForScopeKey(engine, {
+    branch,
+    id: revision.id,
+    scope: revision.scope,
+    scopeKey: revision.scopeKey,
+  })?.document ?? null;
+  if (document === null || document.value === undefined) return;
+  const parsed = parseFieldAnchors(document.value);
+  if ("fault" in parsed) {
+    throw new ProtocolError(
+      `commit operation ${opIndex}: anchors document ${revision.id} ${parsed.fault}`,
     );
-  } catch (cause) {
-    if (!(cause instanceof ProtocolError)) throw cause;
-    throw new ProtocolError(`commit operation ${opIndex}: ${cause.message}`);
   }
 };
 

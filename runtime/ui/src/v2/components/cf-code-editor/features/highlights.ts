@@ -261,29 +261,49 @@ export function characterAt(
   return point.x >= box.left && point.x <= box.right ? at : undefined;
 }
 
+/** What {@link highlightClickHandler} reads of a `click` event. */
+export interface HighlightClick {
+  /** The button the click was made with; `0` is the primary one. */
+  readonly button: number;
+
+  /** Horizontal position of the pointer, in screen coordinates. */
+  readonly clientX: number;
+
+  /** Vertical position of the pointer, in screen coordinates. */
+  readonly clientY: number;
+}
+
 /**
- * Draws the host's highlights and calls `onClick` with the id of the
- * innermost highlight drawn over the character under a click: a press and
- * release of the primary button that leaves nothing selected. A press that
- * drags out a selection, or extends one, is a selection and not a click,
- * wherever it starts. The press itself is left to place the caret as usual,
- * and the click is read once the editor has made of it what it will.
+ * Returns the editor's handler for a `click` event, which calls `onClick`
+ * with the id of the innermost highlight drawn over the character under the
+ * click. A click is a press and release of the primary button that leaves
+ * nothing selected: a press that drags out a selection, or extends one, is a
+ * selection and not a click, wherever it starts. The handler returns `false`
+ * for every event, which leaves the editor to handle it as usual.
+ */
+export function highlightClickHandler(
+  onClick: (id: string) => void,
+): (click: HighlightClick, view: CharacterGeometry) => boolean {
+  return (click, view) => {
+    if (click.button !== 0 || !view.state.selection.main.empty) return false;
+    const at = characterAt(view, { x: click.clientX, y: click.clientY });
+    const id = at === undefined ? undefined : highlightAt(view.state, at);
+    if (id !== undefined) onClick(id);
+    return false;
+  };
+}
+
+/**
+ * Draws the host's highlights and reports a click on one to `onClick`, as
+ * {@link highlightClickHandler} decides. The press itself is left to place
+ * the caret, and the click is read once the editor has made of the press
+ * what it will.
  */
 export function highlights(onClick: (id: string) => void): Extension {
   return [
     highlightField,
     highlightTheme,
-    EditorView.domEventHandlers({
-      click(event, view) {
-        if (event.button !== 0 || !view.state.selection.main.empty) {
-          return false;
-        }
-        const at = characterAt(view, { x: event.clientX, y: event.clientY });
-        const id = at === undefined ? undefined : highlightAt(view.state, at);
-        if (id !== undefined) onClick(id);
-        return false;
-      },
-    }),
+    EditorView.domEventHandlers({ click: highlightClickHandler(onClick) }),
   ];
 }
 

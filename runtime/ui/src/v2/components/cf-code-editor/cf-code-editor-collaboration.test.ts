@@ -1385,6 +1385,74 @@ describe("CFCodeEditor collaboration", () => {
     }
   });
 
+  it("renders no remote caret from presence that arrives while the field has no confirmed cursor", async () => {
+    // The room is joined at a version. The collaboration then holds a
+    // snapshot with no version, as it does once the field is released, and
+    // the room delivers before the editor has left it.
+
+    const runtime = presenceRuntime();
+    const element = new CFCodeEditor();
+    try {
+      const presence = (element as any)._presenceComp as Compartment;
+      const view = statefulView([presence.of([])]);
+      (element as any)._editorView = view;
+      const versioned = {
+        confirmedCursor: { epoch: 2, version: 4 },
+        pendingChanges: [],
+        field: synchronizedField,
+        anchors: {},
+      };
+      const collaboration: {
+        active: boolean;
+        cell: CellHandle<string>;
+        synchronizationSnapshot: {
+          confirmedCursor: { epoch: number; version: number } | null;
+          pendingChanges: never[];
+          field: typeof synchronizedField;
+          anchors: Record<string, number>;
+        };
+      } = {
+        active: true,
+        cell: operationCell(runtime),
+        synchronizationSnapshot: versioned,
+      };
+      (element as any)._collaboration = collaboration;
+      (element as any).emit = () => {};
+      element.collaborative = true;
+      element.participantName = "Ada";
+      (element as any)._setupPresence();
+      await settle();
+      const handle = runtime.handles[0];
+      const participants = () => [
+        ...codeMirrorPresenceState(view.state)!.participants.keys(),
+      ];
+
+      collaboration.synchronizationSnapshot = {
+        ...versioned,
+        confirmedCursor: null,
+      };
+      const unchanged = view.state;
+      handle.emit({ kind: "upsert", participant: caretRecord("peer:1") });
+      handle.emit({
+        kind: "snapshot",
+        participantId: "participant:self",
+        participants: [caretRecord("peer:2")],
+      });
+      (element as any)._applyPresenceSnapshot([caretRecord("peer:3")]);
+      expect(view.state).toBe(unchanged);
+      expect(participants()).toEqual([]);
+
+      // The same deliveries at a version render their carets.
+      collaboration.synchronizationSnapshot = versioned;
+      handle.emit({ kind: "upsert", participant: caretRecord("peer:1") });
+      expect(participants()).toEqual(["peer:1"]);
+      (element as any)._applyPresenceSnapshot([caretRecord("peer:3")]);
+      expect(participants()).toEqual(["peer:3"]);
+    } finally {
+      (element as any)._cleanupPresence();
+    }
+  });
+
   it("submits external backlink title rewrites through collaboration", async () => {
     let state = EditorState.create({
       doc: "[[Old (piece:1)]]",

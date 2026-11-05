@@ -9,7 +9,9 @@ import {
   type EditorHighlight,
   highlightAnchors,
   highlightAt,
+  highlightClickHandler,
   highlightField,
+  highlights,
   localAnchors,
   NOTHING_SELECTED,
   sameSelection,
@@ -70,6 +72,41 @@ const marks = (state: EditorState) => {
   );
   return found;
 };
+
+/**
+ * A stand-in for an editor view that lays `state`'s document out on a grid:
+ * each character is 10 wide and each line 20 tall, with the first line's top
+ * at y = 100 and its first character's left edge at x = 0. Like CodeMirror,
+ * it resolves a point to the nearest position on the point's line and to the
+ * side of that position the point is on, and resolves a point above or below
+ * the lines to the document's start or end.
+ */
+const gridView = (state: EditorState): CharacterGeometry => ({
+  state,
+  documentTop: 100,
+  posAndSideAtCoords: ({ x, y }) => {
+    if (y < 100) return { pos: 0, assoc: 1 };
+    if (y >= 100 + 20 * state.doc.lines) {
+      return { pos: state.doc.length, assoc: -1 };
+    }
+    const line = state.doc.line(1 + Math.floor((y - 100) / 20));
+    const column = Math.max(0, Math.min(line.length, Math.round(x / 10)));
+    return {
+      pos: line.from + column,
+      assoc: column === line.length || x < column * 10 ? -1 : 1,
+    };
+  },
+  lineBlockAt: (pos) => {
+    const top = 20 * (state.doc.lineAt(pos).number - 1);
+    return { top, bottom: top + 20 };
+  },
+  coordsForChar: (pos) => {
+    const line = state.doc.lineAt(pos);
+    if (pos === line.to) return null;
+    const left = 10 * (pos - line.from);
+    return { left, right: left + 10 };
+  },
+});
 
 /** The ranges `state` draws marks over, in document order. */
 const markedRanges = (state: EditorState): Array<[number, number]> =>
@@ -284,39 +321,7 @@ describe("highlights", () => {
   });
 
   describe("characterAt", () => {
-    // The stand-in below lays "ab\ncd" out on a grid: each character is 10
-    // wide and each line 20 tall, with the first line's top at y = 100. Like
-    // CodeMirror, it resolves a point to the nearest position on the point's
-    // line and to the side of that position the point is on, and resolves a
-    // point above or below the lines to the document's start or end.
-
-    const state = EditorState.create({ doc: "ab\ncd" });
-    const view: CharacterGeometry = {
-      state,
-      documentTop: 100,
-      posAndSideAtCoords: ({ x, y }) => {
-        if (y < 100) return { pos: 0, assoc: 1 };
-        if (y >= 100 + 20 * state.doc.lines) {
-          return { pos: state.doc.length, assoc: -1 };
-        }
-        const line = state.doc.line(1 + Math.floor((y - 100) / 20));
-        const column = Math.max(0, Math.min(line.length, Math.round(x / 10)));
-        return {
-          pos: line.from + column,
-          assoc: column === line.length || x < column * 10 ? -1 : 1,
-        };
-      },
-      lineBlockAt: (pos) => {
-        const top = 20 * (state.doc.lineAt(pos).number - 1);
-        return { top, bottom: top + 20 };
-      },
-      coordsForChar: (pos) => {
-        const line = state.doc.lineAt(pos);
-        if (pos === line.to) return null;
-        const left = 10 * (pos - line.from);
-        return { left, right: left + 10 };
-      },
-    };
+    const view = gridView(EditorState.create({ doc: "ab\ncd" }));
 
     it("returns the character whose left half the point is on", () => {
       expect(characterAt(view, { x: 12, y: 110 })).toBe(1);
@@ -348,6 +353,24 @@ describe("highlights", () => {
       ).toBeUndefined();
     });
 
+    it("returns undefined for a position with no character on the side the point is on", () => {
+      // The start of the document has no character before it, and the end
+      // has none after it.
+
+      expect(
+        characterAt({
+          ...view,
+          posAndSideAtCoords: () => ({ pos: 0, assoc: -1 }),
+        }, { x: 5, y: 110 }),
+      ).toBeUndefined();
+      expect(
+        characterAt({
+          ...view,
+          posAndSideAtCoords: () => ({ pos: 5, assoc: 1 }),
+        }, { x: 15, y: 130 }),
+      ).toBeUndefined();
+    });
+
     it("returns undefined for a line break", () => {
       // A point CodeMirror resolves to the end of the first line, on the side
       // of the line break after it.
@@ -367,6 +390,107 @@ describe("highlights", () => {
       expect(
         characterAt({ ...view, coordsForChar: () => null }, { x: 18, y: 110 }),
       ).toBe(1);
+    });
+  });
+
+  describe("highlightClickHandler()", () => {
+    // Each case clicks on "hello world", laid out on the grid as one line
+    // with "world" marked as the highlight `h`, and collects the ids the
+    // handler reports.
+
+    const marked = stateWith("hello world", { from: 6, to: 11 }, [
+      { id: "h", fromAnchor: "from", toAnchor: "to" },
+    ]);
+
+    /** A primary-button click `fraction` of the way across a character. */
+    const clickOn = (at: number, fraction: number) => ({
+      button: 0,
+      clientX: 10 * (at + fraction),
+      clientY: 110,
+    });
+
+    /** What the handler reports and returns for `click` on `state`. */
+    const handle = (
+      state: EditorState,
+      click: { button: number; clientX: number; clientY: number },
+      view: CharacterGeometry = gridView(state),
+    ) => {
+      const reported: string[] = [];
+      const returned = highlightClickHandler((id) => reported.push(id))(
+        click,
+        view,
+      );
+      return { reported, returned };
+    };
+
+    it("reports the highlight under a primary-button click that leaves nothing selected", () => {
+      expect(handle(marked, clickOn(6, 0.25)).reported).toEqual(["h"]);
+      expect(handle(marked, clickOn(10, 0.75)).reported).toEqual(["h"]);
+    });
+
+    it("reports nothing for a click with another button", () => {
+      expect(handle(marked, { ...clickOn(8, 0.5), button: 1 }).reported)
+        .toEqual([]);
+      expect(handle(marked, { ...clickOn(8, 0.5), button: 2 }).reported)
+        .toEqual([]);
+    });
+
+    it("reports nothing for a click that leaves text selected", () => {
+      const selecting = marked.update({
+        selection: { anchor: 7, head: 9 },
+      }).state;
+
+      expect(handle(selecting, clickOn(8, 0.5)).reported).toEqual([]);
+    });
+
+    it("reports nothing for a click on a character outside every highlight", () => {
+      expect(handle(marked, clickOn(2, 0.5)).reported).toEqual([]);
+      expect(handle(marked, clickOn(5, 0.75)).reported).toEqual([]);
+    });
+
+    it("reports nothing for a click over no character", () => {
+      // Past the end of the line, whose last character is marked, and below
+      // it.
+
+      expect(handle(marked, clickOn(20, 0.5)).reported).toEqual([]);
+      expect(handle(marked, { ...clickOn(10, 0.5), clientY: 170 }).reported)
+        .toEqual([]);
+    });
+
+    it("reports nothing where the editor resolves no position", () => {
+      expect(
+        handle(marked, clickOn(8, 0.5), {
+          ...gridView(marked),
+          posAndSideAtCoords: () => null,
+        }).reported,
+      ).toEqual([]);
+    });
+
+    it("returns `false` whether or not it reports a highlight", () => {
+      expect(handle(marked, clickOn(8, 0.5)).returned).toBe(false);
+      expect(handle(marked, clickOn(2, 0.5)).returned).toBe(false);
+      expect(handle(marked, { ...clickOn(8, 0.5), button: 1 }).returned)
+        .toBe(false);
+    });
+  });
+
+  describe("highlights()", () => {
+    it("returns an extension whose state draws the host's highlights", () => {
+      const state = EditorState.create({
+        doc: "hello world",
+        extensions: highlights(() => {}),
+      }).update({
+        effects: [
+          setHighlightAnchorsEffect.of({ from: 6, to: 11 }),
+          setHighlightsEffect.of([
+            { id: "h", fromAnchor: "from", toAnchor: "to" },
+          ]),
+        ],
+      }).state;
+
+      expect(highlightAnchors(state)).toEqual({ from: 6, to: 11 });
+      expect(markedRanges(state)).toEqual([[6, 11]]);
+      expect(highlightAt(state, 8)).toBe("h");
     });
   });
 
