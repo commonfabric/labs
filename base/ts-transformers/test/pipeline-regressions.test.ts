@@ -171,22 +171,23 @@ function isInsideCallNamed(node: ts.Node, name: string): boolean {
 }
 
 Deno.test(
-  "Pipeline regression: manual mapWithPattern preserves fixed plain-capture key evaluation",
+  "Pipeline regression: bound mapWithPattern factories preserve fixed plain-capture key evaluation",
   async () => {
     const source = `import { pattern, UI } from "commonfabric";
-const key = "small" as const;
-const p = pattern<{ items: string[] }>((state) => ({
-  [UI]: (
-    <div>
-      {state.items.mapWithPattern(
-        pattern(({ params: { style: { [key]: fontSize } } }) => (
-          <span>{fontSize}</span>
-        )),
-        { style: { small: 12, large: 16 }, key },
-      )}
-    </div>
-  ),
-}));
+const p = pattern<{ items: string[] }>((state) => {
+  const key = "small" as const;
+  const style = { small: 12, large: 16 };
+  return {
+    [UI]: (
+      <div>
+        {state.items.mapWithPattern(pattern(() => {
+          const { [key]: fontSize } = style;
+          return <span>{fontSize}</span>;
+        }))}
+      </div>
+    ),
+  };
+});
 `;
 
     const { diagnostics } = await validateSource(source, {
@@ -202,23 +203,28 @@ const p = pattern<{ items: string[] }>((state) => ({
     assertEquals(computationDiagnostics.length, 0);
 
     const root = parseModule(output);
-    // `fontSize` binds to a dynamic element access `…style[key]`, keyed by the
-    // `key` identifier, never resolved to the static `.small` member.
-    const fontSizeDecl = collect(root, ts.isVariableDeclaration).find((decl) =>
-      ts.isIdentifier(decl.name) && decl.name.text === "fontSize"
+    const mapWithPattern = callsNamed(root, "mapWithPattern");
+    assertEquals(mapWithPattern.length, 1);
+    assertEquals(mapWithPattern[0].arguments.length, 1);
+    // `fontSize` binds through a computed `[key]` property, never through the
+    // static `.small` member.
+    const fontSizeBinding = collect(root, ts.isBindingElement).find((binding) =>
+      ts.isIdentifier(binding.name) && binding.name.text === "fontSize"
     );
-    assert(fontSizeDecl?.initializer, "expected a fontSize declaration");
-    const access = fontSizeDecl.initializer;
+    assert(fontSizeBinding, "expected a fontSize binding");
+    const propertyName = fontSizeBinding.propertyName;
     assert(
-      ts.isElementAccessExpression(access) &&
-        ts.isIdentifier(access.argumentExpression) &&
-        access.argumentExpression.text === "key",
-      "expected fontSize to bind a `[key]` element access",
+      propertyName !== undefined && ts.isComputedPropertyName(propertyName) &&
+        ts.isIdentifier(propertyName.expression) &&
+        propertyName.expression.text === "key",
+      "expected fontSize to bind through a `[key]` computed property",
     );
-    const style = access.expression;
+    const declaration = fontSizeBinding.parent.parent;
     assert(
-      ts.isPropertyAccessExpression(style) && style.name.text === "style",
-      "expected the element access base to be `…style`",
+      ts.isVariableDeclaration(declaration) &&
+        ts.isIdentifier(declaration.initializer) &&
+        declaration.initializer.text === "style",
+      "expected the computed binding source to be `style`",
     );
     assert(
       !collect(root, ts.isPropertyAccessExpression).some((pa) =>

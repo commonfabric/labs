@@ -107,6 +107,9 @@ passes one bound factory and no sibling params. A runtime-owned, keyless list
 adapter instead binds its private value into the generated graph before passing
 that single capture-free factory; hidden factory params require a durable
 artifact ref and are not a back door for session-only factories.
+Computed property names in a lexical capture remain expressions over callback
+argument 1 after closure conversion. Binding the factory does not fold a
+captured key against a sibling params object or change it into a static member.
 The row piece's stored argument therefore carries only its public list input;
 captured state remains in the bound factory. Authorization for a captured
 writable follows its verified binding identity at that factory boundary, never
