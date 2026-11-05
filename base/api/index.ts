@@ -339,38 +339,45 @@ export interface TextChange {
  * A version of a collaborative field: the field epoch, which a release of the
  * field ends, and the count of operations integrated within it.
  */
-export interface OpCursor {
+export type OpCursor = {
   /** The field epoch. */
   readonly epoch: number;
 
   /** Operations integrated in the epoch. */
   readonly version: number;
-}
+};
 
 /**
  * A range of a string, in UTF-16 code units as string indexes count them:
  * `from` up to `to`, exclusive. `from === to` is a point.
  */
-export interface AnchorRange {
+export type AnchorRange = {
   /** Start of the range. */
   readonly from: number;
 
   /** End of the range, exclusive. */
   readonly to: number;
-}
-
-/** An anchor of a collaborative field: a range under its id. */
-export interface FieldAnchor extends AnchorRange {
-  /** The id the anchor was added under. */
-  readonly id: string;
-}
+};
 
 /**
- * The anchors of a collaborative field, as `anchorsOf()` returns them: the
- * version they were last restated at, and the anchors, sorted by id. Every
- * edit to the field moves them, so they describe the text it holds.
+ * An anchor of a collaborative field: a range under a writer-chosen id, which
+ * Memory carries through every edit to the field. An edit that deletes the
+ * covered text with nothing in its place empties the range to a point; a
+ * replacement of the covered text keeps the range over the replacement.
  */
-export interface FieldAnchors {
+export type FieldAnchor = AnchorRange & {
+  /** The id the anchor was added under. */
+  readonly id: string;
+};
+
+/**
+ * The anchors of a collaborative field, as its anchors document holds them
+ * and `anchorsOf()` returns them: the version they were last restated at, and
+ * the anchors, sorted by id. Every edit to the field moves them, so they
+ * describe the text it holds; a set no edit has moved holds at every later
+ * version, so `version` lags the field's whenever no anchor has moved since.
+ */
+export type FieldAnchors = {
   /** The field epoch the anchors belong to. */
   readonly epoch: number;
 
@@ -379,7 +386,7 @@ export interface FieldAnchors {
 
   /** The anchors, sorted by id. */
   readonly anchors: readonly FieldAnchor[];
-}
+};
 
 /*
  * IAnyCell is an interface that is used by all calls and to which the runner
@@ -3839,8 +3846,9 @@ export type NavigateToFunction = (cell: Reactive<any>) => Reactive<boolean>;
 /**
  * `anchorsOf(field)` — the anchors of a collaborative string field, as
  * `addAnchor()` and `removeAnchor()` leave them and every edit moves them, or
- * `undefined` until the field first holds one. Once the field has held
- * anchors, removing the last leaves an empty list.
+ * `undefined` until the field first holds an anchor, and again once the
+ * field is released or its entity deleted. Removing the last anchor leaves
+ * an empty list.
  */
 export type AnchorsOfFunction = (
   field: FactoryInput<string>,

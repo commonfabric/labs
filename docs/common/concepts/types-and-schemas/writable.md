@@ -140,8 +140,9 @@ to the new range, and `.removeAnchor(id)` removes it. Positions count UTF-16
 code units, as string indexes do.
 
 `anchorsOf(field)` returns the field's anchors, `{ epoch, version, anchors }`
-with `anchors` sorted by id, or `undefined` until the field first holds one;
-removing the last anchor leaves an empty list:
+with `anchors` sorted by id, or `undefined` until the field first holds one
+and again once the field is released; removing the last anchor leaves an empty
+list:
 
 ```typescript
 // Shown at module scope.

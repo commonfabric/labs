@@ -1,7 +1,9 @@
 import type {
   FabricPlainObject,
   FabricValue,
+  FieldAnchor,
   JSONSchema,
+  OpCursor,
   SchemaPathSelector,
 } from "@commonfabric/api";
 import { hashStringOf } from "@commonfabric/data-model";
@@ -925,39 +927,15 @@ export type DeleteOperation = {
   scope?: CellScope;
 };
 
-export type OpCursor = {
-  epoch: number;
-  version: number;
-};
-
 export const CODEMIRROR_CHANGESET_CODEC = "codemirror-changeset@1";
 
-/**
- * A range of a collaborative field, keyed by a client-chosen id, that Memory
- * carries through every integrated operation. `from` and `to` are the codec's
- * positions: for the CodeMirror codec, UTF-16 code unit offsets with `to`
- * exclusive. An edit that deletes the covered text with nothing in its place
- * empties the range to a point (`from === to`); a replacement of the covered
- * text keeps the range over the replacement.
- */
-export type FieldAnchor = {
-  id: string;
-  from: number;
-  to: number;
-};
-
-/**
- * The anchors of a collaborative field as its anchors document holds them
- * ({@link operationAnchorsDocId}): the field cursor the set was last restated
- * at, and the set, sorted by id. A set carried unchanged through later
- * operations holds at every later version, so `version` lags the field head
- * whenever no anchor has moved since.
- */
-export type FieldAnchorsDocument = {
-  epoch: number;
-  version: number;
-  anchors: FieldAnchor[];
-};
+// A field's anchors and its cursors are declared once, where patterns and
+// Memory both see them.
+export type {
+  FieldAnchor,
+  FieldAnchors as FieldAnchorsDocument,
+  OpCursor,
+} from "@commonfabric/api";
 
 /**
  * Anchors an `apply-op` adds, replaces or removes. An `add` of an id the
