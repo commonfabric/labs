@@ -381,22 +381,17 @@ describe("dynamic Factory@1 node", () => {
   });
 
   it("dispatches a warm symbolic HandlerFactory through the existing event path", async () => {
-    const eventSchema = {
-      type: "object",
-      properties: { amount: { type: "number" } },
-      required: ["amount"],
-      additionalProperties: false,
-    } as const satisfies JSONSchema;
     const expected = {
       kind: "handler",
       contextSchema: ARGUMENT_SCHEMA,
-      eventSchema,
+      eventSchema: false,
     } as const satisfies FactoryContract;
     const events: Array<{ amount: number; value: number }> = [];
     const selected = commonfabric.handler(
-      eventSchema,
+      false,
       ARGUMENT_SCHEMA,
-      ({ amount }, { value }) => events.push({ amount, value }),
+      ({ amount }: { amount: number }, { value }) =>
+        events.push({ amount, value }),
     );
     setDurableArtifactEntryRef(selected, REFS.handler);
     warmArtifacts.set(

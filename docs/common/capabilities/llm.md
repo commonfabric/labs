@@ -79,7 +79,7 @@ const summaries = articles.map((article) => ({
 ))}
 ```
 
-## Pattern factories as tools
+### Pattern factories as tools
 
 A `PatternFactory` is a tool directly. Use an object wrapper only for optional
 metadata such as a description; captured data belongs in an inline pattern

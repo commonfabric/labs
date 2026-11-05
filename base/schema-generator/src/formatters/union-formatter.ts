@@ -352,7 +352,10 @@ function pairWrittenMemberNodes(
  * written node, the members are ranked by the union the property an indexed
  * access `siteNode` writes declares (`indexedAccessPairing()`), or else by
  * the union `union`'s alias declares (`declaredPairing()`), as where a
- * transform built the node `union` is read at.
+ * transform built the node `union` is read at. Outside tuple-element
+ * placement, trusted factory members retain their source slots but are ordered
+ * pattern, module, handler within those slots so schema formatting is stable
+ * across TypeScript's internal union order.
  */
 function sourceOrderOfMembers(
   union: ts.Type,

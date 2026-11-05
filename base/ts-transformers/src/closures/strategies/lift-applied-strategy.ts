@@ -26,7 +26,6 @@ import { analyzeFunctionCapabilities } from "../../policy/capability-analysis.ts
 import { unwrapExpression } from "../../utils/expression.ts";
 import { registerLiftAppliedCallType } from "../../ast/type-inference.ts";
 import {
-  getCallbackReturnExpression,
   propagateFactoryContractHints,
 } from "../../transformers/schema-injection.ts";
 import { applyShrinkAndWrap } from "../../transformers/type-shrinking.ts";
@@ -673,9 +672,10 @@ export function transformLiftAppliedCall(
     );
   }
   propagateFactoryContractHints(mergedInput, inputTypeNode, context);
-  const returnExpression = getCallbackReturnExpression(callback);
-  if (returnExpression && resultTypeNode) {
-    propagateFactoryContractHints(returnExpression, resultTypeNode, context);
+  if (resultTypeNode) {
+    for (const returnExpression of callbackReturnExpressions(callback)) {
+      propagateFactoryContractHints(returnExpression, resultTypeNode, context);
+    }
   }
   const schedulerOptions = createDeriveSchedulerOptions(
     inputParamSummary,
@@ -715,6 +715,24 @@ export function transformLiftAppliedCall(
   );
 
   return rebuiltCall;
+}
+
+/** Every value the callback itself returns, excluding nested functions. */
+function callbackReturnExpressions(
+  callback: ts.ArrowFunction | ts.FunctionExpression,
+): readonly ts.Expression[] {
+  if (ts.isExpression(callback.body)) return [callback.body];
+  const expressions: ts.Expression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (node !== callback.body && ts.isFunctionLike(node)) return;
+    if (ts.isReturnStatement(node) && node.expression) {
+      expressions.push(node.expression);
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(callback.body);
+  return expressions;
 }
 
 /**

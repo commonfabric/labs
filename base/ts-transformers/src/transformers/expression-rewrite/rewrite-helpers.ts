@@ -317,9 +317,12 @@ function unionWithEnclosingScopeFreeIdentifiers(
         !alreadyCoveredNames.has(node.text) && !addedNames.has(node.text)
       ) {
         const original = ts.getOriginalNode(node);
+        const resolvedNode = original !== node && ts.isIdentifier(original)
+          ? original
+          : node;
         const symbol = checker.getSymbolAtLocation(node) ??
-          (original !== node && ts.isIdentifier(original)
-            ? checker.getSymbolAtLocation(original)
+          (resolvedNode !== node
+            ? checker.getSymbolAtLocation(resolvedNode)
             : undefined);
         // Only capture value-space symbols. Type-only identifiers (type
         // aliases, interfaces — type parameters are also filtered by
@@ -333,7 +336,7 @@ function unionWithEnclosingScopeFreeIdentifiers(
           symbol &&
           (symbol.flags & ts.SymbolFlags.Value) !== 0 &&
           !hasOnlyErasedDeclarations(symbol) &&
-          !isNestedFunctionLocalCapture(node, expression, checker) &&
+          !isNestedFunctionLocalCapture(resolvedNode, expression, checker) &&
           isEnclosingScopeDeclaration(symbol)
         ) {
           addedNames.add(node.text);

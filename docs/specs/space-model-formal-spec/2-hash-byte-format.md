@@ -57,7 +57,7 @@ The tags are organized into four categories by high nibble:
 |:------------------|:-------|:--------|:--------------------------------|
 | `TAG_ARRAY`       | `0x10` | 16      | plain arrays                    |
 | `TAG_OBJECT`      | `0x11` | 17      | plain objects                   |
-| `TAG_INSTANCE`    | `0x12` | 18      | `FabricInstance` (general)    |
+| `TAG_INSTANCE`    | `0x12` | 18      | `FabricInstance` or `Factory@1` |
 
 **Primitive tags (`0x2N`)** — leaf value types:
 
@@ -437,7 +437,7 @@ Bytes: TAG_OBJECT  KEY_0  VALUE_0  KEY_1  VALUE_1  ...  TAG_END
 Empty object (`{}`) is encoded as `0x11 0x00` — the tag immediately followed by
 `TAG_END`.
 
-### 4.14 `FabricInstance`
+### 4.14 `FabricInstance` and `Factory@1`
 
 ```
 Bytes: TAG_INSTANCE  TYPE_TAG_STRING  STATE
@@ -454,6 +454,11 @@ Bytes: TAG_INSTANCE  TYPE_TAG_STRING  STATE
   form is used in practice.
 - **Encoded state**: The value returned by the codec's `encode()`, hashed
   recursively as a complete tagged value.
+
+An admitted factory callable uses this same representation with the literal
+type tag `"Factory@1"` and its canonical sealed factory state as the encoded
+state. Arbitrary JavaScript functions are not Fabric values and cannot reach
+this encoding.
 
 > **Note on types with dedicated tags.** `FabricBytes`, `FabricEpochNsec`,
 > `FabricEpochDay`, `FabricHash`, `FabricRegExp`, `FabricKeyPair`,

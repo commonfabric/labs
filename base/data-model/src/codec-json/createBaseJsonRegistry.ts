@@ -7,10 +7,9 @@ import { JSON_FORMAT, type JsonCodecValue } from "./interface.ts";
 
 /**
  * Creates a registry holding this format's determination about JavaScript's
- * primitive types, and nothing else. It registers no fabric class, so a
- * registry from here encodes no `FabricSpecialObject` and decodes every fabric
- * wire tag to an `UnknownValue`; registering the classes that participate is a
- * caller's job.
+ * primitive types and the protocol's admitted `Factory@1` callable. It
+ * registers no fabric class, so other fabric wire tags decode to an
+ * `UnknownValue`; registering the classes that participate is a caller's job.
  *
  * Two groups, which is the whole of what the JSON format decides:
  *

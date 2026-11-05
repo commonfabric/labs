@@ -47,7 +47,11 @@ export function parseCellPath(path: string): CellPath {
   return path.split("/").map(linkPathSegmentToCellPathSegment);
 }
 
-/** Reads a path through the root projection, preserving ancestor branch choices. */
+/**
+ * Reads a path by narrowing each child before materializing its parent.
+ * `requireProjection` instead traverses the root projection and preserves
+ * ancestor branch choices.
+ */
 export function resolveCellPath<T>(
   cell: Cell<T>,
   path: CellPath,

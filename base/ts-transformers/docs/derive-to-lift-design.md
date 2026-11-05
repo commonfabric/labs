@@ -90,10 +90,11 @@ evaluate once at module scope. Implementation notes:
   replace the base pattern call with the hoisted name while retaining the
   private `.curry(params)` tail.
 - Recognition is positional via `getMapWithPatternHoistablePatternCall`: a
-  `*WithPattern` call whose first argument is a `pattern(...)` builder call. The
-  top-level `export default pattern(...)` is a _direct_ call (not a
-  `*WithPattern` argument), so it is naturally excluded — no special guard
-  needed.
+  `*WithPattern` call whose first argument is either a capture-free
+  `pattern(...)` builder call or the compiler-private `.curry(params)` wrapped
+  form used for captured callbacks. The top-level `export default pattern(...)`
+  is a _direct_ call (not a `*WithPattern` argument), so it is naturally
+  excluded — no special guard needed.
 - `pattern` is removed from CT-1585's `HOISTABLE_BUILDER_NAMES` in the same
   change (same double-hoist-TDZ rationale; observed directly without it).
 - Pattern's hoisted reference sits in `mapWithPattern` argument position, not an

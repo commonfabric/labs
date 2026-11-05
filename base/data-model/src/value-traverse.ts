@@ -7,8 +7,8 @@ import type {
   FabricValue,
 } from "./interface.ts";
 import { FabricBytes } from "./fabric-primitives/FabricBytes.ts";
-import { deepFreeze, isDeepFrozen } from "./deep-freeze.ts";
-import { sealFactoryState } from "./fabric-factory.ts";
+import { isDeepFrozen } from "./deep-freeze.ts";
+import { factoryStateOf, mapFactoryStateValues } from "./fabric-factory.ts";
 import {
   DefaultValueVisitor,
   DO_RECURSE_VALUES,
@@ -65,7 +65,10 @@ class ContainerVisitor extends DefaultValueVisitor {
   ): VisitResult<never, FabricValue> {
     if (this.#seen.has(value)) return { type: "mapTo", value };
     this.#seen.add(value);
-    visitValue(sealFactoryState(value, deepFreeze), this);
+    mapFactoryStateValues(factoryStateOf(value), (nested) => {
+      visitValue(nested as FabricValue, this);
+      return nested;
+    });
     return { type: "mapTo", value };
   }
 
@@ -147,7 +150,10 @@ class SizeVisitor extends DefaultValueVisitor {
     if (this.#seen.has(value)) return { type: "mapTo", value };
     this.#seen.add(value);
     this.#size += 64;
-    visitValue(sealFactoryState(value, deepFreeze), this);
+    mapFactoryStateValues(factoryStateOf(value), (nested) => {
+      visitValue(nested as FabricValue, this);
+      return nested;
+    });
     return { type: "mapTo", value };
   }
 

@@ -6,7 +6,11 @@ import type {
   FabricValue,
 } from "./interface.ts";
 import { isValidDeepFrozenFabricValue } from "./deep-freeze.ts";
-import { isAdmittedFabricFactory, sealFactoryState } from "./fabric-factory.ts";
+import {
+  factoryStateOf,
+  isAdmittedFabricFactory,
+  mapFactoryStateValues,
+} from "./fabric-factory.ts";
 import { isFabricContainerValue } from "./types/index.ts";
 import {
   DefaultValueVisitor,
@@ -44,7 +48,10 @@ class AcyclicVisitor extends DefaultValueVisitor {
   ): VisitResult<never, FabricValue> {
     if (this.#seen.has(value)) return { type: "mapTo", value };
     this.#seen.add(value);
-    visitValue(sealFactoryState(value), this);
+    mapFactoryStateValues(factoryStateOf(value), (nested) => {
+      visitValue(nested as FabricValue, this);
+      return nested;
+    });
     return { type: "mapTo", value };
   }
 

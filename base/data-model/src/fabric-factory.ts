@@ -227,6 +227,12 @@ function ownEnumerableStringKeys(
   if (Reflect.ownKeys(value).length !== keys.length) {
     validationError(path, "properties must be enumerable strings");
   }
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !("value" in descriptor)) {
+      validationError(path, "properties must be enumerable data fields");
+    }
+  }
   return keys;
 }
 

@@ -516,6 +516,30 @@ Deno.test("schemaToTypeString formats a first-class PatternFactory contract", ()
   assert(!result.includes("extraParams"));
 });
 
+Deno.test("schemaToTypeString renders a HandlerFactory as an event sink", () => {
+  const result = schemaToTypeString({
+    asFactory: {
+      kind: "handler",
+      contextSchema: {
+        type: "object",
+        properties: { value: { type: "number" } },
+        required: ["value"],
+      },
+      eventSchema: {
+        type: "object",
+        properties: { amount: { type: "number" } },
+        required: ["amount"],
+      },
+    },
+  });
+
+  assert(result.startsWith("(e: {"));
+  assert(result.includes("value: number"));
+  assert(result.includes("}) => ({"));
+  assert(result.includes("amount: number"));
+  assert(result.endsWith("}) => void"));
+});
+
 //
 // A conjunction states its fields across its members. These pin that the
 // rendering merges them the way the CLI's reader does, so a help page's type

@@ -704,15 +704,36 @@ export function getArrayElementInfo(
     // their node-keyed hints.
     if (ts.isTupleTypeNode(typeNode)) {
       const elementType = checker.getIndexTypeOfType(type, ts.IndexKind.Number);
-      const elementNodes = typeNode.elements.map((element): ts.TypeNode => {
-        let current: ts.TypeNode = ts.isNamedTupleMember(element)
-          ? element.type
-          : element;
-        if (ts.isOptionalTypeNode(current) || ts.isRestTypeNode(current)) {
-          current = current.type;
-        }
-        return current;
-      });
+      const elementNodes = typeNode.elements.flatMap(
+        (element): ts.TypeNode[] => {
+          let current: ts.TypeNode = ts.isNamedTupleMember(element)
+            ? element.type
+            : element;
+          if (ts.isOptionalTypeNode(current)) {
+            current = current.type;
+          }
+          if (ts.isRestTypeNode(current)) {
+            current = current.type;
+            if (ts.isArrayTypeNode(current)) return [current.elementType];
+            if (ts.isTupleTypeNode(current)) {
+              return current.elements.flatMap((member) => {
+                let nested: ts.TypeNode = ts.isNamedTupleMember(member)
+                  ? member.type
+                  : member;
+                if (
+                  ts.isOptionalTypeNode(nested) || ts.isRestTypeNode(nested)
+                ) {
+                  nested = nested.type;
+                }
+                return ts.isArrayTypeNode(nested)
+                  ? [nested.elementType]
+                  : [nested];
+              });
+            }
+          }
+          return [current];
+        },
+      );
       if (elementType && elementNodes.length > 0) {
         return {
           elementType,

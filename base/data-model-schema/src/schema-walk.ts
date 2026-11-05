@@ -279,6 +279,41 @@ const holdsSubschemaRecord = (
   return false;
 };
 
+type FactorySchemaField =
+  | "argumentSchema"
+  | "resultSchema"
+  | "contextSchema"
+  | "eventSchema";
+
+/** Read the schema-bearing fields of a well-formed factory contract. */
+const factorySchemaFields = (
+  value: unknown,
+  parent: JSONSchema,
+): readonly FactorySchemaField[] | undefined => {
+  if (!isObjectNotArray(value)) {
+    warnNotSchema(
+      "a factory schema object",
+      "asFactory",
+      undefined,
+      value,
+      parent,
+    );
+    return undefined;
+  }
+  if (value.kind === "handler") return ["contextSchema", "eventSchema"];
+  if (value.kind === "pattern" || value.kind === "module") {
+    return ["argumentSchema", "resultSchema"];
+  }
+  warnNotSchema(
+    "a pattern, module, or handler factory schema",
+    "asFactory",
+    "kind",
+    value.kind,
+    parent,
+  );
+  return undefined;
+};
+
 /**
  * Invoke `visit` on each immediate subschema of `schema` (shallow — one level).
  * A boolean schema has no subschemas. `$defs` is visited only when
@@ -298,12 +333,12 @@ export function forEachSubschema(
   if (!isObjectOrArray(schema)) return false;
   const node = schema as JSONSchemaObj;
   if (opts.includeFactorySchemas !== false && node.asFactory !== undefined) {
-    const fields = node.asFactory.kind === "handler"
-      ? (["contextSchema", "eventSchema"] as const)
-      : (["argumentSchema", "resultSchema"] as const);
-    for (const field of fields) {
-      const child = node.asFactory[field] as JSONSchema | undefined;
+    const fields = factorySchemaFields(node.asFactory, node);
+    for (const field of fields ?? []) {
+      const child =
+        (node.asFactory as unknown as Record<string, unknown>)[field];
       if (child === undefined) continue;
+      if (!holdsSubschema(child, "asFactory", field, node)) continue;
       if (
         visit(
           child,
@@ -415,12 +450,12 @@ export function* subschemaEdges(
   if (!isObjectOrArray(schema)) return;
   const node = schema as JSONSchemaObj;
   if (opts.includeFactorySchemas !== false && node.asFactory !== undefined) {
-    const fields = node.asFactory.kind === "handler"
-      ? (["contextSchema", "eventSchema"] as const)
-      : (["argumentSchema", "resultSchema"] as const);
-    for (const field of fields) {
-      const child = node.asFactory[field] as JSONSchema | undefined;
+    const fields = factorySchemaFields(node.asFactory, node);
+    for (const field of fields ?? []) {
+      const child =
+        (node.asFactory as unknown as Record<string, unknown>)[field];
       if (child === undefined) continue;
+      if (!holdsSubschema(child, "asFactory", field, node)) continue;
       yield {
         schema: child,
         keyword: "asFactory",
@@ -474,13 +509,13 @@ export function mapSubschemas(
   };
 
   if (opts.includeFactorySchemas !== false && schema.asFactory !== undefined) {
-    const fields = schema.asFactory.kind === "handler"
-      ? (["contextSchema", "eventSchema"] as const)
-      : (["argumentSchema", "resultSchema"] as const);
+    const fields = factorySchemaFields(schema.asFactory, schema);
     let mappedFactory: Record<string, unknown> | undefined;
-    for (const field of fields) {
-      const child = schema.asFactory[field] as JSONSchema | undefined;
+    for (const field of fields ?? []) {
+      const child =
+        (schema.asFactory as unknown as Record<string, unknown>)[field];
       if (child === undefined) continue;
+      if (!holdsSubschema(child, "asFactory", field, schema)) continue;
       const mapped = map(child);
       if (mapped !== child) {
         mappedFactory ??= { ...schema.asFactory };

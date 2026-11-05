@@ -53,4 +53,19 @@ describe("assertAcyclicFabricValue", () => {
     expect(() => assertAcyclicFabricValue(factory)).not.toThrow();
     expect(() => assertAcyclicFabricValue({ factory })).not.toThrow();
   });
+
+  it("checks live factory values without requiring an artifact ref", () => {
+    const params = { factor: 2 };
+    const factory = registerFabricFactory(() => undefined, "pattern", {
+      kind: "pattern",
+      rootToken: {},
+      argumentSchema: true,
+      resultSchema: true,
+      paramsSchema: true,
+      params,
+    });
+
+    expect(() => assertAcyclicFabricValue(factory)).not.toThrow();
+    expect(Object.isFrozen(params)).toBe(false);
+  });
 });

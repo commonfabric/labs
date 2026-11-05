@@ -7,11 +7,11 @@
  * such identifier. It names a position that acquires a document only when the
  * pattern graph is instantiated, in one of three ways:
  *
- * - By role. `cell: "argument"` and `cell: "result"` name the argument and
- *   result cells of whichever pattern instance the graph is being run as. A
- *   pattern graph is a template, compiled once and instantiated against many
- *   different pairs of documents, so at the time the record is written
- *   neither document exists.
+ * - By role. `cell: "argument"`, `cell: "params"`, and `cell: "result"` name
+ *   the argument, private closure-parameter, and result cells of whichever
+ *   pattern instance the graph is being run as. A pattern graph is a template,
+ *   compiled once and instantiated against many different document groups, so
+ *   at the time the record is written none exists.
  * - By derivation. `partialCause` names a document to mint from the
  *   instance's result cell and that cause, at the instance's own scope. That
  *   is a computation, not an address.
@@ -51,8 +51,8 @@ type AliasBindingBase = {
   schema?: JSONSchema;
 };
 
-// Named-cell aliases carry no scope: the referenced argument/result cell's
-// own link determines the scope when the binding is unwrapped.
+// Named-cell aliases carry no scope: the referenced argument, params, or result
+// cell's own link determines the scope when the binding is unwrapped.
 type AliasBindingNamedCell = AliasBindingBase & {
   cell: "result" | "argument" | "params";
   partialCause?: never;

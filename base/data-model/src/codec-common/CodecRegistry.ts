@@ -38,9 +38,10 @@ export const SELF_REP = "self-rep" as const;
 
 /**
  * The primitive `type` keys the registry accepts: the JS type tags of the
- * encodable `FabricValue` primitives, `null` included. A function is no
- * `FabricValue`, and an object value is matched by class via
- * {@link CodecRegistry#register}, so neither has a key here.
+ * encodable `FabricValue` primitives, `null` included. Admitted factory
+ * callables use the registry's separate callable codec, and an object value is
+ * matched by class via {@link CodecRegistry#register}, so neither has a key
+ * here.
  */
 export type PrimitiveTypeName = Exclude<JsTypeValueTag, "function">;
 
@@ -63,8 +64,9 @@ function constructorOf(
 
     return proto.constructor;
   } else if (value !== undefined) {
-    // This gets the pseudo-constructor of a primitive. **Note:** `function` is
-    // not included in the `FabricValue` union.
+    // This gets the pseudo-constructor of a primitive. Admitted factory
+    // callables are dispatched before this helper; arbitrary functions are not
+    // `FabricValue`s.
     return value.constructor as Constructor;
   } else {
     return undefined;

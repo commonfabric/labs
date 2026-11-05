@@ -48,6 +48,9 @@ export function valueEqual(a: FabricValue, b: FabricValue): boolean {
       if (!isAdmittedFabricFactory(a)) {
         throw new Error("Cannot compare a function value.");
       }
+      if (typeof b === "function" && !isAdmittedFabricFactory(b)) {
+        throw new Error("Cannot compare a function value.");
+      }
       if (!isAdmittedFabricFactory(b)) return false;
       return hashStringOf(sealFactoryState(a)) ===
         hashStringOf(sealFactoryState(b));

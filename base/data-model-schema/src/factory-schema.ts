@@ -153,7 +153,9 @@ function addRequiredSchemaPath(
   const oldProperties: Record<string, unknown> = isPlainObject(base.properties)
     ? base.properties as Record<string, unknown>
     : {};
-  const child = oldProperties[head] as JSONSchema | undefined;
+  const child = Object.hasOwn(oldProperties, head)
+    ? oldProperties[head] as JSONSchema | undefined
+    : undefined;
   const nextChild = tail.length === 0
     ? child ?? true
     : addRequiredSchemaPath(child ?? true, tail);

@@ -51,7 +51,7 @@ export function factoryContractProvenanceFromTypeNode(
   const direct = context.lookupSchemaHint(typeNode)?.factoryContracts;
   if (direct?.length) return { contracts: direct, complete: true };
 
-  if (ts.isParenthesizedTypeNode(typeNode) || ts.isTypeOperatorNode(typeNode)) {
+  if (ts.isParenthesizedTypeNode(typeNode)) {
     return factoryContractProvenanceFromTypeNode(typeNode.type, context, seen);
   }
   if (ts.isUnionTypeNode(typeNode)) {

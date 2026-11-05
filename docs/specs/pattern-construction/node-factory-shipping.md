@@ -981,6 +981,14 @@ Canonical factories are immutable functional values:
 - hashing uses the `Factory@1` tag plus the recursively hashed codec state, the
   same semantic path used for codec-backed Fabric instances.
 
+Sealing is a construction and canonical-write boundary, not a side effect of
+an observational walk. Equality, acyclic validation, size estimation, and
+read-only traversal inspect only the value-bearing state fields and neither
+require an artifact ref nor freeze a live ref-less factory or its nested marker
+state. Canonical encoding still requires and seals the complete durable state.
+Accessor-backed state fields are invalid and must be rejected without invoking
+their getters.
+
 The JSON encoder must include branded functions in its codec cycle tracking.
 
 ### Traversal and binding
@@ -1385,7 +1393,10 @@ The `module` form uses `argumentSchema` / `resultSchema`. The `handler` form
 uses `contextSchema` / `eventSchema`. Schema interpretation maps `eventSchema`
 to `HandlerFactory`'s event type parameter and `contextSchema` to its bound
 context type parameter. A `HandlerFactory` must not be mistaken
-for an `asCell: ["stream"]` merely because calling it returns a stream.
+for an `asCell: ["stream"]` merely because calling it returns a stream. Its
+displayed callable type is `(context) => (event) => void`, and an
+`eventSchema: false` call site still constructs a triggerable stream by using
+the runner's unconstrained internal event schema.
 
 `asFactory` has one schema meaning and two execution-context exposures. In an
 eager pattern-building root it describes a symbolic binding. In a scheduled
@@ -1574,6 +1585,10 @@ cycle with a source-located compile diagnostic. It must not emit a bare
 ancestor's `$defs`, or expand until resource exhaustion.
 Normalization also preserves every own schema key (including `__proto__`) in
 prototype-safe maps; browser object accessors cannot erase a contract difference.
+Schema walkers likewise accept only own, structurally valid `asFactory`
+contracts and schema-valued contract fields. Malformed contracts or fields are
+reported through the walker's normal malformed-schema diagnostic and are never
+dereferenced or inherited from `Object.prototype`.
 Resolving a local `$ref` with legal sibling annotations also produces a
 prototype-safe map. Equivalent schemas therefore remain equal when one side
 spells a referenced schema with an adjacent `description` or other annotation,

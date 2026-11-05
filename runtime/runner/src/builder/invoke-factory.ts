@@ -27,7 +27,7 @@ export function invokeFactory(
   const frame = getTopFrame();
 
   if (expected.kind === "handler") {
-    const eventStream = stream<unknown>(expected.eventSchema ?? true);
+    const eventStream = stream<unknown>(expected.eventSchema || true);
     const node: NodeRef = {
       module: factory as NodeRef["module"],
       inputs: { $ctx: input, $event: eventStream },

@@ -658,8 +658,10 @@ function isValidFabricConvertibleJsValueInternal(
  * `FabricInstance` values (e.g., `UnknownValue`) pass through as-is.
  *
  * The freeze-state contract: the output's freeze state matches `frozen`, except
- * that instances of classes that are defined to always be frozen are in fact
- * returned as frozen, no matter the value of `frozen`.
+ * that admitted factories and instances of classes defined to always be frozen
+ * are returned frozen no matter the value of `frozen`. Factory conversion is
+ * shallow in identity -- it freezes the callable and its already canonical
+ * sealed state rather than replacing the callable.
  */
 export function convertibleJsFromFabricValue(
   value: FabricValue,

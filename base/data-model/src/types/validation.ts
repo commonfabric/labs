@@ -4,10 +4,12 @@
  * exactly what the predicate decides and exists to say why the answer was no.
  *
  * Membership turns on inertness: a `FabricValue` is data, so anything that is
- * live code is refused -- a function, an accessor-backed property, the
- * prototype of an `Array` subclass, a symbol that was never registry-interned.
- * Frozen-ness is a separate question and deliberately not asked here, so a
- * structurally-valid unfrozen value is a member.
+ * live code is refused -- an arbitrary function, an accessor-backed property,
+ * the prototype of an `Array` subclass, a symbol that was never
+ * registry-interned. The one callable exception is a directly branded,
+ * protocol-admitted factory. Frozen-ness is a separate question and
+ * deliberately not asked here, so a structurally-valid unfrozen value is a
+ * member.
  *
  * Each of these takes an `unknown`, that being what a caller holds before
  * membership is settled. The narrowings that ask a shape question of a value
@@ -97,10 +99,8 @@ export function isValidFabricValueLayer(
       return isAdmittedFabricFactory(value);
     }
     default: {
-      // A note about functions: Values of type `function` are very
-      // intentionally _never_ considered to possibly be `FabricValue`s:
-      // `FabricValue` contractually represents that its contents are inert, and
-      // `function` is about as "ert" as a value can get.
+      // The `function` case above admits only branded protocol factories;
+      // every other function remains outside `FabricValue`.
       return false;
     }
   }

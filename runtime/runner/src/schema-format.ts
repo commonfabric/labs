@@ -286,7 +286,9 @@ function schemaToTypeStringInner(
       (output ?? true) as JSONSchema,
       nextOpts,
     );
-    return `(e: ${inputType}) => ${outputType}`;
+    return contract.kind === "handler"
+      ? `(e: ${inputType}) => (${outputType}) => void`
+      : `(e: ${inputType}) => ${outputType}`;
   }
 
   // Handle const - show as the literal, matching the enum rendering (the

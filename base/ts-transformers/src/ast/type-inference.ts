@@ -1090,10 +1090,9 @@ export function inferArrayElementType(
           }
         } else {
           // It's already T
-          elementType = innerType;
+          elementType = extractElementFromArrayType(innerType, checker) ??
+            innerType;
         }
-        elementType = extractElementFromArrayType(innerType, checker) ??
-          innerType;
       }
 
       // Convert Type to TypeNode

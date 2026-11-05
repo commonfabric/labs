@@ -614,6 +614,7 @@ export function classifyLegacyPatternCarrier(
     const callee = stripWrappers(carrier.expression);
     if (
       ts.isPropertyAccessExpression(callee) &&
+      isSyntheticNode(callee) &&
       getArrayMethodAccessKindByName(callee.name.text)?.lowered
     ) {
       return "with-pattern";

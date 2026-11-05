@@ -594,6 +594,34 @@ describe("values that are not schemas", () => {
     expect(warnings).toEqual([]);
   });
 
+  it("ignores malformed factory containers and child schemas", () => {
+    const malformedFactory = withWarnings(() =>
+      edgesOf({ asFactory: null } as unknown as JSONSchema)
+    );
+    expect(malformedFactory.result).toEqual([]);
+    expect(malformedFactory.warnings[0]).toContain("asFactory");
+
+    const malformedChild = withWarnings(() =>
+      edgesOf({
+        asFactory: {
+          kind: "pattern",
+          argumentSchema: "not a schema",
+          resultSchema: { type: "string" },
+        },
+      } as unknown as JSONSchema)
+    );
+    expect(malformedChild.result).toEqual([
+      {
+        schema: { type: "string" },
+        keyword: "asFactory",
+        key: "resultSchema",
+      },
+    ]);
+    expect(malformedChild.warnings[0]).toContain(
+      "asFactory/argumentSchema",
+    );
+  });
+
   it("visits no edge for one under any keyword, in any tier", () => {
     // Driven off the exported keyword constants, so a keyword added to the
     // vocabulary is covered here the day it is added.

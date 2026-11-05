@@ -66,7 +66,7 @@ export function classifyFactoryCallTarget(
     if (derived) return { kind: "derivation", factory: derived };
   }
 
-  const invoked = classifyFactoryCallee(callee, checker);
+  const invoked = classifyFactoryCallee(call.expression, checker);
   if (!invoked) return { kind: "not-factory" };
   return {
     kind: invoked.hasNonFactoryMember ? "ambiguous" : "invocation",
@@ -88,7 +88,11 @@ export function classifyFactoryCallee(
   const target = unwrapExpression(expression);
   let type: ts.Type;
   try {
-    type = checker.getTypeAtLocation(target);
+    // Read the caller-visible wrapper type: a non-null assertion intentionally
+    // removes an optional arm, while `as`/type assertions can establish the
+    // contract the call site is compiled against. Origin analysis below still
+    // follows the unwrapped value expression.
+    type = checker.getTypeAtLocation(expression);
   } catch {
     return undefined;
   }
@@ -98,9 +102,14 @@ export function classifyFactoryCallee(
   let hasNonFactoryMember = false;
   for (const memberType of memberTypes) {
     if (
-      (memberType.flags &
-        (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Never)) !== 0
+      (memberType.flags & ts.TypeFlags.Never) !== 0
     ) {
+      continue;
+    }
+    if (
+      (memberType.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)) !== 0
+    ) {
+      hasNonFactoryMember = true;
       continue;
     }
     const member = detectTrustedFactoryType(memberType, checker);
@@ -289,6 +298,9 @@ function classifyFactoryValueOrigin(
   if (ts.isBindingElement(declaration)) {
     const variable = findOwningVariableDeclaration(declaration);
     if (!variable?.initializer) return "unknown";
+    if (crossesSymbolicCallbackBoundary(target, declaration, checker)) {
+      return "symbolic";
+    }
     if (isModuleScopedDeclaration(variable)) return "live";
     if (!isConstVariableDeclaration(variable)) return "unknown";
     return classifyFactoryValueOrigin(

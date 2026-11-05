@@ -67,6 +67,37 @@ Deno.test(
 );
 
 Deno.test(
+  "an optional symbolic factory call is rejected instead of lowered unconditionally",
+  async () => {
+    const diagnostics: TransformationDiagnostic[] = [];
+    const output = await transformSource(
+      `
+      import { pattern, type PatternFactory } from "commonfabric";
+      interface Input { value: number }
+      interface Output { result: number }
+      export default pattern<{
+        operation?: PatternFactory<Input, Output>;
+        value: number;
+      }>((input) => ({ result: input.operation?.({ value: input.value }) }));
+    `,
+      {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      },
+    );
+
+    assertEquals(invokeFactoryContracts(output), []);
+    assertEquals(
+      diagnostics.filter((diagnostic) =>
+        diagnostic.type === "factory-call:untransformable-symbolic-proxy"
+      ).length,
+      1,
+    );
+  },
+);
+
+Deno.test(
   "factory parameters delivered to lift and handler callbacks remain direct",
   async () => {
     const output = await transformSource(

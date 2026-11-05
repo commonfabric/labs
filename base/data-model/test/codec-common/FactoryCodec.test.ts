@@ -173,6 +173,31 @@ describe("FactoryCodec", () => {
     expect(isDeepFrozen(unknown)).toBe(true);
   });
 
+  it("rejects accessor-backed params without invoking the accessor", () => {
+    let reads = 0;
+    const params = Object.defineProperty({}, "secret", {
+      enumerable: true,
+      get() {
+        reads++;
+        return "read";
+      },
+    });
+    const factory = registerFabricFactory(() => undefined, "pattern", {
+      kind: "pattern",
+      rootToken: {},
+      ref: REF,
+      argumentSchema: true,
+      resultSchema: true,
+      paramsSchema: true,
+      params,
+    });
+
+    expect(() => sealFactoryState(factory)).toThrow(
+      "properties must be enumerable data fields",
+    );
+    expect(reads).toBe(0);
+  });
+
   it("seals live state once its artifact ref exists and rejects it before then", () => {
     const factory = registerFabricFactory(() => undefined, "module", {
       kind: "module",

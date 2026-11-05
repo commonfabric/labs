@@ -85,11 +85,12 @@ export interface FabricFactory<
  *       <-> `FabricValue`
  *       <-> serialized (various forms)
  *
- * `FabricValue` is a union consisting of all JS primitive types, plus a handful
- * of object shapes; it does _not_ include the JS `function` type. Some parts of
- * the union impose contractual restrictions that are not enforceable via the
- * TypeScript type system, some (but not all) of which are enforced by runtime
- * validity checks. Notable details:
+ * `FabricValue` is a union consisting of all JS primitive types, a handful of
+ * object shapes, and the narrow branded callable `FabricFactory` arm. It does
+ * not admit arbitrary JS functions. Some parts of the union impose contractual
+ * restrictions that are not enforceable via the TypeScript type system, some
+ * (but not all) of which are enforced by runtime validity checks. Notable
+ * details:
  *
  * * `number` -- All numbers are considered members of `FabricValue`, including
  *   `-0` and the non-finite numbers. Furthermore, from the perspective of the

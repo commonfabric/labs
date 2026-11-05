@@ -65,6 +65,7 @@ describe("forEachFabricContainerValue", () => {
     expect(visited).toContain(marker);
     expect(visited).toContain(markerState);
     expect(estimateFabricValueSize(factory)).toBeGreaterThan(0);
+    expect(Object.isFrozen(markerState)).toBe(false);
   });
 
   it("visits each identity once when cycles are allowed", () => {

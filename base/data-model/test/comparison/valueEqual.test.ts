@@ -24,6 +24,7 @@ import { expect } from "@std/expect";
 import { deepFreeze, type FabricValue, hashStringOf, valueEqual } from "@";
 import { codecOf, NULL_LIVE_ENVIRONMENT, UnknownValue } from "@/codec-common";
 import { FabricError } from "@/fabric-instances";
+import { registerFabricFactory } from "@/fabric-factory.ts";
 import {
   FabricBytes,
   FabricDurationDay,
@@ -257,6 +258,24 @@ describe("valueEqual()", () => {
     expect(() => valueEqual(fn, { a: 1 })).toThrow();
     // The function on the right (`b`) is rejected symmetrically.
     expect(() => valueEqual({ a: 1 }, fn)).toThrow();
+  });
+
+  it("rejects an arbitrary function compared with an admitted factory", () => {
+    const factory = registerFabricFactory(() => undefined, "module", {
+      kind: "module",
+      ref: {
+        identity: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        symbol: "factory",
+      },
+    });
+    const arbitrary = (() => undefined) as unknown as FabricValue;
+
+    expect(() => valueEqual(factory, arbitrary)).toThrow(
+      "Cannot compare a function value.",
+    );
+    expect(() => valueEqual(arbitrary, factory)).toThrow(
+      "Cannot compare a function value.",
+    );
   });
 
   it("rejects distinct functions reached through containers", () => {

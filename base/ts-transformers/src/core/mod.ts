@@ -17,11 +17,6 @@
  *      transformer-internal, non-cache-invalidating per-node channels:
  *      `capabilitySummary` and `schemaInjected`. Reached only through the
  *      record/lookup/mark/is methods on CrossStageState.
- *   3. The marker family — node/symbol-keyed WeakSets. Reactive-analysis
- *      markers have context-level mutators coupled to cache invalidation
- *      `capabilitySummary`, `schemaInjected`, `patternResultAnchor` and
- *      `printedFrom`. Reached only through the record/lookup/mark/is methods
- *      on CrossStageState.
  *   3. The marker family — node/symbol-keyed WeakSets whose context-level
  *      mutators are coupled to reactive-analysis cache invalidation
  *      (mapCallbackRegistry, syntheticComputeCallbackRegistry,

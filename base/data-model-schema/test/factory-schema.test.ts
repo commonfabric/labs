@@ -90,6 +90,16 @@ describe("factory schema utilities", () => {
         required: ["sandboxId"],
       });
     });
+
+    it("does not inherit schemas for Object prototype property names", () => {
+      for (const name of ["constructor", "toString", "__proto__"]) {
+        expect(addRequiredSchemaPaths({ type: "object" }, [[name]])).toEqual({
+          type: "object",
+          properties: Object.fromEntries([[name, true]]),
+          required: [name],
+        });
+      }
+    });
   });
 
   describe("factorySchemasEqual()", () => {

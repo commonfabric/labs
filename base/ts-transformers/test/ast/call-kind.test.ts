@@ -14,6 +14,7 @@ import {
   resolveCallbackFunctionExpression,
 } from "../../src/ast/mod.ts";
 import {
+  classifyLegacyPatternCarrier,
   getWithPatternHoistablePatternCall,
   isHandlerAppliedCall,
 } from "../../src/ast/call-kind.ts";
@@ -717,6 +718,20 @@ describe("call-kind", () => {
   });
 
   describe("getWithPatternHoistablePatternCall()", () => {
+    it("does not classify an authored untyped WithPattern call as a legacy carrier", () => {
+      const { sourceFile } = createProgram(`
+        declare const items: any;
+        declare const make: { pattern(body: () => number): number };
+        const value = items.mapWithPattern(make.pattern(() => 1), { p: 1 });
+      `);
+      const carrier = findCallInitializer(sourceFile, "value");
+      const patternCall = carrier.arguments[0];
+      expect(ts.isCallExpression(patternCall)).toBe(true);
+      if (!ts.isCallExpression(patternCall)) return;
+
+      expect(classifyLegacyPatternCarrier(patternCall)).toBeUndefined();
+    });
+
     it("returns the pattern call argument of a synthetic `mapWithPattern()` call, and `undefined` for an authored one", () => {
       const { sourceFile, checker } = createProgram(`
         declare const items: any;

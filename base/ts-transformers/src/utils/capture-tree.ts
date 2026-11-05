@@ -313,7 +313,7 @@ export function preserveCaptureReferenceOrigins(
     const visit = (current: ts.Node): void => {
       if (
         ts.isIdentifier(current) && current.text === rootName &&
-        !isPropertyNameIdentifier(current)
+        !isPropertyNameIdentifier(current) && current !== originalRoot
       ) {
         ts.setOriginalNode(current, originalRoot);
       }
@@ -335,21 +335,26 @@ export function findCaptureRootIdentifier(
 ): ts.Identifier | undefined {
   if (!node) return undefined;
   if (node.expression) {
-    let expression = node.expression;
-    while (
-      ts.isPropertyAccessExpression(expression) ||
-      ts.isElementAccessExpression(expression)
-    ) {
-      expression = expression.expression;
-    }
-    if (
-      ts.isCallExpression(expression) &&
-      ts.isPropertyAccessExpression(expression.expression) &&
-      expression.expression.name.text === "key"
-    ) {
-      expression = expression.expression.expression;
-    }
-    if (ts.isIdentifier(expression)) return expression;
+    const findIn = (value: ts.Expression): ts.Identifier | undefined => {
+      const expression = unwrapExpression(value);
+      if (ts.isIdentifier(expression)) return expression;
+      if (
+        ts.isPropertyAccessExpression(expression) ||
+        ts.isElementAccessExpression(expression)
+      ) {
+        return findIn(expression.expression);
+      }
+      if (
+        ts.isCallExpression(expression) &&
+        ts.isPropertyAccessExpression(expression.expression) &&
+        expression.expression.name.text === "key"
+      ) {
+        return findIn(expression.expression.expression);
+      }
+      return undefined;
+    };
+    const root = findIn(node.expression);
+    if (root) return root;
   }
   for (const child of node.properties.values()) {
     const root = findCaptureRootIdentifier(child);
