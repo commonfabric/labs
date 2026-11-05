@@ -2912,6 +2912,9 @@ export async function runLane(
   const addReruns = rerunCommands(options.root);
   const commands: FailedCommand[] = [];
   const notes: string[] = [];
+  // The batches the lane has not begun, and where it heard it was to stop.
+  let notStarted = [...batches];
+  let stoppedIn: string | undefined;
   try {
     for (const batch of batches) {
       // Two capabilities may export the same name and mean different
@@ -2921,6 +2924,7 @@ export async function runLane(
       // hide every batch and every repeat after it, and the point of a
       // lane is what it measured. Being told to stop does.
       if (stop.signal !== undefined) break;
+      notStarted = notStarted.filter((waiting) => waiting !== batch);
       const result = await runBatch(
         batch,
         options,
@@ -2930,6 +2934,10 @@ export async function runLane(
         batchCoverage(options, batch.suite.id, coverage),
         stop,
       );
+      if (stop.signal !== undefined) {
+        stoppedIn = `${batch.suite.id}, pass ${result.executions.length} of ` +
+          `${batchRepeats(batch)}`;
+      }
       for (const conflict of result.conflicts) conflicts.push(conflict);
       const { passed, accounting, excusing } = judgeBatch(
         batch,
@@ -2947,18 +2955,22 @@ export async function runLane(
         ]),
       );
       annotateLaneFailures(await addReruns(tests.values()), annotated);
-      for (const { name } of accounting.silent) {
-        commands.push({
-          label: `${batch.suite.id} ${name}`,
-          reason: "ran no test",
-        });
-      }
-      if (result.unexplained > 0) {
-        commands.push({
-          label: batch.suite.id,
-          reason: `${result.unexplained} command(s) failed having recorded ` +
-            "no failing test",
-        });
+      // What a stopped command left unrun says nothing about its tests, and
+      // the lane says below that it was stopped there.
+      if (stop.signal === undefined) {
+        for (const { name } of accounting.silent) {
+          commands.push({
+            label: `${batch.suite.id} ${name}`,
+            reason: "ran no test",
+          });
+        }
+        if (result.unexplained > 0) {
+          commands.push({
+            label: batch.suite.id,
+            reason: `${result.unexplained} command(s) failed having recorded ` +
+              "no failing test",
+          });
+        }
       }
       if (!passed) ok = false;
       for (const unit of accounting.failedUnits) {
@@ -2975,6 +2987,13 @@ export async function runLane(
     if (stop.signal !== undefined) {
       ok = false;
       notes.push(`Stopped by ${stop.signal} before finishing its plan.`);
+      if (stoppedIn !== undefined) notes.push(`It was running ${stoppedIn}.`);
+      if (notStarted.length > 0) {
+        notes.push(
+          "It did not start: " +
+            notStarted.map(({ suite }) => suite.id).join(", ") + ".",
+        );
+      }
       console.log(
         `ci-lane: stopped by ${stop.signal} before finishing its plan; ` +
           `it passes the signal on to whatever test command is running ` +

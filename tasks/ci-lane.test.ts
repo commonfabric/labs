@@ -2445,6 +2445,125 @@ describe("running a lane's work", () => {
   });
 });
 
+describe("a lane told to stop", () => {
+  /** A suite of one unit, whose every pass records a passing test. */
+  function recording(id: string, passes: string[], stop: () => void): Suite {
+    const unit = `runtime/bakery/${id}.test.ts`;
+    return suite({
+      id,
+      needs: [],
+      units: [unit],
+      locate: () => ({ level: "unit" as const, unit }),
+      command: (_units, context) => {
+        passes.push(id);
+        stop();
+        const record = JSON.stringify({
+          line: "record",
+          test: { k: "unit", s: "bakery", n: `${id} > sets` },
+          outcome: "pass",
+          durationMs: 1,
+        });
+        return Promise.resolve([{
+          command: [
+            Deno.execPath(),
+            "eval",
+            `Deno.writeTextFileSync(
+              Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+              ${JSON.stringify(record + "\n")},
+            )`,
+          ],
+          cwd: context.root,
+        }]);
+      },
+    });
+  }
+
+  /**
+   * Runs a lane of three suites, in descending order of cost, sending it a
+   * signal as the pass numbered `stopAt` begins. Returns whether it passed,
+   * the passes it began, and what it printed.
+   */
+  async function lane(stopAt: number) {
+    const root = await Deno.makeTempDir({ prefix: "lane-stop-" });
+    const passes: string[] = [];
+    const stop = new LaneStop();
+    const stopping = () => {
+      if (passes.length === stopAt) stop.receive("SIGINT");
+    };
+    const lines: string[] = [];
+    const log = console.log;
+    const restore = setEnv({
+      RUNNER_TEMP: undefined,
+      GITHUB_ACTIONS: undefined,
+      GITHUB_STEP_SUMMARY: undefined,
+    });
+    console.log = (line: string) => lines.push(line);
+    try {
+      const entry = (id: string, cost: number) => ({
+        test: { k: "unit", s: "bakery", n: `${id} > sets` },
+        suite: id,
+        unit: `runtime/bakery/${id}.test.ts`,
+        cost,
+      });
+      const ok = await runLane({
+        lane: 1,
+        of: 1,
+        full: true,
+        dryRun: false,
+        laneCount: false,
+        root,
+        at: "2026-09-01T00:00:00Z",
+      }, {
+        topology: () =>
+          Promise.resolve([
+            recording("first", passes, stopping),
+            recording("second", passes, stopping),
+            recording("third", passes, stopping),
+          ]),
+        manifest: () =>
+          Promise.resolve({
+            manifest: manifestOf([
+              entry("first", 30),
+              entry("second", 20),
+              entry("third", 10),
+            ]),
+            objectName: "manifest-fixture.json.gz",
+          }),
+        spool: () => undefined,
+        stop: () => stop,
+      });
+      return { ok, passes, printed: lines.join("\n") };
+    } finally {
+      console.log = log;
+      restore();
+      await Deno.remove(root, { recursive: true });
+    }
+  }
+
+  it("fails, and its summary names the pass it was running", async () => {
+    const { ok, printed } = await lane(2);
+    expect(ok).toBe(false);
+    expect(printed).toContain("Stopped by SIGINT before finishing its plan.");
+    expect(printed).toContain("It was running second, pass 1 of 1.");
+  });
+
+  it("names the batches it did not start", async () => {
+    const { passes, printed } = await lane(2);
+    expect(passes).toEqual(["first", "second"]);
+    expect(printed).toContain("It did not start: third.");
+  });
+
+  it("names no batch as unstarted where it began them all", async () => {
+    const { printed } = await lane(3);
+    expect(printed).not.toContain("It did not start");
+  });
+
+  it("reports nothing it stopped as having run no test", async () => {
+    const { printed } = await lane(2);
+    expect(printed).not.toContain("ran no test");
+  });
+});
+
 describe("planning a lane without running it", () => {
   /** What lane 2 of the full run prints, as `options` asks. */
   async function printed(options: Partial<LaneOptions>): Promise<string> {

@@ -301,7 +301,9 @@ workflow. A run's lanes come from two jobs.
   signal is one an error it did not catch stopped, and is recorded as failed.
   The lane then prints the end of each server's log, keeps its working
   directory for the upload of what a failing lane left behind, and exits
-  without converting its coverage, which takes longer than GitHub waits.
+  without converting its coverage, which takes longer than GitHub waits. Its
+  closing summary says which pass it was running and which batches it did not
+  start, and does not report anything it stopped as having run no test.
 
 Only the `🧪 Run the lane` step is given `GITHUB_TOKEN` in its
 environment, and `tasks/ci-workflow.test.ts` fails a lane job in which the
