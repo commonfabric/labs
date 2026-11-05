@@ -153,6 +153,15 @@ describe.
   behavior from that binding; and the immutable cell store's snapshots keep a
   query-result proxy made under the transaction. Cutting the paths one by one
   has each next one take the charge over, so the three go together.
+- The preparation records of a transaction whose post-commit effects a seal
+  destination took over, which stay after the destination has flushed them.
+  The transaction cannot tell from its flush calls when the last one has run:
+  the outbox selects among several attachments' flushes for one request and
+  drops the ones it did not dispatch, an abandoned wave's effects are never
+  admitted, and the speculation overlay owns effects it never enacts. Releasing
+  them needs each destination to tell the transaction when its last effect is
+  retired or dropped. It is a transaction with an external request in it, so a
+  Topic create leaves none.
 - `deepFrozenCache` is a `WeakSet`, and the charge the tools gave it was the
   weak set's own table, which V8 sizes by the peak number of live frozen
   objects; it fell to nothing once the transactions above were released, since
