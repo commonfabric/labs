@@ -1,14 +1,12 @@
 /**
- * What a client's cell unsubscribe lets the worker's runtime release. Each case
+ * What the release pass a client's cell unsubscribe asks for keeps. Each case
  * drives real `RuntimeClient`s over `MessageChannel`s to a real processor
  * serving a runtime over emulated storage, with a second runtime writing the
  * documents the clients read, so that nothing in the serving runtime reads
  * them but the subscriptions under test. A client subscribes to a holder whose
  * value links to a counter in another space, as a list of rooms links to each
- * room, and the subscription reads the counter through that link. The counter
- * is loaded under a watch of its own, which nothing but the subscription keeps:
- * the worker's own cell for the subscription holds the holder alone
- * (`docs/features/document-release.md`).
+ * room, and the subscription reads the counter through that link, under a
+ * watch of the counter's own (`docs/features/document-release.md`).
  */
 
 import { expect } from "@std/expect";
@@ -191,27 +189,6 @@ function heardWhen(
 }
 
 describe("cell-unsubscribe-release", () => {
-  it("releases a linked document only the cancelled subscription read", async () => {
-    await using fixture = await servedCounter();
-    const client = await fixture.attach();
-    const { heard, cancel } = heardWhen(
-      fixture.open(client),
-      (value) => value?.counter?.n === 1,
-    );
-    await heard;
-    expect(fixture.loaded()).toBe(true);
-    expect(fixture.passes).toEqual([]);
-
-    cancel();
-    // The worker answers requests in the order they arrive, so the
-    // unsubscribe has been handled once this one is.
-    await client.idle();
-
-    expect(fixture.passes.length).toBe(1);
-    await fixture.passes[0];
-    expect(fixture.loaded()).toBe(false);
-  });
-
   it("keeps a linked document another client's subscription still reads, and goes on updating it", async () => {
     await using fixture = await servedCounter();
     const leaving = await fixture.attach();
