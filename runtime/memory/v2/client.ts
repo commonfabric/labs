@@ -3622,7 +3622,7 @@ export class SpaceSession {
    */
   async watchSetSync(
     watches: WatchSpec[] | undefined,
-    holdings?: SessionHolding[],
+    holdings?: SessionHolding[] | (() => SessionHolding[]),
     views?: ViewInterest[],
     restore?: typeof RESTORE_WATCH_SET,
   ): Promise<WatchMutationResult> {
@@ -3644,6 +3644,7 @@ export class SpaceSession {
     return await this.#runWatchMutation(
       () => {
         requestedWatches = watches ?? this.#watchSpecs;
+        const held = typeof holdings === "function" ? holdings() : holdings;
         return this.#client.requestWatchSet({
           type: "session.watch.set",
           requestId: crypto.randomUUID(),
@@ -3651,8 +3652,8 @@ export class SpaceSession {
           sessionId: this.#sessionId,
           watches: requestedWatches,
           ...(views === undefined ? {} : { views }),
-          ...(holdings !== undefined
-            ? { holdings: this.#client.declarableHoldings(holdings) }
+          ...(held !== undefined
+            ? { holdings: this.#client.declarableHoldings(held) }
             : {}),
         });
       },
