@@ -22,7 +22,10 @@
  * Anything else is read as a live verb.
  */
 
-import type { NormalizedFullLink } from "./link-types.ts";
+import {
+  areNormalizedLinksSame,
+  type NormalizedFullLink,
+} from "./link-types.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 import type { Runtime } from "./runtime.ts";
 import type { Cell } from "./cell.ts";
@@ -117,11 +120,14 @@ function ownerOf(
   );
 }
 
+/** Whether `link` names `document`'s root, in the same scope. */
 function namesDocument(
   link: NormalizedFullLink | undefined,
   document: Cell<unknown>,
 ): boolean {
   if (link === undefined) return false;
-  const target = document.getAsNormalizedFullLink();
-  return link.id === target.id && link.space === target.space;
+  return areNormalizedLinksSame(
+    { ...link, path: [] },
+    { ...document.getAsNormalizedFullLink(), path: [] },
+  );
 }

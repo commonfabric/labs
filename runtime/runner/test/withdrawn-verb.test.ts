@@ -8,6 +8,7 @@ import type { RuntimeProgram } from "../src/harness/types.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { isWithdrawnVerb } from "../src/withdrawn-verb.ts";
+import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 
 const signer = await Identity.fromPassphrase("withdrawn-verb");
 const space = signer.did();
@@ -195,6 +196,40 @@ describe("withdrawn-verb", () => {
     });
 
     await run(producer("gone"), "stream-link");
+
+    expect(Object.hasOwn(read(holder), "tick")).toBe(false);
+  });
+
+  it("leaves out a verb whose stream its owner's manifest names only at another scope", async () => {
+    // A manifest entry vouches for one instance of a document: the same id
+    // at another scope is another document, which the stream the holder
+    // reaches is not.
+
+    const producerCell = await run(producer("published"), "scoped");
+    const stream = streamHandleOf(producerCell) as Cell<unknown>;
+    const holder = await holderOf("scoped-holder", { tick: stream });
+    const streamId = stream.getAsNormalizedFullLink().id;
+    const tx = rt.edit();
+    const manifest = producerCell.withTx(tx).getMetaRaw("internal") as {
+      link: { "/": { "link@1": Record<string, unknown> } };
+    }[];
+    producerCell.withTx(tx).setMetaRaw(
+      "internal",
+      manifest.map((entry) =>
+        entry.link["/"]["link@1"].id === streamId
+          ? {
+            ...entry,
+            link: {
+              "/": {
+                "link@1": { ...entry.link["/"]["link@1"], scope: "user" },
+              },
+            },
+          }
+          : entry
+      ) as never,
+      rawMetaWriteAuthorization,
+    );
+    await tx.commit().settled;
 
     expect(Object.hasOwn(read(holder), "tick")).toBe(false);
   });
