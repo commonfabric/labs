@@ -2,7 +2,7 @@
 status: historical
 created: 2026-11-05
 archived: 2026-11-05
-reason: "Profile record: why a Topic create costs a serving worker more as its board grows, from the worker's own CPU profiles at 100, 400 and 800 Topics, on a demanded board and on one nothing demands."
+reason: "Profile record: why a Topic create costs a serving worker more as its board grows, from the worker's own CPU profiles at 100, 400, 800 and 1,200 Topics, on a demanded board and on one nothing demands."
 ---
 
 # Why a Topic create costs more as the board grows
@@ -29,6 +29,7 @@ process's CPU time per create is the absolute figure where a run recorded it.
 | 400 | yes | 1.71 s | 2.36 s | 96 | 8 | 397 MB |
 | 800 | yes | 3.47 s | 10.36 s | 314 | 11 | 600 MB |
 | 800, another run | yes | not recorded | 2.14 s | 30 | 8 | 601 MB |
+| 1,200 | yes | not recorded | 3.50 s | 54 | 6 | 824 MB |
 | 100 | no | 0.63 s | 2.52 s | 321 | 10 | 185 MB |
 | 400 | no | 0.47 s | 0.47 s | 136 | 7 | 263 MB |
 
@@ -44,26 +45,26 @@ nothing demands, a create costs the same at 400 Topics as at 100.
 ## Where the worker's time goes
 
 Share of the worker's busy time over the 20 creates, from one run that
-profiled all three sizes. Indented rows are part of the row above them. A
+profiled all four sizes. Indented rows are part of the row above them. A
 second run gave the same picture at 800 Topics: `crossrefTable` 21%, `equals`
 13%, `cardRowsByActivity` 14%, each action's commit 13%.
 
-| Cost | 100 Topics | 400 | 800 |
-| --- | --- | --- | --- |
-| Reactive actions, all | 28% | 46% | 48% |
-|   `crossrefTable` | 4.9% | 12.1% | 18.0% |
-|     `equals` in `distinctByIdentity` | 1.4% | 5.3% | 13.7% |
-|   `cardRowsByActivity` | 10.1% | 15.0% | 14.0% |
-|   `mentionableIndex` | 4.4% | 8.3% | 5.1% |
-|   `namesTable` | 2.8% | 5.2% | 6.2% |
-| Each action's commit | 5.1% | 10.5% | 13.7% |
-|   flow-label probe (`flowLabelWorkExists`) | 3.5% | 7.3% | 10.1% |
-| Sealing the wave's commits | 9.1% | 8.8% | 9.1% |
-| The `addTopic` handler | 24.4% | 11.2% | 7.9% |
-| Garbage collection | 8.5% | 8.8% | 6.1% |
+| Cost | 100 Topics | 400 | 800 | 1,200 |
+| --- | --- | --- | --- | --- |
+| Reactive actions, all | 28% | 46% | 48% | 47% |
+|   `crossrefTable` | 4.9% | 12.1% | 18.0% | 23.0% |
+|     `equals` in `distinctByIdentity` | 1.4% | 5.3% | 13.7% | 19.2% |
+|   `cardRowsByActivity` | 10.1% | 15.0% | 14.0% | 10.3% |
+|   `mentionableIndex` | 4.4% | 8.3% | 5.1% | 3.8% |
+|   `namesTable` | 2.8% | 5.2% | 6.2% | 6.6% |
+| Each action's commit | 5.1% | 10.5% | 13.7% | 14.2% |
+|   flow-label probe (`flowLabelWorkExists`) | 3.5% | 7.3% | 10.1% | 11.0% |
+| Sealing the wave's commits | 9.1% | 8.8% | 9.1% | 8.4% |
+| The `addTopic` handler | 24.4% | 11.2% | 7.9% | 5.3% |
+| Garbage collection | 8.5% | 8.8% | 6.1% | 11.0% |
 
-Across all of these, `validateAndTransform` is 18%, 26% and 22% of the busy
-time and `resolveLinkTracingDereferences` 10%, 17% and 18%: reading a value
+Across all of these, `validateAndTransform` is 18%, 26%, 22% and 17% of the
+busy time and `resolveLinkTracingDereferences` 10%, 17%, 18% and 19%: reading a value
 through its schema, and resolving a link while recording the dereference for
 Contextual Flow Control.
 
@@ -88,7 +89,7 @@ entry with `equals` against every entry kept before it, `n(n - 1) / 2`
 comparisons for `n` Topics. At 800 Topics that is 320,000 comparisons per run,
 and `equals` resolves both cells' links before comparing them, tracing each
 dereference. Its share of the worker's time goes from 1.4% at 100 Topics to
-13.7% at 800, and it is the one cost here whose share keeps rising. The
+19.2% at 1,200, and it is the one cost here whose share keeps rising. The
 pattern's own comment gives the reason for the pairwise scan: nothing in the
 pattern API turns a `ReadonlyCell` into a resolved key that a set could hold.
 
