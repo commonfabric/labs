@@ -3270,8 +3270,9 @@ export type SqliteQueryRow<Row> = string extends keyof Row
 export interface ISqliteQueryable {
   query<Row = Record<string, unknown>>(
     sql: string,
-    // Each option admits `undefined`, as the `sqliteQuery` factory's optional
-    // inputs do, so a pattern can forward an optional field of its own input.
+    // Each option but `scope` admits `undefined`, as the `sqliteQuery`
+    // factory's optional inputs do, so a pattern can forward an optional field
+    // of its own input.
     options?: {
       params?: ReadonlyArray<unknown> | Record<string, unknown> | undefined;
       reactOn?: unknown;
@@ -3297,8 +3298,12 @@ export interface ISqliteQueryable {
        *  results retain their labels for cell-read enforcement. Absent, the
        *  result takes the narrowest of the db's scope, the pattern's output
        *  scope, and — when `readClearance` is set — `user`, since a cleared
-       *  result is one reader's view. */
-      scope?: CellScope | undefined;
+       *  result is one reader's view.
+       *
+       *  It is read when the pattern is built, before any input has a value,
+       *  so it is written in the pattern: a pattern input or a computed value
+       *  cannot supply it. */
+      scope?: CellScope;
     },
   ): Reactive<
     {
