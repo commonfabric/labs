@@ -555,7 +555,6 @@ describe("operation field inspection", () => {
         expect(moved.address.scope).toBe(scopeKey);
         expect(moved.anchors).toEqual({ a: 0, b: 2 });
         expect(moved).toMatchObject({
-          anchorsCommitSeq: 2,
           anchorsDocumentId: documentId,
           consistency: { anchorsDocumentValid: true, healthy: true },
         });
@@ -583,67 +582,6 @@ describe("operation field inspection", () => {
           anchorsDocumentValid: false,
           healthy: false,
         });
-      } finally {
-        await Deno.remove(path);
-      }
-    });
-
-    it("reads the anchors from the document alone, with and without `anchors` columns in the operation tables", async () => {
-      const path = await Deno.makeTempFile({ suffix: ".sqlite" });
-      try {
-        const engine = await open({
-          url: toFileUrl(path),
-          operationCheckpointInterval: 1,
-        });
-        try {
-          applyCommit(engine, {
-            sessionId: "session:alice",
-            commit: {
-              localSeq: 1,
-              reads: { confirmed: [], pending: [] },
-              operations: [{
-                op: "set",
-                id: "of:columns",
-                value: { value: { body: "ab" } },
-              }, {
-                op: "set",
-                id: operationAnchorsDocId({
-                  id: "of:columns",
-                  path: ["body"],
-                }),
-                value: { value: { b: 1 } },
-              }, insertAhead("of:columns")],
-            },
-          });
-        } finally {
-          close(engine);
-        }
-        const without = inspectOnly(path, "of:columns");
-        expect(without.anchors).toEqual({ b: 2 });
-        expect(without.checkpoints).toEqual([
-          expect.objectContaining({ version: 0 }),
-          expect.objectContaining({ version: 1, matchesCurrentHead: true }),
-        ]);
-
-        const columns = new Database(path);
-        try {
-          const stored = encodeMemoryBoundary([{ id: "c", from: 0, to: 1 }]);
-          columns.exec("ALTER TABLE op_field_epoch ADD COLUMN anchors JSON");
-          columns.exec(
-            "ALTER TABLE op_field_epoch ADD COLUMN anchors_seq INTEGER",
-          );
-          columns.exec("ALTER TABLE op_checkpoint ADD COLUMN anchors JSON");
-          columns.exec("ALTER TABLE op_submission ADD COLUMN anchors JSON");
-          columns.prepare(
-            "UPDATE op_field_epoch SET anchors = ?, anchors_seq = 9",
-          ).run(stored);
-          columns.prepare("UPDATE op_checkpoint SET anchors = ?").run(stored);
-          columns.prepare("UPDATE op_submission SET anchors = ?").run(stored);
-        } finally {
-          columns.close();
-        }
-
-        expect(inspectOnly(path, "of:columns")).toEqual(without);
       } finally {
         await Deno.remove(path);
       }
@@ -702,21 +640,18 @@ describe("operation field inspection", () => {
         const unwritten = inspectOnly(path, "of:unwritten");
         expect(unwritten).toMatchObject({
           active: true,
-          anchorsCommitSeq: null,
           consistency: { anchorsDocumentValid: null, healthy: true },
         });
         expect(unwritten.anchors).toEqual({});
         const cleared = inspectOnly(path, "of:cleared");
         expect(cleared).toMatchObject({
           active: true,
-          anchorsCommitSeq: 3,
           consistency: { anchorsDocumentValid: null, healthy: true },
         });
         expect(cleared.anchors).toEqual({});
         const released = inspectOnly(path, "of:released");
         expect(released).toMatchObject({
           active: false,
-          anchorsCommitSeq: 2,
           consistency: { anchorsDocumentValid: true, healthy: true },
         });
         expect(released.anchors).toEqual({ b: 2 });

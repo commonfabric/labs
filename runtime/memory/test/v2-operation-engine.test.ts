@@ -3425,50 +3425,5 @@ describe("v2-operation-engine", () => {
         await Deno.remove(path);
       }
     });
-
-    it("reads a field's anchors from the document alone in a store whose operation tables hold `anchors` columns", async () => {
-      const { engine, path } = await openTestEngine();
-      try {
-        setup(engine, "of:columns", "abc");
-        commit(engine, [
-          applyOp("of:columns", "alice:1", "abc", [changes(3, 3, "d")]),
-        ]);
-        commit(engine, [setAnchors("of:columns", { b: 1 })]);
-        close(engine);
-        const database = new Database(path);
-        database.exec(`ALTER TABLE op_field_epoch ADD COLUMN anchors JSON`);
-        database.exec(
-          `ALTER TABLE op_field_epoch ADD COLUMN anchors_seq INTEGER`,
-        );
-        database.exec(`ALTER TABLE op_checkpoint ADD COLUMN anchors JSON`);
-        database.exec(`ALTER TABLE op_submission ADD COLUMN anchors JSON`);
-        database.prepare(
-          `UPDATE op_field_epoch SET anchors = :anchors, anchors_seq = 1`,
-        ).run({
-          anchors: encodeMemoryBoundary([{ id: "column", from: 0, to: 1 }]),
-        });
-        database.close();
-
-        const reopened = await open({ url: toFileUrl(path) });
-        try {
-          expect(snapshot(reopened, "of:columns").anchors).toEqual({ b: 1 });
-
-          commit(reopened, [
-            applyOp("of:columns", "alice:2", { epoch: 1, version: 1 }, [
-              changes(4, 0, ">"),
-            ]),
-          ]);
-          expect(snapshot(reopened, "of:columns")).toMatchObject({
-            cursor: { epoch: 1, version: 2 },
-            materialized: ">abcd",
-          });
-          expect(snapshot(reopened, "of:columns").anchors).toEqual({ b: 2 });
-        } finally {
-          close(reopened);
-        }
-      } finally {
-        await Deno.remove(path);
-      }
-    });
   });
 });

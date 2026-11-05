@@ -95,12 +95,6 @@ export interface OperationFieldInspection {
    * `consistency.anchorsDocumentValid` reports as holding something else.
    */
   anchors: FieldAnchors;
-  /**
-   * Commit sequence of the latest write of the anchors document, whether a
-   * client's or the engine's for an edit that moved an anchor; `null` when
-   * the document was never written.
-   */
-  anchorsCommitSeq: number | null;
   /** Id of the field's anchors document in the field's scope. */
   anchorsDocumentId: string;
   submissions: Array<{
@@ -420,14 +414,6 @@ function inspectOperationField(
     : anchorsDocument.status === "undecodable"
     ? false
     : null;
-  const anchorsRevision = space.get<{ seq: number }>(
-    `SELECT seq FROM revision
-     WHERE branch = ? AND id = ? AND scope_key = ?
-     ORDER BY seq DESC LIMIT 1`,
-    field.branch,
-    anchorsDocumentId,
-    field.scope_key,
-  );
   const healthy = pathValid && baselineCheckpointPresent &&
     retainedSuffixContiguous &&
     ordinaryMaterializedMatches !== false &&
@@ -450,7 +436,6 @@ function inspectOperationField(
     commitSeq: field.commit_seq,
     retainedFrom: { epoch: field.epoch, version: retainedVersion },
     anchors: documentAnchors ?? {},
-    anchorsCommitSeq: anchorsRevision?.seq ?? null,
     anchorsDocumentId,
     submissions: visibleSubmissions.map((row) => ({
       epoch: row.epoch,

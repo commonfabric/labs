@@ -221,7 +221,6 @@ describe("cf inspect operations", () => {
       expect(json.fields[0]).toMatchObject({
         active: true,
         cursor: { epoch: 1, version: 1 },
-        anchorsCommitSeq: 2,
         anchorsDocumentId: documentId,
         consistency: { anchorsDocumentValid: true, healthy: true },
       });
