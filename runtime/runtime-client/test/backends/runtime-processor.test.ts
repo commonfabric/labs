@@ -4990,6 +4990,49 @@ describe("runtime-processor", () => {
         expect(releases).toBe(1);
       });
 
+      it("reports a failure of the release Home's bring-up asks for", async () => {
+        await using worker = await homeWorker([]);
+        worker.runtime.releaseUnreadDocuments = () =>
+          Promise.reject(new Error("release failure"));
+        const warn = stub(console, "warn", () => {});
+        try {
+          await worker.processor.handleGetSpaceRootPattern({
+            type: RequestType.GetSpaceRootPattern,
+            space: worker.homeSpace,
+          });
+          await worker.processor.handleIdle();
+          await worker.processor.accessForTestingOnly.homeBringUpReleased;
+
+          expect(warn.calls.map(({ args }) => args[0])).toEqual([
+            "[RuntimeProcessor] Releasing what Home's bring-up loaded:",
+          ]);
+        } finally {
+          warn.restore();
+        }
+      });
+
+      it("reports no failure of that release once the processor is disposed", async () => {
+        await using worker = await homeWorker([]);
+        worker.runtime.releaseUnreadDocuments = () => {
+          worker.processor.accessForTestingOnly.isDisposed = true;
+          return Promise.reject(new Error("release failure"));
+        };
+        const warn = stub(console, "warn", () => {});
+        try {
+          await worker.processor.handleGetSpaceRootPattern({
+            type: RequestType.GetSpaceRootPattern,
+            space: worker.homeSpace,
+          });
+          await worker.processor.handleIdle();
+          await worker.processor.accessForTestingOnly.homeBringUpReleased;
+
+          expect(warn.calls).toEqual([]);
+        } finally {
+          warn.restore();
+          worker.processor.accessForTestingOnly.isDisposed = false;
+        }
+      });
+
       it("starts no housekeeping when the root is read with `start` `false`", async () => {
         await using worker = await homeWorker([{ name: "team-lunch" }]);
         using housekeeping = stubHousekeeping();
