@@ -730,6 +730,13 @@ export enum RuntimeErrorCode {
    * space answers to the address, and to offer to create one.
    */
   SpaceNotFound = "space-not-found",
+
+  /**
+   * The request named a deleted space, which the memory server refuses to
+   * everyone for good. No retry admits anyone, so the client's remedy is to
+   * tell the reader that the space was deleted.
+   */
+  SpaceDeleted = "space-deleted",
 }
 
 /**

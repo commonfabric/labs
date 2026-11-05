@@ -3,6 +3,7 @@
 import {
   computed,
   Default,
+  FS,
   handler,
   NAME,
   pattern,
@@ -31,6 +32,19 @@ export interface SharedNoteOutput {
   [NAME]: string;
   [UI]: VNode;
   [TILE_UI]: VNode;
+
+  /**
+   * The note as `index.md`: the title in the frontmatter, then the body, both
+   * linked to the fields below. A filesystem save writes both back. Once an
+   * editor has changed the body, a save that changes it too is refused, and
+   * the body is edited through the verbs below instead.
+   */
+  [FS]: {
+    type: "text/markdown";
+    frontmatter: { title: string };
+    content: string;
+  };
+
   title: PerSpace<string>;
   content: PerSpace<string>;
   participantName: PerUser<string>;
@@ -246,6 +260,11 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
       [NAME]: title,
       [UI]: view,
       [TILE_UI]: view,
+      [FS]: {
+        type: "text/markdown",
+        frontmatter: { title },
+        content,
+      },
       title,
       content,
       participantName,

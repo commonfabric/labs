@@ -1,8 +1,9 @@
 /**
  * A FabriChat manager and rooms whose spaces are deleted, as the catalog says
- * (`ChatManagerOutput.md`, "Facts"): `rooms` leaves such a room out, and
- * `deletedRooms` lists it by the membership the manager recorded when it
- * created the room, which outlives the catalog's finding of it. A direct room
+ * (`ChatManagerOutput.md`, "Facts"): `rooms` leaves such a room out,
+ * `outgoingNotices` leaves out its notice, and `deletedRooms` lists it by the
+ * membership the manager recorded when it created the room, which outlives
+ * the catalog's finding of it. A direct room
  * the catalog alone calls deleted is still the one `openDirect` finds:
  * `openDirect` replaces a held room only on the memory server's word, since
  * reading the catalog there would bring its entries' labels into the
@@ -88,6 +89,12 @@ export default pattern(() => {
   const assert_both_listed = assert(() =>
     manager.rooms.length === 2 && manager.deletedRooms.length === 0
   );
+  // The direct room's counterpart has been told nothing, so a notice waits.
+  const assert_notice_listed = assert(() =>
+    manager.outgoingNotices.length === 1 &&
+    manager.outgoingNotices[0]?.recipient === BOB
+  );
+  const assert_notice_gone = assert(() => manager.outgoingNotices.length === 0);
   const assert_group_deleted = assert(() =>
     manager.rooms.length === 1 && manager.rooms[0]?.counterpart === BOB &&
     manager.deletedRooms.length === 1 &&
@@ -119,10 +126,13 @@ export default pattern(() => {
         trustedUi: startGesture,
       },
       { assertion: assert_both_listed },
+      { assertion: assert_notice_listed },
       { action: action_catalog_deletes_group },
       { assertion: assert_group_deleted },
+      { assertion: assert_notice_listed },
       { action: action_catalog_deletes_direct },
       { assertion: assert_both_deleted },
+      { assertion: assert_notice_gone },
       {
         action: manager.openDirect,
         event: { requestId: "d-2", counterpart: BOB },
