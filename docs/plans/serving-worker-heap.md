@@ -44,9 +44,12 @@ A worker rig (`heap-worker-probe.ts`, under "The process") serves a fresh board
 from a `ServingWorker` the way the toolshed does and has the worker write its own
 snapshots, so each holder is measured in the process that holds it. On that rig
 a create left 862 KB on the worker before the changes under "Landed" that
-followed, and 522 KB after the last of them, measured over 40 creates after a
-first 10. Two runs of one tree on one machine differ by a hundred kilobytes or
-more, as what the replica holds at the moment of the snapshot varies, so a
+followed, 522 KB after the closure change among them, and 610 KB on the run
+after the last of them, measured over 40 creates after a first 10. Two runs of
+one tree on one machine differ by a hundred kilobytes or more, as what the
+replica holds at the moment of the snapshot varies and as work that is not a
+create's lands in the interval (the 610 KB run charges 81 KB to the TypeScript
+checker's feedback cells and 105 KB to the frozen-value cache's table), so a
 change is judged by the holder table (`heap-retained.ts`), not by the total.
 Whether the board's root is the loop's demand decides most of that: `cf piece new`
 sends the served `instantiate` verb with `start: true`, which makes the root a
@@ -99,14 +102,29 @@ the main thread under the worker arm and so are not on the worker.
   transactions went what they kept: `deepFrozenCache`'s weak-set table, 314 KB
   per create before, is no longer charged at all, and the worker rig's create
   went from 915 to 522 KB.
+- A transaction that has settled releases the records it accumulated for
+  preparation (`#releasePreparationInputs` in `extended-storage-transaction.ts`):
+  the write-policy inputs and the identities that recorded them, the
+  dereference traces, trigger reads, structure containers, asserted value roots,
+  consulted grants and manifests, the observations, and the preparation that
+  verified them, whose input held the same records. Those were 38 KB of the
+  54 KB the transaction of a map element's start left per create, 21 KB of it
+  the write-policy inputs and 13 KB the traces; the state is charged 2 KB per
+  create since, its modes and the snapshots it shares. A settled transaction runs no
+  further gate over them; the one reader after settlement is a post-commit
+  effect's release check, so a commit releases them once its inline effects
+  have flushed, an abort or a commit refused before storage releases them at
+  once, the refusal keeping its reasons, and a transaction whose effects a seal
+  destination took over keeps them, since the destination flushes after its
+  wave lands.
 
 ## What is left
 
 Per create on the worker rig, a demanded board, removing holders cumulatively in
 this order. The figures are from the holder table taken at 862 KB per create,
-before the last two changes under "Landed", which did not move them apart from
-the holders the two entries at the end of this list describe; the total is
-522 KB now.
+before the last three changes under "Landed", which did not move them apart
+from the holders the settled-transaction and `deepFrozenCache` entries below
+describe.
 
 - Each Topic's documents, about 135 KB per create in `SpaceReplica.#docs` and
   shared with the session's watch view, and the watch bookkeeping that remains
@@ -120,25 +138,30 @@ the holders the two entries at the end of this list describe; the total is
   inputs again when a change dirties it, is the design in the introduction
   applied to a demanded piece's computations; it is the largest item left and
   a change to what the scheduler keeps, not to storage.
-- One settled transaction per create, 54 KB, of which 38 KB is its CFC state
-  (`#cfcState` in `extended-storage-transaction.ts`: the prepare state, the
-  dereference traces, the write policy inputs). It is the transaction of the
-  start of a map element, which the change above does not reach on three
-  paths: the map builtin's action keeps the `inputsCell` the raw node hands
-  it, which the node's plan binds to the start's transaction
-  (`inputsCell.withTx(tx)` in `#buildRawNodeInputs`), and builtins read
-  through that cell by `.key()` or `.withTx(tx)` rather than through its own
-  transaction, though several read it directly during their setup, so each
-  needs reading before the node hands them a cell without one; the element's
-  `resultCell` reaches `#startCore` bound to the transaction from
-  `#startWithTx`'s callers, and the start's closures capture it, where the
-  nodes' `cellTx(resultCell)` checks decide local-read behavior from that
-  binding; and the immutable cell store's snapshots keep a query-result proxy
-  made under the transaction. A settled transaction already drops its read memos
-  (`#runCommitCallbacks`); dropping the parts of its CFC state that nothing
-  reads after settlement would free this under every path at once, where
-  cutting the paths one by one has each next one take the charge over. That
-  change belongs with the CFC state's own lifecycle, not here.
+- One settled transaction per create, 21 KB now that it releases its
+  preparation records (under "Landed"): its journal and the rest of its own
+  fields. It is the transaction of the start of a map element, which the
+  closure change under "Landed" does not reach on three paths: the map
+  builtin's action keeps the `inputsCell` the raw node hands it, which the
+  node's plan binds to the start's transaction (`inputsCell.withTx(tx)` in
+  `#buildRawNodeInputs`), and builtins read through that cell by `.key()` or
+  `.withTx(tx)` rather than through its own transaction, though several read it
+  directly during their setup, so each needs reading before the node hands them
+  a cell without one; the element's `resultCell` reaches `#startCore` bound to
+  the transaction from `#startWithTx`'s callers, and the start's closures
+  capture it, where the nodes' `cellTx(resultCell)` checks decide local-read
+  behavior from that binding; and the immutable cell store's snapshots keep a
+  query-result proxy made under the transaction. Cutting the paths one by one
+  has each next one take the charge over, so the three go together.
+- The preparation records of a transaction whose post-commit effects a seal
+  destination took over, which stay after the destination has flushed them.
+  The transaction cannot tell from its flush calls when the last one has run:
+  the outbox selects among several attachments' flushes for one request and
+  drops the ones it did not dispatch, an abandoned wave's effects are never
+  admitted, and the speculation overlay owns effects it never enacts. Releasing
+  them needs each destination to tell the transaction when its last effect is
+  retired or dropped. It is a transaction with an external request in it, so a
+  Topic create leaves none.
 - `deepFrozenCache` is a `WeakSet`, and the charge the tools gave it was the
   weak set's own table, which V8 sizes by the peak number of live frozen
   objects; it fell to nothing once the transactions above were released, since

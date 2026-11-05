@@ -23,6 +23,7 @@ import type {
   IExtendedStorageTransaction,
   TransactionWriteDetail,
 } from "../src/storage/interface.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 import { CFC_GRANT_ID_PREFIX } from "../src/cfc/grants.ts";
 import { RuntimeOwnedStores } from "../src/cfc/runtime-owned-stores.ts";
 import {
@@ -32,6 +33,7 @@ import {
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { refuseAtCommitBoundary } from "./refused-commit.ts";
 
 const signer = await Identity.fromPassphrase("extended-storage-transaction");
 const space = signer.did();
@@ -270,6 +272,161 @@ describe("extended-storage-transaction", () => {
         tx.abort("done with this one");
         const result = await tx.commit().settled;
         expect(result.error?.name).toBe("StorageTransactionAborted");
+      });
+    });
+  });
+
+  describe("the records preparation consumed, once the transaction settles", () => {
+    // Preparation verifies the write-policy inputs, dereference traces and
+    // trigger reads a transaction recorded, and a post-commit effect's
+    // release check reads the prepared inputs when the effect flushes.
+    // Nothing reads them once the transaction has settled and its effects
+    // have flushed, and a settled transaction that stays reachable, from the
+    // piece its start ran in for one, would otherwise keep every record.
+
+    const input = {
+      kind: "custom",
+      name: "released",
+      value: { note: "recorded before the commit" },
+    } as const;
+    const trace = {
+      source: { space, id: "of:released", scope: "space", path: ["link"] },
+      target: { space, id: "of:linked", scope: "space", path: [] },
+      kind: "value",
+    } as const;
+
+    /**
+     * Stages a write with one recorded input and one dereference trace, and
+     * `effect` enqueued, then prepares the transaction.
+     */
+    const staged = (
+      of: Runtime,
+      effect?: (committed: IExtendedStorageTransaction) => void,
+    ) => {
+      const tx = of.edit();
+      of.getCell(space, "released", undefined, tx).set({ title: "once" });
+      tx.recordCfcWritePolicyInput(input);
+      tx.recordCfcDereferenceTrace(trace);
+      if (effect !== undefined) {
+        tx.enqueuePostCommitEffect({
+          id: "released-effect",
+          kind: "test",
+          flush: effect,
+        });
+      }
+      expect(tx.prepareCfc()).not.toBe("");
+      expect(tx.getCfcState().writePolicyInputs).toHaveLength(1);
+      expect(tx.getCfcState().dereferenceTraces).toHaveLength(1);
+      return tx;
+    };
+
+    it("releases them once the commit settles", async () => {
+      const tx = staged(runtime);
+
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      const state = tx.getCfcState();
+      expect(state.prepare.status).toBe("unprepared");
+      expect(state.writePolicyInputs).toEqual([]);
+      expect(state.writePolicyInputIdentities.size).toBe(0);
+      expect(state.dereferenceTraces).toEqual([]);
+    });
+
+    it("releases them when the transaction aborts", () => {
+      const tx = staged(runtime);
+
+      tx.abort("released");
+
+      const state = tx.getCfcState();
+      expect(state.prepare.status).toBe("unprepared");
+      expect(state.writePolicyInputs).toEqual([]);
+      expect(state.writePolicyInputIdentities.size).toBe(0);
+      expect(state.dereferenceTraces).toEqual([]);
+    });
+
+    it("releases them, keeping the refusal's reasons, when the commit is refused before storage", async () => {
+      const tx = runtime.edit();
+      refuseAtCommitBoundary(tx, space, "the refused commit settles");
+      tx.recordCfcWritePolicyInput(input);
+      tx.recordCfcDereferenceTrace(trace);
+
+      const result = await tx.commit().settled;
+
+      expect(result.error?.name).toBe("CfcCommitRefusalError");
+      const state = tx.getCfcState();
+      expect(state.prepare.status).toBe("invalidated");
+      expect(state.writePolicyInputs).toEqual([]);
+      expect(state.writePolicyInputIdentities.size).toBe(0);
+      expect(state.dereferenceTraces).toEqual([]);
+    });
+
+    it("releases them when the commit promise rejects", async () => {
+      const tx = staged(runtime);
+      tx.tx.commit = () =>
+        createTransactionCommitReceipt(
+          Promise.reject(new Error("forced commit promise rejection")),
+        );
+
+      await expect(tx.commit().settled).rejects.toThrow(
+        "forced commit promise rejection",
+      );
+      await tx.postCommitEffectsSettled();
+
+      const state = tx.getCfcState();
+      expect(state.prepare.status).toBe("unprepared");
+      expect(state.writePolicyInputs).toEqual([]);
+      expect(state.writePolicyInputIdentities.size).toBe(0);
+      expect(state.dereferenceTraces).toEqual([]);
+    });
+
+    it("hands a post-commit effect the recorded inputs before releasing them", async () => {
+      let seen: number | undefined;
+      const tx = staged(runtime, (committed) => {
+        seen = committed.getCfcState().writePolicyInputs.length;
+      });
+
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await tx.postCommitEffectsSettled();
+
+      expect(seen).toBe(1);
+      expect(tx.getCfcState().writePolicyInputs).toEqual([]);
+    });
+
+    describe("with a seal destination that owns the effects", () => {
+      // The destination flushes the effects after the wave that carries the
+      // contribution lands, which is after the transaction settles here, so
+      // the release checks still have their prepared inputs to read.
+
+      let sealing: ReturnType<typeof StorageManager.emulate>;
+      let serving: Runtime;
+
+      beforeEach(() => {
+        sealing = StorageManager.emulate({ as: signer });
+        serving = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: sealing,
+          experimental: { serverExecution: true },
+        });
+        serving.installSealDestination({
+          seal: (tx) => tx.tx.commit(),
+          deferSealedEffects: () => true,
+        });
+      });
+      afterEach(async () => {
+        await serving?.dispose();
+        await sealing?.close();
+      });
+
+      it("keeps them after the commit settles", async () => {
+        const tx = staged(serving, () => {});
+
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await tx.postCommitEffectsSettled();
+
+        const state = tx.getCfcState();
+        expect(state.prepare.status).toBe("prepared");
+        expect(state.writePolicyInputs).toHaveLength(1);
+        expect(state.dereferenceTraces).toHaveLength(1);
       });
     });
   });
