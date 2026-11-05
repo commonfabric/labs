@@ -2857,16 +2857,22 @@ export async function runLane(
   // is part of it, and what came before is the prologue.
   const startedAt = performance.now();
   // The directory belongs to the lane from the moment it exists, and a
-  // capability that refuses to open is one of the ways the lane ends.
+  // capability the registry has never heard of is one of the ways the lane
+  // ends. One that fails to open costs only the batches needing it.
   let opened;
   try {
-    opened = await openCapabilities([...needs], {
-      root: options.root,
-      dryRun: false,
-      workDir,
-      ...(githubToken === undefined ? {} : { githubToken }),
-      report: console.log,
-    }, deps.capabilities);
+    opened = await openCapabilities(
+      [...needs],
+      {
+        root: options.root,
+        dryRun: false,
+        workDir,
+        ...(githubToken === undefined ? {} : { githubToken }),
+        report: console.log,
+      },
+      deps.capabilities,
+      { partial: true },
+    );
   } catch (error) {
     await leaveWorkDir(false);
     throw error;
@@ -2921,6 +2927,20 @@ export async function runLane(
       // hide every batch and every repeat after it, and the point of a
       // lane is what it measured. Being told to stop does.
       if (stop.signal !== undefined) break;
+      const refusals = opened.refusalsFor(batch.suite.needs);
+      if (refusals.length > 0) {
+        // A batch that has not run says so, rather than failing somewhere
+        // unrelated for want of what it needs. Its units count as failed, so
+        // that a set measuring one publishes nothing from what it did not run.
+        ok = false;
+        const reason = notRunReason(refusals);
+        commands.push({ label: batch.suite.id, reason });
+        for (const { unit } of batch.units) {
+          failedUnits.add(`${batch.suite.id}\t${unit}`);
+        }
+        annotateNotRun(batch.suite.id, reason);
+        continue;
+      }
       const result = await runBatch(
         batch,
         options,
@@ -3216,6 +3236,30 @@ export function annotateLaneFailures(
   }
 }
 
+/** What a lane says of a batch it did not run for want of `refusals`. */
+export function notRunReason(
+  refusals: readonly { capability: CapabilityId; why: string }[],
+): string {
+  return "did not run, because " + refusals
+    .map(({ capability, why }) => `${capability} did not open: ${why}`)
+    .join("; ");
+}
+
+/**
+ * Raises a GitHub Actions annotation for a batch the lane did not run, which
+ * has no failing test for `annotateLaneFailures()` to raise one for.
+ */
+export function annotateNotRun(
+  suite: string,
+  reason: string,
+  env: (name: string) => string | undefined = Deno.env.get,
+): void {
+  if (env("GITHUB_ACTIONS") !== "true") return;
+  console.log(
+    `::error title=${annotationProperty(suite)}::${annotationData(reason)}`,
+  );
+}
+
 /**
  * Ends a lane's output with its summary and adds the summary to the job's
  * step summary. Inside GitHub Actions it annotates failures the batches have
@@ -3231,23 +3275,31 @@ export function reportLane(
   annotateLaneFailures(summary.tests, annotated, env);
 }
 
+/** `text` as the message of a workflow command. */
+function annotationData(text: string): string {
+  return text.replaceAll("%", "%25").replaceAll("\r", "%0D")
+    .replaceAll("\n", "%0A");
+}
+
+/** `text` as the value of a workflow command's property. */
+function annotationProperty(text: string): string {
+  return annotationData(text).replaceAll(":", "%3A").replaceAll(",", "%2C");
+}
+
 /** The workflow command that raises an error annotation for a failing test. */
 export function errorAnnotation(test: TestResult): string {
   const { file } = test.record;
-  const data = (text: string) =>
-    text.replaceAll("%", "%25").replaceAll("\r", "%0D")
-      .replaceAll("\n", "%0A");
-  const property = (text: string) =>
-    data(text).replaceAll(":", "%3A").replaceAll(",", "%2C");
   const properties = [
-    ...(file === undefined ? [] : [`file=${property(file)}`]),
-    `title=${property(testTitle(test.record))}`,
+    ...(file === undefined ? [] : [`file=${annotationProperty(file)}`]),
+    `title=${annotationProperty(testTitle(test.record))}`,
   ];
   const message = [
     ...(test.rerun === undefined ? [] : [`rerun: ${test.rerun}`]),
     ...errorExcerpt(test.message ?? "failed"),
   ];
-  return `::error ${properties.join(",")}::${data(message.join("\n"))}`;
+  return `::error ${properties.join(",")}::${
+    annotationData(message.join("\n"))
+  }`;
 }
 
 /**

@@ -29,6 +29,7 @@ import {
   addLaneResults,
   ANNOTATED_FAILURES,
   annotateLaneFailures,
+  annotateNotRun,
   batchCoverage,
   batchesOf,
   batchRepeats,
@@ -2445,6 +2446,35 @@ describe("running a lane's work", () => {
   });
 });
 
+describe("annotateNotRun()", () => {
+  /** What it prints, inside a job or not. */
+  function annotating(reason: string, inJob: boolean): string[] {
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      annotateNotRun(
+        "cli-fuse",
+        reason,
+        (name) => inJob && name === "GITHUB_ACTIONS" ? "true" : undefined,
+      );
+    } finally {
+      console.log = log;
+    }
+    return lines;
+  }
+
+  it("prints an annotation naming the suite, with its reason on one line", () => {
+    expect(annotating("did not run, because\nit stalled", true)).toEqual([
+      "::error title=cli-fuse::did not run, because%0Ait stalled",
+    ]);
+  });
+
+  it("prints nothing outside a job", () => {
+    expect(annotating("did not run", false)).toEqual([]);
+  });
+});
+
 describe("planning a lane without running it", () => {
   /** What lane 2 of the full run prints, as `options` asks. */
   async function printed(options: Partial<LaneOptions>): Promise<string> {
@@ -2985,6 +3015,83 @@ describe("the lane's own housekeeping", () => {
     expect([...Deno.readDirSync(temp)]).toEqual([]);
     await Deno.remove(temp, { recursive: true });
     await Deno.remove(root, { recursive: true });
+  });
+
+  describe("a capability that fails to open", () => {
+    /**
+     * Runs a lane over a suite needing `cf`, which refuses, and one needing
+     * nothing, each noting that it was asked to run.
+     */
+    async function refusedLane(): Promise<{
+      ok: boolean;
+      ran: string[];
+      printed: string;
+    }> {
+      const root = await Deno.makeTempDir({ prefix: "lane-refused-" });
+      const ran: string[] = [];
+      const running = (id: string, needs: CapabilityId[]) =>
+        suite({
+          id,
+          needs,
+          units: [`runtime/bakery/${id}.test.ts`],
+          locate: () => undefined,
+          command: () => {
+            ran.push(id);
+            return Promise.resolve([]);
+          },
+        });
+      const lines: string[] = [];
+      const log = console.log;
+      const restore = setEnv({
+        RUNNER_TEMP: undefined,
+        GITHUB_ACTIONS: undefined,
+        GITHUB_STEP_SUMMARY: undefined,
+      });
+      console.log = (line: string) => lines.push(line);
+      try {
+        const ok = await runLane({
+          lane: 1,
+          of: 1,
+          full: true,
+          dryRun: false,
+          laneCount: false,
+          root,
+          at: "2026-09-01T00:00:00Z",
+        }, {
+          topology: () =>
+            Promise.resolve([
+              running("wanting", ["cf"]),
+              running("needing-nothing", []),
+            ]),
+          manifest: ({ at }) =>
+            Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
+          capabilities: new Map<CapabilityId, Capability>([["cf", {
+            id: "cf",
+            description: "a capability that cannot open",
+            open: () => Promise.reject(new Error("the mirror stalled")),
+          }]]),
+          spool: () => undefined,
+        });
+        return { ok, ran, printed: lines.join("\n") };
+      } finally {
+        console.log = log;
+        restore();
+        await Deno.remove(root, { recursive: true });
+      }
+    }
+
+    it("runs the batches that do not need it", async () => {
+      const { ran } = await refusedLane();
+      expect(ran).toEqual(["needing-nothing"]);
+    });
+
+    it("fails the lane, and its summary names the batch and why", async () => {
+      const { ok, printed } = await refusedLane();
+      expect(ok).toBe(false);
+      expect(printed).toContain(
+        "wanting: did not run, because cf did not open: the mirror stalled",
+      );
+    });
   });
 
   it("fails a lane whose capability fails to close", async () => {

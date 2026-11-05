@@ -73,6 +73,15 @@ export interface ExecOptions {
 
   /** Whether the command inherits no environment, leaving it only `env`. */
   clearEnv?: boolean;
+
+  /**
+   * Whether the command writes to the lane's own output rather than having
+   * it captured. Its output is then in the job's log as it is written, so a
+   * command that stalls is seen stalling, and nothing it leaves running can
+   * hold the call open by holding a pipe. The call returns an empty string,
+   * and an error from it does not quote the output, which is in the log.
+   */
+  inheritOutput?: boolean;
 }
 
 /**
@@ -157,9 +166,9 @@ export interface CapabilityContext {
   /**
    * Where opening says what it is doing, a line at a time: each
    * capability as it begins to open and once it has opened, and each
-   * command a capability runs, before it runs. Setup runs its commands
-   * with their output captured, so a step that never finishes is named in
-   * the log only by the line said before it. Absent, opening says nothing.
+   * command a capability runs, before it runs. Setup captures the output of
+   * most of its commands, so a step that never finishes is named in the log
+   * only by the line said before it. Absent, opening says nothing.
    */
   report?: (line: string) => void;
 }
@@ -333,7 +342,17 @@ function exported(env: Record<string, string>): OpenCapability {
  * half-worked is worse than setup that did not, because the batch after
  * it fails somewhere unrelated.
  */
-const run: Exec = async (command, args, options = {}) => {
+export const run: Exec = async (command, args, options = {}) => {
+  if (options.inheritOutput) {
+    const { success, code } = await new Deno.Command(command, {
+      ...commandOptions(args, options),
+      stdin: "null",
+      stdout: "inherit",
+      stderr: "inherit",
+    }).spawn().status;
+    if (success) return "";
+    throw new Error(`${command} ${args.join(" ")} exited ${code}`);
+  }
   const result = await new Deno.Command(command, {
     ...commandOptions(args, options),
     stdout: "piped",
@@ -406,6 +425,17 @@ async function succeeds(
 }
 
 /**
+ * The most seconds one `apt-get` command may take. It waits on mirrors nothing
+ * here controls, and one that stalls would otherwise hold the lane until its
+ * step's bound without a test having run. A command takes seconds when the
+ * mirrors answer, so this stops only one that is not going to finish.
+ */
+const APT_BOUND_SECONDS = 300;
+
+/** How long a stopped `apt-get` command gets before it is killed outright. */
+const APT_KILL_AFTER_SECONDS = 30;
+
+/**
  * Installs Debian packages, and does nothing where the probes say they
  * are already there.
  *
@@ -413,6 +443,12 @@ async function succeeds(
  * provides is there. A package that puts a command on the path is
  * probed with `onPath`; a package whose point is a file is probed with
  * whatever answers about that file.
+ *
+ * Each command is bounded by a `timeout` running inside `sudo`, because the
+ * lane has no permission to signal what `sudo` started. Its output goes to the
+ * job's log, so a stall names the mirror it stalled on.
+ *
+ * @throws where a command fails or reaches `APT_BOUND_SECONDS`.
  */
 async function apt(
   exec: Exec,
@@ -424,14 +460,30 @@ async function apt(
     if (!await succeeds(exec, probe)) missing = true;
   }
   if (!missing) return;
-  await exec("sudo", ["apt-get", "update"]);
-  await exec("sudo", [
-    "apt-get",
-    "install",
-    "-y",
-    "--no-install-recommends",
-    ...packages,
-  ]);
+  const aptGet = async (args: readonly string[]): Promise<void> => {
+    try {
+      await exec(
+        "sudo",
+        [
+          "timeout",
+          `--kill-after=${APT_KILL_AFTER_SECONDS}`,
+          `${APT_BOUND_SECONDS}`,
+          "apt-get",
+          ...args,
+        ],
+        { inheritOutput: true },
+      );
+    } catch (error) {
+      throw new Error(
+        `could not install ${packages.join(", ")}: \`apt-get ${args[0]}\` ` +
+          `failed or took more than ${APT_BOUND_SECONDS}s, and what it said ` +
+          `is in the log above: ${describeFailure(error)}`,
+        { cause: error },
+      );
+    }
+  };
+  await aptGet(["update"]);
+  await aptGet(["install", "-y", "--no-install-recommends", ...packages]);
 }
 
 /**
@@ -1121,6 +1173,14 @@ export interface OpenedCapabilities {
   logs: Array<{ capability: CapabilityId; path: string }>;
 
   /**
+   * Why each of the capabilities `requested` or built under them did not open,
+   * which is never anything without `partial`.
+   */
+  refusalsFor(
+    requested: Iterable<CapabilityId>,
+  ): Array<{ capability: CapabilityId; why: string }>;
+
+  /**
    * Closes them all, in the reverse of the order they opened. Settles once
    * every one has closed, and rejects naming each that failed to.
    */
@@ -1132,16 +1192,27 @@ export interface OpenedCapabilities {
  * what each took. The measurements are what the publisher fits
  * `setupCost` from, so they are the point of this returning anything
  * beyond the environment.
+ *
+ * One that fails to open closes those already open and throws, unless
+ * `partial` is set. Then it is recorded with why, as is any built on it, and
+ * the rest still open, so that a caller can go on with whatever needs none of
+ * them.
  */
 export async function openCapabilities(
   requested: Iterable<CapabilityId>,
   context: CapabilityContext,
   registry: ReadonlyMap<CapabilityId, Capability> = CAPABILITIES,
+  { partial = false }: { partial?: boolean } = {},
 ): Promise<OpenedCapabilities> {
   const exported = new Map<CapabilityId, Record<string, string>>();
   const timings: Array<{ capability: CapabilityId; seconds: number }> = [];
   const logs: Array<{ capability: CapabilityId; path: string }> = [];
   const opened: Array<{ id: CapabilityId; open: OpenCapability }> = [];
+  const refused = new Map<CapabilityId, string>();
+  const refuse = (id: CapabilityId, why: string): void => {
+    refused.set(id, why);
+    context.report?.(`ci-lane: could not open ${id}: ${why}`);
+  };
   // One that fails to close does not keep the rest open.
   const close = async (): Promise<void> => {
     const failures: string[] = [];
@@ -1160,9 +1231,21 @@ export async function openCapabilities(
   try {
     for (const id of resolveCapabilities(requested, registry)) {
       const capability = registry.get(id)!;
+      const under = capability.needs?.find((need) => refused.has(need));
+      if (under !== undefined) {
+        refuse(id, `it is built on ${under}, which did not open`);
+        continue;
+      }
       context.report?.(`ci-lane: opening ${id}: ${capability.description}`);
       const startedAt = performance.now();
-      const open = await capability.open(context);
+      let open: OpenCapability;
+      try {
+        open = await capability.open(context);
+      } catch (error) {
+        if (!partial) throw error;
+        refuse(id, describeFailure(error));
+        continue;
+      }
       opened.push({ id, open });
       exported.set(id, open.env);
       const seconds = (performance.now() - startedAt) / 1000;
@@ -1195,6 +1278,11 @@ export async function openCapabilities(
     },
     timings,
     logs,
+    refusalsFor: (requested) =>
+      resolveCapabilities(requested, registry).flatMap((capability) => {
+        const why = refused.get(capability);
+        return why === undefined ? [] : [{ capability, why }];
+      }),
     close,
   };
 }
