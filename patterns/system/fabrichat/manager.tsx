@@ -469,7 +469,7 @@ const reportDelivery = (
   const requestId = addMemberRequestIdOf(offerId, spaceOf(room));
   if (requestId === undefined) return;
   const stream = addDeliveryStreamOf(room).key("recordAddDelivery");
-  if (stream.get() === undefined) return;
+  if (!isStreamHandle(stream.get())) return;
   stream.send({ requestId, ...report });
 };
 
@@ -660,6 +660,28 @@ const inboxPointerOf = (
   // own is a cell whether or not anything is stored there.
   profile?.key("inbox").get()?.piece;
 
+/**
+ * Whether `read`, what a read of a `receive` through an inbox pointer found, is
+ * a stream. A stream reads as its handle there, and stored data reads as itself.
+ */
+const isStreamHandle = (read: unknown): boolean =>
+  typeof (read as { send?: unknown } | undefined)?.send === "function";
+
+/**
+ * Whether the share inbox `pointer` points at takes offers, as this run finds
+ * it: its space isn't deleted, and its `receive` is a stream. A pointer can
+ * name a piece with no such stream, or an inbox in a space this run can't read.
+ * A send to a path holding no stream writes the event there, and in another
+ * space that write throws, which takes the handler's other sends with it. A
+ * runtime still holding an inbox it read before its space stopped admitting
+ * this user finds the stream, and the offer it sends is lost.
+ */
+const takesOffers = (pointer: Cell<ShareInboxPiece>): boolean => {
+  const inbox = pointer.resolveAsCell();
+  return spaceDeleted(inbox) !== true &&
+    isStreamHandle(inboxOf(inbox).key("receive").get());
+};
+
 /** A share inbox, and the first of a member's profiles pointing at it. */
 interface ProfileInboxEntry {
   /** The inbox, as the profile points at it. */
@@ -672,7 +694,8 @@ interface ProfileInboxEntry {
 /**
  * The share inboxes `profiles` point at, each once, in the order of the first
  * profile pointing at each, with that profile. A profile pointing at no inbox
- * is left out.
+ * is left out, and so is one whose pointer finds no stream to send to (see
+ * `takesOffers()`).
  */
 const distinctInboxes = (
   profiles: readonly Cell<ChatManagerProfile>[],
@@ -680,7 +703,8 @@ const distinctInboxes = (
   profiles.reduce<ProfileInboxEntry[]>((found, profile) => {
     const pointer = inboxPointerOf(profile);
     return pointer === undefined ||
-        found.some((known) => equals(known.pointer, pointer))
+        found.some((known) => equals(known.pointer, pointer)) ||
+        !takesOffers(pointer)
       ? found
       : [...found, { pointer, profile }];
   }, []);
@@ -717,9 +741,9 @@ const offerEnvelope = (
  * the inboxes `offer` has gone to already, which it adds to. It adds to the
  * room's participants the first profile it offered the room through, so that
  * the member is listed once however many inboxes they have. A member whose
- * profiles point at no inbox is offered nothing, and a notice for them, keyed
- * by the offer's `id`, is queued instead, unless `noticeWaiting` says one
- * waits already. Returns which of the two it did.
+ * profiles point at no inbox that takes offers is offered nothing, and a notice
+ * for them, keyed by the offer's `id`, is queued instead, unless `noticeWaiting`
+ * says one waits already. Returns which of the two it did.
  */
 const offerToMember = (
   offer: RoomOffer,
@@ -751,7 +775,8 @@ const offerToMember = (
  * more than one member point at is sent the offer once, and each of those
  * members is offered the room through it. For a request that
  * `recordsDelivery`, a member offered nothing, since no profile of theirs
- * points at an inbox, turns the request's delivery to `noticed`.
+ * points at an inbox that takes offers, turns the request's delivery to
+ * `noticed`.
  *
  * It runs as an event of its own, queued by the act that creates or offers
  * the room, so that it reads the room's space once the room's creation has
@@ -2396,12 +2421,15 @@ export const FabriChatManagerCore = pattern<
       shownPeople.length === 0 ? "none" : "block"
     );
     // A notice whose room's roster lists a profile attesting its recipient
-    // has nothing left to tell them: they are in the room. Per user, as
-    // `roomsForUser` is: the roster is read under the reader's access, and a
-    // profile attests no one to a reader its space refuses. Its binding's
-    // name is its cause, as `foundForUser`'s is.
+    // has nothing left to tell them: they are in the room. A notice of a
+    // deleted room has nothing to tell them either: no one can open the room,
+    // and its roster can't be read. Per user, as `roomsForUser` is: the roster
+    // is read under the reader's access, and a profile attests no one to a
+    // reader its space refuses. Its binding's name is its cause, as
+    // `foundForUser`'s is.
     const noticesForUser = computed((): PerUser<ChatManagerNotice[]> =>
       ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).filter((notice) =>
+        !roomDeleted(catalogEntries, notice.room) &&
         !(notice.room.key("roster").get() ?? []).some((member) =>
           profileOwnerOf(member) === notice.recipient
         )

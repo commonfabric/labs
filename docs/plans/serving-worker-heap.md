@@ -43,7 +43,11 @@ three, 100 creates each, at load 77-269.
 A worker rig (`heap-worker-probe.ts`, under "The process") serves a fresh board
 from a `ServingWorker` the way the toolshed does and has the worker write its own
 snapshots, so each holder is measured in the process that holds it. On that rig
-a create leaves 862 KB on the worker, measured over 40 creates after a first 10.
+a create left 862 KB on the worker before the changes under "Landed" that
+followed, and 522 KB after the last of them, measured over 40 creates after a
+first 10. Two runs of one tree on one machine differ by a hundred kilobytes or
+more, as what the replica holds at the moment of the snapshot varies, so a
+change is judged by the holder table (`heap-retained.ts`), not by the total.
 Whether the board's root is the loop's demand decides most of that: `cf piece new`
 sends the served `instantiate` verb with `start: true`, which makes the root a
 demand root, and the same board created without it leaves a third as much. A
@@ -76,11 +80,33 @@ the main thread under the worker arm and so are not on the worker.
   9, the provider's sync requests 28 to 13, replica documents 22 to 15. Two
   runs on one machine, one each side of the change, left 1,055 and 915 KB per
   create; the per-run spread is wide, so the holder table is the measure.
+- A piece that keeps running no longer keeps the transaction that started it
+  through the start's own closures, a node's closures, or the identity its
+  result cell's siblings share (`start-transaction-release.test.ts`; the
+  paths a raw node's builtin and a bound result cell still keep are under
+  "What is left"). V8 gives every closure of one function
+  scope one context, so a closure that lives as long as the piece, the start's
+  `cancel` or a node's `action` or `handler`, kept every variable any closure of
+  that scope had captured, and a function whose parameters are destructured or
+  defaulted keeps those in a scope of their own on the same terms. The start
+  took its options apart and named the object no further; the nodes stopped
+  naming their transaction-bound `resultCell` and `inputsCell` parameters in
+  closures; a cell made from a link mints the identity its siblings share
+  without a transaction (`CauseContainer.cell` in `cell.ts`), where it was the
+  first, transaction-bound cell made for the entity; and the pattern watcher's
+  lagging pointer is set only for a start that arms the watcher, since the map
+  builtin's element starts do not, and nothing else cleared it. With the
+  transactions went what they kept: `deepFrozenCache`'s weak-set table, 314 KB
+  per create before, is no longer charged at all, and the worker rig's create
+  went from 915 to 522 KB.
 
 ## What is left
 
 Per create on the worker rig, a demanded board, removing holders cumulatively in
-this order. The total is 862 KB.
+this order. The figures are from the holder table taken at 862 KB per create,
+before the last two changes under "Landed", which did not move them apart from
+the holders the two entries at the end of this list describe; the total is
+522 KB now.
 
 - Each Topic's documents, about 135 KB per create in `SpaceReplica.#docs` and
   shared with the session's watch view, and the watch bookkeeping that remains
@@ -94,19 +120,31 @@ this order. The total is 862 KB.
   inputs again when a change dirties it, is the design in the introduction
   applied to a demanded piece's computations; it is the largest item left and
   a change to what the scheduler keeps, not to storage.
-- `deepFrozenCache`, a `WeakSet` with no finalizer, is charged about 314 KB per
-  create by the snapshot tools, and removing its edge frees that much with
-  nothing else taking it up. A weak set holds nothing, so what keeps those
-  values alive between the forced collection and the snapshot is not
-  established; the values are frozen documents, so the retaining path to check
-  first is the one through the replica's documents. Until it is, read totals
-  with that share set apart.
-- The transaction of the run that started the piece, 55 KB. A node a run starts
-  binds its result cell to the run's transaction in `#instantiateNode`
-  (`runner.ts`), and the map builtin's element instances of a demanded board are
-  such nodes. `map.ts` already strips the transaction from the element cells it
-  stores; the result cell wants the same, and since it reaches every node, the
-  change needs the executor suites.
+- One settled transaction per create, 54 KB, of which 38 KB is its CFC state
+  (`#cfcState` in `extended-storage-transaction.ts`: the prepare state, the
+  dereference traces, the write policy inputs). It is the transaction of the
+  start of a map element, which the change above does not reach on three
+  paths: the map builtin's action keeps the `inputsCell` the raw node hands
+  it, which the node's plan binds to the start's transaction
+  (`inputsCell.withTx(tx)` in `#buildRawNodeInputs`), and builtins read
+  through that cell by `.key()` or `.withTx(tx)` rather than through its own
+  transaction, though several read it directly during their setup, so each
+  needs reading before the node hands them a cell without one; the element's
+  `resultCell` reaches `#startCore` bound to the transaction from
+  `#startWithTx`'s callers, and the start's closures capture it, where the
+  nodes' `cellTx(resultCell)` checks decide local-read behavior from that
+  binding; and the immutable cell store's snapshots keep a query-result proxy
+  made under the transaction. A settled transaction already drops its read memos
+  (`#runCommitCallbacks`); dropping the parts of its CFC state that nothing
+  reads after settlement would free this under every path at once, where
+  cutting the paths one by one has each next one take the charge over. That
+  change belongs with the CFC state's own lifecycle, not here.
+- `deepFrozenCache` is a `WeakSet`, and the charge the tools gave it was the
+  weak set's own table, which V8 sizes by the peak number of live frozen
+  objects; it fell to nothing once the transactions above were released, since
+  what they kept was frozen documents. The entry is kept here because the
+  charge will come back with any holder that keeps frozen values, and it names
+  the holder, not the cache.
 - The read logs of the active computations, about 42 KB, which grow with the
   index for the same reason.
 - Bounded caches still filling: `watchIds` 30 KB, `DerivedInternalCellIds`

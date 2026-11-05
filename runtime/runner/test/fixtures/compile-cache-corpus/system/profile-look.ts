@@ -6,9 +6,9 @@
 
 /** The part of a profile's appearance a snapshot carries. */
 export type ProfileLook<Bytes> =
-  | { picture: Bytes; avatar?: undefined }
-  | { avatar: string; picture?: undefined }
-  | { picture?: undefined; avatar?: undefined };
+  | { picture: Bytes; avatar?: never }
+  | { avatar: string; picture?: never }
+  | { picture?: never; avatar?: never };
 
 /**
  * Returns the profile's `picture` when it holds any bytes, or else its

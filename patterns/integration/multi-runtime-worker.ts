@@ -43,6 +43,7 @@ import type {
   NormalizedFullLink,
 } from "@commonfabric/runner";
 import {
+  ACLManager,
   cellRuntime,
   convertCellsToLinks,
   createSpaceRootIfAbsent,
@@ -1117,6 +1118,32 @@ const handlers: Record<
       throw new TypeError("retrySpaceAccess takes a space DID.");
     }
     await controller().runtime.retrySpaceAccess(space as MemorySpace);
+    await idle();
+    return {};
+  },
+
+  /** Removes `user` from the access list of `space`, as an OWNER of it. */
+  async removeFromAccessList({ space, user }) {
+    if (typeof space !== "string" || typeof user !== "string") {
+      throw new TypeError(
+        "removeFromAccessList takes a space DID and a list entry.",
+      );
+    }
+    const { runtime } = controller();
+    await new ACLManager(runtime, space as DID).remove(user as DID | "*");
+    await idle();
+    return {};
+  },
+
+  /** Deletes `space`, whose sole member this session's identity is. */
+  async deleteSpace({ space }) {
+    if (typeof space !== "string") {
+      throw new TypeError("deleteSpace takes a space DID.");
+    }
+    const { runtime } = controller();
+    await new ACLManager(runtime, space as DID).delete(
+      runtime.userIdentityDID,
+    );
     await idle();
     return {};
   },

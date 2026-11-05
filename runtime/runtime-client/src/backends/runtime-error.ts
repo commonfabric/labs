@@ -1,3 +1,4 @@
+import { isDeletedSpaceError } from "@commonfabric/memory/v2/client";
 import {
   CompilerStackLoadError,
   SpaceNotFoundError,
@@ -15,11 +16,14 @@ export function runtimeErrorCode(
 ):
   | RuntimeErrorCode.CompilerStackLoadFailed
   | RuntimeErrorCode.SpaceNotFound
+  | RuntimeErrorCode.SpaceDeleted
   | undefined {
   return error instanceof CompilerStackLoadError
     ? RuntimeErrorCode.CompilerStackLoadFailed
     : error instanceof SpaceNotFoundError
     ? RuntimeErrorCode.SpaceNotFound
+    : isDeletedSpaceError(error)
+    ? RuntimeErrorCode.SpaceDeleted
     : undefined;
 }
 

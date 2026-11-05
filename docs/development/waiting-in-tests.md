@@ -75,6 +75,14 @@ sized so only a multi-minute jump reaches it — except the stuck detector,
 which a competing ceiling keeps lower; its section explains. When an event
 boundary does exist, use it, and neither kind of exception arises.
 
+A deployed client's wait on its server keeps a bound of the second kind, for
+want of an event from a server that has stopped responding: the read of
+`/api/meta` and `Runtime.healthCheck` each end at 60 seconds. An early fire on
+the read leaves a client on its own flags, with an error saying so, and one on
+the health check fails its startup. [The rationale
+document](waiting-in-tests-rationale.md#a-deployed-clients-wait-on-its-server)
+records what that bound is measured from.
+
 One bound sits between the two kinds, and is written down here because its cost
 is easy to understate. The browser load summary in
 `patterns/integration/cfc-browser-helpers.ts` gives the worker a budget

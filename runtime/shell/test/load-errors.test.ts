@@ -805,6 +805,31 @@ describe("load-errors", () => {
           }
         });
 
+        describe("when the space is deleted", () => {
+          for (const kind of ["space", "piece"] as const) {
+            it(`says so for a ${kind} that failed to load, with nothing to try`, async () => {
+              const restore = installBrowserGlobals();
+              try {
+                const { XBodyView } = await import("../src/views/BodyView.ts");
+                const view = new XBodyView();
+                view.loadError = {
+                  kind,
+                  error: Object.assign(new Error("Space is deleted"), {
+                    code: RuntimeErrorCode.SpaceDeleted,
+                  }),
+                };
+
+                const text = templateText(view.render());
+                expect(text).toContain("This space was deleted");
+                expect(text).not.toContain("We could not load");
+                expect(text).not.toContain("Try reloading");
+              } finally {
+                restore();
+              }
+            });
+          }
+        });
+
         describe("when no space answers to the address", () => {
           /** A space load error as the worker reports a space with no history. */
           const spaceNotFound = () => ({

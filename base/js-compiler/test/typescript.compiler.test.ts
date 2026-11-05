@@ -910,4 +910,166 @@ export default add(5, "5");`,
       }
     });
   }
+
+  describe("what a factory input admits under exactOptionalPropertyTypes", () => {
+    // The pattern compiler reads `x?: T` as a property that may be absent,
+    // and `FactoryInput` makes one exception: an optional input admits
+    // `undefined`, so that a pattern can forward its own optional input,
+    // which it sees as `T | undefined`, to another factory. The type cannot
+    // tell that reference from a literal `undefined` or a computation that
+    // returns one, so those are admitted too; the table says so, as what is
+    // accepted. `db.query`'s options admit it for the same reason, as the
+    // `sqliteQuery` factory's inputs do. An optional property's indexed type
+    // includes `undefined`, so `key().set()` admits it too. Required inputs, index-signature values,
+    // required `patternTool()` prefills, and optional-property writes through
+    // `update()` keep the stricter rule.
+
+    const SUB = [
+      "import { computed, pattern, patternTool, UI } from 'commonfabric';",
+      "type Index = { n: number };",
+      "const Sub = pattern<{ index?: Index }, { n: number }>(",
+      "  ({ index }) => ({ n: index?.n ?? 0 }),",
+      ");",
+      "const Strict = pattern<{ index: Index }, { n: number }>(",
+      "  ({ index }) => ({ n: index.n }),",
+      ");",
+    ].join("\n");
+
+    const CASES: { name: string; body: string; refused?: string }[] = [
+      {
+        name: "admits an optional input forwarded to an optional input",
+        body: [
+          "export default pattern<{ index?: Index }, { n: number }>(({ index }) => {",
+          "  const sub = Sub({ index });",
+          "  return { n: sub.n };",
+          "});",
+        ].join("\n"),
+      },
+      {
+        name: "admits a literal undefined at an optional input (accepted)",
+        body:
+          "export default pattern(() => ({ n: Sub({ index: undefined }).n }));",
+      },
+      {
+        name:
+          "admits a computation that may yield undefined at an optional input (accepted)",
+        body: [
+          "export default pattern<{ on: boolean }, { n: number }>(({ on }) => {",
+          "  const index = computed((): Index | undefined =>",
+          "    on ? { n: 1 } : undefined,",
+          "  );",
+          "  return { n: Sub({ index }).n };",
+          "});",
+        ].join("\n"),
+      },
+      {
+        name:
+          "admits a computation that may yield undefined at an optional result field (accepted)",
+        body: [
+          "export default pattern<{ on: boolean }, { m?: number }>(({ on }) => ({",
+          "  m: computed((): number | undefined => (on ? 1 : undefined)),",
+          "}));",
+        ].join("\n"),
+      },
+      {
+        name: "admits undefined at a cf element attribute, which unsets it",
+        body: [
+          "export default pattern<{ src?: string }>(({ src }) => ({",
+          "  [UI]: <cf-avatar src={src} name='x' />,",
+          "}));",
+        ].join("\n"),
+      },
+      {
+        name:
+          "admits undefined at an optional key of patternTool's extraParams",
+        body: "export default patternTool(Sub, { index: undefined });",
+      },
+      {
+        name: "admits an optional input forwarded to a `db.query` option",
+        body: [
+          "import { type SqliteDb } from 'commonfabric';",
+          "export default pattern<{ db: SqliteDb; requestKey?: string }>(",
+          "  ({ db, requestKey }) => db.query('SELECT 1', { requestKey }),",
+          ");",
+        ].join("\n"),
+      },
+      {
+        name: "refuses a value of another type at a `db.query` option",
+        body: [
+          "import { type SqliteDb } from 'commonfabric';",
+          "export default pattern<{ db: SqliteDb }>(",
+          "  ({ db }) => db.query('SELECT 1', { requestKey: 1 }),",
+          ");",
+        ].join("\n"),
+        refused: "not assignable",
+      },
+      {
+        name: "refuses undefined at a required input",
+        body:
+          "export default pattern(() => ({ n: Strict({ index: undefined }).n }));",
+        refused: "'undefined' is not assignable",
+      },
+      {
+        name: "refuses undefined at an index signature's key",
+        body: [
+          "const Map = pattern<{ map: Record<string, string> }, { k: number }>(",
+          "  ({ map }) => ({ k: Object.keys(map).length }),",
+          ");",
+          "export default pattern(() => ({ k: Map({ map: { a: undefined } }).k }));",
+        ].join("\n"),
+        refused: "'undefined' is not assignable",
+      },
+      {
+        name:
+          "refuses undefined at a required key of patternTool's extraParams",
+        body: "export default patternTool(Strict, { index: undefined });",
+        refused: "not assignable to parameter of type 'undefined'",
+      },
+      {
+        name: "admits `undefined` written to an optional key by `key().set()`",
+        body: [
+          "import { handler, type Writable } from 'commonfabric';",
+          "const clear = handler<unknown, { cell: Writable<{ note?: string }> }>(",
+          "  (_event, { cell }) => { cell.key('note').set(undefined); },",
+          ");",
+          "export default pattern<{ cell: Writable<{ note?: string }> }>(({ cell }) => ({",
+          "  clear: clear({ cell }),",
+          "}));",
+        ].join("\n"),
+      },
+      {
+        name: "refuses undefined written into an optional property by update()",
+        body: [
+          "import { handler, type Writable } from 'commonfabric';",
+          "const clear = handler<unknown, { cell: Writable<{ note?: string }> }>(",
+          "  (_event, { cell }) => { cell.update({ note: undefined }); },",
+          ");",
+          "export default pattern<{ cell: Writable<{ note?: string }> }>(({ cell }) => ({",
+          "  clear: clear({ cell }),",
+          "}));",
+        ].join("\n"),
+        refused: "'undefined' is not assignable",
+      },
+    ];
+
+    for (const { name, body, refused } of CASES) {
+      it(name, async () => {
+        // Through the pre-transform, as the engine compiles a pattern, so
+        // JSX finds its helpers.
+        const program = new InMemoryProgram("/main.tsx", {
+          "/main.tsx": transformCfDirective(`${SUB}\n${body}\n`, "/main.tsx"),
+          ...fabricTypeModules,
+        });
+        const compiler = new TypeScriptCompiler(types);
+        const compile = resolveAndCompileToModules(compiler, program, {
+          runtimeModules: FABRIC_RUNTIME_MODULES,
+        });
+        if (refused === undefined) {
+          expect((await compile).get("/main.tsx")).toBeDefined();
+        } else {
+          await expect(compile).rejects.toThrow(refused);
+        }
+      });
+    }
+  });
 });

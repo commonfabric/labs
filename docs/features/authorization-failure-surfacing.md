@@ -141,7 +141,9 @@ revoked space once more, and the status reads "Retrying…" until the answer
 comes; an
 admission restores the content. Content of a deleted space is replaced by a
 placeholder reading "Deleted", marked `data-space-deleted`, with no Retry
-button.
+button. A page opened on a deleted space has no content to replace, and the
+shell says instead that the space was deleted
+([`space-access.md`](space-access.md#a-deleted-space)).
 
 A `cf-render` or `cf-picker` bound to content of a revoked space shows the same
 placeholder as revoked content shown directly, while its binding is withheld,

@@ -111,7 +111,10 @@ import {
 import { isRendererTrustedEvent } from "./cfc/ui-contract.ts";
 import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
-import { memoryHostForForeignOrigin } from "./deployment-meta.ts";
+import {
+  DEPLOYMENT_RESPONSE_BOUND_MS,
+  memoryHostForForeignOrigin,
+} from "./deployment-meta.ts";
 import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
 import {
   type DelegatedCarriage,
@@ -4981,15 +4984,21 @@ export class Runtime {
     const provider = this.storageManager.open(space);
     const aclUri = aclDocId(space) as URI;
     const spaceCell = this.getSpaceCell(space);
+    const spaceId = spaceCell.getAsNormalizedFullLink().id;
     const loads = await Promise.all([
       provider.sync(aclUri),
-      provider.sync(spaceCell.getAsNormalizedFullLink().id),
+      provider.sync(spaceId),
     ]);
     const denied = this.storageManager.spaceAccessError?.(space) ??
       this.storageManager.authorizationError?.(space);
     if (denied !== undefined) return true;
     for (const { error } of loads) {
       if (error !== undefined) throw error;
+    }
+    // Neither reads as absent while a quarantine holds it back.
+    for (const id of [aclUri, spaceId]) {
+      const failure = await provider.replica.quarantineFailure?.(id);
+      if (failure !== undefined) throw failure;
     }
     const tx = this.edit();
     try {
@@ -5595,7 +5604,9 @@ export class Runtime {
   /**
    * True iff the default host AND every distinct mapped host are
    * reachable — one runtime can span hosts, so health is the
-   * conjunction over all of them. The optional signal cancels the requests.
+   * conjunction over all of them. A host with no response within
+   * {@link DEPLOYMENT_RESPONSE_BOUND_MS} counts as unreachable. The optional
+   * signal cancels the requests.
    */
   async healthCheck(signal?: AbortSignal): Promise<boolean> {
     // Overlapping calls each capture into their own generation; only the
@@ -5617,9 +5628,19 @@ export class Runtime {
         return false; // a malformed mapped host is unhealthy by definition
       }
     }
+    const deadline = new AbortController();
+    const timer = setTimeout(
+      () => deadline.abort(new DOMException("timed out", "TimeoutError")),
+      DEPLOYMENT_RESPONSE_BOUND_MS,
+    );
+    const requestSignal = signal === undefined
+      ? deadline.signal
+      : AbortSignal.any([signal, deadline.signal]);
     const checks = [...hosts].map(async (host) => {
       try {
-        const res = await fetch(new URL("/_health", host), { signal });
+        const res = await fetch(new URL("/_health", host), {
+          signal: requestSignal,
+        });
         if (
           host === defaultHost && generation === this.#healthCheckGeneration
         ) {
@@ -5632,6 +5653,10 @@ export class Runtime {
         return false;
       }
     });
-    return (await Promise.all(checks)).every(Boolean);
+    try {
+      return (await Promise.all(checks)).every(Boolean);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
