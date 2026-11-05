@@ -1382,8 +1382,13 @@ export function syncCellForIdentity<T>(
  * The container stores only the entity reference parts that need to be synchronized.
  */
 interface CauseContainer {
-  // Root cell that created this cause container
-  cell: OpaqueCell<unknown>;
+  // The object the siblings share as their identity: what the pattern builder
+  // attaches nodes under and what an export names. A cell made without a link
+  // is its own, since the builder compares it with the cells it made. One
+  // made from a link mints it on first use, without a transaction, so that
+  // the siblings of a cell bound to a transaction do not keep that
+  // transaction alive through it.
+  cell: OpaqueCell<unknown> | undefined;
   // Entity reference - shared across all siblings
   id: URI | undefined;
   space: MemorySpace | undefined;
@@ -1590,7 +1595,9 @@ export class CellImpl<T extends FabricValue>
     // Use provided container or create one
     // If link has an id, extract it to the container
     this.#causeContainer = causeContainer ?? {
-      cell: this as unknown as OpaqueCell<unknown>,
+      cell: this.#_link.id === undefined
+        ? this as unknown as OpaqueCell<unknown>
+        : undefined,
       id: this.#_link.id,
       space: this.#_link.space,
       cause: undefined,
@@ -1746,9 +1753,31 @@ export class CellImpl<T extends FabricValue>
       space,
       ...(id !== undefined ? { id } : {}),
     });
-    for (const node of cellNodes.get(this.#causeContainer.cell) ?? []) {
+    for (const node of cellNodes.get(this.#identityCell()) ?? []) {
       (node.module as Module).targetSpace = space;
     }
+  }
+
+  /**
+   * The object the siblings share as their identity; `CauseContainer.cell`.
+   * A sibling made with no transaction and no frame, as `#linkOnlyCopy()`
+   * makes a copy: `withTx()` keeps the transaction of a cell bound to the run
+   * under way, and a frame carries its action's transaction.
+   */
+  #identityCell(): OpaqueCell<unknown> {
+    if (this.#causeContainer.cell === undefined) {
+      const identity = new CellImpl(
+        this.#runtime,
+        undefined,
+        this.#_link,
+        this.#synced,
+        this.#causeContainer,
+        this.#kind,
+      );
+      identity.#frame = undefined;
+      this.#causeContainer.cell = identity as unknown as OpaqueCell<unknown>;
+    }
+    return this.#causeContainer.cell;
   }
 
   /**
@@ -4473,7 +4502,7 @@ export class CellImpl<T extends FabricValue>
     // For cells created during pattern construction, we need to track which nodes
     // they're connected to. Since Cell doesn't have a nodes set like Reactive's store,
     // we'll store this in a WeakMap keyed by the cell instance.
-    const top = this.#causeContainer.cell;
+    const top = this.#identityCell();
     if (!cellNodes.has(top)) {
       cellNodes.set(top, new Set());
     }
@@ -4491,12 +4520,13 @@ export class CellImpl<T extends FabricValue>
           "disposed, so it cannot take part in building a pattern",
       );
     }
+    const identity = this.#identityCell();
     return {
-      cell: this.#causeContainer.cell,
+      cell: identity,
       path: this.#_link.path,
       schema: this.schema,
       scope: isCellScope(this.#_link.scope) ? this.#_link.scope : undefined,
-      nodes: cellNodes.get(this.#causeContainer.cell) ?? new Set(),
+      nodes: cellNodes.get(identity) ?? new Set(),
       frame: this.#frame,
       kind: this.#kind,
       name: this.#causeContainer.cause,
