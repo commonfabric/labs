@@ -3605,6 +3605,8 @@ export class Server {
   constructor(
     readonly options: {
       sessions?: SessionRegistry;
+      /** Baked serving-process provenance; absent for unknown source builds. */
+      serverBuild?: string;
 
       /**
        * Client retirement is disabled. Only `0` is accepted; any other value
@@ -6840,6 +6842,9 @@ export class Server {
             ...(catchup ? { sync: catchup.effect } : {}),
             ...(spaceKind !== undefined ? { spaceKind } : {}),
             sessionOpen: nextSessionOpen,
+            ...(this.options.serverBuild
+              ? { serverBuild: this.options.serverBuild }
+              : {}),
             ...(redemption === undefined ? {} : { invite: redemption }),
           },
         };

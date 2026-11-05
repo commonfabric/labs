@@ -1252,6 +1252,8 @@ export type ClientCommit = {
 };
 
 export type SessionOpenResult = {
+  /** Serving Toolshed process commit, not the router or a compatibility gate. */
+  serverBuild?: string;
   sessionId: SessionId;
   sessionToken: SessionToken;
   serverSeq: number;

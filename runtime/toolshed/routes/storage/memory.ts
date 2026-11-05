@@ -10,6 +10,7 @@ import { experimentalOptionsFromEnv } from "@commonfabric/runner/experimental-po
 import { MemoryRouterPolicy } from "./memory-router.ts";
 import { memoryEngineStoreUrl } from "./memory-store-url.ts";
 import env from "@/env.ts";
+import { buildInfo } from "@/lib/build-info.ts";
 import { experimentalPosture } from "@/lib/experimental-posture.ts";
 import { identity } from "@/lib/identity.ts";
 import {
@@ -104,6 +105,7 @@ export { memoryEngineStoreUrl };
 await FS.ensureDir(memoryEngineStoreUrl);
 
 export const memoryServer = new MemoryServer.Server({
+  serverBuild: buildInfo.commitSha ?? undefined,
   minimumClientGeneration: env.MEMORY_MINIMUM_CLIENT_GENERATION,
   store: memoryEngineStoreUrl,
   authorizeSessionOpen,

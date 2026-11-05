@@ -693,6 +693,9 @@ export type IPCClientMessage = {
    */
   msgId: MessageId;
 
+  /** Loaded peer commit, for diagnostics only; never an admission rule. */
+  runtimeBuild?: string;
+
   /**
    * The request itself.
    */
@@ -743,6 +746,9 @@ export type IPCRemoteResponse = {
    */
   msgId: MessageId;
 
+  /** Loaded peer commit, for diagnostics only; never an admission rule. */
+  runtimeBuild?: string;
+
   /**
    * What the handler returned, absent where it returned nothing.
    */
@@ -752,6 +758,9 @@ export type IPCRemoteResponse = {
    * The request this answers.
    */
   msgId: MessageId;
+
+  /** Loaded peer commit, for diagnostics only; never an admission rule. */
+  runtimeBuild?: string;
 
   /**
    * What went wrong, as text. Its presence is what makes this the

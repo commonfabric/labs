@@ -1,3 +1,8 @@
+import {
+  bundledBuild,
+  comparePeerBuilds,
+  normalizeBuildMarker,
+} from "@commonfabric/platform/peer-build";
 import { isCanonicalEd25519DID } from "@commonfabric/identity";
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { cloneIfNecessary, debugStr } from "@commonfabric/data-model";
@@ -1134,6 +1139,7 @@ export class Client {
       declaredSpaceKindOf(result),
       options.resumeKey,
       options.resumeAttempt,
+      result.serverBuild,
     );
     this.#spaces.add(session);
     return { session, result };
@@ -2903,6 +2909,7 @@ export class SpaceSession {
   #precedingWatchSyncs: SessionSync[] = [];
   #sessionId: string;
   #sessionToken: string | undefined;
+  #serverBuild: string | undefined;
   #serverSeq: number;
   #ackedSeq = 0;
   #pendingAckSeq = 0;
@@ -3031,6 +3038,7 @@ export class SpaceSession {
     declaredSpaceKind?: DeclaredSpaceKind,
     resumeKey: string = crypto.randomUUID(),
     resumeAttempt = 1,
+    serverBuild?: string,
   ) {
     this.#client = client;
     this.#resumeKey = resumeKey;
@@ -3046,12 +3054,19 @@ export class SpaceSession {
     this.#declaredSpaceKind = declaredSpaceKind;
     this.#sessionId = sessionId;
     this.#sessionToken = sessionToken;
+    this.#serverBuild = normalizeBuildMarker(serverBuild);
+    logger.debug("peer-build", () => [this.space, this.buildDiagnostics]);
     this.#serverSeq = serverSeq;
     this.#ackedSeq = serverSeq;
   }
 
   get sessionId(): string {
     return this.#sessionId;
+  }
+
+  /** Serving-process provenance from the latest successful session open. */
+  get buildDiagnostics() {
+    return comparePeerBuilds(bundledBuild, this.#serverBuild);
   }
 
   get sessionToken(): string | undefined {
@@ -5024,6 +5039,8 @@ export class SpaceSession {
     this.#sessionId = restored.sessionId;
     this.#sessionToken = restored.sessionToken ?? this.#sessionToken;
     this.#declaredSpaceKind = declaredSpaceKindOf(restored);
+    this.#serverBuild = normalizeBuildMarker(restored.serverBuild);
+    logger.debug("peer-build", () => [this.space, this.buildDiagnostics]);
     this.#noteResult(restored.serverSeq);
 
     if (sessionReplaced) {
