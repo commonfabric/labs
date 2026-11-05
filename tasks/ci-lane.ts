@@ -2918,6 +2918,9 @@ export async function runLane(
   const addReruns = rerunCommands(options.root);
   const commands: FailedCommand[] = [];
   const notes: string[] = [];
+  // The batches the lane has not begun, and where it heard it was to stop.
+  let notStarted = [...batches];
+  let stoppedIn: string | undefined;
   try {
     for (const batch of batches) {
       // Two capabilities may export the same name and mean different
@@ -2927,6 +2930,7 @@ export async function runLane(
       // hide every batch and every repeat after it, and the point of a
       // lane is what it measured. Being told to stop does.
       if (stop.signal !== undefined) break;
+      notStarted = notStarted.filter((waiting) => waiting !== batch);
       const refusals = opened.refusalsFor(batch.suite.needs);
       if (refusals.length > 0) {
         // A batch that has not run says so, rather than failing somewhere
@@ -2950,6 +2954,16 @@ export async function runLane(
         batchCoverage(options, batch.suite.id, coverage),
         stop,
       );
+      // The pass the stop cut short, where it cut this batch short. Read
+      // here, before anything else this loop awaits gives a signal the
+      // chance to arrive after the batch had finished.
+      const cutShort = stop.signal === undefined
+        ? undefined
+        : result.executions.length;
+      if (cutShort !== undefined) {
+        stoppedIn = `${batch.suite.id}, pass ${cutShort} of ` +
+          `${batchRepeats(batch)}`;
+      }
       for (const conflict of result.conflicts) conflicts.push(conflict);
       const { passed, accounting, excusing } = judgeBatch(
         batch,
@@ -2967,13 +2981,21 @@ export async function runLane(
         ]),
       );
       annotateLaneFailures(await addReruns(tests.values()), annotated);
-      for (const { name } of accounting.silent) {
+      // What the stop left unrun says nothing about the tests, and the lane
+      // says below where it was stopped. A unit missed in an earlier pass is
+      // still reported, since that pass ran to its end. One that ran and
+      // recorded nothing in the pass the stop cut short is not, because
+      // nothing tells it from one the stop kept from running, and nor are the
+      // commands of a batch the stop cut short that failed having recorded
+      // no failing test, which are counted over the batch's passes together.
+      for (const { name, passes } of accounting.silent) {
+        if (passes.every((pass) => pass === cutShort)) continue;
         commands.push({
           label: `${batch.suite.id} ${name}`,
           reason: "ran no test",
         });
       }
-      if (result.unexplained > 0) {
+      if (result.unexplained > 0 && cutShort === undefined) {
         commands.push({
           label: batch.suite.id,
           reason: `${result.unexplained} command(s) failed having recorded ` +
@@ -2995,6 +3017,13 @@ export async function runLane(
     if (stop.signal !== undefined) {
       ok = false;
       notes.push(`Stopped by ${stop.signal} before finishing its plan.`);
+      if (stoppedIn !== undefined) notes.push(`It was running ${stoppedIn}.`);
+      if (notStarted.length > 0) {
+        notes.push(
+          "It did not start: " +
+            notStarted.map(({ suite }) => suite.id).join(", ") + ".",
+        );
+      }
       console.log(
         `ci-lane: stopped by ${stop.signal} before finishing its plan; ` +
           `it passes the signal on to whatever test command is running ` +
@@ -3017,6 +3046,7 @@ export async function runLane(
     // was packed with, and after the lane's verdict is settled, so that
     // nothing a rerun records can change it.
     if (options.full) {
+      const stoppedAlready = stop.signal !== undefined;
       rerun = await rerunFailures(
         reruns,
         seen.manifest,
@@ -3027,6 +3057,13 @@ export async function runLane(
         stop,
       );
       for (const conflict of rerun.conflicts) conflicts.push(conflict);
+      if (!stoppedAlready && stop.signal !== undefined) {
+        ok = false;
+        notes.push(
+          `Stopped by ${stop.signal} while rerunning failures, with every ` +
+            "batch run.",
+        );
+      }
     }
   } catch (error) {
     // A lane whose loop threw has failed, whatever the batches it got
