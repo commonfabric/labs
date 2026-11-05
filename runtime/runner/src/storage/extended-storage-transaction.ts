@@ -4710,8 +4710,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // run too, so no callback and no release check reads the prepared inputs
     // afterwards. Effects a destination owns flush on its schedule, and their
     // checks read the inputs then.
-    const releaseAfterEffects = async (): Promise<void> => {
-      await effects;
+    const release = (): void => {
       if (!effectsHandedOff) this.#releasePreparationInputs();
     };
 
@@ -4723,11 +4722,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     } catch (error) {
       // A backend whose commit promise rejects may never report a verdict,
       // and the effects wait on one, so the rejection does not wait on the
-      // release.
-      void releaseAfterEffects();
+      // release. The release follows the effects however they end.
+      void effects.then(release, release);
       throw error;
     }
-    await releaseAfterEffects();
+    await effects;
+    release();
 
     return result;
   }
