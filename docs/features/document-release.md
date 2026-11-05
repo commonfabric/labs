@@ -77,6 +77,13 @@ loaded nor read since the first pass began, and asks for no further one. It
 keeps a document loaded or read after the first pass began, as any pass would,
 and the next pass anything asks for decides it.
 
+A host's worker also asks for a pass once it has first brought up the user's
+Home, and the housekeeping that starts has settled with the scheduler idle
+(`RuntimeProcessor.#startHomeHousekeeping()` in `runtime/runtime-client`).
+Bringing Home up loads what its pieces read as they resume and what its stored
+result links to, each room its chat manager lists among it, and nothing goes on
+to read much of that.
+
 A pass that has watches to remove first gives each document the replica keeps,
 as above, and the session still delivers, a watch of its own where it has none,
 with a selector that follows no links: a document that something reads only
