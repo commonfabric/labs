@@ -446,7 +446,7 @@ const APT_KILL_AFTER_SECONDS = 30;
  *
  * Each command is bounded by a `timeout` running inside `sudo`, because the
  * lane has no permission to signal what `sudo` started. Its output goes to the
- * job's log, so a stall names the mirror it stalled on.
+ * job's log, so a stall shows how far the command got.
  *
  * @throws where a command fails or reaches `APT_BOUND_SECONDS`.
  */

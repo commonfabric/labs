@@ -281,8 +281,8 @@ workflow. A run's lanes come from two jobs.
   runs, one once each capability has opened, and one as each batch starts.
   Setup captures the output of most of its commands, so in a lane that stops
   without saying why, the last of these lines names the step it stopped in.
-  `apt-get` writes to the job's log directly, so that a stall names its mirror,
-  and each `apt-get` command is stopped after five minutes.
+  `apt-get` writes to the job's log directly, so that a stall shows how far it
+  got, and each `apt-get` command is stopped after five minutes.
 - A capability that fails to open costs only the batches needing it. The lane
   says why it did not open, runs every other batch, and fails, with each batch
   it did not run named in its closing summary and raised as an error annotation
