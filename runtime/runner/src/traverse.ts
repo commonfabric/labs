@@ -2043,6 +2043,15 @@ export interface IObjectCreator<T> {
   createOpaquePresence?(link: NormalizedFullLink): T;
 
   /**
+   * Whether the property at `slot`, which the traversal read as `value`, is a
+   * verb its producer no longer publishes. An object leaves such a property
+   * out where the schema does not require it, as it leaves out an optional
+   * field the producer stopped publishing. Query traversal leaves this
+   * unimplemented and keeps every handle.
+   */
+  isWithdrawnVerb?(slot: NormalizedFullLink, value: T): boolean;
+
+  /**
    * Creates a value whose schema has already been proven to contain only exact
    * `type`, `properties`, and `items` keywords. Implementations may skip the
    * generic asCell/default/schema-shape checks; the result must otherwise have
@@ -6085,6 +6094,8 @@ export class SchemaObjectTraverser<V extends FabricValue>
       }
     }
 
+    this.#omitWithdrawnVerbs(doc, schema, filteredObj);
+
     // Check that all required fields are present
     if (isObjectOrArray(schema) && "required" in schema) {
       const required = schema["required"] as string[];
@@ -6109,6 +6120,39 @@ export class SchemaObjectTraverser<V extends FabricValue>
       }
     }
     return filteredObj;
+  }
+
+  /**
+   * Leaves out of `filteredObj` each property the schema declares as a stream
+   * and does not require, whose value is a verb its producer no longer
+   * publishes. A required position keeps its handle: its producer cannot drop
+   * it through an update, so its absence is a deletion or an unfinished setup,
+   * not a contract the holder was built to read.
+   */
+  #omitWithdrawnVerbs(
+    doc: IMemorySpaceValueAttestation,
+    schema: JSONSchemaObj,
+    filteredObj: Record<string, FabricValue>,
+  ): void {
+    const creator = this.objectCreator;
+    if (
+      creator.isWithdrawnVerb === undefined ||
+      !isObjectNotArray(schema.properties)
+    ) return;
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    for (const propKey of Object.keys(schema.properties)) {
+      if (
+        required.includes(propKey) || !Object.hasOwn(filteredObj, propKey) ||
+        !propertyDeclaresStream(schema, propKey)
+      ) continue;
+      const slot = getNormalizedLink(
+        { ...doc.address, path: appendToPath(doc.address.path, propKey) },
+        undefined,
+      );
+      if (creator.isWithdrawnVerb(slot, filteredObj[propKey])) {
+        delete filteredObj[propKey];
+      }
+    }
   }
 
   /**

@@ -129,9 +129,11 @@ closed candidate object fails as `source field is rejected by the target
 object`. The result side preserves every required field it published, every
 verb, and every field that holds a verb at any depth. An optional data field it
 may stop publishing, since whoever reads it already reads its absence. An
-optional verb it may not: a stream handle reads as itself when nothing is
-stored, so a holder still bound to a removed verb keeps sending to it, and each
-event is dropped for want of a handler.
+optional verb it may not: an object read leaves out an optional verb its
+producer no longer publishes, but a handle minted before the update, or by
+`Cell.get()` or a read without a schema, still reads as itself, so a holder
+still bound through one keeps sending to it, and each event is dropped for want
+of a handler.
 
 Stated plainly, because much of the design rests on it: **a deployed
 holder's demands can be given up freely, and added only where an existing

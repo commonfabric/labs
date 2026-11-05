@@ -676,10 +676,11 @@ contract. An object carrying a whole-object constraint such as
 `dependentRequired`, or a field compared within a union branch, keeps the
 refusal, since there another part of the schema may still name the field. A
 verb is refused even when optional, and so is a field that holds one at any
-depth, as an optional `ui` holds `ui.tick`: a verb's absence is not something a
-holder can read, because a stream handle reads as itself when nothing is
-stored, so a holder still bound to a removed verb keeps sending and each event
-is dropped for want of a handler. And a field of a verb's event is refused even
+depth, as an optional `ui` holds `ui.tick`. An object read leaves out an
+optional verb its producer no longer publishes, but a handle minted before the
+update, or by `Cell.get()` or a read without a schema, still reads as itself,
+so a holder bound through one keeps sending and each event is dropped for want
+of a handler. And a field of a verb's event is refused even
 when optional, because a caller still sends it and the event would strip it
 without a refusal. An argument's named fields are held neither way: dropping
 one gives up a demand, which the same function accepts wherever the candidate

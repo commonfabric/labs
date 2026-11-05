@@ -154,6 +154,16 @@ the back-link to the manifest. Event payloads are ephemeral. Documents written
 before this held a `{ "$stream": true }` sentinel as their value; readers still
 recognize it, and nothing writes it.
 
+A read of an object property the schema declares as an optional stream leaves
+out a verb that is gone, instead of minting its handle, so a holder reads the
+absence the way it reads an optional field its producer stopped publishing. A
+verb is gone when the property resolves to an empty location inside a piece's
+result or argument document, where no handler listens, or to an empty document
+whose owner names it neither in its `internal` manifest nor as its argument. A
+required stream position keeps its handle, and so does a location whose
+documents are not loaded yet. `runtime/runner/src/withdrawn-verb.ts` states the
+two rules.
+
 See [Cells](./4-cells.md) for stream semantics.
 
 #### Error Wrapper: `{ "@Error": {...} }`
