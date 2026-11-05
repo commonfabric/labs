@@ -71,11 +71,12 @@ one pass waits at a time, and the requests that arrive while one is under way,
 as a closing pane's cancellations of each of its subscriptions do, cost one
 more pass between them.
 
-A cell holds its document until it is collected, so a pass that runs as a
-subscription is cancelled keeps the document the subscription's own cell
-loaded, together with whatever that document's watch reaches. What the
-subscription read through its links in documents watched on their own, as the
-rooms a list links to are, is released by that pass.
+A cell holds its document until it is collected, and a pass keeps every watch
+rooted at a document it keeps. So the document a cancelled subscription's own
+cell loaded stays, with what its watch reaches, until a pass that runs after
+that cell is collected, and nothing asks for that pass on the cell's account.
+What the subscription read only through its links, in documents watched on
+their own, is what the pass its cancellation asks for can release.
 
 A pass keeps the watches rooted at a document loaded or read since the
 previous pass began, and removes only those rooted at one neither loaded nor
