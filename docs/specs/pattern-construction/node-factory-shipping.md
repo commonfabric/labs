@@ -615,6 +615,10 @@ the intentional shell-returning boundary.
 An `asFactory`-only schema is an executable leaf contract, not an open `true`
 schema. Schema traversal must therefore dispatch that leaf before its generic
 flag-only-schema fast path, including for nested array and object positions.
+Contextual-flow joins likewise treat the callable as the atomic value at that
+leaf. They do not descend into its argument, result, event, or context schemas:
+those contracts describe values exchanged by a later invocation, not fields of
+the callable currently crossing the join.
 
 Materialization returns another function, not a wrapper object, and preserves
 the canonical codec state for reserialization. Preservation requires exact
@@ -1187,6 +1191,13 @@ The compiler-only method has exactly one argument and these rules:
 6. It throws if the factory already has params, even if the second value is
    equal or empty.
 7. It throws if the base pattern has no compiler-declared params slot.
+
+Trusted params-schema validation accepts finite arrays and objects described by
+recursive `$ref` schemas. Reference-cycle detection follows a schema path only
+until validation consumes a child value; it restarts at that structural
+boundary so recursive JSON-value contracts remain usable while reference-only
+schema cycles still fail. A cyclic authored parameter value also fails at this
+boundary rather than recursing without bound.
 
 A capture-free nested pattern emits no curry call. It simply references the
 hoisted factory.
@@ -2257,6 +2268,13 @@ sibling list-params readers and writers were therefore removed together.
 Canonical writers emit Factory@1, and a supported-source inventory prevents the
 removed APIs and writers from returning. `$implRef` remains because it is a
 current execution-module descriptor field, not a legacy factory representation.
+
+Direct factory nodes and canonical list binding intentionally replace the
+anonymous internal graph produced by the retired wrapper and sibling-params
+lowering. The affected pre-launch patterns may therefore receive new generated
+cell numbers. Exact base and Factory@1 build digests are recorded in the
+cause-assignment accepted-move registry; pre-launch stores are wiped rather
+than interpreting one generated cell's document as another cell's state.
 
 Factory-function `toJSON()` compatibility remains until every Fabric boundary
 is proven to dispatch through registered codecs. It emits the full graph, never

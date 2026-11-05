@@ -813,21 +813,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/features/llm-message-role-narrowing-break.md",
   },
   {
-    // The second pattern of the same ruling. Its baseline appears in no other
-    // entry, so the pairs stay disjoint.
-    pattern: "apps/deep-research/deep-research.tsx",
-    baselines: [
-      "20260729T022742Z-6PInVAlNOHThJNGH",
-    ],
-    paths: [
-      "argument.messages[].role",
-    ],
-    reason:
-      "The `system` role leaving `LLMMessageSchema`, recorded once for both " +
-      "patterns it breaks.",
-    record: "docs/history/features/llm-message-role-narrowing-break.md",
-  },
-  {
     // A pattern's result schema no longer carries the least upper bound of
     // its argument schema's `ifc.confidentiality` at its root. That clause was
     // a dependency measurement written into the component CFC §8.12.8 reserves

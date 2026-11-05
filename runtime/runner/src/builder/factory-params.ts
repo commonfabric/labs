@@ -673,6 +673,7 @@ function validateSymbolicValue(
   value: unknown,
   root: JSONSchema,
   seenRefs: Set<string>,
+  valueAncestors: ReadonlySet<unknown>,
 ): string | undefined {
   const resolved = schemaAtRef(schema, root);
   if (resolved === undefined) return "unresolved schema reference";
@@ -682,7 +683,13 @@ function validateSymbolicValue(
       if (seenRefs.has(ref)) return "cyclic schema reference";
       const nextSeen = new Set(seenRefs);
       nextSeen.add(ref);
-      return validateSymbolicValue(resolved, value, root, nextSeen);
+      return validateSymbolicValue(
+        resolved,
+        value,
+        root,
+        nextSeen,
+        valueAncestors,
+      );
     }
   }
   schema = resolved;
@@ -706,14 +713,26 @@ function validateSymbolicValue(
 
   if (Array.isArray(schema.allOf)) {
     for (const branch of schema.allOf) {
-      const failure = validateSymbolicValue(branch, value, root, seenRefs);
+      const failure = validateSymbolicValue(
+        branch,
+        value,
+        root,
+        seenRefs,
+        valueAncestors,
+      );
       if (failure !== undefined) return failure;
     }
   }
   if (Array.isArray(schema.anyOf)) {
     if (
       !schema.anyOf.some((branch) =>
-        validateSymbolicValue(branch, value, root, seenRefs) === undefined
+        validateSymbolicValue(
+          branch,
+          value,
+          root,
+          seenRefs,
+          valueAncestors,
+        ) === undefined
       )
     ) {
       return `value does not match anyOf (source schema ${
@@ -724,7 +743,13 @@ function validateSymbolicValue(
   }
   if (Array.isArray(schema.oneOf)) {
     const matches = schema.oneOf.filter((branch) =>
-      validateSymbolicValue(branch, value, root, seenRefs) === undefined
+      validateSymbolicValue(
+        branch,
+        value,
+        root,
+        seenRefs,
+        valueAncestors,
+      ) === undefined
     ).length;
     if (matches !== 1) {
       return "value does not match exactly one oneOf branch";
@@ -747,17 +772,24 @@ function validateSymbolicValue(
   }
 
   if (Array.isArray(value)) {
+    if (valueAncestors.has(value)) return "cyclic pattern param value";
+    const childAncestors = new Set(valueAncestors);
+    childAncestors.add(value);
     const types = Array.isArray(schema.type) ? schema.type : [schema.type];
     if (schema.type !== undefined && !types.includes("array")) {
       return `value does not match type ${types.join("|")}`;
     }
     if (typeof schema.items === "object") {
       for (let index = 0; index < value.length; index++) {
+        // Descending into a child value is structural progress. Start a new
+        // reference chain so recursive schemas accept finite data while an
+        // alias-only reference cycle at that child still fails.
         const failure = validateSymbolicValue(
           schema.items,
           value[index],
           root,
-          seenRefs,
+          new Set(),
+          childAncestors,
         );
         if (failure !== undefined) return `${index}: ${failure}`;
       }
@@ -766,6 +798,9 @@ function validateSymbolicValue(
   }
 
   if (isPlainRecord(value)) {
+    if (valueAncestors.has(value)) return "cyclic pattern param value";
+    const childAncestors = new Set(valueAncestors);
+    childAncestors.add(value);
     const types = Array.isArray(schema.type) ? schema.type : [schema.type];
     if (schema.type !== undefined && !types.includes("object")) {
       return `value does not match type ${types.join("|")}`;
@@ -776,11 +811,13 @@ function validateSymbolicValue(
     const properties = schema.properties ?? {};
     for (const [key, child] of Object.entries(properties)) {
       if (!Object.hasOwn(value, key)) continue;
+      // This property is a smaller value even when its schema is recursive.
       const failure = validateSymbolicValue(
         child,
         value[key],
         root,
-        seenRefs,
+        new Set(),
+        childAncestors,
       );
       if (failure !== undefined) return `${key}: ${failure}`;
     }
@@ -790,11 +827,13 @@ function validateSymbolicValue(
         return `additional property ${key}`;
       }
       if (isObjectNotArray(schema.additionalProperties)) {
+        // This property is a smaller value even when its schema is recursive.
         const failure = validateSymbolicValue(
           schema.additionalProperties as JSONSchema,
           value[key],
           root,
-          seenRefs,
+          new Set(),
+          childAncestors,
         );
         if (failure !== undefined) return `${key}: ${failure}`;
       }
@@ -812,7 +851,13 @@ export function assertValidPatternParams(
   if (!isPlainRecord(params)) {
     throw new TypeError("Pattern curry params must be a plain object");
   }
-  const failure = validateSymbolicValue(schema, params, schema, new Set());
+  const failure = validateSymbolicValue(
+    schema,
+    params,
+    schema,
+    new Set(),
+    new Set(),
+  );
   if (failure !== undefined) {
     throw new TypeError(`Invalid pattern params: ${failure}`);
   }

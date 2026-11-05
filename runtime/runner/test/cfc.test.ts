@@ -761,6 +761,43 @@ describe("ContextualFlowControl atom joins", () => {
       },
     });
   });
+
+  it("treats an embedded factory contract as an atomic callable leaf", () => {
+    const outerAtom = cfcAtom.resource(
+      "SourceProvenance",
+      "did:example:outer",
+    );
+    const contractAtom = cfcAtom.resource(
+      "SourceProvenance",
+      "did:example:contract",
+    );
+    const schema: JSONSchema = {
+      type: "object",
+      ifc: { confidentiality: [outerAtom] },
+      properties: {
+        factory: {
+          asFactory: {
+            kind: "pattern",
+            argumentSchema: { type: "string" },
+            resultSchema: {
+              $ref: "#/$defs/Result",
+              $defs: {
+                Result: {
+                  type: "number",
+                  ifc: { confidentiality: [contractAtom] },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const joined = new Set<unknown>();
+    expect(() => ContextualFlowControl.joinSchema(joined, schema)).not
+      .toThrow();
+    expect(ContextualFlowControl.lub(joined)).toEqual([outerAtom]);
+  });
 });
 
 describe("CFC schema reference discovery", () => {

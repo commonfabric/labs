@@ -25,6 +25,62 @@ function symbolic(schema: JSONSchema): unknown {
   };
 }
 
+Deno.test("pattern curry accepts finite values with recursive JSON schemas", () => {
+  const jsonSchema = {
+    anyOf: [
+      { type: ["null", "boolean", "number", "string"] },
+      {
+        type: "array",
+        items: { $ref: "#/$defs/JsonValue" },
+      },
+      {
+        type: "object",
+        additionalProperties: { $ref: "#/$defs/JsonValue" },
+      },
+    ],
+  } as const satisfies JSONSchema;
+  const paramsSchema = {
+    type: "object",
+    properties: {
+      value: { $ref: "#/$defs/JsonValue" },
+    },
+    required: ["value"],
+    $defs: { JsonValue: jsonSchema },
+  } as const satisfies JSONSchema;
+
+  assertEquals(
+    assertValidPatternParams(
+      { value: { source: { class: "Document" } } },
+      paramsSchema,
+    ),
+    undefined,
+  );
+});
+
+Deno.test("pattern curry rejects a cyclic value under a recursive schema", () => {
+  const paramsSchema = {
+    type: "object",
+    properties: {
+      value: { $ref: "#/$defs/JsonObject" },
+    },
+    required: ["value"],
+    $defs: {
+      JsonObject: {
+        type: "object",
+        additionalProperties: { $ref: "#/$defs/JsonObject" },
+      },
+    },
+  } as const satisfies JSONSchema;
+  const value: Record<string, unknown> = {};
+  value.self = value;
+
+  assertThrows(
+    () => assertValidPatternParams({ value }, paramsSchema),
+    TypeError,
+    "cyclic pattern param value",
+  );
+});
+
 Deno.test("pattern curry accepts an optional cell schema as one symbolic value", () => {
   const roomSchema = {
     type: "object",
