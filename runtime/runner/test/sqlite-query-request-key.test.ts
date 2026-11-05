@@ -34,6 +34,8 @@ describe("sqlite query request keys", () => {
     const pattern = await runtime.patternManager.compilePattern(`
       import { pattern, type SqliteDb } from "commonfabric";
       export default pattern<{ db: SqliteDb; requestKey?: string }>(({ db, requestKey }) => {
+        // @ts-expect-error: An absent key is what this forwards, and the option
+        // type admits only a string.
         return db.query<{ id: number }>("SELECT id FROM notes ORDER BY id", { requestKey });
       });
     `);

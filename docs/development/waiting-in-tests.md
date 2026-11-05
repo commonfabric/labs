@@ -75,6 +75,14 @@ sized so only a multi-minute jump reaches it — except the stuck detector,
 which a competing ceiling keeps lower; its section explains. When an event
 boundary does exist, use it, and neither kind of exception arises.
 
+A deployed client's wait on its server keeps a bound of the second kind, for
+want of an event from a server that has stopped responding: the read of
+`/api/meta` and `Runtime.healthCheck` each end at 60 seconds. An early fire on
+the read leaves a client on its own flags, with an error saying so, and one on
+the health check fails its startup. [The rationale
+document](waiting-in-tests-rationale.md#a-deployed-clients-wait-on-its-server)
+records what that bound is measured from.
+
 One bound sits between the two kinds, and is written down here because its cost
 is easy to understate. The browser load summary in
 `patterns/integration/cfc-browser-helpers.ts` gives the worker a budget
@@ -442,6 +450,16 @@ turning true. A test that installs its own gate or fault seam owns that seam's
 edge already: record each hit on a log rather than incrementing a counter, and
 the counter's readers become the log's, with a wait available for free.
 
+`ExecutorHost.whenQuiescent()` is the barrier for a whole cascade rather than
+for one seq: it resolves once every tenure's loop has come to rest with nothing
+it can do on its own, across spaces, and it covers what the watermark does not,
+such as an event a served handler fired that a later wave serves. Its value
+stays the same until a loop does anything further, so a caller that has let its
+own runtime react to what the wait delivered asks again and compares. `cf test`
+settles on it ([The ON topology in one
+process](TESTING.md#the-on-topology-in-one-process)). It lives on the host, so a
+loop in a worker does not offer it.
+
 A serving-side value that exists only in the SERVING runtime's view — a write
 sealed into an open wave, which the store does not hold yet — has no edge in
 that list, and the `waitForCellValue` shape below is wrong for it: idling the
@@ -601,9 +619,12 @@ By the time the marker arrives, the server holds what the announcing participant
 wrote before it, so the reads that follow resolve against a server that has it.
 On the server-execution arm what a participant's handlers write is the serving
 loop's, and the participant announces only once every event it fired has its
-consequence back at its own runtime, so that holds for those writes too; an
-event a served handler fires on its own account is no participant's, and is not
-covered.
+consequence back at its own runtime and the serving loop has finished what that
+set off, so that holds for those writes too, and for what an event a served
+handler fires on its own account writes. It does not hold for an event left
+waiting on something outside the loop, which [The ON topology in one
+process](TESTING.md#the-on-topology-in-one-process) describes: what that event
+goes on to write can land after the marker.
 Two mechanisms deliver it and both are ordered behind the marker. A document
 already in the awaiting replica's watch set arrives in a fan-out frame the
 server computes by diffing current storage, so a frame carrying the marker

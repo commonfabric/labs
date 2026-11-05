@@ -48,6 +48,11 @@ installFakeClock({
     // The compiled-child suite runs the same live serving host, whose flush
     // deadline must advance in real time while compiler work settles.
     "executor-compile-and-run",
+    // The quiescence suite asks what the same live serving host has finished,
+    // among it what real-time timers hold back: a demand grace, a rescan
+    // backstop, a wave's flush deadline. Auto-advance would fire them as they
+    // arm.
+    "executor-quiescence",
     // Scoped effect requests use the same live serving host and deadlines.
     "executor-fetch-instances",
     "executor-fetch-program-instances",

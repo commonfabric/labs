@@ -254,7 +254,7 @@ const addFavorite = handler<
       cell: piece,
       tags: tags ?? [],
       userTags: [],
-      spaceName,
+      ...(spaceName !== undefined && { spaceName }),
       id,
     });
   }

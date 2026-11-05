@@ -111,7 +111,10 @@ import {
 import { isRendererTrustedEvent } from "./cfc/ui-contract.ts";
 import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
-import { memoryHostForForeignOrigin } from "./deployment-meta.ts";
+import {
+  DEPLOYMENT_RESPONSE_BOUND_MS,
+  memoryHostForForeignOrigin,
+} from "./deployment-meta.ts";
 import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
 import {
   type DelegatedCarriage,
@@ -2495,6 +2498,11 @@ export class Runtime {
     tracked.finally(() => this.#pendingAsyncWork.delete(tracked));
   }
 
+  /** Whether an operation `trackAsyncWork()` was given is still in flight. */
+  get hasAsyncWorkPending(): boolean {
+    return this.#pendingAsyncWork.size > 0;
+  }
+
   /**
    * Wait until the runtime is fully settled: the scheduler is idle, storage is
    * synced, AND every in-flight async builtin operation (`trackAsyncWork`) has
@@ -3326,6 +3334,13 @@ export class Runtime {
    * something that read documents through this runtime has gone, such as a
    * client whose subscriptions it cancelled. Calls made while a pass waits
    * for the scheduler share it.
+   *
+   * A pass keeps a document loaded or read since the previous pass began, so
+   * that a read still under way finishes with it. Where it kept one for that
+   * reason alone, a second pass runs once the scheduler is next idle, and the
+   * call resolves when that has run too: the documents a stopped piece read
+   * are released by the pass after the one its stop asked for, which nothing
+   * else may ever ask for. The second pass asks for no third.
    */
   releaseUnreadDocuments(): Promise<void> {
     this.#documentRelease ??= (async () => {
@@ -3335,6 +3350,9 @@ export class Runtime {
         // A request made from here on asks for a pass of its own.
         this.#documentRelease = undefined;
       }
+      const deferred = await this.storageManager.releaseUnreadDocuments?.();
+      if (deferred !== true) return;
+      await this.scheduler.idle();
       await this.storageManager.releaseUnreadDocuments?.();
     })().catch((error) => {
       documentReleaseLogger.warn("release-failed", () => [
@@ -5580,7 +5598,9 @@ export class Runtime {
   /**
    * True iff the default host AND every distinct mapped host are
    * reachable — one runtime can span hosts, so health is the
-   * conjunction over all of them. The optional signal cancels the requests.
+   * conjunction over all of them. A host with no response within
+   * {@link DEPLOYMENT_RESPONSE_BOUND_MS} counts as unreachable. The optional
+   * signal cancels the requests.
    */
   async healthCheck(signal?: AbortSignal): Promise<boolean> {
     // Overlapping calls each capture into their own generation; only the
@@ -5602,9 +5622,19 @@ export class Runtime {
         return false; // a malformed mapped host is unhealthy by definition
       }
     }
+    const deadline = new AbortController();
+    const timer = setTimeout(
+      () => deadline.abort(new DOMException("timed out", "TimeoutError")),
+      DEPLOYMENT_RESPONSE_BOUND_MS,
+    );
+    const requestSignal = signal === undefined
+      ? deadline.signal
+      : AbortSignal.any([signal, deadline.signal]);
     const checks = [...hosts].map(async (host) => {
       try {
-        const res = await fetch(new URL("/_health", host), { signal });
+        const res = await fetch(new URL("/_health", host), {
+          signal: requestSignal,
+        });
         if (
           host === defaultHost && generation === this.#healthCheckGeneration
         ) {
@@ -5617,6 +5647,10 @@ export class Runtime {
         return false;
       }
     });
-    return (await Promise.all(checks)).every(Boolean);
+    try {
+      return (await Promise.all(checks)).every(Boolean);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

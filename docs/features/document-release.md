@@ -55,10 +55,27 @@ released loads them again when its next event arrives.
 
 A release pass runs when something that read documents has gone: when a piece
 is stopped (`Runner.stop()`, which also runs when the runtime restarts a
-piece), and when a host's client departs
+piece), when a serving runtime stops the pieces a handler's result started once
+the handler's transaction commits, which leaves running one a client demands
+at that moment (`#releaseServedHandlerResult` in
+`runtime/runner/src/runner.ts`; "A piece a handler starts" in
+[`../specs/server-side-execution/serving-loop.md`](../specs/server-side-execution/serving-loop.md)),
+and when a host's client departs
 (`RuntimeProcessor.disposeClient()` in `runtime/runtime-client`). A host may
 also call `Runtime.releaseUnreadDocuments()` itself. The pass waits until the
 scheduler is idle. Passes run one after another, never two at once.
+
+A pass keeps the watches rooted at a document loaded or read since the
+previous pass began, and removes only those rooted at one neither loaded nor
+read in that window. A piece that read its documents after the last pass
+began, and then stops, leaves them in that window, so the pass its stop asks
+for keeps them. Where a pass kept the watches of a document nothing holds for
+that reason alone, one read while the pass itself was under way included,
+`Runtime.releaseUnreadDocuments()` runs one more pass once the scheduler is
+next idle. That pass removes the watches rooted at each such document neither
+loaded nor read since the first pass began, and asks for no further one. It
+keeps a document loaded or read after the first pass began, as any pass would,
+and the next pass anything asks for decides it.
 
 A pass that has watches to remove first gives each document the replica keeps,
 as above, and the session still delivers, a watch of its own where it has none,

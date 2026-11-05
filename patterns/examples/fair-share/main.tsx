@@ -230,7 +230,7 @@ export default pattern<State>(({ people, expenses, myName }) => {
       const share = (shareCents.get(p.name) ?? 0) / 100;
       return {
         name: p.name,
-        picture: p.picture,
+        ...(p.picture !== undefined && { picture: p.picture }),
         avatar: p.avatar ?? "",
         paid,
         share,

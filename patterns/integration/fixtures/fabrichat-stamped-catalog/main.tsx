@@ -13,6 +13,8 @@
  * at, so that another person's manager can offer them a room, and it can
  * record a request outcome from an offer, which carries the label onto the
  * manager's own records. Fixture for
+ * `fabrichat-labeled-catalog-multi-runtime.test.ts`,
+ * `fabrichat-repeated-creates-multi-runtime.test.ts`,
  * `fabrichat-stamped-catalog-multi-runtime.test.ts`,
  * `fabrichat-stamped-records-multi-runtime.test.ts` and
  * `fabrichat-stamped-title-offers-multi-runtime.test.ts`.
@@ -37,6 +39,7 @@ import {
   type RequestsCell,
 } from "../../../system/fabrichat/manager.tsx";
 import {
+  type ChatIndexEntry,
   type ChatManagerNotice,
   type ChatRequestOutcome,
   type ManagerProfileCell,
@@ -234,6 +237,9 @@ export interface MainOutput {
   /** The notices the manager holds for a client to deliver. */
   outgoingNotices: PerUser<ChatManagerNotice[]>;
 
+  /** The rooms the manager lists for the person. */
+  rooms: PerUser<ChatIndexEntry[]>;
+
   /** The person's shared-space catalog, as stored. */
   sharedSpaceCatalog: SharedSpaceCatalogStorage;
 }
@@ -291,6 +297,7 @@ export default pattern<MainInput, MainOutput>((
     joinRoom: chats.joinRoom,
     requests: chats.requests,
     outgoingNotices: chats.outgoingNotices,
+    rooms: chats.rooms,
     sharedSpaceCatalog: chats.sharedSpaceCatalog,
   };
 });

@@ -473,11 +473,13 @@ export const updateProfile = pattern<
   return result;
 });
 
+// `mentionable` is optional: the omnibox feeds it a wish's result, which is
+// absent until the wish is fulfilled, and the tool lists nothing until then.
 export const listMentionable = pattern<
-  { mentionable: Array<MentionablePiece> },
+  { mentionable?: Array<MentionablePiece> },
   { result: Array<{ label: string; piece: MentionablePiece }> }
 >(({ mentionable }) => {
-  const result = mentionable.map((c) => ({
+  const result = (mentionable ?? []).map((c) => ({
     label: c[NAME]!,
     piece: c,
   }));
