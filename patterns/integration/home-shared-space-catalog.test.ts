@@ -2564,24 +2564,6 @@ describe("Home chat manager and a deleted room", () => {
           { stuckLabel: "both rooms listed as deleted" },
         );
 
-        const outcomeOf = async (
-          stream: "joinRoom" | "accept" | "offerRoom",
-          requestId: string,
-          event: { room: Cell<unknown>; member?: string },
-        ) => {
-          await invoke(
-            runtime,
-            manager.key(stream),
-            { requestId, ...event },
-            requestId,
-          );
-          return await waitForCellValue<{ status: string }>(
-            runtime,
-            manager.key("requests").key(requestId),
-            (value) => value !== undefined && value.status !== "pending",
-            { stuckLabel: `the ${requestId} request` },
-          );
-        };
         for (
           const [requestId, stream, room] of [
             ["join-listed", "joinRoom", listed],
@@ -2590,20 +2572,42 @@ describe("Home chat manager and a deleted room", () => {
             ["accept-forgotten", "accept", forgotten],
           ] as const
         ) {
-          expect(await outcomeOf(stream, requestId, { room })).toMatchObject({
-            status: "refused",
-          });
+          // `invoke` returns once the handling has committed, a served one
+          // included, so what the request says is not the client's own
+          // speculative run.
+          await invoke(
+            runtime,
+            manager.key(stream),
+            { requestId, room },
+            requestId,
+          );
+          expect(await manager.key("requests").key(requestId).pull())
+            .toMatchObject({ status: "refused" });
         }
-        expect(
-          await outcomeOf("offerRoom", "offer-listed", {
-            room: listed,
-            member: BOB,
-          }),
-        ).toMatchObject({ status: "refused" });
+
+        // The offer is sent without waiting on its send's callback, which
+        // doesn't always settle for a served offer naming a deleted room. A
+        // start sent after it is handled after it, in Home's own order.
+        sendEvent(manager.key("offerRoom"), {
+          requestId: "offer-listed",
+          room: listed,
+          member: BOB,
+        });
+        await chats.start("createGroup", "g-after", {
+          title: "After",
+          members: [],
+        });
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("rooms"),
+          (value) => value?.length === 1,
+          { stuckLabel: "the room started after the offer" },
+        );
+        expect(await manager.key("requests").key("offer-listed").pull())
+          .toMatchObject({ status: "refused" });
 
         const { entries } = await home.key("sharedSpaceCatalog").pull();
         expect(entries[forgotten.space].state).toBe("archived");
-        expect(await manager.key("rooms").pull()).toEqual([]);
       });
     });
   }
