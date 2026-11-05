@@ -38,6 +38,9 @@ const BOB = "bob-secret";
 /** The confidentiality a planted existence entry carries. */
 const CAROL = "carol-secret";
 
+/** The confidentiality of data no setup below reads. */
+const DAVE = "dave-secret";
+
 describe("cfc-result-wiring-stamp", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
   let runtime: Runtime;
@@ -169,11 +172,14 @@ describe("cfc-result-wiring-stamp", () => {
       .flatMap((entry) => entry.label.confidentiality ?? []);
 
   /**
-   * Adds to `cell`'s stored label map a membership stamp naming
-   * {@link BOB} and an existence entry naming {@link CAROL}, as a stamp left
-   * by an earlier attempt would.
+   * Adds to `cell`'s stored label map a membership stamp naming `atom` and an
+   * existence entry naming {@link CAROL}, as a stamp left by an earlier
+   * attempt would.
    */
-  const plantStamp = async (cell: Cell<unknown>): Promise<void> => {
+  const plantStamp = async (
+    cell: Cell<unknown>,
+    atom: string,
+  ): Promise<void> => {
     const tx = runtime.edit();
     const link = cell.getAsNormalizedFullLink();
     const document: IMemorySpaceAddress = {
@@ -188,7 +194,7 @@ describe("cfc-result-wiring-stamp", () => {
       schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
       labelMap: { version: 1, entries: [] },
     }) as { labelMap: { entries: FabricValue[] } };
-    const stamp = { confidentiality: [BOB] };
+    const stamp = { confidentiality: [atom] };
     seedStoredEnvelope(tx, { ...document, path: ["cfc"] }, {
       ...cfc,
       labelMap: {
@@ -221,7 +227,7 @@ describe("cfc-result-wiring-stamp", () => {
     } as FabricValue);
     runtime.prepareTxForCommit(tx);
     expect((await tx.commit().settled).ok).toBeDefined();
-    expect(membershipOf(cell)).toContain(BOB);
+    expect(membershipOf(cell)).toContain(atom);
     expect(existenceOf(cell)).toEqual([CAROL]);
   };
 
@@ -250,12 +256,13 @@ describe("cfc-result-wiring-stamp", () => {
   });
 
   describe("a stamp an earlier attempt left on the membership", () => {
-    it("comes off at a setup that rewrites the wiring", async () => {
+    it("comes off at a setup that rewrites the wiring, though that setup reads the same data", async () => {
       const { plain, wider } = patterns();
+      const bobs = await seedBobsDocument();
       const result = await setUp("rewritten", plain);
-      await plantStamp(result);
+      await plantStamp(result, BOB);
 
-      await setUp("rewritten", wider);
+      await setUp("rewritten", wider, bobs);
 
       expect(membershipOf(result)).not.toContain(BOB);
       expect(existenceOf(result)).toEqual([CAROL]);
@@ -264,7 +271,7 @@ describe("cfc-result-wiring-stamp", () => {
     it("comes off at a setup that finds the wiring unchanged", async () => {
       const { plain } = patterns();
       const result = await setUp("restated", plain);
-      await plantStamp(result);
+      await plantStamp(result, BOB);
 
       await setUp("restated", plain);
 
@@ -272,15 +279,16 @@ describe("cfc-result-wiring-stamp", () => {
       expect(existenceOf(result)).toEqual([CAROL]);
     });
 
-    it("stays where the restating setup's own reads carry it", async () => {
+    it("gives way to what the restating setup's own reads carry", async () => {
       const { named } = patterns();
       const bobs = await seedBobsDocument();
       const result = await setUp("supported", named);
-      await plantStamp(result);
+      await plantStamp(result, DAVE);
 
       await setUp("supported", named, bobs);
 
       expect(membershipOf(result)).toContain(BOB);
+      expect(membershipOf(result)).not.toContain(DAVE);
       expect(existenceOf(result)).toEqual([CAROL]);
     });
   });
