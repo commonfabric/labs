@@ -16,6 +16,7 @@ import type { EditorView } from "@codemirror/view";
 import type {
   ApplyOpResolution,
   CellHandle,
+  FieldAnchors,
   OperationFieldSnapshot,
   RuntimeClient,
 } from "@commonfabric/runtime-client";
@@ -63,7 +64,7 @@ describe("CodeMirror operation collaboration", () => {
       cursor: { epoch: 1, version: 1 },
       baselineHash: "baseline",
       materialized: "aYbc",
-      anchors: [],
+      anchors: {},
       operations: [{
         opId: "op:bob-1",
         cursor: { epoch: 1, version: 1 },
@@ -92,7 +93,7 @@ describe("CodeMirror operation collaboration", () => {
       ...remote,
       cursor: { epoch: 1, version: 2 },
       materialized,
-      anchors: [],
+      anchors: {},
       operations: [{
         opId: "op:alice-1",
         cursor: { epoch: 1, version: 2 },
@@ -145,7 +146,7 @@ describe("CodeMirror operation collaboration", () => {
       cursor: { epoch: 1, version: 1 },
       baselineHash: "baseline:old",
       materialized: "new",
-      anchors: [],
+      anchors: {},
       operations: [{
         opId: "op:alice:1",
         cursor: { epoch: 1, version: 1 },
@@ -209,7 +210,7 @@ describe("CodeMirror operation collaboration", () => {
       cursor: { epoch: 1, version: 2 },
       baselineHash: "baseline",
       materialized: "abc",
-      anchors: [],
+      anchors: {},
       operations: [],
     };
     expect(() =>
@@ -230,7 +231,7 @@ describe("CodeMirror operation collaboration", () => {
       reset: true,
       baselineHash: "baseline",
       materialized: "canonical",
-      anchors: [],
+      anchors: {},
       operations: [],
     };
 
@@ -250,7 +251,7 @@ describe("CodeMirror operation collaboration", () => {
       cursor: { epoch: 1, version: 1 },
       baselineHash: "baseline",
       materialized: "abc",
-      anchors: [],
+      anchors: {},
       operations: [{
         opId: "op:already-integrated",
         cursor: { epoch: 1, version: 1 },
@@ -585,19 +586,20 @@ describe("CodeMirror operation collaboration", () => {
 
     expect(errors).toEqual([]);
     expect(controller.active).toBe(true);
+    const field = {
+      space: "did:key:test-space",
+      branch: "",
+      id: "of:editor",
+      scopeKey: "space",
+      path: [],
+    };
     expect(observed).toEqual([
-      null,
+      { confirmedCursor: null, pendingChanges: [], field, anchors: {} },
       {
         confirmedCursor: { epoch: 1, version: 0 },
         pendingChanges: [],
-        field: {
-          space: "did:key:test-space",
-          branch: "",
-          id: "of:editor",
-          scopeKey: "space",
-          path: [],
-        },
-        anchors: [],
+        field,
+        anchors: {},
       },
     ]);
   });
@@ -868,7 +870,7 @@ describe("CodeMirror operation collaboration", () => {
   it("states the installed snapshot's anchors at the confirmed cursor", async () => {
     const initial = {
       ...activeSnapshotAt("abc", 1),
-      anchors: [{ id: "c1", from: 1, to: 3 }],
+      anchors: { "c1:from": 1, "c1:to": 3 },
     };
     const { controller, errors } = controllerHarness({
       initial,
@@ -882,9 +884,10 @@ describe("CodeMirror operation collaboration", () => {
       epoch: 1,
       version: 1,
     });
-    expect(controller.synchronizationSnapshot?.anchors).toEqual([
-      { id: "c1", from: 1, to: 3 },
-    ]);
+    expect(controller.synchronizationSnapshot?.anchors).toEqual({
+      "c1:from": 1,
+      "c1:to": 3,
+    });
   });
 
   it("notifies observers of anchors a snapshot at the unchanged cursor restates", async () => {
@@ -896,27 +899,70 @@ describe("CodeMirror operation collaboration", () => {
       subscribe: (callback) => subscriber = callback,
     });
     await controller.start();
-    const observed: Array<readonly unknown[] | undefined> = [];
+    const observed: Array<FieldAnchors | undefined> = [];
     controller.observeSynchronization((snapshot) =>
       observed.push(snapshot?.anchors)
     );
 
-    subscriber?.({ ...initial, anchors: [{ id: "c1", from: 0, to: 2 }] });
-    subscriber?.({ ...initial, anchors: [{ id: "c1", from: 0, to: 2 }] });
+    subscriber?.({ ...initial, anchors: { "c1:from": 0, "c1:to": 2 } });
+    subscriber?.({ ...initial, anchors: { "c1:from": 0, "c1:to": 2 } });
+    subscriber?.({ ...initial, anchors: { "c1:from": 0, "c1:to": 1 } });
+    subscriber?.({ ...initial, anchors: { "c1:from": 0 } });
 
     expect(errors).toEqual([]);
-    expect(observed).toEqual([[], [{ id: "c1", from: 0, to: 2 }]]);
+    expect(observed).toEqual([
+      {},
+      { "c1:from": 0, "c1:to": 2 },
+      { "c1:from": 0, "c1:to": 1 },
+      { "c1:from": 0 },
+    ]);
+  });
+
+  it("keeps the anchors object it holds while snapshots and apply responses leave the anchors as they are", async () => {
+    // The edit is typed after both anchors, so it moves neither, and every
+    // snapshot states the anchors again in an object of its own.
+
+    let subscriber: ((snapshot: OperationFieldSnapshot) => void) | undefined;
+    const initial = {
+      ...activeSnapshotAt("abc", 1),
+      anchors: { from: 0, to: 1 },
+    };
+    const { controller, view, errors } = controllerHarness({
+      initial,
+      followup: { ...activeSnapshotAt("abcX", 2), anchors: { from: 0, to: 1 } },
+      apply: resolutionFor,
+      subscribe: (callback) => subscriber = callback,
+    });
+    await controller.start();
+    const held = controller.synchronizationSnapshot?.anchors;
+    const observed: Array<FieldAnchors | undefined> = [];
+    controller.observeSynchronization((snapshot) =>
+      observed.push(snapshot?.anchors)
+    );
+
+    subscriber?.({ ...initial, anchors: { from: 0, to: 1 } });
+    view.dispatch({ changes: { from: 3, insert: "X" } });
+    await controller.localDocChanged();
+    subscriber?.({
+      ...activeSnapshotAt("abcX", 2),
+      anchors: { from: 0, to: 1 },
+    });
+
+    expect(errors).toEqual([]);
+    expect(controller.synchronizationSnapshot?.confirmedCursor?.version).toBe(
+      2,
+    );
+    expect(held).toBe(initial.anchors);
+    expect(controller.synchronizationSnapshot?.anchors).toBe(held);
+    expect(observed.every((anchors) => anchors === held)).toBe(true);
   });
 
   it("maps anchors through the operations an apply response integrates", async () => {
     const initial = {
       ...activeSnapshotAt("abc", 1),
-      anchors: [
-        { id: "after", from: 1, to: 3 },
-        { id: "point", from: 0, to: 0 },
-      ],
+      anchors: { start: 0, at: 1, after: 3, beyond: 40 },
     };
-    // The follow-up query answers with the older cursor, which the controller
+    // The follow-up query returns the older cursor, which the controller
     // ignores, so only the response moves the anchors.
     const { controller, view, errors } = controllerHarness({
       initial,
@@ -925,25 +971,29 @@ describe("CodeMirror operation collaboration", () => {
     });
     await controller.start();
 
-    view.dispatch({ changes: { from: 0, insert: "X" } });
+    view.dispatch({ changes: { from: 1, insert: "X" } });
     await controller.localDocChanged();
 
+    // The anchor at the insertion stays before the inserted text, and the
+    // one past the end of the text moves as one at its end.
     expect(errors).toEqual([]);
-    expect(view.state.doc.toString()).toBe("Xabc");
-    expect(controller.synchronizationSnapshot?.confirmedCursor.version).toBe(
+    expect(view.state.doc.toString()).toBe("aXbc");
+    expect(controller.synchronizationSnapshot?.confirmedCursor?.version).toBe(
       2,
     );
-    expect(controller.synchronizationSnapshot?.anchors).toEqual([
-      { id: "after", from: 2, to: 4 },
-      { id: "point", from: 0, to: 0 },
-    ]);
+    expect(controller.synchronizationSnapshot?.anchors).toEqual({
+      start: 0,
+      at: 1,
+      after: 4,
+      beyond: 4,
+    });
   });
 
   it("takes the anchors of a snapshot that integrates operations", async () => {
     let subscriber: ((snapshot: OperationFieldSnapshot) => void) | undefined;
     const initial = {
       ...activeSnapshotAt("abc", 1),
-      anchors: [{ id: "c1", from: 0, to: 1 }],
+      anchors: { "c1:from": 0, "c1:to": 1 },
     };
     const { controller, errors } = controllerHarness({
       initial,
@@ -956,13 +1006,124 @@ describe("CodeMirror operation collaboration", () => {
     subscriber?.({
       ...activeSnapshot("abc!", next),
       operations: next.operations,
-      anchors: [{ id: "c2", from: 3, to: 4 }],
+      anchors: { "c2:from": 3, "c2:to": 4 },
     });
 
     expect(errors).toEqual([]);
-    expect(controller.synchronizationSnapshot?.anchors).toEqual([
-      { id: "c2", from: 3, to: 4 },
+    expect(controller.synchronizationSnapshot?.anchors).toEqual({
+      "c2:from": 3,
+      "c2:to": 4,
+    });
+  });
+
+  it("publishes the anchors of a field with no collaborative edit, with no confirmed cursor", async () => {
+    const { controller, errors } = controllerHarness({
+      initial: { ...inactiveSnapshot("abc"), anchors: { from: 1, to: 3 } },
+      apply: resolutionFor,
+    });
+
+    await controller.start();
+
+    expect(errors).toEqual([]);
+    expect(controller.synchronizationSnapshot).toEqual({
+      confirmedCursor: null,
+      pendingChanges: [],
+      field: {
+        space: "did:key:test-space",
+        branch: "",
+        id: "of:editor",
+        scopeKey: "space",
+        path: [],
+      },
+      anchors: { from: 1, to: 3 },
+    });
+  });
+
+  it("notifies observers of anchors a snapshot of a field with no collaborative edit changes", async () => {
+    let subscriber: ((snapshot: OperationFieldSnapshot) => void) | undefined;
+    const initial = inactiveSnapshot("abc");
+    const { controller, errors } = controllerHarness({
+      initial,
+      apply: resolutionFor,
+      subscribe: (callback) => subscriber = callback,
+    });
+    await controller.start();
+    const observed: Array<CodeMirrorSynchronizationSnapshot | null> = [];
+    controller.observeSynchronization((snapshot) => observed.push(snapshot));
+
+    subscriber?.({ ...initial, anchors: { from: 1, to: 3 } });
+    subscriber?.({ ...initial, anchors: { from: 1, to: 3 } });
+    subscriber?.({ ...initial, anchors: {} });
+
+    expect(errors).toEqual([]);
+    expect(observed.map((snapshot) => snapshot?.confirmedCursor)).toEqual([
+      null,
+      null,
+      null,
     ]);
+    expect(observed.map((snapshot) => snapshot?.anchors)).toEqual([
+      {},
+      { from: 1, to: 3 },
+      {},
+    ]);
+  });
+
+  it("keeps publishing a field's anchors, with the pending edit, while the apply that activates the field is in flight", async () => {
+    let subscriber: ((snapshot: OperationFieldSnapshot) => void) | undefined;
+    const applied = Promise.withResolvers<ApplyOpResolution>();
+    const initial = {
+      ...inactiveSnapshot("abc"),
+      anchors: { from: 1, to: 3 },
+    };
+    const { controller, view, errors } = controllerHarness({
+      initial,
+      followup: { ...activeSnapshotAt("Xabc", 1), anchors: { from: 2, to: 3 } },
+      apply: () => applied.promise,
+      subscribe: (callback) => subscriber = callback,
+    });
+    await controller.start();
+    const observed: Array<CodeMirrorSynchronizationSnapshot | null> = [];
+    controller.observeSynchronization((snapshot) => observed.push(snapshot));
+
+    view.dispatch({ changes: { from: 0, insert: "X" } });
+    const flushed = controller.localDocChanged();
+    // A write to the anchors that Memory delivers before it activates the
+    // field, stated against the value the pending edit is made over.
+    subscriber?.({ ...initial, anchors: { from: 1, to: 2 } });
+    applied.resolve(acceptedResolution("abc", 0, "X"));
+    await flushed;
+
+    expect(errors).toEqual([]);
+    expect(
+      observed.map((snapshot) =>
+        snapshot === null ? null : [
+          snapshot.confirmedCursor,
+          snapshot.pendingChanges.length,
+          snapshot.anchors,
+        ]
+      ),
+    ).toEqual([
+      [null, 0, { from: 1, to: 3 }],
+      [null, 1, { from: 1, to: 3 }],
+      [null, 1, { from: 1, to: 2 }],
+      [{ epoch: 1, version: 1 }, 0, { from: 2, to: 3 }],
+    ]);
+  });
+
+  it("publishes no confirmed cursor, and the snapshot's anchors, once another client releases the field", async () => {
+    let subscriber: ((snapshot: OperationFieldSnapshot) => void) | undefined;
+    const { controller, errors } = controllerHarness({
+      initial: { ...activeSnapshotAt("abc", 1), anchors: { from: 1, to: 3 } },
+      apply: resolutionFor,
+      subscribe: (callback) => subscriber = callback,
+    });
+    await controller.start();
+
+    subscriber?.({ ...inactiveSnapshot("abc"), anchors: { kept: 2 } });
+
+    expect(errors).toEqual([]);
+    expect(controller.synchronizationSnapshot?.confirmedCursor).toBeNull();
+    expect(controller.synchronizationSnapshot?.anchors).toEqual({ kept: 2 });
   });
 
   it("rejects a divergent snapshot at the current cursor", async () => {
@@ -1253,7 +1414,7 @@ describe("CodeMirror operation collaboration", () => {
       await controller.start();
       let late: Promise<void> | undefined;
       controller.observeSynchronization((snapshot) => {
-        if (late !== undefined || snapshot?.confirmedCursor.version !== 1) {
+        if (late !== undefined || snapshot?.confirmedCursor?.version !== 1) {
           return;
         }
         late = Promise.resolve().then(async () => {
@@ -1295,7 +1456,7 @@ describe("CodeMirror operation collaboration", () => {
       await controller.start();
       let late: Promise<void> | undefined;
       controller.observeSynchronization((snapshot) => {
-        if (late !== undefined || snapshot?.confirmedCursor.version !== 1) {
+        if (late !== undefined || snapshot?.confirmedCursor?.version !== 1) {
           return;
         }
         late = Promise.resolve().then(async () => {
@@ -1434,7 +1595,7 @@ function inactiveSnapshot(materialized: string): OperationFieldSnapshot {
     cursor: null,
     baselineHash: `baseline:${materialized}`,
     materialized,
-    anchors: [],
+    anchors: {},
     operations: [],
   };
 }
@@ -1505,7 +1666,7 @@ function activeSnapshot(
     cursor: resolution.to,
     baselineHash: "baseline:abc",
     materialized,
-    anchors: [],
+    anchors: {},
     operations: [],
   };
 }
@@ -1526,7 +1687,7 @@ function activeSnapshotAt(
     cursor: { epoch: 1, version },
     baselineHash: "baseline:abc",
     materialized,
-    anchors: [],
+    anchors: {},
     operations: [],
   };
 }

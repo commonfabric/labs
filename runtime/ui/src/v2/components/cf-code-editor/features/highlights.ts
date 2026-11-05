@@ -1,3 +1,12 @@
+/**
+ * Draws a host's highlights over the anchors of a collaborative field, and
+ * reports the main selection as a range of the text Memory has confirmed. A
+ * highlight is the text from one anchor to another. Memory states where each
+ * anchor is, and between its statements the editor carries every anchor
+ * through its own edits by Memory's rule, so nothing here chooses an anchor's
+ * position. `../docs/highlights.md` describes the whole arrangement.
+ */
+
 import {
   type EditorState,
   type Extension,
@@ -5,13 +14,30 @@ import {
   StateField,
 } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
-import { mapAnchorRange, type OpCursor } from "@commonfabric/runtime-client";
-import type { CodeMirrorSynchronizationSnapshot } from "../codemirror-collaboration.ts";
+import type { FieldAnchors } from "@commonfabric/runtime-client";
+
+import {
+  type CodeMirrorSynchronizationSnapshot,
+  mapFieldAnchors,
+} from "../codemirror-collaboration.ts";
 import { composePendingChangeDesc } from "../codemirror-presence.ts";
 
-/** A field anchor the host asks the editor to draw, by the anchor's id. */
+/**
+ * A highlight the host asks the editor to draw: the text from one anchor of
+ * the field to another.
+ */
 export interface EditorHighlight {
+  /**
+   * Identifies the highlight to the host. The mark carries it as
+   * `data-highlight-id`, and `cf-highlight-click` reports it.
+   */
   id: string;
+
+  /** Id of the anchor the highlight starts at. */
+  fromAnchor: string;
+
+  /** Id of the anchor the highlight ends at, exclusive. */
+  toAnchor: string;
 
   /**
    * Adds the class `cm-highlight-<kind>` to the mark. Only lowercase letters,
@@ -20,46 +46,57 @@ export interface EditorHighlight {
   kind?: string;
 }
 
-/** An anchor's range in the editor's own document. */
-export interface HighlightRange {
-  id: string;
-  from: number;
-  to: number;
-}
-
+/** What {@link highlightField} holds. */
 type HighlightState = {
-  ranges: readonly HighlightRange[];
+  /** The field's anchors, as offsets in the editor's own document. */
+  anchors: FieldAnchors;
+
+  /** The highlights the host asks for. */
   highlights: readonly EditorHighlight[];
+
+  /** The marks `highlights` draw over `anchors`. */
   decorations: DecorationSet;
 };
 
-/** Restates every anchor's range against the current document. */
-export const setHighlightRangesEffect = StateEffect.define<
-  readonly HighlightRange[]
->();
+/** Restates every anchor's offset against the current document. */
+export const setHighlightAnchorsEffect = StateEffect.define<FieldAnchors>();
 
-/** Replaces the set of anchors the host asks the editor to draw. */
+/** Replaces the highlights the host asks the editor to draw. */
 export const setHighlightsEffect = StateEffect.define<
   readonly EditorHighlight[]
 >();
 
+/** What a highlight's `kind` holds when it can be part of a class name. */
 const KIND = /^[a-z0-9-]+$/;
 
+/**
+ * Helper for `decorationsOf()`, which returns the offset `anchors` holds
+ * under `id`, brought within a document of `length` code units, or
+ * `undefined` when it holds no such anchor.
+ */
+const offsetOf = (
+  anchors: FieldAnchors,
+  id: string,
+  length: number,
+): number | undefined =>
+  Object.hasOwn(anchors, id) ? Math.min(anchors[id], length) : undefined;
+
+/**
+ * Helper for {@link highlightField}, which builds the marks `highlights` draw
+ * in a document of `length` code units. A highlight draws nothing when
+ * `anchors` lacks either of its anchors, or when its end is not after its
+ * start.
+ */
 const decorationsOf = (
-  ranges: readonly HighlightRange[],
+  anchors: FieldAnchors,
   highlights: readonly EditorHighlight[],
   length: number,
 ): DecorationSet => {
-  const byId = new Map(ranges.map((range) => [range.id, range]));
   const marks = [];
-  for (const { id, kind } of highlights) {
-    const range = byId.get(id);
-    if (
-      range === undefined || range.from >= range.to || range.from < 0 ||
-      range.to > length
-    ) {
-      continue;
-    }
+  for (const { id, fromAnchor, toAnchor, kind } of highlights) {
+    const from = offsetOf(anchors, fromAnchor, length);
+    const to = offsetOf(anchors, toAnchor, length);
+    if (from === undefined || to === undefined || to <= from) continue;
     const kindClass = kind !== undefined && KIND.test(kind)
       ? ` cm-highlight-${kind}`
       : "";
@@ -67,40 +104,42 @@ const decorationsOf = (
       Decoration.mark({
         class: `cm-highlight${kindClass}`,
         attributes: { "data-highlight-id": id },
-      }).range(range.from, range.to),
+      }).range(from, to),
     );
   }
   return Decoration.set(marks, true);
 };
 
 /**
- * Holds every anchor's range in the editor's document, follows each edit with
- * Memory's anchor rule until the host restates the ranges, and draws the
- * anchors the host names. An empty range is held and drawn as nothing.
+ * Holds every anchor's offset in the editor's document, moves each through
+ * every edit by Memory's rule until the host restates them, and draws the
+ * host's highlights between them. The two anchors of a highlight move
+ * independently, so text inserted at its start joins it and text inserted at
+ * its end does not.
  */
 export const highlightField = StateField.define<HighlightState>({
   create: () => ({
-    ranges: [],
+    anchors: {},
     highlights: [],
     decorations: Decoration.none,
   }),
   update(value, transaction) {
-    let ranges = transaction.docChanged
-      ? value.ranges.map((range) => mapAnchorRange(range, transaction.changes))
-      : value.ranges;
+    let anchors = transaction.docChanged
+      ? mapFieldAnchors(value.anchors, transaction.changes)
+      : value.anchors;
     let highlights = value.highlights;
     for (const effect of transaction.effects) {
-      if (effect.is(setHighlightRangesEffect)) ranges = effect.value;
+      if (effect.is(setHighlightAnchorsEffect)) anchors = effect.value;
       if (effect.is(setHighlightsEffect)) highlights = effect.value;
     }
-    if (ranges === value.ranges && highlights === value.highlights) {
+    if (anchors === value.anchors && highlights === value.highlights) {
       return value;
     }
     return {
-      ranges,
+      anchors,
       highlights,
       decorations: decorationsOf(
-        ranges,
+        anchors,
         highlights,
         transaction.newDoc.length,
       ),
@@ -110,11 +149,9 @@ export const highlightField = StateField.define<HighlightState>({
     EditorView.decorations.from(field, (value) => value.decorations),
 });
 
-/** The anchor ranges the editor holds, in its own document. */
-export const highlightRanges = (
-  state: EditorState,
-): readonly HighlightRange[] =>
-  state.field(highlightField, false)?.ranges ?? [];
+/** The anchors the editor holds, as offsets in its own document. */
+export const highlightAnchors = (state: EditorState): FieldAnchors =>
+  state.field(highlightField, false)?.anchors ?? {};
 
 const highlightTheme = EditorView.baseTheme({
   ".cm-highlight": {
@@ -131,19 +168,20 @@ const highlightTheme = EditorView.baseTheme({
 });
 
 /**
- * The id of the innermost highlight the editor draws over `pos`: the shortest
- * drawn range that holds it, the earlier-starting of two the same length.
+ * The id of the innermost highlight the editor draws over the character at
+ * offset `at`: the shortest drawn range that holds it, the earlier-starting
+ * of two the same length.
  */
 export function highlightAt(
   state: EditorState,
-  pos: number,
+  at: number,
 ): string | undefined {
   let found: { id: string; from: number; to: number } | undefined;
   state.field(highlightField, false)?.decorations.between(
-    pos,
-    pos,
+    at,
+    at,
     (from, to, value) => {
-      if (from > pos || to <= pos) return;
+      if (from > at || to <= at) return;
       if (found === undefined || to - from < found.to - found.from) {
         found = { id: value.spec.attributes["data-highlight-id"], from, to };
       }
@@ -153,19 +191,95 @@ export function highlightAt(
 }
 
 /**
+ * What {@link characterAt} reads from an editor view, each member as
+ * `EditorView` declares it.
+ */
+export interface CharacterGeometry {
+  /** The editor's state, for its document. */
+  readonly state: EditorState;
+
+  /** Top of the document's first line, in screen coordinates. */
+  readonly documentTop: number;
+
+  /**
+   * Resolves a point in screen coordinates to the nearest position and the
+   * side of it the point is on, or to `null` for a point over text the editor
+   * has not drawn.
+   */
+  posAndSideAtCoords(
+    point: { x: number; y: number },
+  ): { pos: number; assoc: -1 | 1 } | null;
+
+  /**
+   * Returns the vertical extent of the line holding `pos`, measured from
+   * `documentTop`.
+   */
+  lineBlockAt(pos: number): { readonly top: number; readonly bottom: number };
+
+  /**
+   * Returns the horizontal extent, in screen coordinates, of the character
+   * after `pos`, or `null` when that character has no box of its own.
+   */
+  coordsForChar(
+    pos: number,
+  ): { readonly left: number; readonly right: number } | null;
+}
+
+/**
+ * The offset of the character drawn under `point`, in screen coordinates, or
+ * `undefined` when the point is on none.
+ *
+ * CodeMirror resolves a point to the nearest position and the side of it the
+ * point is on: the position after a character for a point on that
+ * character's right half, the position before it for one on its left half.
+ * It resolves a point beside the text the same way, past a line's end or
+ * outside the document's lines, so the character it names is checked against
+ * the point: the point lies within the character's line vertically and
+ * within the character's box horizontally. A character with no box of its
+ * own, text a widget stands in for, is taken as under the point; a line
+ * break, which draws nothing, is not.
+ */
+export function characterAt(
+  view: CharacterGeometry,
+  point: { x: number; y: number },
+): number | undefined {
+  const found = view.posAndSideAtCoords(point);
+  if (found === null) return undefined;
+  const at = found.assoc < 0 ? found.pos - 1 : found.pos;
+  if (at < 0 || at >= view.state.doc.length) return undefined;
+  const line = view.lineBlockAt(at);
+  if (
+    point.y < view.documentTop + line.top ||
+    point.y > view.documentTop + line.bottom
+  ) {
+    return undefined;
+  }
+  const box = view.coordsForChar(at);
+  if (box === null) {
+    return view.state.sliceDoc(at, at + 1) === "\n" ? undefined : at;
+  }
+  return point.x >= box.left && point.x <= box.right ? at : undefined;
+}
+
+/**
  * Draws the host's highlights and calls `onClick` with the id of the
- * innermost highlight under a primary-button press, leaving the press to
- * place the caret as usual.
+ * innermost highlight drawn over the character under a click: a press and
+ * release of the primary button that leaves nothing selected. A press that
+ * drags out a selection, or extends one, is a selection and not a click,
+ * wherever it starts. The press itself is left to place the caret as usual,
+ * and the click is read once the editor has made of it what it will.
  */
 export function highlights(onClick: (id: string) => void): Extension {
   return [
     highlightField,
     highlightTheme,
     EditorView.domEventHandlers({
-      mousedown(event, view) {
-        if (event.button !== 0) return false;
-        const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-        const id = pos === null ? undefined : highlightAt(view.state, pos);
+      click(event, view) {
+        if (event.button !== 0 || !view.state.selection.main.empty) {
+          return false;
+        }
+        const at = characterAt(view, { x: event.clientX, y: event.clientY });
+        const id = at === undefined ? undefined : highlightAt(view.state, at);
         if (id !== undefined) onClick(id);
         return false;
       },
@@ -175,16 +289,19 @@ export function highlights(onClick: (id: string) => void): Extension {
 
 /**
  * The detail of `cf-selection-change`: the main selection as a range of the
- * text at `base`, the field version Memory has confirmed, with the text it
- * covers. `base` is `null` when the editor has no confirmed version, outside
- * collaboration or before the field's first collaborative edit; the range is
- * then stated against the editor's own document.
+ * text Memory has confirmed to this editor, with the text that range holds.
+ * For a field with no collaborative edit that text is the field's stored
+ * value. Outside collaboration the range is of the editor's own document.
  */
 export interface SelectionReport {
+  /** Start of the range, in UTF-16 code units. */
   from: number;
+
+  /** End of the range, exclusive. */
   to: number;
+
+  /** The text the range holds. */
   text: string;
-  base: OpCursor | null;
 }
 
 /** The report of an empty selection, or of one no confirmed range states. */
@@ -192,37 +309,13 @@ export const NOTHING_SELECTED: Readonly<SelectionReport> = Object.freeze({
   from: 0,
   to: 0,
   text: "",
-  base: null,
 });
 
-/**
- * How many versions a reported selection's `base` may fall behind the
- * confirmed version before the editor restates the selection. Memory keeps at
- * least its operation checkpoint interval of history, 100 operations by
- * default, and a base it no longer holds refuses the anchor added against it.
- */
-export const RESTATE_AFTER_VERSIONS = 32;
-
-/** Whether `a` and `b` report the same range at the same version. */
+/** Whether `a` and `b` report the same range holding the same text. */
 export const sameSelection = (
   a: SelectionReport,
   b: SelectionReport,
-): boolean =>
-  a.from === b.from && a.to === b.to && a.text === b.text &&
-  a.base?.epoch === b.base?.epoch && a.base?.version === b.base?.version;
-
-/**
- * Whether `report`, a selection reported before `confirmed` was the confirmed
- * version, should be stated again against it: it names no version, as one
- * made before collaboration began does, or a version far enough behind.
- */
-export const needsRestating = (
-  report: SelectionReport,
-  confirmed: OpCursor,
-): boolean =>
-  report.from !== report.to &&
-  (report.base === null || report.base.epoch !== confirmed.epoch ||
-    confirmed.version - report.base.version >= RESTATE_AFTER_VERSIONS);
+): boolean => a.from === b.from && a.to === b.to && a.text === b.text;
 
 /**
  * Restates the main selection against the confirmed document. A selection
@@ -236,12 +329,9 @@ export function selectionReport(
   const { from, to } = state.selection.main;
   if (from === to) return NOTHING_SELECTED;
   const text = state.sliceDoc(from, to);
-  if (synchronization === null) {
-    return { from, to, text, base: null };
-  }
-  const base = { ...synchronization.confirmedCursor };
+  if (synchronization === null) return { from, to, text };
   const pending = composePendingChangeDesc(synchronization.pendingChanges);
-  if (pending === undefined) return { from, to, text, base };
+  if (pending === undefined) return { from, to, text };
   if (pending.newLength !== state.doc.length) return NOTHING_SELECTED;
   const confirmedFrom = pending.invertedDesc.mapPos(from, 1);
   const confirmedTo = pending.invertedDesc.mapPos(to, -1);
@@ -252,7 +342,7 @@ export function selectionReport(
   });
   return touched || confirmedFrom >= confirmedTo
     ? NOTHING_SELECTED
-    : { from: confirmedFrom, to: confirmedTo, text, base };
+    : { from: confirmedFrom, to: confirmedTo, text };
 }
 
 /**
@@ -260,20 +350,12 @@ export function selectionReport(
  * over the edits Memory has not yet confirmed, or returns `undefined` when the
  * pending edits do not end at the editor's document.
  */
-export function localAnchorRanges(
+export function localAnchors(
   state: EditorState,
   synchronization: CodeMirrorSynchronizationSnapshot,
-): HighlightRange[] | undefined {
+): FieldAnchors | undefined {
   const pending = composePendingChangeDesc(synchronization.pendingChanges);
-  if (pending === undefined) {
-    return synchronization.anchors.map(({ id, from, to }) => ({
-      id,
-      from,
-      to,
-    }));
-  }
+  if (pending === undefined) return synchronization.anchors;
   if (pending.newLength !== state.doc.length) return undefined;
-  return synchronization.anchors.map(({ id, from, to }) =>
-    mapAnchorRange({ id, from, to }, pending)
-  );
+  return mapFieldAnchors(synchronization.anchors, pending);
 }

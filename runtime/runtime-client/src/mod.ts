@@ -16,7 +16,7 @@ export * from "./vnode-types.ts";
 export * from "@commonfabric/runner/shared";
 export type {
   ApplyOpResolution,
-  FieldAnchor,
+  FieldAnchors,
   IntegratedOperation,
   OpCursor,
   OperationFieldSnapshot,
@@ -26,5 +26,5 @@ export type {
 export type { PresenceEvent } from "@commonfabric/memory/v2/client";
 export {
   CODEMIRROR_CHANGESET_CODEC,
-  mapAnchorRange,
+  mapAnchor,
 } from "@commonfabric/memory/v2/operation-codec";

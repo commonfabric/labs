@@ -155,6 +155,21 @@ const marksOnly = (probe: ProbeApi, text: string): boolean => {
   return marks.length === 1 && marks[0].textContent === text;
 };
 
+/**
+ * The range between the two anchors of the one comment `anchors` holds, or
+ * an empty tuple where it holds neither.
+ */
+const anchoredRange = (
+  anchors: Record<string, number> | undefined,
+): [number, number] | [] => {
+  const ids = Object.keys(anchors ?? {});
+  const from = ids.find((id) => id.endsWith(":from"));
+  const to = ids.find((id) => id.endsWith(":to"));
+  return anchors === undefined || from === undefined || to === undefined
+    ? []
+    : [anchors[from], anchors[to]];
+};
+
 /** Whether the comments panel shows `text`. */
 const commentShown = (probe: ProbeApi, text: string): boolean =>
   probe.collect("#shared-note-comments").some((panel) =>
@@ -416,8 +431,9 @@ describe("shared-note", () => {
       "Which café?",
     );
 
-    // Grace types ahead of "Café" while Ada's composer is open, so Ada's
-    // selection was reported against a version the note has since left.
+    // Grace types ahead of "Café" while Ada's composer is open. The composer
+    // anchored the selection when it opened, so Memory moves the anchors
+    // through Grace's edit.
     await editorState(gracePage, { anchor: 0, head: 0 });
     await gracePage.keyboard.type("G0 ");
     await waitForCondition(
@@ -435,7 +451,7 @@ describe("shared-note", () => {
     );
 
     // Both type ahead of it at once; the mark stays on "Café" in both
-    // editors, and Memory's anchor covers it in the stored text.
+    // editors, and Memory's anchors hold it in the stored text.
     await Promise.all(
       pages.map((page) => editorState(page, { anchor: 0, head: 0 })),
     );
@@ -446,20 +462,20 @@ describe("shared-note", () => {
     const result = controller.getResult(piece.getCell());
     const settled = await waitForCellValue<{
       content: string;
-      commentRanges?: { anchors: { from: number; to: number }[] };
+      commentAnchors?: Record<string, number>;
     }>(
       controller.runtime,
       result,
       (value) => {
-        const anchor = value?.commentRanges?.anchors[0];
+        const [from, to] = anchoredRange(value?.commentAnchors);
         return value?.content.includes("①") === true &&
           value.content.includes("②") &&
-          value.content.includes("G0 ") && anchor !== undefined &&
-          value.content.slice(anchor.from, anchor.to) === "Café";
+          value.content.includes("G0 ") && from !== undefined &&
+          value.content.slice(from, to) === "Café";
       },
-      { stuckLabel: "the comment's anchor follows both edits" },
+      { stuckLabel: "the comment's anchors follow both edits" },
     );
-    expect(settled.commentRanges?.anchors).toHaveLength(1);
+    expect(Object.keys(settled.commentAnchors ?? {})).toHaveLength(2);
     await Promise.all(
       pages.map((page) =>
         waitForCondition(page, editorEquals, { args: [settled.content] })

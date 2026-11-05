@@ -1,7 +1,8 @@
 /**
- * `Cell.addAnchor()`, `Cell.removeAnchor()` and the `anchorsOf()` builtin,
- * against a real Memory engine: what the commit carries to the store, and the
- * anchors document Memory writes from it.
+ * A collaborative field's anchors document and the `anchorsOf()` builtin,
+ * against a real Memory engine: a transaction writes the anchors as it writes
+ * any cell, its commit lands only while the field and the anchors are what it
+ * read, and Memory moves the anchors through every edit.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -22,9 +23,7 @@ import { Runtime } from "../src/runtime.ts";
 import {
   hasOperationStorageCapability,
   type IExtendedStorageTransaction,
-  type NativeStorageCommit,
 } from "../src/storage/interface.ts";
-import { getDirectTransactionNativeCommit } from "../src/storage/transaction-inspection.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { toURI } from "../src/uri-utils.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
@@ -110,10 +109,6 @@ async function readBody(server: MemoryV2Server.Server): Promise<string> {
   }
 }
 
-/** The `apply-op`s `native` carries, as the store receives them. */
-const applyOpsOf = (native: NativeStorageCommit | undefined) =>
-  native?.applyOps ?? [];
-
 describe("collaborative-field-anchors", () => {
   let server: MemoryV2Server.Server;
   let storage: EmulatedStorageManager;
@@ -183,131 +178,73 @@ describe("collaborative-field-anchors", () => {
     await arrived;
   };
 
-  /** Commits `edit`'s writes to `note` in one transaction. */
+  /** The anchors document of `note`'s `body`, as a cell of this session. */
+  const anchorsOf = (
+    note: Cell<Note>,
+    tx?: IExtendedStorageTransaction,
+  ): Cell<FieldAnchors | undefined> =>
+    rt.getCellFromLink<FieldAnchors | undefined>(
+      { space, id: anchorsDocIdOf(note), scope: "space", path: [] },
+      undefined,
+      tx,
+    );
+
+  /** Commits what `edit` does to `note`'s body and anchors in one transaction. */
   const commit = async (
     note: Cell<Note>,
-    edit: (body: Cell<string>) => void,
+    edit: (
+      body: Cell<string>,
+      anchors: Cell<FieldAnchors | undefined>,
+    ) => void,
   ) => {
     const tx = rt.edit();
-    edit(note.withTx(tx).key("body"));
+    edit(note.withTx(tx).key("body"), anchorsOf(note, tx));
     const committed = await tx.commit({ holdSyncedUntilCovered: false })
       .verdict;
     await rt.storageManager.synced();
     return committed;
   };
 
-  describe("without a base", () => {
-    it("sends an anchor alone on an `apply-op` with an empty payload and the hash of the value read", async () => {
+  /** Anchors both ends of the `b` of `abc`, as a highlight of it would. */
+  const highlightB = (note: Cell<Note>) =>
+    commit(note, (_body, anchors) => anchors.set({ from: 1, to: 2 }));
+
+  describe("a write of the anchors document", () => {
+    it("stores the anchors on a field no editor has opened", async () => {
       const note = await seed();
-      await openAsEditor(note);
-
-      const tx = rt.edit();
-      note.withTx(tx).key("body").addAnchor("b", { from: 1, to: 2 });
-      const native = getDirectTransactionNativeCommit(tx, space);
-
-      expect(native?.operations).toEqual([]);
-      expect(applyOpsOf(native)).toEqual([expect.objectContaining({
-        op: "apply-op",
-        path: ["body"],
-        baselineHash: operationBaselineHash("abc"),
-        payload: { updates: [] },
-        anchors: { add: [{ id: "b", from: 1, to: 2 }] },
-      })]);
-      tx.abort();
-    });
-
-    it("commits an anchor alone, which Memory stores and writes to the anchors document", async () => {
-      const note = await seed();
-      await openAsEditor(note);
 
       const committed = await commit(
         note,
-        (body) => body.addAnchor("b", { from: 1, to: 2 }),
+        (_body, anchors) => anchors.set({ a: 1 }),
       );
+
+      expect(committed.error).toBeUndefined();
+      expect(await readAnchors(server, note)).toEqual({ a: 1 });
+    });
+
+    it("stores the anchors on a field an editor has opened", async () => {
+      const note = await seed();
+      await openAsEditor(note);
+
+      const committed = await highlightB(note);
 
       expect(committed.error).toBeUndefined();
       expect(await readBody(server)).toBe("abc");
-      expect(await readAnchors(server, note)).toEqual({
-        epoch: 1,
-        version: 1,
-        anchors: [{ id: "b", from: 1, to: 2 }],
-      });
+      expect(await readAnchors(server, note)).toEqual({ from: 1, to: 2 });
     });
 
-    it("activates an inactive field to anchor it", async () => {
+    it("replaces the anchors the document held", async () => {
       const note = await seed();
+      await openAsEditor(note);
+      await highlightB(note);
 
       const committed = await commit(
         note,
-        (body) => body.addAnchor("a", { from: 0, to: 1 }),
+        (_body, anchors) => anchors.set({ from: anchors.get()!.from }),
       );
 
       expect(committed.error).toBeUndefined();
-      expect(await readAnchors(server, note)).toEqual({
-        epoch: 1,
-        version: 0,
-        anchors: [{ id: "a", from: 0, to: 1 }],
-      });
-    });
-
-    it("carries an anchor added after text changes on their `apply-op`, stated against the text they leave", async () => {
-      const note = await seed();
-      await openAsEditor(note);
-
-      const tx = rt.edit();
-      const body = note.withTx(tx).key("body");
-      body.applyChanges({ from: 3, insert: "d" });
-      body.addAnchor("cd", { from: 2, to: 4 });
-      const ops = applyOpsOf(getDirectTransactionNativeCommit(tx, space));
-
-      expect(ops).toHaveLength(1);
-      expect(ops[0]).toMatchObject({
-        baselineHash: operationBaselineHash("abc"),
-        anchors: { add: [{ id: "cd", from: 2, to: 4 }] },
-      });
-      expect(ops[0].payload).not.toEqual({ updates: [] });
-      const committed = await tx.commit({ holdSyncedUntilCovered: false })
-        .verdict;
-      await rt.storageManager.synced();
-
-      expect(committed.error).toBeUndefined();
-      expect(await readBody(server)).toBe("abcd");
-      expect(await readAnchors(server, note)).toEqual({
-        epoch: 1,
-        version: 2,
-        anchors: [{ id: "cd", from: 2, to: 4 }],
-      });
-    });
-
-    it("sends an anchor added before text changes on an `apply-op` ahead of theirs, so that Memory moves it through them", async () => {
-      const note = await seed();
-      await openAsEditor(note);
-
-      const tx = rt.edit();
-      const body = note.withTx(tx).key("body");
-      body.addAnchor("bc", { from: 1, to: 3 });
-      body.applyChanges({ from: 0, insert: "> " });
-      const ops = applyOpsOf(getDirectTransactionNativeCommit(tx, space));
-
-      expect(
-        ops.map(({ baselineHash, anchors }) => ({ baselineHash, anchors })),
-      )
-        .toEqual([
-          {
-            baselineHash: operationBaselineHash("abc"),
-            anchors: { add: [{ id: "bc", from: 1, to: 3 }] },
-          },
-          { baselineHash: operationBaselineHash("abc"), anchors: undefined },
-        ]);
-      const committed = await tx.commit({ holdSyncedUntilCovered: false })
-        .verdict;
-      await rt.storageManager.synced();
-
-      expect(committed.error).toBeUndefined();
-      expect(await readBody(server)).toBe("> abc");
-      expect(await readAnchors(server, note)).toMatchObject({
-        anchors: [{ id: "bc", from: 3, to: 5 }],
-      });
+      expect(await readAnchors(server, note)).toEqual({ from: 1 });
     });
 
     it("refuses the commit when the field moved after the transaction read it", async () => {
@@ -315,508 +252,162 @@ describe("collaborative-field-anchors", () => {
       await openAsEditor(note);
 
       const tx = rt.edit();
-      note.withTx(tx).key("body").addAnchor("b", { from: 1, to: 2 });
-      await type(note, "editor:2", { epoch: 1, version: 1 }, [3, [0, "d"]]);
+      expect(note.withTx(tx).key("body").get()).toBe("abc");
+      anchorsOf(note, tx).set({ c: 2 });
+      await type(note, "editor:2", { epoch: 1, version: 1 }, [[0, "x"], 3]);
       const committed = await tx.commit({ holdSyncedUntilCovered: false })
         .verdict;
 
-      expect(committed.error).toBeDefined();
+      expect(committed.error?.name).toBe("ConflictError");
       expect(await readAnchors(server, note)).toBeUndefined();
     });
-  });
 
-  describe("with a base", () => {
-    it("sends the anchor on an `apply-op` naming the base, with an empty payload and no hash", async () => {
+    it("refuses the commit when the anchors moved after the transaction read them", async () => {
       const note = await seed();
       await openAsEditor(note);
+      await highlightB(note);
 
       const tx = rt.edit();
-      note.withTx(tx).key("body").addAnchor("a", { from: 0, to: 1 }, {
-        base: { epoch: 1, version: 0 },
-      });
-      const ops = applyOpsOf(getDirectTransactionNativeCommit(tx, space));
+      const anchors = anchorsOf(note, tx);
+      expect(anchors.get()).toEqual({ from: 1, to: 2 });
+      anchors.key("end").set(3);
+      // An edit ahead of the anchors moves both, which rewrites the document
+      // this transaction read.
+      await type(note, "editor:2", { epoch: 1, version: 1 }, [[0, "x"], 3]);
+      const committed = await tx.commit({ holdSyncedUntilCovered: false })
+        .verdict;
 
-      expect(ops).toEqual([expect.objectContaining({
-        base: { epoch: 1, version: 0 },
-        payload: { updates: [] },
-        anchors: { add: [{ id: "a", from: 0, to: 1 }] },
-      })]);
-      expect(Object.hasOwn(ops[0], "baselineHash")).toBe(false);
-      tx.abort();
+      expect(committed.error?.name).toBe("ConflictError");
+      expect(await readAnchors(server, note)).toEqual({ from: 2, to: 3 });
     });
 
-    it("commits a range stated at an older version, which Memory maps over the edits since", async () => {
-      // `c` is 1..2 in `ac`, at version 0; the editor's `b` moves it to 2..3.
-
+    it("refuses a document that holds a range where an offset belongs", async () => {
       const note = await seed();
-      await openAsEditor(note);
 
       const committed = await commit(
         note,
-        (body) =>
-          body.addAnchor("c", { from: 1, to: 2 }, {
-            base: { epoch: 1, version: 0 },
-          }),
+        (_body, anchors) => anchors.setRawUntyped({ a: { from: 0, to: 1 } }),
       );
 
-      expect(committed.error).toBeUndefined();
-      expect(await readAnchors(server, note)).toMatchObject({
-        anchors: [{ id: "c", from: 2, to: 3 }],
-      });
-    });
-
-    it("lands although the field moved after the transaction read it", async () => {
-      const note = await seed();
-      await openAsEditor(note);
-
-      const tx = rt.edit();
-      note.withTx(tx).key("body").addAnchor("b", { from: 1, to: 2 }, {
-        base: { epoch: 1, version: 1 },
-      });
-      await type(note, "editor:2", { epoch: 1, version: 1 }, [[0, "> "], 3]);
-      const committed = await tx.commit({ holdSyncedUntilCovered: false })
-        .verdict;
-      await rt.storageManager.synced();
-
-      expect(committed.error).toBeUndefined();
-      expect(await readAnchors(server, note)).toMatchObject({
-        anchors: [{ id: "b", from: 3, to: 4 }],
-      });
-    });
-
-    it("refuses the commit when another field of the document the transaction read moved", async () => {
-      // Only the reads incidental to the anchored field leave the conflict
-      // set; the transaction's read of the title stays a precondition.
-
-      const note = await seed();
-      await openAsEditor(note);
-      const otherStorage = EmulatedStorageManager.connectTo(server, {
-        as: signer,
-      });
-      const other = new Runtime({
-        apiUrl: new URL(import.meta.url),
-        storageManager: otherStorage,
-      });
-      try {
-        const tx = rt.edit();
-        expect(note.withTx(tx).key("title").get()).toBe("Notes");
-        note.withTx(tx).key("body").addAnchor("b", { from: 1, to: 2 }, {
-          base: { epoch: 1, version: 1 },
-        });
-        await other.getCell<Note>(space, CAUSE, noteSchema).sync();
-        const retitle = other.edit();
-        other.getCell<Note>(space, CAUSE, noteSchema, retitle).key("title")
-          .set("Agenda");
-        expect((await retitle.commit().verdict).error).toBeUndefined();
-        const committed = await tx.commit({ holdSyncedUntilCovered: false })
-          .verdict;
-
-        expect(committed.error?.name).toBe("ConflictError");
-        expect(await readAnchors(server, note)).toBeUndefined();
-      } finally {
-        await other.dispose();
-        await otherStorage.close();
-      }
-    });
-
-    it("sends the based anchor after the text edit of the same transaction", async () => {
-      const note = await seed();
-      await openAsEditor(note);
-
-      const tx = rt.edit();
-      const body = note.withTx(tx).key("body");
-      body.applyChanges({ from: 0, insert: "> " });
-      body.addAnchor("c", { from: 2, to: 3 }, {
-        base: { epoch: 1, version: 1 },
-      });
-      const ops = applyOpsOf(getDirectTransactionNativeCommit(tx, space));
-
-      expect(ops.map((op) => op.base)).toEqual([undefined, {
-        epoch: 1,
-        version: 1,
-      }]);
-      const committed = await tx.commit({ holdSyncedUntilCovered: false })
-        .verdict;
-      await rt.storageManager.synced();
-
-      expect(committed.error).toBeUndefined();
-      expect(await readBody(server)).toBe("> abc");
-      expect(await readAnchors(server, note)).toMatchObject({
-        anchors: [{ id: "c", from: 4, to: 5 }],
-      });
-    });
-  });
-
-  describe("removeAnchor", () => {
-    /** Anchors `a` at 0..1 and `b` at 1..2. */
-    const anchorTwo = (note: Cell<Note>) =>
-      commit(note, (body) => {
-        body.addAnchor("a", { from: 0, to: 1 });
-        body.addAnchor("b", { from: 1, to: 2 });
-      });
-
-    it("sends a remove on an `apply-op` with neither a base nor a hash", async () => {
-      const note = await seed();
-      await openAsEditor(note);
-      await anchorTwo(note);
-
-      const tx = rt.edit();
-      note.withTx(tx).key("body").removeAnchor("a");
-      const ops = applyOpsOf(getDirectTransactionNativeCommit(tx, space));
-
-      expect(ops).toEqual([expect.objectContaining({
-        payload: { updates: [] },
-        anchors: { remove: ["a"] },
-      })]);
-      expect(Object.hasOwn(ops[0], "base")).toBe(false);
-      expect(Object.hasOwn(ops[0], "baselineHash")).toBe(false);
-      tx.abort();
-    });
-
-    it("removes an anchor the field holds although the field moved after the transaction read it", async () => {
-      const note = await seed();
-      await openAsEditor(note);
-      await anchorTwo(note);
-
-      const tx = rt.edit();
-      note.withTx(tx).key("body").removeAnchor("a");
-      await type(note, "editor:2", { epoch: 1, version: 1 }, [3, [0, "d"]]);
-      const committed = await tx.commit({ holdSyncedUntilCovered: false })
-        .verdict;
-      await rt.storageManager.synced();
-
-      expect(committed.error).toBeUndefined();
-      expect(await readBody(server)).toBe("abcd");
-      expect(await readAnchors(server, note)).toMatchObject({
-        anchors: [{ id: "b", from: 1, to: 2 }],
-      });
-    });
-
-    it("removes an anchor whose add is still in flight", async () => {
-      // The remove is recorded while the add's commit has not landed, so no
-      // anchors document this session holds names the id yet.
-
-      const note = await seed();
-      await openAsEditor(note);
-
-      const add = rt.edit();
-      note.withTx(add).key("body").addAnchor("x", { from: 0, to: 1 });
-      const added = add.commit({ holdSyncedUntilCovered: false }).verdict;
-      const remove = rt.edit();
-      note.withTx(remove).key("body").removeAnchor("x");
-      expect(applyOpsOf(getDirectTransactionNativeCommit(remove, space)))
-        .toEqual([expect.objectContaining({ anchors: { remove: ["x"] } })]);
-      const removed = remove.commit({ holdSyncedUntilCovered: false }).verdict;
-
-      expect((await added).error).toBeUndefined();
-      expect((await removed).error).toBeUndefined();
-      await rt.storageManager.synced();
-      expect(await readAnchors(server, note)).toMatchObject({ anchors: [] });
-    });
-
-    it("leaves an inactive field inactive when it removes an anchor", async () => {
-      const note = await seed();
-
-      const remove = rt.edit();
-      note.withTx(remove).key("body").removeAnchor("a");
-      expect(applyOpsOf(getDirectTransactionNativeCommit(remove, space)))
-        .toEqual([expect.objectContaining({ anchors: { remove: ["a"] } })]);
-      expect(
-        (await remove.commit({ holdSyncedUntilCovered: false }).verdict)
-          .error,
-      ).toBeUndefined();
-      await rt.storageManager.synced();
-
-      const set = await commit(note, (body) => body.set("replaced"));
-      expect(set.error).toBeUndefined();
-      expect(await readBody(server)).toBe("replaced");
-      expect(await readAnchors(server, note)).toBeUndefined();
-    });
-  });
-
-  describe("folding", () => {
-    /** The anchor changes of the `apply-op`s `edit` makes, in order. */
-    const anchorChanges = async (edit: (body: Cell<string>) => void) => {
-      const note = await seed();
-      await openAsEditor(note);
-      const tx = rt.edit();
-      edit(note.withTx(tx).key("body"));
-      const ops = applyOpsOf(getDirectTransactionNativeCommit(tx, space));
-      tx.abort();
-      return ops.map((op) => op.anchors);
-    };
-
-    it("sends the later of two adds of one id", async () => {
-      expect(
-        await anchorChanges((body) => {
-          body.addAnchor("a", { from: 0, to: 1 });
-          body.addAnchor("a", { from: 1, to: 3 });
-        }),
-      ).toEqual([{ add: [{ id: "a", from: 1, to: 3 }] }]);
-    });
-
-    it("sends only the remove of an id added and then removed", async () => {
-      expect(
-        await anchorChanges((body) => {
-          body.addAnchor("a", { from: 0, to: 1 });
-          body.addAnchor("a", { from: 0, to: 1 }, {
-            base: { epoch: 1, version: 1 },
-          });
-          body.removeAnchor("a");
-        }),
-      ).toEqual([{ remove: ["a"] }]);
-    });
-
-    it("sends only the add of an id removed and then added", async () => {
-      expect(
-        await anchorChanges((body) => {
-          body.removeAnchor("a");
-          body.addAnchor("a", { from: 0, to: 1 }, {
-            base: { epoch: 1, version: 1 },
-          });
-        }),
-      ).toEqual([{ add: [{ id: "a", from: 0, to: 1 }] }]);
-    });
-
-    it("keeps an id out of an earlier text edit's `apply-op` once a later call names it", async () => {
-      expect(
-        await anchorChanges((body) => {
-          body.addAnchor("a", { from: 0, to: 1 });
-          body.applyChanges({ from: 3, insert: "d" });
-          body.addAnchor("a", { from: 3, to: 4 });
-        }),
-      ).toEqual([{ add: [{ id: "a", from: 3, to: 4 }] }]);
-    });
-  });
-
-  describe("refusals", () => {
-    it("throws outside a transaction", async () => {
-      const note = await seed();
-
-      expect(() => note.key("body").addAnchor("a", { from: 0, to: 1 }))
-        .toThrow("requires a transaction");
-      expect(() => note.key("body").removeAnchor("a"))
-        .toThrow("requires a transaction");
-    });
-
-    it("throws when the cell holds no string", async () => {
-      const note = await seed();
-
-      const tx = rt.edit();
-      expect(() => note.withTx(tx).addAnchor("a", { from: 0, to: 1 }))
-        .toThrow("string value");
-      expect(() =>
-        note.withTx(tx).addAnchor("a", { from: 0, to: 1 }, {
-          base: { epoch: 1, version: 0 },
-        })
-      ).toThrow("string value");
-      expect(() => note.withTx(tx).removeAnchor("a")).toThrow("string value");
-      tx.abort();
-    });
-
-    it("throws when a range does not fit the value, or is not a range", async () => {
-      const note = await seed();
-
-      const tx = rt.edit();
-      const body = note.withTx(tx).key("body");
-      expect(() => body.addAnchor("a", { from: 0, to: 3 })).toThrow(
-        "falls outside a text of length 2",
-      );
-      expect(() => body.addAnchor("a", { from: 2, to: 1 })).toThrow(
-        "falls outside",
-      );
-      expect(() => body.addAnchor("a", { from: 0.5, to: 1 })).toThrow(
-        "falls outside",
-      );
-      expect(() =>
-        body.addAnchor("a", { from: -1, to: 1 }, {
-          base: { epoch: 1, version: 0 },
-        })
-      ).toThrow("falls outside any text");
-      expect(applyOpsOf(getDirectTransactionNativeCommit(tx, space)))
-        .toEqual([]);
-      tx.abort();
-    });
-
-    it("throws for an empty id", async () => {
-      const note = await seed();
-
-      const tx = rt.edit();
-      expect(() => note.withTx(tx).key("body").removeAnchor("")).toThrow(
-        "non-empty string",
-      );
-      tx.abort();
-    });
-
-    it("throws when the transaction already wrote the field another way", async () => {
-      const note = await seed();
-
-      const tx = rt.edit();
-      const body = note.withTx(tx).key("body");
-      body.set("replaced");
-      expect(() => body.addAnchor("a", { from: 0, to: 1 })).toThrow(
-        "already wrote the field another way",
-      );
-      tx.abort();
-    });
-
-    it("throws when a base is not a version", async () => {
-      const note = await seed();
-      await openAsEditor(note);
-
-      const tx = rt.edit();
-      const body = note.withTx(tx).key("body");
-      for (
-        const base of [
-          { epoch: 0, version: 0 },
-          { epoch: 1, version: -1 },
-          { epoch: 1.5, version: 0 },
-        ]
-      ) {
-        expect(() => body.addAnchor("a", { from: 0, to: 1 }, { base }))
-          .toThrow("an anchor's base must name an epoch from 1");
-      }
-      expect(applyOpsOf(getDirectTransactionNativeCommit(tx, space)))
-        .toEqual([]);
-      tx.abort();
-    });
-
-    it("fails a handler whose anchor names a version the field does not have, without running it again", async () => {
-      const note = await seed();
-      await openAsEditor(note);
-      let runs = 0;
-      const stream = rt.getCell<unknown>(space, "collaborative-anchors-stale");
-      rt.scheduler.addEventHandler((tx) => {
-        runs++;
-        note.withTx(tx).key("body").addAnchor("a", { from: 0, to: 1 }, {
-          base: { epoch: 2, version: 0 },
-        });
-      }, stream.getAsNormalizedFullLink());
-      const settled = Promise.withResolvers<IExtendedStorageTransaction>();
-
-      rt.scheduler.queueEvent(
-        stream.getAsNormalizedFullLink(),
-        {},
-        true,
-        (tx) => settled.resolve(tx),
-      );
-      const handled = await settled.promise;
-      await rt.idle();
-
-      expect(handled.status()).toMatchObject({
-        status: "error",
-        error: { message: expect.stringContaining("epoch mismatch") },
-      });
-      expect(runs).toBe(1);
+      expect(committed.error?.name).toBe("ProtocolError");
       expect(await readAnchors(server, note)).toBeUndefined();
     });
 
-    it("records none of a list of changes when one of them is refused", async () => {
-      const note = await seed();
-      await openAsEditor(note);
-
-      const tx = rt.edit();
-      expect(() =>
-        tx.recordAnchorChanges(note.key("body").getAsNormalizedFullLink(), [
-          { op: "add", id: "a", from: 0, to: 1 },
-          { op: "remove", id: "b" },
-          { op: "add", id: "c", from: 0, to: 9 },
-        ])
-      ).toThrow("falls outside a text of length 3");
-      expect(applyOpsOf(getDirectTransactionNativeCommit(tx, space)))
-        .toEqual([]);
-      tx.abort();
-    });
-
-    it("throws when anchors of one field name two versions", async () => {
-      const note = await seed();
-      await openAsEditor(note);
-
-      const tx = rt.edit();
-      const body = note.withTx(tx).key("body");
-      body.addAnchor("a", { from: 0, to: 1 }, {
-        base: { epoch: 1, version: 0 },
-      });
-      expect(() =>
-        body.addAnchor("b", { from: 0, to: 1 }, {
-          base: { epoch: 1, version: 1 },
-        })
-      ).toThrow("name one version");
-      tx.abort();
-    });
-
-    it("commits only the later add when one id is added against two versions", async () => {
-      const note = await seed();
-      await openAsEditor(note);
-
-      const tx = rt.edit();
-      const body = note.withTx(tx).key("body");
-      body.addAnchor("a", { from: 0, to: 1 }, {
-        base: { epoch: 1, version: 0 },
-      });
-      body.addAnchor("a", { from: 1, to: 2 }, {
-        base: { epoch: 1, version: 1 },
-      });
-
-      const ops = applyOpsOf(getDirectTransactionNativeCommit(tx, space));
-      expect(ops).toHaveLength(1);
-      expect(ops[0].base).toEqual({ epoch: 1, version: 1 });
-      expect(ops[0].anchors).toEqual({ add: [{ id: "a", from: 1, to: 2 }] });
-      tx.abort();
-    });
-
-    it("throws when building a commit whose field was written after its anchors", async () => {
+    it("refuses a document that holds an anchor at a negative offset", async () => {
       const note = await seed();
 
-      const tx = rt.edit();
-      const body = note.withTx(tx).key("body");
-      body.addAnchor("a", { from: 0, to: 1 });
-      body.set("replaced");
-      expect(() => getDirectTransactionNativeCommit(tx, space)).toThrow(
-        "does not hold the text its recorded changes produce",
+      const committed = await commit(
+        note,
+        (_body, anchors) => anchors.set({ a: -1 }),
       );
-      tx.abort();
+
+      expect(committed.error?.name).toBe("ProtocolError");
+      expect(await readAnchors(server, note)).toBeUndefined();
     });
 
-    it("leaves anchors out of a whole-document write", async () => {
-      // A whole-document transaction that is not authoritative is the client
-      // speculation overlay's seal, whose entries never reach the store.
+    it("clears the anchors when the cell is set to `undefined`", async () => {
+      const note = await seed();
+      await highlightB(note);
+
+      const committed = await commit(
+        note,
+        (_body, anchors) => anchors.set(undefined),
+      );
+
+      expect(committed.error).toBeUndefined();
+      expect(await readAnchors(server, note)).toBeUndefined();
+    });
+
+    it("adds one anchor under its id beside those the document holds", async () => {
+      const note = await seed();
+      await openAsEditor(note);
+      await highlightB(note);
+
+      const committed = await commit(
+        note,
+        (_body, anchors) => anchors.key("end").set(3),
+      );
+
+      expect(committed.error).toBeUndefined();
+      expect(await readAnchors(server, note)).toEqual({
+        from: 1,
+        to: 2,
+        end: 3,
+      });
+    });
+  });
+
+  describe("an edit to the field", () => {
+    it("keeps an anchor ahead of text inserted at it, and moves one past text inserted before it", async () => {
+      // The highlight of `b` runs from the anchor at 1 to the anchor at 2. An
+      // insert at 1 lands after the first anchor, inside the highlight.
 
       const note = await seed();
       await openAsEditor(note);
+      await highlightB(note);
 
-      const tx = rt.edit();
-      note.withTx(tx).key("title").set("Agenda");
-      note.withTx(tx).key("body").addAnchor("a", { from: 0, to: 1 });
-      tx.tx.markWholeDocumentWrites!();
-      const native = getDirectTransactionNativeCommit(tx, space);
+      await type(note, "editor:2", { epoch: 1, version: 1 }, [1, [0, "X"], 2]);
 
-      expect(native?.applyOps).toBeUndefined();
-      expect(native?.operations).toMatchObject([{
-        op: "set",
-        value: { value: { title: "Agenda", body: "abc" } },
-      }]);
-      tx.abort();
+      expect(await readBody(server)).toBe("aXbc");
+      expect(await readAnchors(server, note)).toEqual({ from: 1, to: 3 });
     });
 
-    it("refuses anchors in a store commit built ahead of its seal", async () => {
-      const note = await seed();
+    it("leaves the anchors alone when text is inserted at the last one", async () => {
+      // An insert at 2 lands after the anchor that ends the highlight of `b`,
+      // outside it.
 
-      const tx = rt.edit();
-      note.withTx(tx).key("body").addAnchor("a", { from: 0, to: 1 });
-      const native = getDirectTransactionNativeCommit(tx, space)!;
-      const replica = storage.open(space).replica;
-      expect(() => replica.storeCommitOf!(native, tx)).toThrow(
-        "cannot carry collaborative-field",
-      );
-      tx.abort();
+      const note = await seed();
+      await openAsEditor(note);
+      await highlightB(note);
+
+      await type(note, "editor:2", { epoch: 1, version: 1 }, [2, [0, "Y"], 1]);
+
+      expect(await readBody(server)).toBe("abYc");
+      expect(await readAnchors(server, note)).toEqual({ from: 1, to: 2 });
+    });
+
+    it("moves the anchor that ends a region one lower when another session deletes a character inside it", async () => {
+      // One session anchors both ends of `abc`; another deletes the `b`.
+
+      const note = await seed();
+      await openAsEditor(note);
+      await commit(note, (body, anchors) => {
+        expect(body.get()).toBe("abc");
+        anchors.set({ from: 0, to: 3 });
+      });
+
+      await type(note, "editor:2", { epoch: 1, version: 1 }, [1, [1], 1]);
+
+      expect(await readBody(server)).toBe("ac");
+      expect(await readAnchors(server, note)).toEqual({ from: 0, to: 2 });
+    });
+
+    it("brings both anchors to where deleted text began", async () => {
+      const note = await seed();
+      await openAsEditor(note);
+      await highlightB(note);
+
+      await type(note, "editor:2", { epoch: 1, version: 1 }, [1, [1], 1]);
+
+      expect(await readBody(server)).toBe("ac");
+      expect(await readAnchors(server, note)).toEqual({ from: 1, to: 1 });
+    });
+
+    it("takes an anchor past the end of the text as one at its end", async () => {
+      const note = await seed();
+      await openAsEditor(note);
+      await commit(note, (_body, anchors) => anchors.set({ far: 99 }));
+
+      await type(note, "editor:2", { epoch: 1, version: 1 }, [[0, "x"], 3]);
+
+      expect(await readBody(server)).toBe("xabc");
+      expect(await readAnchors(server, note)).toEqual({ far: 4 });
     });
   });
 
   describe("anchorsOf", () => {
-    it("returns `undefined` for a field with no anchors, and then the anchors document Memory writes", async () => {
-      const note = await seed();
-      await openAsEditor(note);
+    /** Runs a pattern whose result names the anchors of `note`'s body. */
+    const runAnchored = async (note: Cell<Note>) => {
       const { commonfabric } = createTrustedBuilder(rt);
       const anchored = commonfabric.pattern<{ body: string }>(({ body }) => ({
         anchors: commonfabric.anchorsOf(body),
@@ -830,82 +421,74 @@ describe("collaborative-field-anchors", () => {
       );
       await setup.commit().verdict;
       await result.pull();
+      return result;
+    };
+
+    /** Resolves once the anchors `result` names satisfy `test`. */
+    const whenAnchors = (
+      result: Cell<{ anchors: FieldAnchors | undefined }>,
+      test: (anchors: FieldAnchors | undefined) => boolean,
+    ): Promise<void> => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      const cancel = result.key("anchors").sink((anchors) => {
+        if (test(anchors)) resolve();
+      });
+      return promise.then(() => cancel());
+    };
+
+    /**
+     * Commits `anchors` as the anchors of `note`'s body. The session reads
+     * the document through the running pattern, and fan-out is manual, so
+     * this does not wait for the server to deliver the commit back.
+     */
+    const writeAnchors = async (note: Cell<Note>, anchors: FieldAnchors) => {
+      const tx = rt.edit();
+      anchorsOf(note, tx).set(anchors);
+      return await tx.commit({ holdSyncedUntilCovered: false }).verdict;
+    };
+
+    it("returns `undefined` for a field with no anchors, and then the anchors written", async () => {
+      const note = await seed();
+      await openAsEditor(note);
+      const result = await runAnchored(note);
 
       expect(result.key("anchors").get()).toBeUndefined();
 
-      const arrived = Promise.withResolvers<void>();
-      const cancel = result.key("anchors").sink((anchors) => {
-        if (anchors !== undefined) arrived.resolve();
-      });
-      const tx = rt.edit();
-      note.withTx(tx).key("body").addAnchor("b", { from: 1, to: 2 });
-      const committed = await tx.commit({ holdSyncedUntilCovered: false })
-        .verdict;
-      expect(committed.error).toBeUndefined();
-      // Memory writes the anchors document, and fan-out is manual, so this
-      // session sees it once the server delivers it.
-      await server.flushSessions();
-      await arrived.promise;
-      cancel();
+      const arrived = whenAnchors(result, (anchors) => anchors !== undefined);
+      const committed = await writeAnchors(note, { from: 1, to: 2 });
+      await arrived;
 
-      expect(result.key("anchors").get()).toEqual({
-        epoch: 1,
-        version: 1,
-        anchors: [{ id: "b", from: 1, to: 2 }],
-      });
+      expect(committed.error).toBeUndefined();
+      expect(result.key("anchors").get()).toEqual({ from: 1, to: 2 });
     });
 
-    it("delivers the anchors document to a lift in the session that wrote the anchor", async () => {
-      // The emulated storage `cf test` runs on, whose fan-out is prompt. The
-      // lift commits what it computes from the anchors document, and that
-      // commit is refused until this session holds the document Memory wrote.
+    it("writes the anchors document through its result", async () => {
+      const note = await seed();
+      const result = await runAnchored(note);
 
-      const local = EmulatedStorageManager.emulate({ as: signer });
-      const runtime = new Runtime({
-        apiUrl: new URL(import.meta.url),
-        storageManager: local,
-      });
-      try {
-        const seeded = runtime.edit();
-        const note = runtime.getCell<Note>(space, CAUSE, noteSchema, seeded);
-        note.set({ title: "Notes", body: "abc" });
-        await seeded.commit().verdict;
-        const { commonfabric } = createTrustedBuilder(runtime);
-        const ids = commonfabric.lift((anchors: FieldAnchors | undefined) =>
-          (anchors?.anchors ?? []).map(({ id }) => id)
-        );
-        const anchored = commonfabric.pattern<{ body: string }>((
-          { body },
-        ) => ({ ids: ids(commonfabric.anchorsOf(body)) }));
-        const setup = runtime.edit();
-        const result = runtime.run(
-          setup,
-          anchored,
-          { body: note.key("body") },
-          runtime.getCell(
-            space,
-            "collaborative-anchors-lift",
-            undefined,
-            setup,
-          ),
-        );
-        await setup.commit().verdict;
-        const arrived = Promise.withResolvers<void>();
-        const cancel = result.key("ids").sink((value) => {
-          if (Array.isArray(value) && value.length > 0) arrived.resolve();
-        });
-        const tx = runtime.edit();
-        note.withTx(tx).key("body").addAnchor("b", { from: 1, to: 2 });
-        expect((await tx.commit().verdict).error).toBeUndefined();
-        await arrived.promise;
-        cancel();
-        await runtime.idle();
+      const tx = rt.edit();
+      result.withTx(tx).key("anchors").set({ a: 1 });
+      const committed = await tx.commit({ holdSyncedUntilCovered: false })
+        .verdict;
 
-        expect(result.key("ids").get()).toEqual(["b"]);
-      } finally {
-        await runtime.dispose();
-        await local.close();
-      }
+      expect(committed.error).toBeUndefined();
+      expect(await readAnchors(server, note)).toEqual({ a: 1 });
+    });
+
+    it("returns the anchors where an edit from another session left them", async () => {
+      const note = await seed();
+      await openAsEditor(note);
+      const result = await runAnchored(note);
+      await writeAnchors(note, { from: 1, to: 2 });
+
+      const moved = whenAnchors(result, (anchors) => anchors?.to === 3);
+      await type(note, "editor:2", { epoch: 1, version: 1 }, [1, [0, "X"], 2]);
+      // Fan-out is manual, so this session sees the document Memory rewrote
+      // once the server delivers it.
+      await server.flushSessions();
+      await moved;
+
+      expect(result.key("anchors").get()).toEqual({ from: 1, to: 3 });
     });
   });
 });

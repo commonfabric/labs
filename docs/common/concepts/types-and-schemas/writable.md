@@ -18,8 +18,6 @@ With `Writable<T>` in your signature:
 | `.addUnique(...items)` | Append each item only if not already present (mergeable) |
 | `.increment(by?)` | Add a number (default `+1`, may be negative) to a number cell (mergeable) |
 | `.applyChanges(changes)` | Edit a string cell by position, even while a collaborative editor has it open (see below) |
-| `.addAnchor(id, range, { base? })` | Mark a range of a string cell under `id`; every later edit moves it (see below) |
-| `.removeAnchor(id)` | Remove the anchor `id` from a string cell |
 | `.remove(item)` | Remove first `item` from array |
 | `.removeAll(item)` | Remove all `item` from array |
 | `.removeByValue(item)` | Remove every element equal to `item` by stored value (mergeable) |
@@ -129,98 +127,115 @@ editing a document several people type in at once may run more than once
 before it lands. A write that must not wait on the typing belongs in a field of
 its own.
 
-## Anchoring a range of text: `addAnchor` and `anchorsOf`
+## Anchoring text: `anchorsOf`
 
 A comment, highlight or bookmark on a string field says which text it is
-about with an **anchor**: a range of the field stored under an id the pattern
-chooses. The runtime moves every anchor of a field through every edit, whoever
-makes it, so the pattern stores the anchor's id and never a position of its
-own. `.addAnchor(id, { from, to })` adds an anchor, or moves an existing one
-to the new range, and `.removeAnchor(id)` removes it. Positions count UTF-16
-code units, as string indexes do.
+about with **anchors**: points in the field, each stored under an id the
+pattern chooses. The runtime moves every anchor of a field through every
+edit, whoever makes it, so the pattern stores its anchors' ids and never a
+position of its own. A range of text is two anchors, one where it starts and
+one where it ends.
 
-`anchorsOf(field)` returns the field's anchors, `{ epoch, version, anchors }`
-with `anchors` sorted by id, or `undefined` until the field first holds one;
-removing the last anchor leaves an empty list:
+`anchorsOf(field)` returns the field's anchors as a cell. Its value is a map
+from anchor id to offset, counted in UTF-16 code units as string indexes are,
+or `undefined` until something writes it. A handler changes the anchors by
+writing that cell, as it writes any other:
 
 ```typescript
 // Shown at module scope.
 interface Comment {
-  anchorId: string;
+  id: string;
   text: string;
 }
 
-// `from`, `to` and `base` are an editor's selection, as `cf-selection-change`
+type Anchors = Writable<FieldAnchors | undefined>;
+
+// `from`, `to` and `quote` are an editor's selection, as `cf-selection-change`
 // reports it.
 const addComment = handler<
+  { id: string; text: string; from: number; to: number; quote: string },
   {
-    anchorId: string;
-    text: string;
-    from: number;
-    to: number;
-    base: OpCursor | null;
-  },
-  { content: Writable<string>; comments: Writable<Comment[]> }
->(({ anchorId, text, from, to, base }, { content, comments }) => {
-  content.addAnchor(anchorId, { from, to }, base === null ? {} : { base });
-  comments.push({ anchorId, text });
+    content: Writable<string>;
+    anchors: Anchors;
+    comments: Writable<Comment[]>;
+  }
+>(({ id, text, from, to, quote }, { content, anchors, comments }) => {
+  if (content.get().slice(from, to) !== quote) {
+    throw new Error("The text changed under the selection.");
+  }
+  anchors.set({ ...anchors.get(), [`${id}:from`]: from, [`${id}:to`]: to });
+  comments.push({ id, text });
 });
 
 const deleteComment = handler<
-  { anchorId: string },
-  { content: Writable<string>; comments: Writable<Comment[]> }
->(({ anchorId }, { content, comments }) => {
-  content.removeAnchor(anchorId);
-  comments.set(comments.get().filter((c) => c.anchorId !== anchorId));
+  { id: string },
+  { anchors: Anchors; comments: Writable<Comment[]> }
+>(({ id }, { anchors, comments }) => {
+  const { [`${id}:from`]: _from, [`${id}:to`]: _to, ...others } =
+    anchors.get() ?? {};
+  anchors.set(others);
+  comments.set(comments.get().filter((c) => c.id !== id));
 });
 
-export default pattern<{ content: Writable<string> }>(({ content }) => {
+export default pattern<
+  { content: Writable<string>; comments: Writable<Comment[]> }
+>(({ content, comments }) => {
   const anchors = anchorsOf(content);
   const quoted = computed(() =>
-    (anchors?.anchors ?? []).map(({ id, from, to }) => ({
+    comments.get().map(({ id }) => ({
       id,
-      quote: content.get().slice(from, to),
+      quote: content.get().slice(
+        anchors?.[`${id}:from`] ?? 0,
+        anchors?.[`${id}:to`] ?? 0,
+      ),
     }))
   );
-  return { quoted, addComment, deleteComment };
+  return {
+    quoted,
+    addComment: addComment({ content, anchors, comments }),
+    deleteComment: deleteComment({ anchors, comments }),
+  };
 });
 ```
 
-Without a `base`, the range refers to the value the handler holds, as the
-positions of `.applyChanges()` do: the value it read, after any changes it
-made before the call. The anchor lands only while the field still holds the
-value the handler read, so a handler that anchored text someone has since
-edited runs again against the new text.
+A handler that places an anchor reads the field and the anchors, then writes
+the anchors. Its commit lands only while the field and the anchors are still
+what it read. Where someone has edited the field since, or another handler has
+changed the anchors, the commit is refused and the handler runs again against
+what they hold now, so an offset a handler computed from the text it read is
+never applied to different text.
 
-A range taken from an editor's selection refers to the text the editor showed,
-which may be older than what the field holds by the time the handler runs.
-Pass the version that text was at as `base`, `{ epoch, version }`, and the
-range refers to the field's text at that version; the runtime maps it over
-the edits made since, and the handler does not run again because the field
-moved. All the anchors one handler adds to one field with a `base` name the
-same version.
+An offset that comes from outside the handler needs a check of its own. A
+range taken from an editor's selection refers to the text the editor showed,
+which may be older than what the field holds by the time the handler runs. The
+selection carries the text it covered, and the handler compares that with what
+the field holds at the range, as `addComment` does above, before it anchors
+the range. The comparison catches every edit but one that leaves the same text
+at the same offsets, such as a repeated word deleted just ahead of the
+selection; the anchors then land on the other copy.
 
-The base must be a version the field still holds. A base in an epoch that has
-ended, because the field was released, or older than the history the store
-keeps, which reaches back at least one operation checkpoint interval, refuses
-the commit, and the handler fails rather than running again. `cf-code-editor`
-reports a selection it holds again once the selection's base falls 32 versions
-behind, so the base it reports stays within that history.
+Every anchor moves the way a cursor does. Text inserted at an anchor lands
+after it, and an anchor inside deleted text lands where the deletion began. So
+a range from one anchor to another takes in text inserted at its start, leaves
+out text inserted at its end, and stays over a replacement of exactly its
+text. When an edit deletes the text of a range, both anchors land on the same
+offset; show that as a comment on text no longer in the field.
 
-An anchor whose text an edit deletes becomes a point, `from === to`, where the
-text was; show it as a comment on text no longer in the field. Text inserted at
-either end of an anchor stays outside it. Anchoring a field no editor has
-opened, without a `base`, opens it for collaboration, as the first
-`.applyChanges()` does. `.removeAnchor()` depends on nothing the field holds,
-so a handler deleting a comment does not run again because someone typed. It
-removes the id even when the add it undoes has not landed yet, and removing an
-id the field does not hold does nothing, without opening the field for
-collaboration.
+Anchors move only with edits made in an editor or through `.applyChanges()`.
+A `.set()` of a field that is not open for collaboration, because no editor
+has edited it or because it has been released, replaces the text and moves no
+anchor. A handler that rewrites the text that way, as an agent rewording a
+note does, reads the anchors and writes each one where the new text puts it,
+in the same handler.
 
-An anchor is part of the field it marks. Adding or removing one is a write of
-the field, allowed only where `.set()` of it would be, and `anchorsOf()` is as
-confidential as the field: an anchor's id and position say what the text
-holds.
+What a reader of the anchors may learn is decided as for any other cell, by
+the label of what was written to it. A handler that reads the field before
+writing the anchors writes them under the field's confidentiality. One that
+writes anchors without reading the field does not, and their offsets follow
+the field's edits from then on all the same, so for a confidential field every
+handler that writes its anchors reads it first. The field's write policy does
+not cover the anchors; a pattern that wants only certain handlers to move them
+declares a write policy on the anchors cell's type.
 
 [Collaborative fields](../../../features/collaborative-fields.md#anchors)
 describes how anchors are stored and moved.

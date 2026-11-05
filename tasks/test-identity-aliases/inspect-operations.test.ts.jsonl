@@ -1,0 +1,1 @@
+{"date":"2026-11-04","from":{"k":"unit","s":"cli","n":"cf inspect operations > reports a field's anchors, their checkpoint, and the anchors document check"},"to":{"k":"unit","s":"cli","n":"cf inspect operations > reports a field's anchors and the anchors document check"}}

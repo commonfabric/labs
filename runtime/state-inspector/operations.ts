@@ -1,8 +1,9 @@
 import type { FabricValue } from "@commonfabric/data-model";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
-  type FieldAnchor,
+  type FieldAnchors,
   operationAnchorsDocId,
+  parseFieldAnchors,
   scopeOfScopeKey,
 } from "@commonfabric/memory/v2";
 import { parsePointer } from "@commonfabric/memory/v2/path";
@@ -11,7 +12,11 @@ import type { SpaceDb } from "./db.ts";
 import { tableNames } from "./db.ts";
 import { decodeStored } from "./decode.ts";
 import { hashEntityValue } from "./fingerprint.ts";
-import { reconstructDocument, selectAtPath } from "./reconstruct.ts";
+import {
+  reconstructDocument,
+  reconstructOutcome,
+  selectAtPath,
+} from "./reconstruct.ts";
 
 const DEFAULT_FIELD_LIMIT = 50;
 const DEFAULT_HISTORY_LIMIT = 100;
@@ -29,8 +34,6 @@ type OperationFieldRow = {
   materialized: string;
   active: number;
   commit_seq: number;
-  anchors: string | null;
-  anchors_seq: number | null;
 };
 
 type IntegratedRow = {
@@ -60,16 +63,6 @@ type CheckpointRow = {
   version: number;
   materialized: string;
   commit_seq: number;
-  anchors: string | null;
-};
-
-/**
- * Which anchor columns the store carries. A store written before anchors
- * existed lacks them; it inspects as a store whose fields have none.
- */
-type AnchorColumns = {
-  fieldEpoch: boolean;
-  checkpoint: boolean;
 };
 
 export interface OperationInspectionOptions {
@@ -96,11 +89,16 @@ export interface OperationFieldInspection {
   materialized: unknown;
   commitSeq: number;
   retainedFrom: { epoch: number; version: number };
-  /** The head's anchors, as the engine stores them: sorted by id. */
-  anchors: FieldAnchor[];
   /**
-   * Commit sequence of the last operation that added or removed anchors;
-   * `null` when none did.
+   * The field's anchors, each id's offset as the anchors document holds it.
+   * Empty when the field has no anchors document, or has one that
+   * `consistency.anchorsDocumentValid` reports as holding something else.
+   */
+  anchors: FieldAnchors;
+  /**
+   * Commit sequence of the latest write of the anchors document, whether a
+   * client's or the engine's for an edit that moved an anchor; `null` when
+   * the document was never written.
    */
   anchorsCommitSeq: number | null;
   /** Id of the field's anchors document in the field's scope. */
@@ -130,7 +128,6 @@ export interface OperationFieldInspection {
     version: number;
     materialized: unknown;
     commitSeq: number;
-    anchors: FieldAnchor[];
     matchesCurrentHead: boolean | null;
   }>;
   pagination: {
@@ -145,12 +142,12 @@ export interface OperationFieldInspection {
     ordinaryMaterializedMatches: boolean | null;
     currentCheckpointMatches: boolean | null;
     /**
-     * Whether the anchors document's set equals the head's: `null` when the
-     * field is inactive, the store lacks the anchor columns, or neither the
-     * head nor the document holds anchors; `false` when the head holds
-     * anchors and the document is missing.
+     * Whether the anchors document's value is what the engine admits as
+     * anchors, which is what an edit to the field maps; `null` when the field
+     * holds no anchors document. An edit takes a document that fails this as
+     * holding no anchors.
      */
-    anchorsDocumentMatches: boolean | null;
+    anchorsDocumentValid: boolean | null;
     healthy: boolean;
   };
 }
@@ -190,42 +187,17 @@ const valuesMatch = (left: FabricValue, right: FabricValue): boolean => {
     leftHash.hash === rightHash.hash;
 };
 
-const isAnchor = (value: unknown): value is FieldAnchor =>
-  typeof value === "object" && value !== null && !Array.isArray(value) &&
-  typeof (value as FieldAnchor).id === "string" &&
-  typeof (value as FieldAnchor).from === "number" &&
-  typeof (value as FieldAnchor).to === "number";
-
 /**
- * Anchors from a stored `anchors` column or an anchors document's `anchors`
- * member. NULL and anything that is not an anchor list read as none; the
- * document comparison then reports the divergence rather than a decode error.
+ * The anchors `value` holds when it is an anchors document's value, by the
+ * rule the engine holds a write of the document to
+ * (`parseFieldAnchors()`); a document with no value holds none. `undefined`
+ * for anything else.
  */
-const decodeAnchors = (stored: string | null): FieldAnchor[] => {
-  if (stored === null) return [];
-  const decoded = decode(stored);
-  return anchorsOf(decoded);
+const anchorsOf = (value: unknown): FieldAnchors | undefined => {
+  if (value === undefined) return {};
+  const parsed = parseFieldAnchors(value);
+  return "fault" in parsed ? undefined : parsed.anchors;
 };
-
-const anchorsOf = (value: unknown): FieldAnchor[] =>
-  Array.isArray(value) && value.every(isAnchor)
-    ? value.map(({ id, from, to }) => ({ id, from, to }))
-    : [];
-
-const sameAnchors = (
-  left: readonly FieldAnchor[],
-  right: readonly FieldAnchor[],
-): boolean =>
-  left.length === right.length &&
-  left.every((anchor, index) =>
-    anchor.id === right[index].id && anchor.from === right[index].from &&
-    anchor.to === right[index].to
-  );
-
-const hasColumn = (space: SpaceDb, table: string, column: string): boolean =>
-  (space.db.prepare(`PRAGMA table_info(${table})`).all() as Array<
-    { name: string }
-  >).some((row) => row.name === column);
 
 /** Inspect durable collaborative operation state without opening a live Engine. */
 export function inspectOperationFields(
@@ -258,19 +230,9 @@ export function inspectOperationFields(
     filters.push("scope_key = :scope_key");
     params.scope_key = options.scope;
   }
-  const anchorColumns: AnchorColumns = {
-    fieldEpoch: hasColumn(space, "op_field_epoch", "anchors") &&
-      hasColumn(space, "op_field_epoch", "anchors_seq"),
-    checkpoint: hasColumn(space, "op_checkpoint", "anchors"),
-  };
   const rows = space.db.prepare(`
     SELECT branch, id, scope_key, path, epoch, codec, version, baseline_hash,
-           materialized, active, commit_seq,
-           ${
-    anchorColumns.fieldEpoch
-      ? "anchors, anchors_seq"
-      : "NULL AS anchors, NULL AS anchors_seq"
-  }
+           materialized, active, commit_seq
     FROM op_field_epoch
     WHERE ${filters.join(" AND ")}
     ORDER BY id, scope_key, path
@@ -286,7 +248,6 @@ export function inspectOperationFields(
       inspectOperationField(space, field, {
         historyLimit,
         submissionAfterSeq: options.submissionAfterSeq ?? 0,
-        anchorColumns,
       })
     ),
   };
@@ -298,7 +259,6 @@ function inspectOperationField(
   options: {
     historyLimit: number;
     submissionAfterSeq: number;
-    anchorColumns: AnchorColumns;
   },
 ): OperationFieldInspection {
   const address = {
@@ -408,8 +368,7 @@ function inspectOperationField(
     : submissionRows;
 
   const checkpointRows = space.db.prepare(`
-    SELECT epoch, version, materialized, commit_seq,
-           ${options.anchorColumns.checkpoint ? "anchors" : "NULL AS anchors"}
+    SELECT epoch, version, materialized, commit_seq
     FROM op_checkpoint
     WHERE branch = :branch AND id = :id AND scope_key = :scope_key
       AND path = :path
@@ -438,7 +397,6 @@ function inspectOperationField(
     ? null
     : valuesMatch(materialized, ordinary.value);
 
-  const anchors = decodeAnchors(field.anchors);
   // The document id derives from the scope name, not the scope key: a
   // per-user field's document is addressed as `user` and resolves to the
   // field's own key, which is where it is reconstructed from.
@@ -447,27 +405,34 @@ function inspectOperationField(
     scope: scopeOfScopeKey(field.scope_key),
     path,
   });
-  // A store without the anchor columns cannot hold a head set to compare the
-  // document against, so the check is not made rather than failed.
-  const anchorsDocument =
-    field.active !== 1 || !options.anchorColumns.fieldEpoch
-      ? undefined
-      : reconstructDocument(space, {
-        id: anchorsDocumentId,
-        scope: field.scope_key,
-        branch: field.branch,
-      });
-  const documentAnchors = anchorsDocument === undefined ? null : anchorsOf(
-    (anchorsDocument.value as { anchors?: unknown } | null)?.anchors,
+  const anchorsDocument = reconstructOutcome(space, {
+    id: anchorsDocumentId,
+    scope: field.scope_key,
+    branch: field.branch,
+  });
+  // A deleted document holds no anchors, as one never written does. One that
+  // does not decode holds something, and it is not an anchor map.
+  const documentAnchors = anchorsDocument.status === "present"
+    ? anchorsOf(anchorsDocument.document.value)
+    : undefined;
+  const anchorsDocumentValid = anchorsDocument.status === "present"
+    ? documentAnchors !== undefined
+    : anchorsDocument.status === "undecodable"
+    ? false
+    : null;
+  const anchorsRevision = space.get<{ seq: number }>(
+    `SELECT seq FROM revision
+     WHERE branch = ? AND id = ? AND scope_key = ?
+     ORDER BY seq DESC LIMIT 1`,
+    field.branch,
+    anchorsDocumentId,
+    field.scope_key,
   );
-  const anchorsDocumentMatches = documentAnchors === null
-    ? (anchors.length === 0 ? null : false)
-    : sameAnchors(anchors, documentAnchors);
   const healthy = pathValid && baselineCheckpointPresent &&
     retainedSuffixContiguous &&
     ordinaryMaterializedMatches !== false &&
     currentCheckpointMatches !== false &&
-    anchorsDocumentMatches !== false;
+    anchorsDocumentValid !== false;
 
   return {
     address: {
@@ -484,8 +449,8 @@ function inspectOperationField(
     materialized,
     commitSeq: field.commit_seq,
     retainedFrom: { epoch: field.epoch, version: retainedVersion },
-    anchors,
-    anchorsCommitSeq: field.anchors_seq,
+    anchors: documentAnchors ?? {},
+    anchorsCommitSeq: anchorsRevision?.seq ?? null,
     anchorsDocumentId,
     submissions: visibleSubmissions.map((row) => ({
       epoch: row.epoch,
@@ -512,7 +477,6 @@ function inspectOperationField(
       version: row.version,
       materialized: decode(row.materialized),
       commitSeq: row.commit_seq,
-      anchors: decodeAnchors(row.anchors),
       matchesCurrentHead: row.epoch === field.epoch &&
           row.version === field.version
         ? currentCheckpointMatches
@@ -531,7 +495,7 @@ function inspectOperationField(
       retainedSuffixContiguous,
       ordinaryMaterializedMatches,
       currentCheckpointMatches,
-      anchorsDocumentMatches,
+      anchorsDocumentValid,
       healthy,
     },
   };

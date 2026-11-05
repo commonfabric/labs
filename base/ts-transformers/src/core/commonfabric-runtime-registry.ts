@@ -309,8 +309,9 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     callKind: "runtime-call",
     reactiveOrigin: true,
   },
-  // anchorsOf(field) returns the field's anchors document, a Reactive result
-  // like navigateTo's: no dedicated CallKind, no schema injection.
+  // anchorsOf(field) returns a link to the field's anchors document, a
+  // Reactive result like navigateTo's: no dedicated CallKind, no schema
+  // injection.
   {
     exportName: "anchorsOf",
     category: "call",

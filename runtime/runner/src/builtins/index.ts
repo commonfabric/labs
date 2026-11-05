@@ -137,8 +137,8 @@ export function registerBuiltins(runtime: Runtime) {
   // Pure read/derive/write — not an effect; reactivity comes from its
   // journaled input + envelope reads.
   moduleRegistry.addModuleByRef("inspectConfLabel", raw(inspectConfLabel));
-  // The anchors document of a collaborative field, as confidential as the
-  // field it belongs to.
+  // The anchors document of a collaborative field, as a cell a pattern
+  // reads and writes.
   moduleRegistry.addModuleByRef(
     "anchorsOf",
     raw(anchorsOf, { argumentSchema: ANCHORS_OF_ARGUMENT_SCHEMA }),

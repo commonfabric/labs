@@ -52,35 +52,17 @@ type TestProfile = AddIntegrity<
   readonly ["shared-note-test-profile"]
 >;
 
-/**
- * A `cf-selection-change` event for `quote` at `from`, stated against the
- * editor's own text, as an editor with no confirmed version reports it.
- */
+/** A `cf-selection-change` event for `quote` at `from`. */
 const selectionAt = (from: number, quote: string) => ({
   type: "cf-selection-change",
-  detail: {
-    from,
-    to: from + quote.length,
-    text: quote,
-    base: null,
-  },
+  detail: { from, to: from + quote.length, text: quote },
 });
 
 /**
- * A `cf-selection-change` event for the one occurrence of `quote` in `body`,
- * stated against `base`.
+ * A `cf-selection-change` event for the one occurrence of `quote` in `body`.
  */
-const selectionIn = (
-  body: string,
-  quote: string,
-  base: { epoch: number; version: number },
-) => {
-  const from = body.indexOf(quote);
-  return {
-    type: "cf-selection-change",
-    detail: { from, to: from + quote.length, text: quote, base },
-  };
-};
+const selectionIn = (body: string, quote: string) =>
+  selectionAt(body.indexOf(quote), quote);
 
 /** The `display` an element shown or hidden through its style takes. */
 const displayOf = (node: unknown): unknown =>
@@ -95,12 +77,18 @@ const rowOf = (root: unknown, text: string): unknown =>
       findElementByText(node, "cf-button", "Delete") !== undefined,
   );
 
-/** The anchors the editor under `root` is asked to mark. */
-const highlightsOf = (
-  root: unknown,
-): { id: string; kind?: string }[] | undefined =>
+/** A mark the editor is asked to draw, from one anchor to another. */
+type Highlight = {
+  id: string;
+  fromAnchor: string;
+  toAnchor: string;
+  kind?: string;
+};
+
+/** The marks the editor under `root` is asked to draw. */
+const highlightsOf = (root: unknown): Highlight[] | undefined =>
   propValue(findElement(root, "cf-code-editor"), "highlights") as
-    | { id: string; kind?: string }[]
+    | Highlight[]
     | undefined;
 
 /** Whether the Comment button under `root` is disabled. */
@@ -122,12 +110,19 @@ const draftIdIn = (
   comments: readonly (StoredComment | undefined)[],
 ): string => listed(comments).find((comment) => comment.draft)?.id ?? "";
 
-/** The range of the anchor `id` among `ranges`. */
+/** The range between the two anchors of the comment `id` among `anchors`. */
 const rangeIn = (
-  ranges: FieldAnchors | undefined,
+  anchors: FieldAnchors | undefined,
   id: string | undefined,
-): { from: number; to: number } | undefined =>
-  ranges?.anchors.find((anchor) => anchor.id === id);
+): { from: number; to: number } | undefined => {
+  const from = anchors?.[`${id}:from`];
+  const to = anchors?.[`${id}:to`];
+  return from === undefined || to === undefined ? undefined : { from, to };
+};
+
+/** How many comments `anchors` holds both anchors of. */
+const anchoredCount = (anchors: FieldAnchors | undefined): number =>
+  Object.keys(anchors ?? {}).filter((id) => id.endsWith(":from")).length;
 
 /** The cell a control binds under `prop`, as a `$value` or `$checked`. */
 function boundCell<T>(control: unknown, prop: string): Writable<T>;
@@ -303,7 +298,7 @@ export default pattern(() => {
   const assert_comment_needs_a_selection = assert(() =>
     commentDisabled(note[UI]) === true &&
     highlightsOf(note[UI])?.length === 0 &&
-    note.commentRanges === undefined
+    note.commentAnchors === undefined
   );
   const action_select_quote = action(() =>
     fireEvent(
@@ -333,7 +328,7 @@ export default pattern(() => {
   const action_post_comment = action(() => clickButton(note[UI], "Post"));
   const assert_comment_posted = assert(() => {
     const [comment] = listed(comments.get());
-    const range = rangeIn(note.commentRanges, comment?.id);
+    const range = rangeIn(note.commentAnchors, comment?.id);
     return listed(comments.get()).length === 1 &&
       comment.body === "Needs a date" &&
       comment.quote === QUOTE &&
@@ -373,7 +368,7 @@ export default pattern(() => {
     note.appendLine.send({ text: "- [ ] follow up" })
   );
   const assert_verbs_moved_the_anchor_with_the_text = assert(() => {
-    const range = rangeIn(note.commentRanges, listed(comments.get())[0]?.id);
+    const range = rangeIn(note.commentAnchors, listed(comments.get())[0]?.id);
     return content.get().slice(movedFrom, movedFrom + QUOTE.length) ===
         QUOTE &&
       range?.from === movedFrom && range?.to === movedFrom + QUOTE.length &&
@@ -395,7 +390,7 @@ export default pattern(() => {
   );
   const assert_stale_selection_refused = assert(() =>
     listed(comments.get()).length === 1 &&
-    note.commentRanges?.anchors.length === 1 &&
+    anchoredCount(note.commentAnchors) === 1 &&
     hasText(
       findNodeById(note[UI], "shared-note-comment-notice"),
       "The note changed under your selection",
@@ -409,7 +404,7 @@ export default pattern(() => {
   );
   const assert_agent_comment_lands = assert(() => {
     const agent = listed(comments.get()).find((c) => c.body === "Agent note");
-    const range = rangeIn(note.commentRanges, agent?.id);
+    const range = rangeIn(note.commentAnchors, agent?.id);
     return listed(comments.get()).length === 2 &&
       agent !== undefined &&
       equals(agent.authorProfile, adaProfile) &&
@@ -465,7 +460,7 @@ export default pattern(() => {
     note.replaceText.send({ old: QUOTE, new: EDITED })
   );
   const assert_row_shows_the_quote_and_the_text_now = assert(() => {
-    const range = rangeIn(note.commentRanges, listed(comments.get())[0]?.id);
+    const range = rangeIn(note.commentAnchors, listed(comments.get())[0]?.id);
     return range !== undefined &&
       content.get().slice(range.from, range.to) === EDITED &&
       hasText(rowOf(note[UI], "Needs a date"), QUOTE) &&
@@ -477,7 +472,7 @@ export default pattern(() => {
     note.replaceText.send({ old: `${EDITED}\n`, new: "" })
   );
   const assert_comment_text_gone = assert(() => {
-    const range = rangeIn(note.commentRanges, listed(comments.get())[0]?.id);
+    const range = rangeIn(note.commentAnchors, listed(comments.get())[0]?.id);
     return range !== undefined && range.from === range.to &&
       hasText(rowOf(note[UI], "Needs a date"), "text no longer in note") &&
       hasText(rowOf(note[UI], "Needs a date"), QUOTE) &&
@@ -512,30 +507,20 @@ export default pattern(() => {
   const assert_deleted_with_its_anchor = assert(() =>
     listed(comments.get()).length === 1 &&
     listed(comments.get())[0].body === "Needs a date" &&
-    note.commentRanges?.anchors.length === 1 &&
+    anchoredCount(note.commentAnchors) === 1 &&
     rowOf(note[UI], "Agent note") === undefined
   );
-  // A selection an editor reports against a confirmed version: a verb edits
-  // ahead of it while the composer is open, and Memory moves the range from
-  // that version to the text the body holds when the comment is posted. The
-  // anchors document was last restated by the deletion, which changed no
-  // text, so its version is the body's.
+  // The composer anchors its selection when it opens: a verb edits ahead of
+  // it while the composer is open, and Memory moves the anchors to where the
+  // text is when the comment is posted.
   const HEADING = "Everyone";
-  const action_select_heading_at_a_version = action(() => {
-    const from = content.get().indexOf(HEADING);
-    const ranges = note.commentRanges;
-    fireEvent(editorOf(note[UI]), "oncf-selection-change", {
-      type: "cf-selection-change",
-      detail: {
-        from,
-        to: from + HEADING.length,
-        text: HEADING,
-        base: ranges === undefined
-          ? null
-          : { epoch: ranges.epoch, version: ranges.version },
-      },
-    });
-  });
+  const action_select_heading = action(() =>
+    fireEvent(
+      editorOf(note[UI]),
+      "oncf-selection-change",
+      selectionIn(content.get(), HEADING),
+    )
+  );
   const action_open_composer_on_heading = action(() =>
     clickButton(note[UI], "Comment")
   );
@@ -550,31 +535,31 @@ export default pattern(() => {
   );
   const assert_comment_lands_where_the_text_moved = assert(() => {
     const titled = listed(comments.get()).find((c) => c.body === "Title?");
-    const range = rangeIn(note.commentRanges, titled?.id);
-    return note.commentRanges !== undefined &&
+    const range = rangeIn(note.commentAnchors, titled?.id);
+    return note.commentAnchors !== undefined &&
       content.get().startsWith("> Pinned\n") &&
       range !== undefined &&
       content.get().slice(range.from, range.to) === HEADING;
   });
-  // A selection held until its version leaves the history Memory keeps: the
-  // editor restates it against a version Memory holds before the composer
-  // opens, and the comment lands. Here the first report names an epoch the
-  // field never had.
+  // A selection the body has changed under: its range no longer holds its
+  // text, so the composer refuses it and says so. The editor's next report
+  // names the range that holds the text now, and the comment lands. Here the
+  // first report is one character off.
   const PINNED = "Pinned";
-  const action_select_pinned_at_an_ended_epoch = action(() =>
+  const action_select_pinned_where_it_was = action(() =>
     fireEvent(
       editorOf(note[UI]),
       "oncf-selection-change",
-      selectionIn(content.get(), PINNED, { epoch: 999, version: 0 }),
+      selectionAt(content.get().indexOf(PINNED) + 1, PINNED),
     )
   );
   const action_open_composer_on_pinned = action(() =>
     clickButton(note[UI], "Comment")
   );
-  const action_open_composer_on_the_ended_epoch = action(() =>
+  const action_open_composer_on_the_moved_selection = action(() =>
     clickButton(note[UI], "Comment")
   );
-  const assert_ended_epoch_refused = assert(() =>
+  const assert_moved_selection_refused = assert(() =>
     displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
     hasText(
       findNodeById(note[UI], "shared-note-comment-notice"),
@@ -582,17 +567,13 @@ export default pattern(() => {
     ) &&
     !listed(comments.get()).some((c) => c.draft)
   );
-  const action_editor_restates_the_selection = action(() => {
-    const ranges = note.commentRanges;
+  const action_editor_restates_the_selection = action(() =>
     fireEvent(
       editorOf(note[UI]),
       "oncf-selection-change",
-      selectionIn(content.get(), PINNED, {
-        epoch: ranges?.epoch ?? 0,
-        version: ranges?.version ?? 0,
-      }),
-    );
-  });
+      selectionIn(content.get(), PINNED),
+    )
+  );
   const action_type_pinned_comment = action(() =>
     typeInto(findNodeById(note[UI], "shared-note-comment-draft"), "Why pin?")
   );
@@ -601,39 +582,31 @@ export default pattern(() => {
   );
   const assert_restated_selection_posts = assert(() => {
     const pinned = listed(comments.get()).find((c) => c.body === "Why pin?");
-    const range = rangeIn(note.commentRanges, pinned?.id);
+    const range = rangeIn(note.commentAnchors, pinned?.id);
     return range !== undefined &&
       content.get().slice(range.from, range.to) === PINNED &&
       displayOf(findNodeById(note[UI], "shared-note-composer")) === "none";
   });
   // The person selects other text while the composer is open: the composer
-  // stays on the text it was opened on, which its anchor holds, and the post
-  // lands there. Cancelling a composer removes its anchor.
-  const action_select_everyone_again = action(() => {
-    const ranges = note.commentRanges;
+  // stays on the text it was opened on, which its anchors hold, and the post
+  // lands there. Cancelling a composer removes its anchors.
+  const action_select_everyone_again = action(() =>
     fireEvent(
       editorOf(note[UI]),
       "oncf-selection-change",
-      selectionIn(content.get(), HEADING, {
-        epoch: ranges?.epoch ?? 0,
-        version: ranges?.version ?? 0,
-      }),
-    );
-  });
+      selectionIn(content.get(), HEADING),
+    )
+  );
   const action_open_composer_on_everyone = action(() =>
     clickButton(note[UI], "Comment")
   );
-  const action_select_pinned_while_composing = action(() => {
-    const ranges = note.commentRanges;
+  const action_select_pinned_while_composing = action(() =>
     fireEvent(
       editorOf(note[UI]),
       "oncf-selection-change",
-      selectionIn(content.get(), PINNED, {
-        epoch: ranges?.epoch ?? 0,
-        version: ranges?.version ?? 0,
-      }),
-    );
-  });
+      selectionIn(content.get(), PINNED),
+    )
+  );
   const assert_composer_keeps_its_selection = assert(() => {
     const composer = findNodeById(note[UI], "shared-note-composer");
     return displayOf(composer) === "flex" && hasText(composer, HEADING) &&
@@ -660,7 +633,7 @@ export default pattern(() => {
   const action_post_second_look = action(() => clickButton(note[UI], "Post"));
   const assert_post_lands_on_the_composer_text = assert(() => {
     const again = listed(comments.get()).find((c) => c.body === "Again?");
-    const range = rangeIn(note.commentRanges, again?.id);
+    const range = rangeIn(note.commentAnchors, again?.id);
     return range !== undefined && again?.draft === false &&
       content.get().slice(range.from, range.to) === HEADING &&
       !listed(comments.get()).some((c) => c.draft);
@@ -671,7 +644,7 @@ export default pattern(() => {
   const action_cancel_composer = action(() => clickButton(note[UI], "Cancel"));
   const assert_cancel_removes_the_anchor = assert(() =>
     displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
-    note.commentRanges?.anchors.length === listed(comments.get()).length &&
+    anchoredCount(note.commentAnchors) === listed(comments.get()).length &&
     !listed(comments.get()).some((c) => c.draft)
   );
   // A draft continued and posted in another tab: the first tab's Post is
@@ -726,7 +699,7 @@ export default pattern(() => {
       c.body === "From tab two" && c.draft === false
     ) &&
     displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
-    note.commentRanges?.anchors.length === listed(comments.get()).length
+    anchoredCount(note.commentAnchors) === listed(comments.get()).length
   );
   // A draft discarded in another tab takes its anchor with it, and the first
   // tab's Cancel then has nothing left to discard.
@@ -758,7 +731,7 @@ export default pattern(() => {
   );
   const assert_discarded_draft_is_gone = assert(() =>
     !listed(comments.get()).some((c) => c.draft) &&
-    note.commentRanges?.anchors.length === listed(comments.get()).length
+    anchoredCount(note.commentAnchors) === listed(comments.get()).length
   );
   const action_cancel_after_discard = action(() =>
     clickButton(note[UI], "Cancel")
@@ -860,15 +833,15 @@ export default pattern(() => {
       { assertion: assert_reopened },
       { action: action_delete_by_verb },
       { assertion: assert_deleted_with_its_anchor },
-      { action: action_select_heading_at_a_version },
+      { action: action_select_heading },
       { action: action_open_composer_on_heading },
       { action: action_verb_edits_ahead_of_the_selection },
       { action: action_type_heading_comment },
       { action: action_post_heading_comment },
       { assertion: assert_comment_lands_where_the_text_moved },
-      { action: action_select_pinned_at_an_ended_epoch },
-      { action: action_open_composer_on_the_ended_epoch },
-      { assertion: assert_ended_epoch_refused },
+      { action: action_select_pinned_where_it_was },
+      { action: action_open_composer_on_the_moved_selection },
+      { assertion: assert_moved_selection_refused },
       { action: action_editor_restates_the_selection },
       { action: action_open_composer_on_pinned },
       { action: action_type_pinned_comment },

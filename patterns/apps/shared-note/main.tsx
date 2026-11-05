@@ -14,7 +14,6 @@ import {
   FS,
   handler,
   NAME,
-  type OpCursor,
   pattern,
   type PerSession,
   type PerSpace,
@@ -80,11 +79,12 @@ export interface SharedNoteOutput {
   participantName: PerUser<string>;
 
   /**
-   * Where each comment's text is now: the body's anchors, one per comment,
-   * drafts included, under the comment's `id`, or `undefined` until the body
-   * first holds one.
+   * Where each comment's text is now: the body's anchors, two per comment,
+   * drafts included. The text of the comment `id` runs from the anchor
+   * `<id>:from` to the anchor `<id>:to`. `undefined` until the body first
+   * holds an anchor.
    */
-  commentRanges: FieldAnchors | undefined;
+  commentAnchors: FieldAnchors | undefined;
 
   /** Adds `text` to the end of the document, on a line of its own. */
   appendLine: Stream<LineEvent>;
@@ -267,11 +267,14 @@ const clearPresenceNotice = handler<
 //
 // Comments
 //
-// A comment says which text it is about through an anchor of the body: a
-// range Memory keeps under the comment's id and moves through every edit,
-// whoever makes it. The comment stores no position. Comments and replies are
-// labeled `authored-by` whoever wrote them, by the runtime, and only the
-// handlers their policies name can write them.
+// A comment says which text it is about through two anchors of the body,
+// one where its text starts and one where it ends. Memory moves both through
+// every edit, whoever makes it, so the comment stores no position. A handler
+// changes the anchors as it changes any cell: it reads the body and the
+// anchors and writes the anchors, and its commit lands only while both are
+// still what it read. Comments and replies are labeled `authored-by` whoever
+// wrote them, by the runtime, and only the handlers their policies name can
+// write them.
 //
 
 /** A reply to a comment. */
@@ -296,7 +299,7 @@ export type RepliesValue = StoredReply[] | Default<[]>;
 
 /** A comment on a range of the body. */
 export interface CommentRecord {
-  /** The comment's id, which is also the id of its anchor on the body. */
+  /** The comment's id, which its two anchors on the body are named for. */
   id: string;
 
   /** The profile the comment was written under. */
@@ -306,16 +309,16 @@ export interface CommentRecord {
   body: string;
 
   /**
-   * Whether the comment is still being written. A draft holds its anchor from
-   * the moment its author opens the composer; it is listed only to its
+   * Whether the comment is still being written. A draft holds its anchors
+   * from the moment its author opens the composer; it is listed only to its
    * author, who can continue or discard it, and marks no text for anyone
    * else.
    */
   draft: boolean;
 
   /**
-   * The text the anchor covered when the comment was written, shown once an
-   * edit has deleted that text from the body.
+   * The text between the anchors when the comment was written, shown once
+   * an edit has deleted that text from the body.
    */
   quote: string;
 
@@ -353,25 +356,71 @@ export type StoredComment = AuthoredByCurrentUser<
 
 type CommentsCell = Writable<StoredComment[] | Default<[]>>;
 
+/** The body's anchors, as a handler reads and writes them. */
+type AnchorsCell = Writable<FieldAnchors | undefined>;
+
+/** The id of the anchor where the text of the comment `id` starts. */
+const fromAnchorOf = (id: string): string => `${id}:from`;
+
+/** The id of the anchor where the text of the comment `id` ends. */
+const toAnchorOf = (id: string): string => `${id}:to`;
+
+/**
+ * Anchors the comment `id` on `from` up to `to` of the body, beside the
+ * anchors the body already holds. The caller has read the body in the same
+ * handler, so the offsets refer to the text the commit lands on.
+ */
+const anchorComment = (
+  anchors: AnchorsCell,
+  id: string,
+  from: number,
+  to: number,
+): void => {
+  anchors.set({
+    ...anchors.get(),
+    [fromAnchorOf(id)]: from,
+    [toAnchorOf(id)]: to,
+  });
+};
+
+/** Removes the two anchors of the comment `id`, leaving the others. */
+const unanchorComment = (anchors: AnchorsCell, id: string): void => {
+  const {
+    [fromAnchorOf(id)]: _from,
+    [toAnchorOf(id)]: _to,
+    ...others
+  } = anchors.get() ?? {};
+  anchors.set(others);
+};
+
 /**
  * The editor's main selection, as `cf-selection-change` reports it: a range
- * of the text at `base`, the body version the editor had confirmed, or of
- * the editor's own text where `base` is `null`. `from === to` is nothing
- * selected.
+ * of the body as Memory has confirmed it to the editor, and the text there.
+ * `from === to` is nothing selected.
  */
 interface NoteSelection {
   from: number;
   to: number;
   text: string;
-  base: OpCursor | null;
 }
 
-const NOTHING_SELECTED: NoteSelection = {
-  from: 0,
-  to: 0,
-  text: "",
-  base: null,
-};
+const NOTHING_SELECTED: NoteSelection = { from: 0, to: 0, text: "" };
+
+/** A mark the editor draws: the text from one anchor of the body to another. */
+interface NoteHighlight {
+  id: string;
+  fromAnchor: string;
+  toAnchor: string;
+  kind?: string;
+}
+
+/** The mark on the text of the comment `id`, of `kind` where one is given. */
+const highlightOf = (id: string, kind?: string): NoteHighlight => ({
+  id,
+  fromAnchor: fromAnchorOf(id),
+  toAnchor: toAnchorOf(id),
+  ...(kind === undefined ? {} : { kind }),
+});
 
 /** The `display` of an element a session shows or hides. */
 type NoteDisplay = "block" | "flex" | "none";
@@ -410,7 +459,7 @@ const resolvedProfile = (
 const mintCommentId = (): string =>
   `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
-/** Stores a comment under `id`, on the anchor of the same id. */
+/** Stores a comment under `id`, which its anchors are named for. */
 const storeComment = (
   comments: CommentsCell,
   id: string,
@@ -459,14 +508,14 @@ const trackSelection = handler<
   { detail: NoteSelection },
   { selection: Writable<NoteSelection> }
 >((event, { selection }) => {
-  const { from, to, text, base } = event.detail;
-  selection.set({ from, to, text, base });
+  const { from, to, text } = event.detail;
+  selection.set({ from, to, text });
 });
 
 /**
- * The draft being written in this session, if any: its id, which is also its
- * anchor's, and the text that anchor covered when it was started. `id` is
- * empty while the composer is closed.
+ * The draft being written in this session, if any: its id, and the text
+ * between its anchors when it was started. `id` is empty while the composer
+ * is closed.
  */
 interface Composing {
   id: string;
@@ -478,7 +527,7 @@ const NOT_COMPOSING: Composing = { id: "", text: "" };
 /** What starting a comment works on. */
 interface OpenComposerState {
   content: Writable<string>;
-  commentRanges: FieldAnchors | undefined;
+  anchors: AnchorsCell;
   comments: CommentsCell;
   myProfile: ProfileCell | undefined;
   selection: Writable<NoteSelection>;
@@ -489,12 +538,11 @@ interface OpenComposerState {
 
 /**
  * Starts a comment on the current selection: a draft record under a new id,
- * and an anchor of the body under the same id. A selection with a version is
- * anchored as of that version; one without is checked against the body
- * first, and refused if the body no longer holds its text there. From then
- * on Memory keeps the range on its text through every edit, however long the
- * person writes and whatever they select meanwhile, and the draft stays
- * theirs to continue or discard if they leave.
+ * and the two anchors of the body named for it. The selection is checked
+ * against the body first, and refused if the body no longer holds its text
+ * there. From then on Memory keeps the anchors on that text through every
+ * edit, however long the person writes and whatever they select meanwhile,
+ * and the draft stays theirs to continue or discard if they leave.
  */
 const openComposer = handler<unknown, OpenComposerState>((_, state) => {
   const profile = resolvedProfile(state.myProfile);
@@ -506,24 +554,17 @@ const openComposer = handler<unknown, OpenComposerState>((_, state) => {
     state.notice.set("Post or cancel the comment you are writing first.");
     return;
   }
-  const { from, to, text, base } = state.selection.get();
+  const { from, to, text } = state.selection.get();
   if (from === to) {
     state.notice.set("Select the text to comment on first.");
     return;
   }
-  // A selection from an epoch the body has left names no version Memory
-  // holds; the body's anchors say which epoch it is in, when it has any.
-  const ranges = state.commentRanges;
-  if (
-    base === null
-      ? state.content.get().slice(from, to) !== text
-      : ranges !== undefined && ranges.epoch !== base.epoch
-  ) {
+  if (state.content.get().slice(from, to) !== text) {
     state.notice.set("The note changed under your selection; select again.");
     return;
   }
   const id = mintCommentId();
-  state.content.addAnchor(id, { from, to }, base === null ? {} : { base });
+  anchorComment(state.anchors, id, from, to);
   storeComment(state.comments, id, profile, "", text, true);
   state.composing.set({ id, text });
   state.draft.set("");
@@ -531,12 +572,12 @@ const openComposer = handler<unknown, OpenComposerState>((_, state) => {
 });
 
 /**
- * Deletes the draft `id` with its anchor, if it is still a draft and the
+ * Deletes the draft `id` with its anchors, if it is still a draft and the
  * caller wrote it; a draft posted or discarded meanwhile, from another tab,
  * is left as it is.
  */
 const discardDraftRecord = (
-  content: Writable<string>,
+  anchors: AnchorsCell,
   comments: CommentsCell,
   id: string,
 ): void => {
@@ -552,7 +593,7 @@ const discardDraftRecord = (
   comments.removeByValue(record);
   const cleared: Writable<StoredComment | undefined> = comments.elementById(id);
   cleared.set(undefined);
-  content.removeAnchor(id);
+  unanchorComment(anchors, id);
 };
 
 /** What continuing a draft works on. */
@@ -588,14 +629,14 @@ const resumeDraft = handler<unknown, ResumeState>(
 
 /** What discarding a draft works on. */
 interface DiscardState {
-  content: Writable<string>;
+  anchors: AnchorsCell;
   comments: CommentsCell;
 }
 
 /** Discards the draft `id`, from its row or from the composer's Cancel. */
 const discardDraft = handler<CommentIdEvent, DiscardState>(
-  (event, { content, comments }) =>
-    discardDraftRecord(content, comments, event.id),
+  (event, { anchors, comments }) =>
+    discardDraftRecord(anchors, comments, event.id),
 );
 
 /** What closing the composer works on. */
@@ -606,7 +647,7 @@ interface CloseComposerState {
   notice: Writable<string>;
 }
 
-/** Discards the draft being written, with its anchor, and closes the composer. */
+/** Discards the draft being written, with its anchors, and closes the composer. */
 const closeComposer = handler<unknown, CloseComposerState>(
   (_, { discardVerb, composing, draft, notice }) => {
     const { id } = composing.get();
@@ -668,12 +709,13 @@ const postComment = handler<unknown, PostCommentState>((_, state) => {
 /** What the `addComment` verb works on. */
 interface AddCommentState {
   content: Writable<string>;
+  anchors: AnchorsCell;
   comments: CommentsCell;
   myProfile: ProfileCell | undefined;
 }
 
 const addComment = handler<AddCommentEvent, AddCommentState>(
-  (event, { content, comments, myProfile }) => {
+  (event, { content, anchors, comments, myProfile }) => {
     const profile = resolvedProfile(myProfile);
     if (profile === undefined) throw new Error(NO_PROFILE);
     const body = event.body.trim();
@@ -685,14 +727,14 @@ const addComment = handler<AddCommentEvent, AddCommentState>(
       "quote",
     );
     const id = mintCommentId();
-    content.addAnchor(id, { from, to: from + event.quote.length });
+    anchorComment(anchors, id, from, from + event.quote.length);
     storeComment(comments, id, profile, body, event.quote, false);
   },
 );
 
 /** What the comment verbs other than `addComment` work on. */
 interface CommentActState {
-  content: Writable<string>;
+  anchors: AnchorsCell;
   comments: CommentsCell;
   myProfile: ProfileCell | undefined;
 }
@@ -725,11 +767,11 @@ const reopenComment = handler<CommentIdEvent, CommentActState>(
 );
 
 /**
- * Deletes a comment and its anchor. Only the person the comment is labeled
+ * Deletes a comment and its anchors. Only the person the comment is labeled
  * as written by can delete it.
  */
 const deleteComment = handler<CommentIdEvent, CommentActState>(
-  (event, { content, comments }) => {
+  (event, { anchors, comments }) => {
     const record = commentNamed(comments, event.id);
     const actor = currentPrincipal();
     if (actor === undefined || principalOf(record, "authored-by") !== actor) {
@@ -740,7 +782,7 @@ const deleteComment = handler<CommentIdEvent, CommentActState>(
       event.id,
     );
     cleared.set(undefined);
-    content.removeAnchor(event.id);
+    unanchorComment(anchors, event.id);
   },
 );
 
@@ -805,7 +847,7 @@ export interface SharedNoteCoreInput {
 /** The body's editor with its comments panel, and the verbs. */
 export interface SharedNoteCoreOutput {
   [UI]: VNode;
-  commentRanges: FieldAnchors | undefined;
+  commentAnchors: FieldAnchors | undefined;
   appendLine: Stream<LineEvent>;
   prependLine: Stream<LineEvent>;
   replaceText: Stream<ReplaceTextEvent>;
@@ -833,13 +875,13 @@ export const SharedNoteCore = pattern<
   const hasRecovery = computed(() => recovery.get() !== null);
   const recoveryText = computed(() => recovery.get() ?? "");
 
-  const commentRanges = anchorsOf(content);
-  const acts = { content, comments, myProfile };
+  const anchors = anchorsOf(content);
+  const acts = { anchors, comments, myProfile };
   const replyVerb = commitReply(acts);
   const resolveVerb = resolveComment(acts);
   const reopenVerb = reopenComment(acts);
   const deleteVerb = deleteComment(acts);
-  const discardVerb = discardDraft({ content, comments });
+  const discardVerb = discardDraft({ anchors, comments });
   const selection = new Writable.perSession<NoteSelection>(NOTHING_SELECTED);
   const composing = new Writable.perSession<Composing>(NOT_COMPOSING);
   const draft = new Writable.perSession("");
@@ -849,7 +891,7 @@ export const SharedNoteCore = pattern<
   const showResolved = new Writable.perSession(false);
   const composer = {
     content,
-    commentRanges,
+    anchors,
     comments,
     myProfile,
     selection,
@@ -858,18 +900,25 @@ export const SharedNoteCore = pattern<
     notice,
   };
 
-  // Each comment's range by id, as Memory holds it now.
+  // Each comment's range by id, as Memory holds its two anchors now.
   const rangeOf = computed(() => {
+    const held: FieldAnchors = anchors ?? {};
     const ranges: Record<string, { from: number; to: number }> = {};
-    for (const anchor of commentRanges?.anchors ?? []) {
-      ranges[anchor.id] = { from: anchor.from, to: anchor.to };
+    for (const comment of comments.get()) {
+      if (comment === undefined) continue;
+      const from = held[fromAnchorOf(comment.id)];
+      const to = held[toAnchorOf(comment.id)];
+      if (from !== undefined && to !== undefined) {
+        ranges[comment.id] = { from, to };
+      }
     }
     return ranges;
   });
 
-  // What the editor marks: every open comment, the selected one told apart.
-  // The editor knows where each one is. The open comments are the same for
-  // every viewer, and only the last step reads the viewer's selection.
+  // What the editor marks: the text between the two anchors of every open
+  // comment, the selected one told apart. The editor knows where each anchor
+  // is. The open comments are the same for every viewer, and only the last
+  // step reads the viewer's selection.
   const openIds = computed(() =>
     comments.get()
       .filter((comment) =>
@@ -878,18 +927,16 @@ export const SharedNoteCore = pattern<
       .map((comment) => comment.id)
   );
   // The comment being written marks its text too, for the person writing it.
-  const highlights = computed(
-    (): PerSession<{ id: string; kind?: string }[]> => {
-      const selected = selectedId.get();
-      const marks = openIds.map((id) =>
-        id === selected ? { id, kind: "active" } : { id }
-      );
-      const writing = composing.get().id;
-      return writing === "" || openIds.includes(writing)
-        ? marks
-        : [...marks, { id: writing, kind: "active" }];
-    },
-  );
+  const highlights = computed((): PerSession<NoteHighlight[]> => {
+    const selected = selectedId.get();
+    const marks = openIds.map((id) =>
+      highlightOf(id, id === selected ? "active" : undefined)
+    );
+    const writing = composing.get().id;
+    return writing === "" || openIds.includes(writing)
+      ? marks
+      : [...marks, highlightOf(writing, "active")];
+  });
   const openCount = computed(() => openIds.length);
   const hasProfile = computed(() => myProfile?.get() !== undefined);
   const commentDisabled = computed((): PerSession<boolean> => {
@@ -1036,18 +1083,19 @@ export const SharedNoteCore = pattern<
               // The panel lists comments in the order their text appears in
               // the body, and those whose text is gone after the rest.
               const order = computed(() =>
-                range === undefined || range.from === range.to
+                range === undefined || range.to <= range.from
                   ? 1_000_000_000
                   : range.from
               );
               const gone = computed(() =>
-                range !== undefined && range.from === range.to
+                range !== undefined && range.to <= range.from
               );
-              // The quote is the author's; the text under the anchor is the
-              // note's now, which anyone who can write the note can change.
-              // It is shown apart from the quote whenever the two differ.
+              // The quote is the author's; the text between the anchors is
+              // the note's now, which anyone who can write the note can
+              // change. It is shown apart from the quote whenever the two
+              // differ.
               const now = computed(() =>
-                range === undefined || range.from === range.to
+                range === undefined || range.to <= range.from
                   ? ""
                   : content.get().slice(range.from, range.to)
               );
@@ -1276,11 +1324,11 @@ export const SharedNoteCore = pattern<
 
   return {
     [UI]: view,
-    commentRanges,
+    commentAnchors: anchors,
     appendLine: appendLine({ content }),
     prependLine: prependLine({ content }),
     replaceText: replaceText({ content }),
-    addComment: addComment(acts),
+    addComment: addComment({ content, ...acts }),
     replyToComment: replyVerb,
     resolveComment: resolveVerb,
     reopenComment: reopenVerb,
@@ -1352,7 +1400,7 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
       content,
       comments,
       participantName,
-      commentRanges: note.commentRanges,
+      commentAnchors: note.commentAnchors,
       appendLine: note.appendLine,
       prependLine: note.prependLine,
       replaceText: note.replaceText,

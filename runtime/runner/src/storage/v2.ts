@@ -232,7 +232,6 @@ import {
 import { SelectorTracker } from "./selector-tracker.ts";
 import * as SubscriptionManager from "./subscription.ts";
 import {
-  getDirectTransactionAnchorFieldAddresses,
   getDirectTransactionMergeableOpAddresses,
   getDirectTransactionReadActivities,
   getTransactionWriteAttempts,
@@ -573,8 +572,7 @@ const documentOperationsOf = (
 /**
  * The operations a commit hands the store: cell operations first, a patch
  * carrying its patches alone, then folded SQLite operations, and the
- * collaborative-field operations last, in order, after every write to their
- * documents.
+ * collaborative-field edits last, after every write to their documents.
  */
 const storeOperationsOf = (
   operations: readonly NativeCommitOperation[],
@@ -608,13 +606,12 @@ const storeOperationsOf = (
 /**
  * `operation` as its document's pending layer holds it: each field that one of
  * `applyOps` edits is replaced by the text `operation.value` holds there. The
- * wire patch leaves that field to the edits, and each edit lands only on the
- * text its hash names, which the transaction's read and the edits before it
- * leave there, so the store's result is that text, and the layer replays to
- * it. That holds only for the operations {@link NativeStorageCommit.applyOps}
- * admits, generated with the write that `value` records; an operation with no
- * hash changes anchors alone and no text, so it shows nothing here, and a
- * rebased or blind edit would have no result to show ahead of the verdict.
+ * wire patch leaves that field to the edit, and the edit lands only on the
+ * value its transaction read, so the store's result is that text, and the
+ * layer replays to it. That holds only for the edits
+ * {@link NativeStorageCommit.applyOps} admits, one per field and generated
+ * with the write that `value` records; a rebased or blind edit, or a second
+ * one on the field, has no result to show ahead of the verdict.
  */
 const withTextEditsShown = (
   operation: NativeCommitOperation,
@@ -622,33 +619,28 @@ const withTextEditsShown = (
 ): NativeCommitOperation => {
   if (operation.op !== "patch" || applyOps.length === 0) return operation;
   const scope = normalizeCellScope(operation.scope);
-  const shown = new Map<string, PatchOp>();
-  for (const edit of applyOps) {
-    if (
-      edit.baselineHash === undefined || edit.id !== operation.id ||
-      normalizeCellScope(edit.scope) !== scope
-    ) {
-      continue;
-    }
-    const path = ["value", ...edit.path];
-    const text = readValueAtPath(operation.value, path);
-    if (typeof text !== "string") {
-      throw new Error(
-        debugStr`an edited field holds no text at $quote${path}`,
-      );
-    }
-    const pointer = encodePointer(path);
-    shown.set(pointer, { op: "replace", path: pointer, value: text });
-  }
-  return shown.size === 0
+  const shown: PatchOp[] = applyOps
+    .filter((edit) =>
+      edit.id === operation.id && normalizeCellScope(edit.scope) === scope
+    )
+    .map((edit) => {
+      const path = ["value", ...edit.path];
+      const text = readValueAtPath(operation.value, path);
+      if (typeof text !== "string") {
+        throw new Error(
+          debugStr`an edited field holds no text at $quote${path}`,
+        );
+      }
+      return { op: "replace", path: encodePointer(path), value: text };
+    });
+  return shown.length === 0
     ? operation
-    : { ...operation, patches: [...operation.patches, ...shown.values()] };
+    : { ...operation, patches: [...operation.patches, ...shown] };
 };
 
 /**
- * Throws when `transaction` carries collaborative-field operations, text
- * edits and anchor changes alike, which a commit built ahead of its seal does
- * not carry: `what` names the path refusing them.
+ * Throws when `transaction` carries collaborative-field edits, which a commit
+ * built ahead of its seal does not carry: `what` names the path refusing them.
  */
 const refuseApplyOps = (transaction: NativeStorageCommit, what: string) => {
   if (transaction.applyOps?.length) {
@@ -10424,22 +10416,6 @@ export class SpaceReplica
         mergeableOpPathsByEntity.set(key, [op.path]);
       }
     }
-    // An anchor change the store resolves against what the field holds, an
-    // add against a version or a remove, does not depend on the field's text
-    // either. The reads incidental to it are the ones beneath the field, such
-    // as a link resolution's probe, and a non-recursive one at it; a recursive
-    // read of the field, which an add without a base makes, stays.
-    const anchorFieldsByEntity = new Map<string, (readonly string[])[]>();
-    for (
-      const field of getDirectTransactionAnchorFieldAddresses(source) ?? []
-    ) {
-      if (field.space !== this.#space) continue;
-      const key = `${field.id}\0${normalizeCellScope(field.scope)}`;
-      anchorFieldsByEntity.set(key, [
-        ...anchorFieldsByEntity.get(key) ?? [],
-        field.path,
-      ]);
-    }
     // A document whose CFC envelope this transaction writes beside a
     // mergeable op. The envelope is a whole-member replace whose entries name
     // positions in the array the transaction read, and which carries forward
@@ -10488,14 +10464,6 @@ export class SpaceReplica
 
       const scope = normalizeCellScope(read.scope);
       const key = `${read.id}\0${scope}`;
-      if (
-        anchorFieldsByEntity.get(key)?.some((field) =>
-          isStrictPrefixPath(field, read.path) ||
-          (read.nonRecursive === true && isSamePath(field, read.path))
-        )
-      ) {
-        continue;
-      }
       if (envelopeWritersWithMergeableOps.has(key)) {
         commitReads.push(read);
         continue;

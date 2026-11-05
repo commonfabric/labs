@@ -2,7 +2,6 @@ import type {
   CellScope,
   FabricPlainObject,
   FabricValue,
-  OpCursor,
   SchemaPathSelector,
   TextChange,
 } from "@commonfabric/api";
@@ -38,7 +37,6 @@ import type {
   EntityIdListOptions,
   EntityIdListResult,
   EventAttentionResolveResult,
-  FieldAnchor,
   GenesisRoot,
   MemoryProtocolFlags,
   OperationFieldQuery,
@@ -1982,15 +1980,6 @@ export interface IStorageTransaction {
   getMergeableOpAddresses?(): Iterable<IMemorySpaceAddress>;
 
   /**
-   * The collaborative fields at which this transaction recorded anchor
-   * changes the store resolves against what the field holds: adds against a
-   * version, and removes. The commit's read-set builder drops the incidental
-   * reads of such a field, those beneath it and non-recursive ones at it, from
-   * conflict detection.
-   */
-  getAnchorFieldAddresses?(): Iterable<IMemorySpaceAddress>;
-
-  /**
    * Optional: record a folded SQLite write onto this transaction so it commits
    * ATOMICALLY with the cell ops targeting `space` (one commit = cell ops + a
    * `sqlite` op; on SQL failure the whole commit aborts). Claims `space` as a
@@ -2019,30 +2008,6 @@ export interface IStorageTransaction {
     address: IMemorySpaceAddress,
     changes: readonly TextChange[],
   ): string;
-
-  /**
-   * Optional: record `changes` to the anchors of the string at `address`, in
-   * order, so that the commit carries them on `apply-op`s of the field
-   * (memory-v2 §7.7.4). Only the last change to an id counts: a later add
-   * replaces an earlier one, and a remove drops an earlier add.
-   *
-   * An add without a base is against the value the field holds in this
-   * transaction, after any text changes recorded before it, and reaches the
-   * store beside them, applying only while the field holds the value this
-   * transaction read, as they do. An add with a base is against the text the
-   * field held at that version, and the store maps it from there; the adds
-   * with a base at one field name one version. A remove depends on nothing
-   * the field holds, and reaches the store whatever it holds: a field that
-   * holds no anchors, collaborative or not, takes it as a no-op.
-   *
-   * Throws when an add without a base does not fit the value, when the field
-   * holds no string or was written by other means first, when a base is not a
-   * version, or when adds with a base name two versions.
-   */
-  recordAnchorChanges?(
-    address: IMemorySpaceAddress,
-    changes: readonly AnchorChange[],
-  ): void;
 
   /**
    * Optional: whether this transaction has replaced any document root.
@@ -2580,17 +2545,6 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
     link: NormalizedFullLink,
     changes: readonly TextChange[],
   ): string;
-
-  /**
-   * Record anchor changes to the string addressed by `link`, forwarded to the
-   * underlying transaction after resolving the link to a memory address. See
-   * {@link IStorageTransaction.recordAnchorChanges}. Throws when the
-   * underlying transaction does not record anchor changes.
-   */
-  recordAnchorChanges(
-    link: NormalizedFullLink,
-    changes: readonly AnchorChange[],
-  ): void;
 
   /**
    * Abandon the mergeable fast path for the array addressed by `link`, forwarded
@@ -4312,59 +4266,33 @@ export interface NativeStorageCommit {
   sqliteOps?: readonly SqliteOperation[];
 
   /**
-   * Collaborative-field operations recorded with `recordTextChanges()` and
-   * `recordAnchorChanges()`, applied in the same wire commit after every other
-   * operation, in list order. The field changes they carry are left out of the
-   * patch in `operations`, whose `value` still holds them, so the local view
-   * shows the edited text while the store integrates it.
+   * Collaborative-field edits recorded with `recordTextChanges()`, applied in
+   * the same wire commit after every other operation. The field changes they
+   * carry are left out of the patch in `operations`, whose `value` still holds
+   * them, so the local view shows the edited text while the store integrates
+   * it.
    *
    * The replica shows that text ahead of the verdict, which is sound only for
-   * what the list holds: operations this transaction generated, and at each
-   * field, those carrying a hash each name the text the field holds when the
-   * store reaches them, so that together they produce exactly the text the
-   * transaction's ordinary write left there, and the others change anchors
-   * alone. Accepted, they yield that text and nothing else. An edit the store
-   * rebases, or a blind one, would make the result unpredictable, and
-   * {@link NativeTextEdit} keeps both out.
+   * what the list holds: edits this transaction generated, one per field, each
+   * with no base and a hash of the value the transaction read, combining every
+   * change the transaction made to the field, and producing exactly the text
+   * its ordinary write left there. An accepted edit then yields that text and
+   * nothing else. A cursor-based edit, which the store rebases, a blind one, or
+   * a second operation on the same field would make the result unpredictable,
+   * and none of them belongs here; {@link NativeTextEdit} keeps out the first
+   * two.
    */
   applyOps?: readonly NativeTextEdit[];
 }
 
 /**
  * An `apply-op` as a transaction's native commit carries it in
- * {@link NativeStorageCommit.applyOps}: no base and a hash of the text it
- * applies to; a base, an empty payload, and anchors added as of that version;
- * or neither, an empty payload, and anchors removed.
+ * {@link NativeStorageCommit.applyOps}: no base, and a hash of the value the
+ * transaction read.
  */
 export type NativeTextEdit =
-  & Omit<ApplyOpOperation, "base" | "baselineHash" | "anchors">
-  & (
-    | {
-      base?: never;
-      baselineHash: string;
-      anchors?: ApplyOpOperation["anchors"];
-    }
-    | {
-      base: OpCursor;
-      baselineHash?: never;
-      anchors: { add: FieldAnchor[]; remove?: never };
-    }
-    | {
-      base?: never;
-      baselineHash?: never;
-      anchors: { add?: never; remove: string[] };
-    }
-  );
-
-/**
- * One change to the anchors of a collaborative field, as
- * {@link IStorageTransaction.recordAnchorChanges} records it: an add of a
- * range under `id`, stated against the transaction's value or, with `base`,
- * against the field's text at that version; or a remove of `id`.
- */
-export type AnchorChange =
-  | { op: "add"; id: string; from: number; to: number; base?: OpCursor }
-  | { op: "remove"; id: string };
+  & Omit<ApplyOpOperation, "base" | "baselineHash">
+  & { base?: never; baselineHash: string };
 
 export type Activity = Variant<{
   read: IReadActivity;

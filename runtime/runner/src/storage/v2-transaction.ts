@@ -1,9 +1,4 @@
-import type {
-  AnchorRange,
-  FabricValue,
-  OpCursor,
-  TextChange,
-} from "@commonfabric/api";
+import type { FabricValue, TextChange } from "@commonfabric/api";
 import {
   cloneIfNecessary,
   cloneWithValueAtPath,
@@ -21,8 +16,6 @@ import {
   CODEMIRROR_CHANGESET_CODEC,
   codeMirrorTextChangesPayload,
   type CommitPrecondition,
-  type FieldAnchor,
-  type FieldAnchorChanges,
   getCommitPreconditionsConfig,
   operationBaselineHash,
   type PatchOp,
@@ -61,7 +54,6 @@ import { createTransactionCommitReceipt } from "./commit-receipt.ts";
 import { diagnosticPrefix, type PendingCommitContext } from "./diagnostics.ts";
 import type {
   Activity,
-  AnchorChange,
   ChangeGroup,
   CommitError,
   IAttestation,
@@ -239,135 +231,25 @@ type WritableDocumentEntry = {
 type DocumentEntry = ReadDocumentEntry | WritableDocumentEntry;
 
 /**
- * What a transaction recorded at one string field, which its commit carries
- * as `apply-op`s of the field.
+ * The text changes a transaction recorded at one string field, which its
+ * commit carries as one `apply-op` against the transaction's read of it.
  */
-type FieldChangeIntent = {
+type TextChangeIntent = {
   /** The field's document path, `value` first. */
   path: readonly string[];
 
-  /**
-   * Text changes, and anchor changes stated against the value the transaction
-   * holds, which reach the store against the transaction's read of the field.
-   */
-  edits?: FieldEdits;
-
-  /** Anchors added against a version of the field. */
-  based?: BasedAnchorAdds;
-
-  /**
-   * Ids removed from the field's anchors, and the id their `apply-op` is
-   * submitted under. A remove depends on nothing the field holds, so that
-   * operation carries no base and no hash.
-   */
-  removes?: { ids: Set<string>; submissionId: string };
-};
-
-/** The changes at a field that are against the transaction's read of it. */
-type FieldEdits = {
-  /**
-   * The value the transaction read at the field, which the edits are against.
-   */
+  /** The value the transaction read at the field, which the edit is against. */
   baseline: string;
+
+  /** The recorded batches, each against the value the one before it left. */
+  batches: (readonly TextChange[])[];
 
   /** The field's value with every batch applied. */
   expected: string;
 
-  /**
-   * The changes in recorded order, split where a text change follows an
-   * anchor change, so that each segment's anchors are stated against the text
-   * its batches leave.
-   */
-  segments: FieldSegment[];
-};
-
-/** A run of text changes, and the anchor changes recorded after them. */
-type FieldSegment = {
-  /** The recorded batches, each against the value the one before it left. */
-  batches: (readonly TextChange[])[];
-
-  /** The anchors added, by id. */
-  anchors: Map<string, AnchorRange>;
-
-  /** The id the segment's `apply-op` is submitted under. */
-  submissionId: string;
-};
-
-/** A field whose text a transaction changed, as its commit's patch omits it. */
-type PendingTextChange = { path: readonly string[]; edits: FieldEdits };
-
-/** Anchors added against one version of a field. */
-type BasedAnchorAdds = {
-  /** The version the ranges are stated at. */
-  base: OpCursor;
-
-  /** The ranges, by id. */
-  anchors: Map<string, AnchorRange>;
-
   /** The id the `apply-op` is submitted under. */
   submissionId: string;
 };
-
-/**
- * Throws when `range` is not a range of a text `length` code units long:
- * integer positions, with `0 <= from <= to <= length`.
- */
-const checkAnchorRange = (range: AnchorRange, length: number): void => {
-  const { from, to } = range;
-  if (
-    !Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 ||
-    to < from || to > length
-  ) {
-    throw new RangeError(
-      debugStr`anchor range $quote${from} to $quote${to} falls outside ` +
-        (length === Infinity ? "any text" : `a text of length ${length}`),
-    );
-  }
-};
-
-/**
- * Removes `id` from every change `intent` holds, ahead of recording a later
- * change to it. Only the last change to an id counts, since an add replaces
- * the range the id holds and a remove drops it.
- */
-const dropAnchor = (intent: FieldChangeIntent, id: string): void => {
-  intent.based?.anchors.delete(id);
-  intent.removes?.ids.delete(id);
-  for (const segment of intent.edits?.segments ?? []) {
-    segment.anchors.delete(id);
-  }
-};
-
-/** The anchors `add` holds, as an `apply-op` adds them. */
-const anchorAdds = (add: ReadonlyMap<string, AnchorRange>): FieldAnchor[] =>
-  [...add].map(([id, { from, to }]) => ({ id, from, to }));
-
-/** The `anchors` member of an `apply-op` adding `add`, or none for no adds. */
-const anchorsMember = (
-  add: ReadonlyMap<string, AnchorRange>,
-): { anchors?: FieldAnchorChanges } =>
-  add.size === 0 ? {} : { anchors: { add: anchorAdds(add) } };
-
-/**
- * Throws when `base` is not a version of a field: an epoch from 1 and a
- * version from 0, both integers.
- */
-const checkOpCursor = (base: OpCursor): void => {
-  if (
-    !Number.isSafeInteger(base.epoch) || base.epoch < 1 ||
-    !Number.isSafeInteger(base.version) || base.version < 0
-  ) {
-    throw new RangeError(
-      debugStr`an anchor's base must name an epoch from 1 and a version ` +
-        debugStr`from 0, not $quote${base}`,
-    );
-  }
-};
-
-/** Whether `native` carries nothing for the store to apply. */
-const isEmptyNativeCommit = (native: NativeStorageCommit): boolean =>
-  native.operations.length === 0 && !native.preconditions?.length &&
-  !native.sqliteOps?.length && !native.applyOps?.length;
 
 type SpaceBranch = {
   space: MemorySpace;
@@ -1273,13 +1155,12 @@ export class V2StorageTransaction implements IStorageTransaction {
   #sqliteOps = new Map<MemorySpace, SqliteOperation[]>();
 
   /**
-   * Text and anchor changes per space, keyed by document and then by the
-   * field's document pointer (`recordTextChanges()`,
-   * `recordAnchorChanges()`).
+   * Text changes per space, keyed by document and then by the field's
+   * document pointer (`recordTextChanges()`).
    */
-  #fieldChanges = new Map<
+  #textChanges = new Map<
     MemorySpace,
-    Map<string, Map<string, FieldChangeIntent>>
+    Map<string, Map<string, TextChangeIntent>>
   >();
 
   #writeSpace?: MemorySpace;
@@ -1671,20 +1552,6 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
   }
 
-  *getAnchorFieldAddresses(): Iterable<IMemorySpaceAddress> {
-    if (this.#textChangesAsWholeDocuments) return;
-    for (const [space, byDocument] of this.#fieldChanges) {
-      for (const [docKey, byPath] of byDocument) {
-        const { id, scope } = this.#parseDocKey(docKey);
-        for (const { path, based, removes } of byPath.values()) {
-          if ((based?.anchors.size ?? 0) > 0 || (removes?.ids.size ?? 0) > 0) {
-            yield { space, id, scope, path };
-          }
-        }
-      }
-    }
-  }
-
   recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void {
     this.#assertWritable("recordSqliteWrite()");
     const ready = this.#editable();
@@ -1714,8 +1581,35 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (ready.error) throw ready.error;
     const claimed = this.#claimWriteSpace(address.space);
     if (claimed.error) throw claimed.error;
-    const intent = this.#fieldIntent(address, "text changes");
-    const current = this.#currentText(address, intent.edits, "text changes");
+    if (address.path[0] !== "value") {
+      throw new Error(
+        debugStr`text changes need a path under \`value\`, not $quote${address.path}`,
+      );
+    }
+    const { doc } = this.#document(this.#branch(address.space), address);
+    const current = readValueAtPath(
+      (doc.current ?? doc.initial).value,
+      address.path,
+    );
+    if (typeof current !== "string") {
+      throw new TypeError(
+        debugStr`text changes need a string, and the field holds $quote${current}`,
+      );
+    }
+    const docKey = this.#docKey(address);
+    const pathKey = encodePointer(address.path);
+    const intent = this.#textChanges.get(address.space)?.get(docKey)?.get(
+      pathKey,
+    );
+    const unchangedSoFar = intent === undefined
+      ? current === readValueAtPath(doc.initial.value, address.path)
+      : current === intent.expected;
+    if (!unchangedSoFar) {
+      throw new Error(
+        "text changes describe edits to the value this transaction read, and " +
+          "the transaction already wrote the field another way",
+      );
+    }
     // The payload is encoded at commit, so the changes are copied now: a
     // caller changing its list afterward must not change what the commit
     // sends from the value this call returned.
@@ -1724,190 +1618,29 @@ export class V2StorageTransaction implements IStorageTransaction {
     ) => ({ from, to: to ?? from, insert: insert ?? "" }));
     const next = applyTextChanges(current, recorded);
     if (next === current) return next;
-    const edits = intent.edits ??= {
-      baseline: current,
-      expected: current,
-      segments: [],
-    };
-    const last = edits.segments.at(-1);
-    if (last === undefined || last.anchors.size > 0) {
-      edits.segments.push({
-        batches: [recorded],
-        anchors: new Map(),
-        submissionId: crypto.randomUUID(),
-      });
-    } else {
-      last.batches.push(recorded);
+    if (intent !== undefined) {
+      intent.batches.push(recorded);
+      intent.expected = next;
+      return next;
     }
-    edits.expected = next;
-    return next;
-  }
-
-  recordAnchorChanges(
-    address: IMemorySpaceAddress,
-    changes: readonly AnchorChange[],
-  ): void {
-    this.#assertWritable("recordAnchorChanges()");
-    const ready = this.#editable();
-    if (ready.error) throw ready.error;
-    const claimed = this.#claimWriteSpace(address.space);
-    if (claimed.error) throw claimed.error;
-    const intent = this.#fieldIntent(address, "anchor changes");
-    // The whole list is checked before any of it is recorded, so a change it
-    // refuses leaves none of the others behind.
-    this.#checkAnchorChanges(address, intent, changes);
-    for (const change of changes) {
-      dropAnchor(intent, change.id);
-      if (change.op === "remove") {
-        intent.removes ??= {
-          ids: new Set(),
-          submissionId: crypto.randomUUID(),
-        };
-        intent.removes.ids.add(change.id);
-      } else if (change.base !== undefined) {
-        intent.based = {
-          base: { epoch: change.base.epoch, version: change.base.version },
-          anchors: intent.based?.anchors ?? new Map(),
-          submissionId: intent.based?.submissionId ?? crypto.randomUUID(),
-        };
-        intent.based.anchors.set(change.id, {
-          from: change.from,
-          to: change.to,
-        });
-      } else {
-        if (intent.edits === undefined) {
-          const text = this.#currentText(address, undefined, "anchor changes");
-          intent.edits = { baseline: text, expected: text, segments: [] };
-        }
-        const { edits } = intent;
-        let last = edits.segments.at(-1);
-        if (last === undefined) {
-          last = {
-            batches: [],
-            anchors: new Map(),
-            submissionId: crypto.randomUUID(),
-          };
-          edits.segments.push(last);
-        }
-        last.anchors.set(change.id, { from: change.from, to: change.to });
-      }
-    }
-  }
-
-  /**
-   * Helper for `recordAnchorChanges()`, which checks `changes` against what
-   * `intent` holds at the field `address` names, as recording them in order
-   * would, and throws as `recordAnchorChanges()` documents.
-   */
-  #checkAnchorChanges(
-    address: IMemorySpaceAddress,
-    intent: FieldChangeIntent,
-    changes: readonly AnchorChange[],
-  ): void {
-    let current: string | undefined;
-    let base = intent.based?.base;
-    const based = new Set(intent.based?.anchors.keys());
-    for (const change of changes) {
-      if (typeof change.id !== "string" || change.id.length === 0) {
-        throw new TypeError(
-          debugStr`an anchor id must be a non-empty string, not $quote${change.id}`,
-        );
-      }
-      // A later change to an id replaces any earlier one, so an earlier add
-      // of this id against a version holds no version this one must match.
-      based.delete(change.id);
-      if (change.op === "add" && change.base !== undefined) {
-        checkAnchorRange(change, Infinity);
-        checkOpCursor(change.base);
-        if (
-          base !== undefined && based.size > 0 &&
-          (base.epoch !== change.base.epoch ||
-            base.version !== change.base.version)
-        ) {
-          throw new Error(
-            "the anchors a transaction adds to one field against a version " +
-              debugStr`name one version, and these name $quote${base} ` +
-              debugStr`and $quote${change.base}`,
-          );
-        }
-        base = change.base;
-        based.add(change.id);
-        continue;
-      }
-      if (change.op === "add") {
-        current ??= this.#currentText(address, intent.edits, "anchor changes");
-        checkAnchorRange(change, current.length);
-      }
-    }
-  }
-
-  /**
-   * Helper for `recordTextChanges()` and `recordAnchorChanges()`, which
-   * returns what this transaction recorded at the field `address` names,
-   * recording an empty intent there first where it has none. `what` names the
-   * changes, for the error thrown when `address` is not under `value`.
-   */
-  #fieldIntent(
-    address: IMemorySpaceAddress,
-    what: string,
-  ): FieldChangeIntent {
-    if (address.path[0] !== "value") {
-      throw new Error(
-        debugStr`${what} need a path under \`value\`, not $quote${address.path}`,
-      );
-    }
-    let byDocument = this.#fieldChanges.get(address.space);
+    let byDocument = this.#textChanges.get(address.space);
     if (byDocument === undefined) {
       byDocument = new Map();
-      this.#fieldChanges.set(address.space, byDocument);
+      this.#textChanges.set(address.space, byDocument);
     }
-    const docKey = this.#docKey(address);
     let byPath = byDocument.get(docKey);
     if (byPath === undefined) {
       byPath = new Map();
       byDocument.set(docKey, byPath);
     }
-    const pathKey = encodePointer(address.path);
-    let intent = byPath.get(pathKey);
-    if (intent === undefined) {
-      intent = { path: address.path };
-      byPath.set(pathKey, intent);
-    }
-    return intent;
-  }
-
-  /**
-   * Helper for `recordTextChanges()` and `recordAnchorChanges()`, which
-   * returns the string the field at `address` holds in this transaction.
-   * Throws when it holds no string, or when this transaction wrote it other
-   * than through the changes `edits` records. `what` names the changes being
-   * recorded, for those errors.
-   */
-  #currentText(
-    address: IMemorySpaceAddress,
-    edits: FieldEdits | undefined,
-    what: string,
-  ): string {
-    const { doc } = this.#document(this.#branch(address.space), address);
-    const current = readValueAtPath(
-      (doc.current ?? doc.initial).value,
-      address.path,
-    );
-    if (typeof current !== "string") {
-      throw new TypeError(
-        debugStr`${what} need a string, and the field holds $quote${current}`,
-      );
-    }
-    const unchangedSoFar = edits === undefined
-      ? current === readValueAtPath(doc.initial.value, address.path)
-      : current === edits.expected;
-    if (!unchangedSoFar) {
-      throw new Error(
-        `${what} are stated against the value this transaction read, and ` +
-          "the transaction already wrote the field another way",
-      );
-    }
-    return current;
+    byPath.set(pathKey, {
+      path: address.path,
+      baseline: current,
+      batches: [recorded],
+      expected: next,
+      submissionId: crypto.randomUUID(),
+    });
+    return next;
   }
 
   getNativeCommit(space: MemorySpace): NativeStorageCommit | undefined {
@@ -1916,8 +1649,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     const sqliteOps = this.#sqliteOps.get(space);
     if (
       !branch &&
-      nativePreconditions.length === 0 && !sqliteOps?.length &&
-      !this.#fieldChanges.has(space)
+      nativePreconditions.length === 0 && !sqliteOps?.length
     ) {
       return undefined;
     }
@@ -2104,7 +1836,7 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     const applyOps = this.#textChangesAsWholeDocuments
       ? []
-      : this.#fieldOperations(space);
+      : this.#textChangeOperations(space);
     return {
       operations,
       ...(nativePreconditions.length
@@ -2116,24 +1848,18 @@ export class V2StorageTransaction implements IStorageTransaction {
   }
 
   /**
-   * Helper for `getNativeCommit()`, which returns the fields of the document
-   * at `docKey` in `space` whose text the transaction changed, or `undefined`
-   * where there are none.
+   * Helper for `getNativeCommit()`, which returns the text changes recorded
+   * against the document at `docKey` in `space` that change its text, or
+   * `undefined` where there are none.
    */
   #pendingTextChanges(
     space: MemorySpace,
     docKey: string,
-  ): PendingTextChange[] | undefined {
-    const pending: PendingTextChange[] = [];
-    for (
-      const { path, edits } of this.#fieldChanges.get(space)?.get(docKey)
-        ?.values() ?? []
-    ) {
-      if (edits !== undefined && edits.expected !== edits.baseline) {
-        pending.push({ path, edits });
-      }
-    }
-    return pending.length > 0 ? pending : undefined;
+  ): TextChangeIntent[] | undefined {
+    const intents = [
+      ...this.#textChanges.get(space)?.get(docKey)?.values() ?? [],
+    ].filter((intent) => intent.expected !== intent.baseline);
+    return intents.length > 0 ? intents : undefined;
   }
 
   /**
@@ -2145,114 +1871,65 @@ export class V2StorageTransaction implements IStorageTransaction {
    */
   #valueBeforeTextChanges(
     doc: WritableDocumentEntry,
-    pending: readonly PendingTextChange[],
+    intents: readonly TextChangeIntent[],
   ): FabricValue | undefined {
     let value = doc.current.value;
-    for (const { path, edits } of pending) {
-      if (readValueAtPath(value, path) !== edits.expected) {
+    for (const intent of intents) {
+      if (readValueAtPath(value, intent.path) !== intent.expected) {
         throw new Error(
-          debugStr`the field at $quote${path} was written after its ` +
+          debugStr`the field at $quote${intent.path} was written after its ` +
             "text changes, which the commit cannot carry as an edit",
         );
       }
-      value = cloneWithValueAtPath(value, path, edits.baseline);
+      value = cloneWithValueAtPath(value, intent.path, intent.baseline);
     }
     return value;
   }
 
   /**
-   * Helper for `getNativeCommit()`, which builds the `apply-op`s carrying the
-   * text and anchor changes the transaction recorded at each field in
-   * `space`.
-   *
-   * The changes against the transaction's read of a field go first, one
-   * operation for each run of text changes and the anchor changes recorded
-   * after it, so that each operation's anchors are stated against the text
-   * its payload yields, as Memory takes them. None names a base: each carries
-   * the hash of the text it applies to, the value the transaction read for
-   * the first and the one the operation before it leaves for the rest, and
-   * applies at the version the field holds only while the field holds that
-   * text, so the server has nothing to merge it over. The anchors added
-   * against a version of the field follow, on one operation naming that
-   * version, which changes no text, and then the removes, on one with neither
-   * a base nor a hash, since a remove depends on nothing the field holds.
+   * Helper for `getNativeCommit()`, which builds one `apply-op` per field the
+   * transaction changed the text of in `space`. None names a base: each
+   * carries the hash of the value the transaction read at the field, and
+   * applies at the version the field holds only while the field still holds
+   * that value, so the server has nothing to merge it over.
    */
-  #fieldOperations(space: MemorySpace): NativeTextEdit[] {
+  #textChangeOperations(space: MemorySpace): NativeTextEdit[] {
     const operations: NativeTextEdit[] = [];
-    for (const [docKey, byPath] of this.#fieldChanges.get(space) ?? []) {
+    for (const docKey of this.#textChanges.get(space)?.keys() ?? []) {
       const { id, scope } = this.#parseDocKey(docKey);
       const doc = this.#branches.get(space)?.docs.get(docKey);
-      for (const { path, edits, based, removes } of byPath.values()) {
-        const field = {
-          op: "apply-op" as const,
+      for (const intent of this.#pendingTextChanges(space, docKey) ?? []) {
+        // The edit reaches the store only beside the ordinary write of the
+        // text it produces, which is what CFC and reactivity judged.
+        const written = doc === undefined ? undefined : readValueAtPath(
+          (doc.current ?? doc.initial).value,
+          intent.path,
+        );
+        if (written !== intent.expected) {
+          throw new Error(
+            debugStr`the field at $quote${intent.path} does not hold the text ` +
+              "its recorded changes produce; text changes are recorded with " +
+              "the write of that text, as `applyChanges()` makes",
+          );
+        }
+        operations.push({
+          op: "apply-op",
           id,
           scope,
-          path: toValuePath(path.slice(1)),
+          path: toValuePath(intent.path.slice(1)),
           codec: CODEMIRROR_CHANGESET_CODEC,
-        };
-        if (
-          edits !== undefined &&
-          (edits.expected !== edits.baseline ||
-            edits.segments.some((segment) => segment.anchors.size > 0))
-        ) {
-          // The edits reach the store only beside the ordinary write of the
-          // text they produce, which is what CFC and reactivity judged.
-          const written = doc === undefined
-            ? undefined
-            : readValueAtPath((doc.current ?? doc.initial).value, path);
-          if (written !== edits.expected) {
-            throw new Error(
-              debugStr`the field at $quote${path} does not hold the text ` +
-                "its recorded changes produce; text changes are recorded " +
-                "with the write of that text, as `applyChanges()` makes",
-            );
-          }
-          let text = edits.baseline;
-          let batches: (readonly TextChange[])[] = [];
-          for (const [index, segment] of edits.segments.entries()) {
-            for (const batch of segment.batches) batches.push(batch);
-            const final = index === edits.segments.length - 1;
-            if (
-              segment.anchors.size === 0 && (!final || batches.length === 0)
-            ) {
-              continue;
-            }
-            operations.push({
-              ...field,
-              submissionId: segment.submissionId,
-              // TODO(ubik2): Drop the hash once a served handler's reads reach
-              // its wave commit. The transaction's read of the field, which a
-              // direct commit carries, already refuses a stale edit; a wave
-              // drops that read, and the hash is what still refuses one there.
-              baselineHash: operationBaselineHash(text),
-              payload: codeMirrorTextChangesPayload(
-                text,
-                batches,
-                segment.submissionId,
-              ),
-              ...anchorsMember(segment.anchors),
-            });
-            for (const batch of batches) text = applyTextChanges(text, batch);
-            batches = [];
-          }
-        }
-        if (based !== undefined && based.anchors.size > 0) {
-          operations.push({
-            ...field,
-            submissionId: based.submissionId,
-            base: based.base,
-            payload: codeMirrorTextChangesPayload("", [], based.submissionId),
-            anchors: { add: anchorAdds(based.anchors) },
-          });
-        }
-        if (removes !== undefined && removes.ids.size > 0) {
-          operations.push({
-            ...field,
-            submissionId: removes.submissionId,
-            payload: codeMirrorTextChangesPayload("", [], removes.submissionId),
-            anchors: { remove: [...removes.ids] },
-          });
-        }
+          submissionId: intent.submissionId,
+          // TODO(ubik2): Drop the hash once a served handler's reads reach
+          // its wave commit. The transaction's read of the field, which a
+          // direct commit carries, already refuses a stale edit; a wave drops
+          // that read, and the hash is what still refuses one there.
+          baselineHash: operationBaselineHash(intent.baseline),
+          payload: codeMirrorTextChangesPayload(
+            intent.baseline,
+            intent.batches,
+            intent.submissionId,
+          ),
+        });
       }
     }
     return operations;
@@ -3314,7 +2991,13 @@ export class V2StorageTransaction implements IStorageTransaction {
       ["commit", "getNativeCommit"],
       () => this.getNativeCommit(writeSpace),
     );
-    if (native === undefined || isEmptyNativeCommit(native)) {
+    const operations = native?.operations ?? [];
+    const hasCommitPreconditions = (native?.preconditions?.length ?? 0) > 0;
+    const hasSqliteOps = (native?.sqliteOps?.length ?? 0) > 0;
+    if (
+      operations.length === 0 &&
+      !hasCommitPreconditions && !hasSqliteOps
+    ) {
       return this.#finishEmptyCommit();
     }
 
@@ -3342,7 +3025,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     endLocalReadValidationStretch();
     const promise = withCommitTiming(
       ["commit", "commitNative"],
-      () => commitNative(native, this, options),
+      () => commitNative(native!, this, options),
     );
     this.#state = { status: "pending", promise };
     try {
@@ -3384,7 +3067,16 @@ export class V2StorageTransaction implements IStorageTransaction {
     const commits: { space: MemorySpace; native: NativeStorageCommit }[] = [];
     for (const space of this.#orderedCommitSpaces()) {
       const native = this.getNativeCommit(space);
-      if (native === undefined || isEmptyNativeCommit(native)) continue;
+      const operations = native?.operations ?? [];
+      const hasCommitPreconditions = (native?.preconditions?.length ?? 0) > 0;
+      const hasSqliteOps = (native?.sqliteOps?.length ?? 0) > 0;
+      if (
+        !native ||
+        (operations.length === 0 &&
+          !hasCommitPreconditions && !hasSqliteOps)
+      ) {
+        continue;
+      }
       commits.push({ space, native });
     }
 
@@ -3615,7 +3307,16 @@ export class V2StorageTransaction implements IStorageTransaction {
     const commits: { space: MemorySpace; native: NativeStorageCommit }[] = [];
     for (const space of this.#orderedCommitSpaces()) {
       const native = this.getNativeCommit(space);
-      if (native === undefined || isEmptyNativeCommit(native)) continue;
+      const operations = native?.operations ?? [];
+      const hasCommitPreconditions = (native?.preconditions?.length ?? 0) > 0;
+      const hasSqliteOps = (native?.sqliteOps?.length ?? 0) > 0;
+      if (
+        !native ||
+        (operations.length === 0 &&
+          !hasCommitPreconditions && !hasSqliteOps)
+      ) {
+        continue;
+      }
       commits.push({ space, native });
     }
 

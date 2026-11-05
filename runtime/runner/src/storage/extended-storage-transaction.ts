@@ -174,7 +174,6 @@ import type { URI } from "../sigil-types.ts";
 import { spaceCellId, SpaceRootMissingError } from "../space-root-slot.ts";
 import { createTransactionCommitReceipt } from "./commit-receipt.ts";
 import {
-  type AnchorChange,
   type CommitError,
   createReadOnlyTransactionError,
   type IAttestation,
@@ -3871,53 +3870,24 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     link: NormalizedFullLink,
     changes: readonly TextChange[],
   ): string {
-    return this.#recordFieldChanges(
-      "recordTextChanges",
-      link,
-      changes,
-      this.tx.recordTextChanges?.bind(this.tx),
-    );
-  }
-
-  recordAnchorChanges(
-    link: NormalizedFullLink,
-    changes: readonly AnchorChange[],
-  ): void {
-    this.#recordFieldChanges(
-      "recordAnchorChanges",
-      link,
-      changes,
-      this.tx.recordAnchorChanges?.bind(this.tx),
-    );
-    this.#noteWrite();
-  }
-
-  /**
-   * Helper for `recordTextChanges()` and `recordAnchorChanges()`, which hands
-   * `changes` at `link` to `record`, the underlying transaction's `method`.
-   * The changes are a write of the field, so they take the chokepoint a write
-   * takes. They are held outside the journal the prepared digest is derived
-   * from, and decide what the commit carries, so recording them after a
-   * preparation invalidates it, as a write does.
-   */
-  #recordFieldChanges<C, R>(
-    method: string,
-    link: NormalizedFullLink,
-    changes: C,
-    record: ((address: IMemorySpaceAddress, changes: C) => R) | undefined,
-  ): R {
-    this.#assertWritable(method);
-    if (record === undefined) {
-      throw new Error(`storage transaction does not support ${method}()`);
+    this.#assertWritable("recordTextChanges");
+    if (!this.tx.recordTextChanges) {
+      throw new Error(
+        "storage transaction does not support recordTextChanges()",
+      );
     }
     const address = toMemorySpaceAddress(link);
+    // The same S18 chokepoint a write takes: the changes become a write of
+    // this address, which the caller then makes through `writeOrThrow()`.
     this.#noteSystemWrite(address);
-    this.#noteWriteIdentity();
     this.#noteCfcActivity();
+    // The intent is held outside the journal the prepared digest is derived
+    // from, and decides how the commit carries the field. One recorded after a
+    // preparation invalidates it, as a write does.
     if (this.#cfcState.prepare.status === "prepared") {
-      this.invalidateCfc(`${method}-after-prepare`);
+      this.invalidateCfc("text-changes-after-prepare");
     }
-    return record(address, changes);
+    return this.tx.recordTextChanges(address, changes);
   }
 
   recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void {
@@ -5268,18 +5238,6 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
       );
     }
     return this.#wrapped.recordTextChanges(link, changes);
-  }
-
-  recordAnchorChanges(
-    link: NormalizedFullLink,
-    changes: readonly AnchorChange[],
-  ): void {
-    if (!this.#wrapped.recordAnchorChanges) {
-      throw new Error(
-        "storage transaction does not support recordAnchorChanges()",
-      );
-    }
-    this.#wrapped.recordAnchorChanges(link, changes);
   }
 
   recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void {

@@ -58,7 +58,6 @@ import {
   type GraphQueryResult,
   type HelloMessage,
   identityOfScopeKey,
-  isOperationAnchorsDocId,
   isScopeKey,
   MAX_ENTITY_ID_PAGE_SIZE,
   MAX_UNTRUSTED_MESSAGE_SLOTS,
@@ -7874,11 +7873,12 @@ export class Server {
           for (const revision of commit.revisions) {
             const scopeKey = revision.scopeKey as ScopeKey;
             committedWrites.push({ id: revision.id, scopeKey });
-            // A field's anchors document is the engine's write, never the
-            // committing session's, which holds nothing of it to promote.
+            // A revision the engine derived, a field's anchors document
+            // rewritten for an edit, is no write of the committing session's,
+            // which holds nothing of it to promote.
             dirtyOps.set(
               toDirtyKey(revision.id, scopeKey),
-              isOperationAnchorsDocId(revision.id) ? "derived" : revision.op,
+              revision.derived === true ? "derived" : revision.op,
             );
           }
           if (dirtyOps.size > 0) {

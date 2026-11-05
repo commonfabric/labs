@@ -1,6 +1,7 @@
 import type {
   FabricPlainObject,
   FabricValue,
+  FieldAnchors,
   JSONSchema,
   SchemaPathSelector,
 } from "@commonfabric/api";
@@ -427,13 +428,13 @@ export const streamEntriesDocId = (stream: StreamLinkRef): EntityId =>
   }`;
 
 /**
- * Prefix of the anchors document of a collaborative field: the derived,
- * Memory-owned entity holding the field's anchors
- * (`07-op-views-and-annotations.md` §7.15). The engine writes it in the
- * transaction that changes the set, and a client's write to an id under this
- * prefix is refused. The id is content-derived from the field's address
- * ({@link operationAnchorsDocId}), so every party addresses it with no
- * coordination, and the document is written in the field's own scope: a
+ * Prefix of the anchors document of a collaborative field: the entity holding
+ * the field's anchors (`07-op-views-and-annotations.md` §7.15), whose value is
+ * a {@link FieldAnchors}. A client changes the anchors by writing it as it
+ * writes any entity, and the engine rewrites it in the transaction that
+ * integrates an edit moving one. The id is content-derived from the field's
+ * address ({@link operationAnchorsDocId}), so every party addresses it with
+ * no coordination, and the document lives in the field's own scope: a
  * per-user field's anchors are per-user.
  */
 export const OP_ANCHORS_DOC_PREFIX = "of:op-anchors:";
@@ -925,49 +926,72 @@ export type DeleteOperation = {
   scope?: CellScope;
 };
 
+/**
+ * A version of a collaborative field: the field epoch, which a release of the
+ * field ends, and the count of operations integrated within it.
+ */
 export type OpCursor = {
+  /** The field epoch. */
   epoch: number;
+
+  /** Operations integrated in the epoch. */
   version: number;
+};
+
+/**
+ * The value of a field's anchors document ({@link operationAnchorsDocId}),
+ * which `@commonfabric/api` declares because a pattern reads and writes it.
+ */
+export type { FieldAnchors };
+
+/** The most anchors a field's anchors document may hold. */
+export const MAX_FIELD_ANCHORS = 1024;
+
+/** The most characters an anchor's id may run to. */
+export const MAX_ANCHOR_ID_LENGTH = 256;
+
+/**
+ * Reads `value` as a field's anchors
+ * (`07-op-views-and-annotations.md` §7.8): a plain map from anchor id to
+ * offset, of at most {@link MAX_FIELD_ANCHORS} anchors, each under a
+ * non-empty id of at most {@link MAX_ANCHOR_ID_LENGTH} characters, at a
+ * non-negative integer. Returns the anchors, or what is wrong with `value`
+ * as `fault`, worded to follow the name of whatever holds it. The engine's
+ * check of a written document and the state inspector's report of a stored
+ * one both rest on this, so the two cannot disagree about a document.
+ */
+export const parseFieldAnchors = (
+  value: unknown,
+): { anchors: FieldAnchors } | { fault: string } => {
+  if (!isPlainObject(value)) {
+    return { fault: "is not a map from anchor id to offset" };
+  }
+  const entries = Object.entries(value);
+  if (entries.length > MAX_FIELD_ANCHORS) {
+    return { fault: `holds more than ${MAX_FIELD_ANCHORS} anchors` };
+  }
+  const anchors: Record<string, number> = {};
+  for (const [id, offset] of entries) {
+    if (id.length === 0 || id.length > MAX_ANCHOR_ID_LENGTH) {
+      return {
+        fault:
+          `holds an anchor id that is empty or longer than ${MAX_ANCHOR_ID_LENGTH} characters`,
+      };
+    }
+    if (
+      typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0
+    ) {
+      return {
+        fault:
+          `holds anchor ${id} at something other than a non-negative integer offset`,
+      };
+    }
+    anchors[id] = offset;
+  }
+  return { anchors };
 };
 
 export const CODEMIRROR_CHANGESET_CODEC = "codemirror-changeset@1";
-
-/**
- * A range of a collaborative field, keyed by a client-chosen id, that Memory
- * carries through every integrated operation. `from` and `to` are the codec's
- * positions: for the CodeMirror codec, UTF-16 code unit offsets with `to`
- * exclusive. An edit that deletes the covered text with nothing in its place
- * empties the range to a point (`from === to`); a replacement of the covered
- * text keeps the range over the replacement.
- */
-export type FieldAnchor = {
-  id: string;
-  from: number;
-  to: number;
-};
-
-/**
- * The anchors of a collaborative field as its anchors document holds them
- * ({@link operationAnchorsDocId}): the field cursor the set was last restated
- * at, and the set, sorted by id. A set carried unchanged through later
- * operations holds at every later version, so `version` lags the field head
- * whenever no anchor has moved since.
- */
-export type FieldAnchorsDocument = {
-  epoch: number;
-  version: number;
-  anchors: FieldAnchor[];
-};
-
-/**
- * Anchors an `apply-op` adds, replaces or removes. An `add` of an id the
- * field holds replaces its range; a `remove` of an id it does not hold is a
- * no-op. A member that is present adds or removes at least one.
- */
-export type FieldAnchorChanges = {
-  add?: FieldAnchor[];
-  remove?: string[];
-};
 
 export type OperationFieldAddress = {
   id: EntityId;
@@ -997,17 +1021,6 @@ export type ApplyOpOperation = OperationFieldAddress & {
   baselineHash?: string;
 
   payload: FabricValue;
-
-  /**
-   * Anchors to add, replace or remove with this operation. The ranges in
-   * `add` are stated against the value the payload yields at the base: the
-   * document the client holds, text the payload inserts included. Memory maps
-   * them to the field head, across the operations integrated since the base,
-   * before storing them. A payload that integrates nothing is allowed, for an
-   * operation that changes anchors alone; anchors are not operations and
-   * advance no version.
-   */
-  anchors?: FieldAnchorChanges;
 };
 
 export type ReleaseOpFieldOperation = OperationFieldAddress & {
@@ -1035,15 +1048,6 @@ export type ApplyOpResolution = {
   to: OpCursor;
   operations: IntegratedOperation[];
   duplicate: boolean;
-
-  /**
-   * What the operation's `anchors` landed as, when it carried any: the added
-   * anchors as stored, stated at `to`, and the removed ids the field held.
-   */
-  anchors?: {
-    added: FieldAnchor[];
-    removed: string[];
-  };
 };
 
 export type OperationFieldQuery = OperationFieldAddress & {
@@ -1064,12 +1068,12 @@ export type OperationFieldSnapshot = OperationFieldAddress & {
   operations: IntegratedOperation[];
 
   /**
-   * The field's anchors at `cursor`, sorted by id; empty for an inactive
-   * field. An operation that changes anchors and integrates nothing changes
-   * this set without advancing the cursor, so a snapshot can carry new anchors
-   * at a cursor the client has already applied.
+   * The field's anchors as its anchors document holds them, which are stated
+   * against `materialized`. A write to the document changes them without
+   * advancing the cursor, so a snapshot can carry different anchors at a
+   * cursor the client has already applied.
    */
-  anchors: FieldAnchor[];
+  anchors: FieldAnchors;
 
   /** Lowest cursor from which the retained integrated suffix is contiguous. */
   retainedFrom?: OpCursor;

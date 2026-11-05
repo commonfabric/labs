@@ -1091,12 +1091,12 @@ so the note embeds in other surfaces, and editing or live-cursor failures show
 as notices above the editor.
 
 A panel beside the editor holds comments on ranges of the body, with replies and
-a resolved state. Each comment names an anchor of the body, a range that Memory
-moves through every edit, added with `addAnchor()` and read with `anchorsOf()`;
-the editor draws the open comments' anchors as highlights. Comments and replies
-are labeled `authored-by` their writer through `AuthoredByCurrentUser`, and
-shown through `cf-cfc-authorship`. Verbs let an agent comment on text it quotes,
-reply, resolve, reopen, and delete.
+a resolved state. Each comment names two anchors of the body, points that Memory
+moves through every edit, which the pattern reads and writes as a cell through
+`anchorsOf()`; the editor draws the text between each open comment's anchors as
+a highlight. Comments and replies are labeled `authored-by` their writer through
+`AuthoredByCurrentUser`, and shown through `cf-cfc-authorship`. Verbs let an
+agent comment on text it quotes, reply, resolve, reopen, and delete.
 
 **Keywords:** multiplayer, collaborative editor, note, Markdown, profile, wish,
 co-presence, CodeMirror, comments, annotations, anchors, anchorsOf,
@@ -1120,7 +1120,7 @@ interface SharedNoteOutput {
   content: PerSpace<string>;
   comments: PerSpace<StoredComment[]>;
   participantName: PerUser<string>;
-  commentRanges: FieldAnchors | undefined;
+  commentAnchors: FieldAnchors | undefined;
   appendLine: Stream<LineEvent>;
   prependLine: Stream<LineEvent>;
   replaceText: Stream<ReplaceTextEvent>;

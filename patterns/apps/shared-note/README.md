@@ -54,6 +54,12 @@ the title still lands. A save that changes both lands the title and not the
 body, because the two are written separately. Change the body then through the
 verbs below, which the mount exposes as callable files beside `index.md`.
 
+A save that replaces the body moves no comment. Memory moves a comment's anchors
+through edits made in the editor or by the verbs, and a whole-body write is
+neither, so a comment placed before any editor has changed the note keeps its
+old offsets after such a save and may sit on other text. Its row then shows the
+text it sits on after "now", beside the quote its author selected.
+
 ## Editing from a handler or an agent
 
 Three verbs edit the body while people are typing in it, so an agent or another
@@ -78,7 +84,7 @@ holds exactly once, as `replaceText` does:
 | `replyToComment` | `{ id, body }`    | Replies to the comment `id`.                                                                |
 | `resolveComment` | `{ id }`          | Marks the comment resolved.                                                                 |
 | `reopenComment`  | `{ id }`          | Marks the comment open again.                                                               |
-| `deleteComment`  | `{ id }`          | Deletes the comment and its anchor; refused to anyone but its author.                       |
+| `deleteComment`  | `{ id }`          | Deletes the comment and its anchors; refused to anyone but its author.                      |
 
 `addComment` and `replyToComment` are refused to a caller with no Fabric
 profile, since a comment and a reply are shown under their author's profile.
@@ -93,48 +99,53 @@ has since edited refuses rather than matching somewhere else; read the note
 again and name what it holds. Moving the comments' anchors through each of these
 edits is Memory's work, not the verb's.
 
+`addComment` and `deleteComment` change the body's anchors as well as the
+comments. Each reads the anchors, and `addComment` the body too, and writes the
+anchors it leaves; the commit lands only while what it read still holds, and the
+verb runs again otherwise.
+
 The pattern includes no notebook, note registry, or automatic backlink creation.
 Space membership controls access through the host's ordinary sharing flow.
 
 ## Comments
 
 Selecting text in the editor enables the Comment button. Opening the composer
-starts a draft comment and anchors the selected text under its id at once, and
-marks that text for the person writing. Post completes the draft, and Cancel
-deletes it with its anchor. A draft left open when its author goes away stays
-listed to that author alone, with Continue and Discard, and marks nothing for
-anyone else. A draft keeps its place in the note; the text typed into the
-composer is kept only while the composer is open in that tab. The editor marks
-each open comment's text; clicking a mark selects its comment, and clicking a
-comment selects it and marks its text more strongly. A selected comment shows a
-reply field and Resolve or Reopen, and, to its author, Delete. Resolved comments
-are hidden unless "Show resolved" is checked, and mark no text.
+starts a draft comment and anchors the selected text at once, and marks that
+text for the person writing. Post completes the draft, and Cancel deletes it
+with its anchors. A draft left open when its author goes away stays listed to
+that author alone, with Continue and Discard, and marks nothing for anyone else.
+A draft keeps its place in the note; the text typed into the composer is kept
+only while the composer is open in that tab. The editor marks each open
+comment's text; clicking a mark selects its comment, and clicking a comment
+selects it and marks its text more strongly. A selected comment shows a reply
+field and Resolve or Reopen, and, to its author, Delete. Resolved comments are
+hidden unless "Show resolved" is checked, and mark no text.
 
-A comment never stores a position. Each comment's `id` is also the id of an
-anchor on the body: a range that Memory keeps for the field and moves through
-every edit, whoever makes it, in the transaction that stores the edit
-(`docs/features/collaborative-fields.md`). The editor reports a selection
-against the version of the body it last had confirmed, and the composer adds the
-anchor as of that version, so text typed by anyone between selecting and opening
-the composer moves the range with it, and so does everything typed while the
-person writes. A selection without a version, made before the body's first
-collaborative edit, is checked against the body when the composer opens, and
-refused if the body no longer holds its text there. The panel lists comments in
-the order their text appears in the body. `commentRanges` gives every comment's
-current range.
+A comment never stores a position. Each comment has two anchors on the body,
+`<id>:from` where its text starts and `<id>:to` where it ends. An anchor is a
+point that Memory keeps for the field and moves through every edit, whoever
+makes it, in the transaction that stores the edit
+(`docs/features/collaborative-fields.md`). Text typed at the start of a
+comment's text joins it, and text typed at its end does not. The editor reports
+a selection with the text it covers, and the composer checks that the body still
+holds that text at that range before it adds the anchors, refusing a selection
+the body has changed under. From then on everything typed while the person
+writes moves the anchors with their text. The panel lists comments in the order
+their text appears in the body. `commentAnchors` gives every comment's two
+anchors.
 
 Each row shows the comment's quote: the text its author selected, stored in the
-comment. When the text under the anchor differs from the quote, because someone
-has edited it since, the row also shows that text after "now". A comment whose
-text an edit deleted stays listed after the rest, marks nothing, and shows its
-quote struck through, beside "text no longer in note".
+comment. When the text between the anchors differs from the quote, because
+someone has edited it since, the row also shows that text after "now". A comment
+whose text an edit deleted stays listed after the rest, marks nothing, and shows
+its quote struck through, beside "text no longer in note".
 
 Comments and replies are labeled `authored-by` the person each was written for,
 by the runtime, and only the handlers their write policies name can write them,
 so the profile badge on a comment is the one its author wrote it under.
 `cf-cfc-authorship` checks that label against the author's profile, and shows
-the quote, the comment and each reply only when they carry it. The text under
-the anchor is the note's, which anyone who can write the note can change, so it
+the quote, the comment and each reply only when they carry it. The text between
+the anchors is the note's, which anyone who can write the note can change, so it
 is shown outside that check. Replies and the resolved state are cells of their
 own, linked from the comment, so anyone who can write the note can reply or
 resolve while the comment itself stays its author's.

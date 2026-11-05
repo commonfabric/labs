@@ -15,11 +15,11 @@
             "type": "string"
           },
           "draft": {
-            "description": "Whether the comment is still being written. A draft holds its anchor from\nthe moment its author opens the composer; it is listed only to its\nauthor, who can continue or discard it, and marks no text for anyone\nelse.",
+            "description": "Whether the comment is still being written. A draft holds its anchors\nfrom the moment its author opens the composer; it is listed only to its\nauthor, who can continue or discard it, and marks no text for anyone\nelse.",
             "type": "boolean"
           },
           "id": {
-            "description": "The comment's id, which is also the id of its anchor on the body.",
+            "description": "The comment's id, which its two anchors on the body are named for.",
             "type": "string"
           },
           "postedAt": {
@@ -27,7 +27,7 @@
             "type": "number"
           },
           "quote": {
-            "description": "The text the anchor covered when the comment was written, shown once an\nedit has deleted that text from the body.",
+            "description": "The text between the anchors when the comment was written, shown once\nan edit has deleted that text from the body.",
             "type": "string"
           },
           "replies": {
@@ -117,7 +117,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "kDkRkEEqwkgwmUBG4e2g2LdL7Fro_JOP-R4ooBtym4g",
                   "path": [
                     "openComposer"
                   ]
@@ -128,7 +128,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "kDkRkEEqwkgwmUBG4e2g2LdL7Fro_JOP-R4ooBtym4g",
                   "path": [
                     "postComment"
                   ]
@@ -139,7 +139,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "kDkRkEEqwkgwmUBG4e2g2LdL7Fro_JOP-R4ooBtym4g",
                   "path": [
                     "addComment"
                   ]
@@ -150,7 +150,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "kDkRkEEqwkgwmUBG4e2g2LdL7Fro_JOP-R4ooBtym4g",
                   "path": [
                     "deleteComment"
                   ]
@@ -161,7 +161,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "kDkRkEEqwkgwmUBG4e2g2LdL7Fro_JOP-R4ooBtym4g",
                   "path": [
                     "discardDraft"
                   ]
@@ -185,7 +185,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/apps/shared-note/main.tsx",
-              "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+              "moduleIdentity": "kDkRkEEqwkgwmUBG4e2g2LdL7Fro_JOP-R4ooBtym4g",
               "path": [
                 "commitReply"
               ]
@@ -263,11 +263,11 @@
             "type": "string"
           },
           "draft": {
-            "description": "Whether the comment is still being written. A draft holds its anchor from\nthe moment its author opens the composer; it is listed only to its\nauthor, who can continue or discard it, and marks no text for anyone\nelse.",
+            "description": "Whether the comment is still being written. A draft holds its anchors\nfrom the moment its author opens the composer; it is listed only to its\nauthor, who can continue or discard it, and marks no text for anyone\nelse.",
             "type": "boolean"
           },
           "id": {
-            "description": "The comment's id, which is also the id of its anchor on the body.",
+            "description": "The comment's id, which its two anchors on the body are named for.",
             "type": "string"
           },
           "postedAt": {
@@ -275,7 +275,7 @@
             "type": "number"
           },
           "quote": {
-            "description": "The text the anchor covered when the comment was written, shown once an\nedit has deleted that text from the body.",
+            "description": "The text between the anchors when the comment was written, shown once\nan edit has deleted that text from the body.",
             "type": "string"
           },
           "replies": {
@@ -317,45 +317,11 @@
         ],
         "type": "object"
       },
-      "FieldAnchor": {
-        "properties": {
-          "from": {
-            "type": "number"
-          },
-          "id": {
-            "type": "string"
-          },
-          "to": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "id",
-          "from",
-          "to"
-        ],
-        "type": "object"
-      },
       "FieldAnchors": {
-        "properties": {
-          "anchors": {
-            "items": {
-              "$ref": "#/$defs/FieldAnchor"
-            },
-            "type": "array"
-          },
-          "epoch": {
-            "type": "number"
-          },
-          "version": {
-            "type": "number"
-          }
+        "additionalProperties": {
+          "type": "number"
         },
-        "required": [
-          "epoch",
-          "version",
-          "anchors"
-        ],
+        "properties": {},
         "type": "object"
       },
       "LineEvent": {
@@ -443,7 +409,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "kDkRkEEqwkgwmUBG4e2g2LdL7Fro_JOP-R4ooBtym4g",
                   "path": [
                     "openComposer"
                   ]
@@ -454,7 +420,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "kDkRkEEqwkgwmUBG4e2g2LdL7Fro_JOP-R4ooBtym4g",
                   "path": [
                     "postComment"
                   ]
@@ -465,7 +431,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "kDkRkEEqwkgwmUBG4e2g2LdL7Fro_JOP-R4ooBtym4g",
                   "path": [
                     "addComment"
                   ]
@@ -476,7 +442,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "kDkRkEEqwkgwmUBG4e2g2LdL7Fro_JOP-R4ooBtym4g",
                   "path": [
                     "deleteComment"
                   ]
@@ -487,7 +453,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "kDkRkEEqwkgwmUBG4e2g2LdL7Fro_JOP-R4ooBtym4g",
                   "path": [
                     "discardDraft"
                   ]
@@ -511,7 +477,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/apps/shared-note/main.tsx",
-              "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+              "moduleIdentity": "kDkRkEEqwkgwmUBG4e2g2LdL7Fro_JOP-R4ooBtym4g",
               "path": [
                 "commitReply"
               ]
@@ -522,6 +488,37 @@
     },
     "description": "Readable Markdown and the same compact view for standalone and embedded use.",
     "properties": {
+      "$FS": {
+        "description": "The note as `index.md`: the title in the frontmatter, then the body, both\nlinked to the fields below. A filesystem save writes both back. Once an\neditor has changed the body, a save that changes it too is refused, and\nthe body is edited through the verbs below instead.",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "text/markdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "frontmatter",
+          "content"
+        ],
+        "type": "object"
+      },
       "$NAME": {
         "type": "string"
       },
@@ -545,7 +542,7 @@
         ],
         "description": "Adds `text` to the end of the document, on a line of its own."
       },
-      "commentRanges": {
+      "commentAnchors": {
         "anyOf": [
           {
             "type": "undefined"
@@ -554,7 +551,7 @@
             "$ref": "#/$defs/FieldAnchors"
           }
         ],
-        "description": "Where each comment's text is now: the body's anchors, one per comment,\ndrafts included, under the comment's `id`, or `undefined` while the body\nhas none."
+        "description": "Where each comment's text is now: the body's anchors, two per comment,\ndrafts included. The text of the comment `id` runs from the anchor\n`<id>:from` to the anchor `<id>:to`. `undefined` until the body first\nholds an anchor."
       },
       "comments": {
         "items": {
@@ -623,7 +620,7 @@
       "content",
       "comments",
       "participantName",
-      "commentRanges",
+      "commentAnchors",
       "appendLine",
       "prependLine",
       "replaceText",
@@ -634,7 +631,8 @@
       "deleteComment",
       "$NAME",
       "$UI",
-      "$TILE_UI"
+      "$TILE_UI",
+      "$FS"
     ],
     "type": "object"
   }

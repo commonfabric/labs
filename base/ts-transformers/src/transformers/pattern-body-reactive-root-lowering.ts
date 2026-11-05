@@ -87,8 +87,6 @@ const WRITE_METHODS = new Set([
   "set",
   "update",
   "applyChanges",
-  "addAnchor",
-  "removeAnchor",
   ...MERGEABLE_OP_METHODS.map((op) => op.method),
   "remove",
   "removeAll",

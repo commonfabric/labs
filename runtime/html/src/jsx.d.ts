@@ -4081,7 +4081,20 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "collaborative"?: boolean;
   "presenceRoom"?: string;
   "participantName"?: string;
-  "highlights"?: { id: string; kind?: string }[];
+
+  /**
+   * Ranges of the collaborative field's text to mark. Each runs from the
+   * anchor `fromAnchor` to the anchor `toAnchor`, both ids in the field's
+   * anchors, which `anchorsOf()` names. `id` names the mark, and is what
+   * `cf-highlight-click` reports; `kind` adds the class `cm-highlight-<kind>`.
+   */
+  "highlights"?: {
+    id: string;
+    fromAnchor: string;
+    toAnchor: string;
+    kind?: string;
+  }[];
+
   "placeholder"?: string;
   "timingStrategy"?: string;
   "timingDelay"?: number;
@@ -4110,8 +4123,24 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "oncf-collaboration-reconcile"?: any;
   "oncf-presence-error"?: any;
   "oncf-presence-join"?: any;
-  "oncf-selection-change"?: any;
-  "oncf-highlight-click"?: any;
+
+  /**
+   * The main selection as a range of the text Memory has confirmed to the
+   * editor, with the text that range holds. Nothing selected is
+   * `from === to`.
+   */
+  "oncf-selection-change"?: EventHandler<{
+    from: number;
+    to: number;
+    text: string;
+  }>;
+
+  /**
+   * A click on a highlight that selects no text, with the `id` its
+   * `highlights` entry gave it.
+   */
+  "oncf-highlight-click"?: EventHandler<{ id: string }>;
+
   "onbacklink-click"?: any;
   "onbacklink-create"?: any;
   "onmention-ref-label-changed"?: any;

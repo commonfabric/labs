@@ -73,6 +73,7 @@
     "DID",
     "Default",
     "FabricValue",
+    "FieldAnchors",
     "IAnyCell",
     "IReadable",
     "JSONSchema",
@@ -93,8 +94,7 @@
     "SqliteTableSchemas",
     "UnavailableErrorKind",
     "UnavailableReason",
-    "VNode",
-    "OpCursor"
+    "VNode"
   ],
   "collections": [],
   "others": [

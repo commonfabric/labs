@@ -1,7 +1,7 @@
 /**
- * The `anchorsOf()` builtin, which returns a collaborative field's anchors as
- * Memory last wrote them to the field's anchors document, as confidential as
- * the field itself.
+ * The `anchorsOf()` builtin, which names a collaborative field's anchors
+ * document, so that a pattern reads and writes the field's anchors as it does
+ * any cell.
  */
 
 import { internSchema } from "@commonfabric/data-model-schema";
@@ -22,18 +22,15 @@ export const ANCHORS_OF_ARGUMENT_SCHEMA = internSchema({
 });
 
 /**
- * anchorsOf(field) — the anchors document of the string field the `field`
- * input names, `{ epoch, version, anchors }`, or `undefined` until the field
- * first holds an anchor or while the input names no cell. Removing the last
- * anchor leaves the document, with an empty list.
+ * anchorsOf(field) — a write redirect to the anchors document of the string
+ * field the `field` input names, or `undefined` while the input names no
+ * cell. A read of the result reads the document, a map from anchor id to
+ * offset, or `undefined` until something writes it, and a write of the result
+ * writes the document.
  *
- * An anchor's range and id say what the field's text holds: where text is,
- * how long it is, what was deleted, and whatever its writer put in the id.
- * So the node reads the field's value as well as the anchors document, and
- * that read puts the field's label into the transaction that writes the
- * result, as it would for any derivation of the field: a reader of the result
- * is tainted as a reader of the field is. The read also runs the node again
- * whenever the field changes.
+ * The node reads where the field is stored and nothing of what it holds, so
+ * it runs again only when the input names a different field. What a reader of
+ * the anchors may learn is decided by the document's own label.
  */
 export function anchorsOf(
   inputsCell: Cell<{ field: unknown }>,
@@ -50,17 +47,13 @@ export function anchorsOf(
       sendResult(tx, undefined);
       return;
     }
-    // Resolution follows the link chain to the stored field, as the field's
-    // own `addAnchor()` does, so both name the one document.
-    const text = field.withTx(tx).resolveAsCell();
-    text.getRaw();
+    // Resolution follows the link chain to the stored field, whose address
+    // the document's id is derived from.
+    const stored = field.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
     sendResult(
       tx,
-      runtime.getCellFromLink(
-        anchorsDocumentLink(text.getAsNormalizedFullLink()),
-        undefined,
-        tx,
-      ).getRaw(),
+      runtime.getCellFromLink(anchorsDocumentLink(stored), undefined, tx)
+        .getAsWriteRedirectLink(),
     );
   };
 }

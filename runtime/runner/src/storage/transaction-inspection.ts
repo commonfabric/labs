@@ -28,13 +28,6 @@ export function getDirectTransactionMergeableOpAddresses(
     unwrap(tx).getMergeableOpAddresses?.();
 }
 
-/** The fields at which `tx` recorded anchor changes the store resolves. */
-export function getDirectTransactionAnchorFieldAddresses(
-  tx: TxLike,
-): Iterable<IMemorySpaceAddress> | undefined {
-  return unwrap(tx).getAnchorFieldAddresses?.();
-}
-
 /**
  * Build the native commit for `space` without committing. Inspection-only: the
  * build is what resolves recorded mergeable intents into wire ops, so this is

@@ -336,50 +336,21 @@ export interface TextChange {
 }
 
 /**
- * A version of a collaborative field: the field epoch, which a release of the
- * field ends, and the count of operations integrated within it.
+ * The anchors of a collaborative field: the value of its anchors document,
+ * which `anchorsOf()` names. Each anchor is a point in the field's text,
+ * held as its offset under an id its writer chooses. An offset counts UTF-16
+ * code units, as a string index does, from 0 to the text's length.
+ *
+ * Memory carries every anchor through every collaborative edit of the field
+ * as it would a cursor: text inserted at an anchor lands after it, and an anchor inside
+ * deleted text lands where the deletion began. So a highlight from one anchor
+ * to another takes in text inserted at its start and leaves out text inserted
+ * at its end, and a highlight whose text is deleted is empty.
+ *
+ * A type alias, not an interface, because Memory stores and sends the map as
+ * a fabric value, and only an alias of an object type is assignable to one.
  */
-export interface OpCursor {
-  /** The field epoch. */
-  readonly epoch: number;
-
-  /** Operations integrated in the epoch. */
-  readonly version: number;
-}
-
-/**
- * A range of a string, in UTF-16 code units as string indexes count them:
- * `from` up to `to`, exclusive. `from === to` is a point.
- */
-export interface AnchorRange {
-  /** Start of the range. */
-  readonly from: number;
-
-  /** End of the range, exclusive. */
-  readonly to: number;
-}
-
-/** An anchor of a collaborative field: a range under its id. */
-export interface FieldAnchor extends AnchorRange {
-  /** The id the anchor was added under. */
-  readonly id: string;
-}
-
-/**
- * The anchors of a collaborative field, as `anchorsOf()` returns them: the
- * version they were last restated at, and the anchors, sorted by id. Every
- * edit to the field moves them, so they describe the text it holds.
- */
-export interface FieldAnchors {
-  /** The field epoch the anchors belong to. */
-  readonly epoch: number;
-
-  /** The version the anchors were last restated at. */
-  readonly version: number;
-
-  /** The anchors, sorted by id. */
-  readonly anchors: readonly FieldAnchor[];
-}
+export type FieldAnchors = { readonly [id: string]: number };
 
 /*
  * IAnyCell is an interface that is used by all calls and to which the runner
@@ -503,30 +474,6 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
     this: IsThisString,
     changes: TextChange | readonly TextChange[],
   ): void;
-
-  /**
-   * Anchors `range` of a string cell under `id`, replacing the range the id
-   * held. The field keeps the anchor through every later edit, whoever makes
-   * it, and `anchorsOf()` reads where it is now. Without `base`, `range`
-   * refers to the value the cell holds when the call is made, which includes
-   * this transaction's `applyChanges()` calls before it, and the anchor lands
-   * only while the field still holds the value this transaction read, as
-   * those changes do. With `base`, `range` refers to the text the field held
-   * at that version, such as the version an editor's selection was made in,
-   * and the store maps it over the edits made since.
-   */
-  addAnchor(
-    this: IsThisString,
-    id: string,
-    range: AnchorRange,
-    options?: { base?: OpCursor },
-  ): void;
-
-  /**
-   * Removes the anchor `id` from a string cell. Removing an id the field does
-   * not hold changes nothing.
-   */
-  removeAnchor(this: IsThisString, id: string): void;
 
   remove(
     this: IsThisArray,
@@ -3837,14 +3784,22 @@ export type WishState<T> = {
 export type NavigateToFunction = (cell: Reactive<any>) => Reactive<boolean>;
 
 /**
- * `anchorsOf(field)` — the anchors of a collaborative string field, as
- * `addAnchor()` and `removeAnchor()` leave them and every edit moves them, or
- * `undefined` until the field first holds one. Once the field has held
- * anchors, removing the last leaves an empty list.
+ * `anchorsOf(field)` — the anchors document of a string field, as a cell: a
+ * read returns the field's anchors, or `undefined` until something writes
+ * them, and a write replaces them. Memory moves every anchor through every
+ * collaborative edit of the field. A `set()` of the field moves none, so a
+ * handler that replaces the text that way writes the anchors too.
+ *
+ * A handler that changes the anchors reads the field and the anchors, then
+ * writes the anchors it wants the field to hold. Its commit lands only while
+ * the field and the anchors are still what it read; where either moved, the
+ * handler runs again against what they hold now. Give a handler the result as
+ * a `Writable<FieldAnchors | undefined>`.
  */
 export type AnchorsOfFunction = (
   field: FactoryInput<string>,
 ) => Reactive<FieldAnchors | undefined>;
+
 export interface WishFunction {
   <T = unknown>(
     target: FactoryInput<WishParams>,
