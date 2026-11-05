@@ -1,7 +1,12 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
-import { cfcLabelViewIsPublic, ownerPrincipalFromLabel } from "./cfc-label.ts";
+import {
+  canQueryCfcLabel,
+  cfcLabelViewIsPublic,
+  ownerPrincipalFromLabel,
+  readCfcLabelView,
+} from "./cfc-label.ts";
 
 const DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 
@@ -167,5 +172,39 @@ describe("cfcLabelViewIsPublic (egress check)", () => {
       { path: ["ssn"], label: { confidentiality: [["clause-a"]] } },
     ]);
     expect(cfcLabelViewIsPublic(label)).toBe(false);
+  });
+});
+
+describe("readCfcLabelView", () => {
+  const label = view([{ path: [], label: { integrity: ["profile-link"] } }]);
+  const queryable = { getCfcLabel: () => Promise.resolve(label) };
+
+  it("reads the label of a handle that can be queried", async () => {
+    expect(canQueryCfcLabel(queryable)).toBe(true);
+    expect(await readCfcLabelView(queryable)).toBe(label);
+  });
+
+  it("resolves a handle that cannot be queried and reads the resolved cell's label", async () => {
+    const link = { resolveAsCell: () => queryable };
+    const pending = { resolveAsCell: () => Promise.resolve(queryable) };
+
+    expect(canQueryCfcLabel(link)).toBe(false);
+    expect(await readCfcLabelView(link)).toBe(label);
+    expect(await readCfcLabelView(pending)).toBe(label);
+  });
+
+  it("returns undefined when nothing it can reach has a label to read", async () => {
+    expect(await readCfcLabelView({ resolveAsCell: () => ({}) }))
+      .toBeUndefined();
+    expect(await readCfcLabelView({ getCfcLabel: "not a function" }))
+      .toBeUndefined();
+    expect(await readCfcLabelView("text")).toBeUndefined();
+    expect(await readCfcLabelView(undefined)).toBeUndefined();
+  });
+
+  it("passes on a label the handle reports as absent", async () => {
+    expect(
+      await readCfcLabelView({ getCfcLabel: () => Promise.resolve(undefined) }),
+    ).toBeUndefined();
   });
 });
