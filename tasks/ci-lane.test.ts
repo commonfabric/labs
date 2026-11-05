@@ -29,6 +29,7 @@ import {
   addLaneResults,
   ANNOTATED_FAILURES,
   annotateLaneFailures,
+  annotateNotRun,
   batchCoverage,
   batchesOf,
   batchRepeats,
@@ -2445,6 +2446,53 @@ describe("running a lane's work", () => {
   });
 });
 
+describe("annotateNotRun()", () => {
+  /** What it prints, inside a job or not, with `annotated` raised already. */
+  function annotating(
+    reason: string,
+    inJob: boolean,
+    annotated = new Set<string>(),
+  ): string[] {
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      annotateNotRun(
+        "cli-fuse",
+        reason,
+        annotated,
+        (name) => inJob && name === "GITHUB_ACTIONS" ? "true" : undefined,
+      );
+    } finally {
+      console.log = log;
+    }
+    return lines;
+  }
+
+  it("prints an annotation naming the suite, with its reason on one line", () => {
+    expect(annotating("did not run, because\nit stalled", true)).toEqual([
+      "::error title=cli-fuse::did not run, because%0Ait stalled",
+    ]);
+  });
+
+  it("prints nothing outside a job", () => {
+    expect(annotating("did not run", false)).toEqual([]);
+  });
+
+  it("counts itself among what the lane has annotated", () => {
+    const annotated = new Set<string>();
+    annotating("did not run", true, annotated);
+    expect(annotated.size).toBe(1);
+  });
+
+  it("prints nothing once the lane has annotated all it may", () => {
+    const annotated = new Set(
+      Array.from({ length: ANNOTATED_FAILURES }, (_, i) => `test ${i}`),
+    );
+    expect(annotating("did not run", true, annotated)).toEqual([]);
+  });
+});
+
 describe("planning a lane without running it", () => {
   /** What lane 2 of the full run prints, as `options` asks. */
   async function printed(options: Partial<LaneOptions>): Promise<string> {
@@ -2985,6 +3033,113 @@ describe("the lane's own housekeeping", () => {
     expect([...Deno.readDirSync(temp)]).toEqual([]);
     await Deno.remove(temp, { recursive: true });
     await Deno.remove(root, { recursive: true });
+  });
+
+  describe("a capability that fails to open", () => {
+    /**
+     * Runs a lane over a suite needing `cf`, opening or refusing as `cf` says,
+     * and one needing nothing. Each records a passing test and notes that it
+     * was asked to run, so that all that can fail the lane is the refusal.
+     */
+    async function laneWithCf(cf: Capability["open"]): Promise<{
+      ok: boolean;
+      ran: string[];
+      printed: string;
+    }> {
+      const root = await Deno.makeTempDir({ prefix: "lane-refused-" });
+      const ran: string[] = [];
+      const running = (id: string, needs: CapabilityId[]) => {
+        const unit = `runtime/bakery/${id}.test.ts`;
+        return suite({
+          id,
+          needs,
+          units: [unit],
+          locate: () => ({ level: "unit" as const, unit }),
+          command: (_units, context) => {
+            ran.push(id);
+            const record = JSON.stringify({
+              line: "record",
+              test: { k: "unit", s: "bakery", n: `${id} > sets` },
+              outcome: "pass",
+              durationMs: 1,
+            });
+            return Promise.resolve([{
+              command: [
+                Deno.execPath(),
+                "eval",
+                `Deno.writeTextFileSync(
+                  Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+                  ${JSON.stringify(record + "\n")},
+                )`,
+              ],
+              cwd: context.root,
+            }]);
+          },
+        });
+      };
+      const lines: string[] = [];
+      const log = console.log;
+      const restore = setEnv({
+        RUNNER_TEMP: undefined,
+        GITHUB_ACTIONS: undefined,
+        GITHUB_STEP_SUMMARY: undefined,
+      });
+      console.log = (line: string) => lines.push(line);
+      try {
+        const ok = await runLane({
+          lane: 1,
+          of: 1,
+          full: true,
+          dryRun: false,
+          laneCount: false,
+          root,
+          at: "2026-09-01T00:00:00Z",
+        }, {
+          topology: () =>
+            Promise.resolve([
+              running("wanting", ["cf"]),
+              running("needing-nothing", []),
+            ]),
+          manifest: ({ at }) =>
+            Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
+          capabilities: new Map<CapabilityId, Capability>([["cf", {
+            id: "cf",
+            description: "a capability a case decides about",
+            open: cf,
+          }]]),
+          spool: () => undefined,
+        });
+        return { ok, ran, printed: lines.join("\n") };
+      } finally {
+        console.log = log;
+        restore();
+        await Deno.remove(root, { recursive: true });
+      }
+    }
+
+    const refusing = () => Promise.reject(new Error("the mirror stalled"));
+
+    it("runs the batches that do not need it, and none that do", async () => {
+      const { ran } = await laneWithCf(refusing);
+      expect(ran).toEqual(["needing-nothing"]);
+    });
+
+    it("fails the lane, and its summary names the batch and why", async () => {
+      const { ok, printed } = await laneWithCf(refusing);
+      expect(ok).toBe(false);
+      expect(printed).toContain(
+        "wanting: did not run, because cf did not open: the mirror stalled",
+      );
+    });
+
+    it("passes the same lane where it opens", async () => {
+      const { ok, ran, printed } = await laneWithCf(() =>
+        Promise.resolve({ env: {}, close: () => Promise.resolve() })
+      );
+      expect(ran.toSorted()).toEqual(["needing-nothing", "wanting"]);
+      expect(ok).toBe(true);
+      expect(printed).not.toContain("did not run");
+    });
   });
 
   it("fails a lane whose capability fails to close", async () => {
