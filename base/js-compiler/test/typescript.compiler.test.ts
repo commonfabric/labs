@@ -919,10 +919,12 @@ export default add(5, "5");`,
     // tell that reference from a literal `undefined` or a computation that
     // returns one, so those are admitted too; the table says so, as what is
     // accepted. `db.query`'s options admit it for the same reason, as the
-    // `sqliteQuery` factory's inputs do. An optional property's indexed type
-    // includes `undefined`, so `key().set()` admits it too. Required inputs, index-signature values,
-    // required `patternTool()` prefills, and optional-property writes through
-    // `update()` keep the stricter rule.
+    // `sqliteQuery` factory's inputs do, except `scope`, which is read when
+    // the pattern is built, so no forwarded input can supply it. An optional
+    // property's indexed type includes `undefined`, so `key().set()` admits it
+    // too. Required inputs, index-signature values, required `patternTool()`
+    // prefills, and optional-property writes through `update()` keep the
+    // stricter rule.
 
     const SUB = [
       "import { computed, pattern, patternTool, UI } from 'commonfabric';",
@@ -1002,6 +1004,16 @@ export default add(5, "5");`,
           ");",
         ].join("\n"),
         refused: "not assignable",
+      },
+      {
+        name: "refuses an optional input forwarded to `db.query`'s `scope`",
+        body: [
+          "import { type CellScope, type SqliteDb } from 'commonfabric';",
+          "export default pattern<{ db: SqliteDb; scope?: CellScope }>(",
+          "  ({ db, scope }) => db.query('SELECT 1', { scope }),",
+          ");",
+        ].join("\n"),
+        refused: "'{ scope: CellScope | undefined; }' is not assignable",
       },
       {
         name: "refuses undefined at a required input",

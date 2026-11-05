@@ -4682,7 +4682,7 @@ export class CellImpl<T extends FabricValue>
       maxConfidentiality?: ReadonlyArray<unknown> | undefined;
       onExceed?: "fail" | "skip" | undefined;
       readClearance?: boolean | undefined;
-      scope?: CellScope | undefined;
+      scope?: CellScope;
     },
   ): Reactive<
     {
@@ -4695,10 +4695,12 @@ export class CellImpl<T extends FabricValue>
   > {
     // The scope binds the node the way `.asScope` binds the builder export:
     // the runner folds the node's default scope into the result cell's link.
-    // Validated at the boundary: an invalid scope must not reach the link.
+    // Validated at the boundary: an invalid scope must not reach the link. A
+    // pattern input or a computed value is still a reference here, which no
+    // check can resolve, so the message names that case.
     if (options?.scope !== undefined && !isCellScope(options.scope)) {
       throw new TypeError(
-        `sqlite: invalid query result scope ${JSON.stringify(options.scope)}`,
+        debugStr`sqlite: \`db.query()\`'s \`scope\` is read when the pattern is built, so it is \`"space"\`, \`"user"\`, or \`"session"\` written in the pattern, not a pattern input or a computed value; got $quote${options.scope}`,
       );
     }
     const factory = options?.scope === undefined
