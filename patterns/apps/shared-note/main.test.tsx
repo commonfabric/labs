@@ -7,6 +7,7 @@
 import {
   action,
   assert,
+  FS,
   NAME,
   pattern,
   TESTS,
@@ -33,6 +34,11 @@ export default pattern(() => {
   const assert_imported_content = assert(() =>
     subject.content === MARKDOWN && subject.title === "Team notes" &&
     subject[NAME] === "Team notes" && blank.content === ""
+  );
+  const assert_filesystem_projection = assert(() =>
+    subject[FS].type === "text/markdown" &&
+    subject[FS].frontmatter.title === "Team notes" &&
+    subject[FS].content === MARKDOWN
   );
   const assert_collaborative_editor = assert(() => {
     const props = propsOf(findElement(subject[UI], "cf-code-editor"));
@@ -128,6 +134,9 @@ export default pattern(() => {
   const assert_line_appended = assert(() =>
     subject.content === MARKDOWN + "- [ ] follow up"
   );
+  const assert_projection_follows_body = assert(() =>
+    subject[FS].content === MARKDOWN + "- [ ] follow up"
+  );
   const action_replace_text = action(() =>
     subject.replaceText.send({ old: "- [ ] task", new: "- [x] task" })
   );
@@ -145,6 +154,7 @@ export default pattern(() => {
   return {
     [TESTS]: [
       { assertion: assert_imported_content },
+      { assertion: assert_filesystem_projection },
       { assertion: assert_collaborative_editor },
       { assertion: assert_profile_setup },
       { assertion: assert_profile_name_is_safe_for_presence },
@@ -161,6 +171,7 @@ export default pattern(() => {
       { assertion: assert_presence_unsupported_notice },
       { action: action_append_line },
       { assertion: assert_line_appended },
+      { assertion: assert_projection_follows_body },
       { action: action_replace_text },
       { assertion: assert_text_replaced },
       { action: action_prepend_line_to_blank },
