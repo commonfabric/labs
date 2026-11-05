@@ -4648,13 +4648,13 @@ export class CellImpl<T extends FabricValue>
   query<Row = Record<string, unknown>>(
     sql: string,
     options?: {
-      params?: ReadonlyArray<unknown> | Record<string, unknown>;
+      params?: ReadonlyArray<unknown> | Record<string, unknown> | undefined;
       reactOn?: unknown;
-      requestKey?: string;
-      maxConfidentiality?: ReadonlyArray<unknown>;
-      onExceed?: "fail" | "skip";
-      readClearance?: boolean;
-      scope?: CellScope;
+      requestKey?: string | undefined;
+      maxConfidentiality?: ReadonlyArray<unknown> | undefined;
+      onExceed?: "fail" | "skip" | undefined;
+      readClearance?: boolean | undefined;
+      scope?: CellScope | undefined;
     },
   ): Reactive<
     {
