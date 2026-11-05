@@ -59,12 +59,14 @@ The board that was not demanded listed in the same time as the demanded one,
 1.7–2.3 s at 100 Topics, since a listing demands it.
 
 A 2,000-Topic board was not measured. Creating one on this rig, four creates at
-a time, had reached 1,036 Topics after 45 minutes: 100 Topics took 66–85 s, 500
-took 621–785 s, and the second thousand was arriving at about 7 s per create,
-so the time to build a board grows with the square of its size here. The
-delivery per Topic was the same at 100 and at 500, which puts a listing of
-2,000 at about 164 MB, and the listing's CPU grew slightly faster than the
-board, 19 ms per Topic at 100 and 19–25 ms at 500.
+a time, had reached 1,036 Topics after 45 minutes at a load of 80 to 300: 100
+Topics took 66–85 s, 500 took 621–785 s, and the second thousand was arriving
+at about 7 s per create.
+`2026-11-05-topics-create-cost-by-board-size.md` beside this profiles why a
+create costs more as the board grows. The delivery per Topic was the same at
+100 and at 500, which puts a listing of 2,000 at about 164 MB, and the
+listing's CPU grew slightly faster than the board, 19 ms per Topic at 100 and
+19–25 ms at 500.
 
 ## A listing delivers each Topic's result document twice
 

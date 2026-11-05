@@ -230,7 +230,12 @@ one tree.
    matches for a stopped piece), what loads the inputs again and in which wave,
    and which computations are exempt because a client view reads their inputs
    anyway. Measure the cost of a listing and of an individual read before and
-   after, since this trades heap for loads.
+   after, since this trades heap for loads. The demand that keeps these inputs
+   loaded is also what makes a create cost more as the board grows: each wave
+   re-runs the board's lifts over the whole Topic list, 1.7 s of CPU per create
+   at 400 Topics against 0.5 s on a board nothing demands
+   (`create-worker-probe.ts` beside the heap probe profiles the worker over a
+   run of creates).
 
 3. **Release a piece when its last demand leaves.** The same release as a
    handler's result, called from where `leaveDemandedEntity()` drops the last

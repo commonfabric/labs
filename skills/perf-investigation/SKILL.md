@@ -149,6 +149,15 @@ inspector, and `heap-retained.ts` and `heap-removal.ts` beside them name what
 holds the growth. `docs/plans/serving-worker-heap.md` gives the process in
 order.
 
+**A serving worker's own CPU.** The inspector reaches a process's main thread,
+and a toolshed's serving loop runs in a worker. The worker entry those probes
+start, `heap-worker-module.ts`, profiles its own isolate on request, and
+`skills/perf-investigation/scripts/create-worker-probe.ts` uses that to write
+one `.cpuprofile` of the worker over a run of creates at each of several board
+sizes. The sampler measures elapsed time, so on a loaded machine compare a
+function's share across sizes and take the absolute cost from the process's CPU
+time, which the probe prints beside it.
+
 ## Which process is doing the work
 
 `serverExecution` decides where a derivation runs, and a measurement taken
