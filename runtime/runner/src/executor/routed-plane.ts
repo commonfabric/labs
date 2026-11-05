@@ -5,8 +5,11 @@
  * service identity with the delegated READ binding, on a transport the route
  * addresses to the owner. A session opens when something first needs it and
  * closes once every scope that needed it is disposed; a SpaceServer's tenure
- * holds one scope, so a session outlives no tenure that used it. The owner's
- * side is `served-requests.ts`.
+ * holds one scope, so a session outlives no tenure that used it. A session
+ * the owner ends, as it revokes one an access-list change de-authorizes, is
+ * replaced, so the next crossing opens another, which the owner admits or
+ * refuses against the list as it then stands. The owner's side is
+ * `served-requests.ts`.
  */
 
 import type { FabricPlainObject } from "@commonfabric/api";
@@ -327,10 +330,7 @@ export class RoutedPlane {
         throw error;
       }
     });
-    this.#sessions.set(space, next);
-    next.catch(() => {
-      if (this.#sessions.get(space) === next) this.#sessions.delete(space);
-    });
+    this.#hold(space, next);
   }
 
   /**
@@ -440,16 +440,27 @@ export class RoutedPlane {
     let session = this.#sessions.get(space);
     if (session === undefined) {
       session = this.#open(space);
-      this.#sessions.set(space, session);
-      // A session that could not open is forgotten, so the next use dials
-      // again. The use that failed reports the failure to its caller.
-      session.catch(() => {
-        if (this.#sessions.get(space) === session) {
-          this.#sessions.delete(space);
-        }
-      });
+      this.#hold(space, session);
     }
     return session;
+  }
+
+  /**
+   * Makes `session` the one `space`'s crossings go on. A session that cannot
+   * open is forgotten, so the next use dials again, and the use that failed
+   * reports the failure to its caller. A session that ends once open, which
+   * no crossing works on again, is replaced (`#replace()`): its owner
+   * revoked it, or its client gave up reconnecting.
+   */
+  #hold(space: MemorySpace, session: Promise<RoutedSession>): void {
+    this.#sessions.set(space, session);
+    session.then((routed) => {
+      routed.session.subscribeTermination(() => {
+        if (this.#sessions.get(space) === session) this.#replace(space, routed);
+      });
+    }, () => {
+      if (this.#sessions.get(space) === session) this.#sessions.delete(space);
+    });
   }
 
   /** Dials `space`'s owner and opens the session, or closes what it dialed. */
