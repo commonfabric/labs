@@ -120,6 +120,12 @@ export const PATTERN_BASELINE_RETIREMENTS: readonly BaselineRetirement[] = [
     reason:
       "Pre-launch patternTool-to-Factory@1 migration replaced the stored search callable contract; owner-approved data wipe is recorded in the factory shipping spec.",
   },
+  {
+    pattern: "system/summary-index/summary-index.tsx",
+    baseline: "20261105T182437Z-cE3ev70MkYq2v0yc",
+    reason:
+      "Pre-launch patternTool-to-Factory@1 migration replaced the stored search callable contract; owner-approved data wipe is recorded in the factory shipping spec.",
+  },
 ].map((retirement) => ({
   ...retirement,
   decision: FACTORY_SHIPPING_DECISION,
