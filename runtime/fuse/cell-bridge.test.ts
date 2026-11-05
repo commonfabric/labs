@@ -905,17 +905,25 @@ describe("cell-bridge", () => {
             renders++;
             return {};
           });
+          const reconnectable = bridge.accessForTestingOnly;
 
-          // initStatus publishes once so the file has bytes before anyone reads
-          // it.
-          expect(renders).toBe(1);
+          try {
+            // initStatus publishes once so the file has bytes before anyone
+            // reads it.
+            expect(renders).toBe(1);
 
-          // Rendering the document walks every space and its piece map. Nothing
-          // that moves the state it reports should pay for that — the reader
-          // does.
-          bridge.setDebug(true);
-          bridge.markDisconnected("socket closed");
-          expect(renders).toBe(1);
+            // Rendering the document walks every space and its piece map.
+            // Nothing that moves the state it reports should pay for that —
+            // the reader does.
+            bridge.setDebug(true);
+            bridge.markDisconnected("socket closed");
+            expect(renders).toBe(1);
+          } finally {
+            if (reconnectable.reconnectTimer !== null) {
+              clearTimeout(reconnectable.reconnectTimer);
+              reconnectable.reconnectTimer = null;
+            }
+          }
         });
 
         it("renders when `.status` is read", () => {
