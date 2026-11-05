@@ -630,10 +630,10 @@ inbox among the member's profiles, after the room is created, and adds the
 first profile it offered the room through to the room's participants, through
 the room's `addParticipant`, without a step of the member's own. A profile that
 points at no inbox is offered nothing. A pointer counts as pointing at no inbox
-when the run offering the room finds nothing there to send to: a piece with
-nothing at `receive`, an inbox in a deleted space (`spaceDeleted()`), or an inbox
-in a space that doesn't admit the run, which a serving loop's does, since it
-reads a space as its OWNER does. Such a member gets a notice, and the room is
+when the run offering the room finds no stream there to send to: a piece whose
+`receive` is no stream, an inbox in a deleted space (`spaceDeleted()`), or an
+inbox in a space that doesn't admit the run, which a serving loop's does, since
+it reads a space as its OWNER does. Such a member gets a notice, and the room is
 still offered to the request's other members. `offerRoom` offers a room someone
 was added to the same way, and so does `openDirect` a direct room it finds whose
 counterpart has a notice of it still waiting, which the offer replaces. The
@@ -672,9 +672,7 @@ known only by their DID, who has no profile to reach an inbox through, or one
 whose profile points at no inbox. A member sent an offer gets no notice, and
 nothing tells the sender whether the offer arrived: `offerRoom`'s `offered`
 means sent, or about to be. A runtime still holding an inbox it read before its
-space stopped admitting this user finds it, and the offer it sends is lost. Stored
-data at `receive` can't be told from a stream here, so a pointer naming it costs
-the request's other members their offers.
+space stopped admitting this user finds it, and the offer it sends is lost.
 
 ## Crossing creations
 

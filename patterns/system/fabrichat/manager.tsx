@@ -610,21 +610,25 @@ const inboxPointerOf = (
   profile?.key("inbox").get()?.piece;
 
 /**
+ * Whether `read`, what a read of a `receive` through an inbox pointer found, is a
+ * stream. A stream reads as its handle there, and stored data reads as itself.
+ */
+const isStreamHandle = (read: unknown): boolean =>
+  typeof (read as { send?: unknown } | undefined)?.send === "function";
+
+/**
  * Whether the share inbox `pointer` points at takes offers, as this run finds
- * it: its space isn't deleted, and something is at its `receive`. A pointer can
- * name a piece with nothing there, or an inbox in a space this run can't read. A
+ * it: its space isn't deleted, and its `receive` is a stream. A pointer can name
+ * a piece with no such stream, or an inbox in a space this run can't read. A
  * send to a path holding no stream writes the event there, and in another space
- * that write throws, which takes the handler's other sends with it.
- *
- * This is as far as a read here can tell. Through this cell, stored data at
- * `receive` reads as a stored stream does, so a pointer naming such data still
- * fails that way. A runtime still holding an inbox it read before its space
- * stopped admitting this user finds the stream, and the offer it sends is lost.
+ * that write throws, which takes the handler's other sends with it. A runtime
+ * still holding an inbox it read before its space stopped admitting this user
+ * finds the stream, and the offer it sends is lost.
  */
 const takesOffers = (pointer: Cell<ShareInboxPiece>): boolean => {
   const inbox = pointer.resolveAsCell();
   return spaceDeleted(inbox) !== true &&
-    inboxOf(inbox).key("receive").get() !== undefined;
+    isStreamHandle(inboxOf(inbox).key("receive").get());
 };
 
 /** A share inbox, and the first of a member's profiles pointing at it. */
@@ -639,7 +643,7 @@ interface ProfileInboxEntry {
 /**
  * The share inboxes `profiles` point at, each once, in the order of the first
  * profile pointing at each, with that profile. A profile pointing at no inbox
- * is left out, and so is one whose pointer finds nothing to send to (see
+ * is left out, and so is one whose pointer finds no stream to send to (see
  * `takesOffers()`).
  */
 const distinctInboxes = (
