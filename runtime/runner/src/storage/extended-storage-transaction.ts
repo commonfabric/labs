@@ -4286,6 +4286,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.#statusOverride = undefined;
     this.#clearPostCommitOutbox();
     this.#preparationRefused = false;
+    this.#cfcState.prepare = { status: "unprepared" };
     this.#releasePreparationInputs();
     const result = this.tx.abort(reason);
     // An abort is a terminal outcome, and it discards the staged writes the
@@ -4303,16 +4304,20 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * dereference traces, trigger reads, structure containers, asserted value
    * roots, consulted grants and manifests, the observations, and the
    * preparation that verified them, whose input holds the same records. A
-   * transaction that has settled runs no further gate over them, so a
-   * reference to it that outlives it, from the piece its start ran in for
-   * one, keeps none of them. The one reader after settlement is a post-commit
-   * effect's release check, so `#commit` releases them only once the effects
-   * have flushed, and not at all when a seal destination took the effects
-   * over to flush after its wave lands.
+   * preparation that was invalidated holds its reasons and no input, and
+   * stays for whoever reads why a commit was refused. A transaction that has
+   * settled runs no further gate over the records, so a reference to it that
+   * outlives it, from the piece its start ran in for one, keeps none of them.
+   * The one reader after settlement is a post-commit effect's release check,
+   * so `#commit` releases them only once the effects have flushed, and not at
+   * all when a seal destination took the effects over to flush after its wave
+   * lands.
    */
   #releasePreparationInputs(): void {
     const state = this.#cfcState;
-    state.prepare = { status: "unprepared" };
+    if (state.prepare.status === "prepared") {
+      state.prepare = { status: "unprepared" };
+    }
     state.dereferenceTraces = [];
     state.structureContainers = [];
     state.assertedValueRoots = [];
@@ -4404,6 +4409,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
     this.#clearPostCommitOutbox();
     this.#runCommitCallbacks(result);
+    // No effect flushes for a commit that never reached storage.
+    this.#releasePreparationInputs();
     return result;
   }
 
@@ -4699,15 +4706,28 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       },
     );
 
+    // By the time the inline effects have flushed, the commit callbacks have
+    // run too, so no callback and no release check reads the prepared inputs
+    // afterwards. Effects a destination owns flush on its schedule, and their
+    // checks read the inputs then.
+    const releaseAfterEffects = async (): Promise<void> => {
+      await effects;
+      if (!effectsHandedOff) this.#releasePreparationInputs();
+    };
+
     // The receipt's settlement stage includes the inline effect layer.
     // Observing its verdict never waits for these effects.
-    const result = await promise;
-    await effects;
-    // The commit callbacks have run and the inline effects have flushed, so
-    // no callback and no release check reads the prepared inputs after this.
-    // Effects a destination owns flush on its schedule, and their checks read
-    // the inputs then.
-    if (!effectsHandedOff) this.#releasePreparationInputs();
+    let result: Result<Unit, CommitError>;
+    try {
+      result = await promise;
+    } catch (error) {
+      // A backend whose commit promise rejects may never report a verdict,
+      // and the effects wait on one, so the rejection does not wait on the
+      // release.
+      void releaseAfterEffects();
+      throw error;
+    }
+    await releaseAfterEffects();
 
     return result;
   }

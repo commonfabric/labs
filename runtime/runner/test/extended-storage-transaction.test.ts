@@ -23,6 +23,7 @@ import type {
   IExtendedStorageTransaction,
   TransactionWriteDetail,
 } from "../src/storage/interface.ts";
+import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 import { CFC_GRANT_ID_PREFIX } from "../src/cfc/grants.ts";
 import { RuntimeOwnedStores } from "../src/cfc/runtime-owned-stores.ts";
 import {
@@ -32,6 +33,7 @@ import {
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { refuseAtCommitBoundary } from "./refused-commit.ts";
 
 const signer = await Identity.fromPassphrase("extended-storage-transaction");
 const space = signer.did();
@@ -334,6 +336,41 @@ describe("extended-storage-transaction", () => {
       const tx = staged(runtime);
 
       tx.abort("released");
+
+      const state = tx.getCfcState();
+      expect(state.prepare.status).toBe("unprepared");
+      expect(state.writePolicyInputs).toEqual([]);
+      expect(state.writePolicyInputIdentities.size).toBe(0);
+      expect(state.dereferenceTraces).toEqual([]);
+    });
+
+    it("releases them, keeping the refusal's reasons, when the commit is refused before storage", async () => {
+      const tx = runtime.edit();
+      refuseAtCommitBoundary(tx, space, "the refused commit settles");
+      tx.recordCfcWritePolicyInput(input);
+      tx.recordCfcDereferenceTrace(trace);
+
+      const result = await tx.commit().settled;
+
+      expect(result.error?.name).toBe("CfcCommitRefusalError");
+      const state = tx.getCfcState();
+      expect(state.prepare.status).toBe("invalidated");
+      expect(state.writePolicyInputs).toEqual([]);
+      expect(state.writePolicyInputIdentities.size).toBe(0);
+      expect(state.dereferenceTraces).toEqual([]);
+    });
+
+    it("releases them when the commit promise rejects", async () => {
+      const tx = staged(runtime);
+      tx.tx.commit = () =>
+        createTransactionCommitReceipt(
+          Promise.reject(new Error("forced commit promise rejection")),
+        );
+
+      await expect(tx.commit().settled).rejects.toThrow(
+        "forced commit promise rejection",
+      );
+      await tx.postCommitEffectsSettled();
 
       const state = tx.getCfcState();
       expect(state.prepare.status).toBe("unprepared");

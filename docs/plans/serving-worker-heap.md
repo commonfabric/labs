@@ -113,9 +113,10 @@ the main thread under the worker arm and so are not on the worker.
   create since, its modes and the snapshots it shares. A settled transaction runs no
   further gate over them; the one reader after settlement is a post-commit
   effect's release check, so a commit releases them once its inline effects
-  have flushed, an abort releases them at once, and a transaction whose effects
-  a seal destination took over keeps them, since the destination flushes after
-  its wave lands.
+  have flushed, an abort or a commit refused before storage releases them at
+  once, the refusal keeping its reasons, and a transaction whose effects a seal
+  destination took over keeps them, since the destination flushes after its
+  wave lands.
 
 ## What is left
 
