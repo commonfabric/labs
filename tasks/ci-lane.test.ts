@@ -29,6 +29,7 @@ import {
   addLaneResults,
   ANNOTATED_FAILURES,
   annotateLaneFailures,
+  type Batch,
   batchCoverage,
   batchesOf,
   batchRepeats,
@@ -69,6 +70,7 @@ import {
   runInvocation,
   runLane,
   runLanes,
+  secondsLeftInStep,
   spoolRecords,
   unitsForRun,
 } from "./ci-lane.ts";
@@ -113,6 +115,7 @@ import {
   LANE_BOUND_SECONDS,
   LANE_BUDGET_SECONDS,
   LANE_PROLOGUE_SECONDS,
+  LANE_RESERVE_SECONDS,
   LANES_MAX,
   RERUN_BUDGET_SECONDS,
   RERUN_EXECUTIONS,
@@ -2442,6 +2445,284 @@ describe("running a lane's work", () => {
       console.log = log;
     }
     expect(lines).toEqual([]);
+  });
+});
+
+describe("secondsLeftInStep()", () => {
+  const naming = (value?: string) => (name: string) =>
+    name === "LANE_WORK_TIMEOUT_MINUTES" ? value : undefined;
+
+  it("returns the step's bound less what the lane has spent", () => {
+    expect(secondsLeftInStep(naming("60"), 90_000)).toBe(3510);
+  });
+
+  it("returns `undefined` where the workflow names no bound", () => {
+    expect(secondsLeftInStep(naming(undefined), 90_000)).toBeUndefined();
+  });
+
+  it("returns `undefined` for a bound that is not a positive number", () => {
+    expect(secondsLeftInStep(naming("soon"), 90_000)).toBeUndefined();
+    expect(secondsLeftInStep(naming("0"), 90_000)).toBeUndefined();
+  });
+});
+
+describe("how a lane spends its time", () => {
+  const ROOM = LANE_RESERVE_SECONDS + 1;
+  const NO_ROOM = LANE_RESERVE_SECONDS;
+
+  /** The name of the test a suite of `id` records. */
+  const testOf = (id: string) => `${id} > sets`;
+
+  /** A suite of one unit, noting each pass it is asked to make. */
+  function noting(id: string, passes: string[], stop?: () => void): Suite {
+    const unit = `runtime/bakery/${id}.test.ts`;
+    return suite({
+      id,
+      needs: [],
+      units: [unit],
+      locate: () => ({ level: "unit" as const, unit }),
+      command: (_units, context) => {
+        passes.push(id);
+        stop?.();
+        const record = JSON.stringify({
+          line: "record",
+          test: { k: "unit", s: "bakery", n: testOf(id) },
+          outcome: "pass",
+          durationMs: 1,
+        });
+        return Promise.resolve([{
+          command: [
+            Deno.execPath(),
+            "eval",
+            `Deno.writeTextFileSync(
+              Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+              ${JSON.stringify(record + "\n")},
+            )`,
+          ],
+          cwd: context.root,
+        }]);
+      },
+    });
+  }
+
+  /**
+   * Runs the only lane of a full run where `repeated` asks for three passes and
+   * `once` for one, with `left` saying how long the lane has. Returns whether
+   * it passed, each pass in the order they started, and what it printed and
+   * spooled.
+   */
+  async function lane(
+    left: () => number | undefined,
+    options: { stopAt?: number } = {},
+  ) {
+    const root = await Deno.makeTempDir({ prefix: "lane-time-" });
+    const spool = await Deno.makeTempDir({ prefix: "lane-time-spool-" });
+    const passes: string[] = [];
+    const stop = new LaneStop();
+    const stopping = () => {
+      if (passes.length === options.stopAt) stop.receive("SIGINT");
+    };
+    const lines: string[] = [];
+    const log = console.log;
+    const restore = setEnv({
+      RUNNER_TEMP: undefined,
+      GITHUB_ACTIONS: undefined,
+      GITHUB_STEP_SUMMARY: undefined,
+    });
+    console.log = (line: string) => lines.push(line);
+    try {
+      const suites = [
+        noting("repeated", passes, stopping),
+        noting("once", passes, stopping),
+        noting("last", passes, stopping),
+      ];
+      const entry = (id: string, repeats: number, cost: number) => ({
+        test: { k: "unit", s: "bakery", n: testOf(id) },
+        suite: id,
+        unit: `runtime/bakery/${id}.test.ts`,
+        repeats,
+        cost,
+      });
+      const ok = await runLane({
+        lane: 1,
+        of: 1,
+        full: true,
+        dryRun: false,
+        laneCount: false,
+        root,
+        at: "2026-09-01T00:00:00Z",
+      }, {
+        topology: () => Promise.resolve(suites),
+        manifest: () =>
+          Promise.resolve({
+            manifest: manifestOf([
+              // Costliest first, which is the order a lane starts them.
+              entry("repeated", 3, 30),
+              entry("once", 1, 20),
+              entry("last", 1, 10),
+            ]),
+            objectName: "manifest-fixture.json.gz",
+          }),
+        spool: () => spool,
+        stop: () => stop,
+        secondsLeft: left,
+      });
+      const spooled: TestRecord[] = [];
+      for await (const file of Deno.readDir(spool)) {
+        const text = await Deno.readTextFile(`${spool}/${file.name}`);
+        for (const line of text.split("\n")) {
+          if (line.startsWith("{")) spooled.push(JSON.parse(line));
+        }
+      }
+      return { ok, passes, printed: lines.join("\n"), spooled };
+    } finally {
+      console.log = log;
+      restore();
+      await Deno.remove(root, { recursive: true });
+      await Deno.remove(spool, { recursive: true });
+    }
+  }
+
+  /** The number of passes a lane's measurements say `suite` made. */
+  function passesRecorded(
+    spooled: readonly TestRecord[],
+    suite: string,
+  ): number | undefined {
+    // The full run measures coverage.
+    const name = batchMeasurementName(suite, true, "passes");
+    return spooled.find((record) => record.test.n === name)?.durationMs;
+  }
+
+  it("makes every batch's first pass before any batch's second", async () => {
+    const { ok, passes } = await lane(() => ROOM);
+    expect(passes).toEqual([
+      "repeated",
+      "once",
+      "last",
+      "repeated",
+      "repeated",
+    ]);
+    expect(ok).toBe(true);
+  });
+
+  it("makes every pass where nothing bounds the step", async () => {
+    const { ok, passes } = await lane(() => undefined);
+    expect(passes.filter((id) => id === "repeated")).toHaveLength(3);
+    expect(ok).toBe(true);
+  });
+
+  it("makes every first pass and no later one where the lane has no room", async () => {
+    const { passes } = await lane(() => NO_ROOM);
+    expect(passes).toEqual(["repeated", "once", "last"]);
+  });
+
+  it("stays green, and names what it left short, where the lane has no room", async () => {
+    const { ok, printed } = await lane(() => NO_ROOM);
+    expect(ok).toBe(true);
+    expect(printed).toContain("Left out, which is not a failure:");
+    expect(printed).toContain(
+      "repeated: 1 of 3 passes, of runtime/bakery/repeated.test.ts",
+    );
+  });
+
+  it("stops repeating when the room runs out part way", async () => {
+    const answers = [ROOM, NO_ROOM];
+    const { passes, printed } = await lane(() => answers.shift() ?? NO_ROOM);
+    expect(passes.filter((id) => id === "repeated")).toHaveLength(2);
+    expect(printed).toContain("repeated: 2 of 3 passes");
+  });
+
+  it("records the passes it made rather than the passes asked for", async () => {
+    const { spooled } = await lane(() => NO_ROOM);
+    expect(passesRecorded(spooled, "repeated")).toBe(1);
+    const whole = await lane(() => ROOM);
+    expect(passesRecorded(whole.spooled, "repeated")).toBe(3);
+  });
+
+  it("says nothing left out where it made every pass", async () => {
+    const { printed } = await lane(() => ROOM);
+    expect(printed).not.toContain("Left out");
+    expect(printed).not.toContain("not repeating");
+  });
+
+  describe("told to stop", () => {
+    it("fails, and says what it was running and did not start", async () => {
+      const { ok, passes, printed } = await lane(() => ROOM, { stopAt: 2 });
+      expect(ok).toBe(false);
+      expect(passes).toEqual(["repeated", "once"]);
+      expect(printed).toContain("Stopped by SIGINT before finishing its plan.");
+      expect(printed).toContain("It was running once, pass 1 of 1.");
+      expect(printed).toContain("It did not start: last.");
+      expect(printed).toContain(
+        "It did not finish repeating: repeated: 1 of 3 passes",
+      );
+    });
+
+    it("reports no unit it stopped in as having run no test", async () => {
+      const { printed } = await lane(() => ROOM, { stopAt: 2 });
+      expect(printed).not.toContain("ran no test");
+    });
+  });
+
+  describe("reruns", () => {
+    /** Runs a failing unit through `rerunFailures()`, noting each rerun. */
+    async function rerunning(hasRoom: () => boolean): Promise<{
+      reruns: number;
+      unrun: string[];
+    }> {
+      const root = await Deno.makeTempDir({ prefix: "lane-rerun-room-" });
+      const unit = "runtime/bakery/glaze.test.ts";
+      const key = testIdentityKey({
+        k: "unit",
+        s: "bakery",
+        n: "glaze > sets",
+      });
+      let reruns = 0;
+      const log = console.log;
+      console.log = () => {};
+      try {
+        const batch: Batch = {
+          suite: suite({
+            id: "workspace-unit",
+            needs: [],
+            units: [unit],
+            locate: () => ({ level: "unit" as const, unit }),
+            command: () => {
+              reruns += 1;
+              return Promise.resolve([]);
+            },
+          }),
+          units: [{ unit, skip: [], cost: 1 }],
+          runs: new Map([[unit, 1]]),
+          projected: 1,
+        };
+        const { unrun } = await rerunFailures(
+          [{ batch, env: {}, failing: new Map([[unit, new Set([key])]]) }],
+          manifestOf([{ unit }]),
+          [],
+          { lane: 1, full: true, dryRun: false, laneCount: false, root },
+          root,
+          undefined,
+          new LaneStop(),
+          hasRoom,
+        );
+        return { reruns, unrun };
+      } finally {
+        console.log = log;
+        await Deno.remove(root, { recursive: true });
+      }
+    }
+
+    it("starts none where the lane has no room, and says which went unrun", async () => {
+      const { reruns, unrun } = await rerunning(() => false);
+      expect(reruns).toBe(0);
+      expect(unrun).toHaveLength(1);
+    });
+
+    it("starts one where the lane has room", async () => {
+      const { reruns } = await rerunning(() => true);
+      expect(reruns).toBeGreaterThan(0);
+    });
   });
 });
 

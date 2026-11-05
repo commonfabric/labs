@@ -67,6 +67,9 @@ export interface RunSummary {
   /** Lines saying anything else that kept the run from passing. */
   notes?: readonly string[];
 
+  /** Lines saying what the run left out without failing for it. */
+  omitted?: readonly string[];
+
   /** Where the run's full logs are. */
   logs?: string;
 
@@ -125,6 +128,10 @@ export function summaryLines(summary: RunSummary): string[] {
     lines.push(
       `Not counted, because they report no tests: ${unreported.join(", ")}`,
     );
+  }
+  if ((summary.omitted ?? []).length > 0) {
+    lines.push("", "Left out, which is not a failure:");
+    for (const line of summary.omitted!) lines.push(`  ${line}`);
   }
   if (ok) return lines;
   for (const test of failing.slice(0, DESCRIBED_FAILURES)) {

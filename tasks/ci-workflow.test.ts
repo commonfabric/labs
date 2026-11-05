@@ -16,6 +16,7 @@ import {
   COVERAGE_REPORT_FILE,
   coverageRoot,
   DEFAULT_COVERAGE_DIR,
+  LANE_STEP_BOUND_VARIABLE,
   measuredSetOfReport,
   parseLaneArgs,
   profileRoot,
@@ -394,6 +395,18 @@ Deno.test("a lane's step is bounded above what a lane is packed to finish inside
     `the lane step is bounded at ${minutes} minutes, and a lane is packed ` +
       `to finish inside ${packed} seconds, reruns included`,
   );
+});
+
+Deno.test("the lane step's bound is the one the lane reads", async () => {
+  // A lane decides from this variable whether it has time for a repeat, so a
+  // variable naming some other figure would have it run into the real bound,
+  // or give up repeats it has time for.
+  const workflow = await parsedWorkflow("deno.yml");
+  const minutes = namedStep(workflow.jobs.tests, "🧪 Run the lane")[
+    "timeout-minutes"
+  ];
+  assert(typeof minutes === "number", "the lane step has no timeout-minutes");
+  assertEquals(workflow.env?.[LANE_STEP_BOUND_VARIABLE], minutes);
 });
 
 Deno.test("Pull Request Comments follows the CI workflow by name", async () => {

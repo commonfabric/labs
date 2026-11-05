@@ -281,8 +281,18 @@ workflow. A run's lanes come from two jobs.
   runs, one once each capability has opened, and one as each batch starts.
   Setup captures its commands' output, so in a lane that stops without saying
   why, the last of these lines names the step it stopped in.
-- After each batch, the lane raises GitHub Actions error annotations for the
-  failures it fails for, with a local rerun command where one exists. These
+- A lane makes the first pass of every batch before it makes any later pass,
+  and then a pass of each repeated batch in turn. A first pass is the only run
+  its tests get, and a later pass measures a flake, so a test failing slowly
+  under repeats costs repeats rather than another test's only run. A later pass
+  or a rerun starts only while more than `LANE_RESERVE_SECONDS` is left of the
+  step's bound, which the lane reads from `LANE_WORK_TIMEOUT_MINUTES`. A batch
+  left short of its passes is not a failure: the lane's closing summary and its
+  log name each one, with how many passes it made and the units that wanted
+  more, and it records the passes it made so that the cost fit reads what ran.
+- Once a batch has made its last pass, the lane raises GitHub Actions error
+  annotations for the failures it fails for, with a local rerun command where
+  one exists. These
   appear while the remaining batches, diagnostic reruns, and coverage work
   continue. Each failing identity is annotated once, up to ten per lane; an
   excused failure gets no error annotation. The closing summary still lists
@@ -301,7 +311,10 @@ workflow. A run's lanes come from two jobs.
   signal is one an error it did not catch stopped, and is recorded as failed.
   The lane then prints the end of each server's log, keeps its working
   directory for the upload of what a failing lane left behind, and exits
-  without converting its coverage, which takes longer than GitHub waits.
+  without converting its coverage, which takes longer than GitHub waits. Its
+  closing summary says which pass it was running, which batches it did not
+  start, and which it did not finish repeating, and reports no unit as having
+  run no test on account of being stopped.
 
 Only the `🧪 Run the lane` step is given `GITHUB_TOKEN` in its
 environment, and `tasks/ci-workflow.test.ts` fails a lane job in which the
@@ -802,6 +815,7 @@ measurement to look at rather than a setting to fix.
 | `MAX_EXECUTIONS` | 10 | runs of one item | chosen | Where the line stops. Up when the flakiest items a change forces in still are not proven by what runs; down when they crowd a lane. |
 | `RERUN_EXECUTIONS` | 3 | runs of one unit | chosen | The most times the full run runs a unit again where a test in it failed every time. Up when flaky tests on `main` fail every rerun and go on being counted as new real test failures; down when a real break's reruns take time that tells nobody anything. |
 | `RERUN_BUDGET_SECONDS` | 300 | seconds | chosen | What one lane of the full run may spend rerunning its failures. Up when failures go without reruns for want of it; down when a broken `main` holds every lane this much longer than it needs. |
+| `LANE_RESERVE_SECONDS` | 600 | seconds | chosen | How far short of its step's bound a lane starts no more repeats and reruns. Up when lanes reach the bound during a repeat or their coverage conversion; down when lanes finish well inside the bound with repeats left unrun. |
 | `COVERAGE_COMMENT_LINES` | 25 | lines | chosen | Up when coverage comments are too noisy; down when debt is climbing unnoticed. |
 | `LOCAL_COVERAGE_MAX_SECONDS` | 30 | seconds | chosen | Up when too many sets are reported as expensive for the report to be worth reading; down when one is quietly eating a lane. Nothing is excluded either way; it only decides what the summary mentions. |
 | `EXCLUDED_FROM_COVERAGE_GATE` | 9 | workspace members | chosen | Not a quantity. A line comes off when a package fits the run's budget or gains a Deno-only half, which gives it a measured set. A line goes on when a package's own tests stop being what covers it. |
@@ -1806,7 +1820,9 @@ would measure. A test that has already passed beside its failure in the lane,
 because its unit was repeated, has the evidence already and is no reason to
 run its unit again. It still runs again where another test in its unit is.
 
-What a lane spends on reruns is bounded by `RERUN_BUDGET_SECONDS`. Each rerun
+What a lane spends on reruns is bounded by `RERUN_BUDGET_SECONDS`, and a rerun
+starts only while more than `LANE_RESERVE_SECONDS` is left of the step's bound.
+Each rerun
 goes to the unit that has run again least across all of the lane's suites, so
 the budget is spread over the lane's failures rather than spent on the first. A
 unit starts only where what the packer charges for it fits in what is left of

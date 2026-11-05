@@ -309,6 +309,13 @@ export const RERUN_EXECUTIONS = 3;
  */
 export const RERUN_BUDGET_SECONDS = 300;
 
+/**
+ * The seconds short of its step's bound at which a lane starts no more repeats
+ * and reruns. They hold a repeat already running, which can take minutes where
+ * a test in it is failing slowly, and the lane's coverage conversion.
+ */
+export const LANE_RESERVE_SECONDS = 600;
+
 /** Uncovered lines a change must add before the comment mentions it. */
 export const COVERAGE_COMMENT_LINES = 25;
 
@@ -945,6 +952,16 @@ export const DIALS: readonly Dial[] = [
     why: "What one lane of the full run may spend rerunning its failures. " +
       "Up when failures go without reruns for want of it; down when a " +
       "broken `main` holds every lane this much longer than it needs.",
+  },
+  {
+    name: "LANE_RESERVE_SECONDS",
+    value: LANE_RESERVE_SECONDS,
+    unit: "seconds",
+    setBy: "chosen",
+    why: "How far short of its step's bound a lane starts no more repeats " +
+      "and reruns. Up when lanes reach the bound during a repeat or their " +
+      "coverage conversion; down when lanes finish well inside the bound " +
+      "with repeats left unrun.",
   },
   {
     name: "COVERAGE_COMMENT_LINES",

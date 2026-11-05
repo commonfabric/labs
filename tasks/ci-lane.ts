@@ -134,6 +134,7 @@ import {
   DISCRETIONARY_SECONDS,
   FULL_RUN_LABEL,
   LANE_PROLOGUE_SECONDS,
+  LANE_RESERVE_SECONDS,
   LANES_MAX,
   RERUN_BUDGET_SECONDS,
   RERUN_EXECUTIONS,
@@ -1175,10 +1176,27 @@ export interface Execution {
 }
 
 /**
- * Runs one batch, once per repeat, gathering each execution's records
- * before the next can reuse a path the runner owns. Every repeat must
- * pass: a repeat is not a retry, and three runs of a test is strictly
- * stricter than one.
+ * The variable in which the workflow names the bound on the step running a
+ * lane, in minutes.
+ */
+export const LANE_STEP_BOUND_VARIABLE = "LANE_WORK_TIMEOUT_MINUTES";
+
+/** What a batch's passes came to. */
+export interface BatchResult {
+  ok: boolean;
+  records: TestRecord[];
+  conflicts: TestRecord[];
+  seconds: number;
+  unexplained: number;
+  executions: Execution[];
+  failures: Map<TestRecord, string>;
+}
+
+/**
+ * One batch, run a pass at a time, so that a lane can run other batches between
+ * its passes. Each pass's records are gathered before the next can reuse a path
+ * the runner owns. Every pass must pass: a repeat is not a retry, and three runs
+ * of a test is strictly stricter than one.
  *
  * A record whose kind and scope are outside the suite's declared
  * surfaces, or that a producer marked with a variant the batch did not
@@ -1190,63 +1208,96 @@ export interface Execution {
  * A batch whose lane is told to stop gathers what the execution running
  * then recorded, and starts no other.
  */
-export async function runBatch(
-  batch: Batch,
-  options: LaneOptions,
-  workDir: string,
-  spool: string | undefined,
-  env: Record<string, string>,
-  coverage?: BatchCoverage,
-  stop: LaneStop = new LaneStop(),
-): Promise<{
-  ok: boolean;
-  records: TestRecord[];
-  conflicts: TestRecord[];
-  seconds: number;
-  unexplained: number;
-  executions: Execution[];
-  failures: Map<TestRecord, string>;
-}> {
-  const records: TestRecord[] = [];
-  // The message each failing record's report gave it.
-  const failures = new Map<TestRecord, string>();
-  const conflicts: TestRecord[] = [];
-  // What each pass recorded, kept apart from the other passes. Whether a
-  // pass ran what it was asked to is a statement about that pass, and a
-  // reader taking the batch's records as one list cannot tell a pass that
-  // ran from one that stopped part way.
-  const executions: Execution[] = [];
-  let ok = true;
-  let seconds = 0;
-  // Executions that ended badly having recorded no failure of their own,
-  // which is a failure somewhere the records cannot see: a runner that
-  // could not start, a command that died before reporting.
-  //
-  // Counted per execution rather than over the batch, because an excusal
-  // is a statement about one invocation. A repeat that died having
-  // recorded nothing sits in the same list of records as a repeat that
-  // recorded a failure a flake rate excuses, and a reader taking the
-  // batch's records as one list cannot tell that from a batch where
-  // every execution ran.
-  let unexplained = 0;
-  // How many times a pass opened a unit, over every pass.
-  let opened = 0;
-  // Seconds the records the suite places in a unit took, and what the
-  // units' hooks took, over every pass.
-  let ran = 0;
-  // What each unit's hooks took, once for each pass that opened it.
-  const hooks: { unit: string; seconds: number }[] = [];
-  for (let run = 1; run <= batchRepeats(batch); run++) {
-    if (stop.signal !== undefined) break;
+class BatchPasses {
+  #batch: Batch;
+  #options: LaneOptions;
+  #workDir: string;
+  #env: Record<string, string>;
+  #coverage: BatchCoverage | undefined;
+  #stop: LaneStop;
+  #records: TestRecord[] = [];
+
+  /** The message each failing record's report gave it. */
+  #failures = new Map<TestRecord, string>();
+  #conflicts: TestRecord[] = [];
+
+  /**
+   * What each pass recorded, kept apart from the other passes. Whether a
+   * pass ran what it was asked to is a statement about that pass, and a
+   * reader taking the batch's records as one list cannot tell a pass that
+   * ran from one that stopped part way.
+   */
+  #executions: Execution[] = [];
+  #ok = true;
+  #seconds = 0;
+
+  /**
+   * Executions that ended badly having recorded no failure of their own,
+   * which is a failure somewhere the records cannot see: a runner that
+   * could not start, a command that died before reporting.
+   *
+   * Counted per execution rather than over the batch, because an excusal
+   * is a statement about one invocation. A repeat that died having
+   * recorded nothing sits in the same list of records as a repeat that
+   * recorded a failure a flake rate excuses, and a reader taking the
+   * batch's records as one list cannot tell that from a batch where
+   * every execution ran.
+   */
+  #unexplained = 0;
+
+  /** How many times a pass opened a unit, over every pass. */
+  #opened = 0;
+
+  /**
+   * Seconds the records the suite places in a unit took, and what the
+   * units' hooks took, over every pass.
+   */
+  #ran = 0;
+
+  /** What each unit's hooks took, once for each pass that opened it. */
+  #hooks: { unit: string; seconds: number }[] = [];
+
+  /** Constructs an instance which has run none of `batch`'s passes. */
+  constructor(
+    batch: Batch,
+    options: LaneOptions,
+    workDir: string,
+    env: Record<string, string>,
+    coverage: BatchCoverage | undefined,
+    stop: LaneStop,
+  ) {
+    this.#batch = batch;
+    this.#options = options;
+    this.#workDir = workDir;
+    this.#env = env;
+    this.#coverage = coverage;
+    this.#stop = stop;
+  }
+
+  /** How many passes have started. */
+  get made(): number {
+    return this.#executions.length;
+  }
+
+  /** Whether every pass the batch asks for has started. */
+  get done(): boolean {
+    return this.made >= batchRepeats(this.#batch);
+  }
+
+  /** Runs the next pass, unless the lane has been told to stop. */
+  async runNext(): Promise<void> {
+    if (this.#stop.signal !== undefined) return;
+    const batch = this.#batch;
+    const run = this.made + 1;
     console.log(
       `ci-lane: starting ${batch.suite.id}, run ${run} of ` +
         `${batchRepeats(batch)}`,
     );
-    const outputDir = path.join(workDir, `${batch.suite.id}-${run}`);
+    const outputDir = path.join(this.#workDir, `${batch.suite.id}-${run}`);
     const batchSpool = path.join(outputDir, "spool");
     await Deno.mkdir(batchSpool, { recursive: true });
-    const asked = unitsForRun(batch, run, executions[0]?.registered);
-    opened += asked.length;
+    const asked = unitsForRun(batch, run, this.#executions[0]?.registered);
+    this.#opened += asked.length;
     // The tests a unit's skip list named, by unit and name. Each is a test
     // the plan gave another lane, or none, or one the manifest does not hold
     // that the first pass ran already, so the skip its process registers is
@@ -1265,18 +1316,21 @@ export async function runBatch(
       records: [],
       registered: new Map(),
     };
-    executions.push(execution);
+    this.#executions.push(execution);
     /** Adds `names` to what `unit` registered in this pass. */
     const register = (unit: string, names: Iterable<string>): void => {
       const known = execution.registered.get(unit);
       if (known === undefined) execution.registered.set(unit, new Set(names));
       else for (const name of names) known.add(name);
     };
+    const coverage = this.#coverage;
     const invocations = await batch.suite.command(asked, {
-      root: options.root,
+      root: this.#options.root,
       outputDir,
       spoolDir: batchSpool,
-      ...(options.base === undefined ? {} : { baseRef: options.base }),
+      ...(this.#options.base === undefined
+        ? {}
+        : { baseRef: this.#options.base }),
       ...(coverage === undefined ? {} : {
         coverageDir: coverage.dir,
         ...(coverage.members === undefined
@@ -1288,17 +1342,17 @@ export async function runBatch(
       }),
     });
     for (const invocation of invocations) {
-      if (stop.signal !== undefined) break;
+      if (this.#stop.signal !== undefined) break;
       const outcome = await runInvocation(invocation, {
-        ...env,
+        ...this.#env,
         // Each execution writes into a spool of its own, so a repeat
         // cannot read the previous run's fragments and a failure part
         // way through keeps what finished.
         CF_TEST_RECORDS_DIR: batchSpool,
         ...invocation.env,
-      }, stop);
-      seconds += outcome.seconds;
-      if (!outcome.ok) ok = false;
+      }, this.#stop);
+      this.#seconds += outcome.seconds;
+      if (!outcome.ok) this.#ok = false;
       const collected = await collectRecords({
         spoolDir: batchSpool,
         interrupted: outcome.interrupted,
@@ -1329,7 +1383,7 @@ export async function runBatch(
         !outcome.ok &&
         !collected.records.some((record) => record.outcome === "fail")
       ) {
-        unexplained += 1;
+        this.#unexplained += 1;
       }
       for (const record of collected.records) {
         execution.records.push(record);
@@ -1339,13 +1393,15 @@ export async function runBatch(
             record.outcome === "skip" &&
             skipped.has(`${location.unit}\t${record.test.n}`)
           ) continue;
-          ran += record.durationMs / 1000;
+          this.#ran += record.durationMs / 1000;
         }
-        records.push(record);
+        this.#records.push(record);
       }
-      for (const conflict of collected.conflicts) conflicts.push(conflict);
+      for (const conflict of collected.conflicts) {
+        this.#conflicts.push(conflict);
+      }
       for (const [record, message] of collected.failures) {
-        failures.set(record, message);
+        this.#failures.set(record, message);
       }
       for (const [file, names] of await readRegistrations(batchSpool)) {
         register(file, names);
@@ -1374,92 +1430,118 @@ export async function runBatch(
       await Deno.mkdir(batchSpool, { recursive: true });
     }
     for (const [unit, seconds] of hooked) {
-      ran += seconds;
-      hooks.push({ unit, seconds });
+      this.#ran += seconds;
+      this.#hooks.push({ unit, seconds });
     }
   }
-  // A batch that stopped part way measured only the part it ran, and the
-  // cost fit reads only a passing batch's measurements.
-  if (stop.signal !== undefined) ok = false;
-  if (spool !== undefined) {
-    spoolRecords(spool, [
-      ...records,
-      // What the batch spent, what its tests took between them, how many
-      // times its passes opened a unit, and how many passes it made. The
-      // publisher fits a suite's cost beyond its tests from the four
-      // together. The fifth, what the packer charged the lane for the
-      // batch, is not fitted from: set beside the first, it says how far
-      // the fit the lane was packed by was out.
-      //
-      // The tests' own time is summed here rather than read back from the
-      // records, because a reader has no way to tell which of a report's
-      // records came from which batch. It is summed over the records the
-      // suite places in a unit, which are the ones a manifest can hold and
-      // the packer charges by. A record the suite places in no unit, such
-      // as one a wrapper writes for its whole invocation, is part of what
-      // the batch spent beyond its units' tests. What each unit's hooks
-      // took is in it as well, since the packer charges that through the
-      // same correction, and it is also written for each unit each time a
-      // pass opened it, which is what the publisher reads it from.
-      timingRecord(
-        batchMeasurementName(batch.suite.id, coverage !== undefined),
-        seconds,
-        ok,
-      ),
-      timingRecord(
-        batchMeasurementName(
-          batch.suite.id,
-          coverage !== undefined,
-          "ran",
-        ),
-        ran,
-        ok,
-      ),
-      measurementRecord(
-        batchMeasurementName(
-          batch.suite.id,
-          coverage !== undefined,
-          "units",
-        ),
-        opened,
-        ok,
-      ),
-      measurementRecord(
-        batchMeasurementName(
-          batch.suite.id,
-          coverage !== undefined,
-          "passes",
-        ),
-        batchRepeats(batch),
-        ok,
-      ),
-      timingRecord(
-        batchMeasurementName(
-          batch.suite.id,
-          coverage !== undefined,
-          "projected",
-        ),
-        batch.projected,
-        ok,
-      ),
-      ...hooks.map(({ unit, seconds }) =>
+
+  /**
+   * Returns what the passes made came to, and writes it to `spool`, where
+   * there is one. No pass runs after this.
+   */
+  finish(spool: string | undefined): BatchResult {
+    const batch = this.#batch;
+    const coverage = this.#coverage;
+    // A batch that stopped part way measured only the part it ran, and the
+    // cost fit reads only a passing batch's measurements.
+    if (this.#stop.signal !== undefined) this.#ok = false;
+    const ok = this.#ok;
+    if (spool !== undefined) {
+      spoolRecords(spool, [
+        ...this.#records,
+        // What the batch spent, what its tests took between them, how many
+        // times its passes opened a unit, and how many passes it made. The
+        // publisher fits a suite's cost beyond its tests from the four
+        // together. The fifth, what the packer charged the lane for the
+        // batch, is not fitted from: set beside the first, it says how far
+        // the fit the lane was packed by was out, and it charges every pass
+        // the batch asked for, whether or not the lane had time to make them.
+        //
+        // The tests' own time is summed here rather than read back from the
+        // records, because a reader has no way to tell which of a report's
+        // records came from which batch. It is summed over the records the
+        // suite places in a unit, which are the ones a manifest can hold and
+        // the packer charges by. A record the suite places in no unit, such
+        // as one a wrapper writes for its whole invocation, is part of what
+        // the batch spent beyond its units' tests. What each unit's hooks
+        // took is in it as well, since the packer charges that through the
+        // same correction, and it is also written for each unit each time a
+        // pass opened it, which is what the publisher reads it from.
         timingRecord(
-          hooksMeasurementName(batch.suite.id, coverage !== undefined, unit),
-          seconds,
+          batchMeasurementName(batch.suite.id, coverage !== undefined),
+          this.#seconds,
           ok,
-        )
-      ),
-    ]);
+        ),
+        timingRecord(
+          batchMeasurementName(
+            batch.suite.id,
+            coverage !== undefined,
+            "ran",
+          ),
+          this.#ran,
+          ok,
+        ),
+        measurementRecord(
+          batchMeasurementName(
+            batch.suite.id,
+            coverage !== undefined,
+            "units",
+          ),
+          this.#opened,
+          ok,
+        ),
+        measurementRecord(
+          batchMeasurementName(
+            batch.suite.id,
+            coverage !== undefined,
+            "passes",
+          ),
+          this.made,
+          ok,
+        ),
+        timingRecord(
+          batchMeasurementName(
+            batch.suite.id,
+            coverage !== undefined,
+            "projected",
+          ),
+          batch.projected,
+          ok,
+        ),
+        ...this.#hooks.map(({ unit, seconds }) =>
+          timingRecord(
+            hooksMeasurementName(batch.suite.id, coverage !== undefined, unit),
+            seconds,
+            ok,
+          )
+        ),
+      ]);
+    }
+    return {
+      ok,
+      records: this.#records,
+      conflicts: this.#conflicts,
+      seconds: this.#seconds,
+      unexplained: this.#unexplained,
+      executions: this.#executions,
+      failures: this.#failures,
+    };
   }
-  return {
-    ok,
-    records,
-    conflicts,
-    seconds,
-    unexplained,
-    executions,
-    failures,
-  };
+}
+
+/** Runs every pass of one batch, one after another. */
+export async function runBatch(
+  batch: Batch,
+  options: LaneOptions,
+  workDir: string,
+  spool: string | undefined,
+  env: Record<string, string>,
+  coverage?: BatchCoverage,
+  stop: LaneStop = new LaneStop(),
+): Promise<BatchResult> {
+  const passes = new BatchPasses(batch, options, workDir, env, coverage, stop);
+  while (!passes.done && stop.signal === undefined) await passes.runNext();
+  return passes.finish(spool);
 }
 
 /** What reading a batch's records against what it was asked to run found. */
@@ -1812,7 +1894,7 @@ export interface Reruns {
   /** Tests whose unit ran again, and that no rerun recorded. */
   unrecorded: string[];
 
-  /** Tests whose unit was not run again, for want of budget. */
+  /** Tests whose unit was not run again, for want of budget or of time. */
   unrun: string[];
 
   /** Records the reruns kept as written, as `runBatch()` reports them. */
@@ -1841,7 +1923,7 @@ export interface Reruns {
  * spent on one of them. A unit starts only where what the packer charges
  * for it fits in what the reruns have left of `RERUN_BUDGET_SECONDS`, and
  * the reruns' own time is what they take off it. A lane told to stop
- * starts no rerun.
+ * starts no rerun, and neither does one for which `hasRoom()` returns `false`.
  */
 export async function rerunFailures(
   reruns: readonly Rerun[],
@@ -1851,6 +1933,7 @@ export async function rerunFailures(
   workDir: string,
   spool: string | undefined,
   stop: LaneStop = new LaneStop(),
+  hasRoom: () => boolean = () => true,
 ): Promise<Reruns> {
   let seconds = 0;
   let passes = 0;
@@ -1877,7 +1960,7 @@ export async function rerunFailures(
         .map(({ entry }) => ({ entry, repeats: 1 })),
     );
   };
-  while (stop.signal === undefined) {
+  while (stop.signal === undefined && hasRoom()) {
     const left = RERUN_BUDGET_SECONDS - seconds;
     let next: number | undefined;
     let least = Infinity;
@@ -2293,6 +2376,26 @@ export interface LaneDeps {
    * is saying what opening and closing each one would do.
    */
   capabilities?: ReadonlyMap<CapabilityId, Capability>;
+
+  /**
+   * Seconds left before the step running the lane reaches its bound, or
+   * undefined where nothing bounds it. A test supplies one to stand in for a
+   * clock. By default, `secondsLeftInStep()`.
+   */
+  secondsLeft?: () => number | undefined;
+}
+
+/**
+ * Seconds left before the step running this lane reaches the bound the workflow
+ * names, or undefined where it names none, as on a workstation. The lane is the
+ * step's whole work, so its process is about as old as the step.
+ */
+export function secondsLeftInStep(
+  env: (name: string) => string | undefined = Deno.env.get,
+  elapsedMs: number = performance.now(),
+): number | undefined {
+  const minutes = Number(env(LANE_STEP_BOUND_VARIABLE));
+  return minutes > 0 ? minutes * 60 - elapsedMs / 1000 : undefined;
 }
 
 /**
@@ -2912,41 +3015,34 @@ export async function runLane(
   const addReruns = rerunCommands(options.root);
   const commands: FailedCommand[] = [];
   const notes: string[] = [];
-  try {
-    for (const batch of batches) {
-      // Two capabilities may export the same name and mean different
-      // things by it, and the two server-execution arms can share a lane.
-      const env = opened.envFor(batch.suite.needs);
-      // A failure never stops the lane: one failing batch would otherwise
-      // hide every batch and every repeat after it, and the point of a
-      // lane is what it measured. Being told to stop does.
-      if (stop.signal !== undefined) break;
-      const result = await runBatch(
-        batch,
-        options,
-        workDir,
-        spool,
-        env,
-        batchCoverage(options, batch.suite.id, coverage),
-        stop,
-      );
-      for (const conflict of result.conflicts) conflicts.push(conflict);
-      const { passed, accounting, excusing } = judgeBatch(
-        batch,
-        mine.selections,
-        result,
-        nonGating,
-      );
-      addLaneResults(
-        tests,
-        result.records,
-        result.failures,
-        new Set([
-          ...accounting.gating,
-          ...(excusing ? [] : accounting.excused),
-        ]),
-      );
-      annotateLaneFailures(await addReruns(tests.values()), annotated);
+  // Batches the lane left short of the passes they asked for, for want of time.
+  const notRepeated: string[] = [];
+  /** Says what one batch came to, once no more of its passes will run. */
+  const settle = async (
+    batch: Batch,
+    env: Record<string, string>,
+    result: BatchResult,
+  ): Promise<void> => {
+    for (const conflict of result.conflicts) conflicts.push(conflict);
+    const { passed, accounting, excusing } = judgeBatch(
+      batch,
+      mine.selections,
+      result,
+      nonGating,
+    );
+    addLaneResults(
+      tests,
+      result.records,
+      result.failures,
+      new Set([
+        ...accounting.gating,
+        ...(excusing ? [] : accounting.excused),
+      ]),
+    );
+    annotateLaneFailures(await addReruns(tests.values()), annotated);
+    // A lane told to stop has already said so, and what a stopped command
+    // left unrun says nothing about the tests.
+    if (stop.signal === undefined) {
       for (const { name } of accounting.silent) {
         commands.push({
           label: `${batch.suite.id} ${name}`,
@@ -2960,21 +3056,116 @@ export async function runLane(
             "no failing test",
         });
       }
-      if (!passed) ok = false;
-      for (const unit of accounting.failedUnits) {
-        failedUnits.add(`${batch.suite.id}\t${unit}`);
+    }
+    if (!passed) ok = false;
+    for (const unit of accounting.failedUnits) {
+      failedUnits.add(`${batch.suite.id}\t${unit}`);
+    }
+    for (const key of accounting.excused) {
+      (excusing ? excused : unexcused).add(key);
+    }
+    if (options.full) {
+      const failing = unsettled(batch, result.records);
+      if (failing.size > 0) reruns.push({ batch, env, failing });
+    }
+  };
+  const secondsLeft = deps.secondsLeft ?? secondsLeftInStep;
+  /** Whether the lane has time to start work it can do without. */
+  const hasRoom = (): boolean => {
+    const left = secondsLeft();
+    return left === undefined || left > LANE_RESERVE_SECONDS;
+  };
+  // The batches with passes still to make, each with what it runs in.
+  const repeating: {
+    batch: Batch;
+    env: Record<string, string>;
+    passes: BatchPasses;
+  }[] = [];
+  let notStarted = [...batches];
+  // The pass a lane told to stop was running when it heard.
+  let stoppedIn: string | undefined;
+  /** Runs the next of `passes`, noting whether that is where the lane stops. */
+  const runPass = async (batch: Batch, passes: BatchPasses): Promise<void> => {
+    await passes.runNext();
+    if (stop.signal !== undefined) {
+      stoppedIn ??= `${batch.suite.id}, pass ${passes.made} of ` +
+        `${batchRepeats(batch)}`;
+    }
+  };
+  try {
+    // A failure never stops the lane: one failing batch would otherwise
+    // hide every batch and every repeat after it, and the point of a
+    // lane is what it measured. Being told to stop does.
+    //
+    // Every batch makes its first pass before any makes a second. A first
+    // pass is the only run its tests get, and a repeat measures a flake, so a
+    // test failing slowly under repeats takes time from more repeats and not
+    // from another test's only run.
+    for (const batch of batches) {
+      if (stop.signal !== undefined) break;
+      notStarted = notStarted.filter((waiting) => waiting !== batch);
+      // Two capabilities may export the same name and mean different
+      // things by it, and the two server-execution arms can share a lane.
+      const env = opened.envFor(batch.suite.needs);
+      const passes = new BatchPasses(
+        batch,
+        options,
+        workDir,
+        env,
+        batchCoverage(options, batch.suite.id, coverage),
+        stop,
+      );
+      await runPass(batch, passes);
+      if (passes.done) await settle(batch, env, passes.finish(spool));
+      else repeating.push({ batch, env, passes });
+    }
+    // Then a pass of each in turn, for as long as there is time for one, so
+    // that the time is spread over the lane's repeated batches.
+    let more = repeating.length > 0;
+    while (more && stop.signal === undefined) {
+      for (const { batch, passes } of repeating) {
+        if (passes.done) continue;
+        if (stop.signal !== undefined || !hasRoom()) {
+          more = false;
+          break;
+        }
+        await runPass(batch, passes);
       }
-      for (const key of accounting.excused) {
-        (excusing ? excused : unexcused).add(key);
+      if (repeating.every(({ passes }) => passes.done)) more = false;
+    }
+    const unfinished: string[] = [];
+    for (const { batch, env, passes } of repeating) {
+      if (!passes.done) {
+        const short = batch.units.flatMap(({ unit }) =>
+          (batch.runs.get(unit) ?? 1) > passes.made ? [unit] : []
+        );
+        (stop.signal === undefined ? notRepeated : unfinished).push(
+          `${batch.suite.id}: ${passes.made} of ${batchRepeats(batch)} ` +
+            `passes, of ${short.join(", ")}`,
+        );
       }
-      if (options.full) {
-        const failing = unsettled(batch, result.records);
-        if (failing.size > 0) reruns.push({ batch, env, failing });
-      }
+      await settle(batch, env, passes.finish(spool));
+    }
+    if (notRepeated.length > 0) {
+      console.log(
+        `ci-lane: not repeating any more, with ` +
+          `${duration(secondsLeft() ?? 0)} left of the step's bound: ` +
+          notRepeated.join("; "),
+      );
     }
     if (stop.signal !== undefined) {
       ok = false;
       notes.push(`Stopped by ${stop.signal} before finishing its plan.`);
+      if (stoppedIn !== undefined) notes.push(`It was running ${stoppedIn}.`);
+      if (notStarted.length > 0) {
+        notes.push(
+          "It did not start: " +
+            notStarted.map(({ suite }) => suite.id).join(", ") + ".",
+        );
+      }
+      if (unfinished.length > 0) {
+        notes.push(`It did not finish repeating: ${unfinished.join("; ")}.`);
+      }
       console.log(
         `ci-lane: stopped by ${stop.signal} before finishing its plan; ` +
           `it passes the signal on to whatever test command is running ` +
@@ -3005,6 +3196,7 @@ export async function runLane(
         workDir,
         spool,
         stop,
+        hasRoom,
       );
       for (const conflict of rerun.conflicts) conflicts.push(conflict);
     }
@@ -3095,6 +3287,7 @@ export async function runLane(
     tests: [...tests.values()],
     commands,
     notes,
+    omitted: notRepeated,
     logs: "the output above" +
       (!ok && temp !== undefined
         ? `, and ${workDir}, which the job uploads as its lane-failure artifact`

@@ -418,6 +418,14 @@ past that anchor until `MAX_EXECUTIONS` stops it. So a test that has been
 seen to disagree at all is run at least twice, because one execution
 cannot tell a pass from a lucky pass.
 
+That count is what a test asks for, and a lane may give it fewer. Every
+batch in a lane makes its first pass before any makes a later one, so a
+test's only run comes ahead of another test's repeats, and a later pass
+starts only while more than `LANE_RESERVE_SECONDS` is left of the bound on
+the step running the lane. A lane left short names what it left out, and
+does not fail for it, since a repeat exists to measure a flake and a test
+that ran has been run.
+
 Zero is the one point the count steps at, between running a test once and
 running it at least twice, which is why the manifest records a share as
 it was measured rather than to a few places. A share written to four
