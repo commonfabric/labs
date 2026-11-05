@@ -2954,8 +2954,14 @@ export async function runLane(
         batchCoverage(options, batch.suite.id, coverage),
         stop,
       );
-      if (stop.signal !== undefined) {
-        stoppedIn = `${batch.suite.id}, pass ${result.executions.length} of ` +
+      // The pass the stop cut short, where it cut this batch short. Read
+      // here, before anything else this loop awaits gives a signal the
+      // chance to arrive after the batch had finished.
+      const cutShort = stop.signal === undefined
+        ? undefined
+        : result.executions.length;
+      if (cutShort !== undefined) {
+        stoppedIn = `${batch.suite.id}, pass ${cutShort} of ` +
           `${batchRepeats(batch)}`;
       }
       for (const conflict of result.conflicts) conflicts.push(conflict);
@@ -2975,22 +2981,26 @@ export async function runLane(
         ]),
       );
       annotateLaneFailures(await addReruns(tests.values()), annotated);
-      // What a stopped command left unrun says nothing about its tests, and
-      // the lane says below that it was stopped there.
-      if (stop.signal === undefined) {
-        for (const { name } of accounting.silent) {
-          commands.push({
-            label: `${batch.suite.id} ${name}`,
-            reason: "ran no test",
-          });
-        }
-        if (result.unexplained > 0) {
-          commands.push({
-            label: batch.suite.id,
-            reason: `${result.unexplained} command(s) failed having recorded ` +
-              "no failing test",
-          });
-        }
+      // What the stop left unrun says nothing about the tests, and the lane
+      // says below where it was stopped. A unit missed in an earlier pass is
+      // still reported, since that pass ran to its end. One that ran and
+      // recorded nothing in the pass the stop cut short is not, because
+      // nothing tells it from one the stop kept from running, and nor are the
+      // commands of a batch the stop cut short that failed having recorded
+      // no failing test, which are counted over the batch's passes together.
+      for (const { name, passes } of accounting.silent) {
+        if (passes.every((pass) => pass === cutShort)) continue;
+        commands.push({
+          label: `${batch.suite.id} ${name}`,
+          reason: "ran no test",
+        });
+      }
+      if (result.unexplained > 0 && cutShort === undefined) {
+        commands.push({
+          label: batch.suite.id,
+          reason: `${result.unexplained} command(s) failed having recorded ` +
+            "no failing test",
+        });
       }
       if (!passed) ok = false;
       for (const unit of accounting.failedUnits) {
@@ -3036,6 +3046,7 @@ export async function runLane(
     // was packed with, and after the lane's verdict is settled, so that
     // nothing a rerun records can change it.
     if (options.full) {
+      const stoppedAlready = stop.signal !== undefined;
       rerun = await rerunFailures(
         reruns,
         seen.manifest,
@@ -3046,6 +3057,13 @@ export async function runLane(
         stop,
       );
       for (const conflict of rerun.conflicts) conflicts.push(conflict);
+      if (!stoppedAlready && stop.signal !== undefined) {
+        ok = false;
+        notes.push(
+          `Stopped by ${stop.signal} while rerunning failures, with every ` +
+            "batch run.",
+        );
+      }
     }
   } catch (error) {
     // A lane whose loop threw has failed, whatever the batches it got
