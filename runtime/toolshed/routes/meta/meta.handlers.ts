@@ -3,7 +3,9 @@ import { z } from "zod";
 import { formatReleaseTime } from "@commonfabric/runner/pattern-release-time";
 import env from "@/env.ts";
 import {
+  browserAssetBase,
   buildInfo,
+  compiled,
   resolveGitSha,
   shellServerExecutionDefine,
 } from "@/lib/build-info.ts";
@@ -103,9 +105,7 @@ export const index: AppRouteHandler<IndexRoute> = (c) => {
   const response: MetaResponse = {
     did: SERVER_DID,
     gitSha: GIT_SHA,
-    browserAssetBase: buildInfo.commitSha
-      ? `/builds/${encodeURIComponent(buildInfo.commitSha)}/`
-      : "/",
+    browserAssetBase: browserAssetBase(compiled, buildInfo.commitSha, env.ENV),
     shellServerExecutionDefine,
     releasedAt: env.TOOLSHED_RELEASED_AT === undefined
       ? null

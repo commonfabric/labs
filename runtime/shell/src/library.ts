@@ -1,5 +1,14 @@
 export { createSession, Identity, KeyStore } from "@commonfabric/identity";
-export * from "@commonfabric/lib-shell";
+export {
+  createRuntimeClientOptions,
+  resolveSpaceDid,
+  resolveWorkerUrl,
+  RuntimeInternals,
+} from "@commonfabric/lib-shell/runtime";
+export {
+  createKeyFileCredential,
+  saveCredential,
+} from "@commonfabric/lib-shell/credentials";
 export {
   attachOptionsFrom,
   isCellHandle,

@@ -1,5 +1,8 @@
 import { assert, assertEquals } from "@std/assert";
 
+import { registry } from "./registration-dom.ts";
+import "../src/embedded-components.ts";
+
 // Embedded hosts have no Toolshed routes on their origin. These components
 // depend on those routes, or carry an intentionally excluded heavy dependency.
 const excluded = new Map([
@@ -67,4 +70,11 @@ Deno.test("the embedded palette makes an explicit decision for every component",
       assert(imported.has(tag), tag);
     }
   }
+});
+
+Deno.test("embedded palette registers rendering components without starting a shell", () => {
+  assert(registry.has("cf-map"));
+  assert(registry.has("cf-code-editor"));
+  assert(registry.has("cf-render"));
+  assert(!registry.has("cf-shell"));
 });

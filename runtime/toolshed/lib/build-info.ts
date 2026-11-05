@@ -9,6 +9,8 @@
 // explicit toolshed override if present, otherwise the source-run COMMIT_SHA
 // fallback, so `/api/meta` presents the same field as a compiled binary.
 
+import { existsSync } from "@std/fs";
+
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import {
   type BuildInfo,
@@ -21,6 +23,29 @@ import env from "@/env.ts";
 export { type BuildInfo, normalize, readBuildInfoFrom };
 
 const COMPILED_PATH = new URL("../COMPILED", import.meta.url);
+
+/** Whether this process serves its bundled shell. */
+export const compiled = existsSync(COMPILED_PATH);
+
+/** The immutable namespace served by a compiled shell. */
+export function shellBuildId(
+  commitSha: string | null | undefined,
+  environment: string,
+): string {
+  return commitSha ??
+    (environment === "production" ? "production" : "development");
+}
+
+/** Asset base matching the source proxy or compiled shell router. */
+export function browserAssetBase(
+  isCompiled: boolean,
+  commitSha: string | null | undefined,
+  environment: string,
+): string {
+  return isCompiled
+    ? `/builds/${encodeURIComponent(shellBuildId(commitSha, environment))}/`
+    : "/";
+}
 
 export const buildInfo: BuildInfo = readBuildInfoFrom(COMPILED_PATH);
 
