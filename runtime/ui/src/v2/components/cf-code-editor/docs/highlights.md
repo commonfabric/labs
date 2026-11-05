@@ -136,15 +136,18 @@ the pending edits backwards:
 - Outside collaboration there is no confirmed text, and the range is the
   editor's own.
 
-The editor restates the selection whenever the selection changes and whenever
-the confirmed text does, and fires the event when the report differs from the
-last one it sent. Every empty selection is the same report, so moving the caret
-while typing fires nothing. An edit that leaves a held selection's range where
-it was, such as one made after it, fires nothing either. An edit that moves or
-changes the range, such as a collaborator typing before it, fires the event with
-the range the selection has in the newer text, so the last report a handler
-received names where the selected text is in the text Memory has confirmed to
-this editor.
+The editor restates the selection whenever the selection changes, whenever its
+document changes, and whenever the confirmed text does, and fires the event when
+the report differs from the last one it sent. A change to the document counts
+because it can move a selection without setting one: outside collaboration, a
+rename of a reference ahead of a held selection moves its range, and the event
+fires with the new one. Every empty selection is the same report, so moving the
+caret while typing fires nothing. An edit that leaves a held selection's range
+where it was, such as one made after it, fires nothing either. An edit that
+moves or changes the range, such as a collaborator typing before it, fires the
+event with the range the selection has in the newer text, so the last report a
+handler received names where the selected text is in the text Memory has
+confirmed to this editor.
 
 A new editor has sent no report, so its first one is always sent, and says that
 nothing is selected. A host that keeps the last report somewhere that outlives

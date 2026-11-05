@@ -335,8 +335,8 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   this editor, and the whole of the text that range holds. An empty
  *   selection, or one over an edit not yet confirmed, reports `from === to`;
  *   the second is reported again once Memory confirms the edit. A selection
- *   held while a confirmed edit moves its range is reported again at the
- *   range it has moved to. A new editor's first report is always fired, and
+ *   held while an edit moves its range, a confirmed edit under collaboration
+ *   and any edit outside it, is reported again at the range it has moved to. A new editor's first report is always fired, and
  *   says that nothing is selected.
  * @fires cf-highlight-click - Fired when a highlight is clicked, with detail
  *   `{ id }` naming the highlight: on the release of a primary-button press
@@ -2057,7 +2057,11 @@ export class CFCodeEditor extends BaseElement {
     if (update.selectionSet && !isCellSync && !isRemote) {
       this._publishPresence();
     }
-    if (update.selectionSet) this._reportSelection();
+    // A change to the document moves the selection without setting one, as
+    // a rename of a reference ahead of it does, so the selection is restated
+    // after either. One the change left where it was reports as it did,
+    // which emits nothing.
+    if (update.selectionSet || update.docChanged) this._reportSelection();
     if (!update.docChanged || isCellSync) return;
 
     const value = update.state.doc.toString();

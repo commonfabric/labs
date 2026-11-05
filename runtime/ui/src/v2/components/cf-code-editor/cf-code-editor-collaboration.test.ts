@@ -29,7 +29,7 @@ import {
 import { CodeMirrorCollaborationController } from "./codemirror-collaboration.ts";
 import { codeMirrorPresenceState } from "./codemirror-presence.ts";
 import { backlinkField } from "./features/backlinks.ts";
-import { mentionRefField } from "./features/mention-refs.ts";
+import { mentionRefField, refShortNameField } from "./features/mention-refs.ts";
 
 const operationPath = [] as unknown as OperationFieldSnapshot["path"];
 
@@ -489,10 +489,14 @@ describe("CFCodeEditor collaboration", () => {
       anchors: {},
     });
 
-    const selectionHarness = (anchor: number, head: number) => {
+    const selectionHarness = (
+      anchor: number,
+      head: number,
+      extensions: unknown[] = [],
+    ) => {
       const events: unknown[] = [];
       const element = new CFCodeEditor();
-      const view = statefulView();
+      const view = statefulView(extensions);
       view.dispatch({ selection: { anchor, head } } as never);
       (element as any)._editorView = view;
       (element as any).emit = (name: string, detail: unknown) => {
@@ -542,6 +546,39 @@ describe("CFCodeEditor collaboration", () => {
       confirm(6);
 
       expect(events).toEqual([NOTHING]);
+    });
+
+    it("reports a held selection again where a change to the document moved it, with collaboration off", () => {
+      // A change that names no selection still moves the one held, as a
+      // rename of a reference ahead of it does.
+
+      // The state carries the fields the editor reads on every change to
+      // the document.
+      const { element, events, view, report } = selectionHarness(1, 3, [
+        backlinkField,
+        mentionRefField,
+        refShortNameField,
+      ]);
+      (element as any).readonly = true;
+      report();
+
+      const startState = view.state;
+      const transaction = startState.update({
+        changes: { from: 0, insert: "longer " },
+      });
+      view.state = transaction.state;
+      (element as any)._handleEditorUpdate({
+        transactions: [transaction],
+        docChanged: true,
+        selectionSet: false,
+        state: transaction.state,
+        startState,
+      });
+
+      expect(events).toEqual([
+        { from: 1, to: 3, text: "bc" },
+        { from: 8, to: 10, text: "bc" },
+      ]);
     });
 
     it("states a changed selection against the snapshot the collaboration holds", () => {
@@ -678,8 +715,11 @@ describe("CFCodeEditor collaboration", () => {
         }],
       });
 
+    // Every change to the document restates the selection, which it may
+    // have moved, whoever made it.
     invoke(undefined);
     expect(calls).toEqual([
+      "selection",
       "operation",
       "presence",
       "change",
@@ -691,11 +731,14 @@ describe("CFCodeEditor collaboration", () => {
 
     calls.length = 0;
     invoke(Transaction.remote);
-    expect(calls).toEqual(["mentioned", "subscriptions"]);
+    expect(calls).toEqual(["selection", "mentioned", "subscriptions"]);
 
     calls.length = 0;
     const cellSync = (CFCodeEditor as any)._cellSyncAnnotation;
     invoke(cellSync);
+    expect(calls).toEqual(["selection"]);
+
+    calls.length = 0;
     invoke(undefined, false);
     expect(calls).toEqual([]);
 
