@@ -118,6 +118,7 @@ export const FABRIC_VALUE_TAGS = Object.freeze(
   {
     ...PRIMITIVE_VALUE_TAGS,
     ...FABRIC_CONTAINER_VALUE_TAGS,
+    FabricFactory: "FabricFactory",
   } as const,
 );
 

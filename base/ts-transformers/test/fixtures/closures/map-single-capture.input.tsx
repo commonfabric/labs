@@ -7,7 +7,7 @@ interface State {
 
 // FIXTURE: map-single-capture
 // Verifies: .map() on reactive array captures a single outer state property
-//   .map(fn) → .mapWithPattern(pattern(...), {state: {discount: ...}})
+//   .map(fn) → .mapWithPattern(pattern(...).curry({state: {discount: ...}}))
 //   item.price * state.discount → lift(...)(...) combining element and captured state
 export default pattern<State>((state) => {
   return {

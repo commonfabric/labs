@@ -1,4 +1,13 @@
-import type { CellScope, JSONSchema, Pattern } from "@commonfabric/api";
+import type { CellScope, JSONSchema, PatternFactory } from "@commonfabric/api";
+import {
+  factoryStateOf,
+  isAdmittedFabricFactory,
+} from "@commonfabric/data-model/fabric-factory";
+import {
+  entityRefToString,
+  isEntityRef,
+  linkRefFrom,
+} from "@commonfabric/data-model/cell-rep";
 import type { PiecesController } from "@commonfabric/piece/ops";
 import {
   declaredFieldsAt,
@@ -7,7 +16,6 @@ import {
 } from "@commonfabric/piece/declared-fields";
 import { sendVerbEvent } from "@commonfabric/piece/verb-call";
 import { verbEventForDispatch } from "@commonfabric/piece/verb-input";
-import { cloneWithoutBoundToolKeys } from "@commonfabric/piece/verb-listing";
 import {
   type Cell,
   encodeJsonPointer,
@@ -32,7 +40,17 @@ import {
 import {
   type CallableKind,
   classifyCallableEntry,
+  patternFactoryFromCallableEntry,
+  patternFactorySchemas,
 } from "../../fuse/callables.ts";
+import { prepareFactory } from "../../runner/src/factory-materialization.ts";
+import type { Runtime } from "../../runner/src/runtime.ts";
+import { getFrameworkProvidedPaths } from "../../runner/src/builder/pattern-metadata.ts";
+import { getEntityId } from "../../runner/src/create-ref.ts";
+import {
+  applyFrameworkProvidedInputs,
+  stripFrameworkProvidedPaths,
+} from "../../runner/src/framework-provided-inputs.ts";
 import {
   boundReadValue,
   type CellSelection,
@@ -45,6 +63,7 @@ import { timeCliPhase } from "./trace-timing.ts";
 import { noteWroteTo, transactionWroteTo } from "./write-receipt.ts";
 
 export const CF_RUNTIME_ERROR_LOG = Symbol.for("cf.cli.runtimeErrorLog");
+const preparedCallableTools = new WeakSet<object>();
 
 export interface CliRuntimeErrorRecord {
   message: string;
@@ -57,6 +76,8 @@ export interface CliRuntimeErrorRecord {
 
 export interface CallableResolution {
   callableCell: Cell<any>;
+  /** Stable containing call-site identity when the executable value is read elsewhere. */
+  identityCell?: Cell<any>;
   callableKind: CallableKind;
   cellKey: string;
   pieces: PiecesController;
@@ -104,6 +125,7 @@ export interface CallableResolution {
    * a malformed payload on that path is refused before the invocation id is
    * spent, exactly as on the ordinary paths. */
   inputSchema?: JSONSchema;
+  preparedTool?: PreparedCallableTool;
 }
 
 /** The phases a handler invocation passes through, reported on early exit so
@@ -140,6 +162,10 @@ export interface InvocationIdentity {
 
 export interface CallableExecutionDeps {
   uuid?: () => string;
+  prepareFactory?: (
+    factory: unknown,
+    context: { runtime: Runtime; artifactSpace: MemorySpace },
+  ) => Promise<unknown>;
 
   /** The id and session naming this call's invocation, for a handler send.
    * Absent for a call that names no invocation, which is then dispatched
@@ -311,18 +337,71 @@ export interface ExecutedCallable {
   resultRef?: CallableResultRef;
 }
 
-/** Read a tool callable's stored `pattern` slot as the pattern the runner
- * will run. Only the record shape is checked here; a record missing the
- * schemas reaches `runtime.run` the same way any malformed stored pattern
- * does. The cast goes by way of `unknown` because a `Pattern` is not a record
- * type, so a record says nothing about being one. */
-function asCallablePattern(value: unknown): Pattern | undefined {
-  if (!isObjectNotArray(value)) return undefined;
-  return value as unknown as Pattern;
+export interface PreparedCallableTool {
+  factory: PatternFactory<Record<string, unknown>, unknown>;
+  frameworkProvidedPaths: readonly (readonly string[])[];
+  commandSpec: ExecCommandSpec;
+  resultSchema: JSONSchema;
 }
 
-function asExtraParams(value: unknown): Record<string, unknown> {
-  return isObjectNotArray(value) ? value : {};
+function canonicalFactorySelection(callableCell: Cell<any>): {
+  factory: unknown;
+  leafCell: Cell<any>;
+} | undefined {
+  const resolvedCell = resolveSourceCell(callableCell);
+  for (const value of readCellCandidates(resolvedCell)) {
+    if (isAdmittedFabricFactory(value)) {
+      if (factoryStateOf(value).kind === "pattern") {
+        return { factory: value, leafCell: resolvedCell };
+      }
+      continue;
+    }
+    const factory = patternFactoryFromCallableEntry(value);
+    if (factory !== undefined) {
+      return {
+        factory,
+        leafCell: resolveSourceCell(resolvedCell.key("pattern")),
+      };
+    }
+  }
+
+  try {
+    const leafCell = resolveSourceCell(resolvedCell.key("pattern"));
+    for (const nested of readCellCandidates(leafCell)) {
+      if (
+        isAdmittedFabricFactory(nested) &&
+        factoryStateOf(nested).kind === "pattern"
+      ) {
+        return { factory: nested, leafCell };
+      }
+    }
+  } catch {
+    // A missing descriptor child simply means this is not a canonical factory.
+  }
+  return undefined;
+}
+
+function resolveSourceCell(cell: Cell<any>): Cell<any> {
+  try {
+    return cell.resolveAsCell();
+  } catch {
+    return cell;
+  }
+}
+
+function readCellCandidates(cell: Cell<any>): unknown[] {
+  const candidates: unknown[] = [];
+  try {
+    candidates.push(cell.getRaw());
+  } catch {
+    // A raw read may be unavailable even when the resolved read is valid.
+  }
+  try {
+    candidates.push(cell.get());
+  } catch {
+    // Treat unreadable cells as having no callable value.
+  }
+  return candidates;
 }
 
 export function runtimeErrorLog(runtime: unknown): CliRuntimeErrorRecord[] {
@@ -557,59 +636,40 @@ async function assertVerbInputSatisfiesSchema(
   return judged.value;
 }
 
-function mergeToolInput(
-  input: unknown,
-  extraParams: Record<string, unknown>,
-): Record<string, unknown> {
-  const base = isObjectNotArray(input)
-    ? input
-    : input === undefined
-    ? {}
-    : { value: input };
-
-  return {
-    ...base,
-    ...extraParams,
-  };
-}
-
 export function detectCallableKind(
   callableValue: unknown,
   callableCell: Cell<any>,
 ): CallableKind | null {
-  let resolvedValue = callableValue;
-  try {
-    resolvedValue = callableCell.getRaw() ?? callableCell.get() ??
-      callableValue;
-  } catch {
-    resolvedValue = callableValue;
-  }
-
-  const callableKind =
-    classifyCallableEntry(callableValue, callableCell.schema) ??
-      classifyCallableEntry(resolvedValue, callableCell.schema) ??
-      classifyCallableEntry(callableCell, callableCell.schema);
-  if (callableKind) {
-    return callableKind;
-  }
-
-  try {
-    const pattern = callableCell.key("pattern").getRaw() ??
-      callableCell.key("pattern").get();
-    const extraParams = callableCell.key("extraParams").get();
-    if (pattern !== undefined && extraParams !== undefined) {
-      return "tool";
+  const resolvedCell = resolveSourceCell(callableCell);
+  const candidates = [
+    callableValue,
+    ...readCellCandidates(resolvedCell),
+    resolvedCell,
+  ];
+  for (const candidate of candidates) {
+    const callableKind = classifyCallableEntry(
+      candidate,
+      callableCell.schema ?? resolvedCell.schema,
+    );
+    if (callableKind) {
+      return callableKind;
     }
-  } catch {
-    // Not a tool-shaped callable cell.
   }
-
   return null;
+}
+
+function normalizeToolInput(input: unknown): Record<string, unknown> {
+  return isObjectNotArray(input)
+    ? input
+    : input === undefined
+    ? {}
+    : { value: input };
 }
 
 export function callableCommandSpec(
   callableCell: Cell<any>,
   callableKind: CallableKind,
+  preparedFactory?: unknown,
 ): ExecCommandSpec {
   if (callableKind === "handler") {
     return {
@@ -619,23 +679,98 @@ export function callableCommandSpec(
     };
   }
 
-  const pattern = asCallablePattern(
-    callableCell.key("pattern").getRaw() ??
-      callableCell.key("pattern").get(),
-  );
-  const extraParams = asExtraParams(
-    callableCell.key("extraParams").get(),
-  );
+  const canonical = canonicalFactorySelection(callableCell);
+  const schemaFactory = preparedFactory ?? canonical?.factory;
+  const canonicalSchemas = schemaFactory === undefined
+    ? undefined
+    : patternFactorySchemas(schemaFactory);
+  if (canonicalSchemas) {
+    const frameworkProvidedPaths = getFrameworkProvidedPaths(schemaFactory);
+    return {
+      callableKind: "tool",
+      defaultVerb: "run",
+      inputSchema: stripFrameworkProvidedPaths(
+        canonicalSchemas.argumentSchema,
+        frameworkProvidedPaths,
+      ),
+      outputSchemaSummary: canonicalSchemas.resultSchema,
+    };
+  }
 
-  return {
-    callableKind: "tool",
-    defaultVerb: "run",
-    inputSchema: cloneWithoutBoundToolKeys(
-      pattern?.argumentSchema ?? true,
-      extraParams,
-    ),
-    outputSchemaSummary: pattern?.resultSchema,
+  throw new TypeError("Mounted tool requires a PatternFactory");
+}
+
+export async function prepareResolvedCallableTool(
+  resolved: CallableResolution,
+  deps: CallableExecutionDeps = {},
+): Promise<PreparedCallableTool> {
+  if (resolved.preparedTool) {
+    if (!preparedCallableTools.has(resolved.preparedTool)) {
+      throw new TypeError("Mounted tool preparation is not runner-owned");
+    }
+    return resolved.preparedTool;
+  }
+  if (resolved.callableKind !== "tool") {
+    throw new TypeError("Only mounted tools have a factory to prepare");
+  }
+
+  const canonical = canonicalFactorySelection(resolved.callableCell);
+  if (!canonical) throw new TypeError("Mounted tool requires a PatternFactory");
+  if (!patternFactorySchemas(canonical.factory)) {
+    throw new TypeError("Mounted tool requires a PatternFactory");
+  }
+  const sourceCell = resolveSourceCell(canonical.leafCell);
+  const artifactSpace = sourceCell.getAsNormalizedFullLink().space ??
+    resolved.space;
+  const factory = await (deps.prepareFactory ?? prepareFactory)(
+    canonical.factory,
+    {
+      runtime: resolved.pieces.runtime,
+      artifactSpace,
+    },
+  );
+  if (
+    !isAdmittedFabricFactory(factory) ||
+    factoryStateOf(factory).kind !== "pattern"
+  ) {
+    throw new TypeError("Materialized tool is not a PatternFactory");
+  }
+  const frameworkProvidedPaths = getFrameworkProvidedPaths(factory);
+  const schemas = patternFactorySchemas(factory);
+  if (!schemas) {
+    throw new TypeError("Materialized tool is not a PatternFactory");
+  }
+  const prepared = {
+    factory: factory as PatternFactory<Record<string, unknown>, unknown>,
+    frameworkProvidedPaths,
+    commandSpec: callableCommandSpec(resolved.callableCell, "tool", factory),
+    resultSchema: schemas.resultSchema,
   };
+  preparedCallableTools.add(prepared);
+  return prepared;
+}
+
+function callableStableEntityId(
+  callableCell: Cell<any>,
+): string | undefined {
+  let link;
+  try {
+    link = callableCell.getAsNormalizedFullLink();
+  } catch {
+    return undefined;
+  }
+  if (typeof link.id !== "string" || link.id.length === 0) return undefined;
+  try {
+    const ref = getEntityId(linkRefFrom({
+      id: link.id,
+      ...(link.path && link.path.length > 0
+        ? { path: link.path.map(String) }
+        : {}),
+    }));
+    return ref && isEntityRef(ref) ? entityRefToString(ref) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Serialize a receipt/backing link into the canonical reference syntax.
@@ -1187,12 +1322,11 @@ export async function executeResolvedCallable(
     );
   }
 
-  const pattern = asCallablePattern(
-    resolved.callableCell.key("pattern").getRaw() ??
-      resolved.callableCell.key("pattern").get(),
-  );
-  const extraParams = asExtraParams(
-    resolved.callableCell.key("extraParams").get(),
+  const prepared = await prepareResolvedCallableTool(resolved, deps);
+  const inputWithFrameworkValues = applyFrameworkProvidedInputs(
+    normalizeToolInput(input),
+    prepared.frameworkProvidedPaths,
+    callableStableEntityId(resolved.identityCell ?? resolved.callableCell),
   );
   const runtime = resolved.pieces.runtime;
   const runtimeErrors = runtimeErrorLog(runtime);
@@ -1202,14 +1336,14 @@ export async function executeResolvedCallable(
   const resultCell = runtime.getCell<unknown>(
     resolved.space,
     deps.uuid?.() ?? crypto.randomUUID(),
-    pattern?.resultSchema,
+    prepared.resultSchema,
     tx,
     resultScope,
   );
   const running = runtime.run(
     tx,
-    pattern,
-    mergeToolInput(input, extraParams),
+    prepared.factory,
+    inputWithFrameworkValues,
     resultCell,
   );
   // Capture the tool's result off its cell's sink. sink() fires immediately with

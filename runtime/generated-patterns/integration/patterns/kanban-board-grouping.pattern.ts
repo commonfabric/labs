@@ -178,7 +178,7 @@ const normalizeLimit = (value: unknown, fallback: number): number => {
   return fallback >= 0 ? Math.trunc(fallback) : 0;
 };
 
-const sanitizeTaskList = (value: unknown): KanbanTask[] => {
+const sanitizeTaskList = (value: readonly KanbanTaskInput[]): KanbanTask[] => {
   const source = Array.isArray(value) && value.length > 0
     ? value
     : defaultTasks;

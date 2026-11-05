@@ -120,9 +120,9 @@ Because both come up, and only one is the pin:
   `computeModuleHashes`). A piece's `patternIdentity` uses the entry module's
   identity. A subpath pin uses the selected module's identity. Both are
   verifiable by re-hashing and use the namespace that the existing by-identity
-  machinery keys on (`cf:module/<hash>`, compile cache, `$patternRef`, and
-  `meta("patternIdentity")`). **This is the kind of identity used by a pin**,
-  and `cf:pattern:<identity>` addresses one exact module directly.
+  machinery keys on (`cf:module/<hash>`, compile cache, Factory@1 artifact
+  refs, and `meta("patternIdentity")`). **This is the kind of identity used by
+  a pin**, and `cf:pattern:<identity>` addresses one exact module directly.
 
 ### Tooling reference for a running piece
 

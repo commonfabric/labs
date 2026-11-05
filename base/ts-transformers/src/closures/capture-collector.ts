@@ -223,7 +223,7 @@ export class CaptureCollector {
     }
 
     // Skip module-scoped declarations; property-access captures are only used
-    // for non-module closure extraction, not for patternTool-style module captures.
+    // for non-module closure extraction, not module captures.
     if (
       declarations.some((decl: ts.Declaration) =>
         isModuleScopedDeclaration(decl)

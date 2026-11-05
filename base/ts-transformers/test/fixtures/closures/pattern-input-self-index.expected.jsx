@@ -169,8 +169,8 @@ export default pattern((input) => {
         other: input[__cfHelpers.SELF],
         otherTitle: input[__cfHelpers.SELF].key("title"),
         shouted: __cfLift_2({ input_SELF__title: input[SELF].title }).for(["__patternResult", "shouted"], true),
-        echoed: input[__cfHelpers.SELF].key("items").mapWithPattern(__cfPattern_1, {}).for(["__patternResult", "echoed"], true),
-        kept: input[__cfHelpers.SELF].key("items").filterWithPattern(__cfPattern_2, {}).for(["__patternResult", "kept"], true),
+        echoed: input[__cfHelpers.SELF].key("items").mapWithPattern(__cfPattern_1).for(["__patternResult", "echoed"], true),
+        kept: input[__cfHelpers.SELF].key("items").filterWithPattern(__cfPattern_2).for(["__patternResult", "kept"], true),
         bound,
         poke: poke({ room: input[__cfHelpers.SELF] }).for({ stream: ["__patternResult", "poke"] }, true)
     };

@@ -294,3 +294,71 @@ export function buildCapturePropertyAssignments(
   }
   return properties;
 }
+
+/**
+ * Retain each authored capture root on its synthesized parameter expression so
+ * later symbol- and contract-resolution passes can recover the source value.
+ */
+export function preserveCaptureReferenceOrigins(
+  properties: readonly ts.PropertyAssignment[],
+  captureTree: ReadonlyMap<string, CaptureTreeNode>,
+): void {
+  let index = 0;
+  for (const [rootName, node] of captureTree) {
+    const property = properties[index++];
+    if (!property) continue;
+    const originalRoot = findCaptureRootIdentifier(node);
+    if (!originalRoot) continue;
+
+    const visit = (current: ts.Node): void => {
+      if (
+        ts.isIdentifier(current) && current.text === rootName &&
+        !isPropertyNameIdentifier(current) && current !== originalRoot
+      ) {
+        ts.setOriginalNode(current, originalRoot);
+      }
+      ts.forEachChild(current, visit);
+    };
+    visit(property.initializer);
+  }
+}
+
+function isPropertyNameIdentifier(identifier: ts.Identifier): boolean {
+  const parent = identifier.parent;
+  return !!parent &&
+    ((ts.isPropertyAssignment(parent) && parent.name === identifier) ||
+      (ts.isPropertyAccessExpression(parent) && parent.name === identifier));
+}
+
+export function findCaptureRootIdentifier(
+  node: CaptureTreeNode | undefined,
+): ts.Identifier | undefined {
+  if (!node) return undefined;
+  if (node.expression) {
+    const findIn = (value: ts.Expression): ts.Identifier | undefined => {
+      const expression = unwrapExpression(value);
+      if (ts.isIdentifier(expression)) return expression;
+      if (
+        ts.isPropertyAccessExpression(expression) ||
+        ts.isElementAccessExpression(expression)
+      ) {
+        return findIn(expression.expression);
+      }
+      if (
+        ts.isCallExpression(expression) &&
+        ts.isPropertyAccessExpression(expression.expression) &&
+        expression.expression.name.text === "key"
+      ) {
+        return findIn(expression.expression.expression);
+      }
+      return undefined;
+    };
+    const root = findIn(node.expression);
+    if (root) return root;
+  }
+  for (const child of node.properties.values()) {
+    const root = findCaptureRootIdentifier(child);
+    if (root) return root;
+  }
+  return undefined;
+}

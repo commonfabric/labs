@@ -10,9 +10,7 @@
  *      calls (one persistent sandbox), distinct between instances (no
  *      cross-instance/user sharing), and overrides any model-supplied value
  *      (the model cannot target another instance's sandbox).
- *   B. declares `sandboxId`, author pre-fills via extraParams -> framework
- *      defers to the author's value.
- *   C. does not declare `sandboxId` -> framework injects nothing.
+ *   B. does not declare `sandboxId` -> framework injects nothing.
  *
  * Observation: handleInvoke creates each tool's result cell with the tool-call
  * id as its cause (`runtime.getCell(space, toolCall.id, ...)`). The echo tool
@@ -22,7 +20,7 @@
  * The `sandboxId`-declaring schema here is the bash tool's exact argumentSchema
  * (five fields, `sandboxId` required alongside `command`); the real bash
  * pattern's runtime argumentSchema declares `sandboxId` the same way, so it
- * falls under case A when wired as `patternTool(bash)`.
+ * falls under case A when wired directly as a tool factory.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -36,10 +34,14 @@ import {
   loadConversationFixture,
   resetMockMode,
 } from "@commonfabric/llm/client";
-import type { BuiltInLLMMessage, BuiltInLLMTool } from "@commonfabric/api";
+import type { BuiltInLLMTool } from "@commonfabric/api";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { createBuilder } from "../src/builder/factory.ts";
-import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import { withFrameworkProvidedPaths } from "../src/builder/pattern.ts";
+import {
+  createTrustedBuilder,
+  installTestPatternArtifact,
+} from "./support/trusted-builder.ts";
 import { waitForLlmSettled } from "./support/llm-result.ts";
 import { llmToolExecutionHelpers } from "../src/builtins/llm-dialog.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -99,9 +101,6 @@ describe("auto-provided sandboxId", () => {
   let runtime: Runtime;
   let tx: IExtendedStorageTransaction;
   let pattern: ReturnType<typeof createBuilder>["commonfabric"]["pattern"];
-  let patternTool: ReturnType<
-    typeof createBuilder
-  >["commonfabric"]["patternTool"];
   let generateObject: ReturnType<
     typeof createBuilder
   >["commonfabric"]["generateObject"];
@@ -116,7 +115,7 @@ describe("auto-provided sandboxId", () => {
     });
     tx = runtime.edit();
     const { commonfabric } = createTrustedBuilder(runtime);
-    ({ pattern, patternTool, generateObject } = commonfabric);
+    ({ pattern, generateObject } = commonfabric);
   });
 
   afterEach(async () => {
@@ -134,9 +133,8 @@ describe("auto-provided sandboxId", () => {
     tag: string;
     calls: Array<{ callId: string; modelInput: Record<string, unknown> }>;
     argSchema: JSONSchema;
-    extraParams?: Record<string, unknown>;
   }): Promise<unknown[]> {
-    const { tag, calls, argSchema, extraParams } = opts;
+    const { tag, calls, argSchema } = opts;
     clearMockResponses();
     loadConversationFixture({
       description: tag,
@@ -171,17 +169,17 @@ describe("auto-provided sandboxId", () => {
     });
 
     const echoSandbox = pattern(
-      ({ command, sandboxId }: { command: string; sandboxId: string }) => ({
-        received: sandboxId,
-        command,
-      }),
+      withFrameworkProvidedPaths(
+        ({ command, sandboxId }: { command: string; sandboxId: string }) => ({
+          received: sandboxId,
+          command,
+        }),
+        argSchema === BASH_LIKE_ARG_SCHEMA ? [["sandboxId"]] : [],
+      ),
       argSchema,
       ECHO_RESULT_SCHEMA,
     );
-
-    const toolDef = extraParams
-      ? patternTool(echoSandbox, extraParams as never)
-      : patternTool(echoSandbox);
+    const toolDef = installTestPatternArtifact(runtime, echoSandbox);
 
     const testPattern = pattern<Record<string, never>>(() =>
       generateObject({
@@ -199,7 +197,7 @@ describe("auto-provided sandboxId", () => {
       runTx,
     );
     const result = runtime.run(runTx, testPattern, {}, resultCell);
-    runTx.commit();
+    runTx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
 
@@ -268,94 +266,7 @@ describe("auto-provided sandboxId", () => {
   );
 
   it(
-    "B: a pattern that pins sandboxId via extraParams is flagged as an error",
-    async () => {
-      // If a pattern could pin `sandboxId`, two patterns pinning the same value
-      // would share one server-side sandbox — a cross-instance/user leak. Rather
-      // than silently drop the pin, the framework rejects it so the authoring
-      // mistake surfaces.
-      let toolOutput: { type?: string; value?: unknown } | undefined;
-      addMockResponse(
-        (req) =>
-          req.messages.some((m) =>
-            typeof m.content === "string" && m.content.includes("pin-via-extra")
-          ),
-        {
-          role: "assistant",
-          content: [{
-            type: "tool-call",
-            toolCallId: "pin-1",
-            toolName: "echoSandbox",
-            input: { command: "ls" },
-          }],
-          id: "pin-s0",
-        },
-      );
-      addMockResponse(
-        (req) => {
-          const toolMsg = req.messages.find((m) => m.role === "tool") as
-            | BuiltInLLMMessage
-            | undefined;
-          const content = Array.isArray(toolMsg?.content)
-            ? toolMsg!.content[0] as {
-              output?: { type?: string; value?: unknown };
-            }
-            : undefined;
-          if (content?.output) toolOutput = content.output;
-          return toolOutput !== undefined;
-        },
-        {
-          role: "assistant",
-          content: [{
-            type: "tool-call",
-            toolCallId: "pin-present",
-            toolName: "presentResult",
-            input: { ok: true },
-          }],
-          id: "pin-s1",
-        },
-      );
-
-      const echoSandbox = pattern(
-        ({ command, sandboxId }: { command: string; sandboxId: string }) => ({
-          received: sandboxId,
-          command,
-        }),
-        BASH_LIKE_ARG_SCHEMA,
-        ECHO_RESULT_SCHEMA,
-      );
-      const testPattern = pattern<Record<string, never>>(() =>
-        generateObject({
-          prompt: "pin-via-extra",
-          schema: PRESENT_SCHEMA,
-          tools: {
-            echoSandbox: patternTool(
-              echoSandbox,
-              { sandboxId: "pinned-by-pattern" } as never,
-            ) as unknown as BuiltInLLMTool,
-          },
-        })
-      );
-
-      const runTx = runtime.edit();
-      const resultCell = runtime.getCell(
-        space,
-        "pin-via-extra-instance",
-        testPattern.resultSchema,
-        runTx,
-      );
-      const result = runtime.run(runTx, testPattern, {}, resultCell);
-      runTx.commit();
-      await waitForLlmSettled(runtime, result);
-
-      // The bash call surfaced an error, not a silently-overridden result.
-      expect(toolOutput?.type).toBe("error-text");
-      expect(String(toolOutput?.value)).toContain("framework-provided");
-    },
-  );
-
-  it(
-    "C: does not declare sandboxId -> framework injects nothing",
+    "B: does not declare sandboxId -> framework injects nothing",
     async () => {
       const [received] = await runInstance({
         tag: "nodecl",
@@ -370,9 +281,9 @@ describe("auto-provided sandboxId", () => {
   );
 
   it(
-    "D: one pattern with two separate bash tools -> the two tools get distinct sandboxes",
+    "C: one pattern with two separate bash tools -> the two tools get distinct sandboxes",
     async () => {
-      // Two distinct `patternTool(bash)` nodes (toolA, toolB) in a single
+      // Two distinct tool-definition nodes (toolA, toolB) in a single
       // instance. The id is keyed to the tool-definition cell, so each node is
       // its own sandbox even within one pattern.
       clearMockResponses();
@@ -422,21 +333,25 @@ describe("auto-provided sandboxId", () => {
       });
 
       const echoSandbox = pattern(
-        ({ command, sandboxId }: { command: string; sandboxId: string }) => ({
-          received: sandboxId,
-          command,
-        }),
+        withFrameworkProvidedPaths(
+          ({ command, sandboxId }: { command: string; sandboxId: string }) => ({
+            received: sandboxId,
+            command,
+          }),
+          [["sandboxId"]],
+        ),
         BASH_LIKE_ARG_SCHEMA,
         ECHO_RESULT_SCHEMA,
       );
+      installTestPatternArtifact(runtime, echoSandbox);
 
       const testPattern = pattern<Record<string, never>>(() =>
         generateObject({
           prompt: "two-bash-tools",
           schema: PRESENT_SCHEMA,
           tools: {
-            toolA: patternTool(echoSandbox) as unknown as BuiltInLLMTool,
-            toolB: patternTool(echoSandbox) as unknown as BuiltInLLMTool,
+            toolA: echoSandbox as unknown as BuiltInLLMTool,
+            toolB: echoSandbox as unknown as BuiltInLLMTool,
           },
         })
       );
@@ -449,7 +364,7 @@ describe("auto-provided sandboxId", () => {
         runTx,
       );
       const result = runtime.run(runTx, testPattern, {}, resultCell);
-      runTx.commit();
+      runTx.commit().settled;
 
       await waitForLlmSettled(runtime, result);
       expect(result.key("error").get()).toBeUndefined();
@@ -471,7 +386,7 @@ describe("auto-provided sandboxId", () => {
   );
 
   it(
-    "E: the framework-provided field is stripped from the model-facing schema",
+    "D: the framework-provided field is stripped from the model-facing schema",
     async () => {
       // The model should never be asked for `sandboxId` — it can't set it.
       let toolJson: string | undefined;
@@ -496,19 +411,23 @@ describe("auto-provided sandboxId", () => {
       );
 
       const echoSandbox = pattern(
-        ({ command, sandboxId }: { command: string; sandboxId: string }) => ({
-          received: sandboxId,
-          command,
-        }),
+        withFrameworkProvidedPaths(
+          ({ command, sandboxId }: { command: string; sandboxId: string }) => ({
+            received: sandboxId,
+            command,
+          }),
+          [["sandboxId"]],
+        ),
         BASH_LIKE_ARG_SCHEMA,
         ECHO_RESULT_SCHEMA,
       );
+      installTestPatternArtifact(runtime, echoSandbox);
       const testPattern = pattern<Record<string, never>>(() =>
         generateObject({
           prompt: "strip-model-schema",
           schema: PRESENT_SCHEMA,
           tools: {
-            echoSandbox: patternTool(echoSandbox) as unknown as BuiltInLLMTool,
+            echoSandbox: echoSandbox as unknown as BuiltInLLMTool,
           },
         })
       );
@@ -521,7 +440,7 @@ describe("auto-provided sandboxId", () => {
         runTx,
       );
       const result = runtime.run(runTx, testPattern, {}, resultCell);
-      runTx.commit();
+      runTx.commit().settled;
       await waitForLlmSettled(runtime, result);
 
       console.log("model-facing echoSandbox schema:", toolJson);
@@ -534,21 +453,7 @@ describe("auto-provided sandboxId", () => {
 });
 
 describe("framework-provided field helpers", () => {
-  // Direct unit tests for the framework-provided-field helpers, covering the
-  // defensive branches the dialog-driven cases above don't reach: malformed
-  // schemas and the fail-closed path when no stable instance id can be derived.
-
-  const { stripFrameworkProvidedFields, applyAutoProvidedSandboxId } =
-    llmToolExecutionHelpers;
-
-  // A pattern stub whose argumentSchema declares `sandboxId` (only the schema is
-  // read by applyAutoProvidedSandboxId).
-  const declaresSandboxId = {
-    argumentSchema: {
-      type: "object",
-      properties: { command: {}, sandboxId: {} },
-    },
-  } as never;
+  const { stripFrameworkProvidedFields } = llmToolExecutionHelpers;
 
   it("stripFrameworkProvidedFields: leaves a non-object schema unchanged", () => {
     const schema = true as unknown as JSONSchema;
@@ -588,42 +493,5 @@ describe("framework-provided field helpers", () => {
       required: ["command"],
     } as JSONSchema;
     expect(stripFrameworkProvidedFields(schema)).toBe(schema);
-  });
-
-  it("applyAutoProvidedSandboxId: no-op when the pattern does not declare sandboxId", () => {
-    const args: Record<string, unknown> = { command: "ls" };
-    applyAutoProvidedSandboxId(
-      args,
-      {
-        argumentSchema: { type: "object", properties: { command: {} } },
-      } as never,
-      {},
-      undefined,
-    );
-    expect(args).toEqual({ command: "ls" });
-  });
-
-  it("applyAutoProvidedSandboxId: rejects an author-pinned sandboxId via extraParams", () => {
-    expect(() =>
-      applyAutoProvidedSandboxId(
-        { command: "ls" },
-        declaresSandboxId,
-        { sandboxId: "author-pinned" },
-        undefined,
-      )
-    ).toThrow("framework-provided");
-  });
-
-  it("applyAutoProvidedSandboxId: fails closed when no stable entity id can be derived", () => {
-    // No identity cell -> no entity id. The function must throw rather than fall
-    // through to an empty, shared sandbox name.
-    expect(() =>
-      applyAutoProvidedSandboxId(
-        { command: "ls" },
-        declaresSandboxId,
-        {},
-        undefined,
-      )
-    ).toThrow("no stable entity id");
   });
 });

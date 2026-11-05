@@ -16,7 +16,10 @@ import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { parseLink } from "../src/link-utils.ts";
 import type { Cell } from "../src/cell.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import {
+  createTrustedBuilder,
+  installTestPatternArtifact,
+} from "./support/trusted-builder.ts";
 import { waitForLlmSettled } from "./support/llm-result.ts";
 import { LLM_DERIVED_RESULT_STAMP_SCHEMA } from "../src/builtins/llm-schemas.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
@@ -78,7 +81,7 @@ function childDocIntegrity(
       (entry) => entry.label.integrity ?? [],
     );
   } finally {
-    rtx.commit();
+    rtx.commit().settled;
   }
 }
 
@@ -122,7 +125,7 @@ describe("CFC LlmDerived stamping — result-field stamp mechanism", () => {
       expect(integrityAtomsAt(builtinRead.key("result"))).toContainEqual(
         LLM_DERIVED_ATOM,
       );
-      readTx.commit();
+      readTx.commit().settled;
 
       // Pattern write through the SAME stamp schema: no builtin identity, so
       // the runtime-minted gate strips the forged stamp.
@@ -149,7 +152,7 @@ describe("CFC LlmDerived stamping — result-field stamp mechanism", () => {
       expect(integrityAtomsAt(forgedRead.key("result"))).not.toContainEqual(
         LLM_DERIVED_ATOM,
       );
-      forgeReadTx.commit();
+      forgeReadTx.commit().settled;
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -201,7 +204,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
       tx,
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
 
@@ -236,7 +239,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
       tx,
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
 
@@ -263,7 +266,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
       tx,
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
 
@@ -303,7 +306,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
       tx,
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
 
@@ -341,7 +344,10 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
       },
     );
 
-    const dummyPattern = builder.pattern(() => ({}), { type: "object" });
+    const dummyPattern = installTestPatternArtifact(
+      runtime,
+      builder.pattern(() => ({}), { type: "object" }),
+    );
     const testPattern = builder.pattern(() =>
       builder.generateObject({
         prompt: testPrompt,
@@ -361,7 +367,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
       tx,
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
 
@@ -423,7 +429,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
       tx,
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
 
@@ -528,7 +534,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
       tx,
     );
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
 
@@ -601,7 +607,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
         {},
         resultCell,
       );
-      disabledTx.commit();
+      disabledTx.commit().settled;
 
       await waitForLlmSettled(disabledRuntime, result);
 
@@ -660,7 +666,7 @@ describe("CFC LlmDerived stamping — llm builtins (end to end)", () => {
         {},
         resultCell,
       );
-      disabledTx.commit();
+      disabledTx.commit().settled;
 
       await waitForLlmSettled(disabledRuntime, result);
 

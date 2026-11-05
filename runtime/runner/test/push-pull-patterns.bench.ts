@@ -17,7 +17,10 @@ import {
   type TimingStats,
 } from "@commonfabric/logger";
 import { createBuilder } from "../src/builder/factory.ts";
-import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import {
+  createTrustedBuilder,
+  installTestPatternArtifact,
+} from "./support/trusted-builder.ts";
 import type { Cell, JSONSchema } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 
@@ -457,7 +460,9 @@ async function setupMapScenario(
   const mapPattern = env.pattern<{ values: number[] }>(
     ({ values }) => ({
       // deno-lint-ignore no-explicit-any
-      mapped: (values as any).mapWithPattern(doublePattern as any, {}),
+      mapped: (values as any).mapWithPattern(
+        installTestPatternArtifact(env.runtime, doublePattern as any),
+      ),
     }),
     numberListInputSchema,
     mappedResultSchema,
@@ -505,7 +510,9 @@ async function setupFilterScenario(
   const filterPattern = env.pattern<{ values: number[] }>(
     ({ values }) => ({
       // deno-lint-ignore no-explicit-any
-      filtered: (values as any).filterWithPattern(filterPatternFn as any, {}),
+      filtered: (values as any).filterWithPattern(
+        installTestPatternArtifact(env.runtime, filterPatternFn as any),
+      ),
     }),
     numberListInputSchema,
     filteredResultSchema,
@@ -553,7 +560,9 @@ async function setupFlatMapScenario(
   const flatMapPattern = env.pattern<{ values: number[] }>(
     ({ values }) => ({
       // deno-lint-ignore no-explicit-any
-      flat: (values as any).flatMapWithPattern(flatMapPatternFn as any, {}),
+      flat: (values as any).flatMapWithPattern(
+        installTestPatternArtifact(env.runtime, flatMapPatternFn as any),
+      ),
     }),
     numberListInputSchema,
     flatMappedResultSchema,
@@ -597,7 +606,9 @@ async function setupObjectMapScenario(
   const mapPattern = env.pattern<{ values: Array<{ value: number }> }>(
     ({ values }) => ({
       // deno-lint-ignore no-explicit-any
-      mapped: (values as any).mapWithPattern(doublePattern as any, {}),
+      mapped: (values as any).mapWithPattern(
+        installTestPatternArtifact(env.runtime, doublePattern as any),
+      ),
     }),
     numberObjectListInputSchema,
     mappedResultSchema,
@@ -646,7 +657,9 @@ async function setupObjectFilterScenario(
   const filterPattern = env.pattern<{ values: Array<{ value: number }> }>(
     ({ values }) => ({
       // deno-lint-ignore no-explicit-any
-      filtered: (values as any).filterWithPattern(filterPatternFn as any, {}),
+      filtered: (values as any).filterWithPattern(
+        installTestPatternArtifact(env.runtime, filterPatternFn as any),
+      ),
     }),
     numberObjectListInputSchema,
     filteredResultSchema,
@@ -695,7 +708,9 @@ async function setupObjectFlatMapScenario(
   const flatMapPattern = env.pattern<{ values: Array<{ value: number }> }>(
     ({ values }) => ({
       // deno-lint-ignore no-explicit-any
-      flat: (values as any).flatMapWithPattern(flatMapPatternFn as any, {}),
+      flat: (values as any).flatMapWithPattern(
+        installTestPatternArtifact(env.runtime, flatMapPatternFn as any),
+      ),
     }),
     numberObjectListInputSchema,
     flatMappedResultSchema,

@@ -81,10 +81,10 @@ export function closureCaptureErrorMessage(
     "help: a callback (e.g. inside .map / .filter / .flatMap / computed) must " +
     "receive reactive cells as explicit inputs, not close over them.\n" +
     "  - Most array-method callbacks are handled automatically when the " +
-    "receiver is reactive — prefer `cell.map(...)`, or let the compiler lower " +
-    "`(cell.get() ?? []).map(...)` to `mapWithPattern`.\n" +
-    "  - For a hand-built callback, use `cell.mapWithPattern(pattern, params)` " +
-    "and thread captured cells through `params`, or `computed()` which " +
-    "extracts captures for you."
+    "receiver is reactive — write the callback inline, for example " +
+    "`cell.map((item) => ...)`, so the compiler can create a bound inline " +
+    "pattern for its captures.\n" +
+    "  - If the callback cannot be inlined, use `computed()` and receive the " +
+    "reactive cells as explicit inputs."
   );
 }

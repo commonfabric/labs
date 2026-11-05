@@ -47,7 +47,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 //   -> mapWithPattern(..., ({ item }) => lift(({ item }) => identity(item.toUpperCase()))(...))
 export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
-    return items.mapWithPattern(__cfPattern_1, {}).for("__patternResult", true);
+    return items.mapWithPattern(__cfPattern_1).for("__patternResult", true);
 }, {
     type: "object",
     properties: {

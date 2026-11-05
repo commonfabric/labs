@@ -5298,6 +5298,44 @@ describe("piece schema compatibility", () => {
       assertPatternSchemasBackwardCompatible(argumentPrevious, argumentAnyOf)
     ).not.toThrow();
 
+    const defaultedArrayPrevious = pattern(
+      {
+        type: "object",
+        properties: {
+          value: {
+            type: "array",
+            items: { type: "string" },
+            default: [],
+          },
+        },
+      },
+      oldPattern.resultSchema,
+    );
+    const defaultedArrayWidened = pattern(
+      {
+        type: "object",
+        properties: {
+          value: {
+            anyOf: [
+              { type: "undefined" },
+              {
+                type: "array",
+                items: { type: "string" },
+                default: [],
+              },
+            ],
+          },
+        },
+      },
+      oldPattern.resultSchema,
+    );
+    expect(() =>
+      assertPatternSchemasBackwardCompatible(
+        defaultedArrayPrevious,
+        defaultedArrayWidened,
+      )
+    ).not.toThrow();
+
     const argumentWidenedWithNumericConstraint = pattern(
       {
         type: "object",

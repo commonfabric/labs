@@ -177,6 +177,32 @@ async function resolveAndCompileToModules(
 }
 
 describe("TypeScriptCompiler", () => {
+  it("keeps trusted Common Fabric source authority bound to exact bytes", () => {
+    const compiler = new TypeScriptCompiler(types);
+    const trusted = {
+      name: "commonfabric.d.ts",
+      contents: "export declare function pattern(): 'trusted';",
+    };
+    const artifact = {
+      main: "/main.ts",
+      files: [
+        { name: "/main.ts", contents: "export default 1;" },
+        {
+          name: trusted.name,
+          contents: "export declare function pattern(): 'attacker';",
+        },
+      ],
+    };
+
+    expect(() =>
+      compiler.compileToModules(artifact, {
+        trustedCommonFabricTypeSources: [trusted],
+      })
+    ).toThrow(
+      "Program conflicts with trusted Common Fabric type source 'commonfabric.d.ts'",
+    );
+  });
+
   describe("JSX factory binding", () => {
     for (const extension of ["tsx", "jsx"]) {
       it(`evaluates elements and fragments with local and parameter bindings named \`h\` in .${extension}`, async () => {
@@ -920,12 +946,12 @@ export default add(5, "5");`,
     // returns one, so those are admitted too; the table says so, as what is
     // accepted. `db.query`'s options admit it for the same reason, as the
     // `sqliteQuery` factory's inputs do. An optional property's indexed type
-    // includes `undefined`, so `key().set()` admits it too. Required inputs, index-signature values,
-    // required `patternTool()` prefills, and optional-property writes through
-    // `update()` keep the stricter rule.
+    // includes `undefined`, so `key().set()` admits it too. Required inputs,
+    // index-signature values, and optional-property writes through `update()`
+    // keep the stricter rule.
 
     const SUB = [
-      "import { computed, pattern, patternTool, UI } from 'commonfabric';",
+      "import { computed, pattern, UI } from 'commonfabric';",
       "type Index = { n: number };",
       "const Sub = pattern<{ index?: Index }, { n: number }>(",
       "  ({ index }) => ({ n: index?.n ?? 0 }),",
@@ -980,11 +1006,6 @@ export default add(5, "5");`,
         ].join("\n"),
       },
       {
-        name:
-          "admits undefined at an optional key of patternTool's extraParams",
-        body: "export default patternTool(Sub, { index: undefined });",
-      },
-      {
         name: "admits an optional input forwarded to a `db.query` option",
         body: [
           "import { type SqliteDb } from 'commonfabric';",
@@ -1018,12 +1039,6 @@ export default add(5, "5");`,
           "export default pattern(() => ({ k: Map({ map: { a: undefined } }).k }));",
         ].join("\n"),
         refused: "'undefined' is not assignable",
-      },
-      {
-        name:
-          "refuses undefined at a required key of patternTool's extraParams",
-        body: "export default patternTool(Strict, { index: undefined });",
-        refused: "not assignable to parameter of type 'undefined'",
       },
       {
         name: "admits `undefined` written to an optional key by `key().set()`",

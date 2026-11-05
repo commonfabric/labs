@@ -153,7 +153,7 @@ const compareAssets = (left: AssetRecord, right: AssetRecord): number => {
   return left.id.localeCompare(right.id);
 };
 
-const sanitizeAssetList = (value: unknown): AssetRecord[] => {
+const sanitizeAssetList = (value: readonly AssetInput[]): AssetRecord[] => {
   if (!Array.isArray(value)) {
     return cloneAssets(defaultAssets);
   }

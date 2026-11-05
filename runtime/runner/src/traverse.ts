@@ -11,6 +11,7 @@ import {
   toIndentedDebugString,
 } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
+import { isAdmittedFabricFactory } from "@commonfabric/data-model/fabric-factory";
 import { isFabricPrimitiveSchemaType } from "@commonfabric/data-model/fabric-primitives";
 import {
   DEFAULT_SELECTOR,
@@ -2287,6 +2288,11 @@ export abstract class BaseObjectTraverser {
       );
     } else if (isPrimitive(doc.value)) {
       return doc.value;
+    } else if (isAdmittedFabricFactory(doc.value)) {
+      // Factory@1 callables are atomic Fabric values. A schema-aware traversal
+      // may validate their contract, but the generic DAG reconstruction must
+      // never descend into or discard the callable shell itself.
+      return doc.value;
     } else if (Array.isArray(doc.value)) {
       const newValue = new Array<FabricValue>(doc.value.length);
       using t = this.tracker.include(doc.value, true, newValue, doc);
@@ -2408,9 +2414,10 @@ export abstract class BaseObjectTraverser {
         // We can follow all the links, since we don't need to track cells
         const [valueDoc, _] = this.getDocAtPath(redirDoc, [], DEFAULT_SELECTOR);
         this.tx.read(valueDoc.address, READ_FOR_SCHEDULING);
-        // Same entry gate as followPointer: an unresolvable ref names a
-        // corrupt or malformed declaration (the loader logs it), and such
-        // a declaration selects nothing.
+        // Same entry gate as followPointer: a schema closure that is not
+        // locally available yet selects nothing for this pass. Its tracked
+        // document read schedules the traversal again when the closure
+        // arrives.
         const linkSchemaCollected = link?.schema === undefined ||
           loadExternalSchemaDocs(
             this.tx,
@@ -2985,12 +2992,15 @@ function followPointer(
   noteLinkCrossing(context, doc.address, link);
   if (!collected) {
     // Closure documents travel WITH the documents that refer to them, so
-    // an unresolvable ref names a corrupt or deliberately malformed
-    // declaration. Such a declaration selects nothing: narrow with a
-    // false schema, which a reader with a shape of its own ignores.
-    logger.warn("traverse", () => [
-      "Link schema names cid: documents this space does not hold — a " +
-      "corrupt or malformed declaration; it selects nothing:",
+    // a committed writer cannot leave the reference permanently unbacked.
+    // A reader already running while one commit's operations become visible
+    // can nevertheless observe the carrier before it re-runs for the schema
+    // document's arrival. That transient absence is ordinary reactive state,
+    // not evidence of corruption: select nothing now and let the tracked
+    // schema-document read schedule the retry. A reader with a shape of its
+    // own ignores the false narrowing.
+    logger.debug("traverse", () => [
+      "Link schema closure is not available yet; it selects nothing:",
       doc.address,
     ]);
     link = { ...link, schema: false };
@@ -5027,7 +5037,9 @@ export class SchemaObjectTraverser<V extends FabricValue>
     }
     if (
       ContextualFlowControl.isTrueSchema(resolved) &&
-      !SchemaObjectTraverser.hasAsCell(resolved)
+      !SchemaObjectTraverser.hasAsCell(resolved) &&
+      !(isAdmittedFabricFactory(doc.value) && isObjectOrArray(resolved) &&
+        "asFactory" in resolved)
     ) {
       const defaultValue = isObjectOrArray(resolved)
         ? resolved["default"]
@@ -5174,6 +5186,13 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // an array element under `items: true` still decomposes via
       // `traverseArrayWithSchema`'s `createDataCellURI` path (pre-existing;
       // not addressed here).
+    } else if (
+      isAdmittedFabricFactory(doc.value) && "asFactory" in schemaObj
+    ) {
+      const newLink = link ?? getNormalizedLink(doc.address, schemaObj);
+      return {
+        ok: this.objectCreator.createObject(newLink, doc.value),
+      };
     } else if (doc.value instanceof FabricPrimitive) {
       // An opaque leaf whose `typeof` is "object": this arm must precede the
       // record branch below, which would otherwise decompose it.

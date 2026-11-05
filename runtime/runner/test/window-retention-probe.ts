@@ -157,7 +157,7 @@ export default pattern<
 >(({ index, start, size }) => {
   const shown = computed(() => (index?.rows ?? []).slice(start, start + size));
   // deno-lint-ignore no-explicit-any
-  const projected = (shown as any).mapWithPattern(Row as any, {});
+  const projected = (shown as any).mapWithPattern(Row as any);
   return { rows: projected };
 });
 `,

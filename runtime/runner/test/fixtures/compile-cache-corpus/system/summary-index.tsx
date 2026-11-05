@@ -3,8 +3,7 @@ import {
   type Default,
   NAME,
   pattern,
-  patternTool,
-  type PatternToolResult,
+  type PatternFactory,
   UI,
   wish,
   Writable,
@@ -23,7 +22,7 @@ type Input = Record<string, never>;
 
 export type Output = {
   entries: SummaryIndexEntry[];
-  search: PatternToolResult<{ entries: SummaryIndexEntry[] }>;
+  search: PatternFactory<{ query: string }, Writable<SummaryIndexEntry>[]>;
 };
 
 function isCellLike<T>(value: unknown): value is { get: () => T } {
@@ -150,7 +149,9 @@ const SummaryIndex = pattern<Input, Output>(() => {
       </cf-screen>
     ),
     entries,
-    search: patternTool(searchPattern, { entries }),
+    search: pattern<{ query: string }, Writable<SummaryIndexEntry>[]>(
+      ({ query }) => searchPattern({ query, entries }),
+    ),
   };
 });
 

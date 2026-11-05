@@ -627,6 +627,20 @@ describe("commit-label-table", () => {
     expect(hasClientMessageLabelMetadata(expanded)).toBe(false);
   });
 
+  it("round-trips metadata carried by ensure operations", () => {
+    const source = request([{
+      op: "ensure",
+      id: "of:ensured-document",
+      scope: "space",
+      value: document(),
+    }]);
+    const before = canonical(source);
+    const compact = compressClientMessageLabels(source);
+
+    expect(hasClientMessageLabelMetadata(compact)).toBe(true);
+    expect(canonical(expandClientMessageLabels(compact))).toBe(before);
+  });
+
   it("expands every value-bearing patch form before array edits and moves apply", () => {
     const doc = document();
     const entry = doc.cfc.labelMap.entries[0];

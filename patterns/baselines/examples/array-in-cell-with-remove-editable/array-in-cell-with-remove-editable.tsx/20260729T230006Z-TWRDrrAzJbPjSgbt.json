@@ -1,0 +1,188 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Item": {
+        "properties": {
+          "text": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "items": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Item"
+        },
+        "type": "array"
+      },
+      "title": {
+        "default": "untitled",
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "items"
+    ],
+    "type": "object"
+  },
+  "pattern": "examples/array-in-cell-with-remove-editable.tsx",
+  "resultSchema": {
+    "$defs": {
+      "InputEventType": {
+        "properties": {
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "type": "object"
+      },
+      "Item": {
+        "properties": {
+          "text": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "JSXElement": {
+        "anyOf": [
+          {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          },
+          {
+            "$ref": "#/$defs/UIRenderable"
+          },
+          {
+            "properties": {},
+            "type": "object"
+          }
+        ]
+      },
+      "UIRenderable": {
+        "properties": {
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          }
+        },
+        "required": [
+          "$UI"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "#/$defs/JSXElement"
+      },
+      "addItem": {
+        "$ref": "#/$defs/InputEventType",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "items": {
+        "items": {
+          "$ref": "#/$defs/Item"
+        },
+        "type": "array"
+      },
+      "title": {
+        "type": "string"
+      },
+      "updateItem": {
+        "asFactory": {
+          "contextSchema": {
+            "$defs": {
+              "Item": {
+                "properties": {
+                  "text": {
+                    "default": "",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "type": "object"
+              }
+            },
+            "properties": {
+              "index": {
+                "type": "number"
+              },
+              "items": {
+                "asCell": [
+                  "cell"
+                ],
+                "items": {
+                  "$ref": "#/$defs/Item"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "items",
+              "index"
+            ],
+            "type": "object"
+          },
+          "eventSchema": {
+            "properties": {
+              "detail": {
+                "properties": {
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "value"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "detail"
+            ],
+            "type": "object"
+          },
+          "kind": "handler"
+        }
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI",
+      "title",
+      "items",
+      "addItem",
+      "updateItem"
+    ],
+    "type": "object"
+  }
+}

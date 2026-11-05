@@ -985,7 +985,7 @@ describe("pattern-binding", () => {
       expect(() => bind({ err, aliased: alias() })).toThrow("FabricError");
     });
 
-    it("returns a nested pattern bound over the deep-frozen argument schema its graph holds", () => {
+    it("retains an unchanged nested factory and its deep-frozen argument schema", () => {
       // The schema a nested pattern's nodes are bound under is the deep-frozen
       // one the graph holds, which is what lets `schemaAtPath()` keep the
       // narrowings a bind makes of it.
@@ -1025,11 +1025,11 @@ describe("pattern-binding", () => {
           resultSchema(),
         );
         const nested = Outer.nodes
-          .map((node) => node.module.implementation)
-          .find((implementation) => isPattern(implementation)) as Pattern;
+          .map((node) => node.module)
+          .find((module) => isPattern(module)) as Pattern;
 
         const child = bind(nested);
-        expect(child).not.toBe(nested);
+        expect(child).toBe(nested);
         expect(child.argumentSchema).toBe(nested.argumentSchema);
         expect(child.argumentSchema).toEqual(Inner.argumentSchema);
         expect(isDeepFrozen(child.argumentSchema)).toBe(true);

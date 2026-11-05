@@ -620,8 +620,8 @@ type Output = {
   isHidden: boolean;
   noteId: string;
   backlinks: MentionablePiece[];
-  grep: PatternToolResult<{ content: string }>;
-  translate: PatternToolResult<{ content: string }>;
+  grep: PatternFactory<{ query: string }, string[]>;
+  translate: PatternFactory<{ language: string }, string | undefined>;
   editContent: Stream<{ detail: { value: string } }>;
 };
 ```
@@ -1117,10 +1117,10 @@ interface SharedNoteOutput {
 Interactive side-by-side chatbot demo for the new observation ceiling and
 subagent behavior. One chat reads a hostile prompt-influencing briefing directly
 and gets tainted before it can use a low-conf tool; the other delegates the raw
-text to a higher-ceiling userland subagent pattern via `patternTool()` and only
-receives a schema-limited safe summary.
+text to a higher-ceiling userland subagent through an inline pattern factory and
+only receives a schema-limited safe summary.
 
-**Keywords:** llmDialog, patternTool, prompt-injection, confidentiality,
+**Keywords:** llmDialog, pattern-factory, prompt-injection, confidentiality,
 tool-calling, cf-chat
 
 ### Input Schema

@@ -26,6 +26,7 @@ import {
   type PatternFactory,
   type PerUser,
   type RepresentsCurrentUser,
+  schema,
   type Stream,
   toSchema,
   UI,
@@ -131,42 +132,38 @@ export type AgentQueueOutput = {
   setAgentRunner: Stream<SetAgentRunnerEvent>;
 };
 
-/** Preserve the queue's durable run link in a generated result schema. */
-export const withAgentQueueRunLinkSchema = (
-  generated: JSONSchema,
-): JSONSchema => {
-  if (typeof generated === "boolean") {
-    throw new Error("Agent queue output schema must be an object");
-  }
-  const entry = generated.$defs?.AgentQueueEntry;
-  if (entry === undefined || typeof entry === "boolean") {
-    throw new Error("Agent queue output schema must define AgentQueueEntry");
-  }
-  return {
-    ...generated,
+// The runner removes this private marker while retaining the scoped cell
+// wrapper. It prevents this one exported link from being materialized like
+// ordinary reactive pattern results.
+export const agentQueueRunLinkSchema = schema(
+  {
+    asCell: ["cell"],
+    scope: "user",
+    __ctPreservePatternResultCell: true,
+  } as JSONSchema,
+);
+
+const agentQueueArgumentSchema = toSchema<Record<string, never>>();
+const generatedAgentQueueResultSchema = toSchema<AgentQueueOutput>() as Exclude<
+  JSONSchema,
+  boolean
+>;
+const generatedAgentQueueEntrySchema = generatedAgentQueueResultSchema.$defs!
+  .AgentQueueEntry as Exclude<JSONSchema, boolean>;
+const agentQueueResultSchema = __cf_data(
+  {
+    ...generatedAgentQueueResultSchema,
     $defs: {
-      ...generated.$defs,
+      ...generatedAgentQueueResultSchema.$defs,
       AgentQueueEntry: {
-        ...entry,
+        ...generatedAgentQueueEntrySchema,
         properties: {
-          ...entry.properties,
-          // The runner removes this private marker while retaining the scoped
-          // cell wrapper. It prevents this one exported link from being
-          // materialized like ordinary reactive pattern results.
-          run: {
-            asCell: ["cell"],
-            scope: "user",
-            __ctPreservePatternResultCell: true,
-          } as JSONSchema,
+          ...generatedAgentQueueEntrySchema.properties,
+          run: agentQueueRunLinkSchema,
         },
       },
     },
-  };
-};
-
-const agentQueueArgumentSchema = toSchema<Record<string, never>>();
-const agentQueueResultSchema = __cf_data(
-  withAgentQueueRunLinkSchema(toSchema<AgentQueueOutput>()),
+  } satisfies JSONSchema,
 );
 
 const AgentQueue = pattern(

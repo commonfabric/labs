@@ -89,7 +89,9 @@ const normalizedDefaults = (): NormalizedVariant[] => {
   });
 };
 
-const toNormalizedVariants = (value: unknown): NormalizedVariant[] => {
+const toNormalizedVariants = (
+  value: readonly VariantConfig[],
+): NormalizedVariant[] => {
   if (!Array.isArray(value)) {
     return normalizedDefaults();
   }

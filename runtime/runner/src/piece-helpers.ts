@@ -47,26 +47,56 @@ export function parseCellPath(path: string): CellPath {
   return path.split("/").map(linkPathSegmentToCellPathSegment);
 }
 
-/** Reads a path through the root projection, preserving ancestor branch choices. */
+/**
+ * Reads a path by narrowing each child before materializing its parent.
+ * `requireProjection` instead traverses the root projection and preserves
+ * ancestor branch choices.
+ */
 export function resolveCellPath<T>(
   cell: Cell<T>,
   path: CellPath,
-  options: { requireProjection?: boolean } = {},
+  options: {
+    requireProjection?: boolean;
+    materializeFactories?: boolean;
+  } = {},
 ): unknown {
+  const read = (current: Cell<unknown>): unknown =>
+    options.materializeFactories === false
+      ? current.getWithoutFactoryMaterialization()
+      : current.get();
+  if (path.length === 0) {
+    const value = read(cell as Cell<unknown>);
+    return isCell(value) ? read(value) : value;
+  }
   let currentCell: Cell<unknown> = cell;
-  let value: unknown = cell.get();
+  let value: unknown = options.requireProjection
+    ? read(cell as Cell<unknown>)
+    : undefined;
   for (const [index, segment] of path.entries()) {
     if (isCell(value)) {
       currentCell = value;
-      value = value.get();
+      value = read(value);
     }
-    currentCell = currentCell.key(segment);
-    if (value === undefined && !options.requireProjection) {
-      // A sparse root can fail to materialize while a selected child is
-      // readable. Correlated schemas require a matching root projection.
-      value = currentCell.get();
-      if (value !== undefined || index < path.length - 1) continue;
+    const parentCell = currentCell;
+    currentCell = parentCell.key(segment);
+    if (!options.requireProjection) {
+      // Narrow first: materializing a whole object can be blocked by an
+      // unrelated cold factory sibling even though the requested child is
+      // already readable. A missing or undefined child falls through to the
+      // parent projection so membership and useful error messages remain
+      // exact. Correlated schemas explicitly request that projection below.
+      const narrowed = read(currentCell);
+      const unresolvedHandle = isCell(narrowed) &&
+        currentCell.getRaw() === undefined;
+      if (
+        (!unresolvedHandle && narrowed !== undefined) ||
+        index < path.length - 1
+      ) {
+        value = narrowed;
+        continue;
+      }
     }
+    if (value === undefined) value = read(parentCell);
     if (value != null && typeof value !== "object") {
       throw new Error(
         `Cannot access path "${
@@ -91,7 +121,7 @@ export function resolveCellPath<T>(
     // would discard the branch selected by that parent's current value.
     value = (value as Record<string | number, unknown>)[segment];
   }
-  return isCell(value) ? value.get() : value;
+  return isCell(value) ? read(value) : value;
 }
 
 export function cellEntityIdString(cell: Cell<unknown>): string | undefined {

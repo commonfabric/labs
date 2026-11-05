@@ -2,14 +2,14 @@ import { BigIntCodec } from "./BigIntCodec.ts";
 import { SpecialNumberCodec } from "./SpecialNumberCodec.ts";
 import { CodecRegistry, SymbolCodec } from "@/codec-common";
 import { UndefinedCodec } from "./UndefinedCodec.ts";
+import { FactoryCodec } from "@/codec-common/FactoryCodec.ts";
 import { JSON_FORMAT, type JsonCodecValue } from "./interface.ts";
 
 /**
  * Creates a registry holding this format's determination about JavaScript's
- * primitive types, and nothing else. It registers no fabric class, so a
- * registry from here encodes no `FabricSpecialObject` and decodes every fabric
- * wire tag to an `UnknownValue`; registering the classes that participate is a
- * caller's job.
+ * primitive types and the protocol's admitted `Factory@1` callable. It
+ * registers no fabric class, so other fabric wire tags decode to an
+ * `UnknownValue`; registering the classes that participate is a caller's job.
  *
  * Two groups, which is the whole of what the JSON format decides:
  *
@@ -40,6 +40,7 @@ export function createBaseJsonRegistry(): CodecRegistry<JsonCodecValue> {
     new SymbolCodec<JsonCodecValue>((key) => key),
   );
   registry.registerPrimitive("undefined", new UndefinedCodec());
+  registry.registerCallable(new FactoryCodec());
 
   // Self-representing primitives: emitted as-is (their own wire form).
   // `number` is registered both ways -- finite numbers self-represent, while

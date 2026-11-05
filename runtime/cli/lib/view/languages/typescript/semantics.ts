@@ -572,9 +572,10 @@ function extensionOf(path: string): ts.Extension {
 //
 
 /**
- * Map a specifier to a real local file via the import map. Values in `importMap`
- * are already absolute (resolved against the deno.json that declared them), so
- * resolution does not depend on where cf view was launched.
+ * Map a specifier to a real local file via the import map. Local values in
+ * `importMap` are already absolute (resolved against the deno.json that
+ * declared them), so resolution does not depend on where cf view was launched.
+ * Non-local values remain as precedence markers and resolve to no local file.
  */
 function mapSpecifier(
   spec: string,
@@ -598,12 +599,12 @@ function isLocalSpecifier(value: string): boolean {
 }
 
 /**
- * Walk from `cwd` up to the filesystem root, merging the `imports` of every
- * deno.json(c) found; a nearer config wins. Local targets are resolved to
- * absolute paths against the directory of the config that declared them — which
- * is what Deno does, and is what makes resolution correct no matter which
- * subdirectory cf view was launched from. `root` is the topmost directory that
- * held a config, used to bound real-file reads.
+ * Walk from `cwd` up to the filesystem root, merging local `imports` and Deno
+ * workspace package exports; a nearer explicit import wins. Targets are
+ * resolved to absolute paths against the directory of the config that declared
+ * them — which is what Deno does, and is what makes resolution correct no
+ * matter which subdirectory cf view was launched from. `root` is the topmost
+ * directory that held a config, used to bound real-file reads.
  */
 function discoverConfig(
   cwd: string,
@@ -612,18 +613,19 @@ function discoverConfig(
   let root = cwd;
   let dir = cwd;
   for (let depth = 0; depth < 64; depth++) {
-    for (const file of ["deno.json", "deno.jsonc"]) {
-      let raw: string;
-      try {
-        raw = Deno.readTextFileSync(join(dir, file));
-      } catch {
-        continue;
-      }
+    const raw = readEffectiveDenoConfig(dir);
+    if (raw !== undefined) {
       root = dir; // a config lives here; allow reads under the topmost one
       for (const [key, value] of Object.entries(parseImports(raw))) {
         if (key in importMap) continue; // a nearer config already set this key
-        if (!isLocalSpecifier(value)) continue; // jsr:/npm:/https: → leave as any
-        importMap[key] = isAbsolute(value) ? value : join(dir, value);
+        importMap[key] = isLocalSpecifier(value)
+          ? isAbsolute(value) ? value : join(dir, value)
+          : value;
+      }
+      for (const [key, value] of Object.entries(workspaceExports(raw, dir))) {
+        // An explicit import map entry, including one inherited from a nearer
+        // config, has the same precedence it has in Deno.
+        if (!(key in importMap)) importMap[key] = value;
       }
     }
     const parent = dirname(dir);
@@ -633,17 +635,78 @@ function discoverConfig(
   return { importMap, root };
 }
 
+/** Read the one Deno config effective in a directory. */
+function readEffectiveDenoConfig(dir: string): string | undefined {
+  try {
+    return Deno.readTextFileSync(join(dir, "deno.json"));
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) return undefined;
+  }
+  try {
+    return Deno.readTextFileSync(join(dir, "deno.jsonc"));
+  } catch {
+    return undefined;
+  }
+}
+
+function parseConfig(raw: string): Record<string, unknown> | undefined {
+  const parsed = safe(() => JSON.parse(raw)) ?? safe(() => parseJsonc(raw));
+  return parsed && typeof parsed === "object"
+    ? parsed as Record<string, unknown>
+    : undefined;
+}
+
 function parseImports(raw: string): Record<string, string> {
   // Deno configs are JSONC: they may carry comments and trailing commas, both
   // of which make JSON.parse throw. Parse as JSONC so a comment or a trailing
   // comma does not drop the whole import map.
-  const parsed = safe(() => JSON.parse(raw)) ??
-    safe(() => parseJsonc(raw));
-  const imports = (parsed as { imports?: unknown } | undefined)?.imports;
+  const imports = parseConfig(raw)?.imports;
   if (!imports || typeof imports !== "object") return {};
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(imports as Record<string, unknown>)) {
     if (typeof v === "string") out[k] = v;
+  }
+  return out;
+}
+
+/** Local package exports contributed by a Deno workspace declaration. */
+function workspaceExports(
+  raw: string,
+  configDir: string,
+): Record<string, string> {
+  const workspace = parseConfig(raw)?.workspace;
+  const members = Array.isArray(workspace)
+    ? workspace
+    : workspace && typeof workspace === "object"
+    ? (workspace as { members?: unknown }).members
+    : undefined;
+  if (!Array.isArray(members)) return {};
+
+  const out: Record<string, string> = {};
+  for (const member of members) {
+    if (typeof member !== "string") continue;
+    const memberDir = isAbsolute(member) ? member : join(configDir, member);
+    const raw = readEffectiveDenoConfig(memberDir);
+    const config = raw === undefined ? undefined : parseConfig(raw);
+    if (!config || typeof config.name !== "string") continue;
+    const exports = config.exports;
+    if (typeof exports === "string" && isLocalSpecifier(exports)) {
+      out[config.name] = isAbsolute(exports)
+        ? exports
+        : join(memberDir, exports);
+      continue;
+    }
+    if (!exports || typeof exports !== "object") continue;
+    for (const [subpath, target] of Object.entries(exports)) {
+      if (typeof target !== "string" || !isLocalSpecifier(target)) continue;
+      const specifier = subpath === "."
+        ? config.name
+        : subpath.startsWith("./")
+        ? `${config.name}/${subpath.slice(2)}`
+        : undefined;
+      if (!specifier) continue;
+      out[specifier] = isAbsolute(target) ? target : join(memberDir, target);
+    }
   }
   return out;
 }

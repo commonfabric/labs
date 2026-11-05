@@ -106,71 +106,7 @@ export default pattern((__cf_pattern_input) => {
         subtitle,
         options,
     });
-}, {
-    type: "object",
-    properties: {
-        title: {
-            type: "string",
-            "default": ""
-        },
-        subtitle: {
-            anyOf: [{
-                    type: "string"
-                }, {
-                    type: "null"
-                }],
-            "default": null
-        },
-        options: {
-            $ref: "#/$defs/Options",
-            "default": {
-                theme: "dark",
-                profile: {
-                    name: "Ada"
-                }
-            },
-            properties: {
-                theme: {
-                    "default": "dark"
-                },
-                profile: {
-                    "default": {
-                        name: "Ada"
-                    },
-                    properties: {
-                        name: {
-                            "default": "Ada"
-                        }
-                    }
-                }
-            }
-        }
-    },
-    required: ["title", "subtitle", "options"],
-    $defs: {
-        Options: {
-            type: "object",
-            properties: {
-                theme: {
-                    type: "string"
-                },
-                profile: {
-                    type: "object",
-                    properties: {
-                        name: {
-                            type: "string"
-                        },
-                        email: {
-                            type: "string"
-                        }
-                    },
-                    required: ["name", "email"]
-                }
-            },
-            required: ["theme", "profile"]
-        }
-    }
-} as const satisfies __cfHelpers.JSONSchema, {
+}, inputSchema, {
     type: "object",
     properties: {
         $NAME: {

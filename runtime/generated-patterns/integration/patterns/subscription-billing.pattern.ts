@@ -220,7 +220,7 @@ const recordInvoice = handler(
 );
 
 // Module-scope lift definitions
-const liftSanitizePlanId = lift(sanitizePlanId);
+const liftSanitizePlanId = lift((value: PlanId) => sanitizePlanId(value));
 const liftResolvePlanDefinition = lift(resolvePlanDefinition);
 
 const liftCycleDays = lift((input: {

@@ -47,7 +47,9 @@ const p = pattern((input: { user: { name: string }; value: { foo: number } }) =>
 });
 `;
 
-    const output = await transformSource(source);
+    const output = await transformSource(source, {
+      types: COMMONFABRIC_TYPES,
+    });
     const root = parseModule(output);
 
     // The inner block's `value` aliases input.user, so it lowers to key reads;
@@ -74,7 +76,9 @@ const p = pattern((input: { ok: boolean }) => {
 });
 `;
 
-    const output = await transformSource(source);
+    const output = await transformSource(source, {
+      types: COMMONFABRIC_TYPES,
+    });
     const root = parseModule(output);
 
     assertEquals(memberCalls(root, "arr", "map").length, 1);
@@ -89,7 +93,9 @@ Deno.test(
 const p = pattern((input: { list: Array<{ name: string; age: number }> }) => <div>{input.list.map(({ name }) => <span>{name}</span>)}</div>);
 `;
 
-    const output = await transformSource(source);
+    const output = await transformSource(source, {
+      types: COMMONFABRIC_TYPES,
+    });
     const root = parseModule(output);
 
     assertEquals(callsNamed(root, "mapWithPattern").length, 1);
@@ -138,7 +144,9 @@ const p = pattern((input: { groups: Group[] }) =>
 );
 `;
 
-    const output = await transformSource(source);
+    const output = await transformSource(source, {
+      types: COMMONFABRIC_TYPES,
+    });
     const root = parseModule(output);
 
     // The 1e2 element index canonicalizes to the string key "100".

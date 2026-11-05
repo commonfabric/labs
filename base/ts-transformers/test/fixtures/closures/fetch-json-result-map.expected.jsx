@@ -80,7 +80,7 @@ export default pattern(() => {
         result: []
     }), items = __cf_destructure_1.key("result").for("items", true);
     return {
-        [UI]: <div>{items.mapWithPattern(__cfPattern_1, {})}</div>,
+        [UI]: <div>{items.mapWithPattern(__cfPattern_1)}</div>,
     };
 }, {
     type: "object",

@@ -17,13 +17,25 @@ interface State {
     }>;
     threshold: number;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { label, derived, limit }) => {
     const item = __cf_pattern_input.key("element");
-    const label = __cf_pattern_input.params.label;
-    const derived = __cf_pattern_input.key("params", "derived");
-    const limit = __cf_pattern_input.key("params", "limit");
     return (<span>{label}: {item.key("value")} / {derived} / {limit}</span>);
 }, {
+    type: "object",
+    properties: {
+        label: {
+            type: "string"
+        },
+        derived: {
+            type: "number"
+        },
+        limit: {
+            type: "number",
+            asCell: ["cell"]
+        }
+    },
+    required: ["label", "derived", "limit"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -34,25 +46,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 }
             },
             required: ["value"]
-        },
-        params: {
-            type: "object",
-            properties: {
-                label: {
-                    type: "string"
-                },
-                derived: {
-                    type: "number"
-                },
-                limit: {
-                    type: "number",
-                    asCell: ["readonly"]
-                }
-            },
-            required: ["label", "derived", "limit"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -90,11 +86,11 @@ export default pattern((state) => {
     const derived = state.key("threshold");
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_1.curry({
                 label: label,
                 derived: derived,
                 limit: limit
-            })}
+            }))}
       </div>),
     };
 }, {

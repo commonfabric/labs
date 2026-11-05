@@ -86,7 +86,7 @@ describe("a list projection survives its input emptying", () => {
       values,
       positives: (values as unknown as OpaqueCell<number[]>)
         // deno-lint-ignore no-explicit-any
-        .filterWithPattern(predicate as any, {}),
+        .filterWithPattern(predicate as any),
     }));
 
     const result = runtime.run(

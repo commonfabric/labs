@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema } from "@commonfabric/api";
+import { createFactoryShell } from "@commonfabric/data-model/fabric-factory";
 import type { PieceCallablesListing } from "../lib/piece.ts";
 import { listPieceCallables, partitionVerbListing } from "../lib/piece.ts";
 import { verbListingJson, verbListingLines } from "../commands/piece.ts";
@@ -38,8 +39,8 @@ const INPUT_SIDE_EVENT: JSONSchema = {
 
 const SEARCH_ARGUMENTS: JSONSchema = {
   type: "object",
-  properties: { query: { type: "string" }, source: { type: "string" } },
-  required: ["query", "source"],
+  properties: { query: { type: "string" } },
+  required: ["query"],
 };
 
 const SEARCH_RESULT: JSONSchema = {
@@ -53,35 +54,28 @@ const CREATE_NOTE_RESULT: JSONSchema = {
   required: ["note"],
 };
 
-/** A declared tool property, as the generator lowers a `patternTool` result
- * type: the shape `isPatternToolSchema` classifies on, and nothing a caller
- * could build a payload from — the arguments ride the tool value itself. */
+/** A declared tool property in the canonical public factory vocabulary. */
 const TOOL_PROPERTY: JSONSchema = {
-  type: "object",
-  properties: {
-    pattern: {
-      type: "object",
-      properties: {
-        argumentSchema: { type: "object" },
-        resultSchema: { type: "object" },
-      },
-    },
-    extraParams: { type: "object" },
+  asFactory: {
+    kind: "pattern",
+    argumentSchema: SEARCH_ARGUMENTS,
+    resultSchema: SEARCH_RESULT,
   },
 };
 
-/** A tool as `patternTool` stores it in a compiled result: the sub-pattern's
- * schemas inline, and the parameters the tool binds. */
+/** A tool as a canonical inert PatternFactory value. */
 function toolValue(bound: Record<string, unknown> = {}) {
-  return {
-    pattern: {
-      argumentSchema: SEARCH_ARGUMENTS,
-      resultSchema: SEARCH_RESULT,
-      result: {},
-      nodes: [],
+  return createFactoryShell({
+    kind: "pattern",
+    ref: {
+      identity: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      symbol: "search",
     },
-    extraParams: bound,
-  };
+    argumentSchema: SEARCH_ARGUMENTS,
+    resultSchema: SEARCH_RESULT,
+    paramsSchema: true,
+    ...(Object.keys(bound).length > 0 ? { params: bound } : {}),
+  });
 }
 
 /** One compiled result property as the builder serializes a stream: an alias
@@ -276,7 +270,7 @@ describe("listPieceCallables", () => {
       inputSchema: ADD_TOPIC_EVENT,
       description: "File a topic on the board.",
     });
-    // A tool's arguments ride the stored tool, less what it binds.
+    // A factory's public argument schema excludes its private closure params.
     expect(search).toEqual({
       name: "search",
       kind: "tool",
@@ -606,8 +600,8 @@ describe("listPieceCallables", () => {
 
   it("lists a tool the declared result type omits, off the stored tool itself", async () => {
     // A tool compiles to no node and is marked by no stream, so neither of
-    // the handler's sources can propose it; what names it is the tool value
-    // `patternTool` wrote into the result, which also carries its schemas.
+    // the handler's sources can propose it; the PatternFactory value in the
+    // result carries its public schemas.
     const listing = await listPattern(compiledPattern({
       resultSchema: {
         type: "object",

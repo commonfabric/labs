@@ -104,7 +104,7 @@ describe("list-element-owning-root", () => {
           "map",
           (values, op) =>
             // deno-lint-ignore no-explicit-any
-            values.mapWithPattern(op as any, {}),
+            values.mapWithPattern(op as any),
         ),
       );
     });
@@ -117,7 +117,7 @@ describe("list-element-owning-root", () => {
           "flatMap",
           (values, op) =>
             // deno-lint-ignore no-explicit-any
-            values.flatMapWithPattern(op as any, {}),
+            values.flatMapWithPattern(op as any),
         ),
       );
     });

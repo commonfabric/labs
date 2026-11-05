@@ -91,6 +91,16 @@ Phase 3 shipped in two PRs:
   that function directly — the in-memory path that used to flow through the
   legacy index.
 
+- **E6 (first-class Factory@1 values)**: pattern, module, and handler factories
+  carry the complete content-addressed builder artifact ref in branded
+  Factory@1 state. Canonical Fabric boundaries dispatch through the factory
+  codec and context-free decode returns an inert callable shell. The temporary
+  `$patternRef` writer, reader, list sentinel, and cold resolver were removed
+  under the pre-launch data-wipe decision. Direct `Pattern.toJSON()` retains a
+  full-graph compatibility form until every Fabric boundary is proven to use
+  codec dispatch. `$implRef` remains current only inside instantiated execution-
+  module descriptors; it is not factory state.
+
 Phase 4 is COMPLETE: there is one resolution model — content-addressed
 `{ identity, symbol }`, by identity, everywhere.
 
@@ -106,8 +116,7 @@ module-record loader is the only loader, every module has a content-addressed
 identity (`cf:module/<hash>`), and every module-scope builder artifact
 (pattern / lift / handler) is addressable as `{ identity, symbol }` — authored
 exports by export name, hoisted/non-exported artifacts by their `__cfReg` key
-(see `docs/specs/module-loading.md` and the op-by-identity migration that
-introduced the `$patternRef` sentinel, `builtins/op-pattern-ref.ts`).
+(see `docs/specs/module-loading.md` and the first-class factory specification).
 
 Two updates supply the update-chain exception to strict hash equality, and
 derive the same chain: an explicit `piece setsrc`, and an unattended update
@@ -428,6 +437,13 @@ second key is dropped. `PatternManager`'s piece/meta `patternId` (URIs, meta
 cells, LRU) is unrelated and stays.
 
 ### 7. Pattern JSON becomes refs; the graph representation goes internal
+
+Current status (E6) supersedes the E3/E4 rollout record below. Canonical Fabric
+factory values use Factory@1 and never `$patternRef`. Full graphs still exist
+for runtime builder internals, debug output, and direct `Pattern.toJSON()`
+compatibility; those are not the canonical factory wire representation. The
+remaining paragraphs in this section document the retired transition that
+established content-addressed pattern identity.
 
 Decision (resolves former open question 1): the serialization *boundary* emits
 `{ identity, symbol }` refs — the full node-graph JSON becomes a runtime-

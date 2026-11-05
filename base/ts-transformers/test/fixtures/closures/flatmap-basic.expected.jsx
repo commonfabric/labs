@@ -69,12 +69,12 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: flatmap-basic
 // Verifies: .flatMap() on a reactive array is transformed
-//   .flatMap(fn) → .flatMapWithPattern(pattern(...), {})
+//   .flatMap(fn) → .flatMapWithPattern(pattern(...))
 // Context: flatMap renders each item as JSX. No captured outer variables.
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("items").flatMapWithPattern(__cfPattern_1, {})}
+        {state.key("items").flatMapWithPattern(__cfPattern_1)}
       </div>),
     };
 }, {

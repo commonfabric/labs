@@ -9,6 +9,11 @@ import {
   findLowerableExpressionSite,
 } from "../../src/transformers/expression-site-policy.ts";
 import type { ExpressionContainerKind } from "../../src/transformers/expression-site-types.ts";
+import {
+  registerTrustedCommonFabricTestSources,
+  TRUSTED_COMMONFABRIC_GLOBALS,
+  TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME,
+} from "../trusted-commonfabric-sources.ts";
 
 function createProgramAndContext(source: string): {
   sourceFile: ts.SourceFile;
@@ -32,19 +37,43 @@ function createProgramAndContext(source: string): {
     true,
     ts.ScriptKind.TSX,
   );
+  const commonFabricSourceFile = ts.createSourceFile(
+    TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME,
+    TRUSTED_COMMONFABRIC_GLOBALS,
+    compilerOptions.target!,
+    true,
+  );
 
   const host = ts.createCompilerHost(compilerOptions, true);
-  host.getSourceFile = (name) => name === fileName ? sourceFile : undefined;
+  host.getSourceFile = (name) =>
+    name === fileName
+      ? sourceFile
+      : name === TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME
+      ? commonFabricSourceFile
+      : undefined;
   host.getCurrentDirectory = () => "/";
   host.getDirectories = () => [];
-  host.fileExists = (name) => name === fileName;
-  host.readFile = (name) => name === fileName ? source : undefined;
+  host.fileExists = (name) =>
+    name === fileName || name === TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME;
+  host.readFile = (name) =>
+    name === fileName
+      ? source
+      : name === TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME
+      ? TRUSTED_COMMONFABRIC_GLOBALS
+      : undefined;
   host.writeFile = () => {};
   host.useCaseSensitiveFileNames = () => true;
   host.getCanonicalFileName = (name) => name;
   host.getNewLine = () => "\n";
 
-  const program = ts.createProgram([fileName], compilerOptions, host);
+  const program = ts.createProgram(
+    [fileName, TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME],
+    compilerOptions,
+    host,
+  );
+  registerTrustedCommonFabricTestSources(program, [
+    TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME,
+  ]);
   const context = new TransformationContext({
     program,
     sourceFile,

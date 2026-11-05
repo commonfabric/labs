@@ -20,6 +20,7 @@ import {
   printTypeNode,
   wrapTypeNodeWithCapability,
 } from "../src/transformers/type-shrinking.ts";
+import { registerTrustedCommonFabricTestSources } from "./trusted-commonfabric-sources.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callSchemas, collect, parseModule } from "./transformed-ast.ts";
 import { transformFiles } from "./utils.ts";
@@ -180,6 +181,9 @@ function createProgramWithFiles(
   };
 
   const program = ts.createProgram([entryFileName], compilerOptions, host);
+  if (files["/commonfabric.d.ts"] !== undefined) {
+    registerTrustedCommonFabricTestSources(program, ["/commonfabric.d.ts"]);
+  }
   const sourceFile = program.getSourceFile(entryFileName);
   if (!sourceFile) {
     throw new Error("Expected source file in program.");

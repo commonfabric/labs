@@ -237,7 +237,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
     const tally = __cf_pattern_input.key("element");
-    return (<div>{tally.key("voters").mapWithPattern(__cfPattern_1, {})}</div>);
+    return (<div>{tally.key("voters").mapWithPattern(__cfPattern_1)}</div>);
 }, {
     type: "object",
     properties: {
@@ -339,7 +339,7 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
     const tally = __cf_pattern_input.key("element");
-    return (<div>{tally.key("voters").mapWithPattern(__cfPattern_3, {})}</div>);
+    return (<div>{tally.key("voters").mapWithPattern(__cfPattern_3)}</div>);
 }, {
     type: "object",
     properties: {
@@ -412,10 +412,10 @@ export default pattern((__cf_pattern_input) => {
     return {
         [UI]: (<div>
           <div>
-            {ranked.mapWithPattern(__cfPattern_2, {})}
+            {ranked.mapWithPattern(__cfPattern_2)}
           </div>
           <div>
-            {enriched.mapWithPattern(__cfPattern_4, {})}
+            {enriched.mapWithPattern(__cfPattern_4)}
           </div>
         </div>),
     };

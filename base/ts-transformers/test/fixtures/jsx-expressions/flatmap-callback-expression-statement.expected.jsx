@@ -109,7 +109,7 @@ export default pattern((__cf_pattern_input) => {
     const files = __cf_pattern_input.key("files");
     return {
         [UI]: (<div>
-        {files.flatMapWithPattern(__cfPattern_1, {})}
+        {files.flatMapWithPattern(__cfPattern_1)}
       </div>),
     };
 }, {

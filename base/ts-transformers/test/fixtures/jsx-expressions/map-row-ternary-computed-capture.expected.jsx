@@ -59,9 +59,8 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { me }) => {
     const entry = __cf_pattern_input.key("element");
-    const me = __cf_pattern_input.key("params", "me");
     return (__cfHelpers.ifElse({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
@@ -117,20 +116,19 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Entry"
-        },
-        params: {
-            type: "object",
-            properties: {
-                me: {
-                    type: "string"
-                }
-            },
-            required: ["me"]
+        me: {
+            type: "string"
         }
     },
-    required: ["element", "params"],
+    required: ["me"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Entry"
+        }
+    },
+    required: ["element"],
     $defs: {
         Entry: {
             type: "object",
@@ -183,9 +181,9 @@ export default pattern((__cf_pattern_input) => {
     const me = __cfLift_1({ myName: myName }).for("me", true);
     return {
         [UI]: (<div>
-        {links.mapWithPattern(__cfPattern_1, {
+        {links.mapWithPattern(__cfPattern_1.curry({
                 me: me
-            })}
+            }))}
       </div>),
     };
 }, {

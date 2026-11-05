@@ -1,14 +1,28 @@
 import type { Cell } from "../cell.ts";
 import { createCell } from "../cell.ts";
+import {
+  factoryStateOf,
+  isAdmittedFabricFactory,
+  mapFactoryStateValues,
+} from "@commonfabric/data-model/fabric-factory";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
-import type { CellScope } from "../builder/types.ts";
+import type { CellScope, Pattern } from "../builder/types.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { RawNodeCause } from "../module.ts";
 import { readMaybeLink, resolveLink } from "../link-resolution.ts";
-import { machineryRead } from "../storage/reactivity-log.ts";
+import {
+  ignoreReadForScheduling,
+  linkResolutionProbe,
+  machineryRead,
+} from "../storage/reactivity-log.ts";
 import { narrowestScope, scopeRank } from "../scope.ts";
-import { createSigilLinkFromParsedLink, getMetaLink } from "../link-utils.ts";
+import {
+  createSigilLinkFromParsedLink,
+  getMetaLink,
+  isCellLink,
+  parseLink,
+} from "../link-utils.ts";
 import { rawMetaWriteAuthorization } from "../meta-seam.ts";
 
 export function resolvedCellScope(
@@ -94,6 +108,71 @@ export function narrowestCellScope(
   );
 }
 
+/** Scope imposed by a canonical bound list callback's selected factory value. */
+export function boundPatternFactoryScope(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  pattern: Pattern,
+  sourceLink: NormalizedFullLink,
+): CellScope {
+  const scopes: Array<CellScope | undefined> = [
+    resolvedCellScope(
+      runtime,
+      tx,
+      runtime.getCellFromLink(sourceLink, undefined, tx),
+    ),
+  ];
+  const seen = new Set<object>();
+
+  const visit = (value: unknown, base: NormalizedFullLink): void => {
+    if (value === null || value === undefined) return;
+    if (isCellLink(value)) {
+      const link = parseLink(value, base);
+      if (link?.space !== undefined && link.id !== undefined) {
+        scopes.push(resolveLink(runtime, tx, link as NormalizedFullLink).scope);
+      }
+      return;
+    }
+    if (isAdmittedFabricFactory(value)) {
+      const key = value as unknown as object;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const state = factoryStateOf(value);
+      if (state.kind !== "handler") scopes.push(state.defaultScope);
+      mapFactoryStateValues(state, (nested) => {
+        visit(nested, base);
+        return nested;
+      });
+      return;
+    }
+    if (typeof value !== "object") return;
+    if (seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const nested of value) visit(nested, base);
+      return;
+    }
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      visit(nested, base);
+    }
+  };
+
+  if (isAdmittedFabricFactory(pattern)) {
+    const state = factoryStateOf(pattern);
+    if (state.kind !== "pattern") {
+      throw new TypeError(
+        "bound list callback must carry pattern factory state",
+      );
+    }
+    scopes.push(state.defaultScope);
+    if ("params" in state) visit(state.params, sourceLink);
+  } else {
+    scopes.push(pattern.defaultScope);
+    visit(pattern, sourceLink);
+  }
+  return narrowestScope(scopes);
+}
+
 /**
  * If the cell contains a top level link, and its scope is narrower than the
  * cell's scope, create a copy of the cell.
@@ -104,6 +183,7 @@ export function exposedResultCell<T>(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
   cell: Cell<T>,
+  minimumScope?: CellScope,
 ): Cell<T> {
   // Ideally, we'd just call getRaw on the cell, but since that may be a link,
   // we need to know the base to use to parse that link.
@@ -112,7 +192,7 @@ export function exposedResultCell<T>(
   // on plumbing containers (template-population §6). The value COPY below
   // stays unmarked — the exposed cell genuinely depends on it.
   const target = tx.runWithAmbientReadMeta(
-    machineryRead,
+    { ...ignoreReadForScheduling, ...machineryRead },
     () =>
       resolveLink(
         runtime,
@@ -125,16 +205,21 @@ export function exposedResultCell<T>(
   // Resolve topology without reading a scalar result's content. Observing
   // the value here would subscribe the list coordinator to every child value.
   const link = tx.runWithAmbientReadMeta(
-    machineryRead,
+    {
+      ...ignoreReadForScheduling,
+      ...linkResolutionProbe,
+      ...machineryRead,
+    },
     () => readMaybeLink(tx, target) ?? target,
   );
+  const exposedScope = narrowestScope([link.scope, minimumScope]);
   if (
-    scopeRank(link.scope) <= scopeRank(cell.getAsNormalizedFullLink().scope)
+    scopeRank(exposedScope) <= scopeRank(cell.getAsNormalizedFullLink().scope)
   ) {
     return cell;
   }
 
-  const exposed = scopedCell(runtime, tx, cell, link.scope);
+  const exposed = scopedCell(runtime, tx, cell, exposedScope);
   // Copy the value and result linkage into the new exposed cell
   const resultLink = getMetaLink(initialCell, "result");
   if (resultLink !== undefined) {

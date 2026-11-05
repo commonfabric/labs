@@ -451,6 +451,11 @@ describe("the repository's gate suites", () => {
     expect(reached("tasks/pattern-compat-accepted-breaks.ts")).toEqual(
       [...compat.units].sort(),
     );
+    // The retirement registry can remove any previously deployed contract
+    // from the proof, so it also reaches every pattern.
+    expect(reached("tasks/pattern-compat-retirements.ts")).toEqual(
+      [...compat.units].sort(),
+    );
     // A runtime module every pattern builds on is left to a lane's choice
     // rather than making every pattern mandatory, and a path the gate
     // never reads reaches nothing.

@@ -16,11 +16,19 @@ interface State {
         name: string;
     }>;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { count }) => {
     const item = __cf_pattern_input.key("element");
-    const count = __cf_pattern_input.key("params", "count");
     return (<span>{item.key("name")} #{count}</span>);
 }, {
+    type: "object",
+    properties: {
+        count: {
+            type: "number",
+            asCell: ["cell"]
+        }
+    },
+    required: ["count"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -31,19 +39,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 }
             },
             required: ["name"]
-        },
-        params: {
-            type: "object",
-            properties: {
-                count: {
-                    type: "number",
-                    asCell: ["readonly"]
-                }
-            },
-            required: ["count"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -67,7 +65,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-capture-cell-fn
 // Verifies: cell() variable closed over in .map() is captured with asCell schema annotation
-//   .map(fn) → .mapWithPattern(pattern(...), { count: count })
+//   .map(fn) → .mapWithPattern(pattern(...).curry({ count: count }))
 //   cell(0) capture → params.count with { type: "number", asCell: true }
 export default pattern((state) => {
     const count = cell(0, {
@@ -75,9 +73,9 @@ export default pattern((state) => {
     } as const satisfies __cfHelpers.JSONSchema).for("count", true);
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_1.curry({
                 count: count
-            })}
+            }))}
       </div>),
     };
 }, {

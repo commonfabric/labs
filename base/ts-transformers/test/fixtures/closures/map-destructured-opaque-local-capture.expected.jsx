@@ -21,13 +21,26 @@ interface State {
         }[];
     }[];
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { tasks }) => {
     const tag = __cf_pattern_input.key("element");
-    const tasks = __cf_pattern_input.key("params", "tasks");
     return (<span>
-                {tag.key("name")}:{tasks.key("length")}
+                {tag.key("name")}:{tasks.length}
               </span>);
 }, {
+    type: "object",
+    properties: {
+        tasks: {
+            type: "object",
+            properties: {
+                length: {
+                    type: "number"
+                }
+            },
+            required: ["length"]
+        }
+    },
+    required: ["tasks"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -38,24 +51,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 }
             },
             required: ["name"]
-        },
-        params: {
-            type: "object",
-            properties: {
-                tasks: {
-                    type: "object",
-                    properties: {
-                        length: {
-                            type: "number"
-                        }
-                    },
-                    required: ["length"]
-                }
-            },
-            required: ["tasks"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -81,11 +79,11 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
     const section = __cf_pattern_input.key("element");
     const tasks = section.key("tasks");
     return (<div>
-            {section.key("tags").mapWithPattern(__cfPattern_1, {
+            {section.key("tags").mapWithPattern(__cfPattern_1.curry({
             tasks: {
                 length: tasks.key("length")
             }
-        })}
+        }))}
           </div>);
 }, {
     type: "object",
@@ -149,7 +147,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 //   nested tag callback reads tasks.length through key("length"), not plain params values
 export default pattern((state) => ({
     [UI]: (<div>
-      {state.key("sections").mapWithPattern(__cfPattern_2, {})}
+      {state.key("sections").mapWithPattern(__cfPattern_2)}
     </div>),
 }), {
     type: "object",

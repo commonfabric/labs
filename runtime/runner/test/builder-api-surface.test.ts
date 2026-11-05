@@ -158,10 +158,12 @@ describe("the commonfabric surface handed to a pattern", () => {
     expect(bound).toEqual(["CFC_CANONICAL_ALIAS_NAMES"]);
   });
 
-  it("points `__cfHelpers` back at the surface itself", () => {
-    // The assert-diagnostics transformer emits `__cfHelpers.lift(...)` and the
-    // rest against this, so it has to be the same vocabulary a pattern reaches
-    // by name.
-    expect(delivered.__cfHelpers).toBe(delivered);
+  it("keeps authored bindings on the compiler-only helper surface", () => {
+    const helpers = delivered.__cfHelpers as Record<string, unknown>;
+    expect(helpers).not.toBe(delivered);
+    expect(helpers.lift).toBe(delivered.lift);
+    expect(typeof helpers.invokeFactory).toBe("function");
+    expect(typeof helpers.withPatternParamsSchema).toBe("function");
+    expect(typeof helpers.withFrameworkProvidedPaths).toBe("function");
   });
 });

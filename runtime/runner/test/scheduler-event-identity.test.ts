@@ -276,7 +276,6 @@ describe("scheduler event identity", () => {
       env.runtime.scheduler.addEventHandler((_tx, value) => {
         handled.push(String(value));
       }, loadingLink);
-      finishPieceLoad(pieceLoadVerdict(true));
       await env.runtime.idle();
 
       expect(handled).toEqual(["first", "second"]);
@@ -372,6 +371,48 @@ describe("scheduler event identity", () => {
     expect(eventQueue).toEqual([]);
     expect(callbackCount).toBe(1);
     expect(queued.handlerLoadPending).toBe(true);
+  });
+
+  it("aborts a pending piece load and settles its event during runtime disposal", async () => {
+    const loadingLink: NormalizedFullLink = {
+      ...eventLink,
+      id: "of:dispose-loading-stream",
+      space,
+    };
+    const env = createSchedulerTestRuntime(import.meta.url);
+    const pieceLoad = Promise.withResolvers<EnsurePieceVerdict>();
+    const commitStatus = Promise.withResolvers<string>();
+    let loadSignal: AbortSignal | undefined;
+    let disposed = false;
+    try {
+      (env.runtime.scheduler.accessForTestingOnly.eventQueueState as {
+        loadPieceForEvent?: (
+          runtime: Runtime,
+          link: NormalizedFullLink,
+          options?: { signal?: AbortSignal },
+        ) => Promise<EnsurePieceVerdict>;
+      }).loadPieceForEvent = (_runtime, _link, options) => {
+        loadSignal = options?.signal;
+        return pieceLoad.promise;
+      };
+
+      env.runtime.scheduler.queueEvent(
+        loadingLink,
+        "payload",
+        true,
+        (commitTx) => commitStatus.resolve(commitTx.status().status),
+      );
+      expect(loadSignal?.aborted).toBe(false);
+
+      await disposeSchedulerTestRuntime(env);
+      disposed = true;
+
+      expect(await commitStatus.promise).toBe("error");
+      expect(loadSignal?.aborted).toBe(true);
+    } finally {
+      pieceLoad.resolve(pieceLoadVerdict(true));
+      if (!disposed) await disposeSchedulerTestRuntime(env);
+    }
   });
 
   it("a served piece-start deferral carries the arrival-order barrier (events.md §2; review-6459 F1's sibling arm): later-arrived same-space durable served entries defer behind the failed head instead of staying queued to overtake it — cross-space entries and LT1 in-process copies stay queued", async () => {

@@ -169,7 +169,7 @@ const sanitizeParticipants = (
   return sanitized.length > 0 ? sanitized : cloneDefaults();
 };
 
-const sanitizeBlocked = (value: unknown): SlotId[] => {
+const sanitizeBlocked = (value: readonly SlotInput[]): SlotId[] => {
   return sanitizeSlotList(value, emptySlotFallback);
 };
 

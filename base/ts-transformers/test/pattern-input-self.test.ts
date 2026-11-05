@@ -295,7 +295,10 @@ describe("pattern-input-self", () => {
             }),
           );
         `),
-      ).toEqual(["pattern-context:self-access"]);
+      ).toEqual([
+        "pattern-callback:authored-rest-input",
+        "pattern-context:self-access",
+      ]);
     });
 
     it("reports `pattern-context:self-access` for `[SELF]` read off a value under the input", async () => {

@@ -151,6 +151,7 @@ describe("reactive retries", () => {
         (() => Promise.resolve()),
       handleUnavailable: options.handleUnavailable,
       action,
+      generation: 0,
       tx: {
         abandonStagedWork: (error: unknown) => abandoned.push(error),
       } as unknown as IExtendedStorageTransaction,
@@ -167,6 +168,7 @@ describe("reactive retries", () => {
         queued++;
       },
       getActionId: () => "test-action",
+      isActionGenerationCurrent: () => true,
       restoreInvalidCauses: options.restoreInvalidCauses ?? (() => {}),
       reportTerminalRejection: (terminalError) => {
         reported.push(terminalError);

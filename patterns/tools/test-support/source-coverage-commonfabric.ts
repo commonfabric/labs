@@ -49,10 +49,7 @@ export {
 export type BuiltInLLMMessage = Record<string, unknown>;
 export type BuiltInLLMTool = Record<string, unknown>;
 export type Default<T> = T;
-export type PatternToolResult<T = Record<string, never>> = {
-  pattern: unknown;
-  extraParams: T;
-};
+export type PatternFactory<T, R> = (input?: Partial<T>) => R;
 export type Reactive<T> = T;
 export type Stream<T = unknown> = {
   send(event?: T): unknown;
@@ -254,7 +251,7 @@ export const Cell = {
 export function pattern<TInput, TOutput>(
   body: (input: TInput) => TOutput,
   ..._rest: unknown[]
-): (input?: Partial<TInput>) => TOutput {
+): PatternFactory<TInput, TOutput> {
   return (input = {} as Partial<TInput>) => body(input as TInput);
 }
 
@@ -397,13 +394,6 @@ export function llmDialog<T>(
     pending: false,
     addMessage: handler<BuiltInLLMMessage, Record<string, never>>(() => {})({}),
   };
-}
-
-export function patternTool<T>(
-  patternValue: unknown,
-  extraParams?: T,
-): PatternToolResult<T> {
-  return { pattern: patternValue, extraParams: extraParams as T };
 }
 
 export function toSchema<T>(): T {

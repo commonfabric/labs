@@ -4,10 +4,11 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
-import { filter, FILTER_INPUT_SCHEMA } from "../src/builtins/filter.ts";
-import { flatMap, FLATMAP_INPUT_SCHEMA } from "../src/builtins/flatmap.ts";
-import { map, MAP_INPUT_SCHEMA } from "../src/builtins/map.ts";
+import { filter } from "../src/builtins/filter.ts";
+import { flatMap } from "../src/builtins/flatmap.ts";
+import { map } from "../src/builtins/map.ts";
 import { listCoordinatorPlan } from "../src/builtins/list-coordinator-plan.ts";
+import { materializeListPatternSelection } from "../src/builtins/list-factory-materialization.ts";
 import { listElementKeys } from "../src/builtins/list-element-keys.ts";
 import { createResumeRepublisher } from "../src/builtins/resume-republish.ts";
 import { useCancelGroup } from "../src/cancel.ts";
@@ -18,10 +19,10 @@ import { createTrustedBuilder } from "./support/trusted-builder.ts";
 /** Deferred writes use captured identities after their initiating transactions settle. */
 describe("list deferred identity", () => {
   for (
-    const [name, builtin, schema] of [
-      ["map", map, MAP_INPUT_SCHEMA],
-      ["filter", filter, FILTER_INPUT_SCHEMA],
-      ["flatMap", flatMap, FLATMAP_INPUT_SCHEMA],
+    const [name, builtin] of [
+      ["map", map],
+      ["filter", filter],
+      ["flatMap", flatMap],
     ] as const
   ) {
     it(`retains the ${name} input until its identity-bound sync confirms emptiness`, async () => {
@@ -62,7 +63,12 @@ describe("list deferred identity", () => {
           tx,
           name,
           inputs,
-          schema,
+          materializeListPatternSelection(
+            runtime,
+            tx,
+            inputs.key("op"),
+            name,
+          ),
           parent,
           output,
         );

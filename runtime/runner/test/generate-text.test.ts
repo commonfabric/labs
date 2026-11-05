@@ -10,7 +10,10 @@ import {
 import { LLMClient } from "@commonfabric/llm";
 import type { BuiltInLLMMessage } from "@commonfabric/api";
 import { createBuilder } from "../src/builder/factory.ts";
-import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import {
+  createTrustedBuilder,
+  installTestPatternArtifact,
+} from "./support/trusted-builder.ts";
 import { waitForLlmSettled } from "./support/llm-result.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -43,7 +46,10 @@ describe("generateText", () => {
 
     const { commonfabric } = createTrustedBuilder(runtime);
     ({ pattern, generateText } = commonfabric);
-    dummyPattern = pattern(() => ({}), { type: "object" });
+    dummyPattern = installTestPatternArtifact(
+      runtime,
+      pattern(() => ({}), { type: "object" }),
+    );
   });
 
   afterEach(async () => {
@@ -83,7 +89,7 @@ describe("generateText", () => {
     );
 
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
 
@@ -178,7 +184,7 @@ describe("generateText", () => {
     );
 
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
 
@@ -219,7 +225,7 @@ describe("generateText", () => {
     );
 
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
 
@@ -288,7 +294,7 @@ describe("generateText", () => {
     );
 
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
 
@@ -357,7 +363,7 @@ describe("generateText with queue", () => {
     );
 
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
 
@@ -390,7 +396,7 @@ describe("generateText with queue", () => {
     );
 
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
     // The queue records completion after the writeback's commit round trip;
@@ -430,7 +436,7 @@ describe("generateText with queue", () => {
     );
 
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
 

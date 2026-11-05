@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import type {
   Entity,
   Revision,
@@ -135,6 +136,9 @@ describe("traverse", () => {
       addDoc(store, "of:availability-carrier" as URI, carrier);
 
       const missing: string[] = [];
+      const warningCount = () =>
+        getLoggerCountsBreakdown().traverse?.traverse?.warn ?? 0;
+      const warningsBefore = warningCount();
       const context = contextWith((link) => missing.push(String(link.id)));
       const traverser = traverserFor(
         store,
@@ -154,6 +158,7 @@ describe("traverse", () => {
       // absent document is reported for a fetch.
       expect(error).toBeUndefined();
       expect(missing).toContain(`cid:${absentHash}`);
+      expect(warningCount()).toBe(warningsBefore);
     });
 
     it("meets a shared dependency once in the availability verdict", () => {

@@ -79,10 +79,8 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { logs, todayDate }) => {
     const habit = __cf_pattern_input.key("element");
-    const logs = __cf_pattern_input.key("params", "logs");
-    const todayDate = __cf_pattern_input.key("params", "todayDate");
     const doneToday = __cfLift_1({
         logs: logs,
         habit: {
@@ -102,27 +100,18 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Habit"
-        },
-        params: {
-            type: "object",
-            properties: {
-                logs: {
-                    type: "array",
-                    items: {
-                        $ref: "#/$defs/HabitLog"
-                    },
-                    asCell: ["readonly"]
-                },
-                todayDate: {
-                    type: "string"
-                }
+        logs: {
+            type: "array",
+            items: {
+                $ref: "#/$defs/HabitLog"
             },
-            required: ["logs", "todayDate"]
+            asCell: ["cell"]
+        },
+        todayDate: {
+            type: "string"
         }
     },
-    required: ["element", "params"],
+    required: ["logs", "todayDate"],
     $defs: {
         HabitLog: {
             type: "object",
@@ -138,7 +127,17 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 }
             },
             required: ["habitName", "date", "completed"]
-        },
+        }
+    }
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Habit"
+        }
+    },
+    required: ["element"],
+    $defs: {
         Habit: {
             type: "object",
             properties: {
@@ -180,10 +179,10 @@ export default pattern((__cf_pattern_input) => {
     const logs = __cf_pattern_input.key("logs");
     const todayDate = __cf_pattern_input.key("todayDate");
     return {
-        [UI]: <div>{habits.mapWithPattern(__cfPattern_1, {
+        [UI]: <div>{habits.mapWithPattern(__cfPattern_1.curry({
                 logs: logs,
                 todayDate: todayDate
-            })}</div>,
+            }))}</div>,
     };
 }, {
     type: "object",

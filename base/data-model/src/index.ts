@@ -7,6 +7,7 @@ export {
 } from "./deep-freeze.ts";
 
 export * from "./interface.ts";
+export * from "./fabric-factory.ts";
 export {
   estimateFabricValueSize,
   forEachFabricContainerValue,

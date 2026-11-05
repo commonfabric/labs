@@ -6,7 +6,6 @@ import {
   NAME,
   navigateTo,
   pattern,
-  patternTool,
   Stream,
   UI,
   type VNode,
@@ -237,6 +236,9 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
   const index = BacklinksIndex({ pieceRegistry: piecesWithSystem });
   const summaryIdx = SummaryIndex({});
   const knowledgeGraph = KnowledgeGraph({});
+  const doListItemsForTool = doList.items;
+  const knowledgeEdges = knowledgeGraph.edges;
+  const knowledgeCompoundNodes = knowledgeGraph.compoundNodes;
 
   const quickCapture = QuickCapture({ pieceRegistry });
 
@@ -262,16 +264,19 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
         description:
           "Update a task by title. Set done=true to complete, newTitle to rename, attachments to link pieces.",
       },
-      readDoList: patternTool(readDoList, {
-        items: doList.items,
-      }),
-      getNeighbors: patternTool(getNeighborsPattern, {
-        edges: knowledgeGraph.edges,
-      }),
-      searchAnnotations: patternTool(searchGraphPattern, {
-        edges: knowledgeGraph.edges,
-        compoundNodes: knowledgeGraph.compoundNodes,
-      }),
+      readDoList: pattern<Record<string, never>, any>(() =>
+        readDoList({ items: doListItemsForTool })
+      ),
+      getNeighbors: pattern<{ entity: Writable<MentionablePiece> }, any>(
+        ({ entity }) => getNeighborsPattern({ entity, edges: knowledgeEdges }),
+      ),
+      searchAnnotations: pattern<{ query: string }, any>(({ query }) =>
+        searchGraphPattern({
+          query,
+          edges: knowledgeEdges,
+          compoundNodes: knowledgeCompoundNodes,
+        })
+      ),
     },
     extraSystemPrompt: benExtraSystemPrompt,
   });

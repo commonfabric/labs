@@ -6,6 +6,7 @@ export {
   type SESRuntimeOptions,
 } from "./ses-runtime.ts";
 export {
+  CommonFabricRuntimeTypeIdentifiers,
   getRuntimeModuleExports,
   getRuntimeModuleTypes,
   isRuntimeModuleIdentifier,

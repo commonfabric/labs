@@ -28,7 +28,10 @@ import { CaptureCollector } from "../capture-collector.ts";
 import { buildCaptureParamsObject } from "../utils/capture-scaffold.ts";
 import { expandCapturedObjectSpreads } from "../utils/captured-object-spread.ts";
 import { PatternBuilder } from "../utils/pattern-builder.ts";
-import { createArrayMethodCallbackSchema } from "../utils/schema-factory.ts";
+import {
+  createArrayMethodCallbackSchema,
+  createHandlerStateSchema,
+} from "../utils/schema-factory.ts";
 import {
   analyzeElementBinding,
   rewriteCallbackBody,
@@ -236,7 +239,7 @@ function createPatternCallWithParams(
     context,
   );
 
-  const newCallback = builder.buildCallback(callback, rewrittenBody, "params");
+  const newCallback = builder.buildPatternCallback(callback, rewrittenBody);
   context.markAsArrayMethodCallback(newCallback);
 
   const callbackParamTypeNode = createArrayMethodCallbackSchema(
@@ -244,7 +247,6 @@ function createPatternCallWithParams(
     elemParam,
     indexParam,
     arrayParam,
-    filteredCaptureTree,
     context,
   );
 
@@ -253,14 +255,36 @@ function createPatternCallWithParams(
     typeArgs.push(resultTypeNode);
   }
 
+  const hasCaptures = filteredCaptureTree.size > 0;
+  const callbackArgument = hasCaptures
+    ? context.cfHelpers.createHelperCall(
+      "withPatternParamsSchema",
+      callback,
+      undefined,
+      [
+        newCallback,
+        context.cfHelpers.createHelperCall(
+          "toSchema",
+          callback,
+          [createHandlerStateSchema(filteredCaptureTree, undefined, context)],
+          [],
+        ),
+      ],
+    )
+    : newCallback;
   const patternCall = context.cfHelpers.createHelperCall(
     "pattern",
     methodCall,
     typeArgs,
-    [newCallback],
+    [callbackArgument],
   );
-
-  const paramsObject = buildCaptureParamsObject(filteredCaptureTree, factory);
+  const boundPattern = hasCaptures
+    ? factory.createCallExpression(
+      factory.createPropertyAccessExpression(patternCall, "curry"),
+      undefined,
+      [buildCaptureParamsObject(filteredCaptureTree, factory)],
+    )
+    : patternCall;
 
   if (!ts.isPropertyAccessExpression(methodCall.expression)) {
     throw new Error(
@@ -290,23 +314,11 @@ function createPatternCallWithParams(
     factory.createIdentifier(targetMethodName),
   );
 
-  const args: ts.Expression[] = [patternCall, paramsObject];
-  if (methodCall.arguments.length > 1) {
-    const thisArg = ts.visitNode(
-      methodCall.arguments[1],
-      visitor,
-      ts.isExpression,
-    );
-    if (thisArg) {
-      args.push(thisArg);
-    }
-  }
-
   const mapWithPatternCall = preserveLineage(
     factory.createCallExpression(
       mapWithPatternAccess,
       methodCall.typeArguments,
-      args,
+      [boundPattern],
     ),
     methodCall,
   );
@@ -399,6 +411,18 @@ export function transformArrayMethodCallback(
   options: ArrayMethodCallbackTransformOptions = {},
 ): ts.CallExpression {
   const { checker } = context;
+
+  if (methodCall.arguments.length > 1) {
+    context.reportDiagnosticOnce({
+      severity: "error",
+      type: "array-method:this-arg-unsupported",
+      message:
+        "Reactive array callbacks do not support Array.prototype thisArg. " +
+        "Capture the value lexically instead.",
+      node: methodCall.arguments[1]!,
+    });
+    return methodCall;
+  }
 
   context.markAsArrayMethodCallback(callback);
 

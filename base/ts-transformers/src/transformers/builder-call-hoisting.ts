@@ -1,18 +1,20 @@
 import ts from "typescript";
 import {
+  classifyLegacyPatternCarrier,
   detectCallKind,
   getHandlerAppliedInnerCall,
   getLiftAppliedInnerCall,
-  getPatternToolHoistablePatternCall,
   getWithPatternHoistablePatternCall,
   isCallbackReference,
   isHandlerAppliedCall,
+  isPatternBuilderCall,
   resolveCallbackFunctionExpression,
   SYNTHETIC_HANDLER_HOIST_PREFIX,
   SYNTHETIC_LIFT_HOIST_PREFIX,
   SYNTHETIC_PATTERN_HOIST_PREFIX,
 } from "../ast/call-kind.ts";
 import { recoverAuthoredPosition } from "../ast/utils.ts";
+import { extractBindingNames } from "../utils/identifiers.ts";
 import {
   type BuilderSourceSite,
   HelpersOnlyTransformer,
@@ -72,8 +74,8 @@ import { unwrapExpression } from "../utils/expression.ts";
  * harmful once a builder's whole call is hoisted here: hoisting the call AND the
  * callback produced a double hoist whose two consts referenced each other out
  * of declaration order (TDZ `ReferenceError` at module load). As each builder
- * gained whole-call hoisting — `lift` (CT-1644), then `handler`, `pattern`, and
- * `patternTool` (CT-1655) — it was removed from CT-1585's set; with the set
+ * gained whole-call hoisting — `lift` (CT-1644), then `handler` and `pattern`
+ * (CT-1655) — it was removed from CT-1585's set; with the set
  * emptied, `BuilderCallbackHoistingTransformer` was deleted. This stage is now
  * the single module-scope hoisting phase.
  *
@@ -85,9 +87,11 @@ import { unwrapExpression } from "../utils/expression.ts";
  * {@link HOISTABLE_BUILDERS}. Two shapes are registered:
  *   - applied builders (`lift`, `handler`): `builder(...)(captures)` — hoist the
  *     inner call, leave `name(captures)` (the default callee-swap rewrite);
- *   - argument-position builders (`pattern`): the bare `pattern(...)` sits in
- *     argument 0 of an enclosing `*WithPattern` or `patternTool` call — hoist it
- *     and rewrite that argument (via {@link HoistableBuilderSpec.rewriteSite}).
+ *   - argument-position builders (`pattern`): a capture-free bare `pattern(...)`
+ *     sits in argument 0 of an enclosing `*WithPattern` call — hoist it and
+ *     rewrite that argument (via
+ *     {@link HoistableBuilderSpec.rewriteSite}). Captured list callbacks use the
+ *     generic curried-pattern path.
  */
 export class BuilderCallHoistingTransformer extends HelpersOnlyTransformer {
   override transform(context: TransformationContext): ts.SourceFile {
@@ -107,7 +111,7 @@ export class BuilderCallHoistingTransformer extends HelpersOnlyTransformer {
  *     call applied to captures — `inner(captures)`. The default rewrite swaps
  *     the callee for the hoisted name, leaving the captures arguments and any
  *     surrounding member chain (e.g. the `.for(...)` tail) anchored in place.
- *   - **Argument-position builders** (`pattern`/`patternTool`): the visited
+ *   - **Argument-position builders** (`pattern`): the visited
  *     call is the *enclosing* `mapWithPattern` call and the inner pattern call
  *     sits in one of its arguments. The default callee-swap is wrong here — the
  *     callee (`.mapWithPattern`) and the other arguments must survive untouched.
@@ -175,21 +179,15 @@ const PATTERN_BUILDER: HoistableBuilderSpec = {
     // Pattern is NOT applied: the bare `__cfHelpers.pattern(cb, inSchema,
     // outSchema)` call sits in the FIRST argument of an enclosing call, with
     // per-instance values flowing through that call's remaining argument(s).
-    // Two enclosing shapes carry a hoistable pattern (identical mechanic —
-    // relocate argument 0, keep the rest):
-    //   - `receiver.mapWithPattern(pattern(...), { params })` (and the other
-    //     lowered `*WithPattern` array methods); captures in the params object.
-    //   - `patternTool(pattern(...), extraParams?)` (CT-1655); per-instance
-    //     values in extraParams, module-scoped reads absorbed by the pattern.
-    // In both, the bare pattern call is capture-free and safe to relocate. The
-    // top-level `export default pattern(...)` is a direct call (not an argument
-    // to either), so it is naturally excluded.
-    return getWithPatternHoistablePatternCall(call, context.checker) ??
-      getPatternToolHoistablePatternCall(call, context.checker);
+    // A capture-free bare `pattern(...)` sits in argument 0 of an enclosing
+    // `*WithPattern` call. Captured callbacks use the generic curried-pattern
+    // path below. The top-level `export default pattern(...)` is a direct call
+    // and is naturally excluded.
+    return getWithPatternHoistablePatternCall(call, context.checker);
   },
   rewriteSite: (visited, hoistedName, _innerCall, factory) => {
     // Replace ONLY the first argument (the pattern call) with the hoisted name,
-    // keeping the enclosing call's callee (`.mapWithPattern` / `patternTool`)
+    // keeping the enclosing call's `*WithPattern` callee
     // and the trailing argument(s) intact. (Applied builders take the default
     // callee-swap instead.)
     return factory.updateCallExpression(
@@ -201,11 +199,79 @@ const PATTERN_BUILDER: HoistableBuilderSpec = {
   },
 };
 
+/** Compiler-generated `pattern(...).curry(captures)` nested value. */
+const CURRIED_PATTERN_BUILDER: HoistableBuilderSpec = {
+  prefix: SYNTHETIC_PATTERN_HOIST_PREFIX,
+  resolveHoistable: (call, context) => {
+    if (
+      !ts.isPropertyAccessExpression(call.expression) ||
+      call.expression.name.text !== "curry"
+    ) {
+      return undefined;
+    }
+    const base = call.expression.expression;
+    return ts.isCallExpression(base) &&
+        isPatternBuilderCall(base, context.checker)
+      ? base
+      : undefined;
+  },
+  rewriteSite: (visited, hoistedName, _innerCall, factory) => {
+    return factory.updateCallExpression(
+      visited,
+      factory.createPropertyAccessExpression(hoistedName, "curry"),
+      visited.typeArguments,
+      visited.arguments,
+    );
+  },
+};
+
+/** Capture-free authored pattern used as a value inside a parent pattern. */
+const NESTED_PATTERN_BUILDER: HoistableBuilderSpec = {
+  prefix: SYNTHETIC_PATTERN_HOIST_PREFIX,
+  resolveHoistable: (call, context) => {
+    if (
+      !isPatternBuilderCall(call, context.checker) ||
+      (!isNestedInPatternBuilder(call, context.checker) &&
+        !isGeneratedNestedPattern(call)) ||
+      classifyLegacyPatternCarrier(call) !== undefined
+    ) {
+      return undefined;
+    }
+    return call;
+  },
+  rewriteSite: (_visited, hoistedName) => hoistedName,
+};
+
 const HOISTABLE_BUILDERS: readonly HoistableBuilderSpec[] = [
   LIFT_BUILDER,
   HANDLER_BUILDER,
+  CURRIED_PATTERN_BUILDER,
+  NESTED_PATTERN_BUILDER,
   PATTERN_BUILDER,
 ];
+
+function isNestedInPatternBuilder(
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+): boolean {
+  let current: ts.Node | undefined = call.parent;
+  while (current) {
+    if (
+      ts.isCallExpression(current) && isPatternBuilderCall(current, checker)
+    ) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+function isGeneratedNestedPattern(call: ts.CallExpression): boolean {
+  return ts.isPropertyAccessExpression(call.expression) &&
+    ts.isIdentifier(call.expression.expression) &&
+    call.expression.expression.text === "__cfHelpers" &&
+    call.expression.name.text === "pattern";
+}
 
 function hoistBuilderCalls(
   sourceFile: ts.SourceFile,
@@ -258,6 +324,7 @@ function hoistBuilderCalls(
   // lookups later stages rely on to match a `<prefix>_N` call site back to its
   // hoisted const).
   const counters = new Map<string, number>();
+  const reservedNames = collectTopLevelBindingNames(sourceFile);
 
   // Every hoisted builder-artifact name (`__cfPattern_N`, `__cfLift_N`,
   // `__cfHandler_N`), in creation order. After the whole file is visited we emit
@@ -283,9 +350,14 @@ function hoistBuilderCalls(
         continue;
       }
 
-      const next = (counters.get(builder.prefix) ?? 0) + 1;
+      let next = counters.get(builder.prefix) ?? 0;
+      let nameText: string;
+      do {
+        next++;
+        nameText = `${builder.prefix}_${next}`;
+      } while (reservedNames.has(nameText));
       counters.set(builder.prefix, next);
-      const nameText = `${builder.prefix}_${next}`;
+      reservedNames.add(nameText);
       const name = factory.createIdentifier(nameText);
       registeredNames.push(nameText);
       recordBuilderSourceSite(
@@ -325,7 +397,7 @@ function hoistBuilderCalls(
       // identity (updateCallExpression) so any surrounding member chain —
       // notably the `.for(...)` tail that ReactiveVariableForTransformer later
       // expects on the result — stays anchored to the same position.
-      // Argument-position builders (pattern/patternTool) override via
+      // Argument-position pattern builders override via
       // `rewriteSite` to replace just the argument that held the inner call.
       if (builder.rewriteSite) {
         return builder.rewriteSite(visited, name, innerCall, factory);
@@ -417,6 +489,42 @@ function hoistBuilderCalls(
   }
 
   return factory.updateSourceFile(sourceFile, resultStatements);
+}
+
+function collectTopLevelBindingNames(sourceFile: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  for (const statement of sourceFile.statements) {
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        for (const name of extractBindingNames(declaration.name)) {
+          names.add(name);
+        }
+      }
+      continue;
+    }
+    if (
+      (ts.isFunctionDeclaration(statement) ||
+        ts.isClassDeclaration(statement) ||
+        ts.isEnumDeclaration(statement)) && statement.name
+    ) {
+      names.add(statement.name.text);
+      continue;
+    }
+    if (ts.isImportDeclaration(statement) && statement.importClause) {
+      const clause = statement.importClause;
+      if (clause.name) names.add(clause.name.text);
+      if (clause.namedBindings) {
+        if (ts.isNamespaceImport(clause.namedBindings)) {
+          names.add(clause.namedBindings.name.text);
+        } else {
+          for (const element of clause.namedBindings.elements) {
+            names.add(element.name.text);
+          }
+        }
+      }
+    }
+  }
+  return names;
 }
 
 /**

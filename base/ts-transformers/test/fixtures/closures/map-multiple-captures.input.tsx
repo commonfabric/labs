@@ -15,7 +15,7 @@ const shippingCost = 5.99;
 
 // FIXTURE: map-multiple-captures
 // Verifies: .map() on reactive array captures multiple outer variables (state + local)
-//   .map(fn) → .mapWithPattern(pattern(...), {state: {discount, taxRate}, multiplier})
+//   .map(fn) → .mapWithPattern(pattern(...).curry({state: {discount, taxRate}, multiplier}))
 //   expression → lift(...)(...) combining item + state reactively with `multiplier`
 //     wired in as an explicit input (not via lexical closure)
 // Context: state.discount and state.taxRate are explicit lift-applied inputs;

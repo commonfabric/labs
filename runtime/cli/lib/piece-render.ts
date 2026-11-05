@@ -92,6 +92,10 @@ export function renderVDomToHtml(
     if (reading || cancelled) return;
     reading = true;
     settle().then(() => {
+      if (cancelled) {
+        reading = false;
+        return;
+      }
       let html: string;
       try {
         html = flushAndRead();
@@ -108,6 +112,10 @@ export function renderVDomToHtml(
       logger.info("piece-render", () => `watch read failed: ${error}`);
     });
   };
+  // A render can apply its first batch before `report` is installed. Schedule
+  // the initial settled read explicitly; a simultaneous applied batch sees
+  // `reading` and is covered by the same settle-and-flush pass.
+  report();
   // Unmounting emits its own operations; the caller asked to stop, so those
   // do not become one last report.
   return () => {
@@ -178,9 +186,10 @@ async function idleWithNothingLoading(runtime: Runtime): Promise<void> {
  * Without `options.watch`, returns the HTML of the tree the runtime settles to
  * once the piece has loaded and computed and no commit that produced is
  * pending, so a caller may exit on the result without abandoning a commit in
- * flight. With `options.watch`, the render stays mounted, `options.onUpdate`
- * receives the HTML each time the runtime goes idle with nothing loading, and
- * the return value is the function that unmounts.
+ * flight. With `options.watch`, the render stays mounted. Its first
+ * `options.onUpdate` waits for pending commits as well as loads; later updates
+ * wait only until the runtime is idle with nothing loading, and the return
+ * value is the function that unmounts.
  *
  * Neither mode waits for builtin I/O in flight, such as a fetch or a
  * language-model call.
@@ -215,9 +224,16 @@ export async function renderPiece(
 
   const { runtime } = pieces;
   if (options.watch) {
+    let initialReport = true;
     return renderVDomToHtml(
       cell.key(UI),
-      () => idleWithNothingLoading(runtime),
+      () => {
+        if (initialReport) {
+          initialReport = false;
+          return idleWithNothingPending(runtime);
+        }
+        return idleWithNothingLoading(runtime);
+      },
       (html) => options.onUpdate?.(html),
     );
   }

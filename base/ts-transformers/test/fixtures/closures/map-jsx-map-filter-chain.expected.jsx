@@ -121,15 +121,15 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-jsx-map-filter-chain
 // Verifies: chained .map().filter().map() on reactive array all transform
-//   .map(fn)    → .mapWithPattern(pattern(...), {})
-//   .filter(fn) → .filterWithPattern(pattern(...), {})
-//   .map(fn)    → .mapWithPattern(pattern(...), {})
+//   .map(fn)    → .mapWithPattern(pattern(...))
+//   .filter(fn) → .filterWithPattern(pattern(...))
+//   .map(fn)    → .mapWithPattern(pattern(...))
 // Context: Three-step chain; no outer captures in any callback
 export default pattern((__cf_pattern_input) => {
     const list = __cf_pattern_input.key("list");
     return {
         [UI]: (<div>
-        {list.mapWithPattern(__cfPattern_1, {}).filterWithPattern(__cfPattern_2, {}).mapWithPattern(__cfPattern_3, {})}
+        {list.mapWithPattern(__cfPattern_1).filterWithPattern(__cfPattern_2).mapWithPattern(__cfPattern_3)}
       </div>),
     };
 }, {

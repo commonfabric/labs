@@ -19,7 +19,7 @@ interface State {
 
 // FIXTURE: map-import-reference
 // Verifies: .map() on reactive array is transformed when callback references module-level constants and functions
-//   .map(fn) → .mapWithPattern(pattern(...), {})
+//   .map(fn) → .mapWithPattern(pattern(...))
 //   formatPrice(item.price * (1 + TAX_RATE)) → lift-applied computation wrapping the expression
 // Context: Module-level constant (TAX_RATE) and function (formatPrice) are NOT captured as reactive params
 export default pattern<State>((state) => {

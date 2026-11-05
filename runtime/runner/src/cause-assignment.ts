@@ -24,7 +24,7 @@
  * which cell went where.
  */
 
-import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
+import * as dataModel from "@commonfabric/data-model";
 import {
   isFunction,
   isObjectNotArray,
@@ -142,14 +142,48 @@ function aliasedCauses(
 
 /** A key for a partial cause, the same for two equal causes. */
 function causeKey(cause: unknown): string {
-  return hashStringOf(cause as FabricValue);
+  return dataModel.hashStringOf(cause as dataModel.FabricValue);
+}
+
+/**
+ * The admitted factory kind where this build's data model exposes the factory
+ * protocol. The cause-assignment gate also loads this module while compiling
+ * the comparison tree, whose data-model namespace may not contain that
+ * protocol. Such a tree cannot have directly branded factories, so absence is
+ * the ordinary non-factory case there.
+ */
+function admittedFactoryKind(
+  value: unknown,
+): "pattern" | "module" | "handler" | undefined {
+  const admitted = Reflect.get(dataModel, "isAdmittedFabricFactory");
+  const stateOf = Reflect.get(dataModel, "factoryStateOf");
+  if (
+    typeof admitted !== "function" || typeof stateOf !== "function" ||
+    !admitted(value)
+  ) return undefined;
+  const state = stateOf(value);
+  return isObjectNotArray(state) &&
+      (state.kind === "pattern" || state.kind === "module" ||
+        state.kind === "handler")
+    ? state.kind
+    : undefined;
 }
 
 /** Names the writer `module` in words that hold across compilers. */
 export function writerDescription(
-  module: WriterModule,
+  module: unknown,
   entryRefOf: EntryRefOf,
 ): string {
+  const factoryKind = admittedFactoryKind(module);
+  if (factoryKind !== undefined) {
+    if (factoryKind === "module") return "function";
+    if (factoryKind === "handler") return "function (handler)";
+    const ref = isFunction(module) ? entryRefOf(module) : undefined;
+    return ref === undefined
+      ? "sub-pattern"
+      : `sub-pattern ${ref.identity.slice(0, 12)}#${ref.symbol}`;
+  }
+  if (!isObjectNotArray(module)) return String(undefined);
   switch (module.type) {
     case "ref":
       return `builtin ${String(module.implementation)}`;
@@ -183,7 +217,11 @@ export function numberedCells(
   const writersByCause = new Map<string, string[]>();
   const nodes = Array.isArray(pattern.nodes) ? pattern.nodes : [];
   for (const node of nodes) {
-    if (!isObjectNotArray(node) || !isObjectNotArray(node.module)) continue;
+    if (
+      !isObjectNotArray(node) ||
+      (!isObjectNotArray(node.module) &&
+        admittedFactoryKind(node.module) === undefined)
+    ) continue;
     const writer = writerDescription(node.module, entryRefOf);
     const written = new Set<string>();
     aliasedCauses(node.outputs, written);

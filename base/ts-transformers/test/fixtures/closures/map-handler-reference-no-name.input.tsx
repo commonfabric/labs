@@ -25,7 +25,7 @@ interface State {
 
 // FIXTURE: map-handler-reference-no-name
 // Verifies: .map() transform works when pattern has inline type annotation instead of type arg
-//   .map(fn) → .mapWithPattern(pattern(...), {state: {count: ...}})
+//   .map(fn) → .mapWithPattern(pattern(...).curry({state: {count: ...}}))
 // Context: pattern((state: State) => ...) form without <State> generic; handler not captured
 export default pattern((state: State) => {
   return {

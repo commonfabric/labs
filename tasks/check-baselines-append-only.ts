@@ -109,8 +109,9 @@ async function main() {
       `proof that pieces pinned to it can still roll forward, which is exactly ` +
       `how an incompatible change gets laundered past the gate.` +
       `\n\nIf you are retiring the pattern, delete the pattern file in the same ` +
-      `change. If you are accepting a deliberate break, keep the baseline and ` +
-      `say so in review — do not delete the evidence.`,
+      `change. If an approved migration or wipe retires only this contract, ` +
+      `keep the baseline and add an exact documented entry to ` +
+      `tasks/pattern-compat-retirements.ts — do not delete the evidence.`,
   );
   Deno.exit(1);
 }

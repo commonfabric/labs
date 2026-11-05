@@ -68,10 +68,11 @@ describe("closureCaptureErrorMessage()", () => {
     expect(line).toContain("\u2026");
   });
 
-  it("recommends the real escape hatches (mapWithPattern / computed)", () => {
+  it("recommends inline array callbacks or computed", () => {
     const message = closureCaptureErrorMessage();
-    expect(message).toContain("mapWithPattern");
+    expect(message).toContain("write the callback inline");
     expect(message).toContain("computed()");
+    expect(message).not.toContain("mapWithPattern");
     // The misleading "wrap the access in a derive" recipe is gone.
     expect(message).not.toContain("derive that passes the variable through");
   });

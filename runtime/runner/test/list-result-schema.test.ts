@@ -5,7 +5,10 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { exportCell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { listResultSchema } from "../src/builtins/list-result-schema.ts";
-import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import {
+  createTrustedBuilder,
+  installTestPatternArtifact,
+} from "./support/trusted-builder.ts";
 import type { FactoryInput, JSONSchema } from "../src/builder/types.ts";
 
 const signer = await Identity.fromPassphrase("runner-list-result-schema");
@@ -79,22 +82,28 @@ describe("listResultSchema", () => {
 
     const collectionPattern = pattern<{ values: number[] }>(({ values }) => {
       mappedRef = (values as any).mapWithPattern(
-        pattern(({ element, index, array }: FactoryInput<any>) =>
-          (((value: number) => value) as any)(element, index, array)
+        installTestPatternArtifact(
+          runtime!,
+          pattern(({ element, index, array }: FactoryInput<any>) =>
+            (((value: number) => value) as any)(element, index, array)
+          ),
         ),
-        {},
       );
       filteredRef = (values as any).filterWithPattern(
-        pattern(({ element, index, array }: FactoryInput<any>) =>
-          (((_value: number) => true) as any)(element, index, array)
+        installTestPatternArtifact(
+          runtime!,
+          pattern(({ element, index, array }: FactoryInput<any>) =>
+            (((_value: number) => true) as any)(element, index, array)
+          ),
         ),
-        {},
       );
       flattenedRef = (values as any).flatMapWithPattern(
-        pattern(({ element, index, array }: FactoryInput<any>) =>
-          (((value: number) => [value]) as any)(element, index, array)
+        installTestPatternArtifact(
+          runtime!,
+          pattern(({ element, index, array }: FactoryInput<any>) =>
+            (((value: number) => [value]) as any)(element, index, array)
+          ),
         ),
-        {},
       );
       return {
         mapped: mappedRef,

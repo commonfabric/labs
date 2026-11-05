@@ -7,6 +7,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { Cell } from "../src/cell.ts";
 import {
   createTrustedBuilder,
+  installTestPatternArtifact,
   trustExecutable,
 } from "./support/trusted-builder.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -109,8 +110,11 @@ describe("child run ownership", () => {
 
   it("keeps a directly started map child after its parent stops", async () => {
     const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
-    const op = pattern(({ element }: { element: number }) =>
-      lift((value: number) => value)(element)
+    const op = installTestPatternArtifact(
+      runtime,
+      pattern(({ element }: { element: number }) =>
+        lift((value: number) => value)(element)
+      ),
     );
     const Parent = pattern<{ values?: number[] }>(({ values }) => {
       const list = values as unknown as OpaqueCell<number[]>;
@@ -118,7 +122,6 @@ describe("child run ownership", () => {
         values,
         out: list.mapWithPattern(
           op as unknown as Parameters<typeof list.mapWithPattern>[0],
-          {},
         ),
       };
     });

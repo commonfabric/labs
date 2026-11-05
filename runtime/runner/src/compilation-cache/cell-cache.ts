@@ -1,14 +1,21 @@
 import { normalize } from "@std/path/posix";
 
 import { CFC_COMPILED_BY_ATOM } from "@commonfabric/api/cfc";
-import { type FabricValue, taggedHashStringOf } from "@commonfabric/data-model";
+import {
+  type FabricValue,
+  taggedHashStringOf,
+  valueEqual,
+} from "@commonfabric/data-model";
 import type {
   BuilderSourceSitesV1,
   PatternCoverageSpan,
 } from "@commonfabric/ts-transformers";
 import { isBuilderSourceSitesV1 } from "@commonfabric/ts-transformers/runtime-contract";
 import { getLogger } from "@commonfabric/logger";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import type { JSONSchema } from "../builder/types.ts";
 import { type Cell, isCell } from "../cell.ts";
@@ -111,6 +118,9 @@ interface ModuleDocBase {
   /** Resolved internal imports; each points at another document by identity. */
   readonly imports: readonly ModuleImportRef[];
 
+  /** Compiler-added retention edges excluded from module identity. */
+  readonly roots?: readonly ModuleImportRef[];
+
   /** Predecessor module identities whose writer authority this module inherits. */
   readonly delegatedModuleIdentities?: readonly string[];
 }
@@ -194,6 +204,30 @@ const validDelegatedModuleIdentities = (
   }
   return [...merged].sort();
 };
+
+type StoredRootRef = { specifier: string; link: unknown };
+
+function mergedStoredRootRefs(
+  existing: unknown,
+  additions: readonly StoredRootRef[],
+): StoredRootRef[] {
+  const roots = Array.isArray(existing)
+    ? existing.filter((candidate): candidate is StoredRootRef =>
+      isObjectNotArray(candidate) &&
+      typeof candidate.specifier === "string" &&
+      Object.hasOwn(candidate, "link")
+    )
+    : [];
+  for (const addition of additions) {
+    if (
+      roots.some((root) =>
+        valueEqual(root as FabricValue, addition as FabricValue)
+      )
+    ) continue;
+    roots.push(addition);
+  }
+  return roots;
+}
 
 /**
  * The roots two module names sit under when they end the same way.
@@ -589,17 +623,15 @@ function assertNoUnpinnedFabricImports(
 }
 
 /**
- * The resolved internal-import edges to store on a module's document, augmented
- * (for the entry module only) with synthetic root links to any otherwise-
- * unreachable emitted module so the link-following loader fetches the whole set.
+ * The resolved identity-bearing import edges to store on a module's document.
+ * Synthetic retention roots are constructed separately so concurrent cache
+ * topologies can union them without making authored imports additive.
  */
 function storedImportRefs(
   module: CacheableModule,
-  entryIdentity: string,
-  extraRoots: readonly string[],
   options: { includeFabricEdges: boolean },
 ): ModuleImportRef[] {
-  const refs: ModuleImportRef[] = module.imports
+  return module.imports
     .filter((imp) =>
       options.includeFabricEdges || !isFabricImportSpecifier(imp.specifier)
     )
@@ -607,6 +639,14 @@ function storedImportRefs(
       specifier: imp.specifier,
       identity: imp.targetIdentity,
     }));
+}
+
+function syntheticRootRefs(
+  module: CacheableModule,
+  entryIdentity: string,
+  extraRoots: readonly string[],
+): ModuleImportRef[] {
+  const refs: ModuleImportRef[] = [];
   if (module.identity === entryIdentity) {
     for (const rootIdentity of extraRoots) {
       refs.push({
@@ -621,9 +661,8 @@ function storedImportRefs(
 /**
  * Build the source-set documents for an emitted module set, keyed by module
  * identity. Each document's `imports` resolve internal edges to the imported
- * module's identity (so a reader can follow links to the dependency documents);
- * the entry document additionally links any module unreachable through the
- * natural import graph (see {@link ROOT_LINK_SPECIFIER}).
+ * module's identity. The entry document's separate `roots` retain modules
+ * unreachable through the natural import graph (see {@link ROOT_LINK_SPECIFIER}).
  */
 export function buildSourceDocs(
   modules: readonly CacheableModule[],
@@ -647,9 +686,13 @@ export function buildSourceDocs(
       kind: "source",
       code: module.source,
       filename: module.filename,
-      imports: storedImportRefs(module, entryIdentity, extraRoots, {
+      imports: storedImportRefs(module, {
         includeFabricEdges: false,
       }),
+      ...(() => {
+        const roots = syntheticRootRefs(module, entryIdentity, extraRoots);
+        return roots.length === 0 ? {} : { roots };
+      })(),
       ...(delegatedModuleIdentities.length > 0
         ? { delegatedModuleIdentities }
         : {}),
@@ -714,8 +757,8 @@ export function verifySourceDocs(
 
   const missing: string[] = [];
   for (const doc of docsByIdentity.values()) {
-    for (const imp of doc.imports) {
-      if (!docsByIdentity.has(imp.identity)) missing.push(imp.identity);
+    for (const edge of [...doc.imports, ...(doc.roots ?? [])]) {
+      if (!docsByIdentity.has(edge.identity)) missing.push(edge.identity);
     }
   }
 
@@ -755,7 +798,6 @@ export function verifySourceDocs(
       if (doc === undefined) continue; // dangling edge — recorded in `missing`
       viewIds.push(id);
       for (const imp of doc.imports) {
-        if (imp.specifier.startsWith(ROOT_LINK_SPECIFIER)) continue;
         queue.push(imp.identity);
       }
     }
@@ -851,6 +893,7 @@ interface StoredSourceDoc {
   code: string | SigilLink;
   filename: string;
   imports: { specifier: string; link: unknown }[];
+  roots?: { specifier: string; link: unknown }[];
   delegatedModuleIdentities?: string[];
   // Optional product annotations — see {@link SourceDoc.annotations}. Stored
   // verbatim; never part of the content identity.
@@ -874,6 +917,16 @@ export const SOURCE_DOC_SCHEMA = {
         code: { type: "string" },
         filename: { type: "string" },
         imports: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              specifier: { type: "string" },
+              link: { $ref: "#/$defs/sourceDoc", asCell: ["cell"] },
+            },
+          },
+        },
+        roots: {
           type: "array",
           items: {
             type: "object",
@@ -913,6 +966,16 @@ function sourceDocWriteSchema(): JSONSchema {
       code: true,
       filename: { type: "string" },
       imports: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            specifier: { type: "string" },
+            link: true,
+          },
+        },
+      },
+      roots: {
         type: "array",
         items: {
           type: "object",
@@ -1058,8 +1121,8 @@ function withCompileCacheBuiltin<T>(
 
 /**
  * Write every emitted module as a `pattern:<identity>` cell into `space`, each
- * import a sigil link to its dependency cell (the entry additionally linking any
- * otherwise-unreachable module). Idempotent (content-addressed keys). The caller
+ * import and root a sigil link to its dependency cell. Synthetic roots remain a
+ * separate additive set. Idempotent (content-addressed keys). The caller
  * owns the transaction's commit. Returns the authenticated delegation union
  * actually staged by this write.
  */
@@ -1108,6 +1171,18 @@ export function writeSourceDocs(
       const delegatedModuleIdentities = [
         ...(doc.delegatedModuleIdentities ?? []),
       ];
+      const roots = mergedStoredRootRefs(
+        baseCell.key("roots").getRaw(),
+        (doc.roots ?? []).map((root) => ({
+          specifier: root.specifier,
+          link: runtime.getCell(
+            space,
+            sourceDocKey(root.identity),
+            undefined,
+            tx,
+          ).getAsLink(),
+        })),
+      );
       // A source document without delegation metadata remains an ordinary,
       // self-verifying cache write. Attaching an addIntegrity schema even when
       // the field is absent would make every legacy/direct source-cache write
@@ -1131,6 +1206,7 @@ export function writeSourceDocs(
               tx,
             ).getAsLink(),
           })),
+          ...(roots.length === 0 ? {} : { roots }),
           ...(delegatedModuleIdentities.length > 0
             ? { delegatedModuleIdentities }
             : {}),
@@ -1225,25 +1301,37 @@ export function readLoadedSourceClosure(
     // then fails its identity verification exactly as a missing document
     // does, so the caller recompiles.
     if (!codeFieldVerifies(cell, doc.code)) continue;
-    const imports: ModuleImportRef[] = [];
-    const childDocs: { doc: StoredSourceDoc; cell: Cell<unknown> }[] = [];
-    for (const imp of doc.imports ?? []) {
-      // `link` is already a loaded Cell (the entry sync pulled it). View it
-      // under the recursive schema so its own links resolve as cells too.
-      if (!isCell(imp.link)) continue;
-      const linkedCell = imp.link as Cell<unknown>;
-      // Cache attestations are space-local. A cross-space child may be validly
-      // compiler-stamped in its own space, but must never be flattened into
-      // the requested space's verified closure (and delegation registry).
-      if (linkedCell.space !== space) return undefined;
-      const childCell = linkedCell.asSchema(
-        SOURCE_DOC_SCHEMA,
-      );
-      const child = childCell.get() as StoredSourceDoc | undefined;
-      if (!child || typeof child.identity !== "string") continue;
-      imports.push({ specifier: imp.specifier, identity: child.identity });
-      childDocs.push({ doc: child, cell: childCell });
-    }
+    const readEdges = (
+      edges: readonly StoredRootRef[],
+    ):
+      | {
+        refs: ModuleImportRef[];
+        children: { doc: StoredSourceDoc; cell: Cell<unknown> }[];
+      }
+      | undefined => {
+      const refs: ModuleImportRef[] = [];
+      const children: { doc: StoredSourceDoc; cell: Cell<unknown> }[] = [];
+      for (const edge of edges) {
+        // `link` is already a loaded Cell (the entry sync pulled it). View it
+        // under the recursive schema so its own links resolve as cells too.
+        if (!isCell(edge.link)) continue;
+        const linkedCell = edge.link as Cell<unknown>;
+        // Cache attestations are space-local. A cross-space child may be
+        // validly compiler-stamped in its own space, but must never be
+        // flattened into this space's verified closure.
+        if (linkedCell.space !== space) return undefined;
+        const childCell = linkedCell.asSchema(SOURCE_DOC_SCHEMA);
+        const child = childCell.get() as StoredSourceDoc | undefined;
+        if (!child || typeof child.identity !== "string") continue;
+        refs.push({ specifier: edge.specifier, identity: child.identity });
+        children.push({ doc: child, cell: childCell });
+      }
+      return { refs, children };
+    };
+    const imports = readEdges(doc.imports ?? []);
+    const roots = readEdges(doc.roots ?? []);
+    if (imports === undefined || roots === undefined) return undefined;
+    const childDocs = [...imports.children, ...roots.children];
     const delegatedModuleIdentities = cellCarriesIntegrity(
         cell,
         COMPILED_INTEGRITY_ATOM,
@@ -1259,7 +1347,8 @@ export function readLoadedSourceClosure(
       kind: "source",
       code: doc.code,
       filename: doc.filename,
-      imports,
+      imports: imports.refs,
+      ...(roots.refs.length === 0 ? {} : { roots: roots.refs }),
       ...(delegatedModuleIdentities.length > 0
         ? { delegatedModuleIdentities }
         : {}),
@@ -1418,6 +1507,16 @@ const compiledDocProperties = {
       },
     },
   },
+  roots: {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        specifier: { type: "string" },
+        link: { asCell: ["cell"] },
+      },
+    },
+  },
 } as const;
 
 /**
@@ -1450,6 +1549,16 @@ export const COMPILED_DOC_SCHEMA = {
           items: { type: "string" },
         },
         imports: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              specifier: { type: "string" },
+              link: { $ref: "#/$defs/compiledDoc", asCell: ["cell"] },
+            },
+          },
+        },
+        roots: {
           type: "array",
           items: {
             type: "object",
@@ -1494,6 +1603,7 @@ interface StoredCompiledDoc {
   policyManifests?: readonly unknown[];
   delegatedModuleIdentities?: string[];
   imports: { specifier: string; link: unknown }[];
+  roots?: { specifier: string; link: unknown }[];
 }
 
 /** A stored compiled document whose `code` has been read and verified. */
@@ -1725,8 +1835,8 @@ export function stageModuleDelegations(
 /**
  * Write every emitted module's compiled body as a
  * `compileCache:<runtimeVersion>/<identity>` cell into `space`, stamped with the
- * compiler integrity atom, imports linked to dependency compiled cells (the
- * entry additionally linking any otherwise-unreachable module). The caller must
+ * compiler integrity atom, imports linked to dependency compiled cells, and
+ * otherwise-unreachable modules retained through separate roots. The caller must
  * `prepareCfc()` + commit the tx under an enforcing CFC mode for the integrity
  * label to persist. Returns the authenticated delegation union actually staged
  * by this write.
@@ -1789,6 +1899,18 @@ export function writeCompiledDocs(
       if (policyManifests !== undefined) {
         runtime.registerCfcPolicyManifests(undefined, policyManifests);
       }
+      const roots = mergedStoredRootRefs(
+        cell.key("roots").getRaw(),
+        syntheticRootRefs(module, entryIdentity, extraRoots).map((root) => ({
+          specifier: root.specifier,
+          link: runtime.getCell(
+            space,
+            compiledDocKey(opts.runtimeVersion, root.identity),
+            undefined,
+            tx,
+          ).getAsLink(),
+        })),
+      );
       writeCacheRecord(cell, {
         kind: module.isData ? "data" : "compiled",
         identity: module.identity,
@@ -1814,7 +1936,7 @@ export function writeCompiledDocs(
         ...(delegatedModuleIdentities.length > 0
           ? { delegatedModuleIdentities }
           : {}),
-        imports: storedImportRefs(module, entryIdentity, extraRoots, {
+        imports: storedImportRefs(module, {
           includeFabricEdges: true,
         }).map((ref) => ({
           specifier: ref.specifier,
@@ -1825,6 +1947,7 @@ export function writeCompiledDocs(
             tx,
           ).getAsLink(),
         })),
+        ...(roots.length === 0 ? {} : { roots }),
       } as StoredCompiledDoc);
     }
   });
@@ -1934,7 +2057,7 @@ export const COMPILE_CACHE_WRITEBACK_CHUNK_MODULES = 4;
  * compile-cache-incremental-writeback.test.ts.
  *
  * `extraRoots` is computed over the FULL module set and must be passed to
- * each chunk's write (the entry doc's synthetic root links enumerate every
+ * each chunk's write (the entry doc's synthetic roots enumerate every
  * module unreachable through the natural import graph; computing it over a
  * chunk would corrupt the entry doc's link set).
  */
@@ -2136,30 +2259,40 @@ export async function loadCompiledClosure(
       doc.builderSourceSitesJson,
     );
 
-    const imports: ModuleImportRef[] = [];
-    for (const imp of doc.imports ?? []) {
-      if (!isCell(imp.link)) continue;
-      // `link` is an already-loaded Cell (the entry sync pulled it). View it
-      // under the recursive schema so its own links resolve as cells too, then
-      // integrity-check + read synchronously — no re-lookup by id, no sync.
-      const linkedCell = imp.link as Cell<unknown>;
-      // Compiled-cache integrity and module delegation authority are attested
-      // only in the linked cell's space. Mixed-space cache graphs fail closed
-      // instead of rebasing a child space's attestation onto `space`.
-      if (linkedCell.space !== space) {
-        if (tally !== undefined) tally.entry = "refused";
-        return new Map();
-      }
-      const child = verifiedDoc(linkedCell.asSchema(COMPILED_DOC_SCHEMA));
-      if (child === undefined) {
-        const refusedId = linkedCell.getAsNormalizedFullLink().id;
-        if (tally !== undefined && !refused.has(refusedId)) {
-          refused.add(refusedId);
-          tally.dropped++;
+    const readEdges = (
+      edges: readonly StoredRootRef[],
+    ):
+      | { refs: ModuleImportRef[]; children: VerifiedCompiledDoc[] }
+      | undefined => {
+      const refs: ModuleImportRef[] = [];
+      const children: VerifiedCompiledDoc[] = [];
+      for (const edge of edges) {
+        if (!isCell(edge.link)) continue;
+        // `link` is already loaded by the recursive entry sync. Integrity
+        // and delegation authority remain local to the linked cell's space.
+        const linkedCell = edge.link as Cell<unknown>;
+        if (linkedCell.space !== space) return undefined;
+        const child = verifiedDoc(linkedCell.asSchema(COMPILED_DOC_SCHEMA));
+        if (child === undefined) {
+          const refusedId = linkedCell.getAsNormalizedFullLink().id;
+          if (tally !== undefined && !refused.has(refusedId)) {
+            refused.add(refusedId);
+            tally.dropped++;
+          }
+          continue;
         }
-        continue;
+        refs.push({ specifier: edge.specifier, identity: child.identity });
+        children.push(child);
       }
-      imports.push({ specifier: imp.specifier, identity: child.identity });
+      return { refs, children };
+    };
+    const imports = readEdges(doc.imports ?? []);
+    const roots = readEdges(doc.roots ?? []);
+    if (imports === undefined || roots === undefined) {
+      if (tally !== undefined) tally.entry = "refused";
+      return new Map();
+    }
+    for (const child of [...imports.children, ...roots.children]) {
       if (!visited.has(child.identity)) queue.push({ doc: child });
     }
     out.set(doc.identity, {
@@ -2195,7 +2328,8 @@ export async function loadCompiledClosure(
           ? { delegatedModuleIdentities }
           : {};
       })(),
-      imports,
+      imports: imports.refs,
+      ...(roots.refs.length === 0 ? {} : { roots: roots.refs }),
     });
   }
   if (!tx.hasWrites()) {

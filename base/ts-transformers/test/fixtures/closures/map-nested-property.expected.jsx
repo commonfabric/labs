@@ -23,44 +23,42 @@ interface State {
     items: Item[];
     currentUser: User;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const item = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
     return (<div>
-            {item.key("name")} - edited by {state.key("currentUser", "firstName")} {state.key("currentUser", "lastName")}
+            {item.key("name")} - edited by {state.currentUser.firstName} {state.currentUser.lastName}
           </div>);
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Item"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
+                currentUser: {
                     type: "object",
                     properties: {
-                        currentUser: {
-                            type: "object",
-                            properties: {
-                                firstName: {
-                                    type: "string"
-                                },
-                                lastName: {
-                                    type: "string"
-                                }
-                            },
-                            required: ["firstName", "lastName"]
+                        firstName: {
+                            type: "string"
+                        },
+                        lastName: {
+                            type: "string"
                         }
                     },
-                    required: ["currentUser"]
+                    required: ["firstName", "lastName"]
                 }
             },
-            required: ["state"]
+            required: ["currentUser"]
         }
     },
-    required: ["element", "params"],
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Item"
+        }
+    },
+    required: ["element"],
     $defs: {
         Item: {
             type: "object",
@@ -98,19 +96,19 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-nested-property
 // Verifies: .map() on reactive array captures nested property access on state
-//   .map(fn) → .mapWithPattern(pattern(...), {state: {currentUser: {firstName, lastName}}})
+//   .map(fn) → .mapWithPattern(pattern(...).curry({state: {currentUser: {firstName, lastName}}}))
 // Context: Captures state.currentUser.firstName and state.currentUser.lastName as nested property paths
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_1.curry({
                 state: {
                     currentUser: {
                         firstName: state.key("currentUser", "firstName"),
                         lastName: state.key("currentUser", "lastName")
                     }
                 }
-            })}
+            }))}
       </div>),
     };
 }, {

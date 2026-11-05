@@ -8,7 +8,7 @@ interface State {
 // FIXTURE: cell-map-with-captures
 // Verifies: Cell.map() with outer-scope captures is transformed to mapWithPattern with params
 //   typedValues.map((value) => <span>{value * state.multiplier}</span>)
-//     → typedValues.mapWithPattern(pattern(...), { state: { multiplier: state.key("multiplier") } })
+//     → typedValues.mapWithPattern(pattern(...).curry({ state: { multiplier: state.key("multiplier") } }))
 //   value * state.multiplier → lift(...)({ value, state: { multiplier } })
 // Context: The map callback captures `state.multiplier` from the outer scope,
 //   which must be threaded through as a mapWithPattern param and re-derived inside.

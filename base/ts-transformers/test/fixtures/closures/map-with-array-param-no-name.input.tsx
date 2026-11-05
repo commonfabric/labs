@@ -2,7 +2,7 @@ import { cell, pattern, UI } from "commonfabric";
 
 // FIXTURE: map-with-array-param-no-name
 // Verifies: .map() with array param works when pattern uses inline type annotation
-//   .map((item, index, array) => ...) → .mapWithPattern(pattern(...), {})
+//   .map((item, index, array) => ...) → .mapWithPattern(pattern(...))
 //   array.length → array.key("length")
 // Context: Same as map-with-array-param but with (_state: any) inline annotation instead of type arg
 export default pattern((_state: any) => {

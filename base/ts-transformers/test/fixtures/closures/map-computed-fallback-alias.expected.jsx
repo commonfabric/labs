@@ -69,35 +69,33 @@ const __cfLift_1 = __cfHelpers.lift<{
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { msg }) => {
     const reaction = __cf_pattern_input.key("element");
-    const msg = __cf_pattern_input.key("params", "msg");
-    return (<button type="button" data-msg-id={msg.key("id")}>
+    return (<button type="button" data-msg-id={msg.id}>
                   {reaction.key("emoji")}
                 </button>);
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Reaction"
-        },
-        params: {
+        msg: {
             type: "object",
             properties: {
-                msg: {
-                    type: "object",
-                    properties: {
-                        id: {
-                            type: "string"
-                        }
-                    },
-                    required: ["id"]
+                id: {
+                    type: "string"
                 }
             },
-            required: ["msg"]
+            required: ["id"]
         }
     },
-    required: ["element", "params"],
+    required: ["msg"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Reaction"
+        }
+    },
+    required: ["element"],
     $defs: {
         Reaction: {
             type: "object",
@@ -136,11 +134,11 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
             reactions: msg.key("reactions")
         } }).for("messageReactions", true);
     return (<div>
-              {messageReactions.mapWithPattern(__cfPattern_1, {
+              {messageReactions.mapWithPattern(__cfPattern_1.curry({
             msg: {
                 id: msg.key("id")
             }
-        })}
+        }))}
             </div>);
 }, {
     type: "object",
@@ -200,13 +198,13 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 // FIXTURE: map-computed-fallback-alias
 // Verifies: computed() inside a map callback creates a lift-applied computation and nested map is also transformed
 //   computed(() => (msg.reactions ?? [])) → lift(...)(...) with msg.reactions as input
-//   messageReactions.map(fn) → nested .mapWithPattern(pattern(...), { msg: { id: msg.key("id") } })
+//   messageReactions.map(fn) → nested .mapWithPattern(pattern(...).curry({ msg: { id: msg.key("id") } }))
 // Context: Nested map — outer maps messages, inner maps computed reactions; inner captures msg.id
 export default pattern((__cf_pattern_input) => {
     const messages = __cf_pattern_input.key("messages");
     return {
         [UI]: (<div>
-        {messages.mapWithPattern(__cfPattern_2, {})}
+        {messages.mapWithPattern(__cfPattern_2)}
       </div>),
     };
 }, {

@@ -208,11 +208,11 @@ export default pattern((state) => {
     return {
         [UI]: (<section>
         <ul>
-          {state.key("spots").mapWithPattern(__cfPattern_1, {})}
+          {state.key("spots").mapWithPattern(__cfPattern_1)}
         </ul>
 
         <ul>
-          {state.key("people").mapWithPattern(__cfPattern_2, {})}
+          {state.key("people").mapWithPattern(__cfPattern_2)}
         </ul>
       </section>),
     };

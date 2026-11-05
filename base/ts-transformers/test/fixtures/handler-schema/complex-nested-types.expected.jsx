@@ -141,7 +141,71 @@ export default pattern(() => {
     type: "object",
     properties: {
         userHandler: {
-            asCell: ["stream"]
+            asFactory: {
+                kind: "handler",
+                contextSchema: {
+                    type: "object",
+                    properties: {
+                        count: {
+                            type: "number",
+                            asCell: ["cell"]
+                        },
+                        users: {
+                            type: "array",
+                            items: {
+                                type: "object",
+                                properties: {
+                                    id: {
+                                        type: "string"
+                                    },
+                                    name: {
+                                        type: "string"
+                                    },
+                                    email: {
+                                        type: "string"
+                                    }
+                                },
+                                required: ["id", "name", "email"]
+                            },
+                            asCell: ["writeonly"]
+                        },
+                        lastAction: {
+                            type: "string",
+                            asCell: ["writeonly"]
+                        }
+                    },
+                    required: ["count", "users", "lastAction"]
+                },
+                eventSchema: {
+                    $ref: "#/$defs/UserEvent",
+                    $defs: {
+                        UserEvent: {
+                            type: "object",
+                            properties: {
+                                user: {
+                                    type: "object",
+                                    properties: {
+                                        name: {
+                                            type: "string"
+                                        },
+                                        email: {
+                                            type: "string"
+                                        },
+                                        age: {
+                                            type: "number"
+                                        }
+                                    },
+                                    required: ["name", "email"]
+                                },
+                                action: {
+                                    "enum": ["create", "update", "delete"]
+                                }
+                            },
+                            required: ["user", "action"]
+                        }
+                    }
+                }
+            }
         }
     },
     required: ["userHandler"]

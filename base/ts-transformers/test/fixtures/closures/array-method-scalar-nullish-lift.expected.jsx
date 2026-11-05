@@ -272,13 +272,13 @@ export default pattern((__cf_pattern_input) => {
     return {
         [UI]: (<div>
         {/* scalar string ??: lifted, so "default" is live */}
-        <div>{rows.mapWithPattern(__cfPattern_1, {})}</div>
+        <div>{rows.mapWithPattern(__cfPattern_1)}</div>
         {/* scalar boolean ?? as a filter predicate: lifted */}
         <div>
-          {rows.filterWithPattern(__cfPattern_2, {}).mapWithPattern(__cfPattern_3, {})}
+          {rows.filterWithPattern(__cfPattern_2).mapWithPattern(__cfPattern_3)}
         </div>
         {/* heterogeneous collection ?? (union of array types): stays structural */}
-        <div>{rows.mapWithPattern(__cfPattern_4, {})}</div>
+        <div>{rows.mapWithPattern(__cfPattern_4)}</div>
       </div>),
     };
 }, {

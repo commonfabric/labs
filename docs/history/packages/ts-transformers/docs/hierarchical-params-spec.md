@@ -53,17 +53,31 @@ state.items.map((item) => item.price * state.discount);
 ({ element, params: { discount } }) => element.price * discount
 { discount: state.discount }
 
-// New output
-({ element: item, params: { state } }) => item.price * state.discount
-{ state: { discount: state.discount } }
+// New output (simplified)
+const mapper = pattern(
+  withPatternParamsSchema((input, { state }) => {
+    const item = input.key("element");
+    return item.key("price") * state.discount;
+  }, paramsSchema),
+  publicListInputSchema,
+  resultSchema,
+);
+state.items.mapWithPattern(
+  mapper.curry({ state: { discount: state.discount } }),
+);
 ```
 
 ### 2. Destructuring aliases recover original names
 
-- Runtime still delivers `{ element, index, array, params }` to the pattern
-  callback.
-- We destructure to the developer’s names
-  (`({ element: item, params: { state } })`) so the callback body is untouched.
+- Runtime delivers public `{ element, index, array }` list input through
+  callback argument 0. The generated callback reads those fields from the opaque
+  input.
+- Captures retain their hierarchy in private callback argument 1. The
+  transformer records that private schema with
+  `withPatternParamsSchema(callback, schema)` and binds the values exactly once
+  with `factory.curry(params)`.
+- `mapWithPattern()` receives only the resulting bound factory. Captures never
+  become a sibling node input or merge into the public list input.
 - New helpers normalise identifiers across transformers, ensuring shared
   behaviour when we need fresh names.
 
@@ -76,8 +90,11 @@ orders.map((order) => order.customer?.address ?? state.fallback);
 // Old output rewrote the chain and flattened params
 ({ element, params: { fallback } }) => element.customer.address ?? fallback
 
-// New output preserves the body and structure
-({ element: order, params: { state } }) => order.customer?.address ?? state.fallback
+// New output keeps public input and captures on separate arguments
+withPatternParamsSchema((input, { state }) => {
+  const order = input.key("element");
+  return order.customer?.address ?? state.fallback;
+}, paramsSchema)
 ```
 
 ### 3. Body rewriting is minimal and safer
@@ -98,8 +115,11 @@ items.map(() => <span>{element}</span>);
 // Old output shadowed the outer variable
 ({ element }) => <span>{element}</span>
 
-// New output aliases the runtime value and keeps the capture intact
-({ element: __ct_element, params: { element } }) => <span>{element}</span>
+// New output reads the public element separately and keeps the capture intact
+withPatternParamsSchema((input, { element }) => {
+  const __ct_element = input.key("element");
+  return <span>{element}</span>;
+}, paramsSchema)
 ```
 
 ### 4. Supporting utilities were aligned
@@ -161,9 +181,9 @@ derive(items, () => _v1());
 
 - **Fixture churn:** Updating fixtures by hand was tedious but gives us a
   high-confidence baseline that future regressions will surface clearly.
-- **Runtime contract:** We intentionally kept the existing
-  `{ element, index, array, params }` shape to minimise risk. If we ever adjust
-  the runtime API we can simplify further, but that is out of scope for now.
+- **Runtime contract:** Public list input remains `{ element, index, array }` in
+  callback argument 0. Closure params are private callback argument 1, carried
+  by the bound factory rather than a sibling `params` field.
 - **Future alignment:** Other transformers (e.g. handler closures, `derive`) can
   adopt the same capture-tree utilities so we continue converging on a single
   naming story.

@@ -12,6 +12,19 @@ export type SchemaHint = {
   /** Override for array items schema (e.g., false for items: false) */
   readonly items?: unknown;
 
+  /** Compiler-owned exact contract for a generated first-class factory. */
+  readonly factoryContracts?: readonly {
+    readonly kind: "pattern" | "module" | "handler";
+    readonly factoryType?: ts.Type;
+    readonly inputTypeNode: ts.TypeNode;
+    readonly inputType?: ts.Type;
+    readonly inputSchema?: unknown;
+    readonly outputTypeNode: ts.TypeNode;
+    readonly outputType?: ts.Type;
+    readonly outputSchema?: unknown;
+    readonly frameworkProvidedPaths?: readonly (readonly string[])[];
+  }[];
+
   readonly cfcUiContract?: {
     readonly helper: "UiAction" | "UiPromptSlot" | "UiDisclosure";
     readonly action?: string;

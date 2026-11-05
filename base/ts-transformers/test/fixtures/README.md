@@ -43,8 +43,8 @@ structure. Instead, **comments in the input file** serve as test documentation:
 ```typescript
 // FIXTURE: filter-basic
 // Verifies: .filter() and .map() on reactive arrays are both transformed
-//   .filter(fn) → .filterWithPattern(pattern(...), {})
-//   .map(fn)    → .mapWithPattern(pattern(...), {})
+//   .filter(fn) → .filterWithPattern(pattern(...))
+//   .map(fn)    → .mapWithPattern(pattern(...))
 // Context: No captured outer variables, basic chain
 export default pattern<State>((state) => {
 ```

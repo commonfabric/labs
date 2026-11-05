@@ -25,10 +25,16 @@ import {
 import { analyzeFunctionCapabilities } from "../../policy/capability-analysis.ts";
 import { unwrapExpression } from "../../utils/expression.ts";
 import { registerLiftAppliedCallType } from "../../ast/type-inference.ts";
+import {
+  propagateFactoryContractHints,
+} from "../../transformers/schema-injection.ts";
 import { applyShrinkAndWrap } from "../../transformers/type-shrinking.ts";
 import { getCellKind } from "../../transformers/cell-type.ts";
 import type { CaptureTreeNode } from "../../utils/capture-tree.ts";
-import { buildCapturePropertyAssignments } from "../../utils/capture-tree.ts";
+import {
+  buildCapturePropertyAssignments,
+  preserveCaptureReferenceOrigins,
+} from "../../utils/capture-tree.ts";
 import {
   createPropertyName,
   normalizeBindingName,
@@ -275,6 +281,7 @@ function buildLiftAppliedInputObject(
     factory,
     captureNameMap,
   );
+  preserveCaptureReferenceOrigins(captureProperties, captureTree);
   for (const property of captureProperties) properties.push(property);
 
   return factory.createObjectLiteralExpression(
@@ -664,6 +671,12 @@ export function transformLiftAppliedCall(
       newCallback,
     );
   }
+  propagateFactoryContractHints(mergedInput, inputTypeNode, context);
+  if (resultTypeNode) {
+    for (const returnExpression of callbackReturnExpressions(callback)) {
+      propagateFactoryContractHints(returnExpression, resultTypeNode, context);
+    }
+  }
   const schedulerOptions = createDeriveSchedulerOptions(
     inputParamSummary,
     hasCompleteSchedulerScopeSummary(capabilityAnalysis.summary),
@@ -702,6 +715,24 @@ export function transformLiftAppliedCall(
   );
 
   return rebuiltCall;
+}
+
+/** Every value the callback itself returns, excluding nested functions. */
+function callbackReturnExpressions(
+  callback: ts.ArrowFunction | ts.FunctionExpression,
+): readonly ts.Expression[] {
+  if (ts.isExpression(callback.body)) return [callback.body];
+  const expressions: ts.Expression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (node !== callback.body && ts.isFunctionLike(node)) return;
+    if (ts.isReturnStatement(node) && node.expression) {
+      expressions.push(node.expression);
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(callback.body);
+  return expressions;
 }
 
 /**

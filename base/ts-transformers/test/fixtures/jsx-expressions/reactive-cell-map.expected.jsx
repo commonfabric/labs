@@ -292,7 +292,7 @@ export default pattern(() => {
                 }
             }
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ cellRef: cellRef }), <div>No pieces created yet</div>, <ul>
-            {cellRef.mapWithPattern(__cfPattern_1, {})}
+            {cellRef.mapWithPattern(__cfPattern_1)}
           </ul>)}
 
         <cf-button onClick={createSimplePattern({ cellRef })}>

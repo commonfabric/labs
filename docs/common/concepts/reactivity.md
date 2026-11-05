@@ -82,6 +82,16 @@ export default pattern<WritableInput>(({ count, items, title }) => {
 });
 ```
 
+## Factory values are reactive selections
+
+`PatternFactory`, `ModuleFactory`, and `HandlerFactory` values may travel through
+cells and pattern inputs. A symbolic factory call subscribes to that location:
+when the selected factory changes, the runner replaces the prior generation,
+cancels its work, and fences stale writes while keeping the output location
+stable. Scheduled `lift` and handler callbacks instead receive the current
+factory as an ordinary materialized callable. See
+[First-Class Factories](./factories.md).
+
 ## Results Mirror the Rule: Writable<> in a Result Type Grants Write Access
 
 The same principle applies to what a pattern (or `lift`/`computed`) **returns**.

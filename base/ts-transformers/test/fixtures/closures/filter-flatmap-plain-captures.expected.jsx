@@ -36,9 +36,8 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { suffix }) => {
     const item = __cf_pattern_input.key("element");
-    const suffix = __cf_pattern_input.params.suffix;
     return __cfLift_1({
         item: {
             label: item.key("label")
@@ -46,6 +45,14 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         suffix: suffix
     }).for("__patternResult", true);
 }, {
+    type: "object",
+    properties: {
+        suffix: {
+            type: "string"
+        }
+    },
+    required: ["suffix"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -62,18 +69,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 }
             },
             required: ["label", "tags"]
-        },
-        params: {
-            type: "object",
-            properties: {
-                suffix: {
-                    type: "string"
-                }
-            },
-            required: ["suffix"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
@@ -108,9 +106,8 @@ const __cfLift_2 = __cfHelpers.lift<{
         type: "string"
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_2 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { prefix }) => {
     const item = __cf_pattern_input.key("element");
-    const prefix = __cf_pattern_input.params.prefix;
     return __cfHelpers.ifElse({
         type: "number"
     } as const satisfies __cfHelpers.JSONSchema, {
@@ -135,6 +132,14 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
+        prefix: {
+            type: "string"
+        }
+    },
+    required: ["prefix"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
         element: {
             type: "object",
             properties: {
@@ -149,18 +154,9 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
                 }
             },
             required: ["label", "tags"]
-        },
-        params: {
-            type: "object",
-            properties: {
-                prefix: {
-                    type: "string"
-                }
-            },
-            required: ["prefix"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "array",
     items: {
@@ -179,11 +175,11 @@ export default pattern((__cf_pattern_input) => {
     const suffix = "!";
     const prefix = "#";
     return {
-        labels: items.filterWithPattern(__cfPattern_1, {
+        labels: items.filterWithPattern(__cfPattern_1.curry({
             suffix: suffix
-        }).flatMapWithPattern(__cfPattern_2, {
+        })).flatMapWithPattern(__cfPattern_2.curry({
             prefix: prefix
-        }).for(["__patternResult", "labels"], true)
+        })).for(["__patternResult", "labels"], true)
     };
 }, {
     type: "object",

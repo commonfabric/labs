@@ -2210,6 +2210,16 @@ describe("hoist supersession rule", () => {
       .toBe("stored arguments superseded");
   });
 
+  it("names the stored-argument rule for a hoist missing bound params", () => {
+    expect(
+      hoistSupersessionReason(
+        "__cfPattern_4",
+        "Pattern factory requires bound params",
+        false,
+      ),
+    ).toBe("stored arguments superseded");
+  });
+
   it("names the no-longer-emitted rule for a missing hoist", () => {
     expect(hoistSupersessionReason("__cfPattern_6", "gone", true))
       .toBe("hoist no longer emitted");
@@ -2228,6 +2238,13 @@ describe("hoist supersession rule", () => {
     expect(hoistSupersessionReason("Row", REFUSED, false)).toBeUndefined();
     expect(hoistSupersessionReason("Row", "gone", true)).toBeUndefined();
     expect(hoistSupersessionReason("default", REFUSED, true)).toBeUndefined();
+    expect(
+      hoistSupersessionReason(
+        "default",
+        "Pattern factory requires bound params",
+        false,
+      ),
+    ).toBeUndefined();
     expect(hoistSupersessionReason("__cfPattern_0", REFUSED, true))
       .toBeUndefined();
   });

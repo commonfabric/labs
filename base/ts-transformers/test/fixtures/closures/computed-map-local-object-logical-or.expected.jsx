@@ -127,7 +127,7 @@ export default pattern((state) => {
         } }).for("rows", true);
     return {
         [UI]: (<div>
-        {rows.mapWithPattern(__cfPattern_1, {})}
+        {rows.mapWithPattern(__cfPattern_1)}
       </div>),
     };
 }, {

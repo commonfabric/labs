@@ -1,5 +1,6 @@
 import * as path from "@std/path";
 
+import { registerCommonFabricDeclarationSources } from "@commonfabric/schema-generator/common-fabric-symbols";
 import type { BuilderSourceSitesV1 } from "@commonfabric/ts-transformers/runtime-contract";
 import { getLogger } from "@commonfabric/logger";
 import { yieldToEventLoop } from "@commonfabric/async/sleep";
@@ -316,6 +317,14 @@ export interface TypeScriptCompilerOptions {
   runtimeModules?: string[];
 
   /**
+   * Exact declaration sources selected by the trusted runtime-module resolver.
+   * Source names and bytes are verified against the created program before
+   * their `SourceFile` identities are registered; authored input must never
+   * populate this option.
+   */
+  trustedCommonFabricTypeSources?: readonly Source[];
+
+  /**
    * Maps an import specifier (verbatim text) to a program file name. Used for
    * scheme-prefixed specifiers that the path-join and runtime-module rules
    * cannot resolve. The target must be a file in the program.
@@ -453,6 +462,7 @@ export class TypeScriptCompiler {
     );
     const createStart = performance.now();
     const tsProgram = ts.createProgram(sourceNames, tsOptions, host);
+    registerTrustedCommonFabricSources(tsProgram, inputOptions);
     compileTimingLogger.time(createStart, "phase", "createProgram");
     yield;
 
@@ -680,6 +690,7 @@ export class TypeScriptCompiler {
       inputOptions.specifierAliases,
     );
     const tsProgram = ts.createProgram(sourceNames, tsOptions, host);
+    registerTrustedCommonFabricSources(tsProgram, inputOptions);
 
     const authored = new Set(
       program.files.filter((f) => !f.name.endsWith(".d.ts")).map((f) => f.name),
@@ -812,6 +823,26 @@ export class TypeScriptCompiler {
       });
     }
     return { modules, diagnostics, durations };
+  }
+}
+
+function registerTrustedCommonFabricSources(
+  program: ts.Program,
+  options: TypeScriptCompilerOptions,
+): void {
+  const sources = (options.trustedCommonFabricTypeSources ?? []).map(
+    (trusted) => {
+      const source = program.getSourceFile(trusted.name);
+      if (!source || source.text !== trusted.contents) {
+        throw new Error(
+          `Program conflicts with trusted Common Fabric type source '${trusted.name}'`,
+        );
+      }
+      return source;
+    },
+  );
+  if (sources.length > 0) {
+    registerCommonFabricDeclarationSources(program.getTypeChecker(), sources);
   }
 }
 

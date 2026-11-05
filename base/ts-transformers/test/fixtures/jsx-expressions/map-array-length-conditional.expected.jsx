@@ -117,7 +117,7 @@ export default pattern((_state) => {
                 }
             }
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ list: list }), <div>
-            {list.mapWithPattern(__cfPattern_1, {})}
+            {list.mapWithPattern(__cfPattern_1)}
           </div>)}
       </div>),
     };

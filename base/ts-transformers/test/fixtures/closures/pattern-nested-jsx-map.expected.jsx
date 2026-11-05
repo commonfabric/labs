@@ -76,10 +76,9 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { item }) => {
     const tag = __cf_pattern_input.key("element");
     const i = __cf_pattern_input.key("index");
-    const item = __cf_pattern_input.key("params", "item");
     return (<li>
                     {__cfHelpers.ifElse({
         type: "boolean"
@@ -92,7 +91,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
     } as const satisfies __cfHelpers.JSONSchema, __cfLift_2({
         i: i,
         item: {
-            selectedIndex: item.key("selectedIndex")
+            selectedIndex: item.selectedIndex
         }
     }), "* ", "")}
                     {tag.key("name")}
@@ -100,29 +99,28 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
+        item: {
+            type: "object",
+            properties: {
+                selectedIndex: {
+                    type: "number"
+                }
+            },
+            required: ["selectedIndex"]
+        }
+    },
+    required: ["item"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
         element: {
             $ref: "#/$defs/Tag"
         },
         index: {
             type: "number"
-        },
-        params: {
-            type: "object",
-            properties: {
-                item: {
-                    type: "object",
-                    properties: {
-                        selectedIndex: {
-                            type: "number"
-                        }
-                    },
-                    required: ["selectedIndex"]
-                }
-            },
-            required: ["item"]
         }
     },
-    required: ["element", "params"],
+    required: ["element"],
     $defs: {
         Tag: {
             type: "object",
@@ -160,11 +158,11 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
     return (<div>
               <strong>{item.key("label")}</strong>
               <ul>
-                {item.key("tags").mapWithPattern(__cfPattern_1, {
+                {item.key("tags").mapWithPattern(__cfPattern_1.curry({
             item: {
                 selectedIndex: item.key("selectedIndex")
             }
-        })}
+        }))}
               </ul>
             </div>);
 }, {
@@ -228,7 +226,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 // FIXTURE: pattern-nested-jsx-map
 // Verifies: nested .map() calls in JSX both become mapWithPattern, including inside ifElse
 //   items.map((item) => ...) → items.mapWithPattern(pattern(...))
-//   item.tags.map((tag, i) => ...) → item.key("tags").mapWithPattern(pattern(...), { item: ... })
+//   item.tags.map((tag, i) => ...) → item.key("tags").mapWithPattern(pattern(...).curry({ item: ... }))
 //   hasItems ? items.map(...) : <p>No items</p> → ifElse(hasItems, items.mapWithPattern(...), <p>No items</p>)
 //   i === item.selectedIndex ? "* " : "" → ifElse(lift(...)(...), "* ", "")
 // Context: Inner map on item.tags captures `item.selectedIndex` from the outer
@@ -310,7 +308,7 @@ export default pattern((__cf_pattern_input) => {
                     required: ["$UI"]
                 }
             }
-        } as const satisfies __cfHelpers.JSONSchema, hasItems, items.mapWithPattern(__cfPattern_2, {}), <p>No items</p>)}
+        } as const satisfies __cfHelpers.JSONSchema, hasItems, items.mapWithPattern(__cfPattern_2), <p>No items</p>)}
       </div>),
     };
 }, {

@@ -22,6 +22,15 @@ describe("llmDialog reserved tool names", () => {
         },
       },
     }),
+    getRaw: () => ({
+      [name]: {
+        description: "the pattern's own tool",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+        },
+      },
+    }),
     key: () => ({ get: () => undefined }),
   });
 

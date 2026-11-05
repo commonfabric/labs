@@ -20,10 +20,16 @@ import {
 import { getEnclosingFunctionLikeDeclaration } from "../../src/ast/function-predicates.ts";
 import {
   getPatternBuilderCallbackArgument,
-  getPatternToolHoistablePatternCall,
+  getPatternBuilderCallbackDescriptor,
   getWithPatternHoistablePatternCall,
+  updatePatternBuilderCallbackArgument,
 } from "../../src/ast/call-kind.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import {
+  registerTrustedCommonFabricTestSources,
+  TRUSTED_COMMONFABRIC_GLOBALS,
+  TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME,
+} from "../trusted-commonfabric-sources.ts";
 
 // Harness A: a bare source-file-only program (no lib, no module resolution).
 // Mirrors the setup in call-kind.test.ts for cases that need only structural
@@ -47,19 +53,43 @@ function createProgram(source: string): {
     compilerOptions.target!,
     true,
   );
+  const commonFabricSourceFile = ts.createSourceFile(
+    TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME,
+    TRUSTED_COMMONFABRIC_GLOBALS,
+    compilerOptions.target!,
+    true,
+  );
 
   const host = ts.createCompilerHost(compilerOptions, true);
-  host.getSourceFile = (name) => name === fileName ? sourceFile : undefined;
+  host.getSourceFile = (name) =>
+    name === fileName
+      ? sourceFile
+      : name === TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME
+      ? commonFabricSourceFile
+      : undefined;
   host.getCurrentDirectory = () => "/";
   host.getDirectories = () => [];
-  host.fileExists = (name) => name === fileName;
-  host.readFile = (name) => name === fileName ? source : undefined;
+  host.fileExists = (name) =>
+    name === fileName || name === TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME;
+  host.readFile = (name) =>
+    name === fileName
+      ? source
+      : name === TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME
+      ? TRUSTED_COMMONFABRIC_GLOBALS
+      : undefined;
   host.writeFile = () => {};
   host.useCaseSensitiveFileNames = () => true;
   host.getCanonicalFileName = (name) => name;
   host.getNewLine = () => "\n";
 
-  const program = ts.createProgram([fileName], compilerOptions, host);
+  const program = ts.createProgram(
+    [fileName, TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME],
+    compilerOptions,
+    host,
+  );
+  registerTrustedCommonFabricTestSources(program, [
+    TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME,
+  ]);
   return { sourceFile, checker: program.getTypeChecker() };
 }
 
@@ -111,6 +141,7 @@ function createProgramWithCommonFabric(source: string): {
       }),
   };
   const program = ts.createProgram(["/test.ts"], options, host);
+  registerTrustedCommonFabricTestSources(program, ["/commonfabric.d.ts"]);
   return {
     sourceFile: program.getSourceFile("/test.ts")!,
     checker: program.getTypeChecker(),
@@ -180,39 +211,6 @@ Deno.test("getWithPatternHoistablePatternCall returns undefined for a lowered me
   // Callee is a lowered *WithPattern access, but there is no first argument to
   // hoist, so the recognizer bails at the missing-argument guard.
   assertEquals(getWithPatternHoistablePatternCall(call, checker), undefined);
-});
-
-Deno.test("getPatternToolHoistablePatternCall lifts the bare pattern call out of a patternTool call", () => {
-  const { sourceFile, checker } = createProgramWithCommonFabric(`
-    import { patternTool, pattern } from "commonfabric";
-    const value = patternTool(pattern(() => 1), { p: 1 });
-  `);
-
-  const call = findCall(sourceFile, "value");
-  const hoistable = getPatternToolHoistablePatternCall(call, checker);
-  assertEquals(hoistable?.getText(), "pattern(() => 1)");
-});
-
-Deno.test("getPatternToolHoistablePatternCall returns undefined when patternTool has no arguments", () => {
-  const { sourceFile, checker } = createProgramWithCommonFabric(`
-    import { patternTool } from "commonfabric";
-    const value = patternTool();
-  `);
-
-  const call = findCall(sourceFile, "value");
-  // Recognized as a pattern-tool call, but the missing first argument means
-  // there is nothing to hoist.
-  assertEquals(getPatternToolHoistablePatternCall(call, checker), undefined);
-});
-
-Deno.test("getPatternToolHoistablePatternCall ignores calls that are not patternTool", () => {
-  const { sourceFile, checker } = createProgram(`
-    declare function plain(body: () => number, params?: unknown): number;
-    const value = plain(() => 1, { p: 1 });
-  `);
-
-  const call = findCall(sourceFile, "value");
-  assertEquals(getPatternToolHoistablePatternCall(call, checker), undefined);
 });
 
 Deno.test("getLiftAppliedInputAndCallback returns undefined when the applied lift call has no input argument", () => {
@@ -336,6 +334,85 @@ Deno.test("getPatternBuilderCallbackArgument unwraps a function-hardening wrappe
   assertEquals(callback.parameters[0]?.name.getText(), "input");
 });
 
+Deno.test("getPatternBuilderCallbackArgument unwraps the compiler params-schema carrier", () => {
+  const { sourceFile, checker } = createProgramWithCommonFabric(`
+    import { __cfHelpers, pattern } from "commonfabric";
+    const value = pattern(__cfHelpers.withPatternParamsSchema(
+      (input: unknown, params: unknown) => ({ input, params }),
+      { type: "object", properties: {} },
+    ));
+  `);
+
+  const call = findCall(sourceFile, "value");
+  const descriptor = getPatternBuilderCallbackDescriptor(call, checker);
+  const callback = descriptor?.callback;
+
+  assert(callback && ts.isArrowFunction(callback));
+  assertEquals(
+    callback.parameters.map((parameter) => parameter.name.getText()),
+    [
+      "input",
+      "params",
+    ],
+  );
+  assert(descriptor.paramsSchemaCarrier);
+  assertEquals(
+    descriptor.paramsSchema?.getText(),
+    `{ type: "object", properties: {} }`,
+  );
+});
+
+Deno.test("updatePatternBuilderCallbackArgument preserves satisfies and partially-emitted carriers", () => {
+  const { sourceFile, checker } = createProgramWithCommonFabric(`
+    import { __cfHelpers, pattern } from "commonfabric";
+    const value = pattern((__cfHelpers.withPatternParamsSchema(
+      (input: unknown, params: unknown) => ({ input, params }),
+      { type: "object", properties: {} },
+    ) satisfies unknown));
+  `);
+  const call = findCall(sourceFile, "value");
+  const descriptor = getPatternBuilderCallbackDescriptor(call, checker)!;
+  const replacement = ts.factory.createArrowFunction(
+    undefined,
+    undefined,
+    [],
+    undefined,
+    undefined,
+    ts.factory.createNumericLiteral(1),
+  );
+
+  const satisfiesUpdated = updatePatternBuilderCallbackArgument(
+    descriptor,
+    replacement,
+    ts.factory,
+  );
+  const satisfies = ts.isParenthesizedExpression(satisfiesUpdated)
+    ? satisfiesUpdated.expression
+    : satisfiesUpdated;
+  assert(ts.isSatisfiesExpression(satisfies));
+  assert(ts.isCallExpression(satisfies.expression));
+  assertEquals(satisfies.expression.arguments[0], replacement);
+
+  const partiallyEmittedUpdated = updatePatternBuilderCallbackArgument(
+    {
+      ...descriptor,
+      argument: ts.factory.createPartiallyEmittedExpression(
+        descriptor.argument,
+      ),
+    },
+    replacement,
+    ts.factory,
+  );
+  assert(ts.isPartiallyEmittedExpression(partiallyEmittedUpdated));
+  const partiallyEmittedInner = partiallyEmittedUpdated.expression;
+  const wrapped = ts.isParenthesizedExpression(partiallyEmittedInner)
+    ? partiallyEmittedInner.expression
+    : partiallyEmittedInner;
+  assert(ts.isSatisfiesExpression(wrapped));
+  assert(ts.isCallExpression(wrapped.expression));
+  assertEquals(wrapped.expression.arguments[0], replacement);
+});
+
 Deno.test("getPatternBuilderCallbackArgument follows an identifier bound to the callback arrow", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import { pattern } from "commonfabric";
@@ -445,7 +522,7 @@ Deno.test("detectCallKind classifies imported runtime calls with their export na
 Deno.test("detectCallKind classifies ifElse, when, unless, wish, and generate calls from commonfabric", () => {
   const { sourceFile, checker } = createProgramWithCommonFabric(`
     import {
-      ifElse, when, unless, wish, generateText, generateObject, patternTool,
+      ifElse, when, unless, wish, generateText, generateObject,
     } from "commonfabric";
     const a = ifElse(true, 1, 2);
     const b = when(true, () => 1);
@@ -453,7 +530,6 @@ Deno.test("detectCallKind classifies ifElse, when, unless, wish, and generate ca
     const d = wish({});
     const e = generateText({});
     const f = generateObject({});
-    const g = patternTool({});
   `);
 
   assertEquals(
@@ -479,10 +555,6 @@ Deno.test("detectCallKind classifies ifElse, when, unless, wish, and generate ca
   assertEquals(
     detectCallKind(findCall(sourceFile, "f"), checker)?.kind,
     "generate-object",
-  );
-  assertEquals(
-    detectCallKind(findCall(sourceFile, "g"), checker)?.kind,
-    "pattern-tool",
   );
 });
 
@@ -611,7 +683,6 @@ Deno.test("detectCallKind recognizes synthetic __cfHelpers runtime and cell-fact
     const strValue = __cfHelpers.str(\`x\`);
     const cellValue = __cfHelpers.cell(1);
     const ifElseValue = __cfHelpers.ifElse(true, 1, 2);
-    const patternToolValue = __cfHelpers.patternTool({});
     const generateTextValue = __cfHelpers.generateText({});
     const generateObjectValue = __cfHelpers.generateObject({});
     const wishValue = __cfHelpers.wish({});
@@ -636,10 +707,6 @@ Deno.test("detectCallKind recognizes synthetic __cfHelpers runtime and cell-fact
   assertEquals(
     detectCallKind(findCall(sourceFile, "ifElseValue"), checker)?.kind,
     "ifElse",
-  );
-  assertEquals(
-    detectCallKind(findCall(sourceFile, "patternToolValue"), checker)?.kind,
-    "pattern-tool",
   );
   assertEquals(
     detectCallKind(findCall(sourceFile, "generateTextValue"), checker)?.kind,

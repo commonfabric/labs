@@ -245,6 +245,29 @@ Deno.test(
 );
 
 Deno.test(
+  "interprocedural helper result preserves caller-side property reads",
+  () => {
+    const input = getPaths(
+      analyze(`
+        type Tile = { char: string; id: string; unused: string };
+        const findTile = (tiles: readonly Tile[], char: string) =>
+          tiles.find((tile) => tile.char === char)!;
+        const fn = (input: { tiles: readonly Tile[] }) => {
+          const tile = findTile(input.tiles, "A");
+          return tile.id;
+        };`),
+      "input",
+    );
+
+    assert(
+      input.readPaths.includes("tiles.0.id"),
+      JSON.stringify(input),
+    );
+    assertEquals(input.wildcard, false);
+  },
+);
+
+Deno.test(
   "unknown optional callback use still widens its tracked argument",
   () => {
     // Optionality does not change the call policy. The unresolved callback

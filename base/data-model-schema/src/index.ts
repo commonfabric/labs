@@ -37,3 +37,9 @@ export {
 } from "./schema-rewrite.ts";
 
 export { cloneSchemaMutable, toDeepFrozenSchema } from "./schema-copy.ts";
+
+export {
+  addRequiredSchemaPaths,
+  factorySchemasEqual,
+  resolveLocalSchemaRef,
+} from "./factory-schema.ts";

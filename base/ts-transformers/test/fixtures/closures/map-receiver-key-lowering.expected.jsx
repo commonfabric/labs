@@ -41,7 +41,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
     const item = __cf_pattern_input.key("element");
-    return item.key("subItems").mapWithPattern(__cfPattern_1, {}).for("__patternResult", true);
+    return item.key("subItems").mapWithPattern(__cfPattern_1).for("__patternResult", true);
 }, {
     type: "object",
     properties: {
@@ -78,12 +78,12 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-receiver-key-lowering
 // Verifies: nested .map() calls are both transformed, with receiver lowered to .key()
-//   items.map(fn) → items.mapWithPattern(pattern(...), {})
-//   item.subItems.map(fn) → item.key("subItems").mapWithPattern(pattern(...), {})
+//   items.map(fn) → items.mapWithPattern(pattern(...))
+//   item.subItems.map(fn) → item.key("subItems").mapWithPattern(pattern(...))
 // Context: No captures; receiver expression item.subItems is lowered to item.key("subItems")
 const _p = pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
-    return items.mapWithPattern(__cfPattern_2, {});
+    return items.mapWithPattern(__cfPattern_2);
 }, {
     type: "object",
     properties: {

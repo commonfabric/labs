@@ -41,6 +41,7 @@ import {
   createResumeRepublisher,
   resumeSettleRunKind,
 } from "./resume-republish.ts";
+import { createListPatternFactorySupervisor } from "./list-factory-materialization.ts";
 
 // Presence probe for the result container: slots resolve as cells, so the
 // coordinator can ask "is the container initialized?" without materializing
@@ -86,7 +87,6 @@ export function filter(
   inputsCell: Cell<{
     list: any[];
     op: Pattern;
-    params?: Record<string, any>;
   }>,
   sendResult: (tx: IExtendedStorageTransaction, result: any) => void,
   addCancel: AddCancel,
@@ -157,6 +157,16 @@ function createFilterInstance(
   // Identity-based tracking: maps element address key → element run.
   // resultCell holds the predicate boolean for this element.
   const elementRuns = new Map<string, ElementRun>();
+  const factorySupervisor = createListPatternFactorySupervisor(
+    runtime,
+    addCancel,
+    () => {
+      for (const entry of elementRuns.values()) {
+        runtime.runner.stop(entry.resultCell);
+      }
+    },
+    identity,
+  );
 
   // Cleared when the coordinator is torn down, so the asynchronous resume work
   // below stops writing to a result container nothing owns any more. The same
@@ -226,8 +236,13 @@ function createFilterInstance(
   ): void => {
     runtime.storageManager.trackUntilSettled(
       syncCellForIdentity(inputListCell, identity)
-        .then(() =>
-          !active ? undefined : runtime.editWithRetry((settleTx) => {
+        .then(() => {
+          if (!active) return undefined;
+          // The input is now confirmed at its durable empty/absent state. A
+          // later non-empty value is a post-resume edit, not a delayed initial
+          // batch, so its freshly created rows must run immediately.
+          resumeBatchAwaitSync = false;
+          return runtime.editWithRetry((settleTx) => {
             if (!active || !result) return;
             if (identity !== undefined) settleTx.tx.scopeKeyIdentity = identity;
             // Out-of-band recovery write; the kind decision (bookkeeping
@@ -257,8 +272,8 @@ function createFilterInstance(
                 error,
               });
             }
-          })
-        )
+          });
+        })
         .catch((error) =>
           logger.warn("resume-input", "the resumed input list sync rejected", {
             error,
@@ -274,16 +289,27 @@ function createFilterInstance(
     // result container — is the plan the resume pre-sync shares, naming the
     // children this reconcile runs before the parent instantiates; its
     // reads and their rationale live in list-coordinator-plan.ts.
+    const factorySelection = factorySupervisor.materialize(
+      tx,
+      inputsCell.key("op"),
+      "filter",
+    );
     const plan = listCoordinatorPlan(
       runtime,
       tx,
       "filter",
       inputsCell,
-      FILTER_INPUT_SCHEMA,
+      factorySelection,
       parentCell,
       outputBinding,
     );
-    const { opPattern, argumentUsage, list } = plan;
+    const {
+      opPattern,
+      argumentUsage,
+      factoryGeneration,
+      factorySelectionLink,
+      list,
+    } = plan;
     const outputScope = plan.scope;
 
     // Whether this reconcile issues the container's links: a container it
@@ -352,7 +378,6 @@ function createFilterInstance(
       ...(argumentUsage.usesElement ? { element } : {}),
       ...(argumentUsage.usesIndex ? { index } : {}),
       ...(argumentUsage.usesArray ? { array: inputsCell.key("list") } : {}),
-      ...(argumentUsage.usesParams ? { params: inputsCell.key("params") } : {}),
     });
 
     // Resume against confirmed state, not the not-yet-loaded value: on the
@@ -454,7 +479,8 @@ function createFilterInstance(
         const previousIndex = existing.lastIndex;
         if (
           existing.needsSetup ||
-          (argumentUsage.usesIndex && existing.lastIndex !== i)
+          existing.runGeneration !== factoryGeneration ||
+          existing.lastIndex !== i
         ) {
           if (awaitingResult(existing.resultCell)) {
             // This predicate's document has not caught up, so setup written
@@ -471,11 +497,13 @@ function createFilterInstance(
                 doNotUpdateOnPatternChange: true,
                 awaitSyncBeforeInitialRun: elementAwaitSync,
                 parentPieceRootId,
+                factorySelectionLink,
                 referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
                 capturedArgumentFields: LIST_OP_CAPTURED_ARGUMENT_FIELDS,
                 droppedArgumentFields,
               },
             );
+            existing.runGeneration = factoryGeneration;
             // The whole setup, every time, because issuing it takes the debt
             // for it: an overlapping reconcile that wrote the link and has not
             // settled hands it to this one, and a partial issuance would leave
@@ -510,6 +538,7 @@ function createFilterInstance(
             doNotUpdateOnPatternChange: true,
             awaitSyncBeforeInitialRun: elementAwaitSync,
             parentPieceRootId,
+            factorySelectionLink,
             referencedArgumentFields: LIST_OP_REFERENCED_ARGUMENT_FIELDS,
             capturedArgumentFields: LIST_OP_CAPTURED_ARGUMENT_FIELDS,
             droppedArgumentFields,
@@ -517,7 +546,12 @@ function createFilterInstance(
         );
         linkElementCell(boundResultCell);
 
-        const entry = { resultCell, lastIndex: i, needsSetup: false };
+        const entry = {
+          resultCell,
+          lastIndex: i,
+          needsSetup: false,
+          runGeneration: factoryGeneration,
+        };
         elementRuns.set(elementKey, entry);
         rollback.created(elementKey, entry);
       }

@@ -6,6 +6,7 @@ import type {
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import { getArrayElementInfo, instantiatedElementType } from "../type-utils.ts";
+import { typeNodeContainsFactoryContractHint } from "./factory-formatter.ts";
 
 export class ArrayFormatter implements TypeFormatter {
   #schemaGenerator: SchemaGenerator;
@@ -74,9 +75,10 @@ export class ArrayFormatter implements TypeFormatter {
       ? getArrayElementInfo(type, context.typeChecker, context.hintsNode)
         ?.elementNode
       : undefined;
-    const spelledBy = printedElement &&
-      context.schemaHints?.get(printedElement)?.spelledBy;
-
+    const printedElementHint = printedElement &&
+      (context.schemaHints?.get(printedElement) ??
+        context.schemaHints?.get(ts.getOriginalNode(printedElement)));
+    const spelledBy = printedElementHint?.spelledBy;
     // Use formatChildType - it will auto-detect whether to use type-based
     // or node-based analysis based on whether the type is reliable
     // A tuple's items are the union of its element types, which the checker
@@ -91,7 +93,10 @@ export class ArrayFormatter implements TypeFormatter {
       elements && info.elementType.isUnion()
         ? { ...context, tupleItems: { items: info.elementType, elements } }
         : context,
-      spelledBy ?? info.elementNode,
+      printedElement &&
+        typeNodeContainsFactoryContractHint(printedElement, context)
+        ? printedElement
+        : spelledBy ?? info.elementNode,
       instantiatedElementType(context.instantiatedAs, context.typeChecker),
     );
 

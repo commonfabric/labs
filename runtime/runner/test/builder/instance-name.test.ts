@@ -2,6 +2,10 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import {
+  factoryStateOf,
+  isAdmittedFabricFactory,
+} from "@commonfabric/data-model/fabric-factory";
 
 import {
   instanceNameOfPartialCause,
@@ -48,7 +52,10 @@ describe("instance-name", () => {
   // order, each with the positional cause it records in place of a name.
   const instanceCauses = (parent: Pattern) =>
     parent.nodes
-      .filter((node) => (node.module as { type?: string }).type === "pattern")
+      .filter((node) =>
+        isAdmittedFabricFactory(node.module) &&
+        factoryStateOf(node.module).kind === "pattern"
+      )
       .map((node) => {
         const partialCause =
           (node.outputs as { $alias: { partialCause: unknown } }).$alias

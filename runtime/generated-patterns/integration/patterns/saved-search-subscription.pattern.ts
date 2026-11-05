@@ -207,7 +207,7 @@ const createSubscription = (
 };
 
 const sanitizeSubscriptions = (
-  value: unknown,
+  value: readonly SavedSearchInput[],
 ): SavedSearchSubscription[] => {
   const entries = Array.isArray(value) && value.length > 0
     ? (value as SavedSearchInput[])

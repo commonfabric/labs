@@ -118,7 +118,7 @@ const sanitizeStage = (
   return { id, label, count };
 };
 
-const sanitizeStages = (value: unknown): FunnelStage[] => {
+const sanitizeStages = (value: readonly FunnelStageInput[]): FunnelStage[] => {
   if (!Array.isArray(value)) return cloneDefaultStages();
   const seen = new Set<string>();
   const sanitized: FunnelStage[] = [];

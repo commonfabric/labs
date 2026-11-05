@@ -41,36 +41,34 @@ interface State {
     items: Item[];
     count: Cell<number>;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const item = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
-    return (<cf-button onClick={handleClick({ count: state.key("count") })}>
+    return (<cf-button onClick={handleClick({ count: state.count })}>
             {item.key("name")}
           </cf-button>);
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Item"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        count: {
-                            type: "number",
-                            asCell: ["readonly"]
-                        }
-                    },
-                    required: ["count"]
+                count: {
+                    type: "number",
+                    asCell: ["cell"]
                 }
             },
-            required: ["state"]
+            required: ["count"]
         }
     },
-    required: ["element", "params"],
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Item"
+        }
+    },
+    required: ["element"],
     $defs: {
         Item: {
             type: "object",
@@ -108,17 +106,17 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-handler-reference-with-type-arg-no-name
 // Verifies: .map() transform works with type arg on pattern but no export name
-//   .map(fn) → .mapWithPattern(pattern(...), {state: {count: ...}})
+//   .map(fn) → .mapWithPattern(pattern(...).curry({state: {count: ...}}))
 // Context: Same as map-handler-reference but exercises the <State> type-arg-no-name path
 export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Map callback references handler - should NOT capture it */}
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_1.curry({
                 state: {
                     count: state.key("count")
                 }
-            })}
+            }))}
       </div>),
     };
 }, {

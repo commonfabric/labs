@@ -4,10 +4,11 @@ import { getCallArgumentPosition } from "../ast/call-arguments.ts";
 import {
   classifyArrayCallbackContainerCall,
   detectCallKind,
+  findEnclosingPatternBuilderCallbackDescriptor,
   getPatternBuilderCallbackArgument,
-  getPatternToolCallbackArgument,
   isCollectingPlainArrayMethodCallback,
 } from "../ast/call-kind.ts";
+import { isCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { isEventHandlerJsxAttribute } from "../ast/event-handlers.ts";
 import { outermostTransparentWrapper } from "../utils/expression.ts";
 
@@ -23,7 +24,6 @@ export type SupportedCallbackBoundaryKind =
   | "pattern-builder"
   | "render-builder"
   | "lift-applied"
-  | "pattern-tool"
   | "computed-builder"
   | "action-builder"
   | "lift-builder"
@@ -70,7 +70,6 @@ export interface CallbackBoundarySemantics {
   readonly bodyContext: CallbackBoundaryBodyContext | undefined;
   readonly isReactiveArrayMethodCallback: boolean;
   readonly isPlainArrayValueCallback: boolean;
-  readonly isPatternToolCallback: boolean;
   readonly supportsPatternOwnedWrapperCallbackSite: boolean;
   readonly supportsPatternOwnedStatements: boolean;
   readonly allowsRestrictedContextFunctionCallback: boolean;
@@ -105,35 +104,10 @@ function isSqliteTableCallee(
   const type = checker.getTypeAtLocation(callee);
   const alias = type.aliasSymbol;
   if (!alias || alias.name !== "SqliteTableFunction") return false;
-  // The alias must be declared by Common Fabric's own typings (the api
-  // package in-repo, the bundled commonfabric d.ts in the pattern compile
-  // env) — a user-defined alias of the same name must not steer boundary
-  // classification.
-  return (alias.getDeclarations() ?? []).some((decl) => {
-    const file = decl.getSourceFile().fileName.replace(/\\/g, "/");
-    return file.endsWith("/api/index.ts") ||
-      file.endsWith("commonfabric.d.ts") ||
-      file.includes("/@commonfabric/api/");
-  });
-}
-
-/**
- * True when `patternCall` (a `pattern(...)` call) is the first argument of an
- * enclosing `patternTool(...)` call — the canonical CT-1655 shape
- * `patternTool(pattern(cb), extraParams?)`. Used to give such a pattern's
- * callback a patternTool boundary (function creation allowed in the
- * surrounding restricted context) rather than the restricted pattern-builder
- * boundary a bare `pattern(...)` gets.
- */
-function isPatternToolPatternArgument(
-  patternCall: ts.CallExpression,
-  checker: ts.TypeChecker,
-): boolean {
-  const position = getCallArgumentPosition(patternCall);
-  if (!position || position.index !== 0) {
-    return false;
-  }
-  return detectCallKind(position.call, checker)?.kind === "pattern-tool";
+  // Callback ownership is privileged transformer behavior. Only a declaration
+  // SourceFile registered by the compiler's trusted runtime-type resolver may
+  // grant it; filenames and module-looking paths are authored data.
+  return isCommonFabricSymbol(alias, checker);
 }
 
 export function classifyCallbackBoundary(
@@ -178,6 +152,22 @@ export function classifyCallbackBoundary(
     };
   }
 
+  const patternDescriptor = findEnclosingPatternBuilderCallbackDescriptor(
+    callback,
+    checker,
+  );
+  if (patternDescriptor) {
+    return {
+      kind: "supported",
+      boundaryKind: "pattern-builder",
+      bodyContext: {
+        strategy: "explicit",
+        kind: "pattern",
+        owner: "pattern",
+      },
+    };
+  }
+
   const callKind = detectCallKind(parent, checker);
   if (callKind?.kind === "lift-applied") {
     return {
@@ -187,18 +177,6 @@ export function classifyCallbackBoundary(
         strategy: "explicit",
         kind: "compute",
         owner: "lift-applied",
-      },
-    };
-  }
-
-  if (callKind?.kind === "pattern-tool") {
-    return {
-      kind: "supported",
-      boundaryKind: "pattern-tool",
-      bodyContext: {
-        strategy: "explicit",
-        kind: "compute",
-        owner: "unknown",
       },
     };
   }
@@ -226,24 +204,6 @@ export function classifyCallbackBoundary(
   if (callKind?.kind === "builder") {
     switch (callKind.builderName) {
       case "pattern":
-        // A `pattern(...)` that is itself the first argument of a
-        // `patternTool(...)` call is the canonical patternTool shape (CT-1655):
-        // authoring it inside a pattern body is legitimate, so its callback
-        // gets the same boundary as a directly-passed patternTool callback —
-        // allowing function creation in the surrounding restricted context.
-        // A bare `pattern(...)` (not a patternTool argument) keeps the
-        // restricted `pattern-builder` boundary below.
-        if (isPatternToolPatternArgument(parent, checker)) {
-          return {
-            kind: "supported",
-            boundaryKind: "pattern-tool",
-            bodyContext: {
-              strategy: "explicit",
-              kind: "compute",
-              owner: "unknown",
-            },
-          };
-        }
         return {
           kind: "supported",
           boundaryKind: "pattern-builder",
@@ -355,18 +315,6 @@ export function classifyCallbackBoundary(
     };
   }
 
-  if (getPatternToolCallbackArgument(parent, checker) === callback) {
-    return {
-      kind: "supported",
-      boundaryKind: "pattern-tool",
-      bodyContext: {
-        strategy: "explicit",
-        kind: "compute",
-        owner: "unknown",
-      },
-    };
-  }
-
   if (isWithinJsxExpression(callback)) {
     return {
       kind: "unsupported",
@@ -406,7 +354,6 @@ export function getCallbackBoundarySemantics(
     bodyContext,
     isReactiveArrayMethodCallback: supportedKind === "reactive-array-method",
     isPlainArrayValueCallback: supportedKind === "plain-array-value",
-    isPatternToolCallback: supportedKind === "pattern-tool",
     supportsPatternOwnedWrapperCallbackSite: supportedKind ===
         "reactive-array-method" ||
       (supportedKind === "plain-array-value" &&
@@ -423,7 +370,6 @@ export function getCallbackBoundarySemantics(
       supportedKind === "render-builder",
     allowsRestrictedContextFunctionCallback: !!supportedKind &&
       supportedKind !== "event-handler" &&
-      supportedKind !== "pattern-builder" &&
       supportedKind !== "render-builder",
     establishesLocalReactiveAliasScope: supportedKind === "lift-applied" ||
       supportedKind === "computed-builder",

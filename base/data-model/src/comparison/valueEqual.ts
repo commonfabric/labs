@@ -10,6 +10,7 @@ import {
   type FabricValue,
 } from "@/interface.ts";
 import { isFabricSpecialObject } from "@/types";
+import { isAdmittedFabricFactory, sealFactoryState } from "@/fabric-factory.ts";
 import { debugStr } from "@/value-debug";
 import { hashStringOf } from "@/value-hash";
 
@@ -44,8 +45,15 @@ export function valueEqual(a: FabricValue, b: FabricValue): boolean {
     }
 
     case "function": {
-      // Not a `FabricValue`; reachable only via an unsound cast.
-      throw new Error("Cannot compare a function value.");
+      if (!isAdmittedFabricFactory(a)) {
+        throw new Error("Cannot compare a function value.");
+      }
+      if (typeof b === "function" && !isAdmittedFabricFactory(b)) {
+        throw new Error("Cannot compare a function value.");
+      }
+      if (!isAdmittedFabricFactory(b)) return false;
+      return hashStringOf(sealFactoryState(a)) ===
+        hashStringOf(sealFactoryState(b));
     }
 
     default: {
@@ -66,7 +74,7 @@ export function valueEqual(a: FabricValue, b: FabricValue): boolean {
     }
 
     case "function": {
-      // Not a `FabricValue`; reachable only via an unsound cast.
+      if (isAdmittedFabricFactory(b)) return false;
       throw new Error("Cannot compare a function value.");
     }
 

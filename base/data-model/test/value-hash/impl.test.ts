@@ -6,9 +6,16 @@ import {
   type FabricValue,
   hashOf,
   hashStringOf,
+  registerFabricFactory,
   taggedHashStringOf,
 } from "@";
+import { UnknownValue } from "@/codec-common/UnknownValue.ts";
 import { ValueHasher } from "@/value-hash/ValueHasher.ts";
+
+const FACTORY_REF = {
+  identity: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  symbol: "__cfModule_1",
+} as const;
 
 describe("value-hash/impl", () => {
   describe("hashOf()", () => {
@@ -42,6 +49,22 @@ describe("value-hash/impl", () => {
     it("throws for `Symbol(desc)` (unique / uninterned)", () => {
       expect(() => hashOf(Symbol("nope"))).toThrow(
         "Cannot hash unique (uninterned) symbol",
+      );
+    });
+
+    it("hashes an admitted factory as its `Factory@1` codec value", () => {
+      const state = { kind: "module", ref: FACTORY_REF } as const;
+      const factory = registerFabricFactory(
+        () => undefined,
+        "module",
+        state,
+      );
+
+      expect(hashOf(factory)).toEqual(
+        hashOf(new UnknownValue("Factory@1", state)),
+      );
+      expect(() => hashOf((() => undefined) as never)).toThrow(
+        "Cannot hash an arbitrary function value",
       );
     });
   });

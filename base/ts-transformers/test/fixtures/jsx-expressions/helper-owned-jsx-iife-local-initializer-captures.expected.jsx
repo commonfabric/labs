@@ -167,17 +167,34 @@ const __cfLift_3 = __cfHelpers.lift<{
         unsorted: {
             type: "array",
             items: {
-                type: "object",
-                properties: {
-                    name: {
-                        type: "string"
-                    }
-                },
-                required: ["name"]
+                $ref: "#/$defs/Entry"
             }
         }
     },
-    required: ["unsorted"]
+    required: ["unsorted"],
+    $defs: {
+        Entry: {
+            type: "object",
+            properties: {
+                id: {
+                    type: "string"
+                },
+                name: {
+                    type: "string"
+                },
+                type: {
+                    "enum": ["file", "folder"]
+                },
+                children: {
+                    type: "array",
+                    items: {
+                        $ref: "#/$defs/Entry"
+                    }
+                }
+            },
+            required: ["id", "name", "type"]
+        }
+    }
 } as const satisfies __cfHelpers.JSONSchema, {
     $ref: "#/$defs/AnonymousType_1",
     $defs: {
@@ -232,9 +249,8 @@ const __cfHandler_2 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
     },
     required: ["item", "pushPath"]
 } as const satisfies __cfHelpers.JSONSchema, (_, { pushPath, item }) => pushPath.send({ name: item.name }));
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { pushPath }) => {
     const item = __cf_pattern_input.key("element");
-    const pushPath = __cf_pattern_input.key("params", "pushPath");
     return (<button type="button" onClick={__cfHandler_2({
         pushPath: pushPath,
         item: {
@@ -246,27 +262,26 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Entry"
-        },
-        params: {
+        pushPath: {
             type: "object",
             properties: {
-                pushPath: {
-                    type: "object",
-                    properties: {
-                        name: {
-                            type: "string"
-                        }
-                    },
-                    required: ["name"],
-                    asCell: ["stream"]
+                name: {
+                    type: "string"
                 }
             },
-            required: ["pushPath"]
+            required: ["name"],
+            asCell: ["stream"]
         }
     },
-    required: ["element", "params"],
+    required: ["pushPath"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Entry"
+        }
+    },
+    required: ["element"],
     $defs: {
         Entry: {
             type: "object",
@@ -345,9 +360,9 @@ export default pattern((__cf_pattern_input) => {
                     p: p
                 }).for("unsorted", true);
                 const items = __cfLift_3({ unsorted: unsorted }).for("items", true);
-                return items.mapWithPattern(__cfPattern_1, {
+                return items.mapWithPattern(__cfPattern_1.curry({
                     pushPath: pushPath
-                });
+                }));
             })()}
       </div>)
     };

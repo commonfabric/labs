@@ -3217,7 +3217,21 @@ export class SpaceServer implements TransactionSealDestination {
       );
     }
     const sealed = sealedSpaces[0];
-    const operations = [...sealed.sealed.commit.operations];
+    let wireOperations: Awaited<typeof sealed.sealed.wireOperations>;
+    try {
+      wireOperations = await sealed.sealed.wireOperations;
+    } catch (error) {
+      withdrawAll(
+        `effect completion artifact publication failed: ${String(error)}`,
+      );
+      return refuse(
+        `effect completion artifact publication failed: ${String(error)}`,
+      );
+    }
+    const operations = [
+      ...wireOperations,
+      ...sealed.sealed.commit.operations,
+    ];
     if (operations.some((operation) => operation.op === "sqlite")) {
       withdrawAll("effect completion carries folded sqlite ops; refused");
       return refuse(
@@ -3229,6 +3243,7 @@ export class SpaceServer implements TransactionSealDestination {
     for (const [opIndex, operation] of operations.entries()) {
       // Unreachable after the refusal above; narrows the op type.
       if (operation.op === "sqlite") continue;
+      if (opIndex < wireOperations.length) continue;
       const scoped = operation.scope !== undefined &&
         operation.scope !== "space";
       if (scoped || carriage?.acting !== undefined) {
@@ -3405,13 +3420,21 @@ export class SpaceServer implements TransactionSealDestination {
         return Promise.resolve({ ok: {} });
       },
     };
+    const rejectHandedPreparations = (reason: unknown): void => {
+      for (const entry of handed) entry.store?.rejectPreparations(reason);
+    };
     const result = await inner.sealInto(collector);
-    if (result.error !== undefined) return result;
+    if (result.error !== undefined) {
+      rejectHandedPreparations(result.error);
+      return result;
+    }
     if (handed.length === 0) {
       // An all-no-op transaction handed over nothing.
       return result;
     }
     if (handed.length > 1 || handed[0].store === undefined) {
+      const reason = new Error("direct commit crossed its serving space");
+      rejectHandedPreparations(reason);
       return refuse(
         `direct commit of ${direct.actionId} wrote ${
           handed.map((entry) => entry.space).join(", ")
@@ -3420,13 +3443,17 @@ export class SpaceServer implements TransactionSealDestination {
     }
     const { space, native, source, store } = handed[0];
     if ((native.sqliteOps?.length ?? 0) > 0) {
+      const reason = new Error("direct commit carried sqlite operations");
+      store.rejectPreparations(reason);
       return refuse(
         `direct commit of ${direct.actionId} folds sqlite ops; those ride ` +
           "scheduler runs' wave batches",
       );
     }
-    const { operations, preconditions, reads } = store;
+    const { preconditions, reads } = store;
     if (reads.pending.length > 0) {
+      const reason = new Error("direct commit read pending wave state");
+      store.rejectPreparations(reason);
       return refuse(
         `direct commit of ${direct.actionId} read state the wave has not ` +
           `committed (${
@@ -3440,6 +3467,17 @@ export class SpaceServer implements TransactionSealDestination {
           }); stage that state in an earlier cycle`,
       );
     }
+    let wireOperations: Awaited<typeof store.wireOperations>;
+    try {
+      wireOperations = await store.wireOperations;
+    } catch (error) {
+      store.rejectPreparations(error);
+      return refuse(
+        `direct commit of ${direct.actionId} could not prepare artifact ` +
+          `publication: ${String(error)}`,
+      );
+    }
+    const operations = [...wireOperations, ...store.operations];
     const confirmedReads: ConfirmedRead[] = [...reads.confirmed];
     const annotations: WaveWriteAnnotation[] = [];
     const written: Array<{ id: string; scopeKey: ScopeKey }> = [];
@@ -3466,6 +3504,7 @@ export class SpaceServer implements TransactionSealDestination {
       derivedThrough: this.#watermark,
     });
     if (outcome.error) {
+      store.rejectPreparations(outcome.error);
       return refuse(`direct commit rejected: ${outcome.error.message}`);
     }
     const committedSeq = outcome.ok.seq;

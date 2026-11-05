@@ -30,10 +30,7 @@ import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger } from "@commonfabric/logger";
 import { PathKeyMap } from "@commonfabric/collections/path-key-map";
-import {
-  isObjectNotArray,
-  isObjectOrArray,
-} from "@commonfabric/js-values/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { readStatsActive, recordDocumentRead } from "../read-stats.ts";
 import {
@@ -75,6 +72,7 @@ import type {
   NativeCommitOptions,
   NativeStorageCommit,
   NativeStorageCommitOperation,
+  NativeStorageCommitPreparation,
   NativeTextEdit,
   ReadError,
   Result,
@@ -388,8 +386,17 @@ const invalidateFrozenReadsOnChain = (
 };
 
 const freezeReadValue = <T extends FabricValue | undefined>(value: T): T => {
-  if (!isObjectOrArray(value)) {
+  if (
+    value === undefined || value === null ||
+    (typeof value !== "object" && typeof value !== "function")
+  ) {
     return value;
+  }
+  // Storage has the narrower Fabric-value contract. Route every callable
+  // through that clone boundary so factories are sealed and arbitrary
+  // functions are rejected, including an already-frozen callable.
+  if (typeof value === "function") {
+    return cloneIfNecessary(value) as T;
   }
   // What isolates a read from later mutation of its source is frozen-ness,
   // and `isDeepFrozen()` answers that question alone: a deep-frozen value
@@ -1153,6 +1160,10 @@ export class V2StorageTransaction implements IStorageTransaction {
    * Folded SQLite write ops per space, applied in the same commit as cell ops.
    */
   #sqliteOps = new Map<MemorySpace, SqliteOperation[]>();
+  #nativeCommitPreparations = new Map<
+    MemorySpace,
+    Map<string, NativeStorageCommitPreparation>
+  >();
 
   /**
    * Text changes per space, keyed by document and then by the field's
@@ -1643,18 +1654,53 @@ export class V2StorageTransaction implements IStorageTransaction {
     return next;
   }
 
+  addNativeCommitPreparation(
+    space: MemorySpace,
+    preparation: NativeStorageCommitPreparation,
+  ): void {
+    this.#assertWritable("addNativeCommitPreparation()");
+    let preparations = this.#nativeCommitPreparations.get(space);
+    if (preparations === undefined) {
+      preparations = new Map();
+      this.#nativeCommitPreparations.set(space, preparations);
+    }
+    preparations.set(preparation.key, preparation);
+  }
+
+  removeNativeCommitPreparation(space: MemorySpace, key: string): void {
+    this.#assertWritable("removeNativeCommitPreparation()");
+    const preparations = this.#nativeCommitPreparations.get(space);
+    if (preparations === undefined) return;
+    preparations.delete(key);
+    if (preparations.size === 0) {
+      this.#nativeCommitPreparations.delete(space);
+    }
+  }
+
   getNativeCommit(space: MemorySpace): NativeStorageCommit | undefined {
     const branch = this.#branches.get(space);
     const nativePreconditions = this.#commitPreconditionsFor(space);
     const sqliteOps = this.#sqliteOps.get(space);
+    const preparations = this.#nativeCommitPreparations.get(space);
     if (
       !branch &&
-      nativePreconditions.length === 0 && !sqliteOps?.length
+      nativePreconditions.length === 0 && !sqliteOps?.length &&
+      !preparations?.size
     ) {
       return undefined;
     }
 
+    const contentAddressedOperations: NativeStorageCommitOperation[] = [];
     const operations: NativeStorageCommitOperation[] = [];
+    // A transaction's document map reflects first access, not dependency
+    // order. Publish content-addressed documents before their carriers so a
+    // speculative reader cannot observe a reference before its closure.
+    const appendOperation = (operation: NativeStorageCommitOperation) => {
+      (operation.id.startsWith("cid:")
+        ? contentAddressedOperations
+        : operations)
+        .push(operation);
+    };
     // Unconfirmed schema documents whose staged write nets to no visible
     // change (#mustDeliverSchemaDoc; the visible copy sits on a layer the
     // wire never carries, such as a client speculation overlay entry).
@@ -1776,7 +1822,7 @@ export class V2StorageTransaction implements IStorageTransaction {
         );
         if (mergeable.ops.length > 0) {
           if (hasBase || patch === null) {
-            operations.push({
+            appendOperation({
               op: "patch",
               id,
               type,
@@ -1788,13 +1834,13 @@ export class V2StorageTransaction implements IStorageTransaction {
           }
           this.#abandonMergeableOps(doc);
         } else if (patch) {
-          operations.push(patch);
+          appendOperation(patch);
           continue;
         } else if (textChanges !== undefined) {
           // Only text-changed fields moved, so the patch is empty, and the
           // operation is still what carries the changed text to the local
           // view.
-          operations.push({
+          appendOperation({
             op: "patch",
             id,
             type,
@@ -1809,7 +1855,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       }
 
       if (doc.current.value === undefined) {
-        operations.push({ op: "delete", id, type, scope });
+        appendOperation({ op: "delete", id, type, scope });
         continue;
       }
       // A `set` that the diff above fell through to, for a document with no
@@ -1819,7 +1865,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       if (diffed && doc.initial.value === undefined) {
         this.#recordDocumentRootRead(space, id, scope, doc);
       }
-      operations.push({
+      appendOperation({
         op: "set",
         id,
         type,
@@ -1829,21 +1875,28 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
 
     if (
-      redeliveries.length > 0 && (operations.length > 0 || sqliteOps?.length)
+      redeliveries.length > 0 &&
+      (contentAddressedOperations.length > 0 || operations.length > 0 ||
+        sqliteOps?.length)
     ) {
-      for (const redelivery of redeliveries) operations.push(redelivery);
+      for (const redelivery of redeliveries) {
+        contentAddressedOperations.push(redelivery);
+      }
     }
 
     const applyOps = this.#textChangesAsWholeDocuments
       ? []
       : this.#textChangeOperations(space);
     return {
-      operations,
+      operations: [...contentAddressedOperations, ...operations],
       ...(nativePreconditions.length
         ? { preconditions: nativePreconditions }
         : {}),
       ...(sqliteOps?.length ? { sqliteOps: [...sqliteOps] } : {}),
       ...(applyOps.length ? { applyOps } : {}),
+      ...(preparations?.size
+        ? { preparations: [...preparations.values()] }
+        : {}),
     };
   }
 
@@ -2878,6 +2931,28 @@ export class V2StorageTransaction implements IStorageTransaction {
     });
   }
 
+  private rejectPreparations(
+    preparations: Iterable<NativeStorageCommitPreparation>,
+    reason: unknown,
+  ): void {
+    for (const preparation of preparations) {
+      if (preparation.onRejected === undefined) continue;
+      try {
+        preparation.onRejected(reason);
+      } catch (error) {
+        logger.warn("native-preparation-rejection-callback-failed", () => [
+          String(error),
+        ]);
+      }
+    }
+  }
+
+  private rejectNativeCommitPreparations(reason: unknown): void {
+    for (const preparations of this.#nativeCommitPreparations.values()) {
+      this.rejectPreparations(preparations.values(), reason);
+    }
+  }
+
   abort(reason?: unknown): Result<Unit, InactiveTransactionError> {
     this.#assertWritable("abort()");
     const ready = this.#editable();
@@ -2893,6 +2968,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     if ((this as IStorageTransaction).sourceAction === undefined) {
       releaseLocalReadBasis(this);
     }
+    this.rejectNativeCommitPreparations(reason);
     return { ok: {} };
   }
 
@@ -2994,9 +3070,10 @@ export class V2StorageTransaction implements IStorageTransaction {
     const operations = native?.operations ?? [];
     const hasCommitPreconditions = (native?.preconditions?.length ?? 0) > 0;
     const hasSqliteOps = (native?.sqliteOps?.length ?? 0) > 0;
+    const hasPreparations = (native?.preparations?.length ?? 0) > 0;
     if (
       operations.length === 0 &&
-      !hasCommitPreconditions && !hasSqliteOps
+      !hasCommitPreconditions && !hasSqliteOps && !hasPreparations
     ) {
       return this.#finishEmptyCommit();
     }
@@ -3012,12 +3089,17 @@ export class V2StorageTransaction implements IStorageTransaction {
         status: "done",
         result: { error: validation.error },
       };
+      this.rejectNativeCommitPreparations(validation.error);
       return { error: validation.error };
     }
 
     const replica = this.#replicaForCommit(writeSpace);
     if (!replica.commitNative) {
-      throw new Error("memory v2 replica does not support commitNative()");
+      const error = new Error(
+        "memory v2 replica does not support commitNative()",
+      );
+      this.rejectNativeCommitPreparations(error);
+      throw error;
     }
     const commitNative = replica.commitNative.bind(replica);
     // The replica takes the writes now, and they can change what a local read
@@ -3070,10 +3152,11 @@ export class V2StorageTransaction implements IStorageTransaction {
       const operations = native?.operations ?? [];
       const hasCommitPreconditions = (native?.preconditions?.length ?? 0) > 0;
       const hasSqliteOps = (native?.sqliteOps?.length ?? 0) > 0;
+      const hasPreparations = (native?.preparations?.length ?? 0) > 0;
       if (
         !native ||
         (operations.length === 0 &&
-          !hasCommitPreconditions && !hasSqliteOps)
+          !hasCommitPreconditions && !hasSqliteOps && !hasPreparations)
       ) {
         continue;
       }
@@ -3092,6 +3175,7 @@ export class V2StorageTransaction implements IStorageTransaction {
         status: "done",
         result: { error: validation.error },
       };
+      this.rejectNativeCommitPreparations(validation.error);
       return { error: validation.error };
     }
 
@@ -3170,7 +3254,13 @@ export class V2StorageTransaction implements IStorageTransaction {
       }
       const replica = this.#replicaForCommit(space);
       if (!replica.commitNative) {
-        throw new Error("memory v2 replica does not support commitNative()");
+        const error = new Error(
+          "memory v2 replica does not support commitNative()",
+        );
+        for (const skipped of commits.slice(i)) {
+          this.rejectPreparations(skipped.native.preparations ?? [], error);
+        }
+        throw error;
       }
       const commitNative = replica.commitNative.bind(replica);
       // Stop at the first per-space failure rather than committing the
@@ -3190,6 +3280,12 @@ export class V2StorageTransaction implements IStorageTransaction {
               `earlier spaces are not rolled back and later spaces are skipped`,
             result.error,
           );
+          for (const skipped of commits.slice(i + 1)) {
+            this.rejectPreparations(
+              skipped.native.preparations ?? [],
+              result.error,
+            );
+          }
           return { error: result.error };
         }
       } catch (error) {
@@ -3199,6 +3295,9 @@ export class V2StorageTransaction implements IStorageTransaction {
             `earlier spaces are not rolled back and later spaces are skipped`,
           error,
         );
+        for (const skipped of commits.slice(i + 1)) {
+          this.rejectPreparations(skipped.native.preparations ?? [], error);
+        }
         return { error: toStoreError(error) };
       }
     }
@@ -3310,10 +3409,11 @@ export class V2StorageTransaction implements IStorageTransaction {
       const operations = native?.operations ?? [];
       const hasCommitPreconditions = (native?.preconditions?.length ?? 0) > 0;
       const hasSqliteOps = (native?.sqliteOps?.length ?? 0) > 0;
+      const hasPreparations = (native?.preparations?.length ?? 0) > 0;
       if (
         !native ||
         (operations.length === 0 &&
-          !hasCommitPreconditions && !hasSqliteOps)
+          !hasCommitPreconditions && !hasSqliteOps && !hasPreparations)
       ) {
         continue;
       }
@@ -3332,6 +3432,7 @@ export class V2StorageTransaction implements IStorageTransaction {
         status: "done",
         result: { error: validation.error },
       };
+      this.rejectNativeCommitPreparations(validation.error);
       return { error: validation.error };
     }
 
@@ -3621,32 +3722,52 @@ export class V2StorageTransaction implements IStorageTransaction {
     address: Pick<IMemoryAddress, "id" | "type" | "scope">,
   ): { doc: DocumentEntry } {
     const scope = normalizeCellScope(address.scope);
+    let doc: DocumentEntry | undefined;
     if (
       this.#lastDocument?.branch === branch &&
       this.#lastDocument.id === address.id &&
       this.#lastDocument.type === (address.type ?? DOCUMENT_MIME) &&
       this.#lastDocument.scope === scope
     ) {
-      return { doc: this.#lastDocument.doc };
+      doc = this.#lastDocument.doc;
+    } else {
+      const key = this.#docKey(address);
+      doc = branch.docs.get(key);
+      if (!doc) {
+        const loaded = this.#loadRoot(branch, address);
+        doc = {
+          initial: loaded,
+          validated: false,
+        };
+        branch.docs.set(key, doc);
+      }
+      this.#lastDocument = {
+        branch,
+        id: address.id,
+        type: address.type ?? DOCUMENT_MIME,
+        scope,
+        doc,
+      };
     }
 
-    const key = this.#docKey(address);
-    let doc = branch.docs.get(key);
-    if (!doc) {
+    // Content-addressed documents are immutable and layer-independent, so an
+    // absence cached before a same-space delivery may safely advance to the
+    // verified content now held by the replica. Ordinary documents retain
+    // transaction snapshot semantics, and a transaction that staged a cid:
+    // write keeps its own writable view.
+    if (
+      address.id.startsWith("cid:") &&
+      !isWritableDocument(doc) &&
+      doc.initial.value === undefined
+    ) {
       const loaded = this.#loadRoot(branch, address);
-      doc = {
-        initial: loaded,
-        validated: false,
-      };
-      branch.docs.set(key, doc);
+      if (loaded.value !== undefined) {
+        doc.initial = loaded;
+        doc.validated = false;
+        doc.frozenReads = undefined;
+      }
     }
-    this.#lastDocument = {
-      branch,
-      id: address.id,
-      type: address.type ?? DOCUMENT_MIME,
-      scope,
-      doc,
-    };
+
     return { doc };
   }
 

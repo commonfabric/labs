@@ -35,6 +35,8 @@ especially:
 - receiver-method and other supported call expressions
 - wrapper introduction (`computed`, helper control-flow forms)
 - callback capture and ownership lowering
+- serializable factory values, modifier derivations, and invocation across eager
+  graph-construction and scheduled execution boundaries
 
 ## 3. Semantic Invariants
 
@@ -215,16 +217,84 @@ The semantic contract is:
 2. phase boundaries should exist to preserve semantics and maintainability, not
    to create user-visible special cases
 
+## 3.11 Factory Calls Follow Value Origin And Execution Boundary
+
+Factory call lowering must use both:
+
+1. the factory value's proven origin (`live`, `symbolic`, or
+   `runtime-materialized`), and
+2. the nearest decisive callback boundary.
+
+Live and scheduled-materialized factories remain direct calls. Public factory
+inputs and private factory captures in an eager pattern are symbolic and must
+lower to an explicit runtime invocation node. A nested eager pattern inside
+scheduled code re-establishes symbolic exposure; a non-decisive collection
+callback must not erase its enclosing boundary.
+
+## 3.12 Public Factory Input And Private Captures Stay Separate
+
+A factory's public input/output schema is an executable contract and must not be
+rewritten to include lexical closure state. Pattern closure conversion therefore
+must preserve:
+
+1. public input as callback argument 0
+2. private captured params as callback argument 1
+3. the private capture schema in compiler/runtime metadata
+4. at most one private `.curry(params)` at a capturing site
+
+Private curry state must never bind, default, or widen public input fields.
+
+## 3.13 Factory Call Semantics Must Be Preserved
+
+Whether a factory call stays direct or lowers to `invokeFactory`, the compiler
+must preserve:
+
+1. one evaluation of the callee and explicit input
+2. authored evaluation order
+3. receiver binding for live/materialized direct calls; symbolic calls select
+   the same property/element factory value without treating artifact selection
+   as JavaScript method dispatch
+4. one public argument (with no synchronous tuple/rest spread read during eager
+   graph construction)
+5. result family: pattern/module → reactive value; handler → stream
+
+`asScope()` and `inSpace()` derive factories and must not be mistaken for an
+invocation.
+
+## 3.14 Exact Public Contracts And Provenance Are Required
+
+Serializable factory recognition requires trusted Common Fabric provenance or
+an exact compiler-owned contract hint. A matching name or callable shape alone
+is insufficient.
+
+Every callable union arm must independently carry its authority. Invocation is
+valid only when all arms have one factory kind, exactly equal normalized public
+input/output schemas, and exactly equal FrameworkProvided paths. One arm's
+provenance must not authorize another, and compiler-owned exact contracts take
+precedence over reconstructed checker types.
+
+## 3.15 Executable Factory Contracts Fail Closed
+
+Ordinary schema inference may degrade predictably when a non-executable data
+shape is unresolved. Factory invocation is the explicit exception: if origin,
+execution exposure, factory kind, public contract, or FrameworkProvided
+provenance cannot be proved, the compiler must diagnose instead of emitting a
+guessed executable contract.
+
+This fail-closed rule also applies to recursive nested factory contracts that
+cannot be emitted as finite self-contained schema documents.
+
 ## 4. Non-Normative Implementation Interpretation
 
 The current implementation realizes this contract through:
 
 1. validation transformers
-2. early JSX routing
-3. computed/closure normalization
-4. shared ownership-first lowering
-5. shared expression-rewrite backend
-6. final capability/schema layers
+2. early JSX and factory routing
+3. FrameworkProvided forwarding and symbolic invocation
+4. computed/closure normalization
+5. shared ownership-first lowering
+6. shared expression-rewrite backend
+7. final capability/schema/authority layers
 
 But these layers are explanatory only. The contract above is the normative
 piece.

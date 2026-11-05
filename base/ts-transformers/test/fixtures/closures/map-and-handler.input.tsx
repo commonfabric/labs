@@ -8,7 +8,7 @@ interface State {
 
 // FIXTURE: map-and-handler
 // Verifies: .map() in JSX is transformed to .mapWithPattern() and inline handler inside map body is extracted
-//   state.items.map((item, index) => JSX) → state.key("items").mapWithPattern(pattern(...), { state: { discount, selectedIndex } })
+//   state.items.map((item, index) => JSX) → state.key("items").mapWithPattern(pattern(...).curry({ state: { discount, selectedIndex } }))
 //   onClick={() => state.selectedIndex.set(index)) → handler(false, { state: { selectedIndex: asCell }, index }, ...)
 // Context: Combines reactive array mapping with handler extraction; map callback becomes a sub-pattern
 export default pattern<State>((state) => {

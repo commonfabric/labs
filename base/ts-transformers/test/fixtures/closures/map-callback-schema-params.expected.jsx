@@ -98,40 +98,38 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_2 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const item = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
     return (<span>{__cfLift_1({
         item: {
             price: item.key("price")
         },
         state: {
-            discount: state.key("discount")
+            discount: state.discount
         }
     })}</span>);
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Item"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        discount: {
-                            type: "number"
-                        }
-                    },
-                    required: ["discount"]
+                discount: {
+                    type: "number"
                 }
             },
-            required: ["state"]
+            required: ["discount"]
         }
     },
-    required: ["element", "params"],
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Item"
+        }
+    },
+    required: ["element"],
     $defs: {
         Item: {
             type: "object",
@@ -178,14 +176,14 @@ export default pattern((state) => {
     return {
         [UI]: (<div>
         <section data-kind="unused">
-          {state.key("items").mapWithPattern(__cfPattern_1, {})}
+          {state.key("items").mapWithPattern(__cfPattern_1)}
         </section>
         <section data-kind="used">
-          {state.key("items").mapWithPattern(__cfPattern_2, {
+          {state.key("items").mapWithPattern(__cfPattern_2.curry({
                 state: {
                     discount: state.key("discount")
                 }
-            })}
+            }))}
         </section>
       </div>),
     };

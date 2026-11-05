@@ -9,6 +9,7 @@ import { rewriteExpression } from "../src/transformers/expression-rewrite/mod.ts
 import type { ReactiveContextKind } from "../src/ast/mod.ts";
 import type { ExpressionContainerKind } from "../src/transformers/expression-site-types.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { registerTrustedCommonFabricTestSources } from "./trusted-commonfabric-sources.ts";
 
 // These tests drive the shared expression-rewrite entry point
 // (`rewriteExpression`) directly against reactive binary expressions found in
@@ -68,6 +69,7 @@ function createContext(source: string): {
     options,
     host,
   );
+  registerTrustedCommonFabricTestSources(program, ["commonfabric.d.ts"]);
   const sourceFile = program.getSourceFile(fileName)!;
   const context = new TransformationContext({
     program,

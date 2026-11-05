@@ -242,13 +242,13 @@ const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
 //   boolean-consumer lift over the same local.
 export default pattern((__cf_pattern_input) => {
     const rows = __cf_pattern_input.key("rows");
-    const view = __cfLift_1({ rows: rows }).filterWithPattern(__cfPattern_1, {}).for("view", true);
+    const view = __cfLift_1({ rows: rows }).filterWithPattern(__cfPattern_1).for("view", true);
     const hasAny = __cfLift_2({ view: view }).for("hasAny", true);
-    const labels = view.mapWithPattern(__cfPattern_2, {}).for("labels", true);
+    const labels = view.mapWithPattern(__cfPattern_2).for("labels", true);
     return {
         [UI]: (<section>
         <ul>
-          {view.mapWithPattern(__cfPattern_3, {})}
+          {view.mapWithPattern(__cfPattern_3)}
         </ul>
         {__cfHelpers.ifElse({
             type: "boolean"
@@ -297,7 +297,7 @@ export default pattern((__cf_pattern_input) => {
                 }
             }
         } as const satisfies __cfHelpers.JSONSchema, hasAny, <div>
-              {view.mapWithPattern(__cfPattern_4, {})}
+              {view.mapWithPattern(__cfPattern_4)}
             </div>, null)}
       </section>),
         labels,

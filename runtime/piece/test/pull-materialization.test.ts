@@ -597,6 +597,26 @@ describe("piece link contract localization", () => {
     });
   });
 
+  it("descends through an absence-only union without treating it as correlated", () => {
+    const schema: JSONSchema = {
+      anyOf: [
+        { type: "undefined" },
+        { type: "array", items: { type: "number" } },
+      ],
+    };
+
+    expect(
+      linkPathContracts([contract(schema)], [0], {
+        trackSourcePresence: true,
+        preserveMissingFlag: true,
+      }),
+    ).toEqual([{
+      schema: { type: "number" },
+      root: schema,
+      mayBeMissing: true,
+    }]);
+  });
+
   it("selects current container shapes and rejects impossible ones", () => {
     const scalar = { type: "number", maximum: 10 } as const;
     expect(selectCurrentContainerSchema(scalar, 1)).toBe(scalar);

@@ -279,6 +279,7 @@ function inputsDocumentOf(plan: NodePlan | undefined): string | undefined {
 /** The pattern a node instantiates, or undefined for any other node. */
 function childPatternOf(node: Node): Pattern | undefined {
   const module = node.module;
+  if (isPattern(module)) return module;
   if (typeof module !== "object" || module === null) return undefined;
   if (!("type" in module) || module.type !== "pattern") return undefined;
   const implementation = (module as { implementation: unknown })
@@ -450,12 +451,7 @@ describe("resume-presync-plan-count", () => {
     ): { patternNode: number; others: number } {
       const counts = { patternNode: 0, others: 0 };
       runtime.runner.accessForTestingOnly.nodeBindingRecorder = (_, node) => {
-        if (
-          isPattern(
-            (node.module as { implementation?: unknown })
-              .implementation,
-          )
-        ) {
+        if (childPatternOf(node) !== undefined) {
           counts.patternNode += 1;
         } else {
           counts.others += 1;

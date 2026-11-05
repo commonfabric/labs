@@ -56,7 +56,11 @@ import {
 import { FabricError } from "@/fabric-instances/FabricError.ts";
 import { FabricNativeWrapper } from "@/fabric-instances/FabricNativeWrapper.ts";
 import { cloneHelper } from "./value-clone.ts";
-import { isValidDeepFrozenFabricValueWithCaches } from "./deep-freeze.ts";
+import {
+  deepFreeze,
+  isValidDeepFrozenFabricValueWithCaches,
+} from "./deep-freeze.ts";
+import { isAdmittedFabricFactory, sealFactoryState } from "./fabric-factory.ts";
 
 /**
  * Helper for `shallowFabricFromConvertibleJsObjectElseUndefined()`, which
@@ -275,6 +279,8 @@ export function shallowFabricFromConvertibleJsValue(
   value: unknown,
   freeze = true,
 ): FabricValueLayer {
+  if (isAdmittedFabricFactory(value)) return deepFreeze(value);
+
   const minted = shallowFabricFromConvertibleJsObjectElseUndefined(value);
 
   if (minted !== undefined) {
@@ -570,8 +576,13 @@ function isValidFabricConvertibleJsValueInternal(
     }
 
     case "function": {
-      // A function is live code, and has no fabric representation.
-      return false;
+      if (!isAdmittedFabricFactory(value)) return false;
+      try {
+        sealFactoryState(value, deepFreeze);
+        return true;
+      } catch {
+        return false;
+      }
     }
 
     case "object": {
@@ -647,13 +658,24 @@ function isValidFabricConvertibleJsValueInternal(
  * `FabricInstance` values (e.g., `UnknownValue`) pass through as-is.
  *
  * The freeze-state contract: the output's freeze state matches `frozen`, except
- * that instances of classes that are defined to always be frozen are in fact
- * returned as frozen, no matter the value of `frozen`.
+ * that admitted factories and instances of classes defined to always be frozen
+ * are returned frozen no matter the value of `frozen`. Factory conversion is
+ * shallow in identity -- it freezes the callable and its already canonical
+ * sealed state rather than replacing the callable.
  */
 export function convertibleJsFromFabricValue(
   value: FabricValue,
   frozen = true,
 ): FabricConvertibleJsValue {
+  if (typeof value === "function") {
+    if (!isAdmittedFabricFactory(value)) {
+      throw new TypeError(
+        "Cannot convert arbitrary function presented as a Fabric value",
+      );
+    }
+    return deepFreeze(value);
+  }
+
   if (value instanceof FabricError) {
     return deepUnwrapFabricError(value, frozen);
   }

@@ -2658,7 +2658,6 @@ describe("CFC label view helpers", () => {
               },
             })) as any)(element, index, array)
           ),
-          {},
         );
         return { rendered };
       });

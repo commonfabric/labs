@@ -20,6 +20,11 @@ reference form only when its whole closure is confirmed persisted in
 the target space, the fully inline form (recomposed through the realm
 registry when the schema itself carries references) otherwise, and a
 loud server error for a selector reference nothing backs. The
+cell-read boundary bootstraps a reference-form selector in a fresh process by
+syncing each referenced schema-document root before emitting the target
+selector; each root pull delivers its closure. This preserves the fail-closed
+wire gate without requiring the caller to keep an earlier process's registry
+warm. The
 connection-scoped
 transport experiment (`syncSchemaCasV1`, unmerged) is not being pursued;
 this design is the storage-side successor for link positions, and a
@@ -97,12 +102,26 @@ A schema document is a `cid:` document whose value is a JSON Schema:
 - **Write**: idempotent blind write (no read-before-write, per the
   `ensureSchemaDocument` precedent — a read-before-write turns concurrent
   installation of the same content into a false conflict), performed in the
+  same transaction as the write that references it. The complete closure is
+  staged before the carrier write becomes speculatively visible, so a
+  synchronously awakened reader cannot observe the reference first.
   same transaction as the write that references it, or for an event's
   payload, in the event append's own commit.
 - **Per space**: a schema document must exist in every space that contains a
   reference to it, written there by whichever writer first references it in
   that space. Content addressing makes concurrent installs collide
   harmlessly.
+- **Read visibility**: an active transaction may refresh a cached absence only
+  for a `cid:` document after the replica receives its verified content.
+  Content addressing makes that absent-to-present transition monotonic;
+  ordinary documents and writable `cid:` entries retain their transaction
+  snapshots.
+- **Transient absence**: a traversal that overlaps local delivery may observe
+  a carrier before its already-running read is re-evaluated for the closure's
+  arrival. It selects nothing, tracks every missing schema document, and
+  retries reactively without diagnosing corruption. A stored document whose
+  content does not verify against its `cid:` remains a warning and selects
+  nothing.
 - **Space scope only, by rule**: the commit boundary rejects a `cid:`
   write at any other scope. A scoped partition could hold a divergent
   copy under one content-addressed id, and the paths that read the
@@ -445,6 +464,9 @@ local store at the reading seams:
   contexts). A reference the store cannot back is corruption or a
   deliberately malformed declaration — logged, with the declaration
   selecting nothing (the fail-closed contract above).
+  Link resolution performs that warming for every schema-bearing hop before
+  either narrowing the schema or carrying it to the target, including a link
+  found at the exact requested path with no remaining segments.
 
 Verification happens at registration: a schema document's value is
 re-hashed and must match its id (the `loadSchemaDocument` precedent);
@@ -584,6 +606,8 @@ documents available alongside their declarations:
 - **The write-side guarantee.** The client that replaces an inline schema
   with a reference created the obligation, so it discharges it: the
   decomposed closure is written into the space that will hold the
+  reference, in the same transaction as the reference itself and before that
+  reference enters the speculative layer. A
   reference, in the same transaction as the reference itself. A
   transaction stamps the reference itself on an inline link schema it
   writes into an ordinary document, which would otherwise store and send

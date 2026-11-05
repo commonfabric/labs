@@ -2,6 +2,16 @@ import ts from "typescript";
 
 import { isCommonFabricSymbol } from "./common-fabric-symbols.ts";
 
+function resolveAliasedSymbol(
+  symbol: ts.Symbol | undefined,
+  checker: ts.TypeChecker,
+): ts.Symbol | undefined {
+  if (!symbol) return undefined;
+  return (symbol.flags & ts.SymbolFlags.Alias) !== 0
+    ? checker.getAliasedSymbol(symbol)
+    : symbol;
+}
+
 /**
  * Check if a type is a union that includes undefined.
  * When a property type is `T | undefined`, it's considered optional for JSON/runtime semantics.
@@ -28,10 +38,12 @@ export function isDefaultNodeWithUndefined(
     return false;
   }
 
-  const typeName = ts.isIdentifier(typeNode.typeName)
-    ? typeNode.typeName.text
-    : undefined;
-  if (typeName !== "Default") {
+  if (
+    !isDefaultAliasSymbol(
+      checker.getSymbolAtLocation(typeNode.typeName),
+      checker,
+    )
+  ) {
     return false;
   }
 
@@ -60,7 +72,11 @@ export function isOptionalSymbol(symbol: ts.Symbol): boolean {
  * (`isCommonFabricSymbol()`), so that any user-defined type that happens to
  * be named "Default" is not treated as the framework's Default<T,V>.
  */
-export function isDefaultAliasSymbol(symbol: ts.Symbol | undefined): boolean {
-  return !!symbol && symbol.getName() === "Default" &&
-    isCommonFabricSymbol(symbol);
+export function isDefaultAliasSymbol(
+  symbol: ts.Symbol | undefined,
+  checker: ts.TypeChecker,
+): boolean {
+  const resolved = resolveAliasedSymbol(symbol, checker);
+  return resolved?.getName() === "Default" &&
+    isCommonFabricSymbol(resolved, checker);
 }

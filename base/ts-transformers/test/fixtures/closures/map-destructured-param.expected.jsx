@@ -69,24 +69,37 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const x = __cf_pattern_input.key("element", "x");
     const y = __cf_pattern_input.key("element", "y");
-    const state = __cf_pattern_input.key("params", "state");
     return (<div>
             Point: ({__cfLift_1({
         x: x,
         state: {
-            scale: state.key("scale")
+            scale: state.scale
         }
     })}, {__cfLift_2({
         y: y,
         state: {
-            scale: state.key("scale")
+            scale: state.scale
         }
     })})
           </div>);
 }, {
+    type: "object",
+    properties: {
+        state: {
+            type: "object",
+            properties: {
+                scale: {
+                    type: "number"
+                }
+            },
+            required: ["scale"]
+        }
+    },
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -100,24 +113,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 }
             },
             required: ["x", "y"]
-        },
-        params: {
-            type: "object",
-            properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        scale: {
-                            type: "number"
-                        }
-                    },
-                    required: ["scale"]
-                }
-            },
-            required: ["state"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -148,11 +146,11 @@ export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Map with destructured parameter and capture */}
-        {state.key("points").mapWithPattern(__cfPattern_1, {
+        {state.key("points").mapWithPattern(__cfPattern_1.curry({
                 state: {
                     scale: state.key("scale")
                 }
-            })}
+            }))}
       </div>),
     };
 }, {

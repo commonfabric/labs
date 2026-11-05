@@ -116,7 +116,7 @@ const ensureUniqueId = (value: string, used: Set<string>): string => {
   return candidate;
 };
 
-const sanitizeRoutes = (value: unknown): RouteDefinition[] => {
+const sanitizeRoutes = (value: readonly RouteInput[]): RouteDefinition[] => {
   if (!Array.isArray(value) || value.length === 0) {
     return structuredClone(defaultRoutes);
   }

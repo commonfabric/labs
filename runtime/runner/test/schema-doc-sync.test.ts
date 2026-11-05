@@ -126,6 +126,44 @@ describe("schema-doc-sync", () => {
     expect(resolveSchema({ $ref: decomposed.rootRef })).not.toBe(false);
   });
 
+  it("loads a cold selector schema closure before retrying its carrier sync", async () => {
+    const schema: JSONSchemaObj = {
+      type: "object",
+      properties: { title: { type: "string" } },
+      required: ["title"],
+    };
+    const decomposed = decomposeSchema(schema);
+    await writeSchemaDocs(decomposed);
+    await writeDocs({
+      "of:cold-selector-carrier": { title: "ready" },
+    });
+    const rootHash = parseExternalSchemaRef(decomposed.rootRef)!.taggedHash;
+    expect(lookupSchemaDocument(rootHash)).toBeUndefined();
+
+    const reader = new Runtime({
+      storageManager: readerStorage,
+      apiUrl: new URL(import.meta.url),
+    });
+    try {
+      await reader.getCellFromEntityId(
+        space,
+        "of:cold-selector-carrier" as URI,
+        [],
+        { $ref: decomposed.rootRef },
+      ).sync();
+      await readerStorage.synced();
+
+      const provider = readerStorage.open(space) as unknown as {
+        get: (uri: URI) => unknown;
+      };
+      expect(provider.get(`cid:${rootHash}` as URI)).toBeDefined();
+      expect(provider.get("of:cold-selector-carrier" as URI)).toBeDefined();
+      expect(resolveSchema({ $ref: decomposed.rootRef })).not.toBe(false);
+    } finally {
+      await reader.dispose({ closeStorage: false });
+    }
+  });
+
   it("leaves a forged schema document unregistered on arrival, with resolution closed", async () => {
     const claimedSchema = {
       type: "object",

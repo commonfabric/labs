@@ -15,6 +15,7 @@ import type {
   GenerationContext,
   IndexKeys,
   SchemaGenerationOptions,
+  SchemaHint,
   SchemaHints,
   TypeFormatter,
 } from "./interface.ts";
@@ -41,6 +42,10 @@ import {
   pairUnionMemberNodes,
   UnionFormatter,
 } from "./formatters/union-formatter.ts";
+import {
+  containsFactoryType,
+  FactoryFormatter,
+} from "./formatters/factory-formatter.ts";
 import {
   anyValueSchema,
   IntersectionFormatter,
@@ -2014,12 +2019,15 @@ function mentionsBoundParameter(
 export class SchemaGenerator {
   #commonFabricFormatter = new CommonFabricFormatter(this);
 
+  #factoryFormatter = new FactoryFormatter(this);
+
   #unionFormatter = new UnionFormatter(
     this,
     (type, node, context) => this.#readsWhole(type, node, context),
   );
 
   #formatters: TypeFormatter[] = [
+    this.#factoryFormatter,
     this.#commonFabricFormatter,
     new NativeTypeFormatter(),
     this.#unionFormatter,
@@ -2064,6 +2072,9 @@ export class SchemaGenerator {
   /** Counter to generate stable synthetic identifiers */
   #anonymousNameCounter: number = 0;
 
+  /** Contract-document types on the current synchronous generation path. */
+  #activeFactoryContractTypes = new Set<ts.Type>();
+
   /**
    * The node `#spelling()` builds for each annotation, by whether the type it
    * spells holds `undefined`.
@@ -2084,12 +2095,13 @@ export class SchemaGenerator {
     options?: SchemaGenerationOptions,
     schemaHints?: SchemaHints,
     sourceFile?: ts.SourceFile,
+    typeRegistry?: WeakMap<ts.Node, ts.Type>,
   ): MutableJSONSchema {
     return this.#generateSchemaInternal(
       type,
       checker,
       typeNode,
-      undefined,
+      typeRegistry,
       options,
       schemaHints,
       sourceFile,
@@ -2122,6 +2134,71 @@ export class SchemaGenerator {
       schemaHints,
       sourceFile,
     );
+  }
+
+  /** Generate one compiler-hinted factory contract document. */
+  public generateHintedFactoryContractSchema(
+    typeNode: ts.TypeNode,
+    type: ts.Type | undefined,
+    checker: ts.TypeChecker,
+    typeRegistry?: WeakMap<ts.Node, ts.Type>,
+    schemaHints?: WeakMap<ts.Node, SchemaHint>,
+    sourceFile?: ts.SourceFile,
+  ): MutableJSONSchema {
+    const schema = type &&
+        (!containsAnyOrUnknownTypeNode(typeNode) ||
+          type.isUnion())
+      ? this.generateSchema(
+        type,
+        checker,
+        typeNode,
+        undefined,
+        schemaHints,
+        sourceFile,
+        typeRegistry,
+      )
+      : this.generateSchemaFromSyntheticTypeNode(
+        typeNode,
+        checker,
+        typeRegistry,
+        schemaHints,
+        sourceFile,
+      );
+    return type
+      ? this.#attachRootDescription(schema, type, { typeChecker: checker })
+      : schema;
+  }
+
+  /** Generate an independently comparable factory contract schema. */
+  public generateFactoryContractSchema(
+    type: ts.Type,
+    checker: ts.TypeChecker,
+  ): MutableJSONSchema {
+    if (this.#activeFactoryContractTypes.has(type)) {
+      const symbol = type.aliasSymbol ?? type.getSymbol();
+      const declaration = symbol?.getDeclarations()?.[0];
+      const location = declaration
+        ? (() => {
+          const source = declaration.getSourceFile();
+          const { line, character } = source.getLineAndCharacterOfPosition(
+            declaration.getStart(source),
+          );
+          return `${source.fileName}:${line + 1}:${character + 1}`;
+        })()
+        : "unknown location";
+      throw new Error(
+        `${location}: Recursive nested factory contract for ` +
+          `'${checker.typeToString(type)}' cannot be emitted as a finite ` +
+          "self-contained schema document",
+      );
+    }
+
+    this.#activeFactoryContractTypes.add(type);
+    try {
+      return this.#generateSchemaInternal(type, checker);
+    } finally {
+      this.#activeFactoryContractTypes.delete(type);
+    }
   }
 
   /**
@@ -2215,7 +2292,9 @@ export class SchemaGenerator {
         { rootWriterSuppliedAt: typeNode }),
       ...(schemaHints && { schemaHints }),
     };
-    context = this.#withGenericBindings(type, context);
+    if (!this.#factoryFormatter.supportsType(type, context)) {
+      context = this.#withGenericBindings(type, context);
+    }
     // A print read as the annotation that spells it keeps the print's own
     // hints, as a member does (`formatChildType()`).
     const hintContext = typeNode && hintsNode
@@ -2225,7 +2304,10 @@ export class SchemaGenerator {
     // Auto-detect: Should we use node-based or type-based analysis?
     let schema: MutableJSONSchema;
     let result: MutableJSONSchema;
-    if (this.#shouldUseNodeBasedAnalysis(type, typeNode, checker)) {
+    if (
+      !this.#factoryFormatter.supportsType(type, hintContext) &&
+      this.#shouldUseNodeBasedAnalysis(type, typeNode, context)
+    ) {
       // Use node-based analysis (for synthetic nodes or when type is unreliable)
       schema = this.#analyzeTypeNodeStructure(
         typeNode!,
@@ -2268,22 +2350,40 @@ export class SchemaGenerator {
    * When TypeScript widens a type to 'any' (e.g., for array element types or synthetic nodes),
    * the TypeNode structure is more reliable than the Type.
    *
-   * EXCEPTION: Wrapper types (Default/Cell/Stream/OpaqueCell) erase to their inner type,
-   * which may appear as 'any', but they should use type-based analysis because
-   * CommonFabricFormatter handles them specially via typeNode context.
+   * EXCEPTION: Wrapper types (Default/Cell/Stream/OpaqueCell and the
+   * PerSpace/PerUser/PerSession/PerAny scope wrappers) erase to their inner
+   * type, which may appear as 'any', but they should use type-based analysis
+   * because CommonFabricFormatter handles them specially via typeNode context.
    */
   #shouldUseNodeBasedAnalysis(
     type: ts.Type,
     typeNode: ts.TypeNode | undefined,
-    checker: ts.TypeChecker,
+    context: GenerationContext,
   ): boolean {
-    if (!typeNode || !(type.flags & ts.TypeFlags.Any)) {
+    if (!typeNode) {
+      return false;
+    }
+
+    const checker = context.typeChecker;
+    const unreliableAny = (type.flags & ts.TypeFlags.Any) !== 0;
+    const recoveredUnknownReference =
+      (type.flags & ts.TypeFlags.Unknown) !== 0 &&
+        ts.isTypeReferenceNode(typeNode) && typeNode.pos < 0
+        ? this.#resolveTypeReferenceFromScope(typeNode, checker, context)
+        : undefined;
+    const unreliableUnknown = !!recoveredUnknownReference &&
+      (recoveredUnknownReference.flags & ts.TypeFlags.Unknown) === 0;
+    if (!unreliableAny && !unreliableUnknown) {
       return false;
     }
 
     // Check if this is a wrapper type - if so, use type-based analysis
     const wrapperKind = detectWrapperViaNode(typeNode, checker);
-    if (wrapperKind) {
+    if (
+      wrapperKind ||
+      (ts.isTypeReferenceNode(typeNode) && resolveScopeWrapperNode(typeNode) &&
+        typeNode.typeArguments?.length)
+    ) {
       return false;
     }
 
@@ -2431,10 +2531,11 @@ export class SchemaGenerator {
 
     // Auto-detect: Should we use node-based or type-based analysis?
     const useNodeBased = !readInPlace &&
+      !this.#factoryFormatter.supportsType(readType, childContext) &&
       (this.#shouldUseNodeBasedAnalysis(
         readType,
         typeNode,
-        context.typeChecker,
+        childContext,
       ) ||
         this.#readsBySyntax(typeNode, context));
     if (useNodeBased) {
@@ -3445,6 +3546,12 @@ export class SchemaGenerator {
     context: GenerationContext,
     isRootType: boolean = false,
   ): MutableJSONSchema {
+    // A factory is an atomic value whose public contracts are independently
+    // generated schema documents. Read it before generic-alias binding can
+    // replace the occurrence node that carries compiler-owned exact hints.
+    if (this.#factoryFormatter.supportsType(type, context)) {
+      return this.#factoryFormatter.formatType(type, context);
+    }
     // The schema dialect has no symbol type, so a symbol reads as `false`,
     // which a union drops. A well-known symbol is never stored, so nothing
     // more is needed. Any other symbol could be a registered one, which the
@@ -3732,6 +3839,7 @@ export class SchemaGenerator {
     for (const formatter of this.#formatters) {
       if (formatter.supportsType(type, context)) {
         const result = formatter !== this.#commonFabricFormatter &&
+            formatter !== this.#factoryFormatter &&
             context.typeNode && !ts.isTypeLiteralNode(context.typeNode) &&
             (this.#readsBySyntax(context.typeNode, context) ||
               this.#containerHoldingWrapperErasedByAny(
@@ -4092,7 +4200,7 @@ export class SchemaGenerator {
   #attachRootDescription(
     schema: MutableJSONSchema,
     type: ts.Type,
-    context: GenerationContext,
+    context: Pick<GenerationContext, "typeChecker">,
   ): MutableJSONSchema {
     if (typeof schema !== "object") return schema;
 
@@ -4180,6 +4288,16 @@ export class SchemaGenerator {
     checker: ts.TypeChecker,
     context: GenerationContext,
   ): MutableJSONSchema {
+    const typeRegistry = context.typeRegistry;
+    const factoryContracts = context.schemaHints?.get(typeNode)
+      ?.factoryContracts ??
+      context.schemaHints?.get(ts.getOriginalNode(typeNode))?.factoryContracts;
+    if (factoryContracts?.length) {
+      const hintedType = typeRegistry?.get(typeNode) ?? checker.getAnyType();
+      const { typeNode: _, ...baseContext } = context;
+      return this.#formatType(hintedType, { ...baseContext, typeNode }, false);
+    }
+
     const printed = context.printedFrom?.(typeNode);
     if (printed) {
       return this.formatChildType(
@@ -4189,8 +4307,6 @@ export class SchemaGenerator {
         context.instantiatedAs,
       );
     }
-
-    const typeRegistry = context.typeRegistry;
 
     // Handle TypeLiteral nodes (object types)
     if (ts.isTypeLiteralNode(typeNode)) {
@@ -4227,12 +4343,20 @@ export class SchemaGenerator {
             instantiatedPropType &&
             usesParameterUnreachably(member.type, checker)
           ) propType = instantiatedPropType;
-          const callable = classifyCallableProperty(
-            instantiatedPropType ?? context.printedFrom?.(member.type) ??
-              propType,
-            checker,
-            context.boundTypeParameters,
-          );
+          const callableType = instantiatedPropType ??
+            context.printedFrom?.(member.type) ?? propType;
+          const memberFactoryContracts = context.schemaHints?.get(member.type)
+            ?.factoryContracts ??
+            context.schemaHints?.get(ts.getOriginalNode(member.type))
+              ?.factoryContracts;
+          const callable = (memberFactoryContracts?.length ?? 0) > 0 ||
+              containsFactoryType(callableType, checker)
+            ? undefined
+            : classifyCallableProperty(
+              callableType,
+              checker,
+              context.boundTypeParameters,
+            );
           if (callable) {
             if (callable.kind === "wrapper") {
               const uiContract = getUiContractHint(context, member.type);
@@ -4441,15 +4565,23 @@ export class SchemaGenerator {
       const soleInstantiated = valued.length === 1 && instantiatedAs
         ? soleNonNullishMember(instantiatedAs)
         : undefined;
-      const memberSchemas = members.map((member) =>
-        this.#analyzeTypeNodeStructure(
-          member,
-          checker,
-          soleInstantiated && member === valued[0]
-            ? { ...unplaced, instantiatedAs: soleInstantiated }
-            : unplaced,
-        )
-      );
+      const memberSchemas = members.map((member) => {
+        const at = soleInstantiated && member === valued[0]
+          ? soleInstantiated
+          : undefined;
+        const memberContext = at === undefined
+          ? unplaced
+          : { ...unplaced, instantiatedAs: at };
+        const memberType = typeRegistry?.get(member) ??
+          checker.getTypeFromTypeNode(member);
+        const factoryContext = { ...memberContext, typeNode: member };
+        return this.#factoryFormatter.supportsType(
+            memberType,
+            factoryContext,
+          )
+          ? this.#analyzeChildNode(member, checker, unplaced, at)
+          : this.#analyzeTypeNodeStructure(member, checker, memberContext);
+      });
       if (memberSchemas.some((schema) => schema === true)) {
         return true;
       }
@@ -5701,4 +5833,21 @@ export class SchemaGenerator {
     if (Object.keys(filtered).length > 0) out.$defs = filtered;
     return out as MutableJSONSchema;
   }
+}
+
+function containsAnyOrUnknownTypeNode(node: ts.TypeNode): boolean {
+  let found = false;
+  const visit = (current: ts.Node): void => {
+    if (found) return;
+    if (
+      current.kind === ts.SyntaxKind.AnyKeyword ||
+      current.kind === ts.SyntaxKind.UnknownKeyword
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(current, visit);
+  };
+  visit(node);
+  return found;
 }

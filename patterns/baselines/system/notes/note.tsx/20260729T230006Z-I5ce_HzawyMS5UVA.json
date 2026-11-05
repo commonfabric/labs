@@ -1,0 +1,685 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "AnonymousType_1": {
+        "items": {
+          "$ref": "#/$defs/MentionablePiece"
+        },
+        "type": "array"
+      },
+      "AnonymousType_2": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/NotebookPiece"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "MentionablePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "mentioned": {
+            "$ref": "#/$defs/AnonymousType_1"
+          }
+        },
+        "required": [
+          "mentioned",
+          "backlinks"
+        ],
+        "type": "object"
+      },
+      "NotePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "content": {
+            "type": "string"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "parentNotebook": {
+            "$ref": "#/$defs/AnonymousType_2"
+          },
+          "setTitle": {
+            "asCell": [
+              "stream"
+            ],
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "NotebookPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "createNote": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "navigate": {
+                "type": "boolean"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "content"
+            ],
+            "type": "object"
+          },
+          "createNotebook": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "notesData": {
+                "items": {
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "content"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "createNotes": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "notesData": {
+                "items": {
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "content"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "notesData"
+            ],
+            "type": "object"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "isNotebook": {
+            "type": "boolean"
+          },
+          "notes": {
+            "items": {
+              "$ref": "#/$defs/NotePiece"
+            },
+            "type": "array"
+          },
+          "setTitle": {
+            "asCell": [
+              "stream"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createNote",
+          "createNotes",
+          "setTitle",
+          "createNotebook"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "content": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "isHidden": {
+        "default": false,
+        "type": "boolean"
+      },
+      "linkPattern": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "description": "Pattern JSON for [[wiki-links]]. Defaults to creating new Notes.",
+        "type": "string"
+      },
+      "parentNotebook": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/NotebookPiece"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "asCell": [
+          "cell"
+        ],
+        "default": null,
+        "description": "Parent notebook reference. Set at creation, can be updated for moves."
+      },
+      "title": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "Untitled Note",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "notes/note.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AnonymousType_1": {
+        "items": {
+          "$ref": "#/$defs/MentionablePiece"
+        },
+        "type": "array"
+      },
+      "AnonymousType_2": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/NotebookPiece"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "FsProjection": {
+        "anyOf": [
+          {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "frontmatter": {
+                "additionalProperties": {
+                  "type": "unknown"
+                },
+                "properties": {},
+                "type": "object"
+              },
+              "type": {
+                "enum": [
+                  "text/markdown"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "content": {
+                "additionalProperties": {
+                  "type": "unknown"
+                },
+                "properties": {},
+                "type": "object"
+              },
+              "type": {
+                "enum": [
+                  "application/json"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": {
+              "type": "unknown"
+            },
+            "properties": {
+              "type": {
+                "type": "undefined"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "MentionablePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "mentioned": {
+            "$ref": "#/$defs/AnonymousType_1"
+          }
+        },
+        "required": [
+          "mentioned",
+          "backlinks"
+        ],
+        "type": "object"
+      },
+      "NotePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "content": {
+            "type": "string"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "parentNotebook": {
+            "$ref": "#/$defs/AnonymousType_2"
+          },
+          "setTitle": {
+            "asCell": [
+              "stream"
+            ],
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "NotebookPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "createNote": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "navigate": {
+                "type": "boolean"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "content"
+            ],
+            "type": "object"
+          },
+          "createNotebook": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "notesData": {
+                "items": {
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "content"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "createNotes": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "notesData": {
+                "items": {
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "content"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "notesData"
+            ],
+            "type": "object"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "isNotebook": {
+            "type": "boolean"
+          },
+          "notes": {
+            "items": {
+              "$ref": "#/$defs/NotePiece"
+            },
+            "type": "array"
+          },
+          "setTitle": {
+            "asCell": [
+              "stream"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createNote",
+          "createNotes",
+          "setTitle",
+          "createNotebook"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Represents a small #note a user took to remember some text.",
+    "properties": {
+      "$FS": {
+        "$ref": "#/$defs/FsProjection"
+      },
+      "$NAME": {
+        "type": "string"
+      },
+      "$TILE_UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json",
+        "description": "Tile variant (CT-1764): the minimal embedded UI used when a container\n(e.g. Record) renders this note via `<cf-render variant=\"tile\">`."
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "appendLink": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "piece": {
+            "$ref": "#/$defs/MentionablePiece"
+          }
+        },
+        "required": [
+          "piece"
+        ],
+        "type": "object"
+      },
+      "backlinks": {
+        "$ref": "#/$defs/AnonymousType_1"
+      },
+      "closeMenu": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "content": {
+        "type": "string"
+      },
+      "createNewNote": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "editContent": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "detail": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "type": "object"
+      },
+      "grep": {
+        "asFactory": {
+          "argumentSchema": {
+            "properties": {
+              "query": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "type": "object"
+          },
+          "kind": "pattern",
+          "resultSchema": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        }
+      },
+      "isEditingTitle": {
+        "type": "boolean"
+      },
+      "isHidden": {
+        "type": "boolean"
+      },
+      "mentioned": {
+        "$ref": "#/$defs/AnonymousType_1",
+        "default": []
+      },
+      "menuOpen": {
+        "type": "boolean"
+      },
+      "parentNotebook": {
+        "$ref": "#/$defs/AnonymousType_2",
+        "description": "Parent notebook reference, null if not in a notebook"
+      },
+      "setTitle": {
+        "asCell": [
+          "stream"
+        ],
+        "type": "string"
+      },
+      "startEditingTitle": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "stopEditingTitle": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "summary": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "toggleMenu": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "translate": {
+        "asFactory": {
+          "argumentSchema": {
+            "properties": {
+              "language": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "language"
+            ],
+            "type": "object"
+          },
+          "kind": "pattern",
+          "resultSchema": {
+            "type": [
+              "string",
+              "undefined"
+            ]
+          }
+        }
+      }
+    },
+    "required": [
+      "title",
+      "content",
+      "summary",
+      "mentioned",
+      "backlinks",
+      "isHidden",
+      "grep",
+      "translate",
+      "editContent",
+      "setTitle",
+      "appendLink",
+      "createNewNote",
+      "parentNotebook",
+      "menuOpen",
+      "isEditingTitle",
+      "toggleMenu",
+      "closeMenu",
+      "startEditingTitle",
+      "stopEditingTitle",
+      "$NAME",
+      "$UI",
+      "$FS",
+      "$TILE_UI"
+    ],
+    "tags": [
+      "note"
+    ],
+    "type": "object"
+  }
+}

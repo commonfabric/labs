@@ -41,36 +41,34 @@ interface State {
     items: Item[];
     count: Cell<number>;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const item = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
-    return (<cf-button onClick={handleClick({ count: state.key("count") })}>
+    return (<cf-button onClick={handleClick({ count: state.count })}>
             {item.key("name")}
           </cf-button>);
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Item"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        count: {
-                            type: "number",
-                            asCell: ["readonly"]
-                        }
-                    },
-                    required: ["count"]
+                count: {
+                    type: "number",
+                    asCell: ["cell"]
                 }
             },
-            required: ["state"]
+            required: ["count"]
         }
     },
-    required: ["element", "params"],
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Item"
+        }
+    },
+    required: ["element"],
     $defs: {
         Item: {
             type: "object",
@@ -108,17 +106,17 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-handler-reference-no-name
 // Verifies: .map() transform works when pattern has inline type annotation instead of type arg
-//   .map(fn) → .mapWithPattern(pattern(...), {state: {count: ...}})
+//   .map(fn) → .mapWithPattern(pattern(...).curry({state: {count: ...}}))
 // Context: pattern((state: State) => ...) form without <State> generic; handler not captured
 export default pattern((state: State) => {
     return {
         [UI]: (<div>
         {/* Map callback references handler - should NOT capture it */}
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_1.curry({
                 state: {
                     count: state.key("count")
                 }
-            })}
+            }))}
       </div>),
     };
 }, {

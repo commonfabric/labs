@@ -69,11 +69,13 @@ exports.default = (0, commonfabric_1.pattern)((__cf_pattern_input) => ({
   });
 
   it("accepts a hoisted pattern(...) call at module scope", () => {
+    // CT-1655: extends whole-call hoisting to `pattern`. A reactive map lowers
+    // to `receiver.mapWithPattern(pattern(cb, inSchema, outSchema))`;
     // Whole-call hoisting reaches `pattern` too. A reactive map lowers
     // to `receiver.mapWithPattern(pattern(cb, inSchema, outSchema), { params })`;
     // the bare `pattern(...)` (the first mapWithPattern argument) is hoisted to
     // a module-scope const `__cfPattern_N = pattern(...)` with the callback
-    // inline, and the call site reads `mapWithPattern(__cfPattern_N, { params })`.
+    // inline, and the call site reads `mapWithPattern(__cfPattern_N)`.
     // The verifier must accept this trusted-builder call at module scope and
     // verify its callback (index 0) there.
     const body = `
@@ -83,11 +85,141 @@ const __cfPattern_1 = (0, commonfabric_1.pattern)((__cf_pattern_input) => {
   return item.key("name");
 }, false, false);
 exports.default = (0, commonfabric_1.pattern)((__cf_pattern_input) => ({
-  names: __cf_pattern_input.key("items").mapWithPattern(__cfPattern_1, {}),
+  names: __cf_pattern_input.key("items").mapWithPattern(__cfPattern_1),
 }));
 `;
 
     expect(() => verify(body)).not.toThrow();
+  });
+
+  it("accepts the compiler-only params-schema carrier only as a pattern callback", () => {
+    const body = `
+${IMPORT}
+const __cfPattern_1 = (0, commonfabric_1.pattern)(
+  (0, commonfabric_1.__cfHelpers.withPatternParamsSchema)(
+    (argument, params) => ({ publicValue: argument.value, capturedValue: params.value }),
+    { type: "object", properties: { value: { type: "string" } }, required: ["value"] }
+  ),
+  { type: "object", properties: { value: { type: "number" } }, required: ["value"] },
+  true
+);
+exports.default = __cfPattern_1;
+`;
+
+    expect(() => verify(body)).not.toThrow();
+  });
+
+  it("accepts canonical FrameworkProvided metadata carriers for trusted builders", () => {
+    const body = `
+${IMPORT}
+const __cfPattern_1 = (0, commonfabric_1.pattern)(
+  (0, commonfabric_1.__cfHelpers.withFrameworkProvidedPaths)(
+    (0, commonfabric_1.__cfHelpers.withPatternParamsSchema)(
+      (argument, params) => ({ id: argument.key("sandboxId"), value: params.value }),
+      { type: "object", properties: { value: { type: "string" } }, required: ["value"] }
+    ),
+    [["sandboxId"]]
+  ),
+  true,
+  true
+);
+const __cfLift_1 = (0, commonfabric_1.lift)(
+  (0, commonfabric_1.__cfHelpers.withFrameworkProvidedPaths)(
+    (input) => input.sandboxId,
+    [["sandboxId"]]
+  ),
+  true,
+  true
+);
+exports.default = (0, commonfabric_1.handler)(
+  true,
+  true,
+  (0, commonfabric_1.__cfHelpers.withFrameworkProvidedPaths)(
+    (_event, context) => ({ pattern: __cfPattern_1, lift: __cfLift_1, context }),
+    [["sandboxId"]]
+  )
+);
+`;
+
+    expect(() => verify(body)).not.toThrow();
+  });
+
+  it("accepts UTF-8 canonical FrameworkProvided metadata ordering", () => {
+    const body = `
+${IMPORT}
+exports.default = (0, commonfabric_1.pattern)(
+  (0, commonfabric_1.__cfHelpers.withFrameworkProvidedPaths)(
+    (argument) => argument,
+    [["z"], ["ä"], ["😊"]]
+  ),
+  true,
+  true
+);
+`;
+
+    expect(() => verify(body)).not.toThrow();
+  });
+
+  it("rejects dynamic or malformed FrameworkProvided metadata paths", () => {
+    const invalidPaths = [
+      "paths",
+      "[]",
+      "[[]]",
+      '[[""]] ',
+      '[["*"]]',
+      '[["[]"]]',
+      '[["__proto__"]]',
+      '[["prototype"]]',
+      '[["constructor"]]',
+      '[["sandboxId"], ["sandboxId"]]',
+      '[["z"], ["a"]]',
+    ];
+    for (const paths of invalidPaths) {
+      const body = `
+${IMPORT}
+const paths = (0, commonfabric_1.__cf_data)([["sandboxId"]]);
+exports.default = (0, commonfabric_1.pattern)(
+  (0, commonfabric_1.__cfHelpers.withFrameworkProvidedPaths)(
+    (argument) => argument,
+    ${paths}
+  ),
+  true,
+  true
+);
+`;
+
+      expect(() => verify(body), paths).toThrow(
+        "FrameworkProvided metadata",
+      );
+    }
+  });
+
+  it("rejects exporting a FrameworkProvided metadata carrier result", () => {
+    const body = `
+${IMPORT}
+exports.default = (0, commonfabric_1.__cfHelpers.withFrameworkProvidedPaths)(
+  (argument) => argument,
+  [["sandboxId"]]
+);
+`;
+
+    expect(() => verify(body)).toThrow(
+      "Only trusted builder calls, schema(), canonical function hardening, and canonical binding annotation are allowed at module scope in SES mode",
+    );
+  });
+
+  it("rejects exporting the compiler-only params-schema carrier result", () => {
+    const body = `
+${IMPORT}
+exports.default = (0, commonfabric_1.__cfHelpers.withPatternParamsSchema)(
+  (argument, params) => ({ publicValue: argument.value, capturedValue: params.value }),
+  true
+);
+`;
+
+    expect(() => verify(body)).toThrow(
+      "Only trusted builder calls, schema(), canonical function hardening, and canonical binding annotation are allowed at module scope in SES mode",
+    );
   });
 
   it("accepts compiled dependencies from the shared runtime-module policy", () => {

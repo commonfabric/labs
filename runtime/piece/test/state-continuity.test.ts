@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { createFactoryShell } from "@commonfabric/data-model/fabric-factory";
 import { Identity } from "@commonfabric/identity";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import { assertPatternSchemasBackwardCompatible } from "../src/schema-compatibility.ts";
 import {
   materializeOver,
   openFileBackedRuntime,
+  readStateUnder,
   readVintageArgument,
   vintageArgumentLink,
   vintageRoot,
@@ -251,6 +253,61 @@ describe("pattern update over captured prior state", () => {
   beforeEach(() => {
     dirs = [];
     open = [];
+  });
+
+  it("reads factory-valued state without requiring executable artifacts", async () => {
+    const shell = createFactoryShell({
+      kind: "pattern",
+      ref: { identity: "A".repeat(43), symbol: "factory" },
+      argumentSchema: true,
+      resultSchema: true,
+    });
+    let eagerReadCalled = false;
+    const vintage = {
+      runtime: {
+        getCellFromEntityId: () => ({
+          pull: (options?: { materializeFactories?: boolean }) => {
+            if (options?.materializeFactories !== false) {
+              eagerReadCalled = true;
+              return Promise.reject(
+                new Error("factory requires executable materialization"),
+              );
+            }
+            return Promise.resolve({ factory: shell });
+          },
+        }),
+      },
+    } as unknown as VintageRuntime;
+
+    const state = await readStateUnder(
+      vintage,
+      "did:key:test",
+      "of:test",
+      {
+        type: "object",
+        properties: {
+          factory: {
+            asFactory: {
+              kind: "pattern",
+              argumentSchema: true,
+              resultSchema: true,
+            },
+          },
+        },
+      },
+    );
+
+    expect(eagerReadCalled).toBe(false);
+    expect(state).toEqual({
+      factory: {
+        "[factory]": {
+          kind: "pattern",
+          ref: { identity: "A".repeat(43), symbol: "factory" },
+          argumentSchema: true,
+          resultSchema: true,
+        },
+      },
+    });
   });
 
   afterEach(async () => {

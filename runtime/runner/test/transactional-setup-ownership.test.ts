@@ -1,3 +1,5 @@
+/// <reference path="./clock.d.ts" />
+
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
@@ -8,7 +10,10 @@ import type { Action } from "../src/scheduler.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 import type { RuntimeTelemetryEvent } from "../src/telemetry.ts";
-import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import {
+  createTrustedBuilder,
+  installTestPatternArtifact,
+} from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("transactional setup ownership");
 const space = signer.did();
@@ -174,19 +179,19 @@ describe("transactional setup ownership", () => {
 
   it("produces a mapped result after its child setup aborts", async () => {
     const { cell, lift, pattern } = createTrustedBuilder(runtime).commonfabric;
-    const operation = pattern<{ element: number }>(({ element }) =>
-      lift((value: number) => value * 2)(element)
+    const operation = installTestPatternArtifact(
+      runtime,
+      pattern<{ element: number }>(({ element }) =>
+        lift((value: number) => value * 2)(element)
+      ),
     );
     const parentPattern = pattern(() => {
       const items = cell<number[]>([]);
       return {
         items,
         mapped: (items as unknown as {
-          mapWithPattern(
-            operation: unknown,
-            params: Record<string, never>,
-          ): unknown;
-        }).mapWithPattern(operation, {}),
+          mapWithPattern(operation: unknown): unknown;
+        }).mapWithPattern(operation),
       };
     });
     const setupTx = runtime.edit();

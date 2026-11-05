@@ -50,6 +50,7 @@ describe("default-app notebook reload integration test", () => {
 
     await waitForActiveSpaceRoot(page, notebookSpaceDid);
     await waitForRuntimeIdle(page);
+    await awaitViewSettled(page);
     await clickButtonWithText(page, "Notes");
     await awaitViewSettled(page);
     await clickButtonWithText(page, "New Notebook");

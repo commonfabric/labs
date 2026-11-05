@@ -1,4 +1,6 @@
 import { isInternalMemberName } from "@commonfabric/schema-generator/property-name";
+import { isCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
+import { detectTrustedFactoryType } from "@commonfabric/schema-generator";
 import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
 import {
   namesValueBinding,
@@ -8,7 +10,10 @@ import {
   carriesWriterPolicy,
   holdsWriterPolicy,
 } from "@commonfabric/schema-generator/writer-policy";
-import { FUNCTION_HARDENING_HELPER_NAME } from "@commonfabric/pattern-contract/sandbox-contract";
+import {
+  FUNCTION_HARDENING_HELPER_NAME,
+  isTrustedDataHelper,
+} from "@commonfabric/pattern-contract/sandbox-contract";
 import ts from "typescript";
 
 import {
@@ -17,8 +22,10 @@ import {
   detectCallKind,
   detectNewExpressionKind,
   ensureTypeNodeRegistered,
+  findEnclosingPatternBuilderCallbackDescriptor,
   getLiftAppliedInnerCall,
   getNodeText,
+  getPatternBuilderCallbackDescriptor,
   getTypeAtLocationWithFallback,
   getTypeFromTypeNodeWithFallback,
   getVariableInitializer,
@@ -62,6 +69,11 @@ import { printedArrayElementNode } from "../closures/strategies/lift-applied-str
 import { analyzeFunctionCapabilities } from "../policy/mod.ts";
 import { unwrapExpression } from "../utils/expression.ts";
 import {
+  evaluateStaticJson,
+  resolveStableConstExpression,
+} from "../utils/static-json.ts";
+import { createSchemaAst, generateToSchemaValue } from "./schema-generator.ts";
+import {
   isPatternFactoryCalleeExpression,
   isStructuralReactiveFactoryExpression,
 } from "./structural-reactive-factory.ts";
@@ -77,6 +89,13 @@ import {
 } from "./type-shrinking.ts";
 
 type UiContractHint = NonNullable<SchemaHint["cfcUiContract"]>;
+type FactoryContractHint = NonNullable<
+  SchemaHint["factoryContracts"]
+>[number];
+type SchemaCallback =
+  | ts.ArrowFunction
+  | ts.FunctionExpression
+  | ts.FunctionDeclaration;
 type CellScope = "space" | "user" | "session";
 
 /**
@@ -166,7 +185,7 @@ function normalizeTypeNodeText(text: string): string {
 }
 
 function parameterUsesCellLikeMethods(
-  fn: ts.ArrowFunction | ts.FunctionExpression,
+  fn: SchemaCallback,
   index: number,
 ): boolean {
   const parameter = fn.parameters[index];
@@ -180,7 +199,12 @@ function parameterUsesCellLikeMethods(
   const visit = (node: ts.Node): void => {
     if (usesCellLikeMethods) return;
     if (
-      node !== fn && (ts.isArrowFunction(node) || ts.isFunctionExpression(node))
+      node !== fn &&
+      (
+        ts.isArrowFunction(node) ||
+        ts.isFunctionExpression(node) ||
+        ts.isFunctionDeclaration(node)
+      )
     ) {
       return;
     }
@@ -231,7 +255,7 @@ function getSymbolTypeAtSource(
 // callback AST and checker (it reads no cross-stage registries), and
 // transformed nodes have fresh identities, so entries can't go stale.
 interface CapabilitySummaryMemo {
-  /** `{ checker, includeNestedCallbacks: true }` analyses. */
+  /** `{ checker, interprocedural: true, includeNestedCallbacks: true }` analyses. */
   readonly nested: WeakMap<ts.Node, FunctionCapabilitySummary>;
 
   /** Non-nested analyses (fallback after a recorded-summary miss). */
@@ -255,7 +279,7 @@ function capabilitySummaryMemoFor(
 }
 
 function findCapabilitySummaryForParameter(
-  fn: ts.ArrowFunction | ts.FunctionExpression,
+  fn: SchemaCallback,
   index: number,
   context?: TransformationContext,
   options?: {
@@ -330,7 +354,7 @@ function contractReading(
 }
 
 function applyCapabilitySummaryToArgument(
-  fn: ts.ArrowFunction | ts.FunctionExpression,
+  fn: SchemaCallback,
   argumentNode: ts.TypeNode | undefined,
   argumentType: ts.Type | undefined,
   checker: ts.TypeChecker,
@@ -441,7 +465,7 @@ function applyCapabilitySummaryToArgument(
 }
 
 function applyCapabilitySummaryToParameter(
-  fn: ts.ArrowFunction | ts.FunctionExpression,
+  fn: SchemaCallback,
   parameterIndex: number,
   parameterNode: ts.TypeNode | undefined,
   parameterType: ts.Type | undefined,
@@ -529,7 +553,7 @@ function applyCapabilitySummaryToParameter(
 }
 
 function collectFunctionSchemaTypeNodes(
-  fn: ts.ArrowFunction | ts.FunctionExpression,
+  fn: SchemaCallback,
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
@@ -835,11 +859,614 @@ function collectFunctionSchemaTypeNodes(
     if (argumentType) result.argumentType = argumentType;
   }
   if (resultNode) {
+    if (returnExpr && context) {
+      propagateFactoryContractHints(
+        returnExpr,
+        resultNode,
+        context,
+      );
+    }
     result.result = resultNode;
     if (resultType) result.resultType = resultType;
   }
 
   return result;
+}
+
+export interface PatternFactorySchemaContractHint {
+  readonly kind: "pattern";
+  readonly inputTypeNode: ts.TypeNode;
+  readonly inputType?: ts.Type;
+  readonly inputSchema?: unknown;
+  readonly outputTypeNode: ts.TypeNode;
+  readonly outputType?: ts.Type;
+  readonly outputSchema?: unknown;
+}
+
+function resolveFactorySchemaValue(
+  expression: ts.Expression,
+  context: TransformationContext,
+): { readonly resolved: true; readonly value: unknown } | {
+  readonly resolved: false;
+} {
+  return evaluateStaticFactorySchema(expression, context, new Set());
+}
+
+type StaticFactorySchemaResult =
+  | { readonly resolved: true; readonly value: unknown }
+  | { readonly resolved: false };
+
+/**
+ * Resolve JSON data assembled from literals and compiler-owned schema values.
+ *
+ * `evaluateStaticJson()` deliberately rejects calls. Factory contracts also
+ * admit `toSchema<T>()`, however, and authored code may apply a static object
+ * overlay to that compiler-produced value. This evaluator composes those two
+ * proven sources without evaluating an authored function.
+ */
+function evaluateStaticFactorySchema(
+  expression: ts.Expression,
+  context: TransformationContext,
+  active: Set<ts.Node>,
+): StaticFactorySchemaResult {
+  const node = unwrapExpression(expression);
+  const original = ts.getOriginalNode(node);
+  if (active.has(node) || active.has(original)) return { resolved: false };
+  active.add(node);
+  active.add(original);
+  try {
+    const staticValue = evaluateStaticJson(node, context.checker);
+    if (staticValue.resolved) return staticValue;
+
+    const generated = generateToSchemaValue(node, context);
+    if (generated.resolved) return generated;
+
+    if (ts.isCallExpression(node)) {
+      const argument = trustedDataIdentityArgument(node, context.checker);
+      return argument
+        ? evaluateStaticFactorySchema(argument, context, active)
+        : { resolved: false };
+    }
+
+    if (ts.isIdentifier(node)) {
+      const resolved = resolveStableConstExpression(node, context.checker);
+      return resolved && resolved !== node
+        ? evaluateStaticFactorySchema(resolved, context, active)
+        : { resolved: false };
+    }
+
+    if (ts.isArrayLiteralExpression(node)) {
+      const result: unknown[] = [];
+      for (const element of node.elements) {
+        if (ts.isOmittedExpression(element)) return { resolved: false };
+        if (ts.isSpreadElement(element)) {
+          const spread = evaluateStaticFactorySchema(
+            element.expression,
+            context,
+            active,
+          );
+          if (!spread.resolved || !Array.isArray(spread.value)) {
+            return { resolved: false };
+          }
+          for (const item of spread.value) result.push(item);
+          continue;
+        }
+        const value = evaluateStaticFactorySchema(element, context, active);
+        if (!value.resolved) return value;
+        result.push(value.value);
+      }
+      return { resolved: true, value: result };
+    }
+
+    if (ts.isObjectLiteralExpression(node)) {
+      const result: Record<string, unknown> = {};
+      for (const property of node.properties) {
+        if (ts.isSpreadAssignment(property)) {
+          const spread = evaluateStaticFactorySchema(
+            property.expression,
+            context,
+            active,
+          );
+          if (!spread.resolved || !isStaticSchemaRecord(spread.value)) {
+            return { resolved: false };
+          }
+          Object.assign(result, spread.value);
+          continue;
+        }
+        if (
+          !ts.isPropertyAssignment(property) &&
+          !ts.isShorthandPropertyAssignment(property)
+        ) {
+          return { resolved: false };
+        }
+        const key = staticSchemaPropertyName(property.name, context.checker);
+        if (key === undefined) return { resolved: false };
+        const initializer = ts.isPropertyAssignment(property)
+          ? property.initializer
+          : property.name;
+        const value = evaluateStaticFactorySchema(
+          initializer,
+          context,
+          active,
+        );
+        if (!value.resolved) return value;
+        result[key] = value.value;
+      }
+      return { resolved: true, value: result };
+    }
+
+    if (
+      ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)
+    ) {
+      const container = evaluateStaticFactorySchema(
+        node.expression,
+        context,
+        active,
+      );
+      if (!container.resolved || !isStaticSchemaRecord(container.value)) {
+        return { resolved: false };
+      }
+      const key = ts.isPropertyAccessExpression(node)
+        ? node.name.text
+        : staticSchemaElementKey(node.argumentExpression, context.checker);
+      return key !== undefined && Object.hasOwn(container.value, key)
+        ? { resolved: true, value: container.value[key] }
+        : { resolved: false };
+    }
+
+    return { resolved: false };
+  } finally {
+    active.delete(node);
+    active.delete(original);
+  }
+}
+
+function trustedDataIdentityArgument(
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+): ts.Expression | undefined {
+  if (call.arguments.length !== 1) return undefined;
+  const callee = unwrapExpression(call.expression);
+  const location = ts.isIdentifier(callee)
+    ? callee
+    : ts.isPropertyAccessExpression(callee)
+    ? callee.name
+    : undefined;
+  if (!location) return undefined;
+  let symbol = checker.getSymbolAtLocation(location);
+  if (!symbol) return undefined;
+  if ((symbol.flags & ts.SymbolFlags.Alias) !== 0) {
+    symbol = checker.getAliasedSymbol(symbol);
+  }
+  return isTrustedDataHelper(symbol.getName()) &&
+      isCommonFabricSymbol(symbol, checker)
+    ? call.arguments[0]
+    : undefined;
+}
+
+function staticSchemaPropertyName(
+  name: ts.PropertyName,
+  checker: ts.TypeChecker,
+): string | undefined {
+  if (
+    ts.isIdentifier(name) || ts.isStringLiteralLike(name) ||
+    ts.isNumericLiteral(name)
+  ) {
+    return name.text;
+  }
+  if (!ts.isComputedPropertyName(name)) return undefined;
+  const key = evaluateStaticJson(name.expression, checker);
+  return key.resolved &&
+      (typeof key.value === "string" || typeof key.value === "number")
+    ? String(key.value)
+    : undefined;
+}
+
+function staticSchemaElementKey(
+  expression: ts.Expression | undefined,
+  checker: ts.TypeChecker,
+): string | undefined {
+  if (!expression) return undefined;
+  const key = evaluateStaticJson(expression, checker);
+  return key.resolved &&
+      (typeof key.value === "string" || typeof key.value === "number")
+    ? String(key.value)
+    : undefined;
+}
+
+function isStaticSchemaRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function recordFactorySchemaContract(
+  authored: ts.CallExpression,
+  generated: ts.CallExpression,
+  contract: FactoryContractHint,
+  context: TransformationContext,
+): void {
+  const generatedContracts = context.lookupSchemaHint(generated)
+    ?.factoryContracts;
+  if (
+    generatedContracts?.some((existing) =>
+      (existing.frameworkProvidedPaths?.length ?? 0) > 0
+    )
+  ) return;
+  const existing = context.lookupSchemaHint(authored)?.factoryContracts;
+  const authoritative =
+    existing?.some((candidate) =>
+        (candidate.frameworkProvidedPaths?.length ?? 0) > 0
+      )
+      ? existing
+      : undefined;
+  const refinable = generatedContracts ?? existing;
+  const contracts = authoritative ?? refinable ?? [contract];
+  if (!authoritative && refinable) {
+    // Closure conversion gives the hoisted base and every value that refers
+    // to it one shared contract array. Schema injection may recover a more
+    // exact inferred contract from the generated base callback; refine that
+    // shared compiler metadata before containing schemas consume it.
+    const mutable = refinable as FactoryContractHint[];
+    mutable.splice(0, mutable.length, contract);
+  }
+  const hint = { factoryContracts: contracts };
+  context.recordSchemaHint(authored, hint);
+  context.recordSchemaHint(generated, hint);
+}
+
+function resolveNonPatternFactorySchemaContract(
+  node: ts.CallExpression,
+  kind: "module" | "handler",
+  context: TransformationContext,
+  options: { readonly reportUnresolvable?: boolean } = {},
+): FactoryContractHint | undefined {
+  let callback: SchemaCallback | undefined;
+  let inputSchemaExpression: ts.Expression | undefined;
+  let outputSchemaExpression: ts.Expression | undefined;
+  if (kind === "module") {
+    callback = resolveFunctionLikeExpression(
+      node.arguments[0],
+      context.checker,
+      context.sourceFile,
+    );
+    if (callback) {
+      inputSchemaExpression = node.arguments[1];
+      outputSchemaExpression = node.arguments[2];
+    }
+  } else {
+    callback = resolveFunctionLikeExpression(
+      node.arguments[2],
+      context.checker,
+      context.sourceFile,
+    );
+    if (callback) {
+      // handler() is schema-first: event, context, callback. Factory@1 uses
+      // callable order: context input, event output.
+      inputSchemaExpression = node.arguments[1];
+      outputSchemaExpression = node.arguments[0];
+    }
+  }
+
+  const inputSchema = inputSchemaExpression
+    ? resolveFactorySchemaValue(inputSchemaExpression, context)
+    : undefined;
+  const outputSchema = outputSchemaExpression
+    ? resolveFactorySchemaValue(outputSchemaExpression, context)
+    : undefined;
+  if (inputSchema && !inputSchema.resolved) {
+    if (options.reportUnresolvable ?? true) {
+      reportUnresolvableFactorySchema(inputSchemaExpression!, context);
+    }
+    return undefined;
+  }
+  if (outputSchema && !outputSchema.resolved) {
+    if (options.reportUnresolvable ?? true) {
+      reportUnresolvableFactorySchema(outputSchemaExpression!, context);
+    }
+    return undefined;
+  }
+
+  const callType = getTypeAtLocationWithFallback(
+    node,
+    context.checker,
+    context.options.state?.typeRegistry,
+  );
+  const detected = callType &&
+    detectTrustedFactoryType(callType, context.checker);
+  if (detected && detected.kind !== kind) return undefined;
+
+  // The generic pass-through overload of lift() intentionally exposes a bare
+  // callable TypeScript type. Adding ModuleFactory members to that overload
+  // prevents TypeScript from carrying a callback type parameter through the
+  // returned function. The trusted builder call still constructs a branded
+  // module factory at runtime, so recover its compiler-owned contract directly
+  // from the callback when the public overload does not expose the brand.
+  const inferred = !detected && kind === "module" && callback
+    ? collectFunctionSchemaTypeNodes(
+      callback,
+      context.checker,
+      context.sourceFile,
+      context.factory,
+      undefined,
+      context.options.state?.typeRegistry,
+      "full",
+      context,
+    )
+    : undefined;
+  if (!detected && (!inferred?.argument || !inferred.result)) {
+    return undefined;
+  }
+
+  const inputTypeNode = detected
+    ? typeToInjectableSchemaTypeNode(
+      detected.inputType,
+      context.checker,
+      context.sourceFile,
+      context.factory,
+      context.options.state?.typeRegistry,
+      context.options.state,
+    ) ?? context.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword)
+    : inferred!.argument!;
+  const outputTypeNode = detected
+    ? typeToInjectableSchemaTypeNode(
+      detected.outputType,
+      context.checker,
+      context.sourceFile,
+      context.factory,
+      context.options.state?.typeRegistry,
+      context.options.state,
+    ) ?? context.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword)
+    : inferred!.result!;
+  const inputType = detected?.inputType ?? inferred?.argumentType;
+  const outputType = detected?.outputType ?? inferred?.resultType;
+  if (inputType) {
+    context.options.state?.typeRegistry.set(inputTypeNode, inputType);
+  }
+  if (outputType) {
+    context.options.state?.typeRegistry.set(outputTypeNode, outputType);
+  }
+
+  return {
+    kind,
+    inputTypeNode,
+    ...(inputType && { inputType }),
+    ...(inputSchema?.resolved && { inputSchema: inputSchema.value }),
+    outputTypeNode,
+    ...(outputType && { outputType }),
+    ...(outputSchema?.resolved && { outputSchema: outputSchema.value }),
+  };
+}
+
+/**
+ * Resolve the exact public pattern contract before schema emission.
+ *
+ * Nested-pattern closure conversion runs before SchemaInjection, so it uses
+ * this same canonical callback/type-argument path to retain the contract on
+ * generated base/curry expressions. Contract types are derived only from type
+ * arguments and callback analysis, never reconstructed from wire schemas.
+ */
+export function resolvePatternFactorySchemaContract(
+  node: ts.CallExpression,
+  callback: SchemaCallback,
+  context: TransformationContext,
+  options: { readonly reportUnresolvable?: boolean } = {},
+): PatternFactorySchemaContractHint | undefined {
+  const { checker, sourceFile, factory } = context;
+  const typeRegistry = context.options.state?.typeRegistry;
+  const typeArgs = node.typeArguments;
+  const schemaArguments = Array.from(node.arguments.slice(1));
+  const inputSchema = schemaArguments[0]
+    ? resolveFactorySchemaValue(schemaArguments[0], context)
+    : undefined;
+  const outputSchema = schemaArguments[1]
+    ? resolveFactorySchemaValue(schemaArguments[1], context)
+    : undefined;
+  if (inputSchema && !inputSchema.resolved) {
+    if (options.reportUnresolvable ?? true) {
+      reportUnresolvableFactorySchema(schemaArguments[0]!, context);
+    }
+    return undefined;
+  }
+  if (outputSchema && !outputSchema.resolved) {
+    if (options.reportUnresolvable ?? true) {
+      reportUnresolvableFactorySchema(schemaArguments[1]!, context);
+    }
+    return undefined;
+  }
+
+  if (schemaArguments.length >= 2 && !typeArgs?.length) {
+    const callType = getTypeAtLocationWithFallback(
+      node,
+      checker,
+      typeRegistry,
+    );
+    const detected = callType && detectTrustedFactoryType(callType, checker);
+    if (!detected || detected.kind !== "pattern") {
+      reportUnresolvableFactorySchema(node, context);
+      return undefined;
+    }
+    const inputTypeNode = typeToInjectableSchemaTypeNode(
+      detected.inputType,
+      checker,
+      sourceFile,
+      factory,
+      typeRegistry,
+      context.options.state,
+    ) ?? factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+    const outputTypeNode = typeToInjectableSchemaTypeNode(
+      detected.outputType,
+      checker,
+      sourceFile,
+      factory,
+      typeRegistry,
+      context.options.state,
+    ) ?? factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+    typeRegistry?.set(inputTypeNode, detected.inputType);
+    typeRegistry?.set(outputTypeNode, detected.outputType);
+    return {
+      kind: "pattern",
+      inputTypeNode,
+      inputType: detected.inputType,
+      inputSchema: inputSchema!.value,
+      outputTypeNode,
+      outputType: detected.outputType,
+      outputSchema: outputSchema!.value,
+    };
+  }
+
+  let inputTypeNode: ts.TypeNode;
+  let inputType: ts.Type | undefined;
+  let outputTypeNode: ts.TypeNode;
+  let outputType: ts.Type | undefined;
+
+  if (typeArgs && typeArgs.length >= 2) {
+    inputTypeNode = typeArgs[0]!;
+    outputTypeNode = typeArgs[1]!;
+    inputType = getTypeFromTypeNodeWithFallback(
+      inputTypeNode,
+      checker,
+      typeRegistry,
+    );
+    outputType = getTypeFromTypeNodeWithFallback(
+      outputTypeNode,
+      checker,
+      typeRegistry,
+    );
+  } else {
+    const inferred = collectFunctionSchemaTypeNodes(
+      callback,
+      checker,
+      sourceFile,
+      factory,
+      undefined,
+      typeRegistry,
+      "defaults_only",
+      context,
+    );
+    if (typeArgs?.length === 1) {
+      inputTypeNode = typeArgs[0]!;
+      inputType = getTypeFromTypeNodeWithFallback(
+        inputTypeNode,
+        checker,
+        typeRegistry,
+      );
+    } else {
+      inputTypeNode = inferred.argument ??
+        getParameterSchemaType(factory, callback.parameters[0]);
+      inputType = getTypeFromRegistryOrFallback(
+        inferred.argument,
+        inferred.argumentType,
+        typeRegistry,
+      );
+    }
+
+    outputTypeNode = inferred.result ??
+      factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+    outputType = getTypeFromRegistryOrFallback(
+      inferred.result,
+      inferred.resultType,
+      typeRegistry,
+    );
+  }
+
+  const returnExpression = getCallbackReturnExpression(callback);
+  const lowersArrayCallback = context.isArrayMethodCallback(callback) ||
+    isMapWithPatternCallbackPatternCall(node);
+  const resultAuthored = callback.type !== undefined ||
+    (!lowersArrayCallback && (typeArgs?.length ?? 0) >= 2);
+  const freshResult = resultAuthored ? undefined : freshResultTypeNode(
+    returnExpression ? unwrapExpression(returnExpression) : undefined,
+    checker,
+    sourceFile,
+    factory,
+    typeRegistry,
+    context,
+  );
+  if (freshResult && freshResult !== "whole") {
+    preserveUiContractHint(outputTypeNode, freshResult, context);
+    outputTypeNode = freshResult;
+    outputType = undefined;
+  }
+  const originalInputTypeNode = inputTypeNode;
+  inputTypeNode = applyCapabilitySummaryToArgument(
+    callback,
+    inputTypeNode,
+    inputType,
+    checker,
+    sourceFile,
+    factory,
+    "defaults_only",
+    context,
+    callback,
+  ) ?? inputTypeNode;
+  if (inputTypeNode !== originalInputTypeNode) {
+    inputType = undefined;
+  }
+
+  if (inputType) typeRegistry?.set(inputTypeNode, inputType);
+  if (outputType) typeRegistry?.set(outputTypeNode, outputType);
+  if (returnExpression) {
+    // Contract resolution runs during closure conversion, before the later
+    // SchemaInjection traversal reaches the hoisted base pattern. Preserve
+    // exact factory-valued leaves on the contract's own result TypeNode now so
+    // the curried value embedded in its parent sees the same alternatives.
+    propagateFactoryContractHints(
+      returnExpression,
+      outputTypeNode,
+      context,
+    );
+  }
+  if (inputType) {
+    propagateTrustedFactoryContractsFromType(
+      inputTypeNode,
+      inputType,
+      context,
+      new Set(),
+    );
+  }
+  if (outputType) {
+    propagateTrustedFactoryContractsFromType(
+      outputTypeNode,
+      outputType,
+      context,
+      new Set(),
+    );
+  }
+
+  // An inferred result node is the compiler's recovered public contract.
+  // Contextual builder overloads can leave the corresponding semantic return
+  // type wider (commonly with `any` below an otherwise concrete object), so
+  // generating that contract from the semantic type would discard the exact
+  // recovered member schemas.
+  if (!resultAuthored && !outputType?.isUnion()) outputType = undefined;
+
+  return {
+    kind: "pattern",
+    inputTypeNode,
+    ...(inputType && { inputType }),
+    ...(inputSchema?.resolved && { inputSchema: inputSchema.value }),
+    outputTypeNode,
+    ...(outputType && { outputType }),
+    ...(outputSchema?.resolved && { outputSchema: outputSchema.value }),
+  };
+}
+
+function reportUnresolvableFactorySchema(
+  node: ts.Node,
+  context: TransformationContext,
+): void {
+  context.reportDiagnosticOnce({
+    severity: "error",
+    type: "pattern-factory:non-static-public-schema",
+    message:
+      "A first-class pattern factory requires statically resolvable public " +
+      "schemas so its exact Factory@1 contract can be embedded in containing " +
+      "values. Use JSON-compatible const object/array literals (or const " +
+      "bindings and spreads of those literals); authored code is never " +
+      "executed to discover a schema.",
+    node,
+  });
 }
 
 function createToSchemaCall(
@@ -1985,7 +2612,7 @@ function registerInjectedCallResultType(
 }
 
 function applyCallbackBuilderArgumentCapabilitySummary(
-  callback: ts.ArrowFunction | ts.FunctionExpression | undefined,
+  callback: SchemaCallback | undefined,
   argumentTypeNode: ts.TypeNode,
   argumentTypeValue: ts.Type | undefined,
   checker: ts.TypeChecker,
@@ -2026,7 +2653,7 @@ function applyCallbackBuilderArgumentCapabilitySummary(
 }
 
 function resolveDualSchemaBuilderTypes(
-  callback: ts.ArrowFunction | ts.FunctionExpression | undefined,
+  callback: SchemaCallback | undefined,
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
@@ -2216,6 +2843,21 @@ function visitInjectedDualSchemaBuilderCall(
     typeRegistry,
     checker,
   );
+  const callKind = detectCallKind(node, checker);
+  if (callKind?.kind === "builder" && callKind.builderName === "lift") {
+    recordFactorySchemaContract(
+      node,
+      updated,
+      {
+        kind: "module",
+        inputTypeNode: argumentTypeNode,
+        ...(argumentTypeValue && { inputType: argumentTypeValue }),
+        outputTypeNode: resultTypeNode,
+        ...(resultTypeValue && { outputType: resultTypeValue }),
+      },
+      context,
+    );
+  }
   registerInjectedCallResultType(
     node,
     updated,
@@ -2419,9 +3061,11 @@ function inferLiftFactoryResultType(
   return resultType;
 }
 
-function getCallbackReturnExpression(
-  fn: ts.ArrowFunction | ts.FunctionExpression,
+export function getCallbackReturnExpression(
+  fn: SchemaCallback | undefined,
 ): ts.Expression | undefined {
+  if (!fn) return undefined;
+  if (!fn.body) return undefined;
   if (ts.isExpression(fn.body)) {
     return fn.body;
   }
@@ -2436,7 +3080,7 @@ function getCallbackReturnExpression(
 }
 
 function getDirectProjectionPropertyName(
-  fn: ts.ArrowFunction | ts.FunctionExpression,
+  fn: SchemaCallback,
 ): string | undefined {
   const parameter = fn.parameters[0];
   if (!parameter || !ts.isIdentifier(parameter.name)) {
@@ -2493,7 +3137,7 @@ function findTypeLiteralPropertyTypeNode(
 }
 
 function recoverProjectedResultSchema(
-  fn: ts.ArrowFunction | ts.FunctionExpression,
+  fn: SchemaCallback,
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   argumentNode: ts.TypeNode | undefined,
@@ -2907,6 +3551,1372 @@ function freshResultTypeNode(
  * as the structural type of the value it names, which no reader can tell the
  * binding from; the authored node keeps it.
  */
+export function propagateFactoryContractHints(
+  expression: ts.Expression,
+  typeNode: ts.TypeNode,
+  context: TransformationContext,
+): void {
+  const expr = unwrapExpression(expression);
+  const node = unwrapFactoryContractTypeNode(typeNode);
+  const structuralExpr = resolveFactoryContractStructureExpression(
+    expr,
+    context.checker,
+    new Set(),
+  );
+  const directContracts = collectFactoryContractHints(
+    expr,
+    context,
+    new Set(),
+  );
+  const contracts = directContracts.length > 0 || !ts.isUnionTypeNode(node) ||
+      isAmbiguousAuthoredFactoryContractExpression(expr)
+    ? directContracts
+    : collectTrustedFactoryTypeContracts(
+      getTypeAtLocationWithFallback(
+        expr,
+        context.checker,
+        context.options.state?.typeRegistry,
+      ),
+      context,
+    );
+  const authoredWholeUnionContracts = contracts.filter((contract) =>
+    authoredWholeFactoryUnionContracts.has(contract)
+  );
+  if (authoredWholeUnionContracts.length > 0 && ts.isUnionTypeNode(node)) {
+    for (const contract of authoredWholeUnionContracts) {
+      appendFactoryContractHint(node, contract, context);
+    }
+  }
+  for (
+    const contract of contracts.filter((contract) =>
+      !authoredWholeFactoryUnionContracts.has(contract)
+    )
+  ) {
+    const target = selectFactoryContractTypeNode(node, contract, context);
+    if (target) {
+      appendFactoryContractHint(target, contract, context);
+      const expressionType = getTypeAtLocationWithFallback(
+        expr,
+        context.checker,
+        context.options.state?.typeRegistry,
+      );
+      if (
+        expressionType && !isAnyOrUnknownType(expressionType) &&
+        !ts.isUnionTypeNode(node)
+      ) {
+        context.options.state?.typeRegistry.set(target, expressionType);
+      }
+    }
+  }
+
+  if (
+    ts.isObjectLiteralExpression(structuralExpr) &&
+    ts.isTypeLiteralNode(node)
+  ) {
+    for (const member of node.members) {
+      if (!ts.isPropertySignature(member) || !member.type) continue;
+      const name = propertyNameText(member.name);
+      if (!name) continue;
+      const value = selectFactoryContractContainerMember(
+        structuralExpr,
+        name,
+        context.checker,
+        new Set(),
+      );
+      if (!value) continue;
+      propagateFactoryContractHints(
+        value,
+        member.type,
+        context,
+      );
+    }
+    return;
+  }
+
+  if (ts.isCallExpression(structuralExpr)) {
+    const applied = resolveLiftAppliedInputAndCallback(
+      structuralExpr,
+      context.checker,
+      context.sourceFile,
+    );
+    const callKind = detectCallKind(structuralExpr, context.checker);
+    const computedCallback = callKind?.kind === "builder" &&
+        callKind.builderName === "computed"
+      ? resolveFunctionLikeExpression(
+        structuralExpr.arguments[0],
+        context.checker,
+        context.sourceFile,
+      )
+      : undefined;
+    const returnExpression = getCallbackReturnExpression(
+      applied?.callback ?? computedCallback,
+    );
+    if (returnExpression) {
+      propagateFactoryContractHints(returnExpression, node, context);
+      return;
+    }
+  }
+
+  if (ts.isArrayLiteralExpression(structuralExpr)) {
+    if (ts.isTupleTypeNode(node)) {
+      for (let index = 0; index < structuralExpr.elements.length; index++) {
+        const element = structuralExpr.elements[index];
+        let elementType = node.elements[index];
+        if (!element || !elementType || ts.isSpreadElement(element)) continue;
+        if (ts.isNamedTupleMember(elementType)) elementType = elementType.type;
+        propagateFactoryContractHints(element, elementType, context);
+      }
+      return;
+    }
+    const elementType = ts.isArrayTypeNode(node)
+      ? node.elementType
+      : ts.isTypeReferenceNode(node) && node.typeArguments?.length === 1
+      ? node.typeArguments[0]
+      : undefined;
+    if (elementType) {
+      for (const element of structuralExpr.elements) {
+        if (!ts.isSpreadElement(element)) {
+          propagateFactoryContractHints(element, elementType, context);
+        }
+      }
+    }
+    return;
+  }
+
+  const conditionalBranches = factoryContractConditionalBranches(
+    structuralExpr,
+  );
+  if (conditionalBranches) {
+    propagateFactoryContractHints(conditionalBranches[0], node, context);
+    propagateFactoryContractHints(conditionalBranches[1], node, context);
+  }
+}
+
+function factoryContractConditionalBranches(
+  expression: ts.Expression,
+): readonly [ts.Expression, ts.Expression] | undefined {
+  let current = unwrapExpression(expression);
+  if (
+    ts.isCallExpression(current) &&
+    ts.isPropertyAccessExpression(current.expression) &&
+    current.expression.name.text === "for" &&
+    ts.isCallExpression(current.expression.expression)
+  ) {
+    current = current.expression.expression;
+  }
+  if (ts.isConditionalExpression(current)) {
+    return [current.whenTrue, current.whenFalse];
+  }
+  if (
+    ts.isCallExpression(current) &&
+    factoryContractCallName(current.expression) === "ifElse" &&
+    current.arguments.length >= 3
+  ) {
+    return [
+      current.arguments[current.arguments.length - 2]!,
+      current.arguments[current.arguments.length - 1]!,
+    ];
+  }
+  return undefined;
+}
+
+function factoryContractCallName(
+  expression: ts.LeftHandSideExpression,
+): string | undefined {
+  const current = unwrapExpression(expression);
+  return ts.isIdentifier(current)
+    ? current.text
+    : ts.isPropertyAccessExpression(current)
+    ? current.name.text
+    : undefined;
+}
+
+function resolveFactoryContractStructureExpression(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Node>,
+): ts.Expression {
+  const current = unwrapExpression(expression);
+  const original = ts.getOriginalNode(current);
+  if (seen.has(current) || seen.has(original)) return current;
+  seen.add(current);
+  seen.add(original);
+  const selected = resolveFactoryContractValueExpression(
+    current,
+    checker,
+    new Set(),
+  );
+  return selected && selected !== current
+    ? resolveFactoryContractStructureExpression(selected, checker, seen)
+    : current;
+}
+
+function resolveFactoryContractValueExpression(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Node>,
+): ts.Expression | undefined {
+  const current = unwrapExpression(expression);
+  const original = ts.getOriginalNode(current);
+  if (seen.has(current) || seen.has(original)) return undefined;
+  seen.add(current);
+  seen.add(original);
+  try {
+    if (ts.isIdentifier(current)) {
+      const declaration = factoryContractValueDeclaration(current, checker);
+      if (declaration && ts.isBindingElement(declaration)) {
+        return resolveFactoryContractBindingElement(declaration, checker, seen);
+      }
+      const initializer = declaration && ts.isVariableDeclaration(declaration)
+        ? declaration.initializer
+        : getVariableInitializer(current, checker);
+      return initializer
+        ? resolveFactoryContractValueExpression(initializer, checker, seen) ??
+          unwrapExpression(initializer)
+        : current;
+    }
+
+    if (
+      ts.isPropertyAccessExpression(current) ||
+      ts.isElementAccessExpression(current)
+    ) {
+      const key = ts.isPropertyAccessExpression(current)
+        ? current.name.text
+        : staticFactoryContractKey(current.argumentExpression, checker);
+      if (key === undefined) return current;
+      const container = resolveFactoryContractValueExpression(
+        current.expression,
+        checker,
+        seen,
+      ) ?? unwrapExpression(current.expression);
+      return selectFactoryContractContainerMember(
+        container,
+        key,
+        checker,
+        seen,
+      ) ??
+        current;
+    }
+    return current;
+  } finally {
+    seen.delete(current);
+    seen.delete(original);
+  }
+}
+
+function factoryContractValueDeclaration(
+  identifier: ts.Identifier,
+  checker: ts.TypeChecker,
+): ts.Declaration | undefined {
+  let symbol = identifier.parent &&
+      ts.isShorthandPropertyAssignment(identifier.parent)
+    ? checker.getShorthandAssignmentValueSymbol(identifier.parent) ??
+      checker.getSymbolAtLocation(identifier)
+    : checker.getSymbolAtLocation(identifier);
+  if (!symbol) {
+    symbol = checker.getSymbolAtLocation(ts.getOriginalNode(identifier));
+  }
+  if (!symbol) return undefined;
+  if (symbol.flags & ts.SymbolFlags.Alias) {
+    symbol = checker.getAliasedSymbol(symbol);
+  }
+  return symbol.valueDeclaration ?? symbol.declarations?.[0];
+}
+
+function resolveFactoryContractBindingElement(
+  binding: ts.BindingElement,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Node>,
+): ts.Expression | undefined {
+  const pattern = binding.parent;
+  const owner = pattern.parent;
+  const base = ts.isBindingElement(owner)
+    ? resolveFactoryContractBindingElement(owner, checker, seen)
+    : ts.isVariableDeclaration(owner)
+    ? owner.initializer
+    : undefined;
+  if (!base) return undefined;
+
+  const key = ts.isObjectBindingPattern(pattern)
+    ? binding.propertyName
+      ? staticFactoryContractPropertyName(binding.propertyName, checker)
+      : ts.isIdentifier(binding.name)
+      ? binding.name.text
+      : undefined
+    : pattern.elements.indexOf(binding);
+  if (key === undefined || (typeof key === "number" && key < 0)) {
+    return undefined;
+  }
+
+  const container =
+    resolveFactoryContractValueExpression(base, checker, seen) ??
+      unwrapExpression(base);
+  return selectFactoryContractContainerMember(container, key, checker, seen);
+}
+
+function staticFactoryContractPropertyName(
+  name: ts.PropertyName,
+  checker: ts.TypeChecker,
+): string | number | undefined {
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) return name.text;
+  if (ts.isNumericLiteral(name)) return Number(name.text);
+  if (ts.isComputedPropertyName(name)) {
+    return staticFactoryContractKey(name.expression, checker);
+  }
+  return undefined;
+}
+
+function staticFactoryContractKey(
+  expression: ts.Expression | undefined,
+  checker: ts.TypeChecker,
+): string | number | undefined {
+  if (!expression) return undefined;
+  const result = evaluateStaticJson(expression, checker);
+  return result.resolved &&
+      (typeof result.value === "string" || typeof result.value === "number")
+    ? result.value
+    : undefined;
+}
+
+function selectFactoryContractContainerMember(
+  expression: ts.Expression,
+  key: string | number,
+  checker: ts.TypeChecker,
+  seen: Set<ts.Node>,
+): ts.Expression | undefined {
+  const container = unwrapExpression(expression);
+  if (ts.isObjectLiteralExpression(container)) {
+    for (let index = container.properties.length - 1; index >= 0; index--) {
+      const property = container.properties[index]!;
+      if (ts.isSpreadAssignment(property)) {
+        const spread = resolveFactoryContractValueExpression(
+          property.expression,
+          checker,
+          seen,
+        ) ?? property.expression;
+        const selected = selectFactoryContractContainerMember(
+          spread,
+          key,
+          checker,
+          seen,
+        );
+        if (selected) return selected;
+        continue;
+      }
+      if (
+        !ts.isPropertyAssignment(property) &&
+        !ts.isShorthandPropertyAssignment(property)
+      ) continue;
+      const propertyKey = staticFactoryContractPropertyName(
+        property.name,
+        checker,
+      );
+      if (String(propertyKey) !== String(key)) continue;
+      return ts.isPropertyAssignment(property)
+        ? property.initializer
+        : property.name;
+    }
+    return undefined;
+  }
+  if (ts.isArrayLiteralExpression(container) && typeof key === "number") {
+    const element = container.elements[key];
+    return element && !ts.isOmittedExpression(element) &&
+        !ts.isSpreadElement(element)
+      ? element
+      : undefined;
+  }
+  return undefined;
+}
+
+function collectFactoryContractHints(
+  expression: ts.Expression,
+  context: TransformationContext,
+  seen: Set<ts.Node>,
+): readonly FactoryContractHint[] {
+  const expr = unwrapExpression(expression);
+  const expressionContext = factoryContractContextForNode(expr, context);
+  const source = ts.getOriginalNode(expr);
+  if (seen.has(expr) || seen.has(source)) return [];
+  seen.add(expr);
+  seen.add(source);
+  try {
+    const direct = expressionContext.lookupSchemaHint(expr)?.factoryContracts;
+    if (direct?.length) return direct;
+
+    if (ts.isCallExpression(expr)) {
+      const descriptor = getPatternBuilderCallbackDescriptor(
+        expr,
+        expressionContext.checker,
+      );
+      if (descriptor) {
+        const contract = resolvePatternFactorySchemaContract(
+          expr,
+          descriptor.callback,
+          expressionContext,
+        );
+        if (contract) {
+          recordFactorySchemaContract(
+            expr,
+            expr,
+            contract,
+            expressionContext,
+          );
+          return [contract];
+        }
+      }
+      const callKind = detectCallKind(expr, expressionContext.checker);
+      const kind = callKind?.kind === "builder" &&
+          callKind.builderName === "lift"
+        ? "module"
+        : callKind?.kind === "builder" && callKind.builderName === "handler"
+        ? "handler"
+        : undefined;
+      if (kind) {
+        const contract = resolveNonPatternFactorySchemaContract(
+          expr,
+          kind,
+          expressionContext,
+        );
+        if (
+          contract &&
+          (contract.inputSchema !== undefined ||
+            contract.outputSchema !== undefined)
+        ) {
+          recordFactorySchemaContract(
+            expr,
+            expr,
+            contract,
+            expressionContext,
+          );
+          return [contract];
+        }
+      }
+    }
+
+    const selected = resolveFactoryContractValueExpression(
+      expr,
+      expressionContext.checker,
+      new Set(),
+    );
+    if (selected && selected !== expr) {
+      return collectFactoryContractHints(selected, expressionContext, seen);
+    }
+
+    const branches = factoryContractConditionalBranches(expr);
+    if (branches) {
+      return dedupeFactoryContracts([
+        ...collectFactoryContractHints(
+          branches[0],
+          expressionContext,
+          seen,
+        ),
+        ...collectFactoryContractHints(
+          branches[1],
+          expressionContext,
+          seen,
+        ),
+      ]);
+    }
+
+    const authoredInputContracts = collectAuthoredPatternInputFactoryContracts(
+      expr,
+      expressionContext,
+    );
+    if (authoredInputContracts.length > 0) {
+      expressionContext.recordSchemaHint(expr, {
+        factoryContracts: authoredInputContracts,
+      });
+      return authoredInputContracts;
+    }
+
+    const type = getTypeAtLocationWithFallback(
+      expr,
+      expressionContext.checker,
+      expressionContext.options.state?.typeRegistry,
+    );
+    const detected = type &&
+      detectTrustedFactoryType(type, expressionContext.checker);
+    if (detected) {
+      const contract = factoryContractHintFromTrustedType(
+        detected,
+        expressionContext,
+      );
+      if (contract) {
+        expressionContext.recordSchemaHint(expr, {
+          factoryContracts: [contract],
+        });
+        return [contract];
+      }
+    }
+    return [];
+  } finally {
+    seen.delete(expr);
+    seen.delete(source);
+  }
+}
+
+function factoryContractContextForNode(
+  node: ts.Node,
+  context: TransformationContext,
+): TransformationContext {
+  const sourceFile = node.getSourceFile() ?? context.sourceFile;
+  return sourceFile === context.sourceFile
+    ? context
+    : new TransformationContext({
+      program: context.program,
+      sourceFile,
+      tsContext: context.tsContext,
+      options: context.options,
+    });
+}
+
+function collectTrustedFactoryTypeContracts(
+  type: ts.Type | undefined,
+  context: TransformationContext,
+  activeTypes: Set<ts.Type> = new Set(),
+): readonly FactoryContractHint[] {
+  if (!type) return [];
+  const detected = detectTrustedFactoryType(type, context.checker);
+  if (detected) {
+    const contract = factoryContractHintFromTrustedType(
+      detected,
+      context,
+      activeTypes,
+    );
+    return contract ? [contract] : [];
+  }
+  if ((type.flags & ts.TypeFlags.Union) === 0) return [];
+  return dedupeFactoryContracts(
+    (type as ts.UnionType).types.flatMap((member) =>
+      collectTrustedFactoryTypeContracts(member, context, activeTypes)
+    ),
+  );
+}
+
+type TrustedFactoryContractCache = WeakMap<ts.Type, FactoryContractHint>;
+
+const trustedFactoryContractCaches = new WeakMap<
+  TransformationContext,
+  TrustedFactoryContractCache
+>();
+
+function cachedTrustedFactoryContract(
+  detected: NonNullable<ReturnType<typeof detectTrustedFactoryType>>,
+  context: TransformationContext,
+): FactoryContractHint | undefined {
+  return trustedFactoryContractCaches.get(context)?.get(detected.type);
+}
+
+function cacheTrustedFactoryContract(
+  detected: NonNullable<ReturnType<typeof detectTrustedFactoryType>>,
+  context: TransformationContext,
+  contract: FactoryContractHint,
+): void {
+  let cache = trustedFactoryContractCaches.get(context);
+  if (!cache) {
+    cache = new WeakMap();
+    trustedFactoryContractCaches.set(context, cache);
+  }
+  cache.set(detected.type, contract);
+}
+
+function factoryContractHintFromTrustedType(
+  detected: NonNullable<ReturnType<typeof detectTrustedFactoryType>>,
+  context: TransformationContext,
+  activeTypes: Set<ts.Type> = new Set(),
+): FactoryContractHint | undefined {
+  const cached = cachedTrustedFactoryContract(detected, context);
+  if (cached) return cached;
+  const inputTypeNode = typeToInjectableSchemaTypeNode(
+    detected.inputType,
+    context.checker,
+    context.sourceFile,
+    context.factory,
+    context.options.state?.typeRegistry,
+    context.options.state,
+  );
+  const outputTypeNode = typeToInjectableSchemaTypeNode(
+    detected.outputType,
+    context.checker,
+    context.sourceFile,
+    context.factory,
+    context.options.state?.typeRegistry,
+    context.options.state,
+  );
+  if (!inputTypeNode || !outputTypeNode) return undefined;
+  context.options.state?.typeRegistry.set(inputTypeNode, detected.inputType);
+  context.options.state?.typeRegistry.set(outputTypeNode, detected.outputType);
+  const contract: FactoryContractHint = {
+    kind: detected.kind,
+    factoryType: detected.type,
+    inputTypeNode,
+    inputType: detected.inputType,
+    outputTypeNode,
+    outputType: detected.outputType,
+  };
+  // Publish the shell before walking nested public schemas so recursive
+  // factory types terminate on this exact compiler-owned contract object.
+  // Reusing it also keeps repeated synthetic passes idempotent without
+  // collapsing distinct builder contracts that happen to print alike.
+  cacheTrustedFactoryContract(detected, context, contract);
+  propagateTrustedFactoryContractsFromType(
+    inputTypeNode,
+    detected.inputType,
+    context,
+    activeTypes,
+  );
+  propagateTrustedFactoryContractsFromType(
+    outputTypeNode,
+    detected.outputType,
+    context,
+    activeTypes,
+  );
+  return contract;
+}
+
+function propagateTrustedFactoryContractsFromType(
+  typeNode: ts.TypeNode,
+  type: ts.Type,
+  context: TransformationContext,
+  seen: Set<ts.Type>,
+): void {
+  if (seen.has(type)) return;
+  seen.add(type);
+  try {
+    const node = unwrapFactoryContractTypeNode(typeNode);
+    if (ts.isUnionTypeNode(node)) {
+      const members = (type.flags & ts.TypeFlags.Union) !== 0
+        ? (type as ts.UnionType).types
+        : [type];
+      for (const member of members) {
+        for (
+          const contract of collectTrustedFactoryTypeContracts(
+            member,
+            context,
+            seen,
+          )
+        ) {
+          const target = selectFactoryContractTypeNode(node, contract, context);
+          if (!target) continue;
+          if (!context.lookupSchemaHint(target)?.factoryContracts?.length) {
+            appendFactoryContractHint(target, contract, context);
+          }
+          context.options.state?.typeRegistry.set(target, member);
+        }
+      }
+      return;
+    }
+    if (ts.isTypeLiteralNode(node)) {
+      for (const member of node.members) {
+        if (!ts.isPropertySignature(member) || !member.type) continue;
+        const name = propertyNameText(member.name);
+        if (!name) continue;
+        const property = context.checker.getPropertyOfType(type, name);
+        if (!property) continue;
+        const declaration = property.valueDeclaration ??
+          property.declarations?.[0] ?? context.sourceFile;
+        const propertyType = context.checker.getTypeOfSymbolAtLocation(
+          property,
+          declaration,
+        );
+        context.options.state?.typeRegistry.set(member.type, propertyType);
+        propagateTrustedFactoryContractsFromType(
+          member.type,
+          propertyType,
+          context,
+          seen,
+        );
+      }
+      return;
+    }
+    if (ts.isArrayTypeNode(node)) {
+      const elementType = context.checker.getIndexTypeOfType(
+        type,
+        ts.IndexKind.Number,
+      );
+      if (elementType) {
+        propagateTrustedFactoryContractsFromType(
+          node.elementType,
+          elementType,
+          context,
+          seen,
+        );
+      }
+    }
+  } finally {
+    seen.delete(type);
+  }
+}
+
+function collectAuthoredPatternInputFactoryContracts(
+  expression: ts.Expression,
+  context: TransformationContext,
+): readonly FactoryContractHint[] {
+  const origin = resolvePatternInputSchemaOrigin(
+    expression,
+    context,
+    new Set(),
+  );
+  if (!origin) return [];
+  const descriptor = findEnclosingPatternBuilderCallbackDescriptor(
+    origin.callback,
+    context.checker,
+  );
+  if (!descriptor) return [];
+  const inputSchemaExpression = detectSchemaArguments(
+    descriptor.call.arguments,
+    descriptor.argument,
+  )[0];
+  if (!inputSchemaExpression) return [];
+  const resolved = resolveFactorySchemaValue(inputSchemaExpression, context);
+  if (!resolved.resolved) return [];
+  const schema = schemaValueAtPropertyPath(resolved.value, origin.path);
+  if (schema === undefined) return [];
+
+  const expressionType = getTypeAtLocationWithFallback(
+    expression,
+    context.checker,
+    context.options.state?.typeRegistry,
+  );
+  const typedContracts = collectTrustedFactoryTypeContracts(
+    expressionType,
+    context,
+  );
+  if (typedContracts.length === 0) return [];
+  const authored = analyzeAuthoredFactorySchemaContracts(schema);
+  const authoredContracts = authored.contracts;
+
+  if (authored.isUnion) {
+    const expressionMembers = expressionType &&
+        (expressionType.flags & ts.TypeFlags.Union) !== 0
+      ? (expressionType as ts.UnionType).types
+      : expressionType
+      ? [expressionType]
+      : [];
+    const kindsMatch = factoryContractKindCountsEqual(
+      typedContracts,
+      authoredContracts,
+    );
+    if (
+      authored.complete &&
+      expressionMembers.length === typedContracts.length &&
+      typedContracts.length === authoredContracts.length && kindsMatch
+    ) {
+      const available = [...typedContracts];
+      return authoredContracts.map((authoredContract) => {
+        const typedIndex = available.findIndex((typed) =>
+          typed.kind === authoredContract.kind
+        );
+        if (typedIndex < 0) {
+          throw new Error("Factory union kind counts changed during recovery");
+        }
+        const [typed] = available.splice(typedIndex, 1);
+        if (!typed) {
+          throw new Error("Factory union kind counts changed during recovery");
+        }
+        const contract: FactoryContractHint = {
+          ...typed,
+          inputSchema: authoredContract.inputSchema,
+          outputSchema: authoredContract.outputSchema,
+        };
+        authoredWholeFactoryUnionContracts.add(contract);
+        return contract;
+      });
+    }
+
+    const canMapIndividualArms = authored.flat &&
+      authoredContracts.length === typedContracts.length && kindsMatch &&
+      factoryContractKindsAreUnique(typedContracts) &&
+      expressionMembers.length ===
+        typedContracts.length + authored.nonFactoryAlternatives.length &&
+      authoredNonFactoryAlternativesMatchTypes(
+        authored.nonFactoryAlternatives,
+        expressionMembers.filter((member) =>
+          detectTrustedFactoryType(member, context.checker) === undefined
+        ),
+      );
+    if (canMapIndividualArms) {
+      return typedContracts.map((typed) => {
+        const authoredContract = authoredContracts.find((candidate) =>
+          candidate.kind === typed.kind
+        );
+        if (!authoredContract) {
+          throw new Error("Factory union kind counts changed during recovery");
+        }
+        return {
+          ...typed,
+          inputSchema: authoredContract.inputSchema,
+          outputSchema: authoredContract.outputSchema,
+        };
+      });
+    }
+
+    markAmbiguousAuthoredFactoryContractExpression(expression);
+    context.reportDiagnosticOnce({
+      severity: "error",
+      type: "pattern-factory:ambiguous-authored-union-contract",
+      message:
+        "The authored factory alternatives could not be mapped exactly to " +
+        "the trusted Common Fabric factory type arms without guessing. Use " +
+        "a complete flat anyOf or oneOf, or ensure each factory kind in a " +
+        "mixed union occurs exactly once and its non-factory alternatives " +
+        "match the declared type.",
+      node: expression,
+    });
+    return [];
+  }
+  if (authoredContracts.length === 0) return [];
+
+  const enriched: FactoryContractHint[] = [];
+  for (const typed of typedContracts) {
+    const candidates = authoredContracts.filter((authored) =>
+      authored.kind === typed.kind
+    );
+    // Exact schema metadata must never be guessed between same-kind union
+    // alternatives. The unambiguous single-contract case covers a dynamic
+    // factory arriving through one authored pattern input; compiler-owned
+    // value/branch metadata remains the authority for ambiguous alternatives.
+    if (candidates.length !== 1) continue;
+    const authored = candidates[0]!;
+    enriched.push({
+      ...typed,
+      inputSchema: authored.inputSchema,
+      outputSchema: authored.outputSchema,
+    });
+  }
+  return enriched;
+}
+
+interface PatternInputSchemaOrigin {
+  readonly callback: ts.ArrowFunction | ts.FunctionExpression;
+  readonly path: readonly string[];
+}
+
+function resolvePatternInputSchemaOrigin(
+  expression: ts.Expression,
+  context: TransformationContext,
+  seen: Set<ts.Node>,
+): PatternInputSchemaOrigin | undefined {
+  const current = unwrapExpression(expression);
+  const original = ts.getOriginalNode(current);
+  if (seen.has(current) || seen.has(original)) return undefined;
+  seen.add(current);
+  seen.add(original);
+  try {
+    if (
+      ts.isPropertyAccessExpression(current) ||
+      ts.isElementAccessExpression(current)
+    ) {
+      const key = ts.isPropertyAccessExpression(current)
+        ? current.name.text
+        : staticFactoryContractKey(
+          current.argumentExpression,
+          context.checker,
+        );
+      if (key === undefined) return undefined;
+      const parent = resolvePatternInputSchemaOrigin(
+        current.expression,
+        context,
+        seen,
+      );
+      return parent
+        ? { ...parent, path: [...parent.path, String(key)] }
+        : undefined;
+    }
+    if (!ts.isIdentifier(current)) return undefined;
+    const declaration = factoryContractValueDeclaration(
+      current,
+      context.checker,
+    );
+    if (declaration && ts.isBindingElement(declaration)) {
+      return patternInputBindingOrigin(declaration);
+    }
+    if (declaration && ts.isParameter(declaration)) {
+      const callback = declaration.parent;
+      if (
+        (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
+        callback.parameters[0] === declaration
+      ) {
+        return { callback, path: [] };
+      }
+    }
+    const initializer = getVariableInitializer(current, context.checker);
+    return initializer
+      ? resolvePatternInputSchemaOrigin(initializer, context, seen)
+      : undefined;
+  } finally {
+    seen.delete(current);
+    seen.delete(original);
+  }
+}
+
+function patternInputBindingOrigin(
+  binding: ts.BindingElement,
+): PatternInputSchemaOrigin | undefined {
+  const path: string[] = [];
+  let current = binding;
+  while (true) {
+    const pattern = current.parent;
+    if (ts.isObjectBindingPattern(pattern)) {
+      const name = current.propertyName ?? current.name;
+      if (
+        !ts.isIdentifier(name) && !ts.isStringLiteralLike(name) &&
+        !ts.isNumericLiteral(name)
+      ) return undefined;
+      path.unshift(name.text);
+    } else if (ts.isArrayBindingPattern(pattern)) {
+      const index = pattern.elements.indexOf(current);
+      if (index < 0) return undefined;
+      path.unshift(String(index));
+    } else {
+      return undefined;
+    }
+    const owner = pattern.parent;
+    if (ts.isParameter(owner)) {
+      const callback = owner.parent;
+      return (
+          (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
+          callback.parameters[0] === owner
+        )
+        ? { callback, path }
+        : undefined;
+    }
+    if (!ts.isBindingElement(owner)) return undefined;
+    current = owner;
+  }
+}
+
+function schemaValueAtPropertyPath(
+  value: unknown,
+  path: readonly string[],
+): unknown {
+  let current = value;
+  for (const segment of path) {
+    if (!isSchemaRecord(current)) return undefined;
+    const properties = current.properties;
+    if (!isSchemaRecord(properties) || !Object.hasOwn(properties, segment)) {
+      return undefined;
+    }
+    current = properties[segment];
+  }
+  return current;
+}
+
+interface AuthoredFactorySchemaContract {
+  readonly kind: "pattern" | "module" | "handler";
+  readonly inputSchema: unknown;
+  readonly outputSchema: unknown;
+}
+
+interface AuthoredFactorySchemaAnalysis {
+  readonly contracts: readonly AuthoredFactorySchemaContract[];
+  readonly nonFactoryAlternatives: readonly unknown[];
+  readonly isUnion: boolean;
+  readonly flat: boolean;
+  readonly complete: boolean;
+  readonly keyword?: "anyOf" | "oneOf";
+}
+
+const authoredWholeFactoryUnionContracts = new WeakSet<FactoryContractHint>();
+const ambiguousAuthoredFactoryContractExpressions = new WeakSet<ts.Node>();
+
+function markAmbiguousAuthoredFactoryContractExpression(
+  expression: ts.Expression,
+): void {
+  ambiguousAuthoredFactoryContractExpressions.add(expression);
+  ambiguousAuthoredFactoryContractExpressions.add(
+    ts.getOriginalNode(expression),
+  );
+}
+
+function isAmbiguousAuthoredFactoryContractExpression(
+  expression: ts.Expression,
+): boolean {
+  return ambiguousAuthoredFactoryContractExpressions.has(expression) ||
+    ambiguousAuthoredFactoryContractExpressions.has(
+      ts.getOriginalNode(expression),
+    );
+}
+
+function factoryContractKindCountsEqual(
+  typed: readonly FactoryContractHint[],
+  authored: readonly AuthoredFactorySchemaContract[],
+): boolean {
+  const kinds = ["pattern", "module", "handler"] as const;
+  return kinds.every((kind) =>
+    typed.filter((contract) => contract.kind === kind).length ===
+      authored.filter((contract) => contract.kind === kind).length
+  );
+}
+
+function factoryContractKindsAreUnique(
+  contracts: readonly FactoryContractHint[],
+): boolean {
+  return new Set(contracts.map((contract) => contract.kind)).size ===
+    contracts.length;
+}
+
+function authoredNonFactoryAlternativesMatchTypes(
+  alternatives: readonly unknown[],
+  types: readonly ts.Type[],
+): boolean {
+  const remaining = [...types];
+  for (const alternative of alternatives) {
+    if (!isSchemaRecord(alternative)) return false;
+    const expectedFlag = alternative.type === "null"
+      ? ts.TypeFlags.Null
+      : alternative.type === "undefined"
+      ? ts.TypeFlags.Undefined
+      : undefined;
+    if (expectedFlag === undefined) return false;
+    const index = remaining.findIndex((type) =>
+      (type.flags & expectedFlag) !== 0
+    );
+    if (index < 0) return false;
+    remaining.splice(index, 1);
+  }
+  return remaining.length === 0;
+}
+
+function analyzeAuthoredFactorySchemaContracts(
+  value: unknown,
+): AuthoredFactorySchemaAnalysis {
+  if (!isSchemaRecord(value)) {
+    return {
+      contracts: [],
+      nonFactoryAlternatives: [value],
+      isUnion: false,
+      flat: true,
+      complete: false,
+    };
+  }
+  const unionEntries = (["anyOf", "oneOf"] as const).filter((keyword) =>
+    Array.isArray(value[keyword])
+  );
+  if (unionEntries.length > 0) {
+    const keyword = unionEntries[0]!;
+    const alternatives = value[keyword] as unknown[];
+    const parts = alternatives.map(analyzeAuthoredFactorySchemaContracts);
+    return {
+      contracts: parts.flatMap((part) => part.contracts),
+      nonFactoryAlternatives: parts.flatMap((part) =>
+        part.nonFactoryAlternatives
+      ),
+      isUnion: true,
+      flat: unionEntries.length === 1 && alternatives.length > 0 &&
+        parts.every((part) => !part.isUnion && part.flat),
+      complete: unionEntries.length === 1 && alternatives.length > 0 &&
+        parts.every((part) =>
+          part.complete && !part.isUnion && part.contracts.length === 1
+        ),
+      keyword,
+    };
+  }
+  const contract = value.asFactory;
+  if (!isSchemaRecord(contract)) {
+    return {
+      contracts: [],
+      nonFactoryAlternatives: [value],
+      isUnion: false,
+      flat: true,
+      complete: false,
+    };
+  }
+  const kind = contract.kind;
+  if (kind !== "pattern" && kind !== "module" && kind !== "handler") {
+    return {
+      contracts: [],
+      nonFactoryAlternatives: [value],
+      isUnion: false,
+      flat: true,
+      complete: false,
+    };
+  }
+  const inputKey = kind === "handler" ? "contextSchema" : "argumentSchema";
+  const outputKey = kind === "handler" ? "eventSchema" : "resultSchema";
+  if (
+    !Object.hasOwn(contract, inputKey) || !Object.hasOwn(contract, outputKey)
+  ) {
+    return {
+      contracts: [],
+      nonFactoryAlternatives: [value],
+      isUnion: false,
+      flat: true,
+      complete: false,
+    };
+  }
+  return {
+    contracts: [{
+      kind,
+      inputSchema: contract[inputKey],
+      outputSchema: contract[outputKey],
+    }],
+    nonFactoryAlternatives: [],
+    isUnion: false,
+    flat: true,
+    complete: true,
+  };
+}
+
+function isSchemaRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function appendFactoryContractHint(
+  target: ts.TypeNode,
+  contract: FactoryContractHint,
+  context: TransformationContext,
+): void {
+  const existing = context.lookupSchemaHint(target)?.factoryContracts ?? [];
+  context.recordSchemaHint(target, {
+    factoryContracts: dedupeFactoryContracts([...existing, contract]),
+  });
+}
+
+function dedupeFactoryContracts(
+  contracts: readonly FactoryContractHint[],
+): readonly FactoryContractHint[] {
+  const seen = new Set<FactoryContractHint>();
+  return contracts.filter((contract) => {
+    if (seen.has(contract)) return false;
+    seen.add(contract);
+    return true;
+  });
+}
+
+function selectFactoryContractTypeNode(
+  typeNode: ts.TypeNode,
+  contract: FactoryContractHint,
+  context: TransformationContext,
+): ts.TypeNode | undefined {
+  if (!ts.isUnionTypeNode(typeNode)) return typeNode;
+
+  const semanticCandidates = typeNode.types.filter((member) =>
+    factoryContractMemberTypes(member, context).some((memberType) =>
+      factoryContractMatchesType(memberType, contract, context.checker)
+    )
+  );
+  if (semanticCandidates.length === 1) return semanticCandidates[0];
+  // More than one semantic match means exact metadata cannot be assigned to
+  // one same-kind arm without guessing. Do not fall through to name/text
+  // recovery in that case.
+  if (semanticCandidates.length > 1) return undefined;
+
+  // Synthetic alias nodes can be unbound even though their containing union
+  // retains the checker-owned semantic type in the transformer registry. Map
+  // the exact semantic arm back through the TypeScript checker's own emitted
+  // representation. Authored alias text alone never grants factory authority:
+  // the semantic arm was already proven by its trusted factory brand, and a
+  // non-unique representation fails closed.
+  const unionType = factoryContractRegisteredType(typeNode, context);
+  const semanticArms = unionType && (unionType.flags & ts.TypeFlags.Union) !== 0
+    ? (unionType as ts.UnionType).types.filter((member) =>
+      factoryContractMatchesType(member, contract, context.checker)
+    )
+    : [];
+  if (semanticArms.length > 1) return undefined;
+  const semanticArm = semanticArms[0];
+  if (semanticArm) {
+    const semanticNode = typeToInjectableSchemaTypeNode(
+      semanticArm,
+      context.checker,
+      context.sourceFile,
+      context.factory,
+      context.options.state?.typeRegistry,
+      context.options.state,
+    );
+    if (semanticNode) {
+      const expected = normalizeTypeNodeText(
+        printTypeNode(semanticNode, context.sourceFile),
+      );
+      const representationCandidates = typeNode.types.filter((member) =>
+        normalizeTypeNodeText(printTypeNode(member, context.sourceFile)) ===
+          expected
+      );
+      if (representationCandidates.length === 1) {
+        context.options.state?.typeRegistry.set(
+          representationCandidates[0]!,
+          semanticArm,
+        );
+        return representationCandidates[0];
+      }
+      if (representationCandidates.length > 1) return undefined;
+    }
+  }
+
+  if (contract.factoryType) {
+    const factoryTypeNode = typeToInjectableSchemaTypeNode(
+      contract.factoryType,
+      context.checker,
+      context.sourceFile,
+      context.factory,
+      context.options.state?.typeRegistry,
+      context.options.state,
+    );
+    if (factoryTypeNode) {
+      const expected = normalizeTypeNodeText(
+        printTypeNode(factoryTypeNode, context.sourceFile),
+      );
+      const representationCandidates = typeNode.types.filter((member) =>
+        normalizeTypeNodeText(printTypeNode(member, context.sourceFile)) ===
+          expected
+      );
+      if (representationCandidates.length === 1) {
+        context.options.state?.typeRegistry.set(
+          representationCandidates[0]!,
+          contract.factoryType,
+        );
+        return representationCandidates[0];
+      }
+      if (representationCandidates.length > 1) return undefined;
+    }
+  }
+
+  const expectedName = contract.kind === "pattern"
+    ? "PatternFactory"
+    : contract.kind === "module"
+    ? "ModuleFactory"
+    : "HandlerFactory";
+  const candidates = typeNode.types.filter((member) => {
+    const unwrapped = unwrapFactoryContractTypeNode(member);
+    return factoryTypeNodeName(unwrapped) === expectedName;
+  });
+  if (candidates.length <= 1) return candidates[0];
+  const expectedInput = normalizeTypeNodeText(
+    printTypeNode(contract.inputTypeNode, context.sourceFile),
+  );
+  const expectedOutput = normalizeTypeNodeText(
+    printTypeNode(contract.outputTypeNode, context.sourceFile),
+  );
+  const exactCandidates = candidates.filter((candidate) => {
+    const unwrapped = unwrapFactoryContractTypeNode(candidate);
+    const args = factoryTypeNodeArguments(unwrapped);
+    const input = args?.[0];
+    const output = args?.[1];
+    const inputMatches = !!input && normalizeTypeNodeText(
+          printTypeNode(input, context.sourceFile),
+        ) === expectedInput;
+    const outputMatches = !!output && normalizeTypeNodeText(
+          printTypeNode(output, context.sourceFile),
+        ) === expectedOutput;
+    const unresolvedOutput = output?.kind === ts.SyntaxKind.AnyKeyword ||
+      output?.kind === ts.SyntaxKind.UnknownKeyword;
+    return inputMatches && (outputMatches || unresolvedOutput);
+  });
+  return exactCandidates.length === 1 ? exactCandidates[0] : undefined;
+}
+
+function factoryContractTypesMatch(
+  left: ts.Type,
+  right: ts.Type,
+  checker: ts.TypeChecker,
+): boolean {
+  return left === right ||
+    (checker.isTypeAssignableTo(left, right) &&
+      checker.isTypeAssignableTo(right, left));
+}
+
+function factoryContractMatchesType(
+  type: ts.Type,
+  contract: FactoryContractHint,
+  checker: ts.TypeChecker,
+): boolean {
+  const detected = detectTrustedFactoryType(type, checker);
+  if (!detected || detected.kind !== contract.kind) return false;
+  return (!contract.inputType || factoryContractTypesMatch(
+    detected.inputType,
+    contract.inputType,
+    checker,
+  )) && (!contract.outputType || factoryContractTypesMatch(
+    detected.outputType,
+    contract.outputType,
+    checker,
+  ));
+}
+
+function factoryContractRegisteredType(
+  node: ts.TypeNode,
+  context: TransformationContext,
+): ts.Type | undefined {
+  const original = ts.getOriginalNode(node) as ts.TypeNode;
+  const registry = context.options.state?.typeRegistry;
+  const registered = registry?.get(node) ?? registry?.get(original);
+  if (registered) return registered;
+  try {
+    return context.checker.getTypeFromTypeNode(original);
+  } catch {
+    return undefined;
+  }
+}
+
+function factoryContractMemberTypes(
+  node: ts.TypeNode,
+  context: TransformationContext,
+): readonly ts.Type[] {
+  const original = ts.getOriginalNode(node) as ts.TypeNode;
+  const registry = context.options.state?.typeRegistry;
+  const candidates: ts.Type[] = [];
+  const add = (type: ts.Type | undefined) => {
+    if (type && !candidates.includes(type)) candidates.push(type);
+  };
+  add(registry?.get(node));
+  add(registry?.get(original));
+  try {
+    add(context.checker.getTypeFromTypeNode(original));
+  } catch {
+    // Synthetic node with no checker binding; containing-union recovery below
+    // may still map it by the semantic arm's symbol identity.
+  }
+  if (original !== node) {
+    try {
+      add(context.checker.getTypeFromTypeNode(node));
+    } catch {
+      // Same fallback as above.
+    }
+  }
+  return candidates;
+}
+
+function unwrapFactoryContractTypeNode(typeNode: ts.TypeNode): ts.TypeNode {
+  let current = unwrapTypeParentheses(typeNode);
+  while (
+    ts.isTypeOperatorNode(current) &&
+    current.operator === ts.SyntaxKind.ReadonlyKeyword
+  ) {
+    current = unwrapTypeParentheses(current.type);
+  }
+  return current;
+}
+
+function factoryTypeNodeName(typeNode: ts.TypeNode): string | undefined {
+  if (ts.isTypeReferenceNode(typeNode)) {
+    return typeNameLeaf(typeNode.typeName);
+  }
+  if (ts.isImportTypeNode(typeNode) && typeNode.qualifier) {
+    return typeNameLeaf(typeNode.qualifier);
+  }
+  return undefined;
+}
+
+function factoryTypeNodeArguments(
+  typeNode: ts.TypeNode,
+): readonly ts.TypeNode[] | undefined {
+  return ts.isTypeReferenceNode(typeNode) || ts.isImportTypeNode(typeNode)
+    ? typeNode.typeArguments
+    : undefined;
+}
+
+function typeNameLeaf(name: ts.EntityName): string {
+  return ts.isIdentifier(name) ? name.text : name.right.text;
+}
+
+function propertyNameText(name: ts.PropertyName): string | undefined {
+  return ts.isIdentifier(name) || ts.isStringLiteralLike(name) ||
+      ts.isNumericLiteral(name)
+    ? name.text
+    : undefined;
+}
+
 function getExplicitValueTypeNode(
   valueExpr: ts.Expression,
   checker: ts.TypeChecker,
@@ -3327,7 +5337,7 @@ function getParameterSchemaType(
  */
 function inferParameterSchemaType(
   factory: ts.NodeFactory,
-  fn: ts.ArrowFunction | ts.FunctionExpression,
+  fn: SchemaCallback,
   paramIndex: number,
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
@@ -3550,36 +5560,13 @@ function prependSchemaArguments(
   );
 }
 
-/**
- * Helper to find the function argument in a builder call (pattern).
- * Searches from the end of the arguments array for the first function-like expression.
- */
-function findFunctionArgument(
-  argsArray: readonly ts.Expression[],
-  checker: ts.TypeChecker,
-  sourceFile?: ts.SourceFile,
-): {
-  expression: ts.Expression;
-  callback: ts.ArrowFunction | ts.FunctionExpression;
-} | undefined {
-  for (let i = argsArray.length - 1; i >= 0; i--) {
-    const arg = argsArray[i];
-    const callback = arg &&
-      resolveFunctionLikeExpression(arg, checker, sourceFile);
-    if (arg && callback) {
-      return { expression: arg, callback };
-    }
-  }
-  return undefined;
-}
-
 function resolveLiftAppliedInputAndCallback(
   call: ts.CallExpression,
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
 ): {
   input: ts.Expression;
-  callback: ts.ArrowFunction | ts.FunctionExpression;
+  callback: SchemaCallback;
 } | undefined {
   const callKind = detectCallKind(call, checker);
   if (callKind?.kind !== "lift-applied") {
@@ -3619,7 +5606,7 @@ function resolveFunctionLikeExpression(
   expression: ts.Expression | undefined,
   checker: ts.TypeChecker,
   sourceFile?: ts.SourceFile,
-): ts.ArrowFunction | ts.FunctionExpression | undefined {
+): SchemaCallback | undefined {
   return resolveFunctionLikeExpressionInner(
     expression,
     checker,
@@ -3633,7 +5620,7 @@ function resolveFunctionLikeExpressionInner(
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile | undefined,
   seen: Set<ts.Node>,
-): ts.ArrowFunction | ts.FunctionExpression | undefined {
+): SchemaCallback | undefined {
   if (!expression) {
     return undefined;
   }
@@ -3656,6 +5643,35 @@ function resolveFunctionLikeExpressionInner(
       sourceFile,
       seen,
     );
+  }
+
+  if (ts.isIdentifier(unwrapped)) {
+    const initializer = getVariableInitializer(unwrapped, checker);
+    if (initializer) {
+      return resolveFunctionLikeExpressionInner(
+        initializer,
+        checker,
+        sourceFile,
+        seen,
+      );
+    }
+
+    let symbol = checker.getSymbolAtLocation(unwrapped);
+    if (symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0) {
+      try {
+        symbol = checker.getAliasedSymbol(symbol);
+      } catch {
+        return undefined;
+      }
+    }
+    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    if (
+      declaration && ts.isFunctionDeclaration(declaration) &&
+      declaration.body &&
+      (sourceFile === undefined || declaration.getSourceFile() === sourceFile)
+    ) {
+      return declaration;
+    }
   }
 
   return undefined;
@@ -3961,16 +5977,19 @@ function handlePatternSchemaInjection(
   const typeArgs = node.typeArguments;
   const argsArray = Array.from(node.arguments);
 
-  // Find the function argument
-  const builderFunctionArg = findFunctionArgument(
-    argsArray,
-    checker,
-    sourceFile,
-  );
-  if (!builderFunctionArg) {
+  const callbackDescriptor = getPatternBuilderCallbackDescriptor(node, checker);
+  const callbackArgument = node.arguments[0];
+  const builderFunction = callbackDescriptor?.callback ??
+    resolveFunctionLikeExpression(callbackArgument, checker, sourceFile);
+  if (!builderFunction || !callbackArgument) {
     return undefined; // No function found - skip transformation
   }
-  const builderFunction = builderFunctionArg.callback;
+  const builderFunctionArg = {
+    expression: callbackDescriptor?.argument ?? callbackArgument,
+    callback: builderFunction,
+  };
+  const carriedContract = context.lookupSchemaHint(node)?.factoryContracts
+    ?.find((contract) => contract.kind === "pattern");
   const patternReturnExpr = getCallbackReturnExpression(builderFunction);
   const unwrappedPatternReturnExpr = patternReturnExpr
     ? unwrapExpression(patternReturnExpr)
@@ -4021,6 +6040,41 @@ function handlePatternSchemaInjection(
     );
   };
 
+  const schemaArgs = detectSchemaArguments(
+    argsArray,
+    builderFunctionArg.expression,
+  );
+  if (schemaArgs.length >= 2) {
+    if (!lowersArrayCallback) {
+      markAuthoredDocumentSchema(schemaArgs[0]!, context);
+      markAuthoredDocumentSchema(schemaArgs[1]!, context);
+    }
+    const exactContract = carriedContract ??
+      resolvePatternFactorySchemaContract(
+        node,
+        builderFunction,
+        context,
+        { reportUnresolvable: false },
+      );
+    if (exactContract) {
+      recordFactorySchemaContract(node, node, exactContract, context);
+    }
+    if (carriedContract?.inputSchema !== undefined) {
+      return factory.updateCallExpression(
+        node,
+        node.expression,
+        node.typeArguments,
+        [
+          builderFunctionArg.expression,
+          createSchemaAst(carriedContract.inputSchema, factory),
+          ...node.arguments.slice(2),
+        ],
+      );
+    }
+    return undefined;
+  }
+  const authoredInputSchema = schemaArgs[0];
+
   // The result schema's type node and type where the callback's return infers
   // them, or the rebuild `freshResultTypeNode()` made of what it returns.
   const inferredResult = (
@@ -4031,9 +6085,9 @@ function handlePatternSchemaInjection(
       factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
     return {
       node,
-      type: getTypeFromRegistryOrFallback(
+      type: freshResultNode ? undefined : getTypeFromRegistryOrFallback(
         node,
-        freshResultNode ? undefined : inferred.resultType,
+        inferred.resultType,
         typeRegistry,
       ),
     };
@@ -4114,21 +6168,7 @@ function handlePatternSchemaInjection(
     ({ node: resultTypeNode, type: resultType } = inferredResult(inferred));
   } else {
     // Case 3: No type arguments - check for schema arguments
-    const schemaArgs = detectSchemaArguments(
-      argsArray,
-      builderFunctionArg.expression,
-    );
-
-    if (schemaArgs.length >= 2) {
-      // Already has two schemas (input + result) - skip transformation. An
-      // authored `toSchema` among them defines its document as an injected
-      // one would.
-      if (!lowersArrayCallback) {
-        markAuthoredDocumentSchema(schemaArgs[0]!, context);
-        markAuthoredDocumentSchema(schemaArgs[1]!, context);
-      }
-      return undefined;
-    } else if (schemaArgs.length === 1) {
+    if (schemaArgs.length === 1) {
       // Case 3a: Has one schema argument but no type args
       // Use existing schema as input, infer result from function
       const existingInputSchema = schemaArgs[0]!;
@@ -4205,6 +6245,13 @@ function handlePatternSchemaInjection(
         argumentCapabilityMode,
         context,
       );
+      inputTypeNode = inferred.argument ??
+        getParameterSchemaType(factory, inputParam);
+      inputType = getTypeFromRegistryOrFallback(
+        inputTypeNode,
+        inferred.argumentType,
+        typeRegistry,
+      );
       reportUnknownPatternResult(
         context,
         node,
@@ -4224,46 +6271,67 @@ function handlePatternSchemaInjection(
     }
   }
 
-  const originalInputTypeNode = inputTypeNode;
-  inputTypeNode = applyCapabilitySummaryToArgument(
-    builderFunction,
-    inputTypeNode,
-    inputType,
-    checker,
-    sourceFile,
-    factory,
-    argumentCapabilityMode,
-    context,
-    builderFunction,
-  ) ?? inputTypeNode;
-  if (inputTypeNode !== originalInputTypeNode) {
-    // Capability lowering produced a synthetic wrapped/shrunk node.
-    // Avoid reusing stale type references from the pre-shrunk node.
-    inputType = undefined;
+  if (carriedContract) {
+    inputTypeNode = carriedContract.inputTypeNode;
+    inputType = carriedContract.inputType;
+    resultTypeNode = carriedContract.outputTypeNode;
+    resultType = carriedContract.outputType;
+  }
+
+  if (!carriedContract) {
+    const originalInputTypeNode = inputTypeNode;
+    inputTypeNode = applyCapabilitySummaryToArgument(
+      builderFunction,
+      inputTypeNode,
+      inputType,
+      checker,
+      sourceFile,
+      factory,
+      argumentCapabilityMode,
+      context,
+      builderFunction,
+    ) ?? inputTypeNode;
+    if (inputTypeNode !== originalInputTypeNode) {
+      // Capability lowering produced a synthetic wrapped/shrunk node.
+      // Avoid reusing stale type references from the pre-shrunk node.
+      inputType = undefined;
+    }
   }
 
   // Create both schemas
-  const inputSchemaCall = createSchemaCallWithRegistryTransfer(
-    context,
-    inputTypeNode,
-    checker,
-    typeRegistry,
-  );
-  if (inputType && typeRegistry) {
-    typeRegistry.set(inputSchemaCall, inputType);
+  const carriedInputSchema = carriedContract?.inputSchema === undefined
+    ? undefined
+    : createSchemaAst(carriedContract.inputSchema, factory);
+  const inputSchemaExpression = carriedInputSchema ?? authoredInputSchema ??
+    createSchemaCallWithRegistryTransfer(
+      context,
+      inputTypeNode,
+      checker,
+      typeRegistry,
+    );
+  if (
+    !carriedInputSchema && !authoredInputSchema && inputType && typeRegistry
+  ) {
+    typeRegistry.set(inputSchemaExpression, inputType);
   }
   // An authored pattern's argument document stores the policy envelope its
   // input schema carries.
   if (!lowersArrayCallback) {
-    context.state.markDocumentSchemaCall(inputSchemaCall);
+    if (authoredInputSchema) {
+      markAuthoredDocumentSchema(authoredInputSchema, context);
+    } else if (!carriedInputSchema) {
+      context.state.markDocumentSchemaCall(inputSchemaExpression);
+    }
   }
 
-  const resultSchemaCall = createSchemaCallWithRegistryTransfer(
-    context,
-    resultTypeNode,
-    checker,
-    typeRegistry,
-  );
+  const resultSchemaCall = carriedContract?.outputSchema === undefined
+    ? createSchemaCallWithRegistryTransfer(
+      context,
+      resultTypeNode,
+      checker,
+      typeRegistry,
+    )
+    : createSchemaAst(carriedContract.outputSchema, factory);
   context.state.recordPatternResultSchemaCall(
     resultSchemaCall,
     node.expression,
@@ -4289,8 +6357,47 @@ function handlePatternSchemaInjection(
     typeRegistry.set(resultSchemaCall, resultType);
   }
 
-  const updated = buildCallExpression(inputSchemaCall, resultSchemaCall);
+  const updated = buildCallExpression(inputSchemaExpression, resultSchemaCall);
+  const resolvedContract = resolvePatternFactorySchemaContract(
+    node,
+    builderFunction,
+    context,
+    { reportUnresolvable: false },
+  );
+  const exactContract = carriedContract ?? (resolvedContract
+    ? {
+      ...resolvedContract,
+      inputTypeNode,
+      inputType,
+      outputTypeNode: resultTypeNode,
+      outputType: resultType,
+    }
+    : authoredInputSchema
+    ? undefined
+    : {
+      kind: "pattern" as const,
+      inputTypeNode,
+      ...(inputType && { inputType }),
+      outputTypeNode: resultTypeNode,
+      ...(resultType && { outputType: resultType }),
+    });
+  if (exactContract) {
+    recordFactorySchemaContract(
+      node,
+      updated,
+      exactContract,
+      context,
+    );
+  }
   const visited = ts.visitEachChild(updated, visit, transformation);
+  if (exactContract && ts.isCallExpression(visited)) {
+    recordFactorySchemaContract(
+      node,
+      visited,
+      exactContract,
+      context,
+    );
+  }
   setUiContractHint(
     visited,
     unwrappedPatternReturnExpr &&
@@ -4479,6 +6586,25 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
       }
 
       const callKind = detectCallKind(node, checker);
+      if (
+        callKind?.kind === "builder" &&
+        (callKind.builderName === "lift" ||
+          callKind.builderName === "handler")
+      ) {
+        const contract = resolveNonPatternFactorySchemaContract(
+          node,
+          callKind.builderName === "lift" ? "module" : "handler",
+          context,
+          { reportUnresolvable: false },
+        );
+        if (
+          contract &&
+          (contract.inputSchema !== undefined ||
+            contract.outputSchema !== undefined)
+        ) {
+          recordFactorySchemaContract(node, node, contract, context);
+        }
+      }
       const scopedFactoryCall = maybeApplyFactoryContextualScope(node, context);
       if (scopedFactoryCall) {
         return ts.visitEachChild(scopedFactoryCall, visit, transformation);
@@ -4631,6 +6757,16 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
             node,
           );
 
+          recordFactorySchemaContract(
+            node,
+            updated,
+            {
+              kind: "handler",
+              inputTypeNode: stateTypeNode,
+              outputTypeNode: eventTypeNode,
+            },
+            context,
+          );
           context.markSchemaInjected(updated);
           return ts.visitEachChild(updated, visit, transformation);
         }
@@ -4744,6 +6880,16 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
               node,
             );
 
+            recordFactorySchemaContract(
+              node,
+              updated,
+              {
+                kind: "handler",
+                inputTypeNode: stateType,
+                outputTypeNode: eventType,
+              },
+              context,
+            );
             context.markSchemaInjected(updated);
             return ts.visitEachChild(updated, visit, transformation);
           }

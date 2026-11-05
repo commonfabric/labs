@@ -252,7 +252,13 @@ export function extractedCallbackBody(
   if (!decl?.initializer || !ts.isCallExpression(decl.initializer)) {
     throw new Error(`Expected \`const ${variableName} = call(...)\``);
   }
-  const firstArg = decl.initializer.arguments[0];
+  let firstArg = decl.initializer.arguments[0];
+  if (
+    firstArg && ts.isCallExpression(firstArg) &&
+    calleeName(firstArg) === "withPatternParamsSchema"
+  ) {
+    firstArg = firstArg.arguments[0];
+  }
   if (
     !firstArg ||
     (!ts.isArrowFunction(firstArg) && !ts.isFunctionExpression(firstArg))

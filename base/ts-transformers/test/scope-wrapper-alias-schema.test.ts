@@ -1087,20 +1087,16 @@ export default pattern<{ ${declared} }>(({ handle }) => ({
         // holds the `undefined` the property's `?` adds, and narrowing it
         // rebuilds the wrapper around the cell.
 
-        /** The schema of the `.map` callback's own pattern input. */
-        const callbackInput = (module: ts.SourceFile) =>
-          callsNamed(module, "pattern")
-            .map((call) => literalToValue(call.arguments[1]!))
-            .find((schema) =>
-              "element" in (schema as { properties: object }).properties
-            ) as {
-              properties: {
-                params: {
-                  properties: Record<string, unknown>;
-                  required?: string[];
-                };
-              };
-            };
+        /** The private closure-parameter schema of the `.map` callback. */
+        const callbackParams = (module: ts.SourceFile) => {
+          const wrapper = callsNamed(module, "withPatternParamsSchema")[0];
+          expect(wrapper).toBeDefined();
+          expect(wrapper!.arguments[1]).toBeDefined();
+          return literalToValue(wrapper!.arguments[1]!) as {
+            properties: Record<string, unknown>;
+            required?: string[];
+          };
+        };
 
         for (
           const [cell, read] of [
@@ -1123,7 +1119,7 @@ export default pattern<{ items: A[]; handle?: PerSession<${cell}> }>(
   }),
 );`,
             );
-            const { params } = callbackInput(module).properties;
+            const params = callbackParams(module);
 
             expect(params.properties.handle).toMatchObject({
               asCell: [{ scope: "session" }],

@@ -98,7 +98,7 @@ const sanitizeChannelName = (value: unknown, fallback: string): string => {
   return normalized.length > 0 ? normalized : fallback;
 };
 
-const sanitizeChannelList = (value: unknown): string[] => {
+const sanitizeChannelList = (value: readonly string[]): string[] => {
   const list = Array.isArray(value) ? value : defaultChannels;
   const sanitized: string[] = [];
   const seen = new Set<string>();

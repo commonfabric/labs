@@ -58,7 +58,7 @@ const resolveIncrementAmount = (
   return normalized === 0 ? fallback : normalized;
 };
 
-const sanitizeHistory = (input: unknown): number[] => {
+const sanitizeHistory = (input: readonly number[]): number[] => {
   if (!Array.isArray(input)) return [];
   const entries: number[] = [];
   for (const value of input) {

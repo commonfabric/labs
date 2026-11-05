@@ -198,6 +198,7 @@ Deno supports npm packages via `npm:` specifiers. `fuse-native` provides
 N-API bindings to libfuse with multithreaded support:
 
 ```typescript
+// Shown for illustration only.
 import Fuse from "npm:fuse-native";
 ```
 

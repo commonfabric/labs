@@ -234,7 +234,10 @@ Only top-level callable children under `input/` and `result/` are surfaced as
 `*.handler` and `*.tool`. These callable files are readable; the first line is
 a stable `cf exec` shebang, and the same paths are valid under both
 `pieces/<piece-name>/...` and `entities/<piece-id>/...`. Tool internals such as
-`pattern/` and `extraParams/` do not appear as ordinary mounted directories.
+factory state and metadata do not appear as ordinary mounted directories.
+Direct and metadata-wrapped `PatternFactory` values project as `*.tool`; JSON
+siblings encode factories with the tagged Fabric codec so context-free reads
+recover inert callable shells rather than function source.
 
 ## Name Resolution
 

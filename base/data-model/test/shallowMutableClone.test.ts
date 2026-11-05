@@ -15,11 +15,32 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { registerFabricFactory } from "@/fabric-factory.ts";
+
+const FACTORY_REF = {
+  identity: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  symbol: "__cfModule_1",
+} as const;
 import { deepFreeze, isDeepFrozen, shallowMutableClone } from "@";
 import { FabricError } from "@/fabric-instances";
 import { FabricBytes, FabricHash } from "@/fabric-primitives";
 
 describe("shallowMutableClone()", () => {
+  it("preserves a factory atom by identity while hardening it", () => {
+    const factory = registerFabricFactory(() => undefined, "module", {
+      kind: "module",
+      rootToken: {},
+      ref: FACTORY_REF,
+    });
+
+    expect(shallowMutableClone(factory)).toBe(factory);
+    expect(Object.isFrozen(factory)).toBe(true);
+
+    const outer = shallowMutableClone({ factory }) as { factory: unknown };
+    expect(Object.isFrozen(outer)).toBe(false);
+    expect(outer.factory).toBe(factory);
+  });
+
   it("returns a fresh, mutable, top-level object copy", () => {
     const input = deepFreeze({ a: 1, b: 2 });
     const out = shallowMutableClone(input);

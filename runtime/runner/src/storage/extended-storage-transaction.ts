@@ -972,6 +972,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     cfcInstrumentation: CfcInstrumentationHooks = {},
     immutableCells: ImmutableCellStore = findImmutableCells(tx) ??
       ownImmutableCells(tx),
+    private beforeCommit?: (tx: IExtendedStorageTransaction) => void,
   ) {
     bindImmutableCells(this, immutableCells);
     bindImmutableCells(tx, immutableCells);
@@ -3178,10 +3179,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * and `schema` members carrying external refs, expands each to its closure
    * through the realm registry (the link writer registered the documents
    * when it stamped the reference), and blind-writes the documents at the
-   * canonical space scope. The staging happens eagerly, as each carrying
-   * write stages (`#stageSchemaDocsForValue` from write()/writeOrThrow()),
-   * so the transaction is self-consistent and a same-transaction read
-   * through the staged link resolves its references. This full scan runs
+   * canonical space scope. The staging happens synchronously after each
+   * carrying write succeeds (`#stageSchemaDocsForValue` from
+   * write()/writeOrThrow()), so the transaction is self-consistent when the
+   * write returns and a same-transaction read through the staged link resolves
+   * its references. This full scan runs
    * before CFC prepare (so the writes are part of the prepared digest) and
    * again at commit for transactions that never prepare — a backstop for
    * values staged past the write choke points; the dedupe set makes
@@ -4457,6 +4459,21 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
     const discarded = this.#discardedBySealDestination();
     if (!readOnly && !discarded) {
+      try {
+        // Runtime-owned boundary work is part of every transaction commit.
+        // In particular, a direct Cell write of a factory must reconcile its
+        // atomic artifact-publication preparation before CFC snapshots the
+        // transaction's final activity.
+        this.beforeCommit?.(this);
+      } catch (reason) {
+        return this.#rejectCommitBeforeStorage({
+          error: {
+            name: "StorageTransactionAborted",
+            message: `transaction preparation failed: ${reason}`,
+            reason,
+          },
+        });
+      }
       // Before the CFC probes and the prepared-digest recheck: writes added
       // here must precede any prepare, and the dedupe set makes this a
       // no-op for transactions prepareCfc() already covered.

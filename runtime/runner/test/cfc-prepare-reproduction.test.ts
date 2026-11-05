@@ -118,10 +118,13 @@ describe("CFC prepare reproduction", () => {
         rendered: (values as unknown as OpaqueCell<{ n: number }[]>)
           .mapWithPattern(
             elementPattern as unknown as PatternFactory<
-              { n: number },
+              {
+                element: { n: number };
+                index: number;
+                array: { n: number }[];
+              },
               { children: string[] }
             >,
-            {},
           ),
       }));
       const preparations: unknown[] = [];
@@ -183,7 +186,9 @@ describe("CFC prepare reproduction", () => {
       expect(stats.flowTemplateEntriesMinted).toBe(
         3 * stats.flowTemplateContainers,
       );
-      expect(stats.flowTemplateContainers).toBe(251);
+      // The bound list factory carries its closure state itself, so each of
+      // the fifty rows no longer creates a sibling params container.
+      expect(stats.flowTemplateContainers).toBe(201);
       // A link write persists the reference's own label and nothing of the
       // source's (CFC §8.2, §8.12.8), so no instance's link write walks the
       // source container's template entries: `overlapWildcardQueries`, which

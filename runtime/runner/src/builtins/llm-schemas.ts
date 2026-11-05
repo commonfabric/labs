@@ -80,7 +80,19 @@ export const LLMDialogResultSchema = internSchema(
   } as const,
 );
 
-/** Runtime schema for {@link BuiltInLLMTool} (base/api/index.ts). */
+/**
+ * Object projection for {@link BuiltInLLMTool} (base/api/index.ts).
+ *
+ * This remains the legacy object reader and metadata projection. A direct
+ * factory cannot be represented here with `asFactory`: that extension carries
+ * one exact kind/input/output contract, while a tool map intentionally accepts
+ * heterogeneous PatternFactories. Canonical direct factories and metadata
+ * wrappers are therefore preserved by the Fabric codec and read from the raw
+ * tool-entry cell; `llm-dialog.ts` then validates the admitted Factory@1 state,
+ * requires kind `pattern`, and materializes it through the runner chokepoint.
+ * Using a permissive authored `asFactory` wildcard here would create an
+ * authority channel and is deliberately avoided.
+ */
 export const LLMToolSchema = internSchema(
   {
     type: "object",
@@ -109,7 +121,6 @@ export const LLMToolSchema = internSchema(
         required: ["argumentSchema", "resultSchema", "nodes"],
         asCell: ["cell"],
       },
-      extraParams: { type: "object" },
       useResultSchemaForObservation: { type: "boolean" },
       piece: {
         // Accept whole piece - its own schema defines its handlers

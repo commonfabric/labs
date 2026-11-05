@@ -78,7 +78,7 @@ const sanitizeModules = (
   return sanitized.length > 0 ? sanitized : structuredClone(defaultModules);
 };
 
-const sanitizeStartWeek = (value: unknown): number => {
+const sanitizeStartWeek = (value: number | undefined): number => {
   if (typeof value !== "number" || !Number.isFinite(value)) return 1;
   const rounded = Math.round(value);
   return rounded > 0 ? rounded : 1;

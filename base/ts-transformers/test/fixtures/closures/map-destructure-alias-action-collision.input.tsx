@@ -11,7 +11,7 @@ interface State {
 // FIXTURE: map-destructure-alias-action-collision
 // Verifies: destructured alias inside map callback body is lowered to explicit key() access
 //   const { spotNumber: sn } = spot → const sn = spot.key("spotNumber")
-//   .map(fn) → .mapWithPattern(pattern(...), {})
+//   .map(fn) → .mapWithPattern(pattern(...))
 // Context: Body destructuring from opaque map elements becomes explicit key() bindings
 export default pattern<State>((state) => {
   return {

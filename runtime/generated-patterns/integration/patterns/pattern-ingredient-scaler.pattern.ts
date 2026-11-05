@@ -66,7 +66,7 @@ const textOrNull = (value: unknown): string | null => {
   return trimmed.length > 0 ? trimmed : null;
 };
 
-const sanitizeIngredientList = (value: unknown): Ingredient[] => {
+const sanitizeIngredientList = (value: readonly Ingredient[]): Ingredient[] => {
   if (!Array.isArray(value)) {
     return defaultIngredients.map((item) => ({ ...item }));
   }

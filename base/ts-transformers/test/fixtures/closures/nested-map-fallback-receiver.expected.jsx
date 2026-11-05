@@ -112,9 +112,8 @@ const __cfHandler_2 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
     },
     required: ["p", "setAssign"]
 } as const satisfies __cfHelpers.JSONSchema, (__cf_handler_event, { setAssign, p }) => setAssign.send({ name: p.name }));
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { setAssign }) => {
     const p = __cf_pattern_input.key("element");
-    const setAssign = __cf_pattern_input.key("params", "setAssign");
     return (<button type="button" onClick={__cfHandler_2({
         setAssign: setAssign,
         p: {
@@ -126,27 +125,26 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Person"
-        },
-        params: {
+        setAssign: {
             type: "object",
             properties: {
-                setAssign: {
-                    type: "object",
-                    properties: {
-                        name: {
-                            type: "string"
-                        }
-                    },
-                    required: ["name"],
-                    asCell: ["stream"]
+                name: {
+                    type: "string"
                 }
             },
-            required: ["setAssign"]
+            required: ["name"],
+            asCell: ["stream"]
         }
     },
-    required: ["element", "params"],
+    required: ["setAssign"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Person"
+        }
+    },
+    required: ["element"],
     $defs: {
         Person: {
             type: "object",
@@ -179,17 +177,51 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_2 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { people, setAssign }) => {
     const row = __cf_pattern_input.key("element");
-    const people = __cf_pattern_input.key("params", "people");
-    const setAssign = __cf_pattern_input.key("params", "setAssign");
     return (<div>
             <span>{row.key("label")}</span>
-            {(__cfLift_1({ people: people }) ?? []).mapWithPattern(__cfPattern_1, {
+            {(__cfLift_1({ people: people }) ?? []).mapWithPattern(__cfPattern_1.curry({
             setAssign: setAssign
-        })}
+        }))}
           </div>);
 }, {
+    type: "object",
+    properties: {
+        people: {
+            type: "array",
+            items: {
+                $ref: "#/$defs/Person"
+            },
+            asCell: [{
+                    kind: "cell",
+                    scope: "space"
+                }]
+        },
+        setAssign: {
+            type: "object",
+            properties: {
+                name: {
+                    type: "string"
+                }
+            },
+            required: ["name"],
+            asCell: ["stream"]
+        }
+    },
+    required: ["people", "setAssign"],
+    $defs: {
+        Person: {
+            type: "object",
+            properties: {
+                name: {
+                    type: "string"
+                }
+            },
+            required: ["name"]
+        }
+    }
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -203,46 +235,9 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
                 }
             },
             required: ["id", "label"]
-        },
-        params: {
-            type: "object",
-            properties: {
-                people: {
-                    type: "array",
-                    items: {
-                        $ref: "#/$defs/Person"
-                    },
-                    asCell: [{
-                            kind: "readonly",
-                            scope: "space"
-                        }]
-                },
-                setAssign: {
-                    type: "object",
-                    properties: {
-                        name: {
-                            type: "string"
-                        }
-                    },
-                    required: ["name"],
-                    asCell: ["stream"]
-                }
-            },
-            required: ["people", "setAssign"]
         }
     },
-    required: ["element", "params"],
-    $defs: {
-        Person: {
-            type: "object",
-            properties: {
-                name: {
-                    type: "string"
-                }
-            },
-            required: ["name"]
-        }
-    }
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -307,10 +302,10 @@ export default pattern((__cf_pattern_input) => {
     }).for({ stream: "setAssign" }, true);
     return {
         [UI]: (<div>
-        {rows.mapWithPattern(__cfPattern_2, {
+        {rows.mapWithPattern(__cfPattern_2.curry({
                 people: people,
                 setAssign: setAssign
-            })}
+            }))}
       </div>),
     };
 }, {

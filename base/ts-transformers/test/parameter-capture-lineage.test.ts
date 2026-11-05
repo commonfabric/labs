@@ -122,12 +122,14 @@ describe("parameter capture lineage", () => {
     `,
       { types: COMMONFABRIC_TYPES, typeCheck: true },
     );
-    const maps = callsNamed(parseModule(output), "mapWithPattern");
+    const root = parseModule(output);
+    const maps = callsNamed(root, "mapWithPattern");
     expect(maps).toHaveLength(2);
-    const captureNames = maps.map((call) => {
-      const captures = call.arguments[1];
+    expect(maps.every((call) => call.arguments.length === 1)).toBe(true);
+    const captureNames = callsNamed(root, "curry").map((call) => {
+      const captures = call.arguments[0];
       if (!captures || !ts.isObjectLiteralExpression(captures)) {
-        throw new Error("Expected a map capture object");
+        throw new Error("Expected a curried capture object");
       }
       return captures.properties.map((property) => {
         if (!property.name || !ts.isIdentifier(property.name)) {

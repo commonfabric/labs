@@ -108,17 +108,17 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-index-shorthand
 // Verifies: .map() on reactive array is transformed when index param uses shorthand names (i, idx)
-//   .map((item, i) => ...) → .mapWithPattern(pattern(...), {})
-//   .map((item, idx) => ...) → .mapWithPattern(pattern(...), {})
+//   .map((item, i) => ...) → .mapWithPattern(pattern(...))
+//   .map((item, idx) => ...) → .mapWithPattern(pattern(...))
 // Context: Two maps using different shorthand index names; no outer captures
 export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Map with common shorthand index parameter names */}
-        {state.key("items").mapWithPattern(__cfPattern_1, {})}
+        {state.key("items").mapWithPattern(__cfPattern_1)}
 
         {/* Map with idx as index parameter */}
-        {state.key("items").mapWithPattern(__cfPattern_2, {})}
+        {state.key("items").mapWithPattern(__cfPattern_2)}
       </div>),
     };
 }, {

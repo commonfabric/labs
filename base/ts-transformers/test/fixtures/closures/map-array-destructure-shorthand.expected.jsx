@@ -107,7 +107,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-array-destructure-shorthand
 // Verifies: array-destructured map params are not incorrectly captured as shorthand properties
-//   .map(([item]) => ...) → .mapWithPattern(pattern(...), {}) with key("element", "0")
+//   .map(([item]) => ...) → .mapWithPattern(pattern(...)) with key("element", "0")
 //   .map(([item, count], index) → key("element", "0"), key("element", "1"), key("index")
 // Context: Shorthand JSX usage like {item} must not cause array-destructured bindings to be captured
 export default pattern((__cf_pattern_input) => {
@@ -116,10 +116,10 @@ export default pattern((__cf_pattern_input) => {
         [UI]: (<div>
         {/* Array destructured parameter - without fix, 'item' would be
                 incorrectly captured in params due to shorthand usage in JSX */}
-        {items.mapWithPattern(__cfPattern_1, {})}
+        {items.mapWithPattern(__cfPattern_1)}
 
         {/* Multiple array destructured params */}
-        {items.mapWithPattern(__cfPattern_2, {})}
+        {items.mapWithPattern(__cfPattern_2)}
       </div>),
     };
 }, {

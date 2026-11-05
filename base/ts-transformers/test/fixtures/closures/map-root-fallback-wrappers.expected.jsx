@@ -273,9 +273,9 @@ export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
     return {
         [UI]: (<div>
-        {(__cfLift_1({ items: items })).mapWithPattern(__cfPattern_1, {})}
-        {(__cfLift_2({ items: items })).mapWithPattern(__cfPattern_2, {})}
-        {(__cfLift_3({ items: items })).mapWithPattern(__cfPattern_3, {})}
+        {(__cfLift_1({ items: items })).mapWithPattern(__cfPattern_1)}
+        {(__cfLift_2({ items: items })).mapWithPattern(__cfPattern_2)}
+        {(__cfLift_3({ items: items })).mapWithPattern(__cfPattern_3)}
       </div>),
     };
 }, {

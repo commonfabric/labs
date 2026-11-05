@@ -193,7 +193,7 @@ const sanitizeMilestone = (
 };
 
 const sanitizeMilestoneList = (
-  input: unknown,
+  input: readonly JourneyMilestone[],
 ): JourneyMilestone[] => {
   if (!Array.isArray(input) || input.length === 0) {
     return structuredClone(defaultMilestones);

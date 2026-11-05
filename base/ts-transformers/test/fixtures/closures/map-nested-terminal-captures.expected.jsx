@@ -100,34 +100,32 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_2 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { rows }) => {
     const group = __cf_pattern_input.key("element");
-    const rows = __cf_pattern_input.key("params", "rows");
     const tokens = __cfLift_1({ group: group }).for("tokens", true);
     return __cfLift_3({
         rows: rows,
         tokens: tokens
-    }).mapWithPattern(__cfPattern_1, {}).for("__patternResult", true);
+    }).mapWithPattern(__cfPattern_1).for("__patternResult", true);
 }, {
+    type: "object",
+    properties: {
+        rows: {
+            type: "array",
+            items: {
+                type: "string"
+            }
+        }
+    },
+    required: ["rows"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
             type: "string"
-        },
-        params: {
-            type: "object",
-            properties: {
-                rows: {
-                    type: "array",
-                    items: {
-                        type: "string"
-                    }
-                }
-            },
-            required: ["rows"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "array",
     items: {
@@ -142,9 +140,9 @@ export default pattern((__cf_pattern_input) => {
     const groups = __cf_pattern_input.key("groups");
     const rows = __cf_pattern_input.key("rows");
     return ({
-        matches: groups.mapWithPattern(__cfPattern_2, {
+        matches: groups.mapWithPattern(__cfPattern_2.curry({
             rows: rows
-        }).for(["__patternResult", "matches"], true)
+        })).for(["__patternResult", "matches"], true)
     });
 }, {
     type: "object",

@@ -12,6 +12,11 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
+import {
+  createFactoryShell,
+  factoryStateOf,
+  isAdmittedFabricFactory,
+} from "@commonfabric/data-model/fabric-factory";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { SetPropOp } from "@commonfabric/html/vdom-ops";
 import { WorkerReconciler } from "@commonfabric/html/worker";
@@ -123,6 +128,43 @@ describe("post-to-client", () => {
         expect((prop?.value as FabricBytes).slice()).toEqual(content);
       } finally {
         cancel();
+        restore();
+      }
+    });
+
+    it("carries a factory prop as an inert callable shell", () => {
+      const factory = createFactoryShell({
+        kind: "pattern",
+        ref: { identity: "A".repeat(43), symbol: "factory" },
+        argumentSchema: true,
+        resultSchema: true,
+      });
+      const { posted, restore } = capturing();
+
+      try {
+        expect(
+          postToClient({
+            type: NotificationType.VDomBatch,
+            batchId: 8,
+            ops: [{
+              op: "set-prop",
+              nodeId: 1,
+              key: "factory",
+              value: factory,
+            }],
+          } as never),
+        ).toBe(true);
+
+        const batch = posted[0] as unknown as VDomBatchNotification;
+        const prop = batch.ops.find((op): op is SetPropOp =>
+          op.op === "set-prop" && op.key === "factory"
+        );
+        expect(isAdmittedFabricFactory(prop?.value)).toBe(true);
+        expect(factoryStateOf(prop?.value)).toEqual(factoryStateOf(factory));
+        expect(() => (prop?.value as unknown as () => void)()).toThrow(
+          "factory requires runner materialization",
+        );
+      } finally {
         restore();
       }
     });

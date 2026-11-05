@@ -203,6 +203,101 @@ export class PatternBuilder {
   }
 
   /**
+   * Build a pattern callback whose public input and compiler-owned closure
+   * captures are separate positional roots.
+   *
+   * Array callback lowering uses argument 0 for `{ element, index, array }`
+   * and argument 1 for the private capture record. Capture-free callbacks have
+   * no second argument, matching ordinary capture-free nested patterns.
+   */
+  buildPatternCallback(
+    originalCallback: ts.ArrowFunction | ts.FunctionExpression,
+    body: ts.ConciseBody,
+    returnType?: ts.TypeNode | null,
+  ): ts.ArrowFunction | ts.FunctionExpression {
+    const publicBindings: ts.BindingElement[] = [];
+    for (const param of this.#parameters) {
+      const bindingName = param.bindingName ||
+        this.#factory.createIdentifier(param.name);
+      const propertyName = param.propertyName
+        ? this.#factory.createIdentifier(param.propertyName)
+        : (param.name !== (bindingName as { text?: string }).text
+          ? this.#factory.createIdentifier(param.name)
+          : undefined);
+      publicBindings.push(
+        this.#factory.createBindingElement(
+          undefined,
+          propertyName,
+          bindingName,
+          param.initializer,
+        ),
+      );
+      for (const name of extractBindingNames(bindingName)) {
+        this.#usedBindingNames.add(name);
+      }
+    }
+
+    const parameters: ts.ParameterDeclaration[] = [
+      createParameterFromBindings(publicBindings, this.#factory),
+    ];
+    if (this.#captureTree.size > 0) {
+      const captureBindings: ts.BindingElement[] = [];
+      for (const originalName of this.#captureTree.keys()) {
+        const renamedName = this.#captureRenames.get(originalName) ??
+          originalName;
+        const bindingName = reserveIdentifier(
+          renamedName,
+          this.#usedBindingNames,
+          this.#factory,
+        );
+        captureBindings.push(
+          this.#factory.createBindingElement(
+            undefined,
+            renamedName === bindingName.text
+              ? undefined
+              : this.#factory.createIdentifier(renamedName),
+            bindingName,
+            undefined,
+          ),
+        );
+      }
+      parameters.push(
+        this.#factory.createParameterDeclaration(
+          undefined,
+          undefined,
+          this.#factory.createObjectBindingPattern(captureBindings),
+          undefined,
+          undefined,
+          undefined,
+        ),
+      );
+    }
+
+    const typeNode = returnType === null
+      ? undefined
+      : (returnType || originalCallback.type);
+    const built = ts.isArrowFunction(originalCallback)
+      ? this.#factory.createArrowFunction(
+        originalCallback.modifiers,
+        originalCallback.typeParameters,
+        parameters,
+        typeNode,
+        originalCallback.equalsGreaterThanToken,
+        body,
+      )
+      : this.#factory.createFunctionExpression(
+        originalCallback.modifiers,
+        originalCallback.asteriskToken,
+        originalCallback.name,
+        originalCallback.typeParameters,
+        parameters,
+        typeNode,
+        body as ts.Block,
+      );
+    return preserveSourceMapRange(built, originalCallback);
+  }
+
+  /**
    * Build a handler callback with positional parameters: (event, params, ...extra).
    */
   buildHandlerCallback(
@@ -214,7 +309,7 @@ export class PatternBuilder {
   ): ts.ArrowFunction {
     const eventParam = originalCallback.parameters[0];
     const stateParam = originalCallback.parameters[1];
-    const extraParams = originalCallback.parameters.slice(2);
+    const additionalParams = originalCallback.parameters.slice(2);
 
     // 1. Create event parameter
     // Ensure event parameter doesn't collide with captures
@@ -305,7 +400,7 @@ export class PatternBuilder {
     );
 
     // 3. Handle extra parameters
-    const additionalParameters = extraParams.map(
+    const additionalParameters = additionalParams.map(
       (param: ts.ParameterDeclaration) => {
         const bindingName = normalizeBindingName(
           param.name,

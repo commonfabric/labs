@@ -984,7 +984,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       const { modules, entryIdentity } = await engine.compileToRecordGraph(
         PROGRAM,
       );
-      await runtime.patternManager.compileOrGetPattern(PROGRAM);
+      await runtime.patternManager.compileOrGetPattern(PROGRAM, space);
       expect(
         typeof await runtime.patternManager.loadPatternByIdentity(
           entryIdentity,
@@ -1434,6 +1434,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       const fixture = await engine.compileToRecordGraph(PROGRAM);
       const { entryIdentity } = fixture;
       await runtime.patternManager.compileOrGetPattern(PROGRAM);
+      await storeSourceIn(fixture, [spaceB]);
       const manager = runtime.patternManager.accessForTestingOnly;
       const runtimeVersion = await compileCacheVersionOf(runtime);
       const release = Promise.withResolvers<void>();
@@ -1589,7 +1590,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
         .did();
       const fixture = await engine.compileToRecordGraph(PROGRAM);
       const { entryIdentity } = fixture;
-      await storeSourceIn(fixture, [spaceB]);
+      await storeSourceIn(fixture, [spaceB, spaceC]);
       const manager = runtime.patternManager.accessForTestingOnly;
       const compiles = countColdCompiles();
       // The manager's write, refused for `spaceB` alone.
@@ -1754,6 +1755,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       );
       runtime.prepareTxForCommit(writeTx);
       expect((await writeTx.commit().settled).error).toBeUndefined();
+      await storeSourceIn(fixture, [spaceB]);
       await runtime.storageManager.synced();
       const compiles = countColdCompiles();
 
@@ -1828,29 +1830,52 @@ describe("load by module identity (warm + version-bump recovery)", () => {
 
     it("copies once into a space, however many loads it serves there", async () => {
       const { entryIdentity, loaded } = await coldLoadedInSpace();
-      const { compileCacheWrites } =
-        runtime.patternManager.accessForTestingOnly;
+      const manager = runtime.patternManager.accessForTestingOnly;
+      let writes = 0;
+      manager.compileCacheWriter = async (
+        target,
+        modules,
+        entry,
+        opts,
+        moduleDelegations,
+      ) => {
+        writes++;
+        const writeTx = runtime.edit();
+        writeSourceAndCompiledDocs(
+          runtime,
+          target,
+          modules,
+          entry,
+          { ...opts, moduleDelegations },
+          writeTx,
+        );
+        runtime.prepareTxForCommit(writeTx);
+        expect((await writeTx.commit().settled).error).toBeUndefined();
+      };
 
-      // Three loads before any copy lands: the first issues the copy, and
-      // the other two find it issued.
-      const loads = [
-        load(entryIdentity, spaceB),
-        load(entryIdentity, spaceB),
-        load(entryIdentity, spaceB),
-      ];
-      expect(compileCacheWrites.size).toBe(1);
-      for (const pattern of await Promise.all(loads)) {
-        expect(pattern).toBe(loaded);
+      try {
+        // Three concurrent loads share the exact-space verification and issue
+        // one copy into the destination.
+        const loads = [
+          load(entryIdentity, spaceB),
+          load(entryIdentity, spaceB),
+          load(entryIdentity, spaceB),
+        ];
+        for (const pattern of await Promise.all(loads)) {
+          expect(pattern).toBe(loaded);
+        }
+        await flushed();
+        expect(writes).toBe(1);
+        expect(await holdsClosure(spaceB, entryIdentity)).toBe(true);
+
+        // Once the copy is durable, neither destination nor origin load writes.
+        expect(await load(entryIdentity, spaceB)).toBe(loaded);
+        expect(await load(entryIdentity, space)).toBe(loaded);
+        await flushed();
+        expect(writes).toBe(1);
+      } finally {
+        manager.compileCacheWriter = undefined;
       }
-      await flushed();
-      expect(await holdsClosure(spaceB, entryIdentity)).toBe(true);
-
-      // Once the copy is durable, a load there issues nothing, as a load in
-      // the space that compiled it never did.
-      expect(await load(entryIdentity, spaceB)).toBe(loaded);
-      expect(compileCacheWrites.size).toBe(0);
-      expect(await load(entryIdentity, space)).toBe(loaded);
-      expect(compileCacheWrites.size).toBe(0);
     });
 
     it("copies nothing for a preview load", async () => {
@@ -1869,13 +1894,11 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       // Compiled with no space, the program's closure is live in memory and
       // durable nowhere, so there is nothing to copy from.
       const { entryIdentity } = await engine.compileToRecordGraph(PROGRAM);
-      const compiled = await runtime.patternManager.compileOrGetPattern(
-        PROGRAM,
-      );
+      await runtime.patternManager.compileOrGetPattern(PROGRAM);
       const { compileCacheWrites } =
         runtime.patternManager.accessForTestingOnly;
 
-      expect(await load(entryIdentity, spaceB)).toBe(compiled);
+      expect(await load(entryIdentity, spaceB)).toBeUndefined();
       expect(compileCacheWrites.size).toBe(0);
     });
   });
@@ -2053,7 +2076,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       }
     });
 
-    it("compile on their own behalf when the leader's space cannot resolve a fabric import", async () => {
+    it("compiles only in a space that can verify every fabric import", async () => {
       const spaceB = (await Identity.fromPassphrase("cold share dependency"))
         .did();
       const dependency = await storedModules("/dep.tsx", [{
@@ -2070,33 +2093,24 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       await storeSourceIn(importer, [space, spaceB]);
       await storeSourceIn(dependency, [spaceB]);
 
-      // The leader's compile is held open until the follower has joined it,
-      // so the follower sees that compile fail rather than leading its own.
       const observed = observeColdCompiles(runtime);
-      const release = Promise.withResolvers<void>();
-      const compiles = countColdCompiles({ gate: release.promise });
-      const leader = load(importer.entryIdentity, space);
-      await observed.whenStarted(1);
-      const follower = load(importer.entryIdentity, spaceB);
-      await observed.whenJoined(1);
-      release.resolve();
+      const compiles = countColdCompiles();
+      const [unavailable, loaded] = await Promise.all([
+        load(importer.entryIdentity, space),
+        load(importer.entryIdentity, spaceB),
+      ]);
 
-      expect(await leader).toBeUndefined();
-      const loaded = await follower;
+      expect(unavailable).toBeUndefined();
       expect(typeof loaded).toBe("function");
-      expect(compiles()).toBe(2);
-      // The follower joined the leader's compile, then ran its own.
-      expect(observed.joins()).toEqual([
-        { space: spaceB, entryIdentity: importer.entryIdentity },
-      ]);
+      expect(compiles()).toBe(1);
+      expect(observed.joins()).toEqual([]);
       expect(observed.starts()).toEqual([
-        { space, entryIdentity: importer.entryIdentity },
         { space: spaceB, entryIdentity: importer.entryIdentity },
       ]);
-      await observed.whenCompleted(2);
+      await observed.whenCompleted(1);
       expect(observed.inFlight()).toBe(0);
       observed.restore();
-      expect(coldLoads("compile-failed")).toBe(1);
+      expect(coldLoads("compile-failed")).toBe(0);
       expect(coldLoads("compiled")).toBe(1);
       expect(coldLoads("shared")).toBe(0);
       expect(

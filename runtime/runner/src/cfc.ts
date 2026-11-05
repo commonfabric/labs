@@ -1151,10 +1151,22 @@ export class ContextualFlowControl {
     // contain — a conservative over-taint — but a nested `not` (not-of-not)
     // re-selects values that DO match the inner subschema, so skipping `not`
     // could under-taint.
-    forEachSubschema(schema, (child) => {
-      if (typeof child === "boolean") return;
-      ContextualFlowControl.#joinSchemaWalk(joined, child, schemaRoot, visited);
-    });
+    forEachSubschema(
+      schema,
+      (child) => {
+        if (typeof child === "boolean") return;
+        ContextualFlowControl.#joinSchemaWalk(
+          joined,
+          child,
+          schemaRoot,
+          visited,
+        );
+      },
+      // The callable is the value at an `asFactory` leaf. Its public schemas
+      // describe values a later invocation exchanges; they are not fields of
+      // the callable currently flowing through this join.
+      { includeFactorySchemas: false },
+    );
     if (schema.$ref) {
       // Follow the references
       const resolvedSchema = ContextualFlowControl.resolveSchemaRefsOrThrow(

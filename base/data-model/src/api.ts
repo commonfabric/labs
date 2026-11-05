@@ -61,6 +61,18 @@ export const FABRIC_PRIMITIVE_BRAND = Symbol.for(
   "@commonfabric/FabricPrimitive",
 );
 
+/** Type-only brand for the narrow callable arm of `FabricValue`. */
+declare const FABRIC_FACTORY_TYPE: unique symbol;
+
+/** A pattern, module, or handler factory admitted by the Fabric protocol. */
+export interface FabricFactory<
+  Args extends unknown[] = [never],
+  Result = unknown,
+> {
+  (...args: Args): Result;
+  readonly [FABRIC_FACTORY_TYPE]: true;
+}
+
 //
 // `FabricValue` and the types defined directly from it
 //
@@ -73,11 +85,12 @@ export const FABRIC_PRIMITIVE_BRAND = Symbol.for(
  *       <-> `FabricValue`
  *       <-> serialized (various forms)
  *
- * `FabricValue` is a union consisting of all JS primitive types, plus a handful
- * of object shapes; it does _not_ include the JS `function` type. Some parts of
- * the union impose contractual restrictions that are not enforceable via the
- * TypeScript type system, some (but not all) of which are enforced by runtime
- * validity checks. Notable details:
+ * `FabricValue` is a union consisting of all JS primitive types, a handful of
+ * object shapes, and the narrow branded callable `FabricFactory` arm. It does
+ * not admit arbitrary JS functions. Some parts of the union impose contractual
+ * restrictions that are not enforceable via the TypeScript type system, some
+ * (but not all) of which are enforced by runtime validity checks. Notable
+ * details:
  *
  * * `number` -- All numbers are considered members of `FabricValue`, including
  *   `-0` and the non-finite numbers. Furthermore, from the perspective of the
@@ -200,6 +213,7 @@ export type NonNullableFabricValue = NonNullable<FabricValue>;
 export type FabricValuePlus<PlusType> =
   | bigint
   | boolean
+  | FabricFactory
   | null
   | number
   | string

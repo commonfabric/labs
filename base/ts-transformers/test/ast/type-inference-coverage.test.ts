@@ -14,6 +14,7 @@ import {
   widenLiteralType,
 } from "../../src/ast/type-inference.ts";
 import { setParentPointers } from "../../src/ast/utils.ts";
+import { registerTrustedCommonFabricTestSources } from "../trusted-commonfabric-sources.ts";
 
 // A minimal global lib so `string[]` and `checker.isArrayType(...)` resolve.
 // It is passed as a program root file (not the default lib) with `noLib` on, so
@@ -27,8 +28,8 @@ interface ReadonlyArray<T> { length: number; readonly [index: number]: T; }
 // A stand-in commonfabric module. `Cell<T>` carries the `[CELL_BRAND]: "cell"`
 // marker the transformer's branded-cell detection looks for. `Default<T, V>`
 // mirrors the real alias shape `(T & DefaultMarker<V>) | V`-ish enough that the
-// checker keeps its `aliasSymbol`, and it lives in a file named
-// `commonfabric.d.ts` so `isDefaultAliasSymbol` recognizes it.
+// checker keeps its `aliasSymbol`. The harness explicitly registers its source
+// as compiler-owned below; its filename alone grants no authority.
 const CF = `
 export declare const CELL_BRAND: unique symbol;
 export declare const DEFAULT_MARKER: unique symbol;
@@ -93,6 +94,7 @@ function createProgram(source: string): {
     },
     host,
   );
+  registerTrustedCommonFabricTestSources(program, ["/commonfabric.d.ts"]);
   return {
     sourceFile: program.getSourceFile("/test.ts")!,
     checker: program.getTypeChecker(),

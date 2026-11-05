@@ -14,7 +14,7 @@ interface State {
 // FIXTURE: map-conditional-expression
 // Verifies: ternary expression in .map() callback is transformed to ifElse() with lift-applied branches
 //   item.price > state.threshold ? ... : ... → ifElse(lift(...)(condition), lift(...)(trueBranch), falseBranch)
-//   .map(fn) → .mapWithPattern(pattern(...), { state: { threshold, discount } })
+//   .map(fn) → .mapWithPattern(pattern(...).curry({ state: { threshold, discount } }))
 // Context: Captures state.threshold (for condition) and state.discount (for true branch) from outer scope
 export default pattern<State>((state) => {
   return {

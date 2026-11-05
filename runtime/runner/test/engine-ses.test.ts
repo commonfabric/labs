@@ -54,12 +54,12 @@ describe("Engine in SES mode", () => {
         {
           name: "/main.ts",
           contents: [
-            'import { pattern, schema } from "commonfabric";',
-            "const model = schema({",
+            'import { pattern } from "commonfabric";',
+            "const model = {",
             '  type: "object",',
             '  properties: { count: { type: "number" } },',
             '  required: ["count"],',
-            "});",
+            "} as const;",
             "export default pattern<{ count: number }>(({ count }) => ({ count }), model, model);",
           ].join("\n"),
         },
@@ -608,42 +608,19 @@ describe("Engine in SES mode", () => {
     ).rejects.toThrow("Only trusted builder calls");
   });
 
-  it("rejects top-level patternTool() bindings in SES mode", async () => {
+  it("compiles and evaluates a nested pattern hoisted to module scope", async () => {
+    // The nested `pattern(...)` is hoisted to a module-scope const by
+    // BuilderCallHoistingTransformer. Compile and evaluate end to end to
+    // confirm the hoisted factory remains callable after module evaluation.
     const program: RuntimeProgram = {
       main: "/main.ts",
       files: [
         {
           name: "/main.ts",
           contents: [
-            'import { pattern, patternTool } from "commonfabric";',
-            "export default patternTool(pattern(() => ({ ok: true })));",
-          ].join("\n"),
-        },
-      ],
-    };
-
-    await expect(engine.compileToRecordGraph(program)).rejects.toThrow(
-      "Only trusted builder calls",
-    );
-  });
-
-  it("compiles and evaluates a patternTool whose pattern is hoisted to module scope", async () => {
-    // patternTool's `pattern(...)` argument is hoisted to a module-scope const
-    // by BuilderCallHoistingTransformer. Compile + evaluate end-to-end (not
-    // just transformer goldens) to confirm the hoisted pattern doesn't trip a
-    // module-load error and the tool survives. The pattern returns a plain-data
-    // object (as patternTool patterns do); `count` is supplied per-call.
-    const program: RuntimeProgram = {
-      main: "/main.ts",
-      files: [
-        {
-          name: "/main.ts",
-          contents: [
-            'import { pattern, patternTool } from "commonfabric";',
+            'import { pattern } from "commonfabric";',
             "export default pattern(() => {",
-            "  const tool = patternTool(",
-            "    pattern(({ count }: { count: number }) => ({ doubled: count * 2 })),",
-            "  );",
+            "  const tool = pattern(({ count }: { count: number }) => ({ doubled: count * 2 }));",
             "  return { tool };",
             "});",
           ].join("\n"),

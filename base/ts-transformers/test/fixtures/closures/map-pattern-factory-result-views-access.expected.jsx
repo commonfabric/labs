@@ -141,7 +141,7 @@ export default pattern((__cf_pattern_input) => {
     const entries = __cf_pattern_input.key("entries");
     return ({
         [UI]: (<div>
-      {entries.mapWithPattern(__cfPattern_1, {})}
+      {entries.mapWithPattern(__cfPattern_1)}
     </div>),
     });
 }, {

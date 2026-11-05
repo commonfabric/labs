@@ -16,7 +16,7 @@ const removeItem = handler<unknown, { items: Cell<Item[]>; index: number }>(
 
 // FIXTURE: map-capture-cell-param
 // Verifies: destructured pattern param closed over in .map() is captured as opaque
-//   .map(fn) → .mapWithPattern(pattern(...), { items: items })
+//   .map(fn) → .mapWithPattern(pattern(...).curry({ items: items }))
 //   items (from pattern destructuring) → params.items with asOpaque: true
 // Context: Captures the parent array as opaque to pass to a handler alongside the map index
 export default pattern<InputSchema>(

@@ -516,6 +516,9 @@ async function ensureVerdict(
 
       // Start the existing piece - this registers event handlers without
       // re-running setup and potentially allocating different metadata cells.
+      if (options?.signal?.aborted) {
+        return { started: false, root, observedDocIds, observedDocs };
+      }
       await runtime.start(resultCell);
 
       logger.debug("ensure-piece", () => [
@@ -580,13 +583,15 @@ async function ensureVerdict(
  *   next cycle) from an actual load/start FAILURE (throw — counted
  *   `structureLoadFailures`); with the collapse, its failure arm was
  *   unreachable and real errors retried silently every input-driven cycle.
- *   Default stays best-effort for the event-recovery caller.
+ *   `signal` prevents a load continuation whose event owner was canceled from
+ *   starting a piece after teardown. Default stays best-effort for the
+ *   event-recovery caller.
  * @returns Promise<boolean> - true if a piece was started, false otherwise
  */
 export async function ensurePieceRunning(
   runtime: Runtime,
   cellLink: NormalizedFullLink,
-  options?: { propagateErrors?: boolean },
+  options?: { propagateErrors?: boolean; signal?: AbortSignal },
 ): Promise<boolean> {
   return (await ensurePieceRunningVerdict(runtime, cellLink, options)).started;
 }

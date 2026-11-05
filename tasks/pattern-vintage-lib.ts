@@ -1290,6 +1290,12 @@ export function isStoredArgumentRefusal(error: unknown): boolean {
     error.startsWith(`${STORED_ARGUMENT_SCHEMA_REFUSAL}:`);
 }
 
+/** Whether a closure-bearing pattern factory was stored without its params. */
+export function isMissingBoundFactoryParams(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : error;
+  return message === "Pattern factory requires bound params";
+}
+
 /**
  * Which hold-back rule covers a refused update, or `undefined` when none
  * does and the refusal must fail the run.
@@ -1297,8 +1303,9 @@ export function isStoredArgumentRefusal(error: unknown): boolean {
  * The whole partition in one place, and the returned string is the reason
  * the report prints beside the target: a refusal is held back only for a
  * DERIVED hoist, and only in the two shapes that are supersession rather
- * than loss — captures the re-run derivation re-supplies, and a hoist
- * today's source no longer emits under the recorded (renumbered) id.
+ * than loss — stored inputs or closure params the re-run derivation
+ * re-supplies, and a hoist today's source no longer emits under the recorded
+ * (renumbered) id.
  * Anything else about a hoist, and everything about an authored artifact,
  * is the caller's failure to report.
  *
@@ -1311,7 +1318,11 @@ export function hoistSupersessionReason(
   missingArtifact: boolean,
 ): string | undefined {
   if (!isDerivedHoistSymbol(symbol)) return undefined;
-  if (isStoredArgumentRefusal(error)) return "stored arguments superseded";
+  if (
+    isStoredArgumentRefusal(error) || isMissingBoundFactoryParams(error)
+  ) {
+    return "stored arguments superseded";
+  }
   if (missingArtifact) return "hoist no longer emitted";
   return undefined;
 }

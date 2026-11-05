@@ -38,6 +38,22 @@ function valueSchema(
   return object;
 }
 
+const HANDLER_FACTORY_SCHEMA = {
+  asFactory: {
+    kind: "handler",
+    contextSchema: { type: "object", properties: {} },
+    eventSchema: { asCell: ["opaque"] },
+  },
+} as const;
+
+const PATTERN_FACTORY_SCHEMA = {
+  asFactory: {
+    kind: "pattern",
+    argumentSchema: { type: "unknown" },
+    resultSchema: { type: "object", properties: {} },
+  },
+} as const;
+
 describe("generic writer policy", () => {
   for (const position of ["input", "output"] as const) {
     it(`keeps writer identities from every merged declaration in the ${position} schema`, async () => {
@@ -273,11 +289,13 @@ export default ${
           }
           expect(leaf.properties).toEqual(
             key === "handler"
-              ? { value: { asCell: ["stream"] }, n: { type: "number" } }
+              ? { value: HANDLER_FACTORY_SCHEMA, n: { type: "number" } }
+              : key === "subPattern"
+              ? { value: PATTERN_FACTORY_SCHEMA, n: { type: "number" } }
               : { n: { type: "number" } },
           );
           const required =
-            key === "handler" && name !== "an optional nested member"
+            key !== "plain" && name !== "an optional nested member"
               ? ["value", "n"]
               : ["n"];
           expect(leaf.required).toHaveLength(required.length);
@@ -285,7 +303,7 @@ export default ${
         }
         const guarded = valueSchema(root.properties?.guarded, schema);
         const inner = valueSchema(guarded.properties?.inner, schema);
-        expect(inner.properties?.action).toEqual({ asCell: ["stream"] });
+        expect(inner.properties?.action).toEqual(HANDLER_FACTORY_SCHEMA);
         expect(valueSchema(inner.properties?.value, schema)).toMatchObject({
           type: "string",
           ifc: { writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["f"] } } },
@@ -341,7 +359,7 @@ export default ${
         for (const name of ["handler", "aliasedHandler"]) {
           const member = valueSchema(root.properties?.[name], schema);
           expect(member.properties).toEqual({
-            value: { asCell: ["stream"] },
+            value: HANDLER_FACTORY_SCHEMA,
             n: { type: "number" },
           });
           expect(member.required).toHaveLength(2);
@@ -349,13 +367,19 @@ export default ${
             expect.arrayContaining(["value", "n"]),
           );
         }
-        for (const name of ["plain", "subPattern"]) {
+        const subPattern = valueSchema(root.properties?.subPattern, schema);
+        expect(subPattern.properties).toEqual({
+          value: PATTERN_FACTORY_SCHEMA,
+          n: { type: "number" },
+        });
+        expect(subPattern.required).toEqual(["value", "n"]);
+        for (const name of ["plain"]) {
           const member = valueSchema(root.properties?.[name], schema);
           expect(member.properties).toEqual({ n: { type: "number" } });
           expect(member.required).toEqual(["n"]);
         }
         const guarded = valueSchema(root.properties?.guarded, schema);
-        expect(guarded.properties?.action).toEqual({ asCell: ["stream"] });
+        expect(guarded.properties?.action).toEqual(HANDLER_FACTORY_SCHEMA);
         expect(valueSchema(guarded.properties?.value, schema)).toMatchObject({
           type: "string",
           ifc: {

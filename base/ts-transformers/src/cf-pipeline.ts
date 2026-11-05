@@ -19,6 +19,9 @@ import {
   CfcPolicyAuthoringTransformer,
   CfcPolicyOfValidationTransformer,
   EmptyArrayOfValidationTransformer,
+  FactoryAuthoringValidationTransformer,
+  FrameworkProvidedForwardingTransformer,
+  FrameworkProvidedTransformer,
   HelperOwnedExpressionSiteLoweringTransformer,
   IndirectBuilderCallbackValidationTransformer,
   JsxExpressionSiteRouterTransformer,
@@ -34,6 +37,7 @@ import {
   ReactiveVariableForTransformer,
   SchemaGeneratorTransformer,
   SchemaInjectionTransformer,
+  SymbolicFactoryCallTransformer,
   VerbReturnValidationTransformer,
   VerbTierMarkTransformer,
   WriteAuthorizedByValidationTransformer,
@@ -44,6 +48,7 @@ type TransformerStage = new (options: TransformationOptions) => Transformer;
 const CFC_TRANSFORMER_STAGES: readonly TransformerStage[] = [
   CastValidationTransformer,
   EmptyArrayOfValidationTransformer,
+  FactoryAuthoringValidationTransformer,
   OpaqueGetValidationTransformer,
   PatternContextValidationTransformer,
   MergeablePushValidationTransformer,
@@ -57,6 +62,8 @@ const CFC_TRANSFORMER_STAGES: readonly TransformerStage[] = [
   // follows rewrites the operands inside its capture calls as it would any
   // other reactive expression.
   AssertDiagnosticsTransformer,
+  FrameworkProvidedForwardingTransformer,
+  SymbolicFactoryCallTransformer,
   LiftLoweringTransformer,
   ClosureTransformer,
   PatternOwnedExpressionSiteLoweringTransformer,
@@ -64,6 +71,7 @@ const CFC_TRANSFORMER_STAGES: readonly TransformerStage[] = [
   WriteAuthorizedByValidationTransformer,
   PatternCallbackLoweringTransformer,
   SchemaInjectionTransformer,
+  FrameworkProvidedTransformer,
   BuilderCallHoistingTransformer,
   SchemaGeneratorTransformer,
   // After SchemaGenerator (state + result schemas are literals) and before

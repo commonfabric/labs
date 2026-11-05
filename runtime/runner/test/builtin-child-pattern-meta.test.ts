@@ -110,7 +110,7 @@ describe("builtin-child-pattern-meta", () => {
   describe("map", () => {
     const apply = (values: OpaqueCell<number[]>, op: unknown) =>
       // deno-lint-ignore no-explicit-any
-      values.mapWithPattern(op as any, {});
+      values.mapWithPattern(op as any);
 
     it("leaves the result container's `pattern` meta field unwritten", async () => {
       expectContainerUnmarked(await runListBuiltin("map", apply));
@@ -128,7 +128,7 @@ describe("builtin-child-pattern-meta", () => {
 
     const apply = (values: OpaqueCell<number[]>, op: unknown) =>
       // deno-lint-ignore no-explicit-any
-      values.filterWithPattern(op as any, {});
+      values.filterWithPattern(op as any);
 
     it("leaves the result container's `pattern` meta field unwritten", async () => {
       expectContainerUnmarked(await runListBuiltin("filter", apply));
@@ -138,7 +138,7 @@ describe("builtin-child-pattern-meta", () => {
   describe("flatMap", () => {
     const apply = (values: OpaqueCell<number[]>, op: unknown) =>
       // deno-lint-ignore no-explicit-any
-      values.flatMapWithPattern(op as any, {});
+      values.flatMapWithPattern(op as any);
 
     it("leaves the result container's `pattern` meta field unwritten", async () => {
       expectContainerUnmarked(await runListBuiltin("flatMap", apply));

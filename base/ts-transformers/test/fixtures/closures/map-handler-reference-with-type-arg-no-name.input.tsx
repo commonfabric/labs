@@ -25,7 +25,7 @@ interface State {
 
 // FIXTURE: map-handler-reference-with-type-arg-no-name
 // Verifies: .map() transform works with type arg on pattern but no export name
-//   .map(fn) → .mapWithPattern(pattern(...), {state: {count: ...}})
+//   .map(fn) → .mapWithPattern(pattern(...).curry({state: {count: ...}}))
 // Context: Same as map-handler-reference but exercises the <State> type-arg-no-name path
 export default pattern<State>((state) => {
   return {

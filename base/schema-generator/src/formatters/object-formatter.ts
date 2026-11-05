@@ -53,6 +53,10 @@ import { usesParameterUnreachably } from "../type-parameter-bindings.ts";
 import { CFC_CARRIER_PROPERTY } from "../typescript/cfc-carrier.ts";
 import { withIndexKeys, withValueRecordsOf } from "../schema-origins.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
+import {
+  containsFactoryType,
+  typeNodeContainsFactoryContractHint,
+} from "./factory-formatter.ts";
 
 const logger = getLogger("schema-generator.object", {
   enabled: true,
@@ -87,6 +91,7 @@ export function classifyCallableProperty(
     type = argument.type;
     bound = argument.bound;
   }
+  if (containsFactoryType(type, checker)) return undefined;
   if (!isFunctionLike(type)) return undefined;
   const callSignatures = type.getCallSignatures();
   if (callSignatures.length === 0) return { kind: "omit" };
@@ -228,8 +233,12 @@ function shouldSkipInternalProperty(
     return false;
   }
 
+  const contextNode = context.hintsNode &&
+      typeNodeContainsFactoryContractHint(context.hintsNode, context)
+    ? context.hintsNode
+    : context.typeNode;
   return !typeNodeExplicitlyDeclaresProperty(
-    context.typeNode,
+    contextNode,
     propName,
     context.typeChecker,
   );
@@ -275,14 +284,18 @@ export class ObjectFormatter implements TypeFormatter {
 
     const properties: Record<string, MutableJSONSchema> = {};
     const required: string[] = [];
+    const contextNode = context.hintsNode &&
+        typeNodeContainsFactoryContractHint(context.hintsNode, context)
+      ? context.hintsNode
+      : context.typeNode;
     const shouldRespectExplicitPropertyShape = isExplicitPropertyShapeTypeNode(
-      context.typeNode,
+      contextNode,
     );
 
     const props = propertiesInSourceOrder(
       type,
       checker.getPropertiesOfType(type),
-      context.typeNode,
+      contextNode,
       checker,
     );
     // A CFC metadata carrier a mapped type folded into the object is a
@@ -296,10 +309,21 @@ export class ObjectFormatter implements TypeFormatter {
       }
 
       let propTypeNode = getExplicitPropertyTypeNode(
-        context.typeNode,
+        contextNode,
         propName,
         checker,
       );
+      const hintedPropTypeNode = getExplicitPropertyTypeNode(
+        context.hintsNode,
+        propName,
+        checker,
+      );
+      if (
+        hintedPropTypeNode &&
+        typeNodeContainsFactoryContractHint(hintedPropTypeNode, context)
+      ) {
+        propTypeNode = hintedPropTypeNode;
+      }
       const propDecl = prop.valueDeclaration ??
         (prop.declarations?.[0] as ts.Declaration | undefined);
 
@@ -352,7 +376,11 @@ export class ObjectFormatter implements TypeFormatter {
 
       if (
         shouldRespectExplicitPropertyShape &&
-        !typeNodeExplicitlyDeclaresProperty(context.typeNode, propName, checker)
+        !typeNodeExplicitlyDeclaresProperty(
+          contextNode,
+          propName,
+          checker,
+        )
       ) {
         continue;
       }
@@ -376,11 +404,19 @@ export class ObjectFormatter implements TypeFormatter {
         ? checker.getTypeFromTypeNode(propTypeNode)
         : safeGetPropertyType(prop, type, checker, propTypeNode);
 
-      const callable = classifyCallableProperty(
-        instantiatedPropType ?? resolvedPropType,
-        checker,
-        context.boundTypeParameters,
-      );
+      const callableType = instantiatedPropType ?? resolvedPropType;
+      const factoryContracts = propTypeNode && context.schemaHints &&
+        (context.schemaHints.get(propTypeNode) ??
+          context.schemaHints.get(ts.getOriginalNode(propTypeNode)))
+          ?.factoryContracts;
+      const callable = (factoryContracts?.length ?? 0) > 0 ||
+          containsFactoryType(callableType, checker)
+        ? undefined
+        : classifyCallableProperty(
+          callableType,
+          checker,
+          context.boundTypeParameters,
+        );
       if (callable) {
         if (callable.kind === "wrapper") {
           const wrapperSchema = callable.schema;

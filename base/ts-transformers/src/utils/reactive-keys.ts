@@ -16,6 +16,9 @@ export function getCommonFabricKeyName(
 ): CommonFabricKeyName | undefined {
   return getCommonFabricComputedKeyName(expr, checker, {
     commonFabricHelperIdentifier: CF_HELPERS_IDENTIFIER,
+    // The compiler rejects authored bindings named `__cfHelpers`; matching
+    // helper accesses here therefore come from the compiler-owned envelope.
+    allowCompilerOwnedCommonFabricHelperAccess: true,
   });
 }
 
@@ -86,6 +89,7 @@ export function hasStaticKeyType(
   return key !== undefined &&
     getComputedPropertyKeyInfo(key, checker, {
         commonFabricHelperIdentifier: CF_HELPERS_IDENTIFIER,
+        allowCompilerOwnedCommonFabricHelperAccess: true,
       }) !== undefined;
 }
 
@@ -152,6 +156,7 @@ export function getKnownComputedKeyExpression(
 ): ts.Expression | undefined {
   const keyInfo = getComputedPropertyKeyInfo(expr, context.checker, {
     commonFabricHelperIdentifier: CF_HELPERS_IDENTIFIER,
+    allowCompilerOwnedCommonFabricHelperAccess: true,
   });
   if (!keyInfo) {
     return undefined;

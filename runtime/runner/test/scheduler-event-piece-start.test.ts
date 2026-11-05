@@ -333,9 +333,10 @@ describe("scheduler-event-piece-start", () => {
     }, link);
 
     expect(await status).toBe("done");
-    // The attempt, its recheck, and the attempt the handler's registration
-    // woke: the write in the other space woke nothing.
-    expect(walks).toBe(3);
+    // The attempt and its recheck. The write in the other space wakes
+    // nothing, and exact handler registration hydrates the pending client
+    // event without starting a third piece walk.
+    expect(walks).toBe(2);
     expect(handled).toEqual(["queued"]);
   });
 

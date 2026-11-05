@@ -127,9 +127,8 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { labelPrefix }) => {
     const entry = __cf_pattern_input.key("element");
-    const labelPrefix = __cf_pattern_input.key("params", "labelPrefix");
     return __cfLift_3({
         entry: {
             name: entry.key("name")
@@ -139,21 +138,20 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Entry"
-        },
-        params: {
-            type: "object",
-            properties: {
-                labelPrefix: {
-                    type: "string",
-                    asCell: ["readonly"]
-                }
-            },
-            required: ["labelPrefix"]
+        labelPrefix: {
+            type: "string",
+            asCell: ["cell"]
         }
     },
-    required: ["element", "params"],
+    required: ["labelPrefix"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Entry"
+        }
+    },
+    required: ["element"],
     $defs: {
         Entry: {
             type: "object",
@@ -243,10 +241,10 @@ export default pattern((__cf_pattern_input) => {
                     entries: entries,
                     p: p
                 }).for("visible", true);
-                const filtered = visible.filterWithPattern(__cfPattern_1, {
+                const filtered = visible.filterWithPattern(__cfPattern_1.curry({
                     labelPrefix: labelPrefix
-                }).for("filtered", true);
-                return filtered.mapWithPattern(__cfPattern_2, {});
+                })).for("filtered", true);
+                return filtered.mapWithPattern(__cfPattern_2);
             })()}
       </div>)
     };

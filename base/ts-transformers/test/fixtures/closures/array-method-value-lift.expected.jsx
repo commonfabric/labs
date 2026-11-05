@@ -40,9 +40,8 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { oid }) => {
     const v = __cf_pattern_input.key("element");
-    const oid = __cf_pattern_input.key("params", "oid");
     return __cfLift_1({
         v: {
             optionId: v.key("optionId")
@@ -52,20 +51,19 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Vote"
-        },
-        params: {
-            type: "object",
-            properties: {
-                oid: {
-                    type: "string"
-                }
-            },
-            required: ["oid"]
+        oid: {
+            type: "string"
         }
     },
-    required: ["element", "params"],
+    required: ["oid"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Vote"
+        }
+    },
+    required: ["element"],
     $defs: {
         Vote: {
             type: "object",
@@ -154,9 +152,8 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_3 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { oid }) => {
     const v = __cf_pattern_input.key("element");
-    const oid = __cf_pattern_input.key("params", "oid");
     return __cfLift_2({
         v: {
             optionId: v.key("optionId")
@@ -166,20 +163,19 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Vote"
-        },
-        params: {
-            type: "object",
-            properties: {
-                oid: {
-                    type: "string"
-                }
-            },
-            required: ["oid"]
+        oid: {
+            type: "string"
         }
     },
-    required: ["element", "params"],
+    required: ["oid"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Vote"
+        }
+    },
+    required: ["element"],
     $defs: {
         Vote: {
             type: "object",
@@ -222,9 +218,8 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_4 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { oid }) => {
     const v = __cf_pattern_input.key("element");
-    const oid = __cf_pattern_input.key("params", "oid");
     return [__cfLift_3({
             v: {
                 optionId: v.key("optionId")
@@ -234,20 +229,19 @@ const __cfPattern_4 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Vote"
-        },
-        params: {
-            type: "object",
-            properties: {
-                oid: {
-                    type: "string"
-                }
-            },
-            required: ["oid"]
+        oid: {
+            type: "string"
         }
     },
-    required: ["element", "params"],
+    required: ["oid"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Vote"
+        }
+    },
+    required: ["element"],
     $defs: {
         Vote: {
             type: "object",
@@ -286,18 +280,18 @@ export default pattern((__cf_pattern_input) => {
         [UI]: (<div>
         {/* filter predicate: the comparison must be lifted to value level */}
         <div>
-          {votes.filterWithPattern(__cfPattern_1, {
+          {votes.filterWithPattern(__cfPattern_1.curry({
                 oid: oid
-            }).mapWithPattern(__cfPattern_2, {})}
+            })).mapWithPattern(__cfPattern_2)}
         </div>
         {/* map to a bare non-JSX boolean: the comparison must be lifted */}
-        <div>{votes.mapWithPattern(__cfPattern_3, {
+        <div>{votes.mapWithPattern(__cfPattern_3.curry({
             oid: oid
-        })}</div>
+        }))}</div>
         {/* flatMap returning an array whose element is a comparison: must be lifted */}
-        <div>{votes.flatMapWithPattern(__cfPattern_4, {
+        <div>{votes.flatMapWithPattern(__cfPattern_4.curry({
             oid: oid
-        })}</div>
+        }))}</div>
       </div>),
     };
 }, {

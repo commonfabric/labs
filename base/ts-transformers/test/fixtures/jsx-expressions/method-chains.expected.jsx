@@ -153,38 +153,36 @@ const __cfLift_5 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const x = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
     return __cfLift_5({
         x: x,
         state: {
-            threshold: state.key("threshold")
+            threshold: state.threshold
         }
     }).for("__patternResult", true);
 }, {
     type: "object",
     properties: {
-        element: {
-            type: "number"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        threshold: {
-                            type: "number"
-                        }
-                    },
-                    required: ["threshold"]
+                threshold: {
+                    type: "number"
                 }
             },
-            required: ["state"]
+            required: ["threshold"]
         }
     },
-    required: ["element", "params"]
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            type: "number"
+        }
+    },
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
@@ -213,38 +211,36 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_2 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const x = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
     return (<li>Value: {__cfLift_6({
         x: x,
         state: {
-            factor: state.key("factor")
+            factor: state.factor
         }
     })}</li>);
 }, {
     type: "object",
     properties: {
-        element: {
-            type: "number"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        factor: {
-                            type: "number"
-                        }
-                    },
-                    required: ["factor"]
+                factor: {
+                    type: "number"
                 }
             },
-            required: ["state"]
+            required: ["factor"]
         }
     },
-    required: ["element", "params"]
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            type: "number"
+        }
+    },
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -888,15 +884,15 @@ export default pattern((state) => {
 
         {/* Filter then map */}
         <ul>
-          {state.key("items").filterWithPattern(__cfPattern_1, {
+          {state.key("items").filterWithPattern(__cfPattern_1.curry({
                 state: {
                     threshold: state.key("threshold")
                 }
-            }).mapWithPattern(__cfPattern_2, {
+            })).mapWithPattern(__cfPattern_2.curry({
                 state: {
                     factor: state.key("factor")
                 }
-            })}
+            }))}
         </ul>
 
         {/* Multiple filters */}
@@ -939,7 +935,7 @@ export default pattern((state) => {
         <h3>Complex Method Combinations</h3>
         {/* Map with chained operations inside */}
         <ul>
-          {state.key("names").mapWithPattern(__cfPattern_3, {})}
+          {state.key("names").mapWithPattern(__cfPattern_3)}
         </ul>
 
         {/* Reduce with reactive accumulator */}
@@ -998,7 +994,7 @@ export default pattern((state) => {
 
         {/* Map with conditional logic */}
         <ul>
-          {state.key("users").mapWithPattern(__cfPattern_4, {})}
+          {state.key("users").mapWithPattern(__cfPattern_4)}
         </ul>
 
         {/* Some/every with reactive predicates */}

@@ -99,7 +99,7 @@ const __cfLift_4 = __cfHelpers.lift<{
     inner: string[];
 }, string[]>(({ inner }) => {
     const foo = __cfLift_2({ inner: inner }).for("foo", true);
-    return foo.mapWithPattern(__cfPattern_1, {});
+    return foo.mapWithPattern(__cfPattern_1);
 }, {
     type: "object",
     properties: {
@@ -148,7 +148,7 @@ const __cfLift_6 = __cfHelpers.lift<{
     inner: string[];
 }, string[]>(({ inner }) => {
     const foo = passthrough(inner).for("foo", true);
-    return foo.mapWithPattern(__cfPattern_2, {});
+    return foo.mapWithPattern(__cfPattern_2);
 }, {
     type: "object",
     properties: {
@@ -202,7 +202,7 @@ const __cfLift_8 = __cfHelpers.lift(() => {
         },
         "default": []
     } as const satisfies __cfHelpers.JSONSchema).result!;
-    return foo.mapWithPattern(__cfPattern_3, {});
+    return foo.mapWithPattern(__cfPattern_3);
 }, false, undefined, { completeSchedulerScopeSummary: true });
 const __cfLift_9 = __cfHelpers.lift<{
     inner: string[];
@@ -291,8 +291,8 @@ const __cfLift_12 = __cfHelpers.lift<{
     inner: string[];
 }, string[]>(({ inner }) => {
     const foo = __cfLift_9({ inner: inner }).for("foo", true);
-    const filtered = foo.filterWithPattern(__cfPattern_4, {}).for("filtered", true);
-    return filtered.mapWithPattern(__cfPattern_5, {});
+    const filtered = foo.filterWithPattern(__cfPattern_4).for("filtered", true);
+    return filtered.mapWithPattern(__cfPattern_5);
 }, {
     type: "object",
     properties: {
@@ -397,8 +397,8 @@ const __cfLift_16 = __cfHelpers.lift<{
     inner: string[];
 }, string[]>(({ inner }) => {
     const foo = __cfLift_13({ inner: inner }).for("foo", true);
-    const filtered = foo.filterWithPattern(__cfPattern_6, {}).for("filtered", true);
-    return filtered.mapWithPattern(__cfPattern_7, {});
+    const filtered = foo.filterWithPattern(__cfPattern_6).for("filtered", true);
+    return filtered.mapWithPattern(__cfPattern_7);
 }, {
     type: "object",
     properties: {

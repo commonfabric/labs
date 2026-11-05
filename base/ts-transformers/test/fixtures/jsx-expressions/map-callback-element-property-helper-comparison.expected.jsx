@@ -145,9 +145,8 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { name }) => {
     const message = __cf_pattern_input.key("element");
-    const name = __cf_pattern_input.key("params", "name");
     const isMine = __cfLift_2({
         message: {
             author: message.key("author")
@@ -180,22 +179,21 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Message"
-        },
-        params: {
-            type: "object",
-            properties: {
-                name: {
-                    type: "string",
-                    "default": "",
-                    asCell: ["readonly"]
-                }
-            },
-            required: ["name"]
+        name: {
+            type: "string",
+            "default": "",
+            asCell: ["cell"]
         }
     },
-    required: ["element", "params"],
+    required: ["name"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Message"
+        }
+    },
+    required: ["element"],
     $defs: {
         Message: {
             type: "object",
@@ -236,9 +234,9 @@ export default pattern((__cf_pattern_input) => {
     const selectedRoom = __cf_pattern_input.key("selectedRoom");
     return {
         [UI]: (<div>
-        {__cfLift_1({ selectedRoom: selectedRoom }).mapWithPattern(__cfPattern_1, {
+        {__cfLift_1({ selectedRoom: selectedRoom }).mapWithPattern(__cfPattern_1.curry({
             name: name
-        })}
+        }))}
       </div>),
     };
 }, {

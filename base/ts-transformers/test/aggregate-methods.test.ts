@@ -32,7 +32,9 @@ describe("aggregate methods", () => {
       const module = parseModule(output);
       for (const method of ["count", "minBy", "maxBy"]) {
         expect(callsNamed(module, method)).toHaveLength(0);
-        expect(callsNamed(module, `${method}WithPattern`)).toHaveLength(1);
+        const lowered = callsNamed(module, `${method}WithPattern`);
+        expect(lowered).toHaveLength(1);
+        expect(lowered[0].arguments).toHaveLength(1);
       }
       expect(emittedSchemas(module)).toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -62,20 +64,36 @@ describe("aggregate methods", () => {
       `,
         { types: COMMONFABRIC_TYPES },
       );
-      const calls = callsNamed(parseModule(output), `${method}WithPattern`);
+      const module = parseModule(output);
+      const calls = callsNamed(module, `${method}WithPattern`);
       expect(calls).toHaveLength(1);
       const argument = calls[0].arguments[0];
       if (!ts.isCallExpression(argument)) {
-        throw new Error("Expected an inline pattern call");
+        throw new Error("Expected a curried pattern factory");
       }
-      expect(calleeName(argument)).toBe("pattern");
-      const callback = argument.arguments[0];
-      if (!ts.isArrowFunction(callback) || !ts.isIdentifier(callback.body)) {
-        throw new Error(
-          "Expected the pattern callback to reference its capture",
-        );
+      expect(calleeName(argument)).toBe("curry");
+      expect(argument.arguments).toHaveLength(1);
+      expect(
+        collect(argument.arguments[0], ts.isPropertyAssignment).some(
+          (property) =>
+            ts.isIdentifier(property.name) && property.name.text === "n",
+        ),
+      ).toBe(true);
+      const wrapper = callsNamed(module, "withPatternParamsSchema");
+      expect(wrapper).toHaveLength(1);
+      const callback = wrapper[0].arguments[0];
+      if (!ts.isArrowFunction(callback)) {
+        throw new Error("Expected a pattern callback with private params");
       }
-      expect(callback.body.text).toBe("n");
+      const callbackBindings = collect(
+        callback.parameters[1].name,
+        ts.isBindingElement,
+      );
+      expect(
+        callbackBindings.some((binding) =>
+          ts.isIdentifier(binding.name) && binding.name.text === "n"
+        ),
+      ).toBe(true);
       let enclosing: ts.Node | undefined = calls[0].parent;
       while (enclosing && !ts.isArrowFunction(enclosing)) {
         enclosing = enclosing.parent;
@@ -83,10 +101,7 @@ describe("aggregate methods", () => {
       if (!enclosing || !ts.isArrowFunction(enclosing)) {
         throw new Error("Expected an enclosing callback");
       }
-      const bindings = collect(
-        enclosing.parameters[0].name,
-        ts.isBindingElement,
-      );
+      const bindings = collect(enclosing, ts.isVariableDeclaration);
       expect(
         bindings.some((binding) =>
           ts.isIdentifier(binding.name) && binding.name.text === "n"

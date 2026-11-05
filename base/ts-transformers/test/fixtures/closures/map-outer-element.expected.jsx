@@ -15,12 +15,19 @@ interface State {
     items: number[];
     highlight: string;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { element }) => {
     const _ = __cf_pattern_input.key("element");
     const index = __cf_pattern_input.key("index");
-    const element = __cf_pattern_input.key("params", "element");
     return (<span key={index}>{element}</span>);
 }, {
+    type: "object",
+    properties: {
+        element: {
+            type: "string"
+        }
+    },
+    required: ["element"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -28,18 +35,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         },
         index: {
             type: "number"
-        },
-        params: {
-            type: "object",
-            properties: {
-                element: {
-                    type: "string"
-                }
-            },
-            required: ["element"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -63,15 +61,15 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-outer-element
 // Verifies: .map() on reactive array captures a local variable aliased from state
-//   .map(fn) → .mapWithPattern(pattern(...), {element: ...})
+//   .map(fn) → .mapWithPattern(pattern(...).curry({element: ...}))
 // Context: Local const "element" aliases state.highlight; captured as params.element inside the map pattern
 export default pattern((state) => {
     const element = state.key("highlight");
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_1.curry({
                 element: element
-            })}
+            }))}
       </div>),
     };
 }, {

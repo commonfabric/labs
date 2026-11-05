@@ -1,6 +1,10 @@
 import { utf8Compare } from "@commonfabric/text/utf8";
 
 import type { RuntimeProgram } from "../harness/types.ts";
+import {
+  type FactoryStateView,
+  tryFactoryState,
+} from "@commonfabric/data-model/fabric-factory";
 import { isPattern, type Pattern } from "./types.ts";
 
 /**
@@ -108,6 +112,48 @@ const entryRefByValue = new WeakMap<
   { identity: string; symbol: string }
 >();
 
+type ArtifactEntryRef = { identity: string; symbol: string };
+
+/** Trusted compiler/artifact metadata; deliberately absent from Factory@1. */
+export type FrameworkProvidedPath = readonly string[];
+
+function durableEntryRefs(): WeakMap<object, ArtifactEntryRef> {
+  const self = durableEntryRefs as {
+    map?: WeakMap<object, ArtifactEntryRef>;
+  };
+  return (self.map ??= new WeakMap<object, ArtifactEntryRef>());
+}
+
+function factoryRootTokens(): WeakMap<object, object> {
+  const self = factoryRootTokens as { map?: WeakMap<object, object> };
+  return (self.map ??= new WeakMap<object, object>());
+}
+
+function durableRefsByRootToken(): WeakMap<object, ArtifactEntryRef> {
+  const self = durableRefsByRootToken as {
+    map?: WeakMap<object, ArtifactEntryRef>;
+  };
+  return (self.map ??= new WeakMap<object, ArtifactEntryRef>());
+}
+
+type FactoryStateDeriver = (state: FactoryStateView) => unknown;
+
+function factoryStateDerivers(): WeakMap<object, FactoryStateDeriver> {
+  const self = factoryStateDerivers as {
+    map?: WeakMap<object, FactoryStateDeriver>;
+  };
+  return (self.map ??= new WeakMap<object, FactoryStateDeriver>());
+}
+
+function frameworkProvidedPathsByArtifact(): WeakMap<
+  object,
+  readonly FrameworkProvidedPath[]
+> {
+  const self = frameworkProvidedPathsByArtifact as {
+    map?: WeakMap<object, readonly FrameworkProvidedPath[]>;
+  };
+  return (self.map ??= new WeakMap<object, readonly FrameworkProvidedPath[]>());
+}
 // The least symbol each live builder artifact has been registered under, per
 // identity, by `setArtifactEntryRef()`. Unlike the first registration, which
 // `entryRefByValue` keeps, it does not depend on the order an artifact's
@@ -171,6 +217,78 @@ export function noteDerivedCopy(copy: unknown, original: unknown): void {
   ) {
     entryRefByValue.set(c, ref);
   }
+  const durableRef = durableEntryRefs().get(root);
+  if (durableRef && !durableEntryRefs().has(c)) {
+    durableEntryRefs().set(c, durableRef);
+  }
+  const rootToken = factoryRootTokens().get(root);
+  if (rootToken) factoryRootTokens().set(c, rootToken);
+  const frameworkPaths = frameworkProvidedPathsByArtifact().get(root);
+  if (frameworkPaths) {
+    frameworkProvidedPathsByArtifact().set(c, frameworkPaths);
+  }
+}
+
+/** Attach compiler-proven obligations to a trusted builder artifact. */
+export function setFrameworkProvidedPaths(
+  value: unknown,
+  paths: readonly FrameworkProvidedPath[],
+): void {
+  const key = asKey(value);
+  if (!key || !isTrustedBuilderArtifact(value)) {
+    throw new TypeError(
+      "FrameworkProvided metadata requires a trusted builder artifact",
+    );
+  }
+  const canonical = Object.freeze(
+    paths.map((path) => Object.freeze([...path])),
+  );
+  frameworkProvidedPathsByArtifact().set(key, canonical);
+}
+
+/** Read trusted FrameworkProvided obligations from an artifact or derivation. */
+export function getFrameworkProvidedPaths(
+  value: unknown,
+): readonly FrameworkProvidedPath[] {
+  const key = asKey(value);
+  if (!key || !isTrustedBuilderArtifact(value)) return [];
+  return frameworkProvidedPathsByArtifact().get(key) ??
+    frameworkProvidedPathsByArtifact().get(resolveOriginal(key) as object) ??
+    [];
+}
+
+/** Register the runner-owned reconstruction path for a live builder callable. */
+export function registerFactoryStateDeriver(
+  value: unknown,
+  deriver: FactoryStateDeriver,
+): void {
+  if (typeof value !== "function") {
+    throw new TypeError("Factory state derivers require a callable key");
+  }
+  factoryStateDerivers().set(value, deriver);
+}
+
+/** Rebuild a live builder callable with mapped hidden state. */
+export function deriveFactoryStateCopy<T>(
+  value: T,
+  state: FactoryStateView,
+): T {
+  if (typeof value !== "function") {
+    throw new TypeError("Cannot derive factory state for a non-callable");
+  }
+  const key = value as object;
+  const root = resolveOriginal(key) as object;
+  const deriver = factoryStateDerivers().get(key) ??
+    factoryStateDerivers().get(root);
+  if (!deriver) {
+    throw new Error("Factory callable has no runner-owned state deriver");
+  }
+  const copy = deriver(state);
+  if (typeof copy !== "function") {
+    throw new Error("Factory state deriver did not return a callable");
+  }
+  noteDerivedCopy(copy, value);
+  return copy as T;
 }
 
 /**
@@ -228,6 +346,48 @@ export function setArtifactEntryRef(
     return;
   }
   entryRefByValue.set(key, ref);
+}
+
+/** Bind a live builder callable to its stable runner-private factory root token. */
+export function bindFactoryRootToken(value: unknown, rootToken: object): void {
+  const key = asKey(value);
+  if (!key) return;
+  const tokens = factoryRootTokens();
+  const existing = tokens.get(key);
+  if (existing !== undefined && existing !== rootToken) {
+    throw new Error("Factory derivation cannot change its root token");
+  }
+  tokens.set(key, rootToken);
+
+  const durableRef = durableEntryRefs().get(key);
+  if (durableRef !== undefined) {
+    durableRefsByRootToken().set(rootToken, durableRef);
+  }
+}
+
+/** Record a verified content-addressed export/registry ref. */
+export function setDurableArtifactEntryRef(
+  value: unknown,
+  ref: ArtifactEntryRef,
+): void {
+  setArtifactEntryRef(value, ref);
+  const key = asKey(value);
+  if (!key) return;
+  const refs = durableEntryRefs();
+  if (!refs.has(key)) refs.set(key, ref);
+  const root = resolveOriginal(key) as object;
+  const rootToken = factoryRootTokens().get(key) ??
+    factoryRootTokens().get(root);
+  if (rootToken !== undefined && !durableRefsByRootToken().has(rootToken)) {
+    durableRefsByRootToken().set(rootToken, ref);
+  }
+}
+
+/** Durable ref associated with a shared factory root token, if verified. */
+export function getDurableArtifactRefForRootToken(
+  rootToken: object,
+): ArtifactEntryRef | undefined {
+  return durableRefsByRootToken().get(rootToken);
 }
 
 /**
@@ -376,8 +536,14 @@ export function isTrustedPattern(value: unknown): value is Pattern {
   if (!isPattern(value)) return false;
   const key = asKey(value);
   if (!key) return false;
-  return trustedPatterns.has(key) ||
-    trustedPatterns.has(resolveOriginal(key) as object);
+  if (
+    !trustedPatterns.has(key) &&
+    !trustedPatterns.has(resolveOriginal(key) as object)
+  ) {
+    return false;
+  }
+  const state = tryFactoryState(value);
+  return state === undefined || state.kind === "pattern";
 }
 
 /** Stamp a value as produced by a trusted non-pattern builder (lift/handler/…). */

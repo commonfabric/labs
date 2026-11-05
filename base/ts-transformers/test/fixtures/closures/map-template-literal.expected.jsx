@@ -57,13 +57,12 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const item = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
     return (<div>{__cfLift_1({
         state: {
-            prefix: state.key("prefix"),
-            suffix: state.key("suffix")
+            prefix: state.prefix,
+            suffix: state.suffix
         },
         item: {
             name: item.key("name")
@@ -72,29 +71,28 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Item"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        prefix: {
-                            type: "string"
-                        },
-                        suffix: {
-                            type: "string"
-                        }
-                    },
-                    required: ["prefix", "suffix"]
+                prefix: {
+                    type: "string"
+                },
+                suffix: {
+                    type: "string"
                 }
             },
-            required: ["state"]
+            required: ["prefix", "suffix"]
         }
     },
-    required: ["element", "params"],
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Item"
+        }
+    },
+    required: ["element"],
     $defs: {
         Item: {
             type: "object",
@@ -132,19 +130,19 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-template-literal
 // Verifies: .map() on reactive array is transformed when callback uses a template literal with captures
-//   .map(fn) → .mapWithPattern(pattern(...), {state: {prefix, suffix}})
+//   .map(fn) → .mapWithPattern(pattern(...).curry({state: {prefix, suffix}}))
 //   `${state.prefix} ${item.name} ${state.suffix}` → lift-applied computation wrapping the template
 // Context: Template literal interpolations reference both element and captured state properties
 export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Template literal with captures */}
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_1.curry({
                 state: {
                     prefix: state.key("prefix"),
                     suffix: state.key("suffix")
                 }
-            })}
+            }))}
       </div>),
     };
 }, {

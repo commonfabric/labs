@@ -116,7 +116,10 @@ const pieceUpdateLogger = getLogger("piece.update", {
 });
 
 interface PieceCellIo {
-  get(path?: CellPath): Promise<unknown>;
+  get(
+    path?: CellPath,
+    options?: { materializeFactories?: boolean },
+  ): Promise<unknown>;
   set(value: unknown, path?: CellPath): Promise<void>;
   edit(
     produce: (stored: FabricValue) => { value: unknown } | undefined,
@@ -755,6 +758,40 @@ function linkPathAncestorIssue(
 }
 
 /**
+ * Remove the representation-only union used for a container that may be
+ * absent. The undefined branch exposes no descendant path, so it contributes
+ * presence uncertainty rather than a competing contract for that path.
+ */
+function unwrapAbsentContainerContract(
+  contract: PathSchemaContract,
+): PathSchemaContract {
+  const schema = contract.schema;
+  if (
+    typeof schema !== "object" || schema === null ||
+    Object.keys(schema).some((key) => key !== "anyOf") ||
+    !Array.isArray(schema.anyOf) || schema.anyOf.length !== 2
+  ) {
+    return contract;
+  }
+  const isUndefinedBranch = (branch: JSONSchema): boolean =>
+    typeof branch === "object" && branch !== null &&
+    Object.keys(branch).length === 1 && branch.type === "undefined";
+  const undefinedBranch = schema.anyOf.find(isUndefinedBranch);
+  const containerBranch = schema.anyOf.find((branch) =>
+    branch !== undefinedBranch
+  );
+  if (undefinedBranch === undefined || containerBranch === undefined) {
+    return contract;
+  }
+  return {
+    ...contract,
+    schema: containerBranch,
+    root: contract.root,
+    mayBeMissing: true,
+  };
+}
+
+/**
  * Derive every schema conjunct that applies at a durable link target.
  *
  * `schemaAtPath()` intentionally returns a convenient approximation and loses
@@ -777,7 +814,9 @@ export function linkPathContracts(
     const part = String(segment);
     const next: PathSchemaContract[] = [];
     for (const unresolved of contracts) {
-      const contract = resolvePathSchemaContract(unresolved);
+      const contract = unwrapAbsentContainerContract(
+        resolvePathSchemaContract(unresolved),
+      );
       const { schema, root } = contract;
       if (schema === false) {
         next.push(contract);
@@ -3091,7 +3130,10 @@ class PiecePropIo implements PieceCellIo {
     this.#type = type;
   }
 
-  async get(path?: CellPath) {
+  async get(
+    path?: CellPath,
+    options?: { materializeFactories?: boolean },
+  ) {
     // Under server execution the run that stores a handler's consequences is
     // the serving runtime's, and a send returns ahead of it. The read waits
     // for every event this runtime fired into the piece's space to reach its
@@ -3115,11 +3157,12 @@ class PiecePropIo implements PieceCellIo {
           targetCell.key(...path.slice(0, conditionalDepth)),
           path.slice(conditionalDepth),
           true,
+          options,
         );
       }
     }
     if (!path?.length) {
-      return await this.#getFromRoot(targetCell, []);
+      return await this.#getFromRoot(targetCell, [], false, options);
     }
     // Pull the requested cell, not the whole input/result root. The sync
     // started by pull() sends its path plus narrowed schema to Memory v2, so
@@ -3132,25 +3175,27 @@ class PiecePropIo implements PieceCellIo {
     // projection applies the asCell scope cap itself, so a capped handle stays
     // capped without routing through resolveAsCell().
     const selectedCell = targetCell.key(...path);
-    await selectedCell.pull();
+    await selectedCell.pull(options);
     // Relax `required` for scoped links that this session cannot materialize,
     // at the selected subtree rather than the root — same boundary as
     // #getFromRoot, see schemaWithScopedLinkRequiredsRelaxed.
-    const selected = cellWithScopedLinkRequiredsRelaxed(selectedCell).get();
+    const relaxedSelected = cellWithScopedLinkRequiredsRelaxed(selectedCell);
+    const selected = options?.materializeFactories === false
+      ? relaxedSelected.getWithoutFactoryMaterialization()
+      : relaxedSelected.get();
     if (isCell(selected)) {
       // An asCell projection materializes even an absent or explicitly
       // undefined slot as a Cell, so inspect the stored slot before reading
       // through the handle. Falling back preserves the root read's
       // absent-vs-undefined rules and its missing-path diagnostics.
       if (selectedCell.getRaw() === undefined) {
-        return await this.#getFromRoot(targetCell, path);
+        return await this.#getFromRoot(targetCell, path, false, options);
       }
       const handle = cellWithScopedLinkRequiredsRelaxed(selected);
-      await handle.pull();
-      return handle.get();
+      return await handle.pull(options);
     }
     if (selected === undefined) {
-      return await this.#getFromRoot(targetCell, path);
+      return await this.#getFromRoot(targetCell, path, false, options);
     }
     return selected;
   }
@@ -3159,10 +3204,11 @@ class PiecePropIo implements PieceCellIo {
     targetCell: Cell<unknown>,
     path: CellPath,
     requireProjection = false,
+    options?: { materializeFactories?: boolean },
   ) {
     // Preserve the existing missing-path diagnostics and the distinction
     // between an absent field and a schema-valid undefined value.
-    await targetCell.pull();
+    await targetCell.pull(options);
     // Terminal read boundary: relax `required` for properties whose stored
     // value links into a scope this session may not be able to materialize
     // (perSession/perUser-derived outputs), so a whole-object read degrades
@@ -3198,13 +3244,18 @@ class PiecePropIo implements PieceCellIo {
             );
           }
         }
-        const value = root.get();
+        const value = options?.materializeFactories === false
+          ? root.getWithoutFactoryMaterialization()
+          : root.get();
         if (!isCell(value)) break;
         root = cellWithScopedLinkRequiredsRelaxed(value);
-        await root.pull();
+        await root.pull(options);
       }
     }
-    return resolveCellPath(root, path, { requireProjection });
+    return resolveCellPath(root, path, {
+      requireProjection,
+      materializeFactories: options?.materializeFactories,
+    });
   }
 
   /** Returns the root cell, or a path admitted through the input projection. */
@@ -3881,7 +3932,9 @@ class PiecePropIo implements PieceCellIo {
     if (sentEvent) {
       await pieces.runtime.idle();
     } else if (this.#type === "input") {
-      await pieces.getResult(this.#cc.getCell()).pull();
+      await pieces.getResult(this.#cc.getCell()).pull({
+        materializeFactories: false,
+      });
     } else {
       await targetCell.pull();
     }

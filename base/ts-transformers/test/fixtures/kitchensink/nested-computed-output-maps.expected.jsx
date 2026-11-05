@@ -335,11 +335,9 @@ const __cfLift_4 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { outerIndex, state }) => {
     const comment = __cf_pattern_input.key("element");
     const reboundIndex = __cf_pattern_input.key("index");
-    const outerIndex = __cf_pattern_input.params.outerIndex;
-    const state = __cf_pattern_input.key("params", "state");
     return (<aside>
               {__cfHelpers.ifElse({
         type: "boolean"
@@ -354,7 +352,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         outerIndex: outerIndex
     }), __cfLift_4({
         state: {
-            lane: state.key("lane")
+            lane: state.lane
         },
         comment: {
             id: comment.key("id")
@@ -362,6 +360,23 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
     }), comment.key("text"))}
             </aside>);
 }, {
+    type: "object",
+    properties: {
+        outerIndex: {
+            type: "number"
+        },
+        state: {
+            type: "object",
+            properties: {
+                lane: {
+                    type: "string"
+                }
+            },
+            required: ["lane"]
+        }
+    },
+    required: ["outerIndex", "state"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -378,27 +393,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         },
         index: {
             type: "number"
-        },
-        params: {
-            type: "object",
-            properties: {
-                outerIndex: {
-                    type: "number"
-                },
-                state: {
-                    type: "object",
-                    properties: {
-                        lane: {
-                            type: "string"
-                        }
-                    },
-                    required: ["lane"]
-                }
-            },
-            required: ["outerIndex", "state"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -462,11 +459,9 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_2 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { outerIndex, state }) => {
     const edge = __cf_pattern_input.key("element");
     const edgeIndex = __cf_pattern_input.key("index");
-    const outerIndex = __cf_pattern_input.params.outerIndex;
-    const state = __cf_pattern_input.key("params", "state");
     return (<small>
               {__cfHelpers.ifElse({
         type: "boolean"
@@ -481,7 +476,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
         outerIndex: outerIndex
     }), __cfLift_6({
         state: {
-            lane: state.key("lane")
+            lane: state.lane
         },
         edge: edge
     }), edge)}
@@ -489,32 +484,31 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
+        outerIndex: {
+            type: "number"
+        },
+        state: {
+            type: "object",
+            properties: {
+                lane: {
+                    type: "string"
+                }
+            },
+            required: ["lane"]
+        }
+    },
+    required: ["outerIndex", "state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
         element: {
             type: "string"
         },
         index: {
             type: "number"
-        },
-        params: {
-            type: "object",
-            properties: {
-                outerIndex: {
-                    type: "number"
-                },
-                state: {
-                    type: "object",
-                    properties: {
-                        lane: {
-                            type: "string"
-                        }
-                    },
-                    required: ["lane"]
-                }
-            },
-            required: ["outerIndex", "state"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -647,20 +641,20 @@ visibleThreads.map(({ thread, outerIndex, visibleComments }) => {
             </div>))}
           {/* [TRANSFORM] .map() → mapWithPattern: reboundComments is output of nested computed() — reactive even inside outer computed */}
           {/* [TRANSFORM] closure captures: outerIndex (via params opaque), state.lane (via params reactive .key()) */}
-          {reboundComments.mapWithPattern(__cfPattern_1, {
+          {reboundComments.mapWithPattern(__cfPattern_1.curry({
             outerIndex: outerIndex,
             state: {
                 lane: state.lane
             }
-        })}
+        }))}
           {/* [TRANSFORM] .map() → mapWithPattern: liftedSeparators is output of lift() — reactive even inside outer computed */}
           {/* [TRANSFORM] closure captures: outerIndex (via params opaque), state.lane (via params reactive .key()) */}
-          {liftedSeparators.mapWithPattern(__cfPattern_2, {
+          {liftedSeparators.mapWithPattern(__cfPattern_2.curry({
             outerIndex: outerIndex,
             state: {
                 lane: state.lane
             }
-        })}
+        }))}
           {/* [TRANSFORM] .map() stays plain: plainSeparators is a local literal array */}
           {plainSeparators.map((edge) => <small>{edge}</small>)}
         </article>);
@@ -798,10 +792,9 @@ const __cfLift_9 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_3 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const label = __cf_pattern_input.key("element");
     const labelIndex = __cf_pattern_input.key("index");
-    const state = __cf_pattern_input.key("params", "state");
     return (<header data-lane-label={labelIndex}>
             {__cfHelpers.ifElse({
         type: "boolean"
@@ -813,7 +806,7 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema, __cfLift_8({ labelIndex: labelIndex }), __cfLift_9({
         state: {
-            lane: state.key("lane")
+            lane: state.lane
         },
         label: label
     }), label)}
@@ -821,29 +814,28 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
+        state: {
+            type: "object",
+            properties: {
+                lane: {
+                    type: "string"
+                }
+            },
+            required: ["lane"]
+        }
+    },
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
         element: {
             type: "string"
         },
         index: {
             type: "number"
-        },
-        params: {
-            type: "object",
-            properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        lane: {
-                            type: "string"
-                        }
-                    },
-                    required: ["lane"]
-                }
-            },
-            required: ["state"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -946,13 +938,13 @@ export default pattern((state) => {
         [UI]: (<div>
         {/* [TRANSFORM] .map() → mapWithPattern: laneLabels is output of lift() in pattern context — reactive */}
         {/* [TRANSFORM] ternary lowered: labelIndex===0 ? `${state.lane}:${label}` : label → ifElse(lift(cond), lift(true-branch), label) */}
-        {laneLabels.mapWithPattern(__cfPattern_3, {
+        {laneLabels.mapWithPattern(__cfPattern_3.curry({
                 state: {
                     lane: state.key("lane")
                 }
-            })}
+            }))}
         {/* [TRANSFORM] .map() → mapWithPattern: threadRows is output of computed() — reactive, back in pattern-owned UI */}
-        {threadRows.mapWithPattern(__cfPattern_4, {})}
+        {threadRows.mapWithPattern(__cfPattern_4)}
       </div>),
     };
 }, {

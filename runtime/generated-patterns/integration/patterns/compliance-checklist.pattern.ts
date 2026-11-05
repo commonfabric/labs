@@ -174,7 +174,9 @@ const compareTasks = (left: ComplianceTask, right: ComplianceTask): number => {
   return left.id.localeCompare(right.id);
 };
 
-const sanitizeTaskList = (value: unknown): ComplianceTask[] => {
+const sanitizeTaskList = (
+  value: readonly ChecklistTaskInput[],
+): ComplianceTask[] => {
   if (!Array.isArray(value)) {
     return cloneTasks(defaultTasks);
   }

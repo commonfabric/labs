@@ -40,6 +40,10 @@ import {
   isFabricSpecialObject,
   taggedHashStringOf,
 } from "@commonfabric/data-model";
+import {
+  isAdmittedFabricFactory,
+  sealFactoryState,
+} from "@commonfabric/data-model/fabric-factory";
 import { Identity } from "@commonfabric/identity";
 import type { Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
@@ -681,6 +685,10 @@ function withoutInheritedDocsNote(comment: string): string | undefined {
  *   comparison can pass. Reduced to a tagged content hash, which is the
  *   data-model's own notion of equality for them (`valueEqual` ends in the same
  *   hash) without needing a comparator that also has to survive link sigils.
+ * - **An inert `Factory@1` shell.** State comparison runs before the candidate
+ *   pattern starts, so no executable artifact is available yet. The shell is
+ *   reduced to its canonical codec state: factory identity and bound params
+ *   remain comparable without loading or executing code.
  * - **A cycle.** Even with cells reduced, the data itself may point back at
  *   itself; `deepEqual` recurses until the stack ends. Cut with a marker rather
  *   than by sharing the copy, so what comes out of here is acyclic — which is
@@ -717,6 +725,9 @@ export function comparableState(value: unknown): unknown {
   // read. Only a genuine loop is cut.
   const onPath = new Set<object>();
   const walk = (current: unknown): unknown => {
+    if (isAdmittedFabricFactory(current)) {
+      return { "[factory]": walk(sealFactoryState(current)) };
+    }
     if (!isObjectOrArray(current)) return current;
     if (isFabricSpecialObject(current)) {
       return { "[fabric]": taggedHashStringOf(current) };
@@ -863,8 +874,9 @@ export async function readStateUnder(
     // another space loads on a round trip of its own after the root arrives,
     // and the read has to converge on that target too, or both sides of a
     // comparison read the same absence.
-    await cell.pull();
-    const detached = comparableState(cell.get());
+    const detached = comparableState(
+      await cell.pull({ materializeFactories: false }),
+    );
     // Narrow rather than cast. A root is an object in practice, but asserting
     // it would hand `strandedKeys` a non-object to enumerate — and "no keys"
     // reads exactly like "nothing stranded".
@@ -951,6 +963,7 @@ const RENDERINGS: ReadonlySet<string> = new Set([UI, TILE_UI, CHIP_UI]);
 const REDUCTIONS: ReadonlySet<string> = new Set([
   "[cell]",
   "[fabric]",
+  "[factory]",
   "[cycle]",
   "[vnode]",
 ]);

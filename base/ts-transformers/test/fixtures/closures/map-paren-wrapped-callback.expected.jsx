@@ -47,7 +47,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 //   reactive .map that throws at runtime
 export default pattern((__cf_pattern_input) => {
     const rows = __cf_pattern_input.key("rows");
-    const out = rows.mapWithPattern(__cfPattern_1, {}).for("out", true);
+    const out = rows.mapWithPattern(__cfPattern_1).for("out", true);
     return { out };
 }, {
     type: "object",

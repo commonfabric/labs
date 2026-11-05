@@ -184,12 +184,12 @@ than a separate V2 system. See `rollout-plan.md` for detailed task breakdown.
    - Track created cells and causes in context during execution
    - Wire lift/handler returns to auto-assign causes to returned cells
 
-### Independent Track: First-Class Factory Values (Proposed)
+### Independent Track: First-Class Factory Values (Shipped)
 
 This track depends on content-addressed builder-artifact identity, not on graph
 snapshots or the reactive-interpreter rollout. See
 [First-Class Serializable Factories](./node-factory-shipping.md) and its
-[implementation plan](../../plans/first-class-serializable-factories.md).
+[executed plan](../../history/plans/first-class-serializable-factories.md).
 
 1. Make pattern, module/lift, and handler factory functions directly branded
    `Factory@1` `FabricValue`s.

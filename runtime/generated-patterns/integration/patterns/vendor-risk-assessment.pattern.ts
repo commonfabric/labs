@@ -253,7 +253,7 @@ const sanitizeResponseList = (
   return sanitized;
 };
 
-const sanitizeVendorList = (value: unknown): VendorRecord[] => {
+const sanitizeVendorList = (value: readonly VendorInput[]): VendorRecord[] => {
   const list = Array.isArray(value) ? value : cloneDefaultVendors();
   const sanitized: VendorRecord[] = [];
   const used = new Set<string>();

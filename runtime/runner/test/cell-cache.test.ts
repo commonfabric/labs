@@ -200,8 +200,11 @@ describe("cell-cache", () => {
       };
       const docs = buildSourceDocs([...modules, isolated], entryIdentity);
       const entry = docs.get(entryIdentity)!;
-      // The entry now carries a synthetic root link to the isolated module.
-      const rootLink = entry.imports.find((i) =>
+      // Synthetic topology is kept separate from authored import identity.
+      expect(
+        entry.imports.some((i) => i.specifier.startsWith(ROOT_LINK_SPECIFIER)),
+      ).toBe(false);
+      const rootLink = entry.roots?.find((i) =>
         i.specifier === `${ROOT_LINK_SPECIFIER}iso-identity`
       );
       expect(rootLink?.identity).toBe("iso-identity");
@@ -441,7 +444,7 @@ describe("cell-cache", () => {
         leafIdentity,
       );
       expect(
-        sealOne.get(leafIdentity)!.imports.map((i) => i.specifier),
+        sealOne.get(leafIdentity)!.roots?.map((i) => i.specifier),
       ).toContain(`${ROOT_LINK_SPECIFIER}${oldAmbient.identity}`);
 
       // Seal 2 (newer runtime): an entry importing the same leaf module, plus
@@ -2429,7 +2432,7 @@ describe("cell-cache", () => {
       ).toBe(true);
     });
 
-    it("distinguishes persisted closures that share an entry module", async () => {
+    it("unions persisted closure roots that share an entry module", async () => {
       const targetSpace = "did:key:z6MkCellCacheSharedEntryTarget";
       const main = {
         name: "/main.ts",
@@ -2482,7 +2485,7 @@ describe("cell-cache", () => {
       readTx.abort?.();
 
       expect(loaded.has(secondExtraIdentity)).toBe(true);
-      expect(loaded.has(firstExtraIdentity)).toBe(false);
+      expect(loaded.has(firstExtraIdentity)).toBe(true);
 
       await manager.persistCompileCacheTracked(
         targetSpace,
@@ -2500,7 +2503,7 @@ describe("cell-cache", () => {
       );
       replayTx.abort?.();
       expect(replayed.has(firstExtraIdentity)).toBe(true);
-      expect(replayed.has(secondExtraIdentity)).toBe(false);
+      expect(replayed.has(secondExtraIdentity)).toBe(true);
     });
 
     it("tracks a queued replacement write before its predecessor completes", async () => {

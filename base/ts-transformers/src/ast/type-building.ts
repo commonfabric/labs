@@ -1537,7 +1537,7 @@ export function cloneTypeNodeDeepForEmission<T extends ts.TypeNode>(
  *
  * Both reactive-input sites share this: closure-captured inputs (the capture
  * leaves below — `computed`/`lift`, `handler`/`action`, reactive array methods,
- * `patternTool`) and the condition of `ifElse`/`when`/`unless` (checked where
+ * `pattern`) and the condition of `ifElse`/`when`/`unless` (checked where
  * their schemas are built). `reportDiagnosticOnce` keeps the same value from
  * being reported twice when more than one stage walks it.
  */

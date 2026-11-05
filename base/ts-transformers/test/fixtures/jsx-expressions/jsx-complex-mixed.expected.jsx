@@ -130,9 +130,8 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const item = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
     return (<li key={item.key("id")}>
               <span>{item.key("name")}</span>
               <span>- Original: ${item.key("price")}</span>
@@ -142,7 +141,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
             price: item.key("price")
         },
         state: {
-            discount: state.key("discount")
+            discount: state.discount
         }
     })}
               </span>
@@ -153,8 +152,8 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
             price: item.key("price")
         },
         state: {
-            discount: state.key("discount"),
-            taxRate: state.key("taxRate")
+            discount: state.discount,
+            taxRate: state.taxRate
         }
     })}
               </span>
@@ -162,29 +161,28 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Item"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        discount: {
-                            type: "number"
-                        },
-                        taxRate: {
-                            type: "number"
-                        }
-                    },
-                    required: ["discount", "taxRate"]
+                discount: {
+                    type: "number"
+                },
+                taxRate: {
+                    type: "number"
                 }
             },
-            required: ["state"]
+            required: ["discount", "taxRate"]
         }
     },
-    required: ["element", "params"],
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Item"
+        }
+    },
+    required: ["element"],
     $defs: {
         Item: {
             type: "object",
@@ -419,8 +417,8 @@ const __cfLift_10 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: jsx-complex-mixed
 // Verifies: mixed transforms -- map, filter, arithmetic, ternary/ifElse, attribute bindings in one pattern
-//   .filter(fn)              → .filterWithPattern(pattern(...), {captures})
-//   .map(fn)                 → .mapWithPattern(pattern(...), {captures})
+//   .filter(fn)              → .filterWithPattern(pattern(...).curry({captures}))
+//   .map(fn)                 → .mapWithPattern(pattern(...).curry({captures}))
 //   ternary cond ? a : b     → ifElse(lift(...)(cond), a, b)
 //   {state.discount * 100}   → lift(...)({ discount })
 // Context: Comprehensive fixture combining array methods, conditionals, lift-applied computations, and attributes
@@ -439,12 +437,12 @@ export default pattern((state) => {
 
         <h3>Array with Complex Expressions</h3>
         <ul>
-          {state.key("items").mapWithPattern(__cfPattern_1, {
+          {state.key("items").mapWithPattern(__cfPattern_1.curry({
                 state: {
                     discount: state.key("discount"),
                     taxRate: state.key("taxRate")
                 }
-            })}
+            }))}
         </ul>
 
         <h3>Array Methods</h3>

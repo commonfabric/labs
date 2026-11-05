@@ -13,10 +13,10 @@ interface State {
 
 // FIXTURE: filter-map-chain
 // Verifies: filter+map chain with captured outer variables
-//   .filter(fn) → .filterWithPattern(pattern(...), {})  — no captures
-//   .map(fn)    → .mapWithPattern(pattern(...), { state: { taxRate } })
+//   .filter(fn) → .filterWithPattern(pattern(...))  — no captures
+//   .map(fn)    → .mapWithPattern(pattern(...).curry({ state: { taxRate } }))
 // Context: The map callback captures state.taxRate from outer scope, so it
-//   appears in the params object and the map body uses a lift-applied
+//   appears in the private curry captures and the map body uses a lift-applied
 //   computation for the reactive computation. The filter has no captures (only element properties).
 export default pattern<State>((state) => {
   return {

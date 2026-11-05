@@ -12,56 +12,60 @@ The stages relevant to array-method callbacks are:
 ```
 1.  CastValidationTransformer
 2.  EmptyArrayOfValidationTransformer
-3.  OpaqueGetValidationTransformer
-4.  PatternContextValidationTransformer
-5.  MergeablePushValidationTransformer
-6.  VerbReturnValidationTransformer          ← validation-only; not array-method
+3.  FactoryAuthoringValidationTransformer
+4.  OpaqueGetValidationTransformer
+5.  PatternContextValidationTransformer
+6.  MergeablePushValidationTransformer
+7.  VerbReturnValidationTransformer          ← validation-only; not array-method
                                                 related
-7.  IndirectBuilderCallbackValidationTransformer
+8.  IndirectBuilderCallbackValidationTransformer
                                              ← validation-only; not array-method
                                                 related
-8.  CfcPolicyAuthoringTransformer
-9.  CfcPolicyOfValidationTransformer
-10. JsxExpressionSiteRouterTransformer
-11. AssertDiagnosticsTransformer             ← rewrites assert(...) bodies; not
+9.  CfcPolicyAuthoringTransformer
+10. CfcPolicyOfValidationTransformer
+11. JsxExpressionSiteRouterTransformer
+12. AssertDiagnosticsTransformer             ← rewrites assert(...) bodies; not
                                                 array-method related
-12. LiftLoweringTransformer
-13. ClosureTransformer                       ← lowers .map() to .mapWithPattern()
+13. FrameworkProvidedForwardingTransformer
+14. SymbolicFactoryCallTransformer
+15. LiftLoweringTransformer
+16. ClosureTransformer                       ← lowers .map() to .mapWithPattern()
                                                 + immediately runs the per-callback
                                                 expression-site lowering
-14. PatternOwnedExpressionSiteLoweringTransformer
-15. HelperOwnedExpressionSiteLoweringTransformer
-16. WriteAuthorizedByValidationTransformer
-17. PatternCallbackLoweringTransformer       ← __cf_pattern_input.key(...)
+17. PatternOwnedExpressionSiteLoweringTransformer
+18. HelperOwnedExpressionSiteLoweringTransformer
+19. WriteAuthorizedByValidationTransformer
+20. PatternCallbackLoweringTransformer       ← __cf_pattern_input.key(...)
                                                 destructuring (ONLY for destructured
                                                 first params)
-18. SchemaInjectionTransformer
-19. BuilderCallHoistingTransformer           ← hoists whole lift/handler calls and
+21. SchemaInjectionTransformer
+22. FrameworkProvidedTransformer
+23. BuilderCallHoistingTransformer           ← hoists whole lift/handler calls and
                                                 argument-position pattern(...) to
                                                 module-scope consts, after schema
                                                 injection (CT-1644/CT-1655; replaced
                                                 the former BuilderCallbackHoisting +
                                                 LiftHoisting pair, #3864)
-20. SchemaGeneratorTransformer
-21. VerbTierMarkTransformer                  ← verb listing marks (WS-F)
-22. ReactiveVariableForTransformer
-23. ModuleScopeShadowingTransformer
-24. ModuleScopeCfDataTransformer
-25. PatternCoverageTransformer               ← no-op unless coverage is enabled
-26. ModuleScopeFunctionHardeningTransformer
+24. SchemaGeneratorTransformer
+25. VerbTierMarkTransformer                  ← verb listing marks (WS-F)
+26. ReactiveVariableForTransformer
+27. ModuleScopeShadowingTransformer
+28. ModuleScopeCfDataTransformer
+29. PatternCoverageTransformer               ← no-op unless coverage is enabled
+30. ModuleScopeFunctionHardeningTransformer
 ```
 
 A common misconception worth flagging up front:
-`PatternCallbackLoweringTransformer` (stage 17) runs _last_ among the lowering
+`PatternCallbackLoweringTransformer` (stage 20) runs _last_ among the lowering
 passes, not first. By the time it fires, expression-site lowering during
-`ClosureTransformer` (stage 13) has already had its say. The
+`ClosureTransformer` (stage 16) has already had its say. The
 `key()`-substitution prologue it generates is downstream of the analyzer-driven
 decisions about wrapping.
 
 This document focuses on reactive collection calls that `ClosureTransformer`
 rewrites. An ordinary eager `Array.map()` or `ReadonlyArray.map()` call remains
 plain JavaScript, but a callback in a pattern body can still carry pattern-owned
-value sites that stage 13 lowers. That permission is narrower than the
+value sites that stage 16 lowers. That permission is narrower than the
 `plain-array-value` callback boundary: `isCollectingPlainArrayMethodCallback`
 admits only argument zero of a `map` whose owner symbol includes the configured
 TypeScript default-library `Array`/`ReadonlyArray` declaration. Same-named
@@ -115,7 +119,7 @@ during `ClosureTransformer`. `PatternCallbackLoweringTransformer` sees only the
 synthesized destructured `({element, …})` param and handles all three
 identically as far as the key-prologue is concerned.
 
-| Source form                                             | `ClosureTransformer` (stage 13)                                                                                                                                                                                                                                                                                                               |
+| Source form                                             | `ClosureTransformer` (stage 16)                                                                                                                                                                                                                                                                                                               |
 | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `(elem) => …elem.foo…`                                  | Identifier form. `bindingName = elem`, no aliases, body unchanged. Later passes (and our new analyzer hook) recognize `elem` as the element binding via `mapCallbackRegistry`.                                                                                                                                                                |
 | `({piece, name}) => …` (plain object destructure)       | Destructure with no computed property names. `plan.aliases.length === 0`: the destructure binding passes through unchanged (no fresh `element` identifier synthesized). `PatternCallbackLoweringTransformer` sees the destructured param and generates a `key()` prologue (`const piece = __cf_pattern_input.key("element", "piece");` etc.). |
@@ -129,14 +133,14 @@ path is therefore the dominant one and the one most worth understanding deeply.
 
 For the identifier-form path, the late stages handle most of the lowering:
 
-- During `ClosureTransformer` (stage 13), expression-site lowering decides
+- During `ClosureTransformer` (stage 16), expression-site lowering decides
   whether each expression in the body needs an early lift-applied wrapper. The
   decision flows from `analyze(expression)` reporting `containsReactive` /
   `requiresRewrite` / `dataFlows`.
 - Most `elem.foo`-style passthrough reads (inside `{elem.foo}` JSX, inside
   `[elem.foo]` array literals, etc.) are deliberately **not** wrapped at this
   stage. They flow through to `PatternCallbackLoweringTransformer`.
-- During `PatternCallbackLoweringTransformer` (stage 17),
+- During `PatternCallbackLoweringTransformer` (stage 20),
   `pattern-body-reactive-root-lowering` walks the body and rewrites `elem.foo`
   to `elem.key("foo")` in place. This is the cheaper form — it gives the runtime
   a fine-grained key path without pulling `elem` into a lift's inputs.

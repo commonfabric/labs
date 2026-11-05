@@ -16,6 +16,7 @@ import {
   isCommonFabricDeclaration,
   isCommonFabricModuleName,
   isCommonFabricSymbol,
+  registerCommonFabricDeclarationSources,
   symbolDeclaresCommonFabricDefault,
 } from "../../src/typescript/common-fabric-symbols.ts";
 
@@ -28,7 +29,10 @@ import {
  * Files named "commonfabric.d.ts" are included as root files so their global
  * declarations are visible without imports.
  */
-function createProgram(sources: Record<string, string>): {
+function createProgram(
+  sources: Record<string, string>,
+  trustedSourceNames: readonly string[] = [],
+): {
   program: ts.Program;
   checker: ts.TypeChecker;
 } {
@@ -60,7 +64,15 @@ function createProgram(sources: Record<string, string>): {
   };
 
   const program = ts.createProgram(Object.keys(sources), compilerOptions, host);
-  return { program, checker: program.getTypeChecker() };
+  const checker = program.getTypeChecker();
+  registerCommonFabricDeclarationSources(
+    checker,
+    trustedSourceNames.flatMap((name) => {
+      const source = program.getSourceFile(name);
+      return source ? [source] : [];
+    }),
+  );
+  return { program, checker };
 }
 
 /**
@@ -152,66 +164,57 @@ describe("getImportTypeModuleName", () => {
 });
 
 describe("isCommonFabricDeclaration", () => {
-  it("matches declarations from Common Fabric source files", () => {
-    const sourceFile = ts.createSourceFile(
-      "/repo/base/api/index.ts",
-      `export interface Cell<T> { value: T }`,
-      ts.ScriptTarget.ES2020,
-      true,
-      ts.ScriptKind.TS,
-    );
+  it("matches declarations from an explicitly trusted source", () => {
+    const { program, checker } = createProgram({
+      "/repo/base/api/index.ts": `export interface Cell<T> { value: T }`,
+    }, ["/repo/base/api/index.ts"]);
+    const sourceFile = program.getSourceFile("/repo/base/api/index.ts")!;
 
     const declaration = findFirstNode(sourceFile, ts.isInterfaceDeclaration);
 
     assert(declaration);
-    assert(isCommonFabricDeclaration(declaration));
+    assert(isCommonFabricDeclaration(declaration, checker));
   });
 
-  it("matches declarations from installed Common Fabric package files", () => {
-    const sourceFile = ts.createSourceFile(
+  it("does not infer trust from an installed-package-looking path", () => {
+    const { program, checker } = createProgram({
+      "/repo/node_modules/@commonfabric/api/index.d.ts":
+        `export interface Cell<T> { value: T }`,
+    });
+    const sourceFile = program.getSourceFile(
       "/repo/node_modules/@commonfabric/api/index.d.ts",
-      `export interface Cell<T> { value: T }`,
-      ts.ScriptTarget.ES2020,
-      true,
-      ts.ScriptKind.TS,
-    );
+    )!;
 
     const declaration = findFirstNode(sourceFile, ts.isInterfaceDeclaration);
 
     assert(declaration);
-    assert(isCommonFabricDeclaration(declaration));
+    assertFalse(isCommonFabricDeclaration(declaration, checker));
   });
 
-  it("matches declarations inside Common Fabric ambient modules", () => {
-    const sourceFile = ts.createSourceFile(
-      "/types.d.ts",
-      `declare module "@commonfabric/api" {
+  it("does not infer trust from an ambient module string", () => {
+    const { program, checker } = createProgram({
+      "/types.d.ts": `declare module "@commonfabric/api" {
         export interface Cell<T> { value: T }
       }`,
-      ts.ScriptTarget.ES2020,
-      true,
-      ts.ScriptKind.TS,
-    );
+    });
+    const sourceFile = program.getSourceFile("/types.d.ts")!;
 
     const declaration = findFirstNode(sourceFile, ts.isInterfaceDeclaration);
 
     assert(declaration);
-    assert(isCommonFabricDeclaration(declaration));
+    assertFalse(isCommonFabricDeclaration(declaration, checker));
   });
 
   it("rejects user declarations with matching names", () => {
-    const sourceFile = ts.createSourceFile(
-      "/test.ts",
-      `interface Cell<T> { value: T }`,
-      ts.ScriptTarget.ES2020,
-      true,
-      ts.ScriptKind.TS,
-    );
+    const { program, checker } = createProgram({
+      "/test.ts": `interface Cell<T> { value: T }`,
+    });
+    const sourceFile = program.getSourceFile("/test.ts")!;
 
     const declaration = findFirstNode(sourceFile, ts.isInterfaceDeclaration);
 
     assert(declaration);
-    assertFalse(isCommonFabricDeclaration(declaration));
+    assertFalse(isCommonFabricDeclaration(declaration, checker));
   });
 });
 
@@ -223,16 +226,16 @@ describe("isCommonFabricSymbol", () => {
           get(): T;
         }
       `,
-    });
+    }, ["/repo/base/api/index.ts"]);
 
     const sf = program.getSourceFile("/repo/base/api/index.ts")!;
     const symbol = getInterfaceSymbol(checker, sf, "Cell");
 
     assert(symbol);
-    assert(isCommonFabricSymbol(symbol));
+    assert(isCommonFabricSymbol(symbol, checker));
   });
 
-  it("matches symbols from installed Common Fabric package files", () => {
+  it("does not infer symbol trust from installed-package-looking paths", () => {
     const { program, checker } = createProgram({
       "/repo/node_modules/@commonfabric/api/index.d.ts": `
         export interface Cell<T> {
@@ -247,7 +250,7 @@ describe("isCommonFabricSymbol", () => {
     const symbol = getInterfaceSymbol(checker, sf, "Cell");
 
     assert(symbol);
-    assert(isCommonFabricSymbol(symbol));
+    assertFalse(isCommonFabricSymbol(symbol, checker));
   });
 
   it("rejects user symbols with Common Fabric names", () => {
@@ -263,7 +266,7 @@ describe("isCommonFabricSymbol", () => {
     const symbol = getInterfaceSymbol(checker, sf, "Cell");
 
     assert(symbol);
-    assertFalse(isCommonFabricSymbol(symbol));
+    assertFalse(isCommonFabricSymbol(symbol, checker));
   });
 });
 
@@ -390,7 +393,7 @@ describe("symbolDeclaresCommonFabricDefault", () => {
             title: Default<string, "Untitled">;
           }
         `,
-      });
+      }, ["commonfabric.d.ts"]);
 
       const sf = program.getSourceFile("/test.ts")!;
       const titleSymbol = getPropertySymbol(checker, sf, "MyArgs", "title");
@@ -412,7 +415,7 @@ describe("symbolDeclaresCommonFabricDefault", () => {
             theme?: Default<string, "dark">;
           }
         `,
-      });
+      }, ["commonfabric.d.ts"]);
 
       const sf = program.getSourceFile("/test.ts")!;
       const themeSymbol = getPropertySymbol(checker, sf, "Config", "theme");

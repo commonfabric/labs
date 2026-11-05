@@ -175,7 +175,7 @@ export default pattern((__cf_pattern_input) => {
                         }]
                 }
             }
-        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ limit: limit }), items.mapWithPattern(__cfPattern_1, {}), <span>Hidden</span>)}
+        } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ limit: limit }), items.mapWithPattern(__cfPattern_1), <span>Hidden</span>)}
       <p>{ifElse({
             type: "boolean"
         } as const satisfies __cfHelpers.JSONSchema, {

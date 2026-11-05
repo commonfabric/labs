@@ -65,6 +65,14 @@ function storedImports(sm: EmulatedStorageManager, id: string): unknown[] {
   return raw?.value?.imports ?? [];
 }
 
+/** The synthetic retention roots stored separately from authored imports. */
+function storedRoots(sm: EmulatedStorageManager, id: string): unknown[] {
+  const raw = (sm.open(space) as unknown as {
+    get(id: string): { value?: { roots?: unknown[] } } | undefined;
+  }).get(id);
+  return raw?.value?.roots ?? [];
+}
+
 /**
  * Each import edge is stored inline in the record: an object naming the
  * specifier and linking the imported module, not a link to a document of
@@ -135,8 +143,9 @@ describe("compile-cache write-back of a closure the store already holds", () => 
         space,
         sourceDocKey(ref.identity),
       ).getAsNormalizedFullLink().id;
-      // Two authored imports and the synthetic root link, stored inline.
-      expectInlineEdges(storedImports(first.sm, entrySourceId), 3);
+      // Authored imports and additive retention roots are stored separately.
+      expectInlineEdges(storedImports(first.sm, entrySourceId), 2);
+      expectInlineEdges(storedRoots(first.sm, entrySourceId), 1);
 
       // The source records are independent of the runtime version, so a
       // later version's write-back leaves them at the revision the first

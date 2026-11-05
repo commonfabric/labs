@@ -229,50 +229,54 @@ present; no stage handles a missing one.
 
 The authoritative ordering lives in `CFC_TRANSFORMER_STAGES` /
 `CFC_TRANSFORMER_STAGE_NAMES` in `src/cf-pipeline.ts`. Transformers always run
-in this order (26 stages):
+in this order (30 stages):
 
 1. `CastValidationTransformer`
 2. `EmptyArrayOfValidationTransformer`
-3. `OpaqueGetValidationTransformer`
-4. `PatternContextValidationTransformer`
-5. `MergeablePushValidationTransformer`
-6. `VerbReturnValidationTransformer`
-7. `IndirectBuilderCallbackValidationTransformer`
-8. `CfcPolicyAuthoringTransformer`
-9. `CfcPolicyOfValidationTransformer`
-10. `JsxExpressionSiteRouterTransformer`
-11. `AssertDiagnosticsTransformer`
-12. `LiftLoweringTransformer`
-13. `ClosureTransformer`
-14. `PatternOwnedExpressionSiteLoweringTransformer`
-15. `HelperOwnedExpressionSiteLoweringTransformer`
-16. `WriteAuthorizedByValidationTransformer`
-17. `PatternCallbackLoweringTransformer`
-18. `SchemaInjectionTransformer`
-19. `BuilderCallHoistingTransformer`
-20. `SchemaGeneratorTransformer`
-21. `VerbTierMarkTransformer`
-22. `ReactiveVariableForTransformer`
-23. `ModuleScopeShadowingTransformer`
-24. `ModuleScopeCfDataTransformer`
-25. `PatternCoverageTransformer`
-26. `ModuleScopeFunctionHardeningTransformer`
+3. `FactoryAuthoringValidationTransformer`
+4. `OpaqueGetValidationTransformer`
+5. `PatternContextValidationTransformer`
+6. `MergeablePushValidationTransformer`
+7. `VerbReturnValidationTransformer`
+8. `IndirectBuilderCallbackValidationTransformer`
+9. `CfcPolicyAuthoringTransformer`
+10. `CfcPolicyOfValidationTransformer`
+11. `JsxExpressionSiteRouterTransformer`
+12. `AssertDiagnosticsTransformer`
+13. `FrameworkProvidedForwardingTransformer`
+14. `SymbolicFactoryCallTransformer`
+15. `LiftLoweringTransformer`
+16. `ClosureTransformer`
+17. `PatternOwnedExpressionSiteLoweringTransformer`
+18. `HelperOwnedExpressionSiteLoweringTransformer`
+19. `WriteAuthorizedByValidationTransformer`
+20. `PatternCallbackLoweringTransformer`
+21. `SchemaInjectionTransformer`
+22. `FrameworkProvidedTransformer`
+23. `BuilderCallHoistingTransformer`
+24. `SchemaGeneratorTransformer`
+25. `VerbTierMarkTransformer`
+26. `ReactiveVariableForTransformer`
+27. `ModuleScopeShadowingTransformer`
+28. `ModuleScopeCfDataTransformer`
+29. `PatternCoverageTransformer`
+30. `ModuleScopeFunctionHardeningTransformer`
 The order is behaviorally significant (invariant C-002). Two ordering facts
 worth calling out:
 
-- `BuilderCallHoistingTransformer` (stage 19) runs **after**
-  `SchemaInjectionTransformer` (stage 18) so each builder call it relocates to
+- `BuilderCallHoistingTransformer` (stage 23) runs **after**
+  `SchemaInjectionTransformer` (stage 21) so each builder call it relocates to
   module scope already carries its injected schemas — see CT-1644 and
   `base/ts-transformers/docs/derive-to-lift-design.md`. This stage hoists
   `lift`, `handler`, and `pattern` builder calls. It absorbed and replaced the
   former separate `LiftHoistingTransformer` (which hoisted only `lift`); the
   even-older `BuilderCallbackHoistingTransformer` was deleted (#3864). Earlier
   spec revisions listing those two as distinct stages are obsolete.
-- The final five stages (22–26) run last so they operate on fully lowered and
+- The final five stages (26–30) run last so they operate on fully lowered and
   schema-injected output; they are documented stage by stage in §13–§17.
-- `MergeablePushValidationTransformer` (stage 5; #4450/#4505) is
+- `MergeablePushValidationTransformer` (stage 6; #4450/#4505) is
   validation-only and is documented with the other validators (§6.9).
-- `PatternCoverageTransformer` (stage 25) does no work unless pattern runtime
+- `PatternCoverageTransformer` (stage 29) does no work unless pattern runtime
   coverage is enabled. When enabled, it runs before
   `ModuleScopeFunctionHardeningTransformer` so coverage counters are added to
   authored bodies before hardening helpers are emitted (§16).
@@ -327,9 +331,6 @@ list — is the authoritative source. As of this writing it recognizes:
   `compileAndRun`, `navigateTo`, and the SQLite builtins `sqliteDatabase` /
   `sqliteQuery` (`sqliteQuery<Row>` additionally gets dedicated type-argument
   schema injection)
-- `patternTool` — recognized, but explicitly **not** a reactive origin
-  (`reactiveOrigin: false`)
-
 Detection is provenance-first:
 
 1. symbol resolution against Common Fabric declarations/imports
@@ -789,8 +790,8 @@ Diagnostics emitted in all modes:
   - direct `lift()` or `handler()` inside restricted context
   - special message for immediate `lift(fn)(args)` suggesting `computed()`
 - **Error** `standalone-function:reactive-operation`
-  - in standalone functions (except inline first arg to `patternTool`):
-    `computed(...)`, `lift(...)`, or reactive collection methods on reactive
+  - in standalone functions: `computed(...)`, `lift(...)`, or reactive
+    collection methods on reactive
     receivers
   - what counts as a standalone definition is read through transparent
     parentheses: `const helper = (() => ...)` is validated (and context-
@@ -895,18 +896,11 @@ Diagnostics emitted in all modes:
     imperative container roots" unsupported bucket. Guidance: use a supported
     array-method/value call, an event handler, or move the work into
     `computed(() => ...)`, module-scope `lift()`, or a helper.
-- **Error** `pattern-context:patterntool-requires-pattern`
-  - `patternTool(fn, ...)` where the first argument is a bare callback (arrow /
-    function expression, read through transparent parentheses) rather than a
-    `pattern(...)`. The runtime/transformer
-    auto-wrapping (`pattern(fn)`) and auto-capture were removed in CT-1655;
-    authors now wrap explicitly: `patternTool(pattern(fn), extraParams?)`. The
-    diagnostic is reported on the bare-callback argument.
 - **Error** `ses-callback:callable-capture`
   - a callback at an SES-self-contained boundary captures a **callable**
     declared in an enclosing function scope. The boundary kinds that require
     self-containment are `SES_SELF_CONTAINED_CALLBACK_BOUNDARIES`:
-    `event-handler`, `reactive-array-method`, `pattern-tool`, `pattern-builder`,
+    `event-handler`, `reactive-array-method`, `pattern-builder`,
     `render-builder`, `lift-applied`, `computed-builder`, `action-builder`,
     `lift-builder`, `handler-builder`. (`sqlite-row-label-rule` is deliberately
     excluded — `table()` evaluates its rule callback eagerly at pattern build
@@ -1137,7 +1131,7 @@ additionally gets the transformer-side validation above.
 
 ### 6.9 Mergeable-push validation
 
-`MergeablePushValidationTransformer` (stage 5; #4450, classification refined
+`MergeablePushValidationTransformer` (stage 6; #4450, classification refined
 in #4505) analyzes handler callbacks for reads of a mergeable collection
 followed by a push to the same collection, and reports:
 
@@ -1169,7 +1163,7 @@ shared work, indexed lookups, or named aggregates.
 
 ### 6.10 Verb-return validation
 
-`VerbReturnValidationTransformer` (stage 6; verb contract WS-C/C2) inspects
+`VerbReturnValidationTransformer` (stage 7; verb contract WS-C/C2) inspects
 authored `action(...)` and `handler(...)` calls whose result type argument is
 absent or explicitly `void` (`action`'s 2nd slot, `handler`'s 3rd), and
 reports:
@@ -1205,7 +1199,7 @@ decision rather than a gap:
 
 ### 6.11 Indirect builder callback validation
 
-`IndirectBuilderCallbackValidationTransformer` (stage 7) reports a callback a
+`IndirectBuilderCallbackValidationTransformer` (stage 8) reports a callback a
 trusted builder reaches through a reference the module verifier cannot follow:
 
 - **Error** `builder-callback:indirect-reference`
@@ -1638,11 +1632,10 @@ order:
 Strategy rebuilds — and the callbacks `PatternBuilder` assembles for them —
 carry the replaced nodes' source-map ranges (§11.5).
 
-There is no longer a separate patternTool closure strategy (CT-1655, #3862):
-`patternTool` now requires an explicit `pattern(...)` first argument (see
-§6.5 `pattern-context:patterntool-requires-pattern`), so the captures live on
-that authored pattern and the call is hoisted by `BuilderCallHoisting` (§11)
-rather than capture-rewritten here.
+Pattern factories used as nested values are closure-converted by the dedicated
+pattern strategy. Their public input remains callback argument 0; lexical
+captures are carried only in compiler-private callback argument 1 and bound by
+one emitted `.curry(captures)` call.
 
 ### 9.1 Capture model
 
@@ -1817,12 +1810,18 @@ Transform eligibility:
 Result shape:
 
 - `receiver.<method>(fn[, thisArg])` ->
-  `receiver.<method>WithPattern(pattern(callbackSchema, resultSchema, newCallback), paramsObj[, thisArg])`
+  `receiver.<method>WithPattern(boundPatternFactory)`
 - supported callback methods are `map`, `filter`, `flatMap`, `count`, `minBy`,
   and `maxBy`; the aggregate forms require explicit cell receivers in the
   public type surface
 - argument-free `count`, `sum`, `min`, and `max` remain direct builtin-building
   method calls
+- the PatternFactory's public callback schema includes
+  `{ element, index?, array? }`; when captures exist, the callback receives
+  them as argument 1 through `withPatternParamsSchema`, and the emitted call
+  binds them once with the internal `.curry(paramsObj)` operation
+- `thisArg` is unsupported for reactive callbacks; a second argument produces
+  a diagnostic instead of becoming list-node state
 - callback schema includes `{ element, index?, array? }` and adds `params` only
   when captures exist
 - `element` is the element of the receiver's list. A receiver that is itself
@@ -1905,21 +1904,14 @@ The runtime meaning of `materializerWriteInputPaths` is specified in
 
 If no captures are found, the lift-applied call is left unchanged.
 
-### 9.6 patternTool (no closure strategy)
+### 9.6 Pattern factories as values
 
-There is no patternTool closure strategy in the current pipeline. The former
-strategy auto-wrapped a bare callback as `pattern(fn)` and auto-captured
-module-scoped reactive values into the call; both were removed in CT-1655
-(#3862) in favor of an explicit, addressable pattern.
-
-Current behavior:
-
-- `patternTool(...)`'s first argument **must** be an explicit `pattern(...)`; a
-  bare callback reports `pattern-context:patterntool-requires-pattern` (§6.5).
-- the captures live on the authored `pattern(...)` (module-scoped reads are
-  absorbed by the pattern; per-instance values go in `extraParams`).
-- the bare `pattern(...)` inside `patternTool(...)` is hoisted to module scope
-  by `BuilderCallHoisting` (§11, argument-position pattern case).
+An authored `pattern(...)` used as a nested value is the tool value directly.
+The pattern strategy closure-converts its non-module lexical captures, records
+their private schema with `withPatternParamsSchema(callback, schema)`, and emits
+one `.curry(captures)` binding. The public input and private captures are never
+merged. A capture-free nested pattern has neither the private callback argument
+nor a `.curry(...)` call.
 
 ### 9.7 Pattern callback lowering
 
@@ -2332,6 +2324,11 @@ adjustments:
   function's parameter, `x[SELF]` is recorded as the path `$SELF`
   (`test/policy/capability-analysis.test.ts`, `test/pattern-input-self.test.ts`)
 - wildcard roots disable path shrinking for affected parameters/arguments
+- a recognized writer reached through a dynamic `.key(...)` keeps the last
+  statically known receiver prefix as a write path and also marks that prefix
+  wildcard. Literal keys after the dynamic selection do not claim false static
+  precision. The wildcard disables path shrinking while the retained write
+  path preserves the required write capability
 - the cell `resolveAsCell()` returns is an alias of its receiver: a read or a
   write through it, or through a `.key()` of it, is charged to the receiver's
   path, so `message.resolveAsCell().key("body").set(x)` writes
@@ -2535,7 +2532,7 @@ adjustments:
   routes are held in place at runtime by
   `patterns/dev/checks/kept-element-references.test.tsx`)
 - capability analysis reads through the operand recording an `assert(...)` body
-  wraps a method call's receiver in. `AssertDiagnosticsTransformer` (stage 11)
+  wraps a method call's receiver in. `AssertDiagnosticsTransformer` (stage 12)
   rewrites `event.details.includes(text)` so that `includes` is called on
   `__cfHelpers.assertCapture(parts, "event.details", event.details)` rather
   than on `event.details`. The recording hands its third argument straight
@@ -2852,13 +2849,13 @@ Parameters Are a Capability Contract").
 
 ## 11. Builder Call Hoisting And `__cfReg` Registration
 
-`BuilderCallHoistingTransformer` (stage 19, **after** SchemaInjection) hoists
+`BuilderCallHoistingTransformer` (stage 23, **after** SchemaInjection) hoists
 every reactive *builder call* to module scope and emits a single trailing
 content-addressing registration. It is the sole module-scope hoisting phase; it
 absorbed the former `LiftHoistingTransformer` (lift-only) and replaced the
 deleted `BuilderCallbackHoistingTransformer` (which hoisted builder callbacks
 and caused TDZ double-hoist bugs — #3864). Tickets: CT-1644 (lift), CT-1655
-(handler, pattern, patternTool), CT-1623 (`__cfReg` content addressing).
+(handler, pattern), CT-1623 (`__cfReg` content addressing).
 
 ### 11.1 What gets hoisted
 
@@ -2892,14 +2889,14 @@ time.
   ```
 
 - **Argument-position builder** (`pattern`): the bare `pattern(...)` call sits
-  in argument 0 of an enclosing `*WithPattern` call (`mapWithPattern`, etc.) or
-  `patternTool(...)`. Hoist argument 0 to `__cfPattern_N` and rewrite only that
+  in argument 0 of an enclosing `*WithPattern` call (`mapWithPattern`, etc.).
+  Hoist argument 0 to `__cfPattern_N` and rewrite only that
   argument, keeping the enclosing callee and remaining arguments intact. The
   top-level `export default pattern(...)` is a direct call, not an argument, so
   it is naturally excluded.
 
 Detection is provenance-driven via `detectCallKind` / `isHandlerAppliedCall` /
-`getWithPatternHoistablePatternCall` / `getPatternToolHoistablePatternCall`.
+`getWithPatternHoistablePatternCall`.
 
 ### 11.2 Why this runs after SchemaInjection
 
@@ -3317,7 +3314,7 @@ Special path:
 
 ### 12.1 Verb Tier Marks (Post-Generation)
 
-`VerbTierMarkTransformer` (stage 21) runs immediately after schema generation,
+`VerbTierMarkTransformer` (stage 25) runs immediately after schema generation,
 in the one window where its inference is pure syntax: handler factories are
 already hoisted with LITERAL bound-state schemas, the pattern call carries its
 generated result-schema literal, and the callback's returned identifiers are
@@ -3360,7 +3357,7 @@ topics patterns' transformed output.
 
 ## 13. Reactive Variable `.for()` Naming
 
-`ReactiveVariableForTransformer` (stage 22, first of the five trailing stages
+`ReactiveVariableForTransformer` (stage 26, first of the five trailing stages
 that run on fully lowered, schema-injected output — §3) derives stable,
 human-readable **causes** from authored names and attaches them to reactive
 values as `.for(<cause>, true)` calls. The cause is the runtime identity seed:
@@ -3572,10 +3569,9 @@ function emittedResult(value: Cell<number>) {
 Pattern-factory identifiers are exempt (`isPatternFactoryHelperExpression`),
 and retargeting is disabled inside arguments of pattern-factory /
 pattern-builder calls (`shouldPreserveStructuralCallArgumentReferences`), so
-`{ pattern: searchWeb }` descriptors and `patternTool(searchWeb)` stay
-untouched. Plain (non-cell) identifiers such as string handler params are
-never retargeted (test: "does not retarget plain handler params inside local
-object initializers").
+direct factory values and calls stay untouched. Plain (non-cell) identifiers
+such as string handler params are never retargeted (test: "does not retarget
+plain handler params inside local object initializers").
 
 ### 13.5 Emitted cause grammar
 
@@ -3625,10 +3621,10 @@ preserved from the original initializer (`preserveNodeSourceMap`).
 
 ### 13.6 Ordering and the hoisting interplay
 
-Running at stage 22 means causes are derived from the final lowered shape:
+Running at stage 26 means causes are derived from the final lowered shape:
 `computed`/`action`/JSX expression sites have already become lift/handler
-applications and IIFE-local consts (stages 9–14), schemas are injected and
-generated (18, 20), and builder calls are hoisted (19). Two concrete
+applications and IIFE-local consts (stages 10–17), schemas are injected and
+generated (21, 24), and builder calls are hoisted (23). Two concrete
 dependencies on `BuilderCallHoistingTransformer` (§11):
 
 - Hoisted module-scope consts are named `__cfLift_N` / `__cfHandler_N` /
@@ -3670,7 +3666,7 @@ The emitted-shape contract is pinned primarily by the "adds stable … causes"
 
 ## 14. Module-Scope Shadow Guards
 
-`ModuleScopeShadowingTransformer` (stage 23,
+`ModuleScopeShadowingTransformer` (stage 27,
 `src/transformers/module-scope-shadowing.ts`) inserts one module-scope
 `const <name> = undefined;` declaration for each name in
 `SHADOWED_FACTORY_BINDINGS` — as of this writing `define`, `runtimeDeps`, and
@@ -3701,7 +3697,7 @@ source file the pipeline visits receives the guards, including:
 
 - files with no Common Fabric imports or builders at all, and
 - **function-free** files, where the guards are the only synthetic addition; a
-  file with top-level functions also gets stage-26 hardening (§17).
+  file with top-level functions also gets stage-30 hardening (§17).
 
 The stage reads no cross-stage state and never reports diagnostics: its
 `transform()` touches only `context.factory` and `context.sourceFile`.
@@ -3745,13 +3741,13 @@ verifier compares against (§14.4). The transformer performs no dedupe or
 collision check: it does not look for existing declarations of the guard names
 before inserting.
 
-### 14.3 Ordering (why stage 23)
+### 14.3 Ordering (why stage 27)
 
-The stage sits in the trailing module-scope emission group (23
-`ModuleScopeShadowing`, 24 `ModuleScopeCfData`, 26
+The stage sits in the trailing module-scope emission group (27
+`ModuleScopeShadowing`, 28 `ModuleScopeCfData`, 30
 `ModuleScopeFunctionHardening`), which runs after lowering and schema work is
 complete (§3). It is purely syntactic — no checker, `typeRegistry`, or
-capability state — so no output from schema generation (stage 20) feeds it;
+capability state — so no output from schema generation (stage 24) feeds it;
 conversely the
 later module-scope stages leave the guards untouched: `ModuleScopeCfData` never
 wraps them (`undefined` is not a data candidate — every guard appears verbatim
@@ -3836,7 +3832,7 @@ corpus, not the verifier, is what pins them today.
 
 ## 15. Module-Scope `__cf_data` Wrapping (SES Plain-Data Snapshots)
 
-`ModuleScopeCfDataTransformer` (stage 24,
+`ModuleScopeCfDataTransformer` (stage 28,
 `src/transformers/module-scope-cf-data.ts`) wraps qualifying module-scope
 initializers and default exports in `__cfHelpers.__cf_data(...)`. The wrap
 exists for the runner's SES sandbox: the module verifier only admits top-level
@@ -3884,7 +3880,7 @@ An initializer is wrapped when `shouldWrapTopLevelExpression` accepts it.
 First, two negative gates: initializers asserted to `any`/`unknown` (`as any`,
 `<unknown>expr`, including parenthesized forms) are never wrapped
 (`isAnyLikeTypeAssertion`), and arrow functions, function expressions, and
-class expressions are never wrapped (functions are stage 26's business, see
+class expressions are never wrapped (functions are stage 30's business, see
 §15.4). Classification then looks through non-semantic wrappers —
 parentheses, `as`, `satisfies`, `!`, angle-bracket assertions
 (`unwrapExpression`, `src/utils/expression.ts`) — while the emitted wrap
@@ -3959,7 +3955,7 @@ const matcher = /^[a-z]+$/;
 const tags = new Set(["a", "b"]);
 const passthrough = lift((value: string) => value);
 
-// After stage 24 (abridged from test/transform.test.ts):
+// After stage 28 (abridged from test/transform.test.ts):
 const model = __cfHelpers.__cf_data(schema({ type: "string" } as const));
 const days = __cfHelpers.__cf_data(Array.from({ length: 3 }, (_, i) => String(i + 1)));
 const matcher = __cfHelpers.__cf_data(/^[a-z]+$/);
@@ -3969,7 +3965,7 @@ const passthrough = lift((value: string) => value); // builder call — excluded
 
 The most common wrap in fixture output is the schema literal §12 materializes:
 `toSchema<T>()` becomes `{...} as const satisfies __cfHelpers.JSONSchema`,
-which stage 24 then wraps whole — assertions preserved inside the call:
+which stage 28 then wraps whole — assertions preserved inside the call:
 
 ```ts
 // Shown at module scope.
@@ -4023,25 +4019,25 @@ trust-requiring sites check the trusted brand, not the structural shape
 (`runtime/runner/src/builder/pattern-metadata.ts`,
 `runtime/runner/src/pattern-manager.ts`).
 
-### 15.4 Why stage 24
+### 15.4 Why stage 28
 
-- **After `SchemaGeneratorTransformer` (stage 20):** materialized schema
+- **After `SchemaGeneratorTransformer` (stage 24):** materialized schema
   literals are object literals at module scope; running after materialization
   is what gets them wrapped (§15.2 fixtures). Before it, the authored
   `toSchema<T>()` call matches no wrap arm, so the literal would reach the
   verifier raw and be rejected as mutable top-level data.
-- **After `BuilderCallHoistingTransformer` (stage 19):** the hoisted
-  `const __cfLift_N = __cfHelpers.lift(...)` consts exist by stage 24 and are
+- **After `BuilderCallHoistingTransformer` (stage 23):** the hoisted
+  `const __cfLift_N = __cfHelpers.lift(...)` consts exist by stage 28 and are
   excluded by the trusted-builder arm; the trailing `__cfReg({...})` call is
   an expression statement and out of scope (§15.1).
-- **Before `ModuleScopeFunctionHardeningTransformer` (stage 26):** hardening
+- **Before `ModuleScopeFunctionHardeningTransformer` (stage 30):** hardening
   rewrites top-level function initializers to `__cfHardenFn(...)` calls and
   declares `__cfHardenFn` as a top-level function. Had cf-data run afterwards,
   those calls would match the local-helper-call arm and function values would
   be mis-wrapped into throwing `__cf_data` snapshots. (Derived from
   `isTopLevelLocalHelperCall` plus the hardening emission; no dedicated
   regression test pins this ordering.)
-- The relative order against `ModuleScopeShadowingTransformer` (stage 23) is
+- The relative order against `ModuleScopeShadowingTransformer` (stage 27) is
   not observably load-bearing: the shadow guards' `undefined` initializers
   match no wrap arm (derived; guards in
   `src/transformers/module-scope-shadowing.ts`).
@@ -4122,7 +4118,7 @@ this removal no code in the package references the identifier at all.
 
 ## 16. Pattern Runtime Coverage Instrumentation
 
-`PatternCoverageTransformer` (stage 25) injects statement-level coverage
+`PatternCoverageTransformer` (stage 29) injects statement-level coverage
 counters into authored runtime code. It is off by default and is the only
 stage gated on a harness-supplied option rather than on source content: its
 `filter` requires `TransformationOptions.patternCoverage` to be set and the
@@ -4257,7 +4253,7 @@ line 1 registers (after that test's +10/+100 `mapSpan`):
   startLine: 101, endLine: 101, startColumn: 1, endColumn: 16 }
 ```
 
-### 16.4 Why stage 25 (ordering)
+### 16.4 Why stage 29 (ordering)
 
 Coverage runs second-to-last: after every lowering, schema, and module-scope
 rewriting stage, so counters attach to the final shape of authored bodies
@@ -4265,10 +4261,10 @@ rewriting stage, so counters attach to the final shape of authored bodies
 records callback body lines after the full pipeline" in
 `runtime/runner/test/pattern-coverage.test.ts`), with the original-node
 fallback of §16.2 recovering authored positions for rebuilt statements. It
-runs **before** `ModuleScopeFunctionHardeningTransformer` (stage 26) for the
+runs **before** `ModuleScopeFunctionHardeningTransformer` (stage 30) for the
 reason stated on the stage spec itself (`src/cf-pipeline.ts`): "Coverage runs
 before function hardening. That keeps coverage counters out of the hardening
-helper output." — i.e. the synthetic hardening helpers emitted by stage 26
+helper output." — i.e. the synthetic hardening helpers emitted by stage 30
 never acquire counters, so coverage reports only authored code. The stage
 list itself is pinned by `test/pipeline-regressions.test.ts`.
 
@@ -4403,7 +4399,7 @@ counters.
 
 ## 17. Module-Scope Function Hardening And Verified-Binding Annotation
 
-`ModuleScopeFunctionHardeningTransformer` (stage 26, **last**) rewrites a
+`ModuleScopeFunctionHardeningTransformer` (stage 30, **last**) rewrites a
 module's top level so that every surviving module-scope function value is
 frozen at module-evaluation time, and so that CFC trusted bindings carry a
 machine-readable binding identity. It emits up to two module-local helper
@@ -4560,6 +4556,24 @@ The same stage stamps CFC **trusted bindings** with their authoring identity,
 so a `WriteAuthorizedBy` claim embedded in a schema can later be matched to
 the live handler that performs the write.
 
+**Which bindings are trusted.** `collectWriteAuthorizedByBindingNames` scans
+the stage-23 AST for type references to `WriteAuthorizedBy`,
+`TrustedActionWrite`, or `TrustedActionWriteWithIntegrity` (binding position
+= type argument 1 for all three, seeded in
+`discoverWriteAuthorizedByBindingPositions`), plus any local type aliases
+that forward a type parameter into such a position (computed to a fixed
+point, so alias-of-alias works — `collectAliasBindingPositions`; exercised by
+`test/cfc-authoring.test.ts` "lowers alias-referenced trusted builder
+bindings"). Within each binding-position type argument, every `typeof x`
+type-query identifier contributes `x` to the trusted-name set
+(`collectTypeQueryIdentifiers`). Detection is purely name-based (no
+symbol/import resolution), and it sees only type references **still present
+after stages 18–20**: a reference that lived solely inside a
+`toSchema<WriteAuthorizedBy<…>>()` type argument was already replaced by the
+schema literal in stage 21 and contributes nothing (verified by direct
+pipeline run — such a module gets a plain `__cfHardenFn` wrap and no
+annotation), whereas references surviving in `interface`/type-alias
+declarations or un-lowered type arguments do.
 **Which bindings are trusted.** A binding is trusted in the module that
 DECLARES it, whichever module wrote the claim that names it: the schema names
 the declaring module (§12), and the runtime verifies a write against that
@@ -4768,10 +4782,10 @@ __cfBindVerifiedBinding(saveTitle, {
 
 ### 17.5 Why it runs last
 
-The stage-26 slot (after everything, and specifically after
+The stage-30 slot (after everything, and specifically after
 `PatternCoverageTransformer`) is behaviorally significant (C-002):
 
-- **After coverage (stage 25):** "Coverage runs before function hardening.
+- **After coverage (stage 29):** "Coverage runs before function hardening.
   That keeps coverage counters out of the hardening helper output"
   (`src/cf-pipeline.ts` stage-list comment). Coverage inserts
   `globalThis.__cfPatternCoverage?.hit(…)` statements into function bodies
@@ -4781,7 +4795,7 @@ The stage-26 slot (after everything, and specifically after
   executions as pattern coverage. The verifier separately allows the
   coverage-hit statements themselves at module scope
   (`isPatternCoverageHitStatement`, `compiled-bundle-verifier.ts`).
-- **After hoisting (stage 19) and schema generation (stage 20):** the
+- **After hoisting (stage 23) and schema generation (stage 24):** the
   module-scope surface it freezes/annotates is final — hoisted
   `__cfLift_N`/`__cfPattern_N` consts exist (and stay unwrapped, being call
   initializers), and trusted-name discovery sees the post-lowering AST
@@ -4892,15 +4906,15 @@ lists).
   verifier regardless (`module-loading-verifier-and-engine-design.md`,
   security-classification list).
 - Trusted names referenced **only** via `toSchema<…>()` type arguments get a
-  schema-side claim but no binding annotation, because stage 18 erased the
-  reference before stage 26 ran (direct pipeline run; compare
+  schema-side claim but no binding annotation, because stage 21 erased the
+  reference before stage 30 ran (direct pipeline run; compare
   `test/cfc-authoring.test.ts` "preserves the local binding identity through
   schema emission", which asserts only `__ctWriterIdentityOf`).
 - A trusted binding whose initializer is neither a call nor a direct
   function (e.g. a literal) is skipped entirely — trusted-ness alone does
   not annotate (`transformVariableStatement` gate on `isTrustedCallable ||
   isDirectFunction`). Malformed `WriteAuthorizedBy` usage was already
-  diagnosed at stage 16 (§6.8).
+  diagnosed at stage 19 (§6.8).
 - The hardening wrapper preserves evaluation semantics (`return fn`), so
   wrapped initializers remain direct-function-classifiable to the verifier,
   while debug `fn.src` is resolved independently through the compiler sidecar

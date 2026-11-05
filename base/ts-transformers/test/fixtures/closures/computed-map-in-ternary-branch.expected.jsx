@@ -201,7 +201,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 // FIXTURE: computed-map-in-ternary-branch
 // Verifies: a computed array used inside a ternary JSX branch stays pattern-lowered
 //   const adminData = computed(() => [...people.get()].sort(...).map(...))
-//   adminData.map((entry) => <li>...) → adminData.mapWithPattern(pattern(...), {})
+//   adminData.map((entry) => <li>...) → adminData.mapWithPattern(pattern(...))
 //   showAdmin ? <div>...</div> : null → ifElse(showAdmin, <div>...</div>, null)
 // Context: The outer `people.map(...)` is over a pattern input cell, while the
 //   inner `adminData.map(...)` is over compute-owned data but still lowered in
@@ -215,7 +215,7 @@ export default pattern((__cf_pattern_input) => {
     const count = __cfLift_2({ people: people }).for("count", true);
     return {
         [UI]: (<div>
-        {people.mapWithPattern(__cfPattern_1, {})}
+        {people.mapWithPattern(__cfPattern_1)}
         {__cfHelpers.ifElse({
             type: "boolean",
             asCell: ["cell"]
@@ -266,7 +266,7 @@ export default pattern((__cf_pattern_input) => {
         } as const satisfies __cfHelpers.JSONSchema, showAdmin, <div>
               <span>{__cfLift_3({ count: count })}</span>
               <ul>
-                {adminData.mapWithPattern(__cfPattern_2, {})}
+                {adminData.mapWithPattern(__cfPattern_2)}
               </ul>
             </div>, null)}
       </div>),

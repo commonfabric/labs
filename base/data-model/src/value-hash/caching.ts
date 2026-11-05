@@ -8,7 +8,11 @@ import { LRUCache } from "@commonfabric/collections/cache";
 
 import { isDeepFrozen } from "@/deep-freeze.ts";
 import type { FabricHash } from "@/fabric-primitives";
-import type { FabricContainerValue, FabricPrimitive } from "@/interface.ts";
+import type {
+  FabricContainerValue,
+  FabricFactory,
+  FabricPrimitive,
+} from "@/interface.ts";
 
 import { ValueHasher } from "./ValueHasher.ts";
 
@@ -69,7 +73,7 @@ export const NEGATIVE_ZERO_HASH = ValueHasher.computeHash(-0);
  * if the object is not deep-frozen.
  */
 export function cachedFrozenObjectHashElseUndefined(
-  value: FabricContainerValue | FabricPrimitive,
+  value: FabricContainerValue | FabricFactory | FabricPrimitive,
 ): FabricHash | undefined {
   // Even if we don't know that `value` is deep-frozen, it's okay to look it up
   // in the cache for same (we just won't find it if it's not deep-frozen). And

@@ -88,6 +88,7 @@ import {
   scopeInsideUnionError,
   scopeUnionUnreadError,
 } from "../scope-placement.ts";
+import { containsFactoryType } from "./factory-formatter.ts";
 import {
   EVIDENCE_LABELS,
   POLICY_READ_IN_PART,
@@ -1342,6 +1343,12 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   supportsType(type: ts.Type, context: GenerationContext): boolean {
+    if (
+      (type.flags & ts.TypeFlags.Union) !== 0 &&
+      containsFactoryType(type, context.typeChecker)
+    ) {
+      return false;
+    }
     const aliasName = (type as TypeWithInternals).aliasSymbol?.name;
     if (scopeForWrapperName(aliasName) !== undefined) {
       return true;
@@ -1405,7 +1412,12 @@ export class CommonFabricFormatter implements TypeFormatter {
     // Fallback: check via aliasSymbol for Default<T> when typeToTypeNode expanded the alias.
     // typeToTypeNode expands Default<T,V> to its branded union representation, losing the
     // "Default" type node. The type object itself still carries aliasSymbol = Default.
-    if (isDefaultAliasSymbol((type as TypeWithInternals).aliasSymbol)) {
+    if (
+      isDefaultAliasSymbol(
+        (type as TypeWithInternals).aliasSymbol,
+        context.typeChecker,
+      )
+    ) {
       return true;
     }
 
@@ -1623,7 +1635,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     // and V from aliasTypeArguments[1] so the default value is preserved in the schema.
     const typeWithAlias = type as TypeWithInternals;
     if (
-      isDefaultAliasSymbol(typeWithAlias.aliasSymbol) &&
+      isDefaultAliasSymbol(typeWithAlias.aliasSymbol, context.typeChecker) &&
       typeWithAlias.aliasTypeArguments &&
       typeWithAlias.aliasTypeArguments.length >= 1
     ) {
@@ -2382,11 +2394,21 @@ export class CommonFabricFormatter implements TypeFormatter {
 
     const syntheticNodeNeedsHelp = !!innerTypeNode && !!isSyntheticNode &&
       this.#innerTypeNeedsNodeAssistance(innerType, context.typeChecker);
+    const registeredSyntheticInnerType = innerTypeNode
+      ? context.typeRegistry?.get(innerTypeNode)
+      : undefined;
+    const syntheticNodeHasRegisteredType = registeredSyntheticInnerType !==
+        undefined &&
+      !this.#isUnusableInnerType(registeredSyntheticInnerType);
 
     // Prefer real source nodes, but allow synthetic nodes when the resolved type
-    // is widened/unusable and the node still carries useful structure.
+    // is widened/unusable and the node still carries useful structure. A
+    // compiler-owned registry pairing is also authoritative: node syntax can
+    // retain Default/CFC semantics erased from the checker Type, while the
+    // paired Type preserves exact nested generic instantiations.
     const shouldPassTypeNode = innerTypeNode && !innerTypeIsGeneric &&
-      (!isSyntheticNode || syntheticNodeNeedsHelp);
+      (!isSyntheticNode || syntheticNodeNeedsHelp ||
+        syntheticNodeHasRegisteredType);
 
     // Check for schema hints on the current typeNode and propagate to child context.
     // This allows identity-only/property-only array access patterns to avoid

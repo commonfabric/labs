@@ -4,10 +4,17 @@ import {
   isFabricSpecialObject,
   refuseFabricInstance,
 } from "@commonfabric/data-model";
+import { isAdmittedFabricFactory } from "@commonfabric/data-model/fabric-factory";
 import { type FactoryInput, isPattern, isReactive } from "./types.ts";
 import { noteDerivedCopy } from "./pattern-metadata.ts";
 import { isCell } from "../cell.ts";
 import { isCellResultForDereferencing } from "../query-result-proxy.ts";
+import {
+  createFactoryTraversalContext,
+  type FactoryTraversalContext,
+  mapFactoryForTraversal,
+  visitFactoryForTraversal,
+} from "./factory-traversal.ts";
 
 /**
  * Traverse a value, _not_ entering cells, rebuilding each container reached
@@ -21,8 +28,16 @@ export function traverseValue(
   unprocessedValue: FactoryInput<any>,
   fn: (value: any) => any,
   seen: Set<FactoryInput<any>> = new Set(),
+  factoryContext: FactoryTraversalContext = createFactoryTraversalContext(),
 ): any {
-  return walkValue(unprocessedValue, fn, seen, true);
+  return walkValue(
+    unprocessedValue,
+    fn,
+    seen,
+    factoryContext,
+    true,
+    false,
+  );
 }
 
 /**
@@ -35,7 +50,14 @@ export function visitValue(
   value: FactoryInput<any>,
   fn: (value: any) => any,
 ): void {
-  walkValue(value, fn, new Set(), false);
+  walkValue(
+    value,
+    fn,
+    new Set(),
+    createFactoryTraversalContext(),
+    false,
+    false,
+  );
 }
 
 /**
@@ -69,11 +91,68 @@ function walkValue(
   unprocessedValue: FactoryInput<any>,
   fn: (value: any) => any,
   seen: Set<FactoryInput<any>>,
+  factoryContext: FactoryTraversalContext,
   rebuild: boolean,
+  insideFactoryState: boolean,
 ): any {
+  if (
+    insideFactoryState && typeof unprocessedValue === "function" &&
+    !isAdmittedFabricFactory(unprocessedValue)
+  ) {
+    throw new TypeError(
+      "Arbitrary functions are not valid factory state values",
+    );
+  }
+
   // Perform operation, replaces value if non-undefined is returned
   const result = fn(unprocessedValue);
   const value = result !== undefined ? result : unprocessedValue;
+
+  if (
+    insideFactoryState && typeof value === "function" &&
+    !isAdmittedFabricFactory(value)
+  ) {
+    throw new TypeError(
+      "Arbitrary functions are not valid factory state values",
+    );
+  }
+
+  // Factory callables carry their value-bearing contents in hidden state,
+  // never in enumerable function properties. Transforming traversals rebuild
+  // that state through the runner-owned derivation path; read-only traversals
+  // visit the same fields without manufacturing another callable.
+  if (isAdmittedFabricFactory(value)) {
+    if (rebuild) {
+      return mapFactoryForTraversal(
+        value,
+        (nested) =>
+          walkValue(
+            nested as FactoryInput<any>,
+            fn,
+            seen,
+            factoryContext,
+            true,
+            true,
+          ),
+        factoryContext,
+      );
+    }
+    visitFactoryForTraversal(
+      value,
+      (nested) => {
+        walkValue(
+          nested as FactoryInput<any>,
+          fn,
+          seen,
+          factoryContext,
+          false,
+          true,
+        );
+      },
+      factoryContext,
+    );
+    return value;
+  }
 
   // Prevent infinite recursion
   if (seen.has(value) || seen.has(result)) return value;
@@ -122,17 +201,42 @@ function walkValue(
         // By index, skipping holes, as the rebuild's `map()` does: a hole is
         // no value for `fn` to see.
         for (let index = 0; index < elements.length; index++) {
-          if (index in elements) walkValue(elements[index], fn, seen, false);
+          if (index in elements) {
+            walkValue(
+              elements[index],
+              fn,
+              seen,
+              factoryContext,
+              false,
+              insideFactoryState,
+            );
+          }
         }
         return value;
       }
-      return elements.map((v) => walkValue(v, fn, seen, true));
+      return elements.map((v) =>
+        walkValue(
+          v,
+          fn,
+          seen,
+          factoryContext,
+          true,
+          insideFactoryState,
+        )
+      );
     } else {
       const record = value as Record<string, unknown>;
       if (!rebuild) {
         for (const key in record) {
           if (Object.hasOwn(record, key)) {
-            walkValue(record[key], fn, seen, false);
+            walkValue(
+              record[key],
+              fn,
+              seen,
+              factoryContext,
+              false,
+              insideFactoryState,
+            );
           }
         }
         return value;
@@ -140,7 +244,18 @@ function walkValue(
       const copy: Record<string, unknown> = {};
       for (const key in record) {
         if (Object.hasOwn(record, key)) {
-          defineOwn(copy, key, walkValue(record[key], fn, seen, true));
+          defineOwn(
+            copy,
+            key,
+            walkValue(
+              record[key],
+              fn,
+              seen,
+              factoryContext,
+              true,
+              insideFactoryState,
+            ),
+          );
         }
       }
       // A pattern copied here must keep its link back to the original

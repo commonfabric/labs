@@ -1,9 +1,17 @@
-import { computed, NAME, pattern, UI, wish, Writable } from "commonfabric";
+import {
+  computed,
+  NAME,
+  pattern,
+  type PatternFactory,
+  UI,
+  wish,
+  Writable,
+} from "commonfabric";
 import { type SummaryIndexEntry } from "../../system/summary-index/summary-index.tsx";
 
 type SummaryIndexResult = {
   entries: SummaryIndexEntry[];
-  search: { pattern: unknown; extraParams: { entries: SummaryIndexEntry[] } };
+  search: PatternFactory<{ query: string }, Writable<SummaryIndexEntry>[]>;
 };
 
 export default pattern<Record<string, never>>((_) => {

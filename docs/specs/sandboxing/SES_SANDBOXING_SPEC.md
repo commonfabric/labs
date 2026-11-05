@@ -523,8 +523,9 @@ By the time this hoisting pass runs:
 - `action(...)` has already been rewritten to `handler(...)(params)`
 - closure lowering has already converted local closed-over values into explicit
   callback parameters / params objects where possible
-- `mapWithPattern(...)` and `patternTool(...)` have already been expressed as
-  inner-scope `pattern(...)` forms with explicit captures
+- `mapWithPattern(...)` and nested factory values have already been expressed as
+  hoisted `pattern(...)` forms whose explicit captures are bound in private
+  callback argument 1
 
 The hoisting pass therefore only cares about what still crosses the callback
 boundary after those rewrites: remaining free variables, imported symbols, and
@@ -649,10 +650,16 @@ export const MyPattern = pattern<Input, Output>((props) => {
 #### 4.3.3 Pattern-Based Inner-Scope Forms
 
 The `pattern(...)` forms created for `mapWithPattern(...)`,
+`filterWithPattern(...)`, and `flatMapWithPattern(...)` carry public list input
+as callback argument 0 and explicit captures as private callback argument 1.
+The builder call is hoisted and capturing sites retain one private
+`.curry(params)` tail.
 `filterWithPattern(...)`, `flatMapWithPattern(...)`,
-`groupByWithPattern(...)`, `keyByWithPattern(...)`, and `patternTool(...)`
-remain inner-scope constructs in this phase. They already carry their captures
-explicitly and are not the target of the module-hoisting rule above.
+`groupByWithPattern(...)`, and `keyByWithPattern(...)` remain inner-scope
+constructs in this phase. They already carry their captures explicitly and are
+not the target of the module-hoisting rule above. `patternTool(...)` is removed;
+an inline pattern used as a tool follows the same closure-conversion and
+hoisting rules as every other nested pattern.
 
 **Before:**
 ```typescript
@@ -1010,9 +1017,8 @@ These runtime modules may export:
 
 - module-scope trusted builder entrypoints: `pattern`, `lift`, `handler`,
   `action`, `computed`
-- callback-scope helper entrypoints such as `patternTool(...)`, which remain
-  valid inside verified pattern callbacks but are not part of the module-scope
-  trusted-builder allowlist
+- direct and metadata-wrapped PatternFactory tool values, which require no
+  callback-scope helper entrypoint
 - cell constructors and helpers: `Cell`, `Writable`, `OpaqueCell`, `Stream`,
   `ComparableCell`, `ReadonlyCell`, `WriteonlyCell`, `cell`, `equals`
 - graph-construction built-ins: `str`, `ifElse`, `when`, `unless`, `llm`,
@@ -1024,11 +1030,8 @@ The important distinction is that these are graph-building or deferred runtime
 constructors. They may be used during module load to build the frozen reactive
 graph, but they do not directly perform host effects merely by being present as
 imports. Host-visible effects happen later, under the runtime's node execution
-model, not during authored module evaluation. `patternTool(...)` is the main
-exception to the "usable during module load" shorthand here: it may be exported
-by trusted runtime modules, but it is only allowed inside verified pattern
-callbacks after the earlier pattern transforms. These imports are not valid
-from within `__cfHelpers.__cf_data(...)` initializers.
+model, not during authored module evaluation. These imports are not valid from
+within `__cfHelpers.__cf_data(...)` initializers.
 
 Any shared value exposed by a trusted runtime module MUST be transitively
 hardened before Compartment evaluation begins. That export graph is reused across
@@ -2036,9 +2039,9 @@ The hoist target must be the builder factory:
   `handler(eventSchema, stateSchema, fn)` and leaves the `(params)` call in
   place
 
-Generated `pattern(...)` forms for `*WithPattern(...)` and `patternTool(...)`
-remain inner-scope transforms in this phase rather than becoming module-level
-hoists.
+Generated `pattern(...)` forms for `*WithPattern(...)` become named module-level
+builder artifacts; bound factory state retains private captures at the call
+site.
 
 ### Phase 2: Trusted Runtime Verification at the Module Body Boundary
 

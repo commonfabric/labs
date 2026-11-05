@@ -22,10 +22,13 @@ import type {
   FabricPrimitiveSchemaType,
   FactoryInput,
   HandlerFactory,
+  HandlerFactorySchema,
   JSONSchema,
   ModuleFactory,
+  ModuleFactorySchema,
   OpaqueCell,
   PatternFactory,
+  PatternFactorySchema,
   Reactive,
   ReadonlyCell,
   SELF,
@@ -141,10 +144,11 @@ type MergeRefSiteWithTargetGeneric<
   Root extends JSONSchema,
   Depth extends DepthLevel,
   WrapCells extends boolean,
+  FactoryDepth extends FactoryDepthLevel,
 > = RefSite extends { $ref: string }
   ? MergeSchemas<Omit<RefSite, "$ref">, Target> extends
     infer Merged extends JSONSchema
-    ? SchemaInner<Merged, Root, Depth, WrapCells>
+    ? SchemaInner<Merged, Root, Depth, WrapCells, FactoryDepth>
   : never
   : never;
 
@@ -153,9 +157,15 @@ type SchemaAnyOf<
   Root extends JSONSchema,
   Depth extends DepthLevel,
   WrapCells extends boolean,
+  FactoryDepth extends FactoryDepthLevel,
 > = {
-  [I in keyof Schemas]: Schemas[I] extends JSONSchema
-    ? SchemaInner<Schemas[I], Root, DecrementDepth<Depth>, WrapCells>
+  [I in keyof Schemas]: Schemas[I] extends JSONSchema ? SchemaInner<
+      Schemas[I],
+      Root,
+      DecrementDepth<Depth>,
+      WrapCells,
+      FactoryDepth
+    >
     : never;
 }[number];
 
@@ -164,20 +174,128 @@ type SchemaArrayItems<
   Root extends JSONSchema,
   Depth extends DepthLevel,
   WrapCells extends boolean,
-> = Items extends JSONSchema
-  ? Array<SchemaInner<Items, Root, DecrementDepth<Depth>, WrapCells>>
+  FactoryDepth extends FactoryDepthLevel,
+> = Items extends JSONSchema ? Array<
+    SchemaInner<
+      Items,
+      Root,
+      DecrementDepth<Depth>,
+      WrapCells,
+      FactoryDepth
+    >
+  >
   : unknown[];
+
+type FactorySchemaKind =
+  | PatternFactorySchema["kind"]
+  | ModuleFactorySchema["kind"]
+  | HandlerFactorySchema["kind"];
+
+type IsBroadFactorySchema<Factory> = [Factory] extends [{
+  kind: FactorySchemaKind;
+}] ? [PatternFactorySchema] extends [
+    Extract<Factory, { kind: "pattern" }>,
+  ] ? true
+  : [ModuleFactorySchema] extends [
+    Extract<Factory, { kind: "module" }>,
+  ] ? true
+  : [HandlerFactorySchema] extends [
+    Extract<Factory, { kind: "handler" }>,
+  ] ? true
+  : false
+  : true;
+
+type SchemaFactoryContract<
+  Factory,
+  Depth extends DepthLevel,
+  ChildFactoryDepth extends FactoryDepthLevel,
+> = Factory extends {
+  kind: "pattern";
+  argumentSchema: infer Argument extends JSONSchema;
+  resultSchema: infer Result extends JSONSchema;
+} ? PatternFactory<
+    SchemaInner<
+      Argument,
+      Argument,
+      DecrementDepth<Depth>,
+      false,
+      ChildFactoryDepth
+    >,
+    SchemaInner<
+      Result,
+      Result,
+      DecrementDepth<Depth>,
+      true,
+      ChildFactoryDepth
+    >
+  >
+  : Factory extends {
+    kind: "module";
+    argumentSchema: infer Argument extends JSONSchema;
+    resultSchema: infer Result extends JSONSchema;
+  } ? ModuleFactory<
+      SchemaInner<
+        Argument,
+        Argument,
+        DecrementDepth<Depth>,
+        false,
+        ChildFactoryDepth
+      >,
+      SchemaInner<
+        Result,
+        Result,
+        DecrementDepth<Depth>,
+        true,
+        ChildFactoryDepth
+      >
+    >
+  : Factory extends {
+    kind: "handler";
+    contextSchema: infer Context extends JSONSchema;
+    eventSchema: infer Event extends JSONSchema;
+  } ? HandlerFactory<
+      SchemaInner<
+        Event,
+        Event,
+        DecrementDepth<Depth>,
+        false,
+        ChildFactoryDepth
+      >,
+      SchemaInner<
+        Context,
+        Context,
+        DecrementDepth<Depth>,
+        false,
+        ChildFactoryDepth
+      >
+    >
+  : never;
+
+type SchemaFactory<
+  Factory,
+  Depth extends DepthLevel,
+  FactoryDepth extends FactoryDepthLevel,
+> = FactoryDepth extends 0
+  ? IsBroadFactorySchema<Factory> extends true ? unknown
+  : SchemaFactoryContract<Factory, Depth, 0>
+  : SchemaFactoryContract<
+    Factory,
+    Depth,
+    DecrementFactoryDepth<FactoryDepth>
+  >;
 
 type SchemaCore<
   T extends JSONSchema,
   Root extends JSONSchema,
   Depth extends DepthLevel,
   WrapCells extends boolean,
+  FactoryDepth extends FactoryDepthLevel,
 > = T extends { $ref: "#" } ? SchemaInner<
     Omit<Root, "asCell">,
     Root,
     DecrementDepth<Depth>,
-    WrapCells
+    WrapCells,
+    FactoryDepth
   >
   : T extends { $ref: infer RefStr extends string }
     ? MergeRefSiteWithTargetGeneric<
@@ -185,11 +303,14 @@ type SchemaCore<
       ResolveRef<RefStr, Root, DecrementDepth<Depth>>,
       Root,
       DecrementDepth<Depth>,
-      WrapCells
+      WrapCells,
+      FactoryDepth
     >
   : T extends { enum: infer E extends readonly any[] } ? E[number]
   : T extends { anyOf: infer U extends readonly JSONSchema[] }
-    ? SchemaAnyOf<U, Root, Depth, WrapCells>
+    ? SchemaAnyOf<U, Root, Depth, WrapCells, FactoryDepth>
+  : T extends { asFactory: infer Factory }
+    ? SchemaFactory<Factory, Depth, FactoryDepth>
   : T extends { type: "string" } ? string
   : T extends { type: "number" | "integer" } ? number
   : T extends { type: "boolean" } ? boolean
@@ -197,7 +318,8 @@ type SchemaCore<
   : T extends { type: infer Name extends FabricPrimitiveSchemaType }
     ? FabricPrimitiveOfSchemaType<Name>
   : T extends { type: "array" }
-    ? T extends { items: infer I } ? SchemaArrayItems<I, Root, Depth, WrapCells>
+    ? T extends { items: infer I }
+      ? SchemaArrayItems<I, Root, Depth, WrapCells, FactoryDepth>
     : unknown[]
   : T extends { type: "object" }
     ? T extends { properties: infer P }
@@ -209,7 +331,8 @@ type SchemaCore<
           T extends { additionalProperties: infer AP extends JSONSchema } ? AP
             : false,
           GetDefaultKeys<T>,
-          WrapCells
+          WrapCells,
+          FactoryDepth
         >
       : Record<string, unknown>
     : T extends { additionalProperties: infer AP }
@@ -217,7 +340,13 @@ type SchemaCore<
       : AP extends true ? Record<string | number | symbol, unknown>
       : AP extends JSONSchema ? Record<
           string | number | symbol,
-          SchemaInner<AP, Root, DecrementDepth<Depth>, WrapCells>
+          SchemaInner<
+            AP,
+            Root,
+            DecrementDepth<Depth>,
+            WrapCells,
+            FactoryDepth
+          >
         >
       : Record<string | number | symbol, unknown>
     : Record<string, unknown>
@@ -262,19 +391,27 @@ type SchemaInner<
   Root extends JSONSchema = T,
   Depth extends DepthLevel = 9,
   WrapCells extends boolean = true,
+  FactoryDepth extends FactoryDepthLevel = 0,
 > = IsAny<T> extends true ? any
   : Depth extends 0 ? unknown
-  : WrapperList<T> extends readonly [] ? SchemaCore<T, Root, Depth, WrapCells>
+  : WrapperList<T> extends readonly [] ? SchemaCore<
+      T,
+      Root,
+      Depth,
+      WrapCells,
+      FactoryDepth
+    >
   : WrapCells extends true ? ApplyWrapper<
       FirstWrapper<WrapperList<T>>,
       SchemaInner<
         ReapplyWrappers<T, ShiftWrapper<WrapperList<T>>>,
         Root,
         Depth,
-        WrapCells
+        WrapCells,
+        FactoryDepth
       >
     >
-  : SchemaInner<StripWrappers<T>, Root, Depth, WrapCells>;
+  : SchemaInner<StripWrappers<T>, Root, Depth, WrapCells, FactoryDepth>;
 
 /**
  * Convert a JSONSchema type to its corresponding TypeScript type.
@@ -308,7 +445,7 @@ export type Schema<
   T extends JSONSchema,
   Root extends JSONSchema = T,
   Depth extends DepthLevel = 9,
-> = SchemaInner<T, Root, Depth, true>;
+> = SchemaInner<T, Root, Depth, true, FactoryDepthFor<T>>;
 
 // Get keys from the default object
 type GetDefaultKeys<T extends JSONSchema> = T extends { default: infer D }
@@ -325,18 +462,31 @@ type ObjectFromProperties<
   AP extends JSONSchema = false,
   DK extends string = never,
   WrapCells extends boolean = true,
+  FactoryDepth extends FactoryDepthLevel = 0,
 > =
   & {
     [
       K in keyof P as K extends string ? K extends R[number] | DK ? K : never
         : never
-    ]: SchemaInner<P[K], Root, DecrementDepth<Depth>, WrapCells>;
+    ]: SchemaInner<
+      P[K],
+      Root,
+      DecrementDepth<Depth>,
+      WrapCells,
+      FactoryDepth
+    >;
   }
   & {
     [
       K in keyof P as K extends string ? K extends R[number] | DK ? never : K
         : never
-    ]?: SchemaInner<P[K], Root, DecrementDepth<Depth>, WrapCells>;
+    ]?: SchemaInner<
+      P[K],
+      Root,
+      DecrementDepth<Depth>,
+      WrapCells,
+      FactoryDepth
+    >;
   }
   & (
     AP extends false ? Record<never, never>
@@ -346,7 +496,8 @@ type ObjectFromProperties<
             AP,
             Root,
             DecrementDepth<Depth>,
-            WrapCells
+            WrapCells,
+            FactoryDepth
           >;
         }
       : Record<string | number | symbol, never>
@@ -354,6 +505,16 @@ type ObjectFromProperties<
 
 // Restrict Depth to these numeric literal types
 type DepthLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+
+// Exact finite higher-order factory literals continue under the ordinary
+// schema-depth bound. This separate gate stops broad factory schema types once
+// they cross a factory boundary; the ordinary depth bound still terminates
+// exact recursive literals.
+type FactoryDepthLevel = 0 | 1;
+
+type DecrementFactoryDepth<_D extends FactoryDepthLevel> = 0;
+
+type FactoryDepthFor<T extends JSONSchema> = [JSONSchema] extends [T] ? 0 : 1;
 
 // Decrement map for recursion limit
 type Decrement = {
@@ -385,7 +546,7 @@ export type SchemaWithoutCell<
   T extends JSONSchema,
   Root extends JSONSchema = T,
   Depth extends DepthLevel = 9,
-> = SchemaInner<T, Root, Depth, false>;
+> = SchemaInner<T, Root, Depth, false, FactoryDepthFor<T>>;
 
 //
 // Module Augmentation for Schema-based Overloads
@@ -404,12 +565,12 @@ declare module "commonfabric" {
     ): PatternFactory<SchemaWithoutCell<IS>, Schema<OS>>;
 
     // Function + one schema: infer input type from JSONSchema literal
-    <IS extends JSONSchema = JSONSchema>(
+    <IS extends JSONSchema, Result>(
       fn: (
         input: Reactive<Schema<IS>> & { [SELF]: Reactive<any> },
-      ) => any,
+      ) => FactoryInput<Result>,
       argumentSchema: IS,
-    ): PatternFactory<SchemaWithoutCell<IS>, any>;
+    ): PatternFactory<SchemaWithoutCell<IS>, Result>;
   }
 
   // Augment LiftFunction with schema-based overloads (callback-first, matching

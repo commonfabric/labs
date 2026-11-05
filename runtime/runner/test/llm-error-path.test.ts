@@ -26,7 +26,10 @@ import {
   resetMockMode,
 } from "@commonfabric/llm/client";
 import { LLMClient } from "@commonfabric/llm";
-import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import {
+  createTrustedBuilder,
+  installTestPatternArtifact,
+} from "./support/trusted-builder.ts";
 import { waitForLlmSettled } from "./support/llm-result.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -53,7 +56,10 @@ describe("LLM builtin error surfacing", () => {
     });
     tx = runtime.edit();
     ({ commonfabric: builder } = createTrustedBuilder(runtime));
-    dummyPattern = builder.pattern(() => ({}), { type: "object" });
+    dummyPattern = installTestPatternArtifact(
+      runtime,
+      builder.pattern(() => ({}), { type: "object" }),
+    );
   });
 
   afterEach(async () => {
@@ -79,7 +85,7 @@ describe("LLM builtin error surfacing", () => {
         tx,
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
-      tx.commit();
+      tx.commit().settled;
 
       const settled = await waitForLlmSettled(runtime, result);
 
@@ -106,7 +112,7 @@ describe("LLM builtin error surfacing", () => {
         tx,
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
-      tx.commit();
+      tx.commit().settled;
 
       const settled = await waitForLlmSettled(runtime, result);
 
@@ -138,7 +144,7 @@ describe("LLM builtin error surfacing", () => {
         tx,
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
-      tx.commit();
+      tx.commit().settled;
 
       const settled = await waitForLlmSettled(runtime, result);
 
@@ -179,7 +185,7 @@ describe("LLM builtin error surfacing", () => {
         tx,
       );
       const result = runtime.run(tx, testPattern, {}, resultCell);
-      tx.commit();
+      tx.commit().settled;
 
       const settled = await waitForLlmSettled(runtime, result);
 

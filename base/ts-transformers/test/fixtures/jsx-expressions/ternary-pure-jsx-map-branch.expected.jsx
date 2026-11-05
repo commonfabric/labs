@@ -153,7 +153,7 @@ export default pattern((__cf_pattern_input) => {
                 }
             }
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ recentEvents: recentEvents }), <span>No events yet</span>, <div>
-            {recentEvents.mapWithPattern(__cfPattern_1, {})}
+            {recentEvents.mapWithPattern(__cfPattern_1)}
           </div>)}
     </div>),
     });

@@ -148,7 +148,7 @@ export default pattern((state) => ({
             maybeText: state.key("maybeText"),
             suffix: state.key("suffix")
         } })}</p>
-      {state.key("items").mapWithPattern(__cfPattern_1, {})}
+      {state.key("items").mapWithPattern(__cfPattern_1)}
     </div>)
 }), {
     type: "object",

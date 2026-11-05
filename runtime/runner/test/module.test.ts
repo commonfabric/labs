@@ -631,11 +631,12 @@ describe("module", () => {
     const hasTrackedImplementation = (
       node: TestNode | undefined,
     ): node is TestNode & {
-      module: TestNode["module"] & {
+      module: Module & {
         implementation: SourceTrackedImplementation;
       };
     } =>
       !!node &&
+      isModule(node.module) &&
       typeof node.module.implementation === "function";
 
     const expectTrackedNode = (

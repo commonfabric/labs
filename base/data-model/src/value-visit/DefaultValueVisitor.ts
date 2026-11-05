@@ -15,6 +15,7 @@ import type {
 import type {
   FabricArrayPlus,
   FabricContainerValuePlus,
+  FabricFactory,
   FabricInstancePlus,
   FabricPlainObjectPlus,
   FabricPrimitive,
@@ -145,6 +146,18 @@ export abstract class DefaultValueVisitor<
     value: FabricEpochNsec,
   ): VisitResult<PlusType, ResultType> {
     return this.visitFabricPrimitiveValue(value, VALUE_TAGS.FabricEpochNsec);
+  }
+
+  /**
+   * Visits an admitted `FabricFactory`. A factory is an atomic callable value;
+   * visitors that need its canonical state can explicitly traverse
+   * `sealFactoryState(value)`. If not overridden, this calls
+   * `visitUnhandledValue()`.
+   */
+  visitFabricFactory(
+    value: FabricFactory,
+  ): VisitResult<PlusType, ResultType> {
+    return this.visitUnhandledValue(value, VALUE_TAGS.FabricFactory);
   }
 
   /**
@@ -466,6 +479,10 @@ export abstract class DefaultValueVisitor<
 
       case VALUE_TAGS.FabricHash: {
         return this.visitFabricHash(value as FabricHash);
+      }
+
+      case VALUE_TAGS.FabricFactory: {
+        return this.visitFabricFactory(value as FabricFactory);
       }
 
       case VALUE_TAGS.FabricInstance: {

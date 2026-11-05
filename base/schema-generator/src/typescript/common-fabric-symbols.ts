@@ -13,6 +13,12 @@ const COMMONFABRIC_DECLARATION = "commonfabric.d.ts";
 const COMMONFABRIC_MODULE_NAME = "commonfabric";
 const COMMONFABRIC_PACKAGE_PREFIX = "@commonfabric/";
 
+/** Exact compiler-owned declaration sources trusted by each checker. */
+const TRUSTED_SOURCES = new WeakMap<
+  ts.TypeChecker,
+  WeakSet<ts.SourceFile>
+>();
+
 export function isCommonFabricModuleName(moduleName: string): boolean {
   return moduleName === COMMONFABRIC_MODULE_NAME ||
     moduleName.startsWith(COMMONFABRIC_PACKAGE_PREFIX);
@@ -28,9 +34,33 @@ export function getImportTypeModuleName(
     : undefined;
 }
 
+/**
+ * Registers declaration sources selected by a trusted compiler or module
+ * resolver. Source-file object identity is the authority used when a checker
+ * is supplied to the recognition functions below.
+ */
+export function registerCommonFabricDeclarationSources(
+  checker: ts.TypeChecker,
+  sources: Iterable<ts.SourceFile>,
+): void {
+  let trusted = TRUSTED_SOURCES.get(checker);
+  if (!trusted) {
+    trusted = new WeakSet();
+    TRUSTED_SOURCES.set(checker, trusted);
+  }
+  for (const source of sources) trusted.add(source);
+}
+
+/** Returns whether a declaration belongs to Common Fabric's authored API. */
 export function isCommonFabricDeclaration(
   declaration: ts.Declaration,
+  checker?: ts.TypeChecker,
 ): boolean {
+  if (checker !== undefined) {
+    return TRUSTED_SOURCES.get(checker)?.has(declaration.getSourceFile()) ??
+      false;
+  }
+
   if (
     isCommonFabricDeclarationSourceFile(
       declaration.getSourceFile().fileName,
@@ -68,8 +98,11 @@ function isCommonFabricDeclarationSourceFile(fileName: string): boolean {
  */
 export function isCommonFabricSymbol(
   symbol: ts.Symbol,
+  checker?: ts.TypeChecker,
 ): boolean {
-  return (symbol.getDeclarations() ?? []).some(isCommonFabricDeclaration);
+  return (symbol.getDeclarations() ?? []).some((declaration) =>
+    isCommonFabricDeclaration(declaration, checker)
+  );
 }
 
 /**
@@ -142,7 +175,7 @@ export function resolvesToCommonFabricSymbol(
   seen.add(symbol);
 
   if (symbol.getName() === targetName) {
-    if (isCommonFabricSymbol(symbol)) {
+    if (isCommonFabricSymbol(symbol, checker)) {
       return true;
     }
   }

@@ -85,7 +85,7 @@ const sanitizeHistory = (
   return entries.map((entry) => sanitizeChange(entry));
 };
 
-const normalizeStep = (value: unknown): number => {
+const normalizeStep = (value: number | undefined): number => {
   const next = Math.abs(sanitizeNumber(value, 1));
   return next > 0 ? next : 1;
 };

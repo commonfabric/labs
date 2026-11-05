@@ -26,6 +26,9 @@ export const CODEC_TYPE_TAGS = Object.freeze(
     /** Constant representing JavaScript type `undefined`. */
     Undefined: "Undefined@1",
 
+    /** Constant for directly callable Fabric factories. */
+    Factory: "Factory@1",
+
     // Tags for the built-in "primitive" `FabricPrimitive` classes, which are
     // defined beside those classes.
     ...FABRIC_PRIMITIVE_CODEC_TYPE_TAGS,

@@ -2,9 +2,11 @@ import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import {
   isFabricObjectOrArray,
   isFabricSpecialObject,
+  isValidFabricValue,
   valueEqual,
   valueEqualByWalk,
 } from "@commonfabric/data-model";
+import { isAdmittedFabricFactory } from "@commonfabric/data-model/fabric-factory";
 import {
   resolveScopeKey,
   type ScopeKeyIdentity,
@@ -109,6 +111,12 @@ const collectChangedPaths = (
   depth: number,
   paths: string[][],
 ): void => {
+  if (
+    (typeof before === "function" && !isAdmittedFabricFactory(before)) ||
+    (typeof after === "function" && !isAdmittedFabricFactory(after))
+  ) {
+    throw new Error("Cannot compare an arbitrary function value.");
+  }
   if (Object.is(before, after)) {
     return;
   }
@@ -267,6 +275,10 @@ const collectChangedPaths = (
     return;
   }
 
+  // Callable factories never enter the record walk above. Keep them atomic at
+  // their containing path and delegate both admission and canonical-state
+  // comparison to the shared Fabric equality protocol; arbitrary functions
+  // are rejected there rather than being treated as empty callable objects.
   if (!valueEqual(before, after)) {
     pushChangedPath(paths, currentPath, depth);
   }
@@ -278,6 +290,14 @@ const addStateChange = (
   before: State["is"] | undefined,
   after: State["is"] | undefined,
 ): void => {
+  if (
+    (before !== undefined && !isValidFabricValue(before)) ||
+    (after !== undefined && !isValidFabricValue(after))
+  ) {
+    throw new Error(
+      "Cannot compare an arbitrary function or other invalid Fabric value.",
+    );
+  }
   // Identity alone: `collectChangedPaths()` compares each pair of containers
   // before descending into it, the roots included, and records nothing for
   // a pair that is equal.

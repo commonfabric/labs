@@ -16,7 +16,6 @@ import {
   NAME,
   navigateTo,
   pattern,
-  patternTool,
   Reactive,
   Stream,
   UI,
@@ -225,7 +224,7 @@ const addItems = handler<
   });
 });
 
-// Search sub-pattern for patternTool - filters items by query
+// Search sub-pattern - filters items by query
 const searchItemsPattern = pattern<
   { items: ShoppingItem[]; query: string },
   ShoppingItem[]
@@ -335,8 +334,11 @@ export default pattern<Input, Output>(({ items, storeLayout }) => {
   const correctionIndex = new Writable<number>(-1);
   const correctionTitle = new Writable<string>("");
 
-  // Create search tool for omnibot
-  const searchItems = patternTool(searchItemsPattern, { items });
+  // Create search tool for omnibot. `items` is a private closure capture; only
+  // `query` is exposed to the model as public pattern input.
+  const searchItems = pattern<{ query: string }, ShoppingItem[]>(({ query }) =>
+    searchItemsPattern({ items, query })
+  );
 
   // Whether correction panel is open
   const isCorrecting = correctionIndex.get() >= 0;

@@ -5,6 +5,7 @@ import { transformActionCall } from "./strategies/action-strategy.ts";
 import { transformArrayMethodCall } from "./strategies/array-method-strategy.ts";
 import { transformLiftAppliedCall } from "./strategies/lift-applied-strategy.ts";
 import { transformHandlerJsxAttribute } from "./strategies/handler-strategy.ts";
+import { PatternStrategy } from "./strategies/pattern-strategy.ts";
 
 /** Rewrites one node, or returns undefined when it does not apply to it. */
 type ClosureTransformation = (
@@ -19,6 +20,13 @@ const transformations: ClosureTransformation[] = [
   transformActionCall,
   transformArrayMethodCall,
   transformLiftAppliedCall,
+  (() => {
+    const strategy = new PatternStrategy();
+    return (node, context, visitor) =>
+      strategy.canTransform(node, context)
+        ? strategy.transform(node, context, visitor)
+        : undefined;
+  })(),
 ];
 
 export class ClosureTransformer extends HelpersOnlyTransformer {

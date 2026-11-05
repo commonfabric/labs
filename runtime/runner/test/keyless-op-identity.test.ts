@@ -13,6 +13,18 @@ import type { RuntimeProgram } from "./engine-test-support.ts";
  * bare, non-registering `Engine.compileAndEvaluateModules`) whose mapped
  * sub-pattern nests a GRANDCHILD exposing a derived-internal computed output.
  *
+ * Before the keyless-op mint, such an op fell back to its embedded pattern
+ * graph, whose nested output-alias `defer` levels the immutable-cell JSON
+ * round-trip decrements one step too far — the grandchild derived-internal
+ * output then resolved one instantiation level too early (throw under strict
+ * binding, mis-wire under lenient). This is the CT-1811 corruption on its
+ * ref-less remnant path: PR #4454 sealed the harness load path by
+ * registration; this test pins the remnant.
+ *
+ * The runner mints the op's `keyless:` content-hash session identity (the same
+ * pointer a keyless root pattern receives), then retains the exact trusted
+ * callback for the immutable list-input document. The op therefore uses its
+ * pristine artifact and never depends on the embedded round-trip.
  * `Runner.#substituteOpPatternRefs` mints the op's `keyless:` content-hash
  * session identity (the same pointer a keyless ROOT pattern gets via
  * `entryRefForPattern`), so the op rides a `$patternRef` to its pristine

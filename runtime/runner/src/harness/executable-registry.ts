@@ -1,5 +1,10 @@
 import { setArtifactEntryRef } from "../builder/pattern-metadata.ts";
 import { isPattern } from "../builder/types.ts";
+import {
+  factoryStateOf,
+  isAdmittedFabricFactory,
+  mapFactoryStateValues,
+} from "@commonfabric/data-model/fabric-factory";
 import { hardenVerifiedFunction } from "../sandbox/function-hardening.ts";
 import type { UnsafeHostTrustOptions } from "../unsafe-host-trust.ts";
 import type { HarnessedFunction } from "./types.ts";
@@ -136,13 +141,16 @@ export class ExecutableRegistry {
       (value as { implementation?: unknown }).implementation;
     if (typeof implementation === "function") {
       functions.push(implementation as HarnessedFunction);
-    } else if (typeof value === "function" && !isPattern(value)) {
+    } else if (
+      typeof value === "function" && !isAdmittedFabricFactory(value) &&
+      !isPattern(value)
+    ) {
       // A bare host helper. Pattern FACTORIES are excluded: patterns resolve
-      // through the artifact index, not the implementation index, and giving
-      // a factory a host entry ref would poison the op-sentinel path
-      // (substituteOpPatternRefs would stamp a `$patternRef` the artifact
-      // index cannot resolve). Their nodes' module implementations are
-      // registered by the walk below.
+      // through the artifact index, not the implementation index. Factory@1
+      // extends that rule to module and handler factories: the callable is a
+      // shipped artifact reference, never a host implementation. Their actual
+      // module implementations and pattern nodes are registered by the
+      // semantic walk below.
       functions.push(value as HarnessedFunction);
     }
 
@@ -169,6 +177,29 @@ export class ExecutableRegistry {
  * values.
  */
 export function* verifiedWalkChildValues(value: object): Generator<unknown> {
+  if (isAdmittedFabricFactory(value)) {
+    // An admitted factory is a semantic leaf with two hidden graph-value
+    // fields. Reflecting over the callable would expose protocol accessors and
+    // builder convenience methods as executable children; walk the canonical
+    // state view plus the actual serialized builder payload instead.
+    const stateChildren: unknown[] = [];
+    mapFactoryStateValues(factoryStateOf(value), (nested) => {
+      stateChildren.push(nested);
+      return nested;
+    });
+    yield* stateChildren;
+
+    if (isPattern(value)) {
+      yield value.nodes;
+      yield value.result;
+    } else {
+      const implementation = (value as { implementation?: unknown })
+        .implementation;
+      if (implementation !== undefined) yield implementation;
+    }
+    return;
+  }
+
   const isModuleNamespace = isModuleNamespaceObject(value);
   for (const key of Reflect.ownKeys(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);

@@ -79,7 +79,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 // FIXTURE: schema-generation-builders
 // Verifies: handler with generic type args generates event+state schemas; .map() becomes .mapWithPattern()
 //   handler<TodoEvent, { items: Cell<string[]> }>(fn) → handler(eventSchema, stateSchema, fn)
-//   state.items.map((item, index) => JSX)             → state.key("items").mapWithPattern(pattern(...), {})
+//   state.items.map((item, index) => JSX)             → state.key("items").mapWithPattern(pattern(...))
 //   pattern<TodoState>(fn)                            → pattern(fn, inputSchema, outputSchema)
 export default pattern((state) => {
     return {
@@ -88,7 +88,7 @@ export default pattern((state) => {
           Add
         </button>
         <ul>
-          {state.key("items").mapWithPattern(__cfPattern_1, {})}
+          {state.key("items").mapWithPattern(__cfPattern_1)}
         </ul>
       </div>),
     };

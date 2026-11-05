@@ -22,35 +22,33 @@ interface Message {
 interface Input {
     messages: Message[];
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { msg }) => {
     const reaction = __cf_pattern_input.key("element");
-    const msg = __cf_pattern_input.key("params", "msg");
-    return (<button type="button" data-msg-id={msg.key("id")}>
+    return (<button type="button" data-msg-id={msg.id}>
                 {reaction.key("emoji")}
               </button>);
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Reaction"
-        },
-        params: {
+        msg: {
             type: "object",
             properties: {
-                msg: {
-                    type: "object",
-                    properties: {
-                        id: {
-                            type: "string"
-                        }
-                    },
-                    required: ["id"]
+                id: {
+                    type: "string"
                 }
             },
-            required: ["msg"]
+            required: ["id"]
         }
     },
-    required: ["element", "params"],
+    required: ["msg"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Reaction"
+        }
+    },
+    required: ["element"],
     $defs: {
         Reaction: {
             type: "object",
@@ -89,13 +87,26 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_2 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { msg }) => {
     const reaction = __cf_pattern_input.key("element");
-    const msg = __cf_pattern_input.key("params", "msg");
     return (<span>
-                {msg.key("id")}:{reaction.key("userNames", "length")}
+                {msg.id}:{reaction.key("userNames", "length")}
               </span>);
 }, {
+    type: "object",
+    properties: {
+        msg: {
+            type: "object",
+            properties: {
+                id: {
+                    type: "string"
+                }
+            },
+            required: ["id"]
+        }
+    },
+    required: ["msg"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -109,24 +120,9 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
                 }
             },
             required: ["userNames"]
-        },
-        params: {
-            type: "object",
-            properties: {
-                msg: {
-                    type: "object",
-                    properties: {
-                        id: {
-                            type: "string"
-                        }
-                    },
-                    required: ["id"]
-                }
-            },
-            required: ["msg"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -151,16 +147,16 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
     const msg = __cf_pattern_input.key("element");
     return (<section>
-            {(msg.key("reactions") ?? []).mapWithPattern(__cfPattern_1, {
+            {(msg.key("reactions") ?? []).mapWithPattern(__cfPattern_1.curry({
             msg: {
                 id: msg.key("id")
             }
-        })}
-            {(msg.key("reactions") || []).mapWithPattern(__cfPattern_2, {
+        }))}
+            {(msg.key("reactions") || []).mapWithPattern(__cfPattern_2.curry({
             msg: {
                 id: msg.key("id")
             }
-        })}
+        }))}
           </section>);
 }, {
     type: "object",
@@ -225,14 +221,14 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-inline-fallback-receivers
 // Verifies: inline fallback array-method receivers are transformed structurally
-//   (msg.reactions ?? []).map(fn) → lift(...)(...).mapWithPattern(pattern(...), { msg: { id: ... } })
-//   (msg.reactions || []).map(fn) → lift(...)(...).mapWithPattern(pattern(...), { msg: { id: ... } })
+//   (msg.reactions ?? []).map(fn) → lift(...)(...).mapWithPattern(pattern(...).curry({ msg: { id: ... } }))
+//   (msg.reactions || []).map(fn) → lift(...)(...).mapWithPattern(pattern(...).curry({ msg: { id: ... } }))
 // Context: Nested map — outer maps messages, inner fallback receivers capture msg.id and message-local reaction data
 export default pattern((__cf_pattern_input) => {
     const messages = __cf_pattern_input.key("messages");
     return {
         [UI]: (<div>
-        {messages.mapWithPattern(__cfPattern_3, {})}
+        {messages.mapWithPattern(__cfPattern_3)}
       </div>),
     };
 }, {

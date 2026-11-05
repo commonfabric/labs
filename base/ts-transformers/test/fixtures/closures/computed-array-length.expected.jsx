@@ -115,6 +115,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 // FIXTURE: computed-array-length
 // Verifies: computed(() => expr) with .length access on a Reactive<T[]> is closure-extracted
 //   computed(() => pieceRegistry.length) → lift(({ pieceRegistry }) => pieceRegistry.length)({ pieceRegistry: { length: pieceRegistry.length } })
+//   pieceRegistry.map(fn) → pieceRegistry.mapWithPattern(pattern(fn, ...schemas))
+// Context: Regression test ensuring array .length produces the correct schema
+//   shape rather than an object schema with a length property.
 //   pieceRegistry.map(fn) → pieceRegistry.mapWithPattern(pattern(fn, ...schemas), {})
 // Context: the capture is the `length` member, so the lift's input schema is
 //   an object holding `length`, not the array the member is read from.
@@ -156,7 +159,7 @@ export default pattern(() => {
                 length: pieceRegistry.key("length")
             } })}</span>
         <ul>
-          {pieceRegistry.mapWithPattern(__cfPattern_1, {})}
+          {pieceRegistry.mapWithPattern(__cfPattern_1)}
         </ul>
       </div>),
     };

@@ -9,9 +9,7 @@
 
 import ts from "typescript";
 import {
-  getImportTypeModuleName,
   isCommonFabricDeclaration,
-  isCommonFabricModuleName,
 } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
 import { spellingsWhere } from "@commonfabric/schema-generator/wrapper-names";
@@ -284,27 +282,20 @@ export class CastValidationTransformer extends HelpersOnlyTransformer {
       );
     }
     if (ts.isImportTypeNode(typeNode)) {
-      return this.#resolveImportTypeName(typeNode);
+      return this.#resolveImportTypeName(typeNode, context, seenSymbols);
     }
     return undefined;
   }
 
   #resolveImportTypeName(
     typeNode: ts.ImportTypeNode,
+    context: TransformationContext,
+    seenSymbols: Set<ts.Symbol>,
   ): string | undefined {
     const qualifier = typeNode.qualifier;
-    const moduleName = getImportTypeModuleName(typeNode);
-    if (
-      !qualifier ||
-      !moduleName ||
-      !isCommonFabricModuleName(moduleName)
-    ) {
-      return undefined;
-    }
-    const typeName = ts.isIdentifier(qualifier)
-      ? qualifier.text
-      : qualifier.right.text;
-    return this.#isWrapperTypeName(typeName) ? typeName : undefined;
+    return qualifier
+      ? this.#resolveWrapperTypeName(qualifier, context, seenSymbols)
+      : undefined;
   }
 
   #resolveWrapperTypeName(
@@ -338,7 +329,7 @@ export class CastValidationTransformer extends HelpersOnlyTransformer {
     const symbolName = symbol.getName();
     if (
       this.#isWrapperTypeName(symbolName) &&
-      this.#hasCommonFabricDeclaration(symbol)
+      this.#hasCommonFabricDeclaration(symbol, context.checker)
     ) {
       return symbolName;
     }
@@ -397,9 +388,12 @@ export class CastValidationTransformer extends HelpersOnlyTransformer {
       CELL_LIKE_TYPE_NAMES.has(typeName);
   }
 
-  #hasCommonFabricDeclaration(symbol: ts.Symbol): boolean {
+  #hasCommonFabricDeclaration(
+    symbol: ts.Symbol,
+    checker: ts.TypeChecker,
+  ): boolean {
     return (symbol.declarations ?? []).some((declaration) =>
-      isCommonFabricDeclaration(declaration)
+      isCommonFabricDeclaration(declaration, checker)
     );
   }
 }

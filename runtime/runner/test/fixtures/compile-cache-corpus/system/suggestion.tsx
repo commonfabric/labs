@@ -8,7 +8,6 @@ import {
   llmDialog,
   NAME,
   pattern,
-  patternTool,
   type Stream,
   toSchema,
   UI,
@@ -182,13 +181,15 @@ Use the user context above to personalize your suggestions when relevant.`;
     system: systemPrompt,
     messages,
     tools: {
-      fetchAndRunPattern: patternTool(fetchAndRunPattern),
-      bash: patternTool(bash),
-      searchSpace: patternTool(summarySearchPattern, {
-        entries: summaryEntries,
-      }),
+      fetchAndRunPattern,
+      bash,
+      searchSpace: pattern(({ query }: { query: string }) =>
+        summarySearchPattern({ query, entries: summaryEntries })
+      ),
       searchHistory: suggestionHistory.search,
-      listMentionable: patternTool(listMentionable, { mentionable }),
+      listMentionable: pattern((_input: Record<string, never>) =>
+        listMentionable({ mentionable })
+      ),
       askUserQuestion: {
         handler: setQuestion({ pendingQuestion }),
         description:

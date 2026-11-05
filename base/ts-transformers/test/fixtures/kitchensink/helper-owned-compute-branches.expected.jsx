@@ -153,10 +153,9 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { project }) => {
     const member = __cf_pattern_input.key("element");
     const memberIndex = __cf_pattern_input.key("index");
-    const project = __cf_pattern_input.params.project;
     return (<small>
               {__cfHelpers.ifElse({
         type: "boolean"
@@ -176,29 +175,28 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
+        project: {
+            type: "object",
+            properties: {
+                name: {
+                    type: "string"
+                }
+            },
+            required: ["name"]
+        }
+    },
+    required: ["project"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
         element: {
             type: "string"
         },
         index: {
             type: "number"
-        },
-        params: {
-            type: "object",
-            properties: {
-                project: {
-                    type: "object",
-                    properties: {
-                        name: {
-                            type: "string"
-                        }
-                    },
-                    required: ["name"]
-                }
-            },
-            required: ["project"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -309,11 +307,11 @@ visibleProjects.map((project, projectIndex) => {
                     : ""}
             </span>))}
           {/* [TRANSFORM] .map() → mapWithPattern: fallbackMembers is a Writable (reactive Cell), lowered even inside computed */}
-          {fallbackMembers.mapWithPattern(__cfPattern_1, {
+          {fallbackMembers.mapWithPattern(__cfPattern_1.curry({
             project: {
                 name: project.name
             }
-        })}
+        }))}
           {/* [TRANSFORM] .map() stays plain: plainPreview is a local literal array */}
           {plainPreview.map((label) => <i>{label}</i>)}
         </div>, <div>

@@ -11,8 +11,13 @@ import {
 import ts from "typescript";
 
 import { reportUnresolvedDefault } from "../default-diagnostics.ts";
-import type { GenerationContext, TypeFormatter } from "../interface.ts";
+import type {
+  GenerationContext,
+  SchemaHint,
+  TypeFormatter,
+} from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
+import { detectTrustedFactoryType } from "./factory-formatter.ts";
 import { unionFoldedFrom } from "../schema-origins.ts";
 import { readBoundTypeNode } from "../type-parameter-bindings.ts";
 import {
@@ -73,7 +78,11 @@ interface DefaultUnionEntry {
 function getTypeNodeMemberType(
   node: ts.TypeNode,
   checker: ts.TypeChecker,
+  typeRegistry?: WeakMap<ts.Node, ts.Type>,
 ): ts.Type | undefined {
+  const registered = typeRegistry?.get(node) ??
+    typeRegistry?.get(ts.getOriginalNode(node));
+  if (registered) return registered;
   try {
     return checker.getTypeFromTypeNode(node);
   } catch {
@@ -97,16 +106,71 @@ function orderMemberNodesBySemanticType(
   members: readonly ts.Type[],
   memberNodes: readonly ts.TypeNode[],
   checker: ts.TypeChecker,
+  typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  schemaHints?: WeakMap<ts.Node, SchemaHint>,
 ): Array<ts.TypeNode | undefined> {
   const remaining = memberNodes.map((node) => ({
     node,
-    type: getTypeNodeMemberType(node, checker),
+    type: getTypeNodeMemberType(node, checker, typeRegistry),
   }));
 
   return members.map((member) => {
-    const matchIndex = remaining.findIndex(({ type }) =>
+    let matchIndex = remaining.findIndex(({ type }) =>
       type !== undefined && unionMemberTypesMatch(type, member, checker)
     );
+    if (matchIndex === -1) {
+      const detected = detectTrustedFactoryType(member, checker);
+      if (detected) {
+        const hintedKindCandidates = remaining.flatMap(({ node }, index) => {
+          const contracts = schemaHints?.get(node)?.factoryContracts ??
+            schemaHints?.get(ts.getOriginalNode(node))?.factoryContracts;
+          return contracts?.some((contract) => contract.kind === detected.kind)
+            ? [index]
+            : [];
+        });
+        const hintedMatch = hintedKindCandidates.find((index) => {
+          const node = remaining[index]!.node;
+          const contracts = schemaHints?.get(node)?.factoryContracts ??
+            schemaHints?.get(ts.getOriginalNode(node))?.factoryContracts;
+          return contracts?.some((contract) => {
+            if (contract.kind !== detected.kind) return false;
+            const inputType = getTypeNodeMemberType(
+              contract.inputTypeNode,
+              checker,
+              typeRegistry,
+            );
+            if (
+              !inputType ||
+              !unionMemberTypesMatch(inputType, detected.inputType, checker)
+            ) return false;
+            if (
+              (detected.outputType.flags &
+                (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0
+            ) return true;
+            const outputType = getTypeNodeMemberType(
+              contract.outputTypeNode,
+              checker,
+              typeRegistry,
+            );
+            return !!outputType && unionMemberTypesMatch(
+              outputType,
+              detected.outputType,
+              checker,
+            );
+          }) ?? false;
+        });
+        if (hintedMatch !== undefined) matchIndex = hintedMatch;
+        const semanticKindCount = members.filter((candidate) =>
+          detectTrustedFactoryType(candidate, checker)?.kind === detected.kind
+        ).length;
+        if (
+          matchIndex === -1 && hintedKindCandidates.length === 1 &&
+          semanticKindCount === 1
+        ) {
+          matchIndex = hintedKindCandidates[0]!;
+        }
+      }
+    }
     if (matchIndex === -1) {
       return undefined;
     }
@@ -161,6 +225,8 @@ export function pairUnionMemberNodes(
     members,
     unionNode.types,
     checker,
+    undefined,
+    undefined,
     readsWhole,
   );
 }
@@ -216,7 +282,14 @@ export function unionMembersInSourceOrder(
   const members = union.types;
   const unionNode = readUnionTypeNode(siteNode, checker);
   const paired = unionNode &&
-    pairWrittenMemberNodes(members, unionNode.types, checker, () => false);
+    pairWrittenMemberNodes(
+      members,
+      unionNode.types,
+      checker,
+      undefined,
+      undefined,
+      () => false,
+    );
   return sourceOrderOfMembers(
     union,
     members,
@@ -240,6 +313,8 @@ function pairWrittenMemberNodes(
   members: readonly ts.Type[],
   written: readonly ts.TypeNode[],
   checker: ts.TypeChecker,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  schemaHints: WeakMap<ts.Node, SchemaHint> | undefined,
   readsWhole: (type: ts.Type, node: ts.TypeNode) => boolean,
 ): {
   ordered: Array<ts.TypeNode | undefined>;
@@ -250,10 +325,16 @@ function pairWrittenMemberNodes(
   const memberNodes = written.flatMap((node) =>
     readUnionMemberNodes(node, checker, read)
   );
-  const ordered = orderMemberNodesBySemanticType(members, memberNodes, checker);
+  const ordered = orderMemberNodesBySemanticType(
+    members,
+    memberNodes,
+    checker,
+    typeRegistry,
+    schemaHints,
+  );
   const wholeNodes = new Map<ts.Type, WholeMemberNode[]>();
   for (const node of memberNodes) {
-    const type = getTypeNodeMemberType(node, checker);
+    const type = getTypeNodeMemberType(node, checker, typeRegistry);
     if (!type || !readsWhole(type, node)) continue;
     for (const member of type.isUnion() ? type.types : [type]) {
       wholeNodes.set(member, [...wholeNodes.get(member) ?? [], { node, type }]);
@@ -271,7 +352,10 @@ function pairWrittenMemberNodes(
  * written node, the members are ranked by the union the property an indexed
  * access `siteNode` writes declares (`indexedAccessPairing()`), or else by
  * the union `union`'s alias declares (`declaredPairing()`), as where a
- * transform built the node `union` is read at.
+ * transform built the node `union` is read at. Outside tuple-element
+ * placement, trusted factory members retain their source slots but are ordered
+ * pattern, module, handler within those slots so schema formatting is stable
+ * across TypeScript's internal union order.
  */
 function sourceOrderOfMembers(
   union: ts.Type,
@@ -284,18 +368,6 @@ function sourceOrderOfMembers(
   const written = paired?.memberNodes.some(isWrittenNode)
     ? paired
     : indexedAccessPairing(siteNode, members, checker);
-  if (written === undefined && tupleItems?.items === union) {
-    // Every member, an intrinsic one included, goes where the tuple lists
-    // it; members one element holds, as a `boolean`'s two do, keep the
-    // order `inSourceOrder()` gives them.
-    const place = (index: number) =>
-      tupleElementPlace(members[index]!, tupleItems.elements) ??
-        Number.POSITIVE_INFINITY;
-    return inSourceOrder(
-      members.map((_, index) => index),
-      (index) => members[index]!,
-    ).sort((left, right) => place(left) - place(right));
-  }
   const ranking = written ?? declaredPairing(union, members, checker);
   const rankOfNode = new Map<ts.TypeNode, number>();
   ranking?.memberNodes.forEach((node, index) => {
@@ -310,11 +382,34 @@ function sourceOrderOfMembers(
     ) => rankOfNode.get(node) ?? []);
     return whole?.length ? minOf(whole) : undefined;
   };
-  return inSourceOrder(
+  const ordered = inSourceOrder(
     members.map((_, index) => index),
     (index) => members[index]!,
     rankOf,
   );
+  if (tupleItems?.items !== union) {
+    const factoryPositions = ordered.flatMap((index, position) =>
+      detectTrustedFactoryType(members[index]!, checker) ? [position] : []
+    );
+    const factories = factoryPositions.map((position) => ordered[position]!)
+      .sort((left, right) => {
+        const rank = { pattern: 0, module: 1, handler: 2 } as const;
+        return rank[detectTrustedFactoryType(members[left]!, checker)!.kind] -
+          rank[detectTrustedFactoryType(members[right]!, checker)!.kind];
+      });
+    for (let index = 0; index < factoryPositions.length; index++) {
+      ordered[factoryPositions[index]!] = factories[index]!;
+    }
+    return ordered;
+  }
+
+  // Every member, an intrinsic one included, goes where the tuple lists it.
+  // The ordinary source ranking remains the tie-breaker for several members
+  // one element holds, as the two members of `boolean` do.
+  const place = (index: number) =>
+    tupleElementPlace(members[index]!, tupleItems.elements, checker) ??
+      Number.POSITIVE_INFINITY;
+  return ordered.sort((left, right) => place(left) - place(right));
 }
 
 /**
@@ -325,10 +420,14 @@ function sourceOrderOfMembers(
 function tupleElementPlace(
   member: ts.Type,
   elements: readonly ts.Type[],
+  checker: ts.TypeChecker,
 ): number | undefined {
   const place = elements.findIndex((element) =>
-    element === member ||
-    (element.isUnion() && element.types.includes(member))
+    unionMemberTypesMatch(element, member, checker) ||
+    (element.isUnion() &&
+      element.types.some((candidate) =>
+        unionMemberTypesMatch(candidate, member, checker)
+      ))
   );
   return place < 0 ? undefined : place;
 }
@@ -375,6 +474,8 @@ function indexedAccessPairing(
     members,
     [declaration.type],
     checker,
+    undefined,
+    undefined,
     () => false,
   );
 }
@@ -406,6 +507,8 @@ function declaredPairing(
     members,
     [declaration.type],
     checker,
+    undefined,
+    undefined,
     () => false,
   );
 }
@@ -479,7 +582,10 @@ export class UnionFormatter implements TypeFormatter {
     type: ts.Type,
     context: GenerationContext,
   ): MutableJSONSchema | undefined {
-    const node = readUnionTypeNode(context.typeNode, context.typeChecker);
+    const node = readUnionTypeNode(
+      context.typeNode ?? context.hintsNode,
+      context.typeChecker,
+    );
     if (!node) return undefined;
     const members = type.isUnion() ? type.types : [type];
     const paired = pairUnionMemberNodes(
@@ -504,8 +610,9 @@ export class UnionFormatter implements TypeFormatter {
     // is read at those members (`GenerationContext.scopePayloadNodes`), here
     // and nowhere below.
     const { scopePayloadNodes, ...context } = outerContext;
+    const contextNode = context.typeNode ?? context.hintsNode;
     const memberNodes = readUnionTypeNode(
-      context.typeNode,
+      contextNode,
       context.typeChecker,
     )?.types ??
       (scopePayloadNodes?.payload === type
@@ -516,6 +623,8 @@ export class UnionFormatter implements TypeFormatter {
         checkerMembers,
         memberNodes,
         context.typeChecker,
+        context.typeRegistry,
+        context.schemaHints,
         (union, node) => this.#readsWhole(union, node, context),
       )
       : undefined;
@@ -525,7 +634,7 @@ export class UnionFormatter implements TypeFormatter {
       type,
       checkerMembers,
       paired,
-      context.typeNode,
+      contextNode,
       context.typeChecker,
       context.tupleItems,
     );

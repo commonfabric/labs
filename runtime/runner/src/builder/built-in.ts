@@ -17,8 +17,6 @@ import type {
   FetchBinaryResult,
   FetchOptions,
   InspectConfLabelResult,
-  PatternToolFunction,
-  PatternToolResult,
   SqliteDatabaseFunction,
   SqliteQueryFunction,
   UIVariantKind,
@@ -38,7 +36,6 @@ import type {
   FactoryInput,
   JSONSchema,
   NodeFactory,
-  PatternFactory,
   Reactive,
   Schema,
 } from "./types.ts";
@@ -529,50 +526,3 @@ declare function createCell<S extends JSONSchema = JSONSchema>(
 ): CellType<Schema<S>>;
 
 export type { createCell };
-
-/**
- * Helper function for creating LLM tool definitions from patterns with optional
- * pre-filled parameters. Returns an object suitable for use as an LLM tool, with
- * proper TypeScript typing that reflects only the non-pre-filled parameters.
- *
- * The first argument must be a `pattern(...)` (CT-1655). A module-scoped reactive
- * value the pattern's callback reads is captured by the pattern automatically (as
- * a module-scope closure); per-instance values are pre-filled via `extraParams`.
- *
- * @param pattern - An already-created PatternFactory (wrap callbacks in pattern())
- * @param extraParams - Optional object of parameter values to pre-fill
- * @returns An object with `pattern` and `extraParams` properties, typed to show only remaining params
- *
- * @example
- * ```ts
- * import { pattern, patternTool } from "commonfabric";
- *
- * const grepTool = patternTool(
- *   pattern(({ query, content }: { query: string; content: string }) => {
- *     return content.split("\n").filter((c) => c.includes(query));
- *   }),
- *   { content },
- * );
- *
- * // With a pattern declared elsewhere:
- * const grepTool2 = patternTool(myGrepPattern, { content });
- *
- * // Result type: PatternToolResult<{ content: string }>
- * // which has { pattern: Pattern, extraParams: { content: string } }
- * ```
- */
-export const patternTool = (<
-  T,
-  E extends Partial<T> = Record<PropertyKey, never>,
->(
-  // CT-1655: must already be a pattern. Authors wrap callbacks explicitly —
-  // `patternTool(pattern(fn), extraParams?)` — so the unit is addressable and
-  // hoistable; the runtime no longer coerces a bare function into a pattern.
-  pattern: PatternFactory<T, any>,
-  extraParams?: FactoryInput<E>,
-): PatternToolResult<E> => {
-  return {
-    pattern,
-    extraParams: (extraParams ?? {}) as E,
-  };
-}) as PatternToolFunction;

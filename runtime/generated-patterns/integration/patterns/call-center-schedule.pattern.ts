@@ -143,7 +143,7 @@ const ensureUnique = (value: string, used: Set<string>): string => {
   return candidate;
 };
 
-const sanitizeSlots = (value: unknown): SlotDefinition[] => {
+const sanitizeSlots = (value: readonly SlotInput[]): SlotDefinition[] => {
   if (!Array.isArray(value) || value.length === 0) {
     return structuredClone(defaultSlots);
   }
@@ -177,7 +177,7 @@ const normalizeAgentName = (value: unknown, fallback: string): string => {
   return fallback;
 };
 
-const sanitizeAgents = (value: unknown): AgentDefinition[] => {
+const sanitizeAgents = (value: readonly AgentInput[]): AgentDefinition[] => {
   if (!Array.isArray(value) || value.length === 0) {
     return structuredClone(defaultAgents);
   }

@@ -79,6 +79,33 @@ const summaries = articles.map((article) => ({
 ))}
 ```
 
+### Pattern factories as tools
+
+A `PatternFactory` is a tool directly. Use an object wrapper only for optional
+metadata such as a description; captured data belongs in an inline pattern
+closure and is not part of the model-facing input schema:
+
+```tsx
+// Shown for illustration only.
+const search = pattern(({ query }: { query: string }) =>
+  searchIndex({ query, entries })
+);
+
+const response = generateObject({
+  prompt,
+  tools: {
+    search,
+    describedSearch: {
+      pattern: search,
+      description: "Search the current index",
+    },
+  },
+});
+```
+
+Here `query` is public tool input and `entries` is private closure state. See
+[First-Class Factories](../concepts/factories.md).
+
 ### Selecting a Model
 
 `model` is optional on `generateText`, `generateObject`, and `llmDialog`. Omit

@@ -91,8 +91,8 @@ export const counterNestedComputedTotalsScenario: PatternIntegrationScenario<
     },
     {
       events: [
-        // Sanitized by the pattern's own `sanitizeNumber` (non-finite -> 0):
-        // the event carries `NaN` faithfully, and the handler catches it.
+        // Canonical Fabric data URIs preserve NaN, so the handler receives it
+        // and applies its documented sanitize-to-zero behavior.
         { stream: "groups.0.append", payload: { value: Number.NaN } },
         { stream: "groups.0.append", payload: { value: 0 } },
         { stream: "appendToGroup", payload: { index: 9, value: 100 } },

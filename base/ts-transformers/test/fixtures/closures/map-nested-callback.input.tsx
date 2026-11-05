@@ -18,8 +18,8 @@ interface State {
 
 // FIXTURE: map-nested-callback
 // Verifies: nested .map() calls on reactive arrays are each transformed independently
-//   outer .map(fn) → .mapWithPattern(pattern(...), {state: {prefix}})
-//   inner .map(fn) → .mapWithPattern(pattern(...), {item: {name}})
+//   outer .map(fn) → .mapWithPattern(pattern(...).curry({state: {prefix}}))
+//   inner .map(fn) → .mapWithPattern(pattern(...).curry({item: {name}}))
 // Context: Inner map captures item.name from the outer map callback scope
 export default pattern<State>((state) => {
   return {

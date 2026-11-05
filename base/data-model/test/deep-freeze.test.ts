@@ -19,7 +19,14 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { deepFreeze, isDeepFrozen, isValidDeepFrozenFabricValue } from "@";
+import {
+  deepFreeze,
+  fabricFromConvertibleJsValue,
+  isDeepFrozen,
+  isValidDeepFrozenFabricValue,
+  registerFabricFactory,
+  trySealedFactoryState,
+} from "@";
 import { FabricError } from "@/fabric-instances";
 import { FabricEpochNsec } from "@/fabric-primitives";
 
@@ -81,6 +88,41 @@ describe("deep-freeze", () => {
         const o = deepFreeze({ a: 1, fn: () => {} }) as Record<string, unknown>;
         expect(Object.isFrozen(o)).toBe(true);
         expect(typeof o.fn).toBe("function");
+      });
+
+      it("does not treat an unsealed admitted factory as a frozen function leaf", () => {
+        const params = { prefix: "before" };
+        const factory = registerFabricFactory(
+          (input: unknown) => input,
+          "pattern",
+          {
+            kind: "pattern",
+            rootToken: {},
+            ref: {
+              identity: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+              symbol: "pattern",
+            },
+            argumentSchema: true,
+            resultSchema: false,
+            paramsSchema: true,
+            params,
+          },
+        );
+
+        expect(isDeepFrozen(factory)).toBe(false);
+        expect(isValidDeepFrozenFabricValue(factory)).toBe(false);
+
+        const converted = fabricFromConvertibleJsValue(factory);
+        expect(converted).toBe(factory);
+        expect(Object.isFrozen(factory)).toBe(true);
+        const sealed = trySealedFactoryState(factory);
+        expect(sealed).toBeDefined();
+        expect(sealed?.kind).toBe("pattern");
+        if (sealed?.kind === "pattern") {
+          expect(Object.isFrozen(sealed.params)).toBe(true);
+          expect(sealed.params).toEqual(params);
+        }
+        expect(isValidDeepFrozenFabricValue(factory)).toBe(true);
       });
     });
 

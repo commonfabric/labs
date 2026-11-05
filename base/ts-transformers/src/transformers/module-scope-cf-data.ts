@@ -146,6 +146,10 @@ function shouldWrapTopLevelExpression(
 
   const expr = unwrapExpression(expression);
 
+  if (context.isLiveFactoryDerivation(expr)) {
+    return false;
+  }
+
   if (
     ts.isArrowFunction(expr) ||
     ts.isFunctionExpression(expr) ||

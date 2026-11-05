@@ -1376,10 +1376,12 @@ language-model call. A piece that renders a pending state for one is printed in
 that state.
 
 With `--watch` the command stays connected and prints the HTML again each time
-the UI changes. Each print is the tree at a point where the piece has nothing
-left to compute and is waiting for nothing from storage. A commit may still be
-pending at that point, so a change that a commit's result causes is a later
-print.
+the UI changes. Its first print is the initial settled tree, including when the
+renderer applied its first batch before the watch callback was installed, and
+waits for the same durable-state barrier as a one-shot render. Each later print
+is the tree at a point where the piece has nothing left to compute and is
+waiting for nothing from storage. A commit may still be pending at that point,
+so a change that a commit's result causes is a later print.
 
 ## Compacting a space store
 

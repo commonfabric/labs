@@ -134,7 +134,7 @@ const normalizeParticipantName = (
 };
 
 const sanitizeParticipants = (
-  value: unknown,
+  value: readonly ParticipantInput[],
 ): ParticipantDefinition[] => {
   if (!Array.isArray(value) || value.length === 0) {
     return structuredClone(defaultParticipants);
@@ -173,7 +173,9 @@ const normalizeSlotLabel = (value: unknown, fallback: string): string => {
   return fallback;
 };
 
-const sanitizeSlots = (value: unknown): SlotDefinition[] => {
+const sanitizeSlots = (
+  value: readonly (SlotInput | string)[],
+): SlotDefinition[] => {
   if (!Array.isArray(value) || value.length === 0) {
     return structuredClone(defaultSlots);
   }

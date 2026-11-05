@@ -51,128 +51,120 @@ const record = handler({
     state.log.push(`${state.prefix.get()}:${state.id}`);
 });
 const moduleStyle = __cfHelpers.__cf_data({ color: "red" });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { records, withPrototype, prefix, ownProto, nested, numbered, aliased }) => {
     const item = __cf_pattern_input.key("element");
-    const records = __cf_pattern_input.params.records;
-    const withPrototype = __cf_pattern_input.params.withPrototype;
-    const prefix = __cf_pattern_input.key("params", "prefix");
-    const ownProto = __cf_pattern_input.params.ownProto;
-    const nested = __cf_pattern_input.params.nested;
-    const numbered = __cf_pattern_input.params.numbered;
-    const aliased = __cf_pattern_input.params.aliased;
     return (<cf-button style={{ ...moduleStyle }} onClick={record({ log: records.key("log"), prefix: records.key("prefix"), id: item.key("id") })} onDblClick={record({ log: withPrototype.key("log"), prefix, id: item.key("id") })} data={{ ["__proto__"]: ownProto.key("__proto__") }} nested={{ color: nested.key("color"), log: nested.key("log"), prefix: nested.key("prefix") }} numbered={{ 0: numbered.key("0") }} aliased={{ log: aliased.key("log"), prefix: aliased.key("prefix") }}>
             {item.key("id")}
           </cf-button>);
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Item"
-        },
-        params: {
+        records: {
             type: "object",
             properties: {
-                records: {
-                    type: "object",
-                    properties: {
-                        log: {
-                            type: "array",
-                            items: {
-                                type: "string"
-                            },
-                            asCell: ["readonly"]
-                        },
-                        prefix: {
-                            type: "string",
-                            asCell: ["readonly"]
-                        }
+                log: {
+                    type: "array",
+                    items: {
+                        type: "string"
                     },
-                    required: ["log", "prefix"]
-                },
-                withPrototype: {
-                    type: "object",
-                    properties: {
-                        __proto__: {
-                            type: "null"
-                        },
-                        log: {
-                            type: "array",
-                            items: {
-                                type: "string"
-                            },
-                            asCell: ["readonly"]
-                        }
-                    },
-                    required: ["__proto__", "log"]
+                    asCell: ["cell"]
                 },
                 prefix: {
                     type: "string",
-                    asCell: ["readonly"]
-                },
-                ownProto: {
-                    type: "object",
-                    properties: {
-                        __proto__: {
-                            type: "string"
-                        }
-                    },
-                    required: ["__proto__"]
-                },
-                nested: {
-                    type: "object",
-                    properties: {
-                        log: {
-                            type: "array",
-                            items: {
-                                type: "string"
-                            },
-                            asCell: ["readonly"]
-                        },
-                        prefix: {
-                            type: "string",
-                            asCell: ["readonly"]
-                        },
-                        color: {
-                            type: "string"
-                        }
-                    },
-                    required: ["log", "prefix", "color"]
-                },
-                numbered: {
-                    type: "object",
-                    properties: {
-                        "0": {
-                            type: "array",
-                            items: {
-                                type: "string"
-                            },
-                            asCell: ["readonly"]
-                        }
-                    },
-                    required: ["0"]
-                },
-                aliased: {
-                    type: "object",
-                    properties: {
-                        log: {
-                            type: "array",
-                            items: {
-                                type: "string"
-                            },
-                            asCell: ["readonly"]
-                        },
-                        prefix: {
-                            type: "string",
-                            asCell: ["readonly"]
-                        }
-                    },
-                    required: ["log", "prefix"]
+                    asCell: ["cell"]
                 }
             },
-            required: ["records", "withPrototype", "prefix", "ownProto", "nested", "numbered", "aliased"]
+            required: ["log", "prefix"]
+        },
+        withPrototype: {
+            type: "object",
+            properties: {
+                ["__proto__"]: {
+                    type: "null"
+                },
+                log: {
+                    type: "array",
+                    items: {
+                        type: "string"
+                    },
+                    asCell: ["cell"]
+                }
+            },
+            required: ["__proto__", "log"]
+        },
+        prefix: {
+            type: "string",
+            asCell: ["cell"]
+        },
+        ownProto: {
+            type: "object",
+            properties: {
+                ["__proto__"]: {
+                    type: "string"
+                }
+            },
+            required: ["__proto__"]
+        },
+        nested: {
+            type: "object",
+            properties: {
+                log: {
+                    type: "array",
+                    items: {
+                        type: "string"
+                    },
+                    asCell: ["cell"]
+                },
+                prefix: {
+                    type: "string",
+                    asCell: ["cell"]
+                },
+                color: {
+                    type: "string"
+                }
+            },
+            required: ["log", "prefix", "color"]
+        },
+        numbered: {
+            type: "object",
+            properties: {
+                "0": {
+                    type: "array",
+                    items: {
+                        type: "string"
+                    },
+                    asCell: ["cell"]
+                }
+            },
+            required: ["0"]
+        },
+        aliased: {
+            type: "object",
+            properties: {
+                log: {
+                    type: "array",
+                    items: {
+                        type: "string"
+                    },
+                    asCell: ["cell"]
+                },
+                prefix: {
+                    type: "string",
+                    asCell: ["cell"]
+                }
+            },
+            required: ["log", "prefix"]
         }
     },
-    required: ["element", "params"],
+    required: ["records", "withPrototype", "prefix", "ownProto", "nested", "numbered", "aliased"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Item"
+        }
+    },
+    required: ["element"],
     $defs: {
         Item: {
             type: "object",
@@ -237,7 +229,7 @@ export default pattern((__cf_pattern_input) => {
     const aliased = records;
     return {
         [UI]: (<div>
-        {items.mapWithPattern(__cfPattern_1, {
+        {items.mapWithPattern(__cfPattern_1.curry({
                 records: records,
                 withPrototype: withPrototype,
                 prefix: prefix,
@@ -245,7 +237,7 @@ export default pattern((__cf_pattern_input) => {
                 nested: nested,
                 numbered: numbered,
                 aliased: aliased
-            })}
+            }))}
       </div>),
     };
 }, {

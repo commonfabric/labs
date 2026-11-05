@@ -9,6 +9,7 @@ import {
   createCaptureTreeNode,
   groupCapturesByRoot,
   parseCaptureExpression,
+  preserveCaptureReferenceOrigins,
 } from "../../src/utils/capture-tree.ts";
 
 const factory = ts.factory;
@@ -275,4 +276,47 @@ Deno.test("buildCapturePropertyAssignments applies renames to the root property 
   const text = print(assignments[0], fileOf(childExpr));
   assert(text.startsWith("renamed:"));
   assert(text.includes("name: entry.name"));
+});
+
+Deno.test("preserveCaptureReferenceOrigins never creates a self original-node link", () => {
+  const captured = parseExpression('entry.key("name")');
+  const tree = groupCapturesByRoot([captured]);
+  const properties = buildCapturePropertyAssignments(tree, factory);
+  const callee = captured;
+  assert(ts.isCallExpression(callee));
+  assert(ts.isPropertyAccessExpression(callee.expression));
+  const authoredRoot = callee.expression.expression;
+  assert(ts.isIdentifier(authoredRoot));
+
+  preserveCaptureReferenceOrigins(properties, tree);
+
+  assertEquals(
+    (authoredRoot as ts.Node & { original?: ts.Node }).original,
+    undefined,
+  );
+});
+
+Deno.test("preserveCaptureReferenceOrigins follows wrappers to the authored root", () => {
+  const captured = parseExpression("(entry!).name");
+  const tree = groupCapturesByRoot([captured]);
+  const properties = buildCapturePropertyAssignments(tree, factory);
+  preserveCaptureReferenceOrigins(properties, tree);
+
+  const initializer = properties[0]!.initializer;
+  assert(ts.isObjectLiteralExpression(initializer));
+  const name = initializer.properties[0];
+  assert(ts.isPropertyAssignment(name));
+  const access = name.initializer;
+  assert(ts.isPropertyAccessExpression(access));
+  const synthesizedRoot = access.expression;
+  const identifier = ts.isIdentifier(synthesizedRoot)
+    ? synthesizedRoot
+    : ts.isNonNullExpression(synthesizedRoot)
+    ? synthesizedRoot.expression
+    : undefined;
+  assert(identifier);
+  assert(ts.isIdentifier(identifier));
+
+  assert(ts.getOriginalNode(identifier) !== identifier);
+  assertEquals(ts.getOriginalNode(identifier).getText(), "entry");
 });

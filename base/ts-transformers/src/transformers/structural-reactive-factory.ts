@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { detectTrustedFactoryType } from "@commonfabric/schema-generator";
 
 import { detectCallKind } from "../ast/mod.ts";
 import { unwrapExpression } from "../utils/expression.ts";
@@ -34,6 +35,30 @@ export function isPatternFactoryCalleeExpression(
   }
 }
 
+/** True for every branded public Pattern/Module/Handler factory callable. */
+export function isFirstClassFactoryCalleeExpression(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+): boolean {
+  const target = unwrapExpression(expression);
+  // Preserve the pre-Factory@1 structural path for internal/legacy node
+  // factories whose compile-time type exposes pattern schemas but predates the
+  // public FabricFactory brand. Canonical public factories take the branded
+  // path below; this fallback is not used for value admission.
+  if (isPatternFactoryCalleeExpression(target, checker)) return true;
+  try {
+    const type = checker.getTypeAtLocation(target);
+    const members = type.isUnion() ? type.types : [type];
+    return members.length > 0 && members.every((member) =>
+      (member.flags &
+          (ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Never)) !==
+        0 || detectTrustedFactoryType(member, checker) !== undefined
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function returnsReactiveResult(
   expression: ts.CallExpression,
   checker: ts.TypeChecker,
@@ -58,7 +83,7 @@ export function isPatternFactoryHelperExpression(
       ts.isCallExpression(target) &&
       (
         isPatternBuilderCall(target, checker) ||
-        isPatternFactoryCalleeExpression(target.expression, checker) ||
+        isFirstClassFactoryCalleeExpression(target.expression, checker) ||
         isPatternFactoryHelperExpression(
           target.expression,
           checker,
@@ -94,7 +119,7 @@ export function isStructuralReactiveFactoryExpression(
         return true;
       }
 
-      if (isPatternFactoryCalleeExpression(target.expression, checker)) {
+      if (isFirstClassFactoryCalleeExpression(target.expression, checker)) {
         return true;
       }
 
@@ -108,7 +133,6 @@ export function isStructuralReactiveFactoryExpression(
           case "wish":
           case "generate-text":
           case "generate-object":
-          case "pattern-tool":
           case "runtime-call":
             return true;
           default:

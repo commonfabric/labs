@@ -1,6 +1,11 @@
-import { computed, NAME, pattern, UI, wish } from "commonfabric";
+import { computed, NAME, pattern, UI, type VNode, wish } from "commonfabric";
 
-export default pattern(
+interface SharedProfileDemoOutput {
+  [NAME]: string;
+  [UI]: VNode;
+}
+
+export default pattern<never, SharedProfileDemoOutput>(
   () => {
     const profileWish = wish<{ initialNameApplied?: string }>({
       query: "#profile",
@@ -32,12 +37,4 @@ export default pattern(
     };
   },
   false as const,
-  {
-    type: "object",
-    properties: {
-      [NAME]: { type: "string" },
-      [UI]: true,
-    },
-    required: [NAME, UI],
-  },
 );

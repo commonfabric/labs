@@ -316,6 +316,7 @@ export function materializeSchemaView(
   cfcLabelView: CfcLabelView | undefined,
   synced: boolean,
   isRoot: boolean,
+  materializeFactories: boolean,
 ): unknown {
   pinImmutableCell(link, link.id);
   const mismatch = (reason: string): undefined => {
@@ -422,6 +423,7 @@ export function materializeSchemaView(
       cfcLabelView,
       synced,
       epoch,
+      materializeFactories,
     );
   }
 
@@ -460,6 +462,7 @@ export function materializeSchemaView(
     cfcLabelView,
     synced,
     epoch,
+    materializeFactories,
   );
 }
 
@@ -498,13 +501,22 @@ const readChild = (
   schema: JSONSchema,
   cfcLabelView: CfcLabelView | undefined,
   synced: boolean,
+  materializeFactories: boolean,
 ): unknown => {
   const childLink: NormalizedFullLink = {
     ...link,
     path: [...link.path, key],
     schema,
   };
-  return readChildAt(runtime, tx, childLink, [key], cfcLabelView, synced);
+  return readChildAt(
+    runtime,
+    tx,
+    childLink,
+    [key],
+    cfcLabelView,
+    synced,
+    materializeFactories,
+  );
 };
 
 /**
@@ -521,6 +533,7 @@ const readChildAt = (
   labelPath: readonly string[],
   cfcLabelView: CfcLabelView | undefined,
   synced: boolean,
+  materializeFactories: boolean,
 ): unknown => {
   // Back through the front door: link resolution, `asCell` dispatch and schema
   // combination all belong there, and a marked transaction lands back here for
@@ -535,7 +548,12 @@ const readChildAt = (
       cfcLabelView: rebaseCfcLabelView(cfcLabelView, [...labelPath]),
     },
     [],
-    { synced, mismatchThrows: true, viewChild: true },
+    {
+      synced,
+      materializeFactories,
+      mismatchThrows: true,
+      viewChild: true,
+    },
   );
 };
 
@@ -565,6 +583,7 @@ function createObjectView(
   cfcLabelView: CfcLabelView | undefined,
   synced: boolean,
   epoch: number | undefined,
+  materializeFactories: boolean,
 ): unknown {
   const schema = link.schema;
   const required = new Set(requiredKeys(schema));
@@ -627,6 +646,7 @@ function createObjectView(
           declareStreamSchema(narrowed),
           cfcLabelView,
           synced,
+          materializeFactories,
         );
       }
       return applyDefault();
@@ -636,7 +656,16 @@ function createObjectView(
       // check a view makes when it is built, or a combinator's whole-branch
       // evaluation. A mismatch deeper inside a child view is not decided here;
       // it surfaces where the reader touches it.
-      return readChild(runtime, tx, link, key, narrowed, cfcLabelView, synced);
+      return readChild(
+        runtime,
+        tx,
+        link,
+        key,
+        narrowed,
+        cfcLabelView,
+        synced,
+        materializeFactories,
+      );
     } catch (error) {
       if (!isSchemaMismatchError(error)) throw error;
       // A child can dead-end at a doc the replica cannot serve — inside a
@@ -762,6 +791,7 @@ function createArrayView(
   cfcLabelView: CfcLabelView | undefined,
   synced: boolean,
   epoch: number | undefined,
+  materializeFactories: boolean,
 ): unknown {
   const schema = link.schema;
   const resolveElement = (index: number): unknown => {
@@ -801,9 +831,18 @@ function createArrayView(
         [key],
         cfcLabelView,
         synced,
+        materializeFactories,
       );
     }
-    return readChildAt(runtime, tx, slotLink, [key], cfcLabelView, synced);
+    return readChildAt(
+      runtime,
+      tx,
+      slotLink,
+      [key],
+      cfcLabelView,
+      synced,
+      materializeFactories,
+    );
   };
 
   // The array's counterpart to the object view's gate: every element read steps

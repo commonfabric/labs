@@ -621,7 +621,7 @@ Deno.test(
 );
 
 Deno.test(
-  "Callback boundary policy: unresolved property-access patternTool fallback stays compute-owned",
+  "Callback boundary policy: removed patternTool name gets no boundary fallback",
   () => {
     const { sourceFile, checker, context } = createProgramAndContext(`
       const helpers = {} as any;
@@ -632,12 +632,11 @@ Deno.test(
     const decision = classifyCallbackBoundary(callback, checker, context);
 
     assertEquals(decision, {
-      kind: "supported",
-      boundaryKind: "pattern-tool",
+      kind: "unsupported",
+      boundaryKind: "unsupported-container",
+      boundaryDiagnostic: "function-creation",
       bodyContext: {
-        strategy: "explicit",
-        kind: "compute",
-        owner: "unknown",
+        strategy: "inherit-parent",
       },
     });
   },

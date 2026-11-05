@@ -121,6 +121,16 @@ export type EventHandler =
   };
 export type AnnotatedEventHandler = EventHandler & TelemetryAnnotations;
 
+/** One independently cancelable handler registration for one stream. */
+export interface EventHandlerRegistration {
+  ref: NormalizedFullLink;
+  handler: EventHandler;
+  generation: number;
+  /** Finalizers for events parked outside the queue on async readiness. */
+  readonly readinessCancels: Set<(reason: string) => void>;
+  active: boolean;
+}
+
 /**
  * Reactivity log.
  *
@@ -440,13 +450,17 @@ export type QueuedEvent = {
    * reads the instant of the event that actually dispatches.
    */
   time?: number;
-
   /** The transaction whose handler sent this event, when transactional. */
   readonly originTx?: IExtendedStorageTransaction;
 
   eventLink: NormalizedFullLink;
   action: Action;
   handler: EventHandler;
+  /** Registration captured when queued, except for an explicit pattern swap. */
+  handlerRegistration: EventHandlerRegistration;
+  handlerGeneration: number;
+  /** The piece had a scheduler-owned pattern transition at enqueue time. */
+  followPatternSwap?: boolean;
   event: any;
 
   /** Guarded implementation whose input dependencies passed preflight. */
@@ -469,6 +483,14 @@ export type QueuedEvent = {
    * handlers cannot overtake it.
    */
   handlerLoadPending?: boolean;
+
+  /**
+   * Cancels the scheduler-owned continuation that is loading this event's
+   * handler. The load operation receives the same cancellation signal, but
+   * the continuation also settles independently when that operation cannot
+   * stop promptly.
+   */
+  abortHandlerLoad?: (reason: string) => void;
 
   /**
    * Ends the wait of a loading head whose piece could not be started yet.
@@ -573,6 +595,8 @@ export type QueuedEvent = {
    * failure and carried across backoff retries.
    */
   retryDeadline?: number;
+  /** Settles an intent temporarily parked outside `eventQueue`. */
+  cancelPending?: (reason: string) => void;
 
   /**
    * How many backoff re-runs this event has taken after its handler body did

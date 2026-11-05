@@ -6,7 +6,8 @@ import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import {
   bindingIdentities,
   callSchemas,
-  emittedSchemas,
+  callsNamed,
+  literalToValue,
   parseModule,
   patternSchemas,
 } from "./transformed-ast.ts";
@@ -896,11 +897,12 @@ export default pattern(() => {
     [UI]: <ul>{items.map((item) => <li><button type="button" onClick={removeItem({ items, id: item.id })}>Remove</button></li>)}</ul>,
   }`;
     const count = `{ count: computed(() => items.get().length) }`;
-    const callbackSchema = (root: ts.SourceFile) =>
-      emittedSchemas(root).find(({ properties }) =>
-        typeof properties === "object" && properties !== null &&
-        "params" in properties
-      );
+    const callbackParamsSchema = (root: ts.SourceFile) => {
+      const wrapper = callsNamed(root, "withPatternParamsSchema")[0];
+      expect(wrapper).toBeDefined();
+      expect(wrapper!.arguments[1]).toBeDefined();
+      return literalToValue(wrapper!.arguments[1]!);
+    };
     const ownerPolicy = {
       writeAuthorizedBy: { __ctWriterIdentityOf: { path: ["removeItem"] } },
       ownerPrincipal: { __ctCurrentPrincipal: true },
@@ -910,10 +912,8 @@ export default pattern(() => {
       }],
     };
     const callbackKeepsPolicy = (root: ts.SourceFile) =>
-      expect(callbackSchema(root)).toMatchObject({
-        properties: {
-          params: { properties: { items: { ifc: ownerPolicy } } },
-        },
+      expect(callbackParamsSchema(root)).toMatchObject({
+        properties: { items: { ifc: ownerPolicy } },
       });
     const computedKeepsPolicy = (root: ts.SourceFile) =>
       expect(callSchemas(root, "lift")[0]).toMatchObject({

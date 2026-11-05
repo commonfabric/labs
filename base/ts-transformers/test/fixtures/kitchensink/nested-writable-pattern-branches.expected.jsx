@@ -125,13 +125,9 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { taskIndex, section, state, task }) => {
     const tag = __cf_pattern_input.key("element");
     const tagIndex = __cf_pattern_input.key("index");
-    const taskIndex = __cf_pattern_input.key("params", "taskIndex");
-    const section = __cf_pattern_input.key("params", "section");
-    const state = __cf_pattern_input.key("params", "state");
-    const task = __cf_pattern_input.key("params", "task");
     return (<span>
                             {__cfHelpers.ifElse({
             type: "boolean"
@@ -144,7 +140,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_3({
             tagIndex: tagIndex,
             taskIndex: taskIndex
-        }), `${section.key("title")}:${tag}`, __cfHelpers.ifElse({
+        }), `${section.title}:${tag}`, __cfHelpers.ifElse({
             type: "boolean"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
@@ -158,9 +154,44 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
             type: "boolean"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "boolean"
-        } as const satisfies __cfHelpers.JSONSchema, state.key("showCompleted"), !task.key("done")), tag, ""))}
+        } as const satisfies __cfHelpers.JSONSchema, state.showCompleted, !task.done), tag, ""))}
                           </span>);
 }, {
+    type: "object",
+    properties: {
+        taskIndex: {
+            type: "number"
+        },
+        section: {
+            type: "object",
+            properties: {
+                title: {
+                    type: "string"
+                }
+            },
+            required: ["title"]
+        },
+        state: {
+            type: "object",
+            properties: {
+                showCompleted: {
+                    type: "boolean"
+                }
+            },
+            required: ["showCompleted"]
+        },
+        task: {
+            type: "object",
+            properties: {
+                done: {
+                    type: "boolean"
+                }
+            },
+            required: ["done"]
+        }
+    },
+    required: ["taskIndex", "section", "state", "task"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -168,45 +199,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         },
         index: {
             type: "number"
-        },
-        params: {
-            type: "object",
-            properties: {
-                taskIndex: {
-                    type: "number"
-                },
-                section: {
-                    type: "object",
-                    properties: {
-                        title: {
-                            type: "string"
-                        }
-                    },
-                    required: ["title"]
-                },
-                state: {
-                    type: "object",
-                    properties: {
-                        showCompleted: {
-                            type: "boolean"
-                        }
-                    },
-                    required: ["showCompleted"]
-                },
-                task: {
-                    type: "object",
-                    properties: {
-                        done: {
-                            type: "boolean"
-                        }
-                    },
-                    required: ["done"]
-                }
-            },
-            required: ["taskIndex", "section", "state", "task"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -228,19 +223,14 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_2 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { selectedTaskId, hoveredSectionId, section, sectionIndex, state }) => {
     const task = __cf_pattern_input.key("element");
     const taskIndex = __cf_pattern_input.key("index");
-    const selectedTaskId = __cf_pattern_input.key("params", "selectedTaskId");
-    const hoveredSectionId = __cf_pattern_input.key("params", "hoveredSectionId");
-    const section = __cf_pattern_input.key("params", "section");
-    const sectionIndex = __cf_pattern_input.key("params", "sectionIndex");
-    const state = __cf_pattern_input.key("params", "state");
     return (<div>
                         <button type="button" onClick={selectTask({
             selectedTaskId,
             hoveredSectionId,
-            sectionId: section.key("id"),
+            sectionId: section.id,
             taskId: task.key("id"),
             sectionIndex,
             taskIndex,
@@ -377,20 +367,57 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
                         {/* [TRANSFORM] .map() → mapWithPattern: task.tags is reactive pattern-owned data (nested inside sections map) */}
                         {/* [TRANSFORM] closure captures: taskIndex, section, state, task (all via params) */}
                         {/* [TRANSFORM] ternary lowered: tagIndex===taskIndex ? `${section.title}:${tag}` : (showCompleted||!task.done ? tag : "") */}
-                        {task.key("tags").mapWithPattern(__cfPattern_1, {
+                        {task.key("tags").mapWithPattern(__cfPattern_1.curry({
             taskIndex: taskIndex,
             section: {
-                title: section.key("title")
+                title: section.title
             },
             state: {
-                showCompleted: state.key("showCompleted")
+                showCompleted: state.showCompleted
             },
             task: {
                 done: task.key("done")
             }
-        })}
+        }))}
                       </div>);
 }, {
+    type: "object",
+    properties: {
+        selectedTaskId: {
+            type: ["string", "undefined"],
+            asCell: ["cell"]
+        },
+        hoveredSectionId: {
+            type: ["string", "undefined"],
+            asCell: ["cell"]
+        },
+        section: {
+            type: "object",
+            properties: {
+                id: {
+                    type: "string"
+                },
+                title: {
+                    type: "string"
+                }
+            },
+            required: ["id", "title"]
+        },
+        sectionIndex: {
+            type: "number"
+        },
+        state: {
+            type: "object",
+            properties: {
+                showCompleted: {
+                    type: "boolean"
+                }
+            },
+            required: ["showCompleted"]
+        }
+    },
+    required: ["selectedTaskId", "hoveredSectionId", "section", "sectionIndex", "state"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -398,47 +425,9 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
         },
         index: {
             type: "number"
-        },
-        params: {
-            type: "object",
-            properties: {
-                selectedTaskId: {
-                    type: ["string", "undefined"],
-                    asCell: ["readonly"]
-                },
-                hoveredSectionId: {
-                    type: ["string", "undefined"],
-                    asCell: ["readonly"]
-                },
-                section: {
-                    type: "object",
-                    properties: {
-                        id: {
-                            type: "string"
-                        },
-                        title: {
-                            type: "string"
-                        }
-                    },
-                    required: ["id", "title"]
-                },
-                sectionIndex: {
-                    type: "number"
-                },
-                state: {
-                    type: "object",
-                    properties: {
-                        showCompleted: {
-                            type: "boolean"
-                        }
-                    },
-                    required: ["showCompleted"]
-                }
-            },
-            required: ["selectedTaskId", "hoveredSectionId", "section", "sectionIndex", "state"]
         }
     },
-    required: ["element", "params"],
+    required: ["element"],
     $defs: {
         Task: {
             type: "object",
@@ -543,12 +532,9 @@ section.tasks.length > 0
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_3 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state, selectedTaskId, hoveredSectionId }) => {
     const section = __cf_pattern_input.key("element");
     const sectionIndex = __cf_pattern_input.key("index");
-    const state = __cf_pattern_input.key("params", "state");
-    const selectedTaskId = __cf_pattern_input.key("params", "selectedTaskId");
-    const hoveredSectionId = __cf_pattern_input.key("params", "hoveredSectionId");
     return (<section>
                 <h2 style={{
         // [TRANSFORM] ternary lowered: section.accent ? section.accent : state.globalAccent → ifElse(...)
@@ -560,7 +546,7 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
-        } as const satisfies __cfHelpers.JSONSchema, section.key("accent"), section.key("accent"), state.key("globalAccent")),
+        } as const satisfies __cfHelpers.JSONSchema, section.key("accent"), section.key("accent"), state.globalAccent),
     }}>
                   {section.key("title")}
                 </h2>
@@ -627,7 +613,7 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
         } as const satisfies __cfHelpers.JSONSchema, section.key("expanded"), <div>
                     {/* [TRANSFORM] .map() → mapWithPattern: section.tasks is reactive pattern-owned data */}
                     {/* [TRANSFORM] closure captures: selectedTaskId, hoveredSectionId, section, sectionIndex, state (all via params) */}
-                    {section.key("tasks").mapWithPattern(__cfPattern_2, {
+                    {section.key("tasks").mapWithPattern(__cfPattern_2.curry({
                 selectedTaskId: selectedTaskId,
                 hoveredSectionId: hoveredSectionId,
                 section: {
@@ -636,9 +622,9 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
                 },
                 sectionIndex: sectionIndex,
                 state: {
-                    showCompleted: state.key("showCompleted")
+                    showCompleted: state.showCompleted
                 }
-            })}
+            }))}
                   </div>, __cfLift_4({ section: {
                 tasks: {
                     length: section.key("tasks", "length")
@@ -649,40 +635,39 @@ const __cfPattern_3 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
+        state: {
+            type: "object",
+            properties: {
+                globalAccent: {
+                    type: "string"
+                },
+                showCompleted: {
+                    type: "boolean"
+                }
+            },
+            required: ["globalAccent", "showCompleted"]
+        },
+        selectedTaskId: {
+            type: ["string", "undefined"],
+            asCell: ["cell"]
+        },
+        hoveredSectionId: {
+            type: ["string", "undefined"],
+            asCell: ["cell"]
+        }
+    },
+    required: ["state", "selectedTaskId", "hoveredSectionId"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
         element: {
             $ref: "#/$defs/Section"
         },
         index: {
             type: "number"
-        },
-        params: {
-            type: "object",
-            properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        globalAccent: {
-                            type: "string"
-                        },
-                        showCompleted: {
-                            type: "boolean"
-                        }
-                    },
-                    required: ["globalAccent", "showCompleted"]
-                },
-                selectedTaskId: {
-                    type: ["string", "undefined"],
-                    asCell: ["readonly"]
-                },
-                hoveredSectionId: {
-                    type: ["string", "undefined"],
-                    asCell: ["readonly"]
-                }
-            },
-            required: ["state", "selectedTaskId", "hoveredSectionId"]
         }
     },
-    required: ["element", "params"],
+    required: ["element"],
     $defs: {
         Section: {
             type: "object",
@@ -833,14 +818,14 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, hasSections, <div>
             {/* [TRANSFORM] .map() → mapWithPattern: state.sections is Writable<Section[]> — reactive, pattern context */}
             {/* [TRANSFORM] closure captures: state (reactive), selectedTaskId (Writable), hoveredSectionId (Writable) */}
-            {state.key("sections").mapWithPattern(__cfPattern_3, {
+            {state.key("sections").mapWithPattern(__cfPattern_3.curry({
                 state: {
                     globalAccent: state.key("globalAccent"),
                     showCompleted: state.key("showCompleted")
                 },
                 selectedTaskId: selectedTaskId,
                 hoveredSectionId: hoveredSectionId
-            })}
+            }))}
           </div>, 
         // [TRANSFORM] false-branch of ifElse(hasSections): ternary showCompleted ? "No completed sections" : "No sections"
         //   → local ifElse(...) inside the <p> JSX expression

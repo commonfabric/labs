@@ -97,9 +97,8 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { labelPrefix }) => {
     const entry = __cf_pattern_input.key("element");
-    const labelPrefix = __cf_pattern_input.key("params", "labelPrefix");
     return __cfHelpers.ifElse({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
@@ -124,20 +123,19 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Entry"
-        },
-        params: {
-            type: "object",
-            properties: {
-                labelPrefix: {
-                    type: "string"
-                }
-            },
-            required: ["labelPrefix"]
+        labelPrefix: {
+            type: "string"
         }
     },
-    required: ["element", "params"],
+    required: ["labelPrefix"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Entry"
+        }
+    },
+    required: ["element"],
     $defs: {
         Entry: {
             type: "object",
@@ -233,10 +231,10 @@ export default pattern((__cf_pattern_input) => {
                     entries: entries,
                     prefix: prefix
                 }).for(["visible", 3], true), []).for("visible", true);
-                const labels = visible.flatMapWithPattern(__cfPattern_1, {
+                const labels = visible.flatMapWithPattern(__cfPattern_1.curry({
                     labelPrefix: labelPrefix
-                }).for("labels", true);
-                return labels.mapWithPattern(__cfPattern_2, {});
+                })).for("labels", true);
+                return labels.mapWithPattern(__cfPattern_2);
             })()}
     </div>)
     });

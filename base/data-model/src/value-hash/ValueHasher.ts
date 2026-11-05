@@ -28,6 +28,9 @@ import { tagOfFabricValueElseNull, VALUE_TAGS } from "@/types";
 import { debugStr } from "@/value-debug";
 import type { BaseFabricInstance } from "@/fabric-bases";
 import { codecOf, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
+import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
+import { deepFreeze } from "@/deep-freeze.ts";
+import { isAdmittedFabricFactory, sealFactoryState } from "@/fabric-factory.ts";
 import {
   FabricBytes,
   FabricHash,
@@ -277,13 +280,34 @@ export class ValueHasher {
         break;
       }
 
-      default: {
-        // Notably, values of type `function` are _never_ `FabricValue`s:
-        // `FabricValue` contractually represents that its contents are inert,
-        // and `function` is about as "ert" as a value can get.
-        throw new Error(debugStr`Cannot hash value: $quote${value}`);
+      case "function": {
+        if (!isAdmittedFabricFactory(value)) {
+          throw new Error("Cannot hash an arbitrary function value");
+        }
+        this.#feedCodecValue(
+          value,
+          CODEC_TYPE_TAGS.Factory,
+          sealFactoryState(value, deepFreeze),
+        );
+        break;
       }
+
+      default:
+        throw new Error(debugStr`Cannot hash value: $quote${value}`);
     }
+  }
+
+  /** Feed the shared instance-tag, codec-tag, and codec-state representation. */
+  #feedCodecValue(
+    reference: object,
+    typeTag: string,
+    state: FabricValue,
+  ): void {
+    this.#hasher.update(TAG_INSTANCE_BYTES);
+    this.#hasher.update(getStringRep(typeTag));
+    this.#path.push(reference);
+    this.feedValue(state);
+    this.#path.pop();
   }
 
   /**
@@ -436,13 +460,12 @@ export class ValueHasher {
           return;
         }
         const fabInst = value as BaseFabricInstance;
-        hasher.update(TAG_INSTANCE_BYTES);
         const codec = codecOf(fabInst);
-        hasher.update(getStringRep(codec.tagForValue(fabInst)));
-        const state = codec.encode(fabInst, NULL_LIVE_ENVIRONMENT);
-        this.#path.push(fabInst);
-        this.feedValue(state);
-        this.#path.pop();
+        this.#feedCodecValue(
+          fabInst,
+          codec.tagForValue(fabInst),
+          codec.encode(fabInst, NULL_LIVE_ENVIRONMENT),
+        );
         return;
       }
 

@@ -32,6 +32,11 @@ The authoritative field inventory is the `JSONSchema` type in
   a view onto a value. (A separate boolean-style `asStream` field existed
   historically; it is no longer part of the type and is not emitted — a couple
   of runner utilities still tolerate it on stored data.)
+- **`asFactory`**: the public executable contract for a first-class pattern,
+  module, or handler factory. Pattern/module contracts carry
+  `argumentSchema`/`resultSchema`; handler contracts carry
+  `contextSchema`/`eventSchema`. Each field is an embedded, independently
+  rooted schema document.
 - **`scope`**: storage-partition selector emitted for `PerSpace<T>` /
   `PerUser<T>` / `PerSession<T>` wrappers.
 - **`tier`**: verb listing mark on stream properties. `tier: "wrapper"` names
@@ -43,6 +48,58 @@ The authoritative field inventory is the `JSONSchema` type in
   (adds and removes freely). Standard `deprecated: true` is the companion
   mark on the other axis, produced from `@deprecated` JSDoc.
 - **`ifc`**: Information Flow Control (IFC) annotations (see [IFC](#ifc))
+
+### First-Class Factories (`asFactory`)
+
+The three extension shapes are:
+
+```json
+{
+  "asFactory": {
+    "kind": "pattern",
+    "argumentSchema": { "type": "object" },
+    "resultSchema": { "type": "object" }
+  }
+}
+```
+
+```json
+{
+  "asFactory": {
+    "kind": "module",
+    "argumentSchema": { "type": "object" },
+    "resultSchema": { "type": "object" }
+  }
+}
+```
+
+```json
+{
+  "asFactory": {
+    "kind": "handler",
+    "contextSchema": { "type": "object" },
+    "eventSchema": { "type": "object" }
+  }
+}
+```
+
+Each nested contract field is a self-contained schema root. A `$ref` inside
+`argumentSchema`, for example, resolves against `$defs` inside that
+`argumentSchema`; it does not borrow definitions from the containing schema,
+`resultSchema`, or another union arm. This independence makes public factory
+contracts portable and exactly comparable.
+
+The schema generator emits `asFactory` only for trusted Common Fabric factory
+types or exact compiler-owned contract hints. Ordinary callable properties are
+not serializable and remain omitted. FrameworkProvided paths are runtime
+authority metadata and deliberately do not appear inside this extension.
+
+At the TypeScript type level, `Schema<...>` interprets these shapes as
+`PatternFactory<Argument, Result>`, `ModuleFactory<Argument, Result>`, or
+`HandlerFactory<Event, Context>`. Nested factory interpretation is depth-bounded
+to keep type evaluation finite; a broad/unresolved factory schema becomes
+`unknown`. The concrete extension vocabulary is defined by `AsFactoryType` in
+`base/api/index.ts`, and the inference rules live in `base/api/schema.ts`.
 
 ### Streams are declarations, not views
 

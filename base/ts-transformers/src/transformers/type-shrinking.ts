@@ -202,7 +202,11 @@ function deriveCapabilityShrinkPlan(
     ...(paramSummary.comparableCellPaths ?? []),
     ...(paramSummary.capability === "comparable" ? identityCellPaths : []),
   ]);
-  const retainedPaths = uniquePaths([...paths, ...identityPaths]);
+  const retainedPaths = uniquePaths([
+    ...paths,
+    ...identityPaths,
+    ...fullShapePaths,
+  ]);
   const identityOnlyRoot = !!paramSummary.identityOnly &&
     !paramSummary.wildcard &&
     paths.length === 0;

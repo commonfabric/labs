@@ -58,7 +58,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-with-array-param
 // Verifies: .map() on reactive array is transformed when the third parameter (array) is used
-//   .map((item, index, array) => ...) → .mapWithPattern(pattern(...), {})
+//   .map((item, index, array) => ...) → .mapWithPattern(pattern(...))
 //   array.length → array.key("length")
 // Context: All three .map() callback params (element, index, array) are used; no outer captures
 export default pattern((_state) => {
@@ -70,7 +70,7 @@ export default pattern((_state) => {
     } as const satisfies __cfHelpers.JSONSchema).for("items", true);
     return {
         [UI]: (<div>
-        {items.mapWithPattern(__cfPattern_1, {})}
+        {items.mapWithPattern(__cfPattern_1)}
       </div>),
     };
 }, false as const satisfies __cfHelpers.JSONSchema, {

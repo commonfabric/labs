@@ -1140,15 +1140,15 @@ describe("Engine.evaluateRecordGraph()", () => {
         {
           name: "/main.ts",
           contents: [
-            'import { handler, pattern, schema } from "commonfabric";',
+            'import { handler, pattern } from "commonfabric";',
             'import "commonfabric/schema";',
-            "const model = schema({",
+            "const model = {",
             '  type: "object",',
             "  properties: {",
             '    value: { type: "number", default: 0, asCell: ["cell"] },',
             "  },",
             "  default: { value: 0 },",
-            "});",
+            "} as const;",
             "const increment = handler({}, model, (_, state) => {",
             "  state.value.set(state.value.get() + 1);",
             "});",

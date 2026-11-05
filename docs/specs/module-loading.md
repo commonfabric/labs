@@ -594,7 +594,7 @@ unrelated legacy and current roots without applying one entry fingerprint to
 every document.
 
 Source and compiled documents share the base shape
-`{ code, filename, imports: [{ specifier, link }], delegatedModuleIdentities? }`.
+`{ code, filename, imports: [{ specifier, link }], roots?: [{ specifier, link }], delegatedModuleIdentities? }`.
 `code` is a sigil link to the content-addressed code document holding the
 module's text, `cid:<taggedHash>` over the string alone, so identical text is
 one document per space however many records or runtime versions name it
@@ -607,7 +607,10 @@ for its identity. Their link sets are different. A source document stores intern
 authored-import links, including links to authored declarations. It omits fabric
 edges so one program's source closure does not absorb another program.
 Synthetic retention links may keep other source roots alive, but they are
-excluded from the identity hash and executable graph traversal. Separately, a
+stored only in `roots`, excluded from the identity hash and authored executable
+graph traversal, and followed only to load the retained closure. Canonical
+writers preserve and union this set without making `imports` additive.
+Separately, a
 source document stores one identity-only link per member of its source package
 that no import reaches and that its module owns: [`SOURCE_ROOT_SPECIFIER`][c7]
 (`cf:source-root/`) for an attached source entry point such as a test, owned
@@ -635,10 +638,10 @@ files without moving their identity edges to the requested entry. The rebuilt
 compiled closure retains the same ownership for subsequent loads. A compiled
 document stores runtime edges only between emitted modules. It includes fabric
 edges needed by the self-contained compiled closure. The entry compiled
-document also uses synthetic [`ROOT_LINK_SPECIFIER`][c14] (`cf:cache-root/`)
-links to load emitted modules that no runtime edge reaches. Compiled runtime and
-synthetic links only target emitted modules. They never target a declaration
-document.
+document also stores synthetic [`ROOT_LINK_SPECIFIER`][c14]
+(`cf:cache-root/`) edges in `roots` to load emitted modules that no runtime edge
+reaches. Compiled runtime imports and synthetic roots only target emitted
+modules. They never target a declaration document.
 
 `delegatedModuleIdentities` is mutable metadata, excluded from the Merkle
 identity, that records predecessor module hashes whose writer authority the
@@ -896,7 +899,8 @@ cell's contents. The cache is designed around this:
   closure into another space in the same session, such a load copies it
   into its own space from there; when it compiled the closure in the same
   session and the write-back was deferred by a preview or failed, the load
-  writes that compile back instead of compiling again. On a serving runtime a
+  remains an in-memory hit and writes that retained compile back instead of
+  entering the storage path and compiling again. On a serving runtime a
   write-back commits when its wave accepts it, and a write-back the wave
   withdraws at its commit counts as failed: the runner no longer counts that
   space as holding the closure, neither as a copy's origin nor as a space

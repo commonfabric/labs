@@ -73,6 +73,7 @@ import { getReaderSchemaPrecedenceConfig } from "./reader-schema-precedence-conf
 import type { Runtime } from "./runtime.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
 import { markIfcBearingLinkCrossing, schemaHasIfc } from "./schema-ifc.ts";
+import { materializeFactoryForSchema } from "./factory-materialization.ts";
 import { arrayMatchesPositionally } from "./schema-match.ts";
 import {
   externalResolutionMissCount,
@@ -1141,6 +1142,9 @@ export interface ValidateAndTransformOptions {
   /** When true, cells created during traversal are marked as already synced */
   synced?: boolean;
 
+  /** False for dependency-only reads that must preserve inert factory shells. */
+  materializeFactories?: boolean;
+
   /**
    * Set by a schema view reading one of its children: a mismatch there is a
    * refusal the reader must be told about, not the `undefined` a root read
@@ -1217,6 +1221,7 @@ export function validateAndTransform(
       options?.synced ?? false,
       link,
       cfcLabelView,
+      options?.materializeFactories ?? true,
     ).createObject(
       { ...link, schema: resolvedSchema },
       undefined,
@@ -1287,7 +1292,14 @@ export function validateAndTransform(
     ) &&
     filteredSchema !== false && !isNontrivialSchema(filteredSchema)
   ) {
-    return createQueryResultProxy(runtime, tx, link, 0, cfcLabelView);
+    return createQueryResultProxy(
+      runtime,
+      tx,
+      link,
+      0,
+      cfcLabelView,
+      options?.materializeFactories ?? true,
+    );
   }
 
   // Now resolve further links until we get the actual value.
@@ -1326,6 +1338,7 @@ export function validateAndTransform(
     options?.synced ?? false,
     resolvedValueLink,
     cfcLabelView,
+    options?.materializeFactories ?? true,
   );
 
   // If our link is asCell/asStream, and we don't have any path portions, we
@@ -1572,6 +1585,7 @@ export function validateAndTransform(
           [],
           {
             synced: options?.synced,
+            materializeFactories: options?.materializeFactories,
             mismatchThrows: options?.mismatchThrows,
             viewChild: true,
           },
@@ -1618,6 +1632,7 @@ export function validateAndTransform(
           cfcLabelView,
           options?.synced ?? false,
           options?.mismatchThrows !== true,
+          options?.materializeFactories ?? true,
         );
       }
       selector.schema = viewSchema;
@@ -1844,6 +1859,7 @@ class TransformObjectCreator
   #synced: boolean;
   #baseLink: NormalizedFullLink;
   #cfcLabelView: CfcLabelViewRebaser;
+  #materializeFactories: boolean;
   #baseViewEmpty: boolean;
   #route: RouteCrossing[] = [];
   #keys = new Map<string, string>();
@@ -1858,12 +1874,14 @@ class TransformObjectCreator
     synced: boolean,
     baseLink: NormalizedFullLink,
     cfcLabelView: CfcLabelView | undefined,
+    materializeFactories: boolean,
   ) {
     this.#runtime = runtime;
     this.#tx = tx;
     this.#synced = synced;
     this.#baseLink = baseLink;
     this.#cfcLabelView = new CfcLabelViewRebaser(cfcLabelView);
+    this.#materializeFactories = materializeFactories;
     this.#baseViewEmpty = cloneCfcLabelView(cfcLabelView) === undefined;
   }
 
@@ -2087,6 +2105,15 @@ class TransformObjectCreator
     link: NormalizedFullLink,
     value: AnyCellWrapping<FabricValue> | undefined,
   ): AnyCellWrapping<FabricValue> {
+    if (this.#materializeFactories) {
+      const materialized = materializeFactoryForSchema(value, link.schema, {
+        runtime: this.#runtime,
+        artifactSpace: link.space,
+      });
+      if (!Object.is(materialized, value)) {
+        return materialized as AnyCellWrapping<FabricValue>;
+      }
+    }
     // If we have a schema with an asCell or asStream (or if our anyOf values
     // do), we should create a cell here.
     // If we don't have a schema, or a true schema, we should create a query result proxy.
@@ -2099,6 +2126,7 @@ class TransformObjectCreator
         link,
         0,
         this.#labelViewFor(link),
+        this.#materializeFactories,
       );
     } else if (isObjectOrArray(link.schema)) {
       // A reference-form schema resolves here — materialization is a
@@ -2158,6 +2186,7 @@ class TransformObjectCreator
           link,
           0,
           this.#labelViewFor(link),
+          this.#materializeFactories,
         );
       }
       // link.schema is not true, and not asCell/asStream

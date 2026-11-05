@@ -19,10 +19,10 @@ const firstName = (entries: Cell<EntriesValue>): string =>
 // Verifies (BEHAVIOR LOCK): a by-reference, read-only-used capture of a bare
 //   `Cell<EntriesValue>` (EntriesValue = Entry[] | Default<[]>, Entry has a
 //   nested `Cell`) is branded `__cfHelpers.ReadonlyCell<EntriesValue>` with
-//   schema `{ $ref: "#/$defs/EntriesValue", asCell: ["readonly"] }`. The Cell ->
-//   ReadonlyCell capability narrowing must PRESERVE the inner `$ref` (and thus
-//   the nested `profile` Cell materialized in $defs), NOT collapse the capture to
-//   a bare `{ asCell: ["readonly"] }`.
+//   an array schema carrying `default: []` and `asCell: ["readonly"]`. The
+//   Cell -> ReadonlyCell capability narrowing must preserve the Entry `$ref`
+//   and the nested `profile` Cell materialized in `$defs`, not collapse the
+//   capture to a bare `{ asCell: ["readonly"] }`.
 //
 // NOTE: this is a behavior lock, not a standalone regression repro. The schema-gen
 //   `$ref`-drop bug this guards against only manifests when the inner type comes

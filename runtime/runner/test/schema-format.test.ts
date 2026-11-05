@@ -493,130 +493,51 @@ Deno.test("schemaToTypeString produces compact output for complex schema", () =>
   assert(result.includes("Cell<"), "aCell should use Cell wrapper");
 });
 
-Deno.test("schemaToTypeString converts PatternToolResult to function syntax", () => {
-  // PatternToolResult<{ content: string }> schema
-  const schema: any = {
-    type: "object",
-    properties: {
-      pattern: {
+Deno.test("schemaToTypeString formats a first-class PatternFactory contract", () => {
+  const result = schemaToTypeString({
+    asFactory: {
+      kind: "pattern",
+      argumentSchema: {
         type: "object",
-        additionalProperties: true,
+        properties: { query: { type: "string" } },
+        required: ["query"],
       },
-      extraParams: {
+      resultSchema: {
         type: "object",
-        properties: {
-          content: { type: "string" },
-        },
+        properties: { answer: { type: "string" } },
+        required: ["answer"],
       },
     },
-  };
-  const result = schemaToTypeString(schema);
-  // Should format as a handler function, not as an object with pattern/extraParams
-  assert(
-    result.includes("=>"),
-    "PatternToolResult should use arrow function syntax",
-  );
-  assert(result.includes("void"), "PatternToolResult should return void");
-  assert(result.includes("content"), "extraParams content should be included");
-  assert(!result.includes("pattern"), "pattern property should not be visible");
-  assert(
-    !result.includes("extraParams"),
-    "extraParams key should not be visible",
-  );
+  });
+
+  assert(result.includes("=>"));
+  assert(result.includes("query"));
+  assert(result.includes("answer"));
+  assert(!result.includes("extraParams"));
 });
 
-Deno.test("schemaToTypeString handles nested PatternToolResult in object", () => {
-  // Schema for a piece output with handler properties
-  const schema: any = {
-    type: "object",
-    properties: {
-      name: { type: "string" },
-      grep: {
+Deno.test("schemaToTypeString renders a HandlerFactory as an event sink", () => {
+  const result = schemaToTypeString({
+    asFactory: {
+      kind: "handler",
+      contextSchema: {
         type: "object",
-        properties: {
-          pattern: { type: "object" },
-          extraParams: {
-            type: "object",
-            properties: {
-              content: { type: "string" },
-            },
-          },
-        },
+        properties: { value: { type: "number" } },
+        required: ["value"],
       },
-      translate: {
+      eventSchema: {
         type: "object",
-        properties: {
-          pattern: { type: "object" },
-          extraParams: {
-            type: "object",
-            properties: {
-              content: { type: "string" },
-            },
-          },
-        },
+        properties: { amount: { type: "number" } },
+        required: ["amount"],
       },
     },
-  };
-  const result = schemaToTypeString(schema);
+  });
 
-  // Both grep and translate should be formatted as handlers
-  assert(
-    (result.match(/=>/g) || []).length >= 2,
-    "both grep and translate should be handlers",
-  );
-  assert(result.includes("grep?:"), "should have grep property");
-  assert(result.includes("translate?:"), "should have translate property");
-  assert(result.includes("void"), "handlers should return void");
-});
-
-Deno.test("schemaToTypeString formats fixture-style PatternToolResult without leaking internals", () => {
-  const schema: any = {
-    type: "object",
-    properties: {
-      search: {
-        type: "object",
-        properties: {
-          pattern: {
-            type: "object",
-            properties: {
-              argumentSchema: {
-                type: "object",
-                properties: {
-                  query: { type: "string" },
-                  help: { type: "string" },
-                  source: { type: "string" },
-                },
-              },
-              resultSchema: {
-                type: "object",
-                properties: {
-                  summary: { type: "string" },
-                },
-              },
-              nodes: { type: "array", items: { type: "object" } },
-            },
-            asCell: ["cell"],
-          },
-          extraParams: {
-            type: "object",
-            properties: {
-              source: { type: "string" },
-            },
-          },
-        },
-      },
-    },
-  };
-
-  const result = schemaToTypeString(schema);
-
-  assert(result.includes("search?:"), "should include the tool key");
-  assert(result.includes("source"), "should describe the bound extraParams");
-  assert(!/\bpattern\??:/.test(result), "pattern internals should stay hidden");
-  assert(
-    !/\bextraParams\??:/.test(result),
-    "extraParams internals should stay hidden",
-  );
+  assert(result.startsWith("(e: {"));
+  assert(result.includes("value: number"));
+  assert(result.includes("}) => ({"));
+  assert(result.includes("amount: number"));
+  assert(result.endsWith("}) => void"));
 });
 
 //

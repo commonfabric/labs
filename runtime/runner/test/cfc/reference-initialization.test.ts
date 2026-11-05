@@ -2071,8 +2071,7 @@ describe("reference-initialization", () => {
       expect(await result.key("items").pull()).toEqual(["b"]);
 
       const tx = runtime.edit();
-      row.getArgumentCell<{ params: { items: string[] } }>()!.withTx(tx)
-        .key("params").key("items").set(["forged"]);
+      result.key("items").withTx(tx).set(["forged"]);
       runtime.prepareTxForCommit(tx);
 
       expect((await tx.commit().settled).error?.message).toContain(
@@ -2201,12 +2200,15 @@ describe("reference-initialization", () => {
         }>(result.getAsNormalizedFullLink());
         const cancel = shown.sink(() => {});
         expect(await visitorRuntime.start(shown)).toBe(true);
+        await visitorRuntime.runner.idlePieceInstantiationSettlements();
         await visitorRuntime.idle();
         expect(await shown.key("rows").pull()).toEqual([]);
         shown.key("reveal").send({});
-        await visitorRuntime.idle();
-        await visitorStorage.synced();
-        expect(itemsOf(await shown.key("rows").pull())).toEqual(["a", "b"]);
+        expect(
+          itemsOf(
+            await shown.key("rows").pull({ awaitDurability: true }),
+          ),
+        ).toEqual(["a", "b"]);
         expect(errors).toEqual([]);
 
         shown.key("rows").key(0).resolveAsCell().key("remove").send({

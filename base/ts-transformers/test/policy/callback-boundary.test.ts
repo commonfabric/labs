@@ -1,11 +1,13 @@
 import { assertEquals } from "@std/assert";
 import ts from "typescript";
 
+import { registerCommonFabricDeclarationSources } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { classifyCallbackBoundary } from "../../src/policy/callback-boundary.ts";
 
 function createProgramWithFiles(
   files: Record<string, string>,
   entryFileName = "/test.tsx",
+  trustedSourceNames: readonly string[] = [],
 ): { sourceFile: ts.SourceFile; checker: ts.TypeChecker } {
   const compilerOptions: ts.CompilerOptions = {
     target: ts.ScriptTarget.ES2020,
@@ -54,7 +56,15 @@ function createProgramWithFiles(
   const program = ts.createProgram([entryFileName], compilerOptions, host);
   const sourceFile = program.getSourceFile(entryFileName);
   if (!sourceFile) throw new Error("Expected entry source file");
-  return { sourceFile, checker: program.getTypeChecker() };
+  const checker = program.getTypeChecker();
+  registerCommonFabricDeclarationSources(
+    checker,
+    trustedSourceNames.flatMap((name) => {
+      const source = program.getSourceFile(name);
+      return source ? [source] : [];
+    }),
+  );
+  return { sourceFile, checker };
 }
 
 /** Find the second argument arrow of the first `table(cols, (row) => …)` call. */
@@ -88,16 +98,20 @@ export declare const table: SqliteTableFunction;
 `;
 
 Deno.test("classifyCallbackBoundary: a SQLite table row rule is a compute-owned supported boundary", () => {
-  const { sourceFile, checker } = createProgramWithFiles({
-    "/commonfabric.d.ts": SQLITE_TYPINGS,
-    "/test.tsx": `
+  const { sourceFile, checker } = createProgramWithFiles(
+    {
+      "/commonfabric.d.ts": SQLITE_TYPINGS,
+      "/test.tsx": `
       import { table } from "commonfabric";
       const result = table(
         { id: "id", name: "name" },
         (row) => ({ display: row.name }),
       );
     `,
-  });
+    },
+    "/test.tsx",
+    ["/commonfabric.d.ts"],
+  );
 
   const callback = findTableRowCallback(sourceFile);
   assertEquals(classifyCallbackBoundary(callback, checker), {
@@ -110,6 +124,40 @@ Deno.test("classifyCallbackBoundary: a SQLite table row rule is a compute-owned 
     },
   });
 });
+
+for (
+  const [moduleName, declarationFile] of [
+    ["commonfabric", "/commonfabric.d.ts"],
+    [
+      "fake/@commonfabric/api/commonfabric",
+      "/fake/@commonfabric/api/commonfabric.d.ts",
+    ],
+  ] as const
+) {
+  Deno.test(
+    `classifyCallbackBoundary: authored ${declarationFile} does not grant SQLite callback ownership`,
+    () => {
+      const { sourceFile, checker } = createProgramWithFiles({
+        [declarationFile]: SQLITE_TYPINGS,
+        "/test.tsx": `
+          import { table } from "${moduleName}";
+          const result = table(
+            { id: "id" },
+            (row) => ({ display: row.id }),
+          );
+        `,
+      });
+
+      const callback = findTableRowCallback(sourceFile);
+      const decision = classifyCallbackBoundary(callback, checker);
+      assertEquals(
+        decision.kind !== "supported" || decision.boundaryKind !==
+            "sqlite-row-label-rule",
+        true,
+      );
+    },
+  );
+}
 
 Deno.test("classifyCallbackBoundary: a user-defined table alias does not match the SQLite rule", () => {
   // A local alias must not match, whether its name resembles the framework's

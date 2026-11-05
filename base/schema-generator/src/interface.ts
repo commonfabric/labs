@@ -4,7 +4,6 @@ import type {
   MutableJSONSchema,
   MutableJSONSchemaObj,
 } from "@commonfabric/api";
-import type { Mutable } from "@commonfabric/js-values/types";
 import type { ExpansionBudget } from "./typescript/expanding-recursion.ts";
 
 import type { AnyValueBesideUnwritten } from "./ifc-labels.ts";
@@ -12,7 +11,7 @@ import type { AnyValueBesideUnwritten } from "./ifc-labels.ts";
 /**
  * JSON Schema object type - mutable version of the Common Fabric JSONSchema interface
  */
-export type SchemaDefinition = Mutable<JSONSchema>;
+export type SchemaDefinition = MutableJSONSchema;
 
 /** File and optional content identity attached to a writer-binding claim. */
 export interface WriterSourceIdentity {
@@ -48,6 +47,17 @@ export interface NarrowedFrom {
  */
 export interface SchemaHint {
   readonly items?: unknown;
+  readonly factoryContracts?: readonly {
+    readonly kind: "pattern" | "module" | "handler";
+    readonly factoryType?: ts.Type;
+    readonly inputTypeNode: ts.TypeNode;
+    readonly inputType?: ts.Type;
+    readonly inputSchema?: unknown;
+    readonly outputTypeNode: ts.TypeNode;
+    readonly outputType?: ts.Type;
+    readonly outputSchema?: unknown;
+    readonly frameworkProvidedPaths?: readonly (readonly string[])[];
+  }[];
   readonly cfcUiContract?: UiContractHint;
   /** The value the node narrows, whose CFC labels its schema keeps. */
   readonly narrowedFrom?: NarrowedFrom;

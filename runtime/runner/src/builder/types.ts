@@ -12,6 +12,7 @@ import type {
   JSONValue,
   Module,
   Pattern,
+  PatternFactory,
   Reactive,
   schema as schemaFunction,
   SELF as SELFSymbol,
@@ -44,6 +45,7 @@ import type { cfLink, table } from "@commonfabric/memory/sqlite/schema";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { ImplementationIdentity } from "../cfc/types.ts";
+import type { FactoryContract } from "../factory-contract.ts";
 import type { EntityKind } from "../entity-kind.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { Runtime } from "../runtime.ts";
@@ -52,6 +54,7 @@ import type {
   MemorySpace,
 } from "../storage/interface.ts";
 import type { PatternBuilder } from "./pattern.ts";
+import type { invokeFactory } from "./invoke-factory.ts";
 import { AuthSchema, WebhookConfigSchema } from "./schema-lib.ts";
 
 // Define runtime constants here - actual runtime values
@@ -155,6 +158,11 @@ export type {
 export type { AsCellEntry } from "@commonfabric/api";
 export type { Schema, SchemaWithoutCell } from "@commonfabric/api/schema";
 
+/** Transformer-only callable view; `.curry` is intentionally not public API. */
+export type InternalPatternFactory<T, R> = PatternFactory<T, R> & {
+  curry(params: unknown): InternalPatternFactory<T, R>;
+};
+
 export const isReactiveMarker = Symbol("isReactive");
 
 export function isReactive<T = any>(
@@ -170,6 +178,8 @@ export type NodeRef = {
   inputs: FactoryInput<any>;
   outputs: Reactive<any>;
   frame: Frame | undefined;
+  /** Compiler-emitted contract for a symbolic Factory@1 call. */
+  expectedFactory?: FactoryContract;
 };
 
 export type StreamValue = {
@@ -266,6 +276,8 @@ export type Node = {
   module: Module; // TODO(seefeld): Add `Alias` here once supported
   inputs: FabricExecValue;
   outputs: FabricExecValue;
+  /** Trusted call-site contract; never sourced from the selected factory. */
+  expectedFactory?: FactoryContract;
 };
 
 export type DerivedInternalCellDescriptor = {
@@ -600,6 +612,24 @@ export interface BuilderFunctionsAndConstants extends
   AuthSchema: typeof AuthSchema;
   WebhookConfigSchema: typeof WebhookConfigSchema;
 }
+
+/** Runtime-only helpers emitted by the transformer. */
+export type InternalBuilderHelpers =
+  & Omit<
+    BuilderFunctionsAndConstants,
+    "__cfHelpers"
+  >
+  & {
+    invokeFactory: typeof invokeFactory;
+    withPatternParamsSchema<T extends (...args: any[]) => unknown>(
+      callback: T,
+      schema: JSONSchema,
+    ): T;
+    withFrameworkProvidedPaths<T extends (...args: any[]) => unknown>(
+      callback: T,
+      paths: readonly (readonly string[])[],
+    ): T;
+  };
 
 // Runtime interface needed by createCell
 export interface BuilderRuntime {

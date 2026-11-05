@@ -377,6 +377,68 @@ describe("ContextualFlowControl.schemaAtPath", () => {
     expect(ContextualFlowControl.isTrueSchema({ scope: "any" })).toBe(true);
   });
 
+  it("preserves factory metadata and discovers refs in its public schemas", () => {
+    const schema: JSONSchema = {
+      asFactory: {
+        kind: "pattern",
+        argumentSchema: { $ref: "#/$defs/Argument" },
+        resultSchema: { $ref: "#/$defs/Result" },
+      },
+      $defs: {
+        Argument: { type: "string" },
+        Result: { type: "number" },
+      },
+    };
+    const refs = new Set<string>();
+
+    findCfcSchemaRefs(schema, refs);
+
+    expect(ContextualFlowControl.isTrueSchema(schema)).toBe(true);
+    expect([...refs].sort()).toEqual([
+      "#/$defs/Argument",
+      "#/$defs/Result",
+    ]);
+  });
+
+  it("keeps factory-public refs rooted in their embedded schema", () => {
+    const factorySchema = {
+      asFactory: {
+        kind: "pattern",
+        argumentSchema: {
+          $ref: "#/$defs/Input",
+          $defs: { Input: { type: "string" } },
+        },
+        resultSchema: { type: "number" },
+      },
+    } as const satisfies JSONSchema;
+    const fullSchema = {
+      $defs: { Factory: factorySchema },
+      $ref: "#/$defs/Factory",
+    } as const satisfies JSONSchema;
+
+    const resolved = ContextualFlowControl.resolveSchemaRef(
+      fullSchema,
+      "#/$defs/Factory",
+    );
+    expect((resolved as typeof factorySchema).asFactory).toEqual(
+      factorySchema.asFactory,
+    );
+  });
+
+  it("accepts schema-light module and handler factory contracts", () => {
+    for (
+      const asFactory of [
+        { kind: "module" },
+        { kind: "handler" },
+      ] as const
+    ) {
+      const refs = new Set<string>();
+      expect(() => findCfcSchemaRefs({ asFactory } as JSONSchema, refs)).not
+        .toThrow();
+      expect(refs.size).toBe(0);
+    }
+  });
+
   it("does not resolve a subschema's `$ref` when the root declares no `$defs`, whatever the subschema declares", () => {
     const schema: JSONSchema = {
       type: "object",
@@ -698,6 +760,43 @@ describe("ContextualFlowControl atom joins", () => {
         confidentiality: [caveatAtom, provenanceAtom],
       },
     });
+  });
+
+  it("treats an embedded factory contract as an atomic callable leaf", () => {
+    const outerAtom = cfcAtom.resource(
+      "SourceProvenance",
+      "did:example:outer",
+    );
+    const contractAtom = cfcAtom.resource(
+      "SourceProvenance",
+      "did:example:contract",
+    );
+    const schema: JSONSchema = {
+      type: "object",
+      ifc: { confidentiality: [outerAtom] },
+      properties: {
+        factory: {
+          asFactory: {
+            kind: "pattern",
+            argumentSchema: { type: "string" },
+            resultSchema: {
+              $ref: "#/$defs/Result",
+              $defs: {
+                Result: {
+                  type: "number",
+                  ifc: { confidentiality: [contractAtom] },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const joined = new Set<unknown>();
+    expect(() => ContextualFlowControl.joinSchema(joined, schema)).not
+      .toThrow();
+    expect(ContextualFlowControl.lub(joined)).toEqual([outerAtom]);
   });
 });
 

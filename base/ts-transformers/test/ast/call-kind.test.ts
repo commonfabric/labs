@@ -14,9 +14,16 @@ import {
   resolveCallbackFunctionExpression,
 } from "../../src/ast/mod.ts";
 import {
+  classifyLegacyPatternCarrier,
   getWithPatternHoistablePatternCall,
   isHandlerAppliedCall,
 } from "../../src/ast/call-kind.ts";
+import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import {
+  registerTrustedCommonFabricTestSources,
+  TRUSTED_COMMONFABRIC_GLOBALS,
+  TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME,
+} from "../trusted-commonfabric-sources.ts";
 
 function createProgram(source: string): {
   sourceFile: ts.SourceFile;
@@ -37,19 +44,70 @@ function createProgram(source: string): {
     compilerOptions.target!,
     true,
   );
+  const commonFabricGlobals = ts.createSourceFile(
+    TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME,
+    TRUSTED_COMMONFABRIC_GLOBALS,
+    compilerOptions.target!,
+    true,
+  );
+  const commonFabricModuleName = "/commonfabric.d.ts";
+  const commonFabricModule = ts.createSourceFile(
+    commonFabricModuleName,
+    COMMONFABRIC_TYPES["commonfabric.d.ts"],
+    compilerOptions.target!,
+    true,
+  );
 
   const host = ts.createCompilerHost(compilerOptions, true);
-  host.getSourceFile = (name) => name === fileName ? sourceFile : undefined;
+  host.getSourceFile = (name) =>
+    name === fileName
+      ? sourceFile
+      : name === TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME
+      ? commonFabricGlobals
+      : name === commonFabricModuleName
+      ? commonFabricModule
+      : undefined;
   host.getCurrentDirectory = () => "/";
   host.getDirectories = () => [];
-  host.fileExists = (name) => name === fileName;
-  host.readFile = (name) => name === fileName ? source : undefined;
+  host.fileExists = (name) =>
+    name === fileName || name === TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME ||
+    name === commonFabricModuleName;
+  host.readFile = (name) =>
+    name === fileName
+      ? source
+      : name === TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME
+      ? TRUSTED_COMMONFABRIC_GLOBALS
+      : name === commonFabricModuleName
+      ? COMMONFABRIC_TYPES["commonfabric.d.ts"]
+      : undefined;
   host.writeFile = () => {};
   host.useCaseSensitiveFileNames = () => true;
   host.getCanonicalFileName = (name) => name;
   host.getNewLine = () => "\n";
+  host.resolveModuleNames = (moduleNames) =>
+    moduleNames.map((moduleName) =>
+      moduleName === "commonfabric"
+        ? {
+          resolvedFileName: commonFabricModuleName,
+          extension: ts.Extension.Dts,
+          isExternalLibraryImport: false,
+        }
+        : undefined
+    );
 
-  const program = ts.createProgram([fileName], compilerOptions, host);
+  const program = ts.createProgram(
+    [
+      fileName,
+      TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME,
+      commonFabricModuleName,
+    ],
+    compilerOptions,
+    host,
+  );
+  registerTrustedCommonFabricTestSources(program, [
+    TRUSTED_COMMONFABRIC_GLOBALS_SOURCE_NAME,
+    commonFabricModuleName,
+  ]);
   return { sourceFile, checker: program.getTypeChecker() };
 }
 
@@ -660,6 +718,20 @@ describe("call-kind", () => {
   });
 
   describe("getWithPatternHoistablePatternCall()", () => {
+    it("does not classify an authored untyped WithPattern call as a legacy carrier", () => {
+      const { sourceFile } = createProgram(`
+        declare const items: any;
+        declare const make: { pattern(body: () => number): number };
+        const value = items.mapWithPattern(make.pattern(() => 1), { p: 1 });
+      `);
+      const carrier = findCallInitializer(sourceFile, "value");
+      const patternCall = carrier.arguments[0];
+      expect(ts.isCallExpression(patternCall)).toBe(true);
+      if (!ts.isCallExpression(patternCall)) return;
+
+      expect(classifyLegacyPatternCarrier(patternCall)).toBeUndefined();
+    });
+
     it("returns the pattern call argument of a synthetic `mapWithPattern()` call, and `undefined` for an authored one", () => {
       const { sourceFile, checker } = createProgram(`
         declare const items: any;

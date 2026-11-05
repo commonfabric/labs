@@ -63,12 +63,12 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-array-destructure-lowering
 // Verifies: array destructuring in .map() callback is lowered to index-based key access
-//   .map(([left, right]) => ...) → .mapWithPattern(pattern(...), {})
+//   .map(([left, right]) => ...) → .mapWithPattern(pattern(...))
 //   [left, right] → key("element", "0"), key("element", "1")
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("rows").mapWithPattern(__cfPattern_1, {})}
+        {state.key("rows").mapWithPattern(__cfPattern_1)}
       </div>),
     };
 }, {

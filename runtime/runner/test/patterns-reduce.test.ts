@@ -8,7 +8,10 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { FactoryInput, JSONSchema } from "../src/builder/types.ts";
 import { createBuilder } from "../src/builder/factory.ts";
-import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import {
+  createTrustedBuilder,
+  installTestPatternArtifact,
+} from "./support/trusted-builder.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
@@ -223,10 +226,12 @@ describe("Pattern Runner - Reduce", () => {
       ({ values }) => {
         const total = (values as any)
           .mapWithPattern(
-            pattern(({ element, index, array }: FactoryInput<any>) =>
-              (((x: any) => double(x)) as any)(element, index, array)
+            installTestPatternArtifact(
+              runtime,
+              pattern(({ element, index, array }: FactoryInput<any>) =>
+                (((x: any) => double(x)) as any)(element, index, array)
+              ),
             ),
-            {},
           )
           .reduce((acc: number, x: number) => acc + x, 0);
         return { total };

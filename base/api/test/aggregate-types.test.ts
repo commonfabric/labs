@@ -7,13 +7,20 @@ import type {
   Writable,
 } from "@commonfabric/api";
 
+type Row = { score: number };
+type RowCallbackInput = {
+  element: Row;
+  index: number;
+  array: Row[];
+};
+
 function checkReceivers(
   numbers: Cell<number[]>,
-  rows: Writable<{ score: number }[]>,
+  rows: Writable<Row[]>,
   object: Cell<JSONObject>,
   strings: Cell<string[]>,
-  predicate: PatternFactory<{ score: number }, boolean>,
-  score: PatternFactory<{ score: number }, number>,
+  predicate: PatternFactory<RowCallbackInput, boolean>,
+  score: PatternFactory<RowCallbackInput, number>,
 ) {
   const totals: number[] = [
     numbers.sum(),
@@ -21,18 +28,18 @@ function checkReceivers(
     numbers.max(),
     rows.count(),
     rows.count((row) => row.score > 0),
-    rows.countWithPattern(predicate, {}),
+    rows.countWithPattern(predicate),
   ];
-  const winners: ({ score: number } | undefined)[] = [
+  const winners: (Row | undefined)[] = [
     rows.minBy((row) => row.score),
     rows.maxBy((row) => row.score),
-    rows.minByWithPattern(score, {}),
-    rows.maxByWithPattern(score, {}),
+    rows.minByWithPattern(score),
+    rows.maxByWithPattern(score),
   ];
   // @ts-expect-error Aggregate receivers must contain arrays.
   object.count();
   // @ts-expect-error Aggregate receivers must contain arrays.
-  object.countWithPattern(predicate, {});
+  object.countWithPattern(predicate);
   // @ts-expect-error Numeric aggregates require numeric arrays.
   object.sum();
   // @ts-expect-error Numeric aggregates require numeric arrays.
@@ -46,9 +53,11 @@ function checkReceivers(
   // @ts-expect-error Score selectors require array receivers.
   object.maxBy(() => 1);
   // @ts-expect-error Score patterns require array receivers.
-  object.minByWithPattern(score, {});
+  object.minByWithPattern(score);
   // @ts-expect-error Score patterns require array receivers.
-  object.maxByWithPattern(score, {});
+  object.maxByWithPattern(score);
+  // @ts-expect-error Captures are bound in the factory, never passed as sibling params.
+  rows.countWithPattern(predicate, {});
   return { totals, winners };
 }
 

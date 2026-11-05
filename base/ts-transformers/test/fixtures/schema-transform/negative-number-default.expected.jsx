@@ -41,20 +41,7 @@ export default pattern((__cf_pattern_input) => {
         selectedIndex,
         threshold,
     });
-}, {
-    type: "object",
-    properties: {
-        selectedIndex: {
-            type: "number",
-            "default": -1
-        },
-        threshold: {
-            type: "number",
-            "default": -0.5
-        }
-    },
-    required: ["selectedIndex", "threshold"]
-} as const satisfies __cfHelpers.JSONSchema, {
+}, inputSchema, {
     type: "object",
     properties: {
         $NAME: {

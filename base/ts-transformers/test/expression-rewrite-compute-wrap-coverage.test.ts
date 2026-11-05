@@ -9,6 +9,7 @@ import {
 } from "../src/transformers/expression-rewrite/emitters/compute-wrap-invariants.ts";
 import { rewriteHelperOwnedExpression } from "../src/transformers/expression-rewrite/emitters/helper-owned-expression.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { registerTrustedCommonFabricTestSources } from "./trusted-commonfabric-sources.ts";
 
 // These tests exercise the compute-wrap invariant guard that emitters call
 // before adding a compute wrapper, and the pending-candidate search that
@@ -72,6 +73,7 @@ function createContext(source: string): {
     options,
     host,
   );
+  registerTrustedCommonFabricTestSources(program, ["commonfabric.d.ts"]);
   const sourceFile = program.getSourceFile(fileName)!;
   const context = new TransformationContext({
     program,

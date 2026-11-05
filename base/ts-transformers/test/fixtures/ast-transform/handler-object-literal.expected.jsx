@@ -46,17 +46,11 @@ export default pattern((state) => {
 }, {
     type: "object",
     properties: {
-        value: {
-            type: "number",
-            asCell: ["cell"]
-        },
-        name: {
-            type: "string",
-            asCell: ["cell"]
-        }
+        value: { type: "number", asCell: ["cell"] },
+        name: { type: "string", asCell: ["cell"] },
     },
-    required: ["value"]
-} as const satisfies __cfHelpers.JSONSchema, {
+    required: ["value"],
+}, {
     type: "object",
     properties: {
         onClick1: {

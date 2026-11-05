@@ -232,6 +232,82 @@ interface Root<T> { field: Narrow<T>; }
     expect(schema).toEqual({ enum: ["alpha", "beta"] });
   });
 
+  it("recovers a concrete synthetic reference when its paired type is unknown", async () => {
+    const { checker, sourceFile } = await createTestProgram(
+      "interface Item { text: string; indented: boolean }",
+    );
+    const itemNode = ts.factory.createTypeReferenceNode("Item");
+    const generator = new SchemaGenerator();
+
+    const schema = generator.generateSchema(
+      checker.getUnknownType(),
+      checker,
+      itemNode,
+      undefined,
+      undefined,
+      sourceFile,
+    );
+
+    expect(schema).toEqual({
+      $ref: "#/$defs/Item",
+      $defs: {
+        Item: {
+          type: "object",
+          properties: {
+            text: { type: "string" },
+            indented: { type: "boolean" },
+          },
+          required: ["text", "indented"],
+        },
+      },
+    });
+  });
+
+  it("preserves a named alias explicitly declared as unknown", async () => {
+    const { checker, sourceFile } = await createTestProgram(
+      "type UnknownAlias = unknown;",
+    );
+    const aliasNode = ts.factory.createTypeReferenceNode("UnknownAlias");
+    const generator = new SchemaGenerator();
+
+    const schema = generator.generateSchema(
+      checker.getUnknownType(),
+      checker,
+      aliasNode,
+      undefined,
+      undefined,
+      sourceFile,
+    );
+
+    expect(schema).toEqual({ type: "unknown" });
+  });
+
+  it("does not recover structure from an authored union collapsed to unknown", async () => {
+    const code = `
+interface Item { text: string; }
+type Maybe = unknown | Item;
+`;
+    const { type, checker, typeNode } = await getTypeFromCode(code, "Maybe");
+    const generator = new SchemaGenerator();
+
+    const schema = generator.generateSchema(type, checker, typeNode);
+
+    expect(schema).toEqual({ type: "unknown" });
+  });
+
+  it("does not recover a source-bound generic reference resolving to unknown", async () => {
+    const code = `
+type Identity<T> = T;
+type Result = Identity<unknown>;
+`;
+    const { type, checker, typeNode } = await getTypeFromCode(code, "Result");
+    const generator = new SchemaGenerator();
+
+    const schema = generator.generateSchema(type, checker, typeNode);
+
+    expect(schema).toEqual({ type: "unknown" });
+  });
+
   it("resolves an indexed-access type node through the checker when node-based analysis is forced", async () => {
     // schema-generator.ts analyzeTypeNodeStructure: same non-keyword resolution
     // branch, driven by an indexed-access type node `Options["alpha"]`. The

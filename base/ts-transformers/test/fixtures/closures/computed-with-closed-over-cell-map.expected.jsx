@@ -29,9 +29,8 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { multiplier }) => {
     const n = __cf_pattern_input.key("element");
-    const multiplier = __cf_pattern_input.key("params", "multiplier");
     return __cfLift_1({
         n: n,
         multiplier: multiplier
@@ -39,30 +38,29 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            type: "number"
-        },
-        params: {
-            type: "object",
-            properties: {
-                multiplier: {
-                    type: "number",
-                    asCell: ["readonly"]
-                }
-            },
-            required: ["multiplier"]
+        multiplier: {
+            type: "number",
+            asCell: ["cell"]
         }
     },
-    required: ["element", "params"]
+    required: ["multiplier"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            type: "number"
+        }
+    },
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
 const __cfLift_2 = __cfHelpers.lift<{
     numbers: __cfHelpers.ReadonlyCell<number[]>;
     multiplier: __cfHelpers.ReadonlyCell<number>;
-}, number[]>(({ numbers, multiplier }) => numbers.mapWithPattern(__cfPattern_1, {
+}, number[]>(({ numbers, multiplier }) => numbers.mapWithPattern(__cfPattern_1.curry({
     multiplier: multiplier
-}), {
+})), {
     type: "object",
     properties: {
         numbers: {
@@ -86,10 +84,10 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
 // FIXTURE: computed-with-closed-over-cell-map
 // Verifies: .map() on a closed-over Cell inside computed() IS transformed to .mapWithPattern()
-//   computed(() => numbers.map(n => n * multiplier.get())) → lift(({ numbers, multiplier }) => numbers.mapWithPattern(pattern(fn, ...), { multiplier }))({ numbers, multiplier })
+//   computed(() => numbers.map(n => n * multiplier.get())) → lift(({ numbers, multiplier }) => numbers.mapWithPattern(pattern(fn, ...).curry({ multiplier })))({ numbers, multiplier })
 // Context: Unlike Reactive arrays, Cell arrays still need reactive mapping even
 //   inside a lift-applied callback. The .map() callback's closed-over `multiplier` cell
-//   is passed as a params object to mapWithPattern.
+//   is bound through the private `.curry(...)` carrier.
 export default pattern(() => {
     const numbers = new Writable([1, 2, 3], {
         type: "array",

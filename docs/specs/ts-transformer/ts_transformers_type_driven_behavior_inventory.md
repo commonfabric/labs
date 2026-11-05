@@ -73,14 +73,34 @@ It does not list pure schema-generation/type-emission code unless that code exis
 - `src/ast/scope-analysis.ts`
   `isFunctionDeclaration(...)` uses initializer type call signatures to decide whether a declaration should count as a plain function for capture/serialization policy.
 
-- `patternTool` capture/boundary classification
-  The former `src/closures/strategies/patternTool-strategy.ts` was removed in
-  CT-1655 (#3862): `patternTool` no longer auto-wraps a bare callback or
-  auto-captures module-scoped values. The type-backed decisions now live in
-  `src/policy/callback-boundary.ts` (recognizing the canonical
-  `patternTool(pattern(cb), extraParams?)` shape and giving the inner pattern a
-  `pattern-tool` boundary) and in `src/closures/capture-collector.ts` (which
-  captures for the authored `pattern(...)`).
+- `src/ast/factory-callee.ts`
+  `classifyFactoryValueOrigin(...)`, `classifyFactoryCallTarget(...)`, and
+  `classifyFactoryCallExposure(...)` use trusted semantic factory types,
+  declarations, callback signatures, and call sites to decide:
+  - live vs symbolic vs runtime-materialized origin
+  - invocation vs `asScope()` / `inSpace()` derivation
+  - nearest decisive eager/scheduled boundary
+  - stable helper exposure, including mixed/unknown fail-closed cases
+
+- `src/transformers/symbolic-factory-call.ts`
+  Uses exact trusted factory types or compiler-owned contract hints to decide
+  whether a union is callable. Same-kind arms require equal normalized public
+  input/output schemas and equal FrameworkProvided paths; cross-kind,
+  schema-mismatched, partially provenanced, and callable/non-callable unions
+  diagnose instead of selecting an arm.
+
+- `src/transformers/framework-provided.ts` and
+  `src/policy/framework-provided.ts`
+  Type provenance and the private FrameworkProvided brand identify protected
+  factory input paths. The forwarding stage uses those paths to decide whether
+  eager pattern calls can be rewritten and whether scheduled calls must reject.
+
+- Nested-pattern factory capture/boundary classification
+  Authored nested `pattern(...)` calls use the `pattern-builder` boundary.
+  Capture analysis produces private callback argument 1, carries its schema via
+  `withPatternParamsSchema`, and emits one private `.curry(params)` at a
+  capturing site. Tool descriptors do not define a separate boundary: direct
+  and metadata-wrapped PatternFactory values use the same path.
 
 ## Behavior-Preserving Type Handoffs
 
@@ -103,6 +123,19 @@ These are not new policy decisions by themselves, but they preserve type informa
   - `createReactiveWrapperForExpression(...)`
   Registers synthetic computed-wrapper result types so later checker-backed logic remains coherent.
 
+- `src/core/cross-stage-state.ts` and
+  `src/ast/factory-contract-hints.ts`
+  `SchemaHint.factoryContracts`, `factoryContractsBySymbol`, and the live
+  derivation marker preserve exact factory kind/input/output/protected-path
+  provenance across forwarding, symbolic invocation, closure conversion, and
+  schema generation. Compiler-owned hints take precedence over type
+  reconstruction, and each union arm carries its own authority.
+
+- `src/transformers/framework-provided.ts`
+  The forwarding pass annotates type queries, aliases, and union nodes with
+  exact contracts; the later metadata pass attaches trusted callback paths only
+  after schema and callback lowering.
+
 ## Explicitly Excluded
 
 These areas are type-heavy but are primarily schema/type-emission concerns, not behavioral policy:
@@ -124,3 +157,6 @@ The main live dependencies are:
 - `.get()` legality
 - event-handler / callback / reactive-context classification
 - TypeRegistry handoffs that preserve those decisions across synthetic nodes
+- factory origin, decisive execution exposure, and invocation-vs-derivation
+  classification
+- exact factory union contracts and FrameworkProvided provenance handoffs

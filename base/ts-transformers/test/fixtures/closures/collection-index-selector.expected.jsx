@@ -195,8 +195,8 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 export default pattern((__cf_pattern_input) => {
     const rows = __cf_pattern_input.key("rows");
-    const groups = rows.groupByWithPattern(__cfPattern_1, {}).for("groups", true);
-    const unique = rows.keyByWithPattern(__cfPattern_2, {}).for("unique", true);
+    const groups = rows.groupByWithPattern(__cfPattern_1).for("groups", true);
+    const unique = rows.keyByWithPattern(__cfPattern_2).for("unique", true);
     return { groups: groups.for(["__patternResult", "groups"], true), unique: unique.for(["__patternResult", "unique"], true) };
 }, {
     type: "object",

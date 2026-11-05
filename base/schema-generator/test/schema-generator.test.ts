@@ -3913,14 +3913,69 @@ type CalculatorRequest = {
         unionNode,
         checker,
       ) as Record<string, unknown>;
-
       expect(schema.anyOf).toEqual([
         { type: "undefined" },
         { type: "unknown", asCell: ["opaque"] },
       ]);
     });
 
-    it("preserves computed Common Fabric UI keys in synthetic type literals", async () => {
+    it("formats compiler-owned factory hints inside synthetic unions", async () => {
+      const generator = new SchemaGenerator();
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      const factoryNode = ts.factory.createTypeReferenceNode(
+        "PatternFactory",
+        [
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword),
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+        ],
+      );
+      const unionNode = ts.factory.createUnionTypeNode([
+        factoryNode,
+        ts.factory.createLiteralTypeNode(ts.factory.createNull()),
+        ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+      ]);
+      const schemaHints = new WeakMap<ts.Node, {
+        factoryContracts?: readonly {
+          kind: "pattern";
+          inputTypeNode: ts.TypeNode;
+          outputTypeNode: ts.TypeNode;
+        }[];
+      }>();
+      schemaHints.set(factoryNode, {
+        factoryContracts: [{
+          kind: "pattern",
+          inputTypeNode: ts.factory.createKeywordTypeNode(
+            ts.SyntaxKind.NumberKeyword,
+          ),
+          outputTypeNode: ts.factory.createKeywordTypeNode(
+            ts.SyntaxKind.StringKeyword,
+          ),
+        }],
+      });
+
+      const schema = generator.generateSchemaFromSyntheticTypeNode(
+        unionNode,
+        checker,
+        undefined,
+        schemaHints,
+      ) as Record<string, unknown>;
+      expect(schema.anyOf).toEqual([
+        {
+          asFactory: {
+            kind: "pattern",
+            argumentSchema: { type: "number" },
+            resultSchema: { type: "string" },
+          },
+        },
+        { type: "null" },
+        { type: "string" },
+      ]);
+    });
+
+    it("does not grant Common Fabric UI semantics to an authored unique symbol", async () => {
       const generator = new SchemaGenerator();
       const code = `
 declare const UI: unique symbol;
@@ -3939,12 +3994,8 @@ type Output = { [UI]: VNode };
       ) as Record<string, unknown>;
 
       expect(schema.type).toBe("object");
-      expect(schema.properties).toEqual({
-        $UI: {
-          $ref: "https://commonfabric.org/schemas/vnode.json",
-        },
-      });
-      expect(schema.required).toEqual(["$UI"]);
+      expect(schema.properties).toEqual({});
+      expect(schema.required).toBeUndefined();
     });
 
     it("preserves local const string computed keys in synthetic type literals", async () => {

@@ -174,9 +174,8 @@ const __cfHandler_2 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
     },
     required: ["entry", "pushPath"]
 } as const satisfies __cfHelpers.JSONSchema, (_, { pushPath, entry }) => pushPath.send({ name: entry.name }));
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { pushPath }) => {
     const entry = __cf_pattern_input.key("element");
-    const pushPath = __cf_pattern_input.key("params", "pushPath");
     return (<button type="button" onClick={__cfHandler_2({
         pushPath: pushPath,
         entry: {
@@ -188,27 +187,26 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Entry"
-        },
-        params: {
+        pushPath: {
             type: "object",
             properties: {
-                pushPath: {
-                    type: "object",
-                    properties: {
-                        name: {
-                            type: "string"
-                        }
-                    },
-                    required: ["name"],
-                    asCell: ["stream"]
+                name: {
+                    type: "string"
                 }
             },
-            required: ["pushPath"]
+            required: ["name"],
+            asCell: ["stream"]
         }
     },
-    required: ["element", "params"],
+    required: ["pushPath"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Entry"
+        }
+    },
+    required: ["element"],
     $defs: {
         Entry: {
             type: "object",
@@ -292,9 +290,9 @@ export default pattern((__cf_pattern_input) => {
                     entries: entries,
                     p: p
                 }).for("visible", true);
-                return visible.mapWithPattern(__cfPattern_1, {
+                return visible.mapWithPattern(__cfPattern_1.curry({
                     pushPath: pushPath
-                });
+                }));
             })()}
       </div>)
     };

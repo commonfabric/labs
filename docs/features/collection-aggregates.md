@@ -25,10 +25,11 @@ alias for `T`, so ordinary array-typed pattern inputs and the array returned by
 surface is separate from the aggregate runtime implementation.
 
 Direct builder callers use `countWithPattern`, `minByWithPattern`, and
-`maxByWithPattern` with a score or predicate pattern and its captured parameters.
-The transformer emits those forms for authored callbacks, including explicit
-cell receivers inside `computed`. Calling a callback form directly without
-lowering throws, as it does for `map`.
+`maxByWithPattern` with a bound score or predicate PatternFactory. Captures are
+part of that factory's private state rather than a sibling argument. The
+transformer emits those forms for authored callbacks, including explicit cell
+receivers inside `computed`. Calling a callback form directly without lowering
+throws, as it does for `map`.
 
 Reactive proxies expose aggregate methods on receivers whose resolved schema
 has the top-level type `array`. Direct builder construction must supply that

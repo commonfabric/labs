@@ -15,7 +15,10 @@ import {
   StorageManager as StorageManagerV2,
 } from "../src/storage/v2.ts";
 import { createBuilder } from "../src/builder/factory.ts";
-import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import {
+  createTrustedBuilder,
+  installTestPatternArtifact,
+} from "./support/trusted-builder.ts";
 import { Runtime } from "../src/runtime.ts";
 import { resumeSettleRunKind } from "../src/builtins/resume-republish.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -54,10 +57,8 @@ describe("list builtin edge paths", () => {
   let lift: ReturnType<typeof createBuilder>["commonfabric"]["lift"];
   let pattern: ReturnType<typeof createBuilder>["commonfabric"]["pattern"];
 
-  // An op pattern with no explicit argument schema runs in legacy mode, where
-  // inferListOpArgumentUsage reports every argument (element, index, array,
-  // params) as used. That makes usesIndex true, so a reused element that shifts
-  // position re-runs its op.
+  // An op pattern receives the canonical element, index, and array inputs. A
+  // reused element that shifts position therefore re-runs its op.
   function indexUsingOp(
     // deno-lint-ignore no-explicit-any
     fn: (element: any, index: any) => any,
@@ -112,8 +113,7 @@ describe("list builtin edge paths", () => {
       values,
       tagged: (values as unknown as OpaqueCell<number[]>).mapWithPattern(
         // deno-lint-ignore no-explicit-any
-        op as any,
-        {},
+        installTestPatternArtifact(runtime, op as any),
       ),
     }));
 
@@ -166,7 +166,6 @@ describe("list builtin edge paths", () => {
       tagged: (values as unknown as OpaqueCell<number[]>).mapWithPattern(
         // deno-lint-ignore no-explicit-any
         op as any,
-        {},
       ),
     }));
 
@@ -312,8 +311,7 @@ describe("list builtin edge paths", () => {
       values,
       evens: (values as unknown as OpaqueCell<number[]>).filterWithPattern(
         // deno-lint-ignore no-explicit-any
-        op as any,
-        {},
+        installTestPatternArtifact(runtime, op as any),
       ),
     }));
 
@@ -358,8 +356,7 @@ describe("list builtin edge paths", () => {
       values,
       indices: (values as unknown as OpaqueCell<number[]>).flatMapWithPattern(
         // deno-lint-ignore no-explicit-any
-        op as any,
-        {},
+        installTestPatternArtifact(runtime, op as any),
       ),
     }));
 
@@ -397,8 +394,7 @@ describe("list builtin edge paths", () => {
     const flatMapPattern = pattern<{ values: number[] }>(({ values }) => ({
       out: (values as unknown as OpaqueCell<number[]>).flatMapWithPattern(
         // deno-lint-ignore no-explicit-any
-        op as any,
-        {},
+        installTestPatternArtifact(runtime, op as any),
       ),
     }));
 
@@ -474,7 +470,8 @@ describe("list builtin edge paths", () => {
     // their guard is not reachable from a non-array input value.)
     await expectNonArrayThrow(
       "map-non-array",
-      (values, op) => values.mapWithPattern(op, {}),
+      (values, op) =>
+        values.mapWithPattern(installTestPatternArtifact(runtime, op)),
       /map currently only supports arrays/,
     );
   });

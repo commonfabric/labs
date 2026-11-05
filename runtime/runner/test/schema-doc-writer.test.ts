@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { JSONSchemaObj } from "@commonfabric/api";
@@ -130,6 +131,85 @@ describe("schema-doc-writer", () => {
       }).get(`cid:${hash}` as URI);
       expect(stored).toBeDefined();
     }
+  });
+
+  it("stages schema documents before exposing their carrier", () => {
+    const sigil = sigilFor({
+      type: "object",
+      properties: { orderedField: { type: "string" } },
+    });
+    const carrierId = "of:ordered-schema-carrier" as URI;
+    const tx = writer.edit();
+    // Runtime work commonly reads a result document before writing it, which
+    // gives the carrier an earlier transaction-map position than documents
+    // discovered only at the write boundary.
+    expect(
+      tx.readValueOrThrow({
+        space,
+        id: carrierId,
+        scope: "space",
+        path: [],
+      }),
+    ).toBeUndefined();
+    tx.writeValueOrThrow(
+      { space, id: carrierId, scope: "space", path: [] },
+      { person: sigil },
+    );
+
+    const stagedIds =
+      tx.tx.getNativeCommit?.(space)?.operations.map((operation) =>
+        operation.id
+      ) ?? [];
+    const carrierIndex = stagedIds.indexOf(carrierId);
+    const schemaDocumentIndices = stagedIds.flatMap((id, index) =>
+      id.startsWith("cid:") ? [index] : []
+    );
+    expect(schemaDocumentIndices.length).toBeGreaterThan(0);
+    expect(schemaDocumentIndices.every((index) => index < carrierIndex)).toBe(
+      true,
+    );
+    tx.abort(new Error("test cleanup"));
+  });
+
+  it("refreshes a cached schema-document absence after delivery", async () => {
+    const sigil = sigilFor({
+      type: "object",
+      properties: { refreshedField: { type: "string" } },
+    });
+    const stamped = payloadSchema(sigil) as JSONSchemaObj;
+    const rootHash = parseExternalSchemaRef(stamped.$ref!)!.taggedHash;
+    const cachedReader = writer.readTx();
+    const schemaDocument = {
+      space,
+      id: `cid:${rootHash}` as URI,
+      scope: "space" as const,
+      path: [],
+    };
+    expect(cachedReader.readOrThrow(schemaDocument)).toBeUndefined();
+
+    const tx = writer.edit();
+    tx.writeValueOrThrow(
+      { space, id: "of:refresh-carrier" as URI, scope: "space", path: [] },
+      { person: sigil },
+    );
+    expect((await tx.commit().settled).ok).toBeDefined();
+
+    expect(cachedReader.readOrThrow(schemaDocument)).toEqual({
+      value: lookupSchemaDocument(rootHash),
+    });
+  });
+
+  it("keeps an ordinary cached absence on its transaction snapshot", async () => {
+    const id = "of:ordinary-snapshot" as URI;
+    const address = { space, id, scope: "space" as const, path: [] };
+    const cachedReader = writer.readTx();
+    expect(cachedReader.readValueOrThrow(address)).toBeUndefined();
+
+    const tx = writer.edit();
+    tx.writeValueOrThrow(address, { arrived: true });
+    expect((await tx.commit().settled).ok).toBeDefined();
+
+    expect(cachedReader.readValueOrThrow(address)).toBeUndefined();
   });
 
   it("re-installs the same closure across transactions under the immutability boundary", async () => {
@@ -269,6 +349,45 @@ describe("schema-doc-writer", () => {
       await other.dispose();
       await otherStorage.close();
     }
+  });
+
+  it("does not stage a schema closure when the carrier write is refused", () => {
+    const sigil = sigilFor({
+      type: "object",
+      properties: { refusedField: { type: "string" } },
+    });
+    const tx = writer.edit();
+    const carrierId = "of:refused-carrier" as URI;
+    const originalWrite = tx.tx.write.bind(tx.tx);
+    using _refusedCarrier = stub(
+      tx.tx,
+      "write",
+      (address, value, options) =>
+        address.id === carrierId
+          ? {
+            error: {
+              name: "StorageTransactionAborted",
+              message: "forced carrier refusal",
+              reason: new Error("forced carrier refusal"),
+            },
+          } as never
+          : originalWrite(address, value, options),
+    );
+    const result = tx.write(
+      {
+        space,
+        id: carrierId,
+        scope: "space",
+        path: [],
+      },
+      { person: sigil },
+    );
+
+    expect(result.error).toBeDefined();
+    const staged = [...tx.getWriteDetails?.(space) ?? []].map((detail) =>
+      detail.address.id
+    );
+    expect(staged.some((id) => id.startsWith("cid:"))).toBe(false);
   });
 
   it("re-stages a schema document that is visible only through speculation", async () => {

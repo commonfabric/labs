@@ -80,9 +80,8 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { showInactive }) => {
     const tag = __cf_pattern_input.key("element");
-    const showInactive = __cf_pattern_input.key("params", "showInactive");
     return (<li>
                     {/* This ternary should be transformed to ifElse */}
                     {__cfHelpers.ifElse({
@@ -106,21 +105,20 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Tag"
-        },
-        params: {
-            type: "object",
-            properties: {
-                showInactive: {
-                    type: "boolean",
-                    "default": false
-                }
-            },
-            required: ["showInactive"]
+        showInactive: {
+            type: "boolean",
+            "default": false
         }
     },
-    required: ["element", "params"],
+    required: ["showInactive"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Tag"
+        }
+    },
+    required: ["element"],
     $defs: {
         Tag: {
             type: "object",
@@ -156,9 +154,8 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_2 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { showInactive }) => {
     const item = __cf_pattern_input.key("element");
-    const showInactive = __cf_pattern_input.key("params", "showInactive");
     return (<div>
               {/* Ternary in outer map, outside inner map - should also be ifElse */}
               <strong>{__cfHelpers.ifElse({
@@ -175,29 +172,28 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
             }
         } }), item.key("label"), "No tags")}</strong>
               <ul>
-                {item.key("tags").mapWithPattern(__cfPattern_1, {
+                {item.key("tags").mapWithPattern(__cfPattern_1.curry({
             showInactive: showInactive
-        })}
+        }))}
               </ul>
             </div>);
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Item"
-        },
-        params: {
-            type: "object",
-            properties: {
-                showInactive: {
-                    type: "boolean",
-                    "default": false
-                }
-            },
-            required: ["showInactive"]
+        showInactive: {
+            type: "boolean",
+            "default": false
         }
     },
-    required: ["element", "params"],
+    required: ["showInactive"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Item"
+        }
+    },
+    required: ["element"],
     $defs: {
         Item: {
             type: "object",
@@ -251,8 +247,8 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 // FIXTURE: map-ternary-inside-nested-map
 // Verifies: ternaries inside nested .map() callbacks are transformed to ifElse
 //   outer ternary → ifElse(hasItems, items.mapWithPattern(...), <p>No items</p>)
-//   outer .map(fn) → .mapWithPattern(pattern(...), {showInactive})
-//   inner .map(fn) → .mapWithPattern(pattern(...), {showInactive})
+//   outer .map(fn) → .mapWithPattern(pattern(...).curry({showInactive}))
+//   inner .map(fn) → .mapWithPattern(pattern(...).curry({showInactive}))
 //   inner ternary → ifElse(tag.active, tag.name, ifElse(showInactive, `(${tag.name})`, ""))
 // Context: Nested maps with ternaries at both levels; captures showInactive through both map layers
 export default pattern((__cf_pattern_input) => {
@@ -332,9 +328,9 @@ export default pattern((__cf_pattern_input) => {
                     required: ["$UI"]
                 }
             }
-        } as const satisfies __cfHelpers.JSONSchema, hasItems, items.mapWithPattern(__cfPattern_2, {
+        } as const satisfies __cfHelpers.JSONSchema, hasItems, items.mapWithPattern(__cfPattern_2.curry({
             showInactive: showInactive
-        }), <p>No items</p>)}
+        })), <p>No items</p>)}
       </div>),
     };
 }, {

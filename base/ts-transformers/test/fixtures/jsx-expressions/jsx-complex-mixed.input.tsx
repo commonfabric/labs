@@ -16,8 +16,8 @@ interface State {
 
 // FIXTURE: jsx-complex-mixed
 // Verifies: mixed transforms -- map, filter, arithmetic, ternary/ifElse, attribute bindings in one pattern
-//   .filter(fn)              → .filterWithPattern(pattern(...), {captures})
-//   .map(fn)                 → .mapWithPattern(pattern(...), {captures})
+//   .filter(fn)              → .filterWithPattern(pattern(...).curry({captures}))
+//   .map(fn)                 → .mapWithPattern(pattern(...).curry({captures}))
 //   ternary cond ? a : b     → ifElse(lift(...)(cond), a, b)
 //   {state.discount * 100}   → lift(...)({ discount })
 // Context: Comprehensive fixture combining array methods, conditionals, lift-applied computations, and attributes

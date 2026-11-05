@@ -326,8 +326,14 @@ export async function getTypeFromFiles(
   files: Record<string, string>,
   entryFile: string,
   typeName: string,
-): Promise<{ type: ts.Type; checker: ts.TypeChecker; typeNode?: ts.TypeNode }> {
-  const { checker, sourceFile } = await createTestProgramFromFiles(
+): Promise<{
+  type: ts.Type;
+  checker: ts.TypeChecker;
+  program: ts.Program;
+  sourceFile: ts.SourceFile;
+  typeNode?: ts.TypeNode;
+}> {
+  const { program, checker, sourceFile } = await createTestProgramFromFiles(
     files,
     entryFile,
   );
@@ -347,8 +353,8 @@ export async function getTypeFromFiles(
 
   if (!foundType) throw new Error(`Type ${typeName} not found in code`);
   return foundTypeNode
-    ? { type: foundType, checker, typeNode: foundTypeNode }
-    : { type: foundType, checker };
+    ? { type: foundType, checker, program, sourceFile, typeNode: foundTypeNode }
+    : { type: foundType, checker, program, sourceFile };
 }
 
 /**

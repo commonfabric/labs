@@ -64,8 +64,8 @@ const togglePreview = handler(
 );
 
 // Module-scope lift definitions
-const liftSanitizeContent = lift(sanitizeContent);
-const liftSanitizePreview = lift(sanitizePreview);
+const liftSanitizeContent = lift((value: string) => sanitizeContent(value));
+const liftSanitizePreview = lift((value: boolean) => sanitizePreview(value));
 const liftPreviewText = lift((value: string) => formatMarkdown(value));
 const liftModeLabel = lift((enabled: boolean) => enabled ? "Preview" : "Raw");
 

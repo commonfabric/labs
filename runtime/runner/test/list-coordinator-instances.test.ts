@@ -11,6 +11,7 @@ import {
   listCoordinatorPlan,
   listElementResultCell,
 } from "../src/builtins/list-coordinator-plan.ts";
+import { materializeListPatternSelection } from "../src/builtins/list-factory-materialization.ts";
 import { listInstanceCoordinator } from "../src/builtins/list-instance-coordinator.ts";
 import type { Action } from "../src/scheduler.ts";
 import { useCancelGroup } from "../src/cancel.ts";
@@ -225,10 +226,12 @@ describe("list-coordinator-instances", () => {
               tx,
               name,
               inputs,
-              {
-                type: "object",
-                properties: { op: { asCell: ["cell"] } },
-              },
+              materializeListPatternSelection(
+                runtime,
+                tx,
+                inputs.key("op"),
+                name,
+              ),
               parent,
               output,
             );
@@ -355,10 +358,12 @@ describe("list-coordinator-instances", () => {
                 tx,
                 name,
                 inputs,
-                {
-                  type: "object",
-                  properties: { op: { asCell: ["cell"] } },
-                },
+                materializeListPatternSelection(
+                  runtime,
+                  tx,
+                  inputs.key("op"),
+                  name,
+                ),
                 parent,
                 output,
               );

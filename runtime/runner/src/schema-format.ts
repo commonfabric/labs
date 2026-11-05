@@ -7,7 +7,10 @@
  */
 
 import type { AsCellType } from "@commonfabric/api";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import type { JSONSchema } from "commonfabric";
 
 import { ContextualFlowControl } from "./cfc.ts";
@@ -113,18 +116,6 @@ export interface SchemaFormatOptions {
  * })
  * // → "Record<string, number>"
  *
- * @example
- * // PatternToolResult schemas (from patternTool())
- * schemaToTypeString({
- *   type: "object",
- *   properties: {
- *     pattern: { type: "object" },
- *     extraParams: { properties: { content: { type: "string" } } }
- *   }
- * })
- * // → "(e: { content?: string }) => void"
- *
- * @example
  * // With $defs resolution
  * schemaToTypeString(
  *   { $ref: "#/$defs/User" },
@@ -279,18 +270,25 @@ function schemaToTypeStringInner(
     return innerType;
   }
 
-  // Handle PatternToolResult - objects with { pattern, extraParams } structure
-  // These represent callable handlers created via patternTool()
-  // Format as (e: ExtraParamsType) => void for LLM readability
-  if (s.type === "object" || s.properties) {
-    const props = s.properties as Record<string, JSONSchema> | undefined;
-    if (props && "pattern" in props && "extraParams" in props) {
-      // This is a PatternToolResult schema - format as a handler
-      const extraParamsSchema = props.extraParams;
-      if (depth >= maxDepth) return "(e: {...}) => void";
-      const paramType = schemaToTypeString(extraParamsSchema, nextOpts);
-      return `(e: ${paramType}) => void`;
-    }
+  if (isObjectNotArray(s.asFactory)) {
+    const contract = s.asFactory;
+    const input = contract.kind === "handler"
+      ? contract.contextSchema
+      : contract.argumentSchema;
+    const output = contract.kind === "handler"
+      ? contract.eventSchema
+      : contract.resultSchema;
+    const inputType = schemaToTypeString(
+      (input ?? true) as JSONSchema,
+      nextOpts,
+    );
+    const outputType = schemaToTypeString(
+      (output ?? true) as JSONSchema,
+      nextOpts,
+    );
+    return contract.kind === "handler"
+      ? `(e: ${inputType}) => (${outputType}) => void`
+      : `(e: ${inputType}) => ${outputType}`;
   }
 
   // Handle const - show as the literal, matching the enum rendering (the

@@ -130,7 +130,7 @@ export default pattern((__cf_pattern_input) => {
     const filtered = __cf_pattern_input.key("filtered");
     return ({
         [UI]: (<div>
-      {filtered.mapWithPattern(__cfPattern_1, {})}
+      {filtered.mapWithPattern(__cfPattern_1)}
     </div>),
     });
 }, {

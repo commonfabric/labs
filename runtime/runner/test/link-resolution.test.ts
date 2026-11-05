@@ -242,6 +242,43 @@ describe("link-resolution", () => {
         $alias: { path: ["value"] },
       });
     });
+
+    it("does not follow a link envelope that has data siblings", () => {
+      const targetCell = runtime.getCell<string>(
+        space,
+        "link-shaped-record-target",
+        undefined,
+        tx,
+      );
+      targetCell.set("target");
+      const sourceCell = runtime.getCell<unknown>(
+        space,
+        "link-shaped-record-source",
+        undefined,
+        tx,
+      );
+      sourceCell.setRaw({
+        ...targetCell.getAsWriteRedirectLink(),
+        sibling: "data",
+      });
+      const location = sourceCell.getAsNormalizedFullLink();
+
+      const resolved = resolveLink(runtime, tx, location);
+
+      expect(areNormalizedLinksSame(resolved, location)).toBe(true);
+      expect(tx.readValueOrThrow(resolved)).toEqual({
+        ...targetCell.getAsWriteRedirectLink(),
+        sibling: "data",
+      });
+
+      const siblingLocation = sourceCell.key("sibling")
+        .getAsNormalizedFullLink();
+      const resolvedSibling = resolveLink(runtime, tx, siblingLocation);
+      expect(areNormalizedLinksSame(resolvedSibling, siblingLocation)).toBe(
+        true,
+      );
+      expect(tx.readValueOrThrow(resolvedSibling)).toBe("data");
+    });
   });
 
   describe("Schema handling in links", () => {
@@ -273,7 +310,7 @@ describe("link-resolution", () => {
       sourceCell.setRaw({
         link: targetCell.getAsLink({ includeSchema: true }),
       });
-      tx.commit();
+      tx.commit().settled;
       tx = runtime.edit();
 
       // When resolving a link to a cell that has a schema,
@@ -316,7 +353,7 @@ describe("link-resolution", () => {
       sourceCell.setRaw({
         link: targetCell.key("user").getAsLink({ includeSchema: true }),
       });
-      tx.commit();
+      tx.commit().settled;
       tx = runtime.edit();
 
       // The resolved link should have the adjusted schema for the user object
@@ -357,7 +394,7 @@ describe("link-resolution", () => {
       sourceCell.setRaw({
         alias: targetCell.getAsWriteRedirectLink({ includeSchema: true }),
       });
-      tx.commit();
+      tx.commit().settled;
       tx = runtime.edit();
 
       // Resolve with writeRedirect mode
@@ -384,7 +421,7 @@ describe("link-resolution", () => {
         tx,
       );
       sourceCell.set({ link: targetCell });
-      tx.commit();
+      tx.commit().settled;
       tx = runtime.edit();
 
       const linkValue = sourceCell.key("link").get();
@@ -424,7 +461,7 @@ describe("link-resolution", () => {
         linkData = linkRefFrom({ ...linkRefPayload(linkData), schema });
       }
       sourceCell.setRaw({ link: linkData });
-      tx.commit();
+      tx.commit().settled;
       tx = runtime.edit();
 
       const link = parseLink(sourceCell.get().link, sourceCell)!;
@@ -479,7 +516,7 @@ describe("link-resolution", () => {
       );
       // Link to cell2
       cell3.set({ ref: cell2 });
-      tx.commit();
+      tx.commit().settled;
       tx = runtime.edit();
 
       // Following through cell3 -> cell2 -> cell1.nested
@@ -537,7 +574,7 @@ describe("link-resolution", () => {
       sourceCell.setRaw({
         link: targetCell.key("items").key(0).getAsLink({ includeSchema: true }),
       });
-      tx.commit();
+      tx.commit().settled;
       tx = runtime.edit();
 
       const linkValue = sourceCell.key("link").get();
@@ -587,7 +624,7 @@ describe("link-resolution", () => {
         tx,
       );
       sourceCell.set({ ref: linkCell });
-      tx.commit();
+      tx.commit().settled;
       tx = runtime.edit();
 
       // Following the chain should preserve the destination schema
@@ -617,7 +654,7 @@ describe("link-resolution", () => {
       sourceCell.setRaw({
         link: targetCell.getAsLink({ includeSchema: true }),
       });
-      tx.commit();
+      tx.commit().settled;
       tx = runtime.edit();
 
       const linkValue = sourceCell.key("link").get();
@@ -646,7 +683,7 @@ describe("link-resolution", () => {
             includeSchema: true,
           }),
         });
-        tx.commit();
+        tx.commit().settled;
         tx = runtime.edit();
         const resolved = resolveLink(runtime, tx, {
           ...sourceCell.key("link").getAsNormalizedFullLink(),
@@ -776,7 +813,7 @@ describe("link-resolution", () => {
         link: targetCell.key("level1").key("level2").key("level3").key(0)
           .getAsLink({ includeSchema: true }),
       });
-      tx.commit();
+      tx.commit().settled;
       tx = runtime.edit();
 
       const linkValue = sourceCell.key("link").get();
@@ -818,7 +855,7 @@ describe("link-resolution", () => {
       sourceCell.setRaw({
         link: targetCell.getAsLink({ includeSchema: true }),
       });
-      tx.commit();
+      tx.commit().settled;
       tx = runtime.edit();
 
       const linkValue = sourceCell.key("link").get();
@@ -863,7 +900,7 @@ describe("link-resolution", () => {
         name: "test",
         ref: targetCell.getAsLink({ includeSchema: true }),
       });
-      tx.commit();
+      tx.commit().settled;
       tx = runtime.edit();
 
       // Resolving the ref should give us the target schema
@@ -907,7 +944,7 @@ describe("link-resolution", () => {
       sourceCell.setRaw({
         data: targetCell.getAsLink({ includeSchema: true }),
       });
-      tx.commit();
+      tx.commit().settled;
       tx = runtime.edit();
 
       // First verify the link to targetCell has the schema

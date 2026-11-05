@@ -1,7 +1,7 @@
 /**
  * Tier 1 of the pattern-update regime: prove that a pattern's current
- * argument/result contract can still be applied to every version of itself
- * that is, or was, deployed.
+ * argument/result contract can still be applied to every active version of
+ * itself that is, or was, deployed.
  *
  * Why this exists as a CI gate rather than a runtime check: `cf piece setsrc`
  * refuses an incompatible replacement (`PieceController.setPattern` calls
@@ -51,6 +51,71 @@ export interface PatternContract {
 export interface Baseline {
   label: string;
   contract: PatternContract;
+}
+
+/**
+ * One deliberately retired durable contract. The baseline remains in the
+ * append-only store as evidence; this exact pattern/label pair is omitted from
+ * future rollout proofs only after its stored population has been migrated,
+ * expired, or explicitly approved for a wipe.
+ */
+export interface BaselineRetirement {
+  pattern: string;
+  baseline: string;
+  reason: string;
+  /** Repo-relative path to the indexed decision record authorizing removal. */
+  decision: string;
+}
+
+/** Keep every baseline except exact, explicitly retired pattern/label pairs. */
+export function filterRetiredBaselines(
+  pattern: string,
+  baselines: readonly Baseline[],
+  retirements: readonly BaselineRetirement[],
+): Baseline[] {
+  const retiredLabels = new Set(
+    retirements
+      .filter((retirement) => retirement.pattern === pattern)
+      .map((retirement) => retirement.baseline),
+  );
+  return baselines.filter((baseline) => !retiredLabels.has(baseline.label));
+}
+
+/** Validate that every retirement names one unique, existing baseline. */
+export function retirementConfigurationIssues(
+  retirements: readonly BaselineRetirement[],
+  baselinesByPattern: ReadonlyMap<string, readonly Baseline[]>,
+  recordExists: (repoRelativePath: string) => boolean,
+): string[] {
+  const issues: string[] = [];
+  const seen = new Set<string>();
+  for (const retirement of retirements) {
+    const key = `${retirement.pattern}/${retirement.baseline}`;
+    if (seen.has(key)) {
+      issues.push(`duplicate retirement ${key}`);
+      continue;
+    }
+    seen.add(key);
+    if (retirement.reason.trim().length === 0) {
+      issues.push(`retirement ${key} has no reason`);
+    }
+    if (retirement.decision.trim().length === 0) {
+      issues.push(`retirement ${key} has no decision record`);
+    }
+    const baselines = baselinesByPattern.get(retirement.pattern) ?? [];
+    if (!baselines.some((baseline) => baseline.label === retirement.baseline)) {
+      issues.push(`retirement ${key} does not name a recorded baseline`);
+    }
+    if (
+      retirement.decision.trim().length > 0 &&
+      !recordExists(retirement.decision)
+    ) {
+      issues.push(
+        `retirement ${key} decision record does not exist: ${retirement.decision}`,
+      );
+    }
+  }
+  return issues;
 }
 
 export type Finding =
@@ -183,11 +248,12 @@ const asPattern = (contract: PatternContract): Pattern => ({
 /**
  * Check one pattern's current contract against every baseline recorded for it.
  *
- * Every baseline is checked, never just the newest. A piece rolls forward from
- * whatever version it last opened at, which may be many releases back, and the
- * evolution-policy allowances in the subset check are not guaranteed to
- * compose across steps — so proving compatibility with N-1 does not prove it
- * with N-5. Checking all of them makes the question moot.
+ * Every supplied active baseline is checked, never just the newest. A piece
+ * rolls forward from whatever version it last opened at, which may be many
+ * releases back, and the evolution-policy allowances in the subset check are
+ * not guaranteed to compose across steps — so proving compatibility with N-1
+ * does not prove it with N-5. The task shell removes only exact, documented
+ * baseline retirements before calling this function.
  *
  * `current` is `undefined` when baselines exist for a path that no longer
  * compiles to a pattern.

@@ -79,7 +79,7 @@ const toNonNegativeInteger = (value: unknown): number | undefined => {
   return integer >= 0 ? integer : undefined;
 };
 
-const sanitizeReactionCatalog = (value: unknown): string[] => {
+const sanitizeReactionCatalog = (value: readonly string[]): string[] => {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
   for (const entry of value) {

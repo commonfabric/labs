@@ -48,7 +48,7 @@ const toSafeString = (input: unknown, fallback: string): string => {
   return input.trim();
 };
 
-const sanitizeStepEntries = (input: unknown): StepEntry[] => {
+const sanitizeStepEntries = (input: readonly StepEntry[]): StepEntry[] => {
   if (!Array.isArray(input)) return [];
   const result: StepEntry[] = [];
   for (const value of input) {

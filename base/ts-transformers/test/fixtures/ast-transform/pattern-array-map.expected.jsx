@@ -86,7 +86,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: pattern-array-map
 // Verifies: .map() on a reactive array is transformed to .mapWithPattern()
-//   values.map((value, index) => JSX)  → values.mapWithPattern(pattern(fn, elementSchema, outputSchema), {})
+//   values.map((value, index) => JSX)  → values.mapWithPattern(pattern(fn, elementSchema, outputSchema))
 //   computed(() => { ... })            → captures `values` into lift(inputSchema, outputSchema, fn)
 //   handler((_, state: {...}) => ...)  → handler(false, stateSchema, fn)
 //   pattern<{ values: string[] }>      → pattern(fn, inputSchema, outputSchema)
@@ -99,7 +99,7 @@ export default pattern((__cf_pattern_input) => {
         [UI]: (<div>
           <button type="button" onClick={adder({ values })}>Add Value</button>
           <div>
-            {values.mapWithPattern(__cfPattern_1, {})}
+            {values.mapWithPattern(__cfPattern_1)}
           </div>
         </div>),
         values,

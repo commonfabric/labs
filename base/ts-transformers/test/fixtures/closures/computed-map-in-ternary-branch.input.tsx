@@ -12,7 +12,7 @@ interface PatternInput {
 // FIXTURE: computed-map-in-ternary-branch
 // Verifies: a computed array used inside a ternary JSX branch stays pattern-lowered
 //   const adminData = computed(() => [...people.get()].sort(...).map(...))
-//   adminData.map((entry) => <li>...) → adminData.mapWithPattern(pattern(...), {})
+//   adminData.map((entry) => <li>...) → adminData.mapWithPattern(pattern(...))
 //   showAdmin ? <div>...</div> : null → ifElse(showAdmin, <div>...</div>, null)
 // Context: The outer `people.map(...)` is over a pattern input cell, while the
 //   inner `adminData.map(...)` is over compute-owned data but still lowered in

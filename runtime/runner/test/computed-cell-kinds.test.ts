@@ -99,7 +99,10 @@ describe("computed cell kinds", () => {
         return { doubled: double(intermediate) };
       });
       expect(testPattern.derivedInternalCells).toEqual([
-        { partialCause: { $generated: 0 }, kind: "computed" },
+        {
+          partialCause: { $generated: 0 },
+          kind: "computed",
+        },
         { partialCause: "doubled", kind: "computed" },
       ]);
     });

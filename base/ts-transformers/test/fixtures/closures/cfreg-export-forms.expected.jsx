@@ -53,7 +53,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
     return ({
-        vs: items.mapWithPattern(__cfPattern_1, {}).for(["__patternResult", "vs"], true)
+        vs: items.mapWithPattern(__cfPattern_1).for(["__patternResult", "vs"], true)
     });
 }, {
     type: "object",

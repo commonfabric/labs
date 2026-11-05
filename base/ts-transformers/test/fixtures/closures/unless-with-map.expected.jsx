@@ -106,7 +106,7 @@ export default pattern((__cf_pattern_input) => {
             }
         } as const satisfies __cfHelpers.JSONSchema, {
             asCell: ["cell"]
-        } as const satisfies __cfHelpers.JSONSchema, customContent, items.mapWithPattern(__cfPattern_1, {}))}
+        } as const satisfies __cfHelpers.JSONSchema, customContent, items.mapWithPattern(__cfPattern_1))}
       </div>),
     };
 }, {

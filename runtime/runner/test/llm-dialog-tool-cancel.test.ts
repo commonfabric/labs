@@ -34,11 +34,7 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import type {
-  BuiltInLLMMessage,
-  BuiltInLLMTool,
-  JSONSchema,
-} from "@commonfabric/api";
+import type { BuiltInLLMMessage, JSONSchema } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
@@ -52,7 +48,10 @@ import { createBuilder } from "../src/builder/factory.ts";
 import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import {
+  createTrustedBuilder,
+  installTestPatternArtifact,
+} from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -66,9 +65,6 @@ describe("cancelling a dialog turn stops a running tool", () => {
   let Cell: ReturnType<typeof createBuilder>["commonfabric"]["Cell"];
   let pattern: ReturnType<typeof createBuilder>["commonfabric"]["pattern"];
   let handler: ReturnType<typeof createBuilder>["commonfabric"]["handler"];
-  let patternTool: ReturnType<
-    typeof createBuilder
-  >["commonfabric"]["patternTool"];
   let llmDialog: ReturnType<typeof createBuilder>["commonfabric"]["llmDialog"];
 
   beforeEach(() => {
@@ -81,7 +77,7 @@ describe("cancelling a dialog turn stops a running tool", () => {
     tx = runtime.edit();
 
     const { commonfabric } = createTrustedBuilder(runtime);
-    ({ pattern, llmDialog, Cell, patternTool, handler } = commonfabric);
+    ({ pattern, llmDialog, Cell, handler } = commonfabric);
   });
 
   afterEach(async () => {
@@ -122,6 +118,7 @@ describe("cancelling a dialog turn stops a running tool", () => {
       { type: "object", additionalProperties: false },
       true,
     );
+    installTestPatternArtifact(runtime, stallTool);
 
     const resultSchema = {
       type: "object",
@@ -145,7 +142,7 @@ describe("cancelling a dialog turn stops a running tool", () => {
           tools: {
             stall: {
               description: "Never returns a result.",
-              ...(patternTool(stallTool) as unknown as BuiltInLLMTool),
+              pattern: stallTool,
             },
           },
         });
@@ -168,7 +165,7 @@ describe("cancelling a dialog turn stops a running tool", () => {
     );
 
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     const addMessage = await result.key("addMessage").pull();
     addMessage.send({ role: "user", content: "Start the stalling tool." });
@@ -239,6 +236,7 @@ describe("cancelling a dialog turn stops a running tool", () => {
       { type: "object", additionalProperties: false },
       true,
     );
+    installTestPatternArtifact(runtime, stallTool);
 
     const secondTool = handler(
       {
@@ -275,7 +273,7 @@ describe("cancelling a dialog turn stops a running tool", () => {
           tools: {
             stall: {
               description: "Never returns a result.",
-              ...(patternTool(stallTool) as unknown as BuiltInLLMTool),
+              pattern: stallTool,
             },
             second: {
               description: "Must not run once the turn is cancelled.",
@@ -302,7 +300,7 @@ describe("cancelling a dialog turn stops a running tool", () => {
     );
 
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     const addMessage = await result.key("addMessage").pull();
     addMessage.send({ role: "user", content: "Start both tools." });

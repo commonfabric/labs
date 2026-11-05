@@ -20,6 +20,7 @@ import {
   type FabricValueLayer,
   type FabricValuePlusLayer,
 } from "@/interface.ts";
+import { isAdmittedFabricFactory } from "@/fabric-factory.ts";
 import type { FabricPrimitiveValueTag } from "@/fabric-primitives/interface.ts";
 import { debugStr } from "@/value-debug";
 
@@ -76,9 +77,11 @@ function tagOfUnknownElseNull<PlusType = never>(
 
   switch (jsType) {
     case "function": {
-      // Values of type `function` are _never_ `FabricValue`s: `FabricValue`
-      // contractually represents that its contents are inert, and `function` is
-      // about as "ert" as a value can get. However, the `PlusType` may accept
+      if (isAdmittedFabricFactory(value)) return VALUE_TAGS.FabricFactory;
+      // Arbitrary functions are never FabricValues: FabricValue contractually
+      // represents inert contents. The admitted factory arm above is the one
+      // callable exception, validated through its canonical hidden state.
+      // The `PlusType` may accept
       // `function`s, so we check that to make a final determination as to tag.
       return isPlusType?.(value) ? VALUE_TAGS.PlusType : null;
     }

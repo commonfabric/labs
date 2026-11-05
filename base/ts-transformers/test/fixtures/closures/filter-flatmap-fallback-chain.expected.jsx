@@ -121,7 +121,7 @@ export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
     return {
         [UI]: (<div>
-        {(items ?? []).filterWithPattern(__cfPattern_1, {}).flatMapWithPattern(__cfPattern_2, {}).mapWithPattern(__cfPattern_3, {})}
+        {(items ?? []).filterWithPattern(__cfPattern_1).flatMapWithPattern(__cfPattern_2).mapWithPattern(__cfPattern_3)}
       </div>),
     };
 }, {

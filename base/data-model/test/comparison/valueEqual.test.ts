@@ -24,6 +24,7 @@ import { expect } from "@std/expect";
 import { deepFreeze, type FabricValue, hashStringOf, valueEqual } from "@";
 import { codecOf, NULL_LIVE_ENVIRONMENT, UnknownValue } from "@/codec-common";
 import { FabricError } from "@/fabric-instances";
+import { registerFabricFactory } from "@/fabric-factory.ts";
 import {
   FabricBytes,
   FabricDurationDay,
@@ -259,12 +260,30 @@ describe("valueEqual()", () => {
     expect(() => valueEqual({ a: 1 }, fn)).toThrow();
   });
 
+  it("rejects an arbitrary function compared with an admitted factory", () => {
+    const factory = registerFabricFactory(() => undefined, "module", {
+      kind: "module",
+      ref: {
+        identity: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        symbol: "factory",
+      },
+    });
+    const arbitrary = (() => undefined) as unknown as FabricValue;
+
+    expect(() => valueEqual(factory, arbitrary)).toThrow(
+      "Cannot compare a function value.",
+    );
+    expect(() => valueEqual(arbitrary, factory)).toThrow(
+      "Cannot compare a function value.",
+    );
+  });
+
   it("rejects distinct functions reached through containers", () => {
     const fn = (() => 1) as unknown as FabricValue;
     const other = (() => 1) as unknown as FabricValue;
     for (const [left, right] of [[fn, other], [fn, 1], [1, fn]]) {
       expect(() => valueEqual({ nested: [left] }, { nested: [right] }))
-        .toThrow("Cannot hash value");
+        .toThrow("Cannot hash an arbitrary function value");
     }
   });
 

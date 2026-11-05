@@ -36,6 +36,10 @@ import {
  * (docs/history/plans/server-execution-v2/optimize/
  * keyless-diagnosis-2026-08-27.md analyzes them):
  *   1. `Runner.setup()`'s durable `patternIdentity`/`patternSetupIdentity`
+ *      stamps (`if (entryRef)` filters nothing — `entryRefForPattern`
+ *      always mints);
+ *   2. map/filter/flatMap's durable op selection in the node inputs document;
+ *   3. a pattern value crossing a durable storage boundary.
  *      stamps (`entryRefForPattern` always mints, so an `if (entryRef)`
  *      filters nothing);
  *   2. `Runner.#substituteOpPatternRefs`' `$patternRef` sentinel for keyless
@@ -226,8 +230,8 @@ describe("keyless identities never land durably (L3(a), RULED 2026-08-27)", () =
         ).toBe(true);
       }
 
-      // Writer 2: the map builtin's `$patternRef` sentinel for a keyless op
-      // (bare evaluation indexes nothing, so the op pattern has no ref).
+      // Writer 2: the map builtin's durable selection for a keyless op (bare
+      // evaluation indexes nothing, so the op pattern has no durable ref).
       const engine = runtime.harness as Engine;
       const evalResult = await engine.compileAndEvaluateModules(mapProgram);
       const factory = evalResult.main!.default as Parameters<

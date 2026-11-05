@@ -58,7 +58,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-with-array-param-no-name
 // Verifies: .map() with array param works when pattern uses inline type annotation
-//   .map((item, index, array) => ...) → .mapWithPattern(pattern(...), {})
+//   .map((item, index, array) => ...) → .mapWithPattern(pattern(...))
 //   array.length → array.key("length")
 // Context: Same as map-with-array-param but with (_state: any) inline annotation instead of type arg
 export default pattern((_state: any) => {
@@ -70,7 +70,7 @@ export default pattern((_state: any) => {
     } as const satisfies __cfHelpers.JSONSchema).for("items", true);
     return {
         [UI]: (<div>
-        {items.mapWithPattern(__cfPattern_1, {})}
+        {items.mapWithPattern(__cfPattern_1)}
       </div>),
     };
 }, false as const satisfies __cfHelpers.JSONSchema, {

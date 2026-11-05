@@ -94,6 +94,12 @@ form should be supported is undecided.
   - projected-result / object-literal schema recovery for lift result
     inference
   - compute-context local reactive alias diagnostics
+  - first-class serializable `PatternFactory`, `ModuleFactory`, and
+    `HandlerFactory` values, including exact `asFactory` contracts
+  - eager symbolic factory invocation through `invokeFactory`, while live and
+    scheduled-materialized factories remain direct
+  - trusted FrameworkProvided forwarding/metadata and fail-closed factory union
+    compatibility/provenance checks
 - Partially landed:
   - diagnostics migration (some legacy validation remains)
   - compute-context interprocedural capability summaries (MVP scope)
@@ -110,7 +116,7 @@ landed after the snapshot above:
 - Landed:
   - `derive`/`computed` → lift-applied lowering (Phase 1, CT-1615)
   - whole-builder-call hoisting to module scope for `lift` (CT-1644), then
-    `handler`, `pattern`, and `patternTool` (CT-1655), via the single
+    `handler` and `pattern` (CT-1655), via the single
     `BuilderCallHoistingTransformer` (current-behavior spec §11). The former
     lift-only `LiftHoistingTransformer` and the callback-only
     `BuilderCallbackHoistingTransformer` are both gone (the latter deleted in
@@ -533,6 +539,55 @@ index access. (Case counts churn; the file is the inventory.)
 instead of silently degrading)\
 **Non-goal check:** Does not attempt full type soundness (NG-002); validates
 only top-level path heads, not deep path resolution.
+
+## D-006 First-Class Serializable Factory Values
+
+**Status:** Landed on #4687
+
+**Policy target:**
+
+- Treat trusted PatternFactory, ModuleFactory, and HandlerFactory values as one
+  serializable construct family.
+- Preserve exact public executable contracts separately from private pattern
+  closure captures and FrameworkProvided authority.
+- Choose invocation lowering from value origin plus the nearest decisive
+  execution boundary: live/scheduled-materialized calls stay direct; eager
+  symbolic pattern inputs and captures lower through `invokeFactory`.
+- Preserve contract/provenance through `asScope()` and `inSpace()` derivations.
+- Allow callable unions only when every arm has the same kind, exactly equal
+  normalized public schemas, and exactly equal protected paths.
+- Fail closed on ambiguous origin/exposure, mixed helper use, callable/non-
+  callable unions, incomplete provenance, and non-finite recursive factory
+  contract documents.
+
+**Implementation:**
+
+- Added the factory authoring validator, FrameworkProvided forwarding pass,
+  symbolic invocation pass, and final FrameworkProvided metadata pass to the
+  ordered pipeline.
+- `factory-callee.ts` centralizes live/symbolic/materialized origin, invocation
+  versus derivation, and nearest-boundary/helper exposure classification.
+- `SchemaHint.factoryContracts`, `factoryContractsBySymbol`, and
+  `liveFactoryDerivationRegistry` carry exact compiler-owned contracts and
+  provenance across stages and into schema generation.
+- `FactoryFormatter` emits pattern/module
+  `{ asFactory: { kind, argumentSchema, resultSchema } }` and handler
+  `{ asFactory: { kind: "handler", contextSchema, eventSchema } }`, with every
+  nested contract schema generated as its own `$defs`-owning document.
+- The runner's `invokeFactory` records the expected contract on
+  `NodeRef.expectedFactory`; the selected artifact stays outside serialized
+  node identity.
+
+**Rationale:**
+
+Plain callable types cannot carry a serializable execution contract. Explicit
+factory values let patterns compose executable artifacts while keeping schema,
+identity, and system-provided authority reviewable and deterministic.
+
+**Goals touched:** G-004, G-005, G-006, G-007, G-017\
+**Invariants touched:** C-002, C-003, C-005, C-007, C-013, C-014\
+**Non-goal check:** Recognition is not a new security boundary (NG-001); it
+requires existing Common Fabric provenance or exact compiler-owned metadata.
 
 ## Principles
 

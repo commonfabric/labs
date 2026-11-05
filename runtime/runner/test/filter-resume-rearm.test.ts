@@ -9,6 +9,7 @@ import {
   listCoordinatorPlan,
   listElementResultCell,
 } from "../src/builtins/list-coordinator-plan.ts";
+import { materializeListPatternSelection } from "../src/builtins/list-factory-materialization.ts";
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { Action } from "../src/scheduler.ts";
@@ -56,16 +57,17 @@ describe("filter-resume-rearm", () => {
       const parent = runtime.getCell(signer.did(), "parent", undefined, tx);
       const output = runtime.getCell(signer.did(), "output", undefined, tx)
         .getAsNormalizedFullLink();
-      const inputSchema = {
-        type: "object",
-        properties: { op: { asCell: ["cell"] } },
-      } as const;
       const plan = listCoordinatorPlan(
         runtime,
         tx,
         "filter",
         inputs,
-        inputSchema,
+        materializeListPatternSelection(
+          runtime,
+          tx,
+          inputs.key("op"),
+          "filter",
+        ),
         parent,
         output,
       );

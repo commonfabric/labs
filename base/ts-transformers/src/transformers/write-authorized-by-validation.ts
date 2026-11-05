@@ -129,6 +129,7 @@ function findWriteAuthorizedByReferences(
 ): ts.TypeReferenceNode[] {
   const matches: ts.TypeReferenceNode[] = [];
   const visited = new Set<string>();
+  const resolvingTypeArguments = new Set<ts.TypeNode>();
   const visit = (
     current: ts.Node,
     typeParamMap: ReadonlyMap<string, ts.TypeNode>,
@@ -136,7 +137,11 @@ function findWriteAuthorizedByReferences(
     if (ts.isTypeReferenceNode(current) && ts.isIdentifier(current.typeName)) {
       const mapped = typeParamMap.get(current.typeName.text);
       if (mapped && !current.typeArguments?.length) {
-        visit(mapped, typeParamMap);
+        if (!resolvingTypeArguments.has(mapped)) {
+          resolvingTypeArguments.add(mapped);
+          visit(mapped, typeParamMap);
+          resolvingTypeArguments.delete(mapped);
+        }
         return;
       }
     }

@@ -37,7 +37,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 //   pattern<Input, Result>(fn, inputSchema, outputSchema) → pattern(fn, inputSchema, outputSchema) (schemas kept)
 //   ({ count }) destructuring                              → __cf_pattern_input.key("count")
 // Context: Schemas are user-provided, not generated; type args are stripped but schemas remain
-export default pattern((__cf_pattern_input) => {
+export default pattern<Input, Result>((__cf_pattern_input) => {
     const count = __cf_pattern_input.key("count");
     return {
         doubled: __cfLift_1({ count: count }).for(["__patternResult", "doubled"], true)
@@ -45,20 +45,16 @@ export default pattern((__cf_pattern_input) => {
 }, {
     type: "object",
     properties: {
-        count: {
-            type: "number"
-        }
+        count: { type: "number" }
     },
     required: ["count"]
-} as const satisfies __cfHelpers.JSONSchema, {
+} as const satisfies JSONSchema, {
     type: "object",
     properties: {
-        doubled: {
-            type: "number"
-        }
+        doubled: { type: "number" }
     },
     required: ["doubled"]
-} as const satisfies __cfHelpers.JSONSchema);
+} as const satisfies JSONSchema);
 // @ts-ignore: Internals
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);

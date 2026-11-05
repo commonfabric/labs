@@ -912,6 +912,12 @@ function recursiveStripAsCellFromSchema(
     // Skip $ref - it's just a string pointer, not a schema to process
     if (key === "$ref") continue;
 
+    // Factory contracts are semantic metadata on the outer link schema. Their
+    // public argument, params, and result schemas must remain complete; an
+    // outer link's asCell policy does not authorize rewriting those nested
+    // contracts.
+    if (key === "asFactory") continue;
+
     // A fabric value is carried by reference: the rebuild below reads it by
     // property name and would return `{}`, so a fabric-valued default (which
     // `Cell.of()` embeds into schemas) would be lost from the sanitized
@@ -1028,7 +1034,7 @@ function removeStrippedStreamPropertiesFromRequired(
 /** Get or create a cell using the resultCell as the cause. */
 export function getMetaCell(
   resultCell: AnyCell<unknown>,
-  type: "internal" | "argument",
+  type: "internal" | "argument" | "params",
   tx: IExtendedStorageTransaction,
   schema?: JSONSchema,
 ): Cell {

@@ -29,7 +29,7 @@ interface PatternInput {
 // FIXTURE: pattern-nested-jsx-map
 // Verifies: nested .map() calls in JSX both become mapWithPattern, including inside ifElse
 //   items.map((item) => ...) → items.mapWithPattern(pattern(...))
-//   item.tags.map((tag, i) => ...) → item.key("tags").mapWithPattern(pattern(...), { item: ... })
+//   item.tags.map((tag, i) => ...) → item.key("tags").mapWithPattern(pattern(...).curry({ item: ... }))
 //   hasItems ? items.map(...) : <p>No items</p> → ifElse(hasItems, items.mapWithPattern(...), <p>No items</p>)
 //   i === item.selectedIndex ? "* " : "" → ifElse(lift(...)(...), "* ", "")
 // Context: Inner map on item.tags captures `item.selectedIndex` from the outer

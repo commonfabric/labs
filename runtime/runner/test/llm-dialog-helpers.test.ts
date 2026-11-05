@@ -62,7 +62,14 @@ function makeDocumentationCell(params: {
     resolveAsCell: () => cell,
     asSchemaFromLinks: () => cell,
     asSchema: () => cell,
-    key: () => ({ getRaw: () => undefined, get: () => undefined }),
+    key: () => {
+      const child: any = {
+        getRaw: () => undefined,
+        get: () => undefined,
+        resolveAsCell: () => child,
+      };
+      return child;
+    },
     pull: () => Promise.resolve(),
   };
   if (params.nested !== undefined) {
@@ -558,64 +565,59 @@ Deno.test("traverseAndCellify passes a nested FabricPrimitive through intact", (
   assert(result.payload === bytes, "FabricBytes instance must survive intact");
 });
 
-Deno.test("buildToolCatalog normalizes dynamic legacy tools", () => {
-  const childValues = new Map<string, unknown>([
-    [
-      "fromChildPattern",
-      {
-        pattern: {
-          get: () => ({
-            argumentSchema: {
-              type: "object",
-              properties: { prompt: { type: "string" } },
-            },
-          }),
+Deno.test("buildToolCatalog normalizes schema-backed tools", () => {
+  const readTools = () => ({
+    fromInputSchema: {
+      description: "uses a parent schema",
+      inputSchema: {
+        type: "object",
+        properties: {
+          result: { type: "string" },
+          value: { type: "number" },
         },
+        required: ["result", "value"],
       },
-    ],
-  ]);
-  const childCells = new Map<string, unknown>();
+    },
+    booleanSchema: {
+      description: "uses a boolean schema",
+      inputSchema: true,
+    },
+    missingSchema: {
+      description: "skipped",
+    },
+    pieceTool: {
+      piece: {
+        get: () => ({ name: "piece" }),
+        getAsNormalizedFullLink: () => ({
+          id: "of:piece",
+          path: [],
+          space: "did:test:tools",
+          scope: "space",
+        }),
+      },
+    },
+  });
   const toolsCell = {
-    get: () => ({
-      fromInputSchema: {
-        description: "uses a parent schema",
-        inputSchema: {
-          type: "object",
-          properties: {
-            result: { type: "string" },
-            value: { type: "number" },
-          },
-          required: ["result", "value"],
+    get: readTools,
+    getRaw: readTools,
+    runtime: {},
+    key(_name: string) {
+      const makeCell = (read: () => unknown): any => ({
+        get: read,
+        getRaw: read,
+        resolveAsCell() {
+          return this;
         },
-      },
-      fromChildPattern: {
-        description: "uses a child pattern schema",
-      },
-      booleanSchema: {
-        description: "uses a boolean schema",
-        inputSchema: true,
-      },
-      missingSchema: {
-        description: "skipped",
-      },
-      pieceTool: {
-        piece: {
-          get: () => ({ name: "piece" }),
-          getAsNormalizedFullLink: () => ({
-            id: "of:piece",
-            path: [],
-            space: "did:test:tools",
-            scope: "space",
-          }),
+        key(field: string) {
+          return makeCell(() => {
+            const value = read();
+            return typeof value === "object" && value !== null
+              ? (value as Record<string, unknown>)[field]
+              : undefined;
+          });
         },
-      },
-    }),
-    key(name: string) {
-      const cell = {
-        get: () => childValues.get(name),
-      };
-      childCells.set(name, cell);
-      return cell;
+      });
+      return makeCell(() => undefined);
     },
   };
 
@@ -623,7 +625,6 @@ Deno.test("buildToolCatalog normalizes dynamic legacy tools", () => {
 
   assertEquals(Object.keys(catalog.llmTools).sort(), [
     "booleanSchema",
-    "fromChildPattern",
     "fromInputSchema",
   ]);
   assertEquals(
@@ -639,23 +640,17 @@ Deno.test("buildToolCatalog normalizes dynamic legacy tools", () => {
     ["value"],
   );
   assertEquals(
-    (catalog.llmTools.fromChildPattern.inputSchema as any).properties.prompt
-      .type,
-    "string",
-  );
-  assertEquals(
     (catalog.llmTools.booleanSchema.inputSchema as any).additionalProperties,
     {},
   );
-  assertEquals(
-    catalog.dynamicToolCells.get("fromChildPattern"),
-    childCells.get("fromChildPattern"),
-  );
+  assertEquals(catalog.dynamicToolCells.size, 2);
 });
 
 Deno.test("buildToolCatalog adds built-in tools by default", () => {
   const toolsCell = {
     get: () => undefined,
+    getRaw: () => undefined,
+    runtime: {},
     key: () => ({ get: () => undefined }),
   };
 
@@ -734,9 +729,18 @@ Deno.test("buildAvailableCellsDocumentation documents context and pinned cells",
 
 Deno.test("executeToolCalls wraps denied, present-result, pin, and error results", async () => {
   const space = "did:test:tools";
+  const emptyChildCell: any = {
+    get: () => undefined,
+    getRaw: () => undefined,
+    resolveAsCell() {
+      return this;
+    },
+  };
   const emptyToolsCell = {
     get: () => undefined,
-    key: () => ({ get: () => undefined }),
+    getRaw: () => undefined,
+    runtime: {},
+    key: () => emptyChildCell,
   };
   const catalog = buildToolCatalog(emptyToolsCell as any);
   catalog.llmTools.secretTool = {
@@ -906,7 +910,7 @@ Deno.test("executeToolCalls wraps denied, present-result, pin, and error results
     );
     assertEquals(
       results[8].error,
-      "target does not resolve to a handler stream or pattern.",
+      "target does not resolve to a handler stream or PatternFactory.",
     );
     assertEquals(results[9].error, "Tool has neither pattern nor handler");
     assertEquals(pinnedState, [{ path: "/of:new", name: "New" }]);

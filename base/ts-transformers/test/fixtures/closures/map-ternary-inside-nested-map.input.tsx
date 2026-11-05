@@ -29,8 +29,8 @@ interface PatternInput {
 // FIXTURE: map-ternary-inside-nested-map
 // Verifies: ternaries inside nested .map() callbacks are transformed to ifElse
 //   outer ternary → ifElse(hasItems, items.mapWithPattern(...), <p>No items</p>)
-//   outer .map(fn) → .mapWithPattern(pattern(...), {showInactive})
-//   inner .map(fn) → .mapWithPattern(pattern(...), {showInactive})
+//   outer .map(fn) → .mapWithPattern(pattern(...).curry({showInactive}))
+//   inner .map(fn) → .mapWithPattern(pattern(...).curry({showInactive}))
 //   inner ternary → ifElse(tag.active, tag.name, ifElse(showInactive, `(${tag.name})`, ""))
 // Context: Nested maps with ternaries at both levels; captures showInactive through both map layers
 export default pattern<PatternInput>(({ items, showInactive }) => {

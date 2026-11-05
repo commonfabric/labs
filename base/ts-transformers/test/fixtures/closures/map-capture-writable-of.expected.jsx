@@ -16,11 +16,23 @@ interface State {
         name: string;
     }>;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { selected }) => {
     const item = __cf_pattern_input.key("element");
-    const selected = __cf_pattern_input.key("params", "selected");
     return (<span>{item.key("name")} {selected}</span>);
 }, {
+    type: "object",
+    properties: {
+        selected: {
+            anyOf: [{
+                    type: "string"
+                }, {
+                    type: "null"
+                }],
+            asCell: ["cell"]
+        }
+    },
+    required: ["selected"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -31,23 +43,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 }
             },
             required: ["name"]
-        },
-        params: {
-            type: "object",
-            properties: {
-                selected: {
-                    anyOf: [{
-                            type: "string"
-                        }, {
-                            type: "null"
-                        }],
-                    asCell: ["readonly"]
-                }
-            },
-            required: ["selected"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -71,7 +69,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-capture-writable-of
 // Verifies: new Writable() variable closed over in .map() is captured with asCell annotation
-//   .map(fn) → .mapWithPattern(pattern(...), { selected: selected })
+//   .map(fn) → .mapWithPattern(pattern(...).curry({ selected: selected }))
 //   new Writable<string | null>(null) → params.selected with { anyOf: [string, null], asCell: true }
 export default pattern((state) => {
     const selected = new Writable<string | null>(null, {
@@ -83,9 +81,9 @@ export default pattern((state) => {
     } as const satisfies __cfHelpers.JSONSchema).for("selected", true);
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_1.curry({
                 selected: selected
-            })}
+            }))}
       </div>),
     };
 }, {

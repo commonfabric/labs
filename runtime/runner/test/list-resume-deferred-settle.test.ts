@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import {
+  getTimingStatsBreakdown,
+  resetAllTimingStats,
+} from "@commonfabric/logger";
 
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
@@ -201,6 +205,7 @@ describe("list builtins defer-settle when their input hydrates after resume", ()
       await tx2.commit().settled;
 
       await resultCell2.sync();
+      resetAllTimingStats();
       const started = await rt2.start(resultCell2);
       expect(started).toBe(true);
 
@@ -230,6 +235,11 @@ describe("list builtins defer-settle when their input hydrates after resume", ()
       expect(resumed.optDoubled).toEqual([]);
       expect(resumed.optEvens).toEqual([]);
       expect(resumed.optSpread).toEqual([]);
+      expect(
+        getTimingStatsBreakdown()["storage.v2"]?.[
+          "commitNative/commitOperations"
+        ]?.count ?? 0,
+      ).toBe(0);
     } finally {
       await rt2.dispose();
       await rt1.dispose();

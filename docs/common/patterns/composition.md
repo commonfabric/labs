@@ -71,6 +71,12 @@ export default pattern<ListInput, ListOutput>(({ items }) => ({
 
 Both patterns receive the same `items` cell - changes sync automatically.
 
+Patterns themselves are first-class factory values. They can be passed through
+inputs, returned or stored, and invoked with the same call syntax. A factory-
+valued input is dynamic: changing it replaces the child generation while
+keeping the call site's output identity. See
+[First-Class Factories](../concepts/factories.md).
+
 **When to use which:**
 - **Pattern Composition**: Multiple views in one UI, reusable components
 - **Linked Pieces**: Independent deployments that communicate
@@ -162,8 +168,8 @@ const omnibot = Chatbot({
 // Shown inside a pattern body.
 // WORKS: computed() unwraps extraTools before spreading
 const baseTools = {
-  searchWeb: { pattern: searchWeb },
-  calculator: { pattern: calculator },
+  searchWeb,
+  calculator,
 };
 
 const allTools = computed(() => ({

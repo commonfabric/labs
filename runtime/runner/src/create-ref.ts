@@ -1,15 +1,22 @@
-import { hashOf } from "@commonfabric/data-model";
+import { hashOf, isFabricSpecialObject } from "@commonfabric/data-model";
+import {
+  factoryStateOf,
+  isAdmittedFabricFactory,
+} from "@commonfabric/data-model/fabric-factory";
 import {
   type EntityRef,
   entityRefFrom,
   entityRefFromString,
   isEntityRef,
 } from "@commonfabric/data-model/cell-rep";
-import { BaseFabricPrimitive } from "@commonfabric/data-model/fabric-bases";
 import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
-import { isReactive } from "./builder/types.ts";
+import {
+  createFactoryTraversalContext,
+  mapFactoryForTraversal,
+} from "./builder/factory-traversal.ts";
+import { isModule, isPattern, isReactive } from "./builder/types.ts";
 import { exportCell, isCell } from "./cell.ts";
 import { encodableFormOf } from "./encodable-form.ts";
 import {
@@ -116,10 +123,95 @@ export function createRef(
   })(),
 ): EntityId {
   const seen = new Set<any>();
+  const factoryContext = createFactoryTraversalContext();
+  const factoryStateAncestors = new WeakSet<object>();
 
-  // Unwrap query result proxies and replace docs with their ids; functions are
-  // stringified, since our data model doesn't support them as values.
-  function traverse(obj: any): any {
+  type LegacyPatternGraphSource = {
+    argumentSchema?: unknown;
+    resultSchema?: unknown;
+    derivedInternalCells?: unknown;
+    result?: unknown;
+    nodes?: unknown;
+    defaultScope?: unknown;
+  };
+  const legacyPatternGraph = (pattern: LegacyPatternGraphSource) => ({
+    argumentSchema: pattern.argumentSchema,
+    resultSchema: pattern.resultSchema,
+    ...(pattern.derivedInternalCells === undefined
+      ? {}
+      : { derivedInternalCells: pattern.derivedInternalCells }),
+    result: pattern.result,
+    nodes: pattern.nodes,
+    ...(pattern.defaultScope === undefined
+      ? {}
+      : { defaultScope: pattern.defaultScope }),
+  });
+
+  // Unwrap query result proxies and replace docs with their links. Admitted
+  // factories map only their hidden semantic state; every other JavaScript
+  // function fails closed.
+  function traverse(
+    obj: any,
+    insideFactoryState = false,
+    allowLegacyImplementationFunction = false,
+    insideLegacyPatternGraph = false,
+  ): any {
+    if (isAdmittedFabricFactory(obj)) {
+      const state = factoryStateOf(obj);
+      const legacyPattern = obj as unknown as { toJSON?: () => unknown };
+
+      // A hand-built pattern has no Factory@1 ref to hash. Its session-only
+      // identity keeps the established structural graph fallback; every
+      // ref-backed factory takes the canonical hidden-state path below.
+      if (
+        state.ref === undefined && state.kind === "pattern" &&
+        typeof legacyPattern.toJSON === "function"
+      ) {
+        return traverse(
+          legacyPatternGraph(obj as unknown as LegacyPatternGraphSource),
+          insideFactoryState,
+          false,
+          true,
+        );
+      }
+
+      // Keyless module and handler descriptors are permitted only inside the
+      // already-recognized legacy pattern graph. They remain invalid as
+      // standalone Fabric values and have no cold reconstruction path.
+      if (state.ref === undefined && insideLegacyPatternGraph) {
+        const legacyFactory = obj as unknown as { toJSON?: () => unknown };
+        return traverse(
+          typeof legacyFactory.toJSON === "function"
+            ? legacyFactory.toJSON() ?? obj
+            : Object.fromEntries(Object.entries(obj)),
+          insideFactoryState,
+          false,
+          true,
+        );
+      }
+
+      return mapFactoryForTraversal(
+        obj,
+        (nested) => traverse(nested, true),
+        factoryContext,
+      );
+    }
+
+    if (typeof obj === "function" && isReactive(obj)) {
+      throw new Error(
+        "[createRef] Cell method is not a value; cannot derive a stable id",
+      );
+    }
+
+    if (typeof obj === "function") {
+      if (allowLegacyImplementationFunction) return obj.toString();
+      throw new TypeError(
+        insideFactoryState
+          ? "Arbitrary functions are not valid factory state values"
+          : "Arbitrary functions are not valid createRef values",
+      );
+    }
+
     // A primitive is its own preimage. Nothing below applies to one -- it
     // carries no members to serialize, is no kind of reference, and holds
     // nothing to descend into -- and `obj` is `any`, so `null`, `undefined` and
@@ -130,20 +222,26 @@ export function createRef(
       return obj;
     }
 
-    // Avoid cycles. Primitives are not tracked, and are gone by here: they use
-    // value equality in a Set, so repeated strings like "primary" would be
-    // deduplicated and collide the hashes of patterns differing only in the
-    // position of a repeated value.
-    if (seen.has(obj)) return null;
-    seen.add(obj);
+    // A non-callable builder artifact is represented by its encodable form.
+    // Factories and reactive function projections were classified above: an
+    // otherwise arbitrary function remains invalid even if it carries an
+    // authored method with this name.
+    if (typeof obj !== "function") {
+      const form = encodableFormOf(obj);
+      if (form !== null && form !== undefined && form !== obj) {
+        return traverse(
+          form,
+          insideFactoryState,
+          false,
+          insideLegacyPatternGraph,
+        );
+      }
+    }
 
     // Don't traverse into atomic values or already-serialized references. A
-    // `FabricPrimitive` (a `FabricHash` id, `FabricBytes`, a date, …) is an
-    // atomic value and must be hashed via its own codec — descending into one
-    // would decompose it to its (empty) enumerable props and collide distinct
-    // values. A serialized entity-ref or sigil link is a reference to another
-    // cell, recognized through the cell-rep / sigil chokepoint predicates rather
-    // than the raw `{ "/": ... }` shape.
+    // Fabric-special object is hashed through its codec rather than decomposed
+    // into enumerable implementation details. A serialized entity-ref or
+    // sigil link is likewise an atomic reference to another cell.
     //
     // A link is hashed as it stands, schema and all. This walk takes what it
     // is given: a caller deriving an id has to hand over a preimage that is
@@ -152,92 +250,110 @@ export function createRef(
     // reducing for a node's cause, at the seam that knows which links a bound
     // tree holds and why they carry a schema at all.
     //
-    // TODO(danfuzz): the other data-model special-object type, `FabricInstance`
-    // (a container that holds other values), is not handled here. Unlike a
-    // primitive it *does* need descending into — but by its actual contents,
-    // which the generic enumerable-prop traversal below won't do correctly. This
-    // site will need attention once FabricInstances see real use.
-    if (obj instanceof BaseFabricPrimitive) return obj;
+    if (isFabricSpecialObject(obj)) return obj;
     if (isSigilLink(obj) || isEntityRef(obj)) return obj;
 
-    // A cell's _method_ is not a value. For a name in `cellMethods`, a
-    // `Reactive` returns a proxy that is callable and is also a projection of
-    // the cell at that name, so one object serves both the method and a data
-    // key of the same name, and its encodable form is the same link either
-    // way. A derived id therefore cannot express which of the two was meant.
-    // Failing closed says so, rather than minting an id off the ambiguity
-    // (audit S14) -- and where no data lives at the name, that id would rest on
-    // a link to a path holding nothing.
-    //
-    // A builder artifact is a function carrying the member too, and is not
-    // reactive, which is what separates the two here.
-    if (typeof obj === "function" && isReactive(obj)) {
-      throw new Error(
-        "[createRef] Cell method is not a value; cannot derive a stable id",
+    // A hand-built pattern graph carries live module descriptors, including
+    // runtime-only serializer methods. Hash the same encodable module form the
+    // graph writer uses rather than descending into those methods as authored
+    // values. This exception is confined to the already-admitted legacy graph;
+    // an arbitrary object with a serializer remains ordinary input.
+    if (
+      insideLegacyPatternGraph && isModule(obj) &&
+      typeof (obj as { toEncodableForm?: unknown }).toEncodableForm ===
+        "function"
+    ) {
+      return traverse(
+        encodableFormOf(obj),
+        insideFactoryState,
+        false,
+        true,
       );
     }
 
-    // A builder artifact is replaced by its encodable form, then descended
-    // into: what the ref is derived from is the form that gets written.
-    // Functions qualify because a pattern factory is one.
-    //
-    // A _nullish_ form leaves the value in place, which is what the `??` is
-    // for -- a value carrying no form at all needs no fallback, since that
-    // answer is the value already. `CellImpl` is the one implementation that
-    // returns nullish, doing so for a cell whose link is not built yet, and the
-    // branches below need that cell rather than the `null`: one of them builds
-    // the link.
-    obj = encodableFormOf(obj) ?? obj;
-
-    if (isReactive(obj)) {
-      // A stream is the one reactive an id derives from: it holds no value,
-      // and its sentinel stands in as the value the id hashes. Any other
-      // reactive has no value to hash, and an id minted from one would
-      // silently become non-deterministic (audit S14). Fail closed.
-      if (exportCell(obj).kind !== "stream") {
-        throw new Error(
-          "[createRef] Reactive has no value; cannot derive a stable id",
-        );
+    const factoryStateContainer = insideFactoryState && obj !== null &&
+        typeof obj === "object"
+      ? obj as object
+      : undefined;
+    if (factoryStateContainer !== undefined) {
+      if (factoryStateAncestors.has(factoryStateContainer)) {
+        throw new TypeError("Circular reference detected in factory state");
       }
-      return { $stream: true };
+      factoryStateAncestors.add(factoryStateContainer);
     }
 
-    if (isCellResultForDereferencing(obj)) {
-      // A query result stands for the cell it dereferences to, and derives what
-      // that cell derives.
-      obj = getCellOrThrow(obj);
-    }
+    try {
+      // Avoid cycles. Primitives and codec-owned atoms are gone by here; those
+      // use value equality and must remain occurrence-sensitive.
+      if (seen.has(obj)) return null;
+      seen.add(obj);
 
-    if (isCell(obj)) {
-      // Reading the entity id is what materializes a link from an explicit
-      // cause, so it comes first: the link read below is available only once
-      // this has happened.
-      const id = obj.entityId;
-      if (id == null) {
-        // A Cell referenced from a derived id must have an entityId; otherwise
-        // the id would silently become non-deterministic (audit S14). Fail
-        // closed rather than mint a random substitute.
-        throw new Error(
-          "[createRef] Cell has no entityId; cannot derive a stable id",
-        );
+      if (isReactive(obj)) {
+        // A stream is the one reactive an id derives from: it holds no value,
+        // and its sentinel stands in as the value the id hashes. Any other
+        // reactive has no value to hash, and an id minted from one would
+        // silently become non-deterministic (audit S14). Fail closed.
+        if (exportCell(obj).kind !== "stream") {
+          throw new Error(
+            "[createRef] Reactive has no value; cannot derive a stable id",
+          );
+        }
+        return { $stream: true };
       }
 
-      // The path is part of what names a cell, so a cell derives from the link
-      // naming it -- the same form the encodable-form branch above gives a cell
-      // that arrives directly, which is what keeps the two routes at one
-      // answer. Two cells of one document derive two ids.
-      return traverse(encodableFormOf(obj));
-    } else if (Array.isArray(obj)) return obj.map(traverse);
-    else if (isObjectOrArray(obj)) {
-      return Object.fromEntries(
-        Object.entries(obj).map(([key, value]) => [key, traverse(value)]),
-      );
-    } else if (typeof obj === "function") return obj.toString();
-    // A primitive reaches here only as an encodable FORM, the reassignment above
-    // having replaced the value it came from -- a primitive INPUT is handled at
-    // the top of the walk. A form is its own preimage, and stringifying one
-    // would make the form `7` and the form `"7"` name a single document.
-    else return obj;
+      if (isCellResultForDereferencing(obj)) {
+        // A query result stands for the cell it dereferences to, and derives
+        // what that cell derives.
+        obj = getCellOrThrow(obj);
+      }
+
+      if (isCell(obj)) {
+        // Reading the entity id materializes a link from an explicit cause.
+        const id = obj.entityId;
+        if (id == null) {
+          // A referenced Cell must already name an entity; otherwise the id
+          // would silently become non-deterministic (audit S14).
+          throw new Error(
+            "[createRef] Cell has no entityId; cannot derive a stable id",
+          );
+        }
+
+        // The path participates in cell identity, so derive from the complete
+        // link rather than from the document id alone.
+        return traverse(
+          encodableFormOf(obj),
+          insideFactoryState,
+          false,
+          insideLegacyPatternGraph,
+        );
+      } else if (Array.isArray(obj)) {
+        return obj.map((value) =>
+          traverse(value, insideFactoryState, false, insideLegacyPatternGraph)
+        );
+      } else if (isObjectOrArray(obj)) {
+        return Object.fromEntries(
+          Object.entries(obj).map(([key, value]) => [
+            key,
+            traverse(
+              value,
+              insideFactoryState,
+              insideLegacyPatternGraph && key === "implementation" &&
+                isModule(obj),
+              insideLegacyPatternGraph,
+            ),
+          ]),
+        );
+      } else {
+        // A primitive reaches here only as an encodable form. A form is its
+        // own preimage; stringifying it would collapse values such as 7 and
+        // "7" onto one identity.
+        return obj;
+      }
+    } finally {
+      if (factoryStateContainer !== undefined) {
+        factoryStateAncestors.delete(factoryStateContainer);
+      }
+    }
   }
 
   // The entity kind deliberately does NOT enter the preimage: a computed
@@ -245,7 +361,21 @@ export function createRef(
   // differ only in their URI scheme (`computed:` vs `of:`, applied by
   // `toURI`). The full URI string is the identity; nothing may rebuild a
   // computed cell's URI from its bare hash.
-  return entityIdFrom(hashOf(traverse({ ...source, causal: cause })));
+  const directFactoryState = isAdmittedFabricFactory(source)
+    ? factoryStateOf(source)
+    : undefined;
+  const directLegacyPattern = directFactoryState?.kind === "pattern" &&
+      directFactoryState.ref === undefined
+    ? legacyPatternGraph(source as LegacyPatternGraphSource)
+    : source;
+  return entityIdFrom(hashOf(
+    traverse(
+      { ...directLegacyPattern, causal: cause },
+      false,
+      false,
+      isPattern(source),
+    ),
+  ));
 }
 
 /**

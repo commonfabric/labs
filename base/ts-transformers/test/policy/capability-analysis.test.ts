@@ -7,6 +7,7 @@ import {
   type MergeablePushMisuse,
 } from "../../src/policy/mod.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import { registerTrustedCommonFabricTestSources } from "../trusted-commonfabric-sources.ts";
 
 function collectMergeablePushMisuses(
   source: string,
@@ -54,6 +55,47 @@ function createProgramWithSource(source: string): {
   return createProgramWithFiles({
     "/test.ts": source,
   });
+}
+
+function createProgramWithRealLib(source: string): {
+  program: ts.Program;
+  sourceFile: ts.SourceFile;
+} {
+  const fileName = "/v.ts";
+  const options: ts.CompilerOptions = {
+    target: ts.ScriptTarget.ESNext,
+    module: ts.ModuleKind.ESNext,
+    strict: true,
+  };
+  const defaultHost = ts.createCompilerHost(options);
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    source,
+    options.target!,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const host: ts.CompilerHost = {
+    ...defaultHost,
+    fileExists: (name) => name === fileName || defaultHost.fileExists(name),
+    readFile: (name) => name === fileName ? source : defaultHost.readFile(name),
+    getSourceFile: (
+      name,
+      languageVersion,
+      onError,
+      shouldCreateNewSourceFile,
+    ) =>
+      name === fileName ? sourceFile : defaultHost.getSourceFile(
+        name,
+        languageVersion,
+        onError,
+        shouldCreateNewSourceFile,
+      ),
+  };
+  return {
+    program: ts.createProgram([fileName], options, host),
+    sourceFile,
+  };
 }
 
 function createProgramWithFiles(
@@ -109,6 +151,9 @@ function createProgramWithFiles(
   };
 
   const program = ts.createProgram([entryFileName], options, host);
+  if (files["/commonfabric.d.ts"] !== undefined) {
+    registerTrustedCommonFabricTestSources(program, ["/commonfabric.d.ts"]);
+  }
   const sourceFile = program.getSourceFile(entryFileName);
   if (!sourceFile) {
     throw new Error("Expected source file in program.");
@@ -656,6 +701,25 @@ Deno.test("Capability analysis classifies read+write usage as writable", () => {
   assert(input.writePaths.includes("count"));
 });
 
+Deno.test("Capability analysis preserves writes through chained dynamic keys", () => {
+  const fn = parseFirstCallback(
+    `const fn = (_, state) => {
+      const index = 0;
+      state.localQueries.key(index).key("effectiveness").set(state.rating);
+    };`,
+  );
+  const summary = analyzeFunctionCapabilities(fn);
+  const state = getPaths(summary, "state");
+
+  assertEquals(state.capability, "writable");
+  assertEquals(state.writePaths.includes("localQueries"), true);
+  assertEquals(
+    state.writePaths.includes("localQueries.effectiveness"),
+    false,
+  );
+  assertEquals(state.wildcard, true);
+});
+
 Deno.test("Capability analysis classifies update-only usage as writeonly", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
@@ -729,9 +793,9 @@ Deno.test("Capability analysis keeps opaque derivation methods opaque", () => {
       input.map(mapper);
       input.flatMap(mapper);
       input.filter(mapper);
-      input.mapWithPattern(mapper, {});
-      input.flatMapWithPattern(mapper, {});
-      input.filterWithPattern(mapper, {});
+      input.mapWithPattern(mapper);
+      input.flatMapWithPattern(mapper);
+      input.filterWithPattern(mapper);
     };`,
   );
   const summary = analyzeFunctionCapabilities(fn);
@@ -3123,6 +3187,123 @@ Deno.test(
 );
 
 Deno.test(
+  "Capability analysis keeps retained-element array copies full-shape while map stays precise",
+  () => {
+    const { program, sourceFile } = createProgramWithSource(
+      `
+      interface Array<T> {
+        concat(): T[];
+        map<U>(callback: (value: T) => U): U[];
+        slice(): T[];
+        toReversed(): T[];
+        toSpliced(start?: number, deleteCount?: number): T[];
+        with(index: number, value: T): T[];
+      }
+
+      type Item = { id: string; unused: string };
+      type ArrayOrTuple = Item[] | [Item];
+
+      const concatCopy = (input: { items: Item[]; other: Item[] }) => input.items.concat(input.other);
+      const concatSpread = (input: { items: Item[]; groups: Item[][] }) => input.items.concat(...input.groups);
+      const sliceCopy = (input: { items: Item[] }) => input.items.slice();
+      const reversedCopy = (input: { items: Item[] }) => input.items.toReversed();
+      const splicedCopy = (input: { items: Item[]; replacement: Item }) => input.items.toSpliced(0, 1, input.replacement);
+      const splicedSpread = (input: { items: Item[]; replacements: Item[] }) => input.items.toSpliced(0, 1, ...input.replacements);
+      const spreadCopy = (input: { items: Item[] }) => [...input.items];
+      const withCopy = (input: { items: Item[]; replacement: Item }) => input.items.with(0, input.replacement);
+      const withSpread = (input: { items: Item[]; args: [number, Item] }) => input.items.with(...input.args);
+      const withConditional = (input: { items: Item[]; flag: boolean; a: Item; b: Item }) => input.items.with(0, input.flag ? input.a : input.b);
+      const concatAnd = (input: { items: (Item | false)[]; flag: boolean; replacement: Item }) => input.items.concat(input.flag && input.replacement);
+      const unionCopy = (input: { items: ArrayOrTuple }) => input.items.toSpliced(0, 1);
+      const mapped = (input: { items: Item[] }) => input.items.map((item) => item.id);
+      `,
+    );
+    const checker = program.getTypeChecker();
+
+    const fullShapeByName = new Map<string, string[]>([
+      ["concatCopy", ["items", "other"]],
+      ["concatSpread", ["items", "groups"]],
+      ["sliceCopy", ["items"]],
+      ["reversedCopy", ["items"]],
+      ["splicedCopy", ["items", "replacement"]],
+      ["splicedSpread", ["items", "replacements"]],
+      ["spreadCopy", ["items"]],
+      ["withCopy", ["items", "replacement"]],
+      ["withSpread", ["items", "args"]],
+      ["withConditional", ["items", "a", "b"]],
+      ["concatAnd", ["items", "replacement"]],
+      ["unionCopy", ["items"]],
+    ]);
+    for (const [name, expectedPaths] of fullShapeByName) {
+      const summary = analyzeFunctionCapabilities(
+        findArrowByVariableName(sourceFile, name),
+        { checker },
+      );
+      const paths = getPaths(summary, "input");
+      assertEquals(paths.capability, "readonly");
+      for (const expectedPath of expectedPaths) {
+        assert(paths.readPaths.includes(expectedPath));
+        assert(
+          paths.fullShapePaths.includes(expectedPath),
+          `${name} must preserve the complete '${expectedPath}' payload`,
+        );
+      }
+    }
+
+    const withConditional = getPaths(
+      analyzeFunctionCapabilities(
+        findArrowByVariableName(sourceFile, "withConditional"),
+        { checker },
+      ),
+      "input",
+    );
+    assertEquals(withConditional.fullShapePaths.includes("flag"), false);
+    const concatAnd = getPaths(
+      analyzeFunctionCapabilities(
+        findArrowByVariableName(sourceFile, "concatAnd"),
+        { checker },
+      ),
+      "input",
+    );
+    assertEquals(concatAnd.fullShapePaths.includes("flag"), false);
+
+    const mapped = getPaths(
+      analyzeFunctionCapabilities(
+        findArrowByVariableName(sourceFile, "mapped"),
+        { checker },
+      ),
+      "input",
+    );
+    assertEquals(mapped.fullShapePaths.includes("items"), false);
+    assert(mapped.readPaths.includes("items.0.id"));
+    assertEquals(mapped.readPaths.includes("items.0.unused"), false);
+  },
+);
+
+Deno.test(
+  "Capability analysis recognizes reused array constituents across union branches",
+  () => {
+    const { program, sourceFile } = createProgramWithRealLib(
+      `
+      interface Item { id: string; secret: string }
+      type Tagged = Item[] & { tag: string };
+      type Mixed = Item[] | Tagged;
+      const copy = (input: { items: Mixed }) => input.items.toSpliced(0, 1);
+      `,
+    );
+    assertEquals(program.getSemanticDiagnostics().length, 0);
+    const summary = analyzeFunctionCapabilities(
+      findArrowByVariableName(sourceFile, "copy"),
+      { checker: program.getTypeChecker() },
+    );
+    const input = getPaths(summary, "input");
+
+    assert(input.readPaths.includes("items"));
+    assert(input.fullShapePaths.includes("items"));
+  },
+);
+
+Deno.test(
   "Capability analysis drops identity-only paths that overlap full-shape reads",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -3158,11 +3339,9 @@ Deno.test(
 Deno.test(
   "Capability analysis tracks known fixed-symbol element access without wildcard",
   () => {
-    const { program, sourceFile } = createProgramWithSource(
-      `
-      declare const NAME: unique symbol;
-      declare const UI: unique symbol;
-      declare const SELF: unique symbol;
+    const { program, sourceFile } = createProgramWithFiles({
+      "/test.ts": `
+      import { NAME, UI, SELF } from "commonfabric";
 
       const fn = (input: {
         [NAME]?: string;
@@ -3171,7 +3350,8 @@ Deno.test(
         extra: number;
       }) => [input[NAME], input[UI], input[SELF]];
       `,
-    );
+      "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+    });
     const summary = analyzeFunctionCapabilities(
       findArrowByVariableName(sourceFile, "fn"),
       { checker: program.getTypeChecker() },
@@ -3215,15 +3395,16 @@ Deno.test(
 Deno.test(
   "Capability analysis tracks known fixed-symbol destructuring without wildcard",
   () => {
-    const { program, sourceFile } = createProgramWithSource(
-      `
-      declare const SELF: unique symbol;
+    const { program, sourceFile } = createProgramWithFiles({
+      "/test.ts": `
+      import { SELF } from "commonfabric";
 
       const fn = (
         { [SELF]: self, value }: { [SELF]?: { id: string }; value: string },
       ) => self?.id ?? value;
       `,
-    );
+      "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+    });
     const summary = analyzeFunctionCapabilities(
       findArrowByVariableName(sourceFile, "fn"),
       { checker: program.getTypeChecker() },

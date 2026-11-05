@@ -136,19 +136,39 @@ const __cfLift_2 = __cfHelpers.lift<{
     type: "object",
     properties: {
         unsorted: {
-            type: "array",
-            items: {
-                type: "object",
-                properties: {
-                    type: {
-                        "enum": ["file", "folder"]
-                    }
-                },
-                required: ["type"]
-            }
+            $ref: "#/$defs/AnonymousType_1"
         }
     },
-    required: ["unsorted"]
+    required: ["unsorted"],
+    $defs: {
+        AnonymousType_1: {
+            type: "array",
+            items: {
+                $ref: "#/$defs/Entry"
+            }
+        },
+        Entry: {
+            type: "object",
+            properties: {
+                id: {
+                    type: "string"
+                },
+                name: {
+                    type: "string"
+                },
+                type: {
+                    "enum": ["file", "folder"]
+                },
+                children: {
+                    $ref: "#/$defs/AnonymousType_1"
+                },
+                contentType: {
+                    type: "string"
+                }
+            },
+            required: ["id", "name", "type"]
+        }
+    }
 } as const satisfies __cfHelpers.JSONSchema, {
     $ref: "#/$defs/AnonymousType_1",
     $defs: {
@@ -253,10 +273,8 @@ const __cfHandler_4 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, (_, { handleOpenFile, item }) => handleOpenFile.send({ item }));
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { handleNavigateInto, handleOpenFile }) => {
     const item = __cf_pattern_input.key("element");
-    const handleNavigateInto = __cf_pattern_input.key("params", "handleNavigateInto");
-    const handleOpenFile = __cf_pattern_input.key("params", "handleOpenFile");
     const isFolder = item.key("type") === "folder";
     const isOpenable = __cfHelpers.when({
         type: "boolean"
@@ -282,37 +300,62 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Entry"
-        },
-        params: {
+        handleNavigateInto: {
             type: "object",
             properties: {
-                handleNavigateInto: {
-                    type: "object",
-                    properties: {
-                        name: {
-                            type: "string"
-                        }
-                    },
-                    required: ["name"],
-                    asCell: ["stream"]
-                },
-                handleOpenFile: {
-                    type: "object",
-                    properties: {
-                        item: {
-                            $ref: "#/$defs/Entry"
-                        }
-                    },
-                    required: ["item"],
-                    asCell: ["stream"]
+                name: {
+                    type: "string"
                 }
             },
-            required: ["handleNavigateInto", "handleOpenFile"]
+            required: ["name"],
+            asCell: ["stream"]
+        },
+        handleOpenFile: {
+            type: "object",
+            properties: {
+                item: {
+                    $ref: "#/$defs/Entry"
+                }
+            },
+            required: ["item"],
+            asCell: ["stream"]
         }
     },
-    required: ["element", "params"],
+    required: ["handleNavigateInto", "handleOpenFile"],
+    $defs: {
+        Entry: {
+            type: "object",
+            properties: {
+                id: {
+                    type: "string"
+                },
+                name: {
+                    type: "string"
+                },
+                type: {
+                    "enum": ["file", "folder"]
+                },
+                children: {
+                    type: "array",
+                    items: {
+                        $ref: "#/$defs/Entry"
+                    }
+                },
+                contentType: {
+                    type: "string"
+                }
+            },
+            required: ["id", "name", "type"]
+        }
+    }
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Entry"
+        }
+    },
+    required: ["element"],
     $defs: {
         Entry: {
             type: "object",
@@ -457,10 +500,10 @@ export default pattern((__cf_pattern_input) => {
                 } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ path: path }), [])).for("p", true) as string[];
                 const unsorted = findChildren(tree, p) as Entry[];
                 const items = __cfLift_2({ unsorted: unsorted }).for("items", true);
-                return items.mapWithPattern(__cfPattern_1, {
+                return items.mapWithPattern(__cfPattern_1.curry({
                     handleNavigateInto: handleNavigateInto,
                     handleOpenFile: handleOpenFile
-                });
+                }));
             })()}
       </div>)
     };

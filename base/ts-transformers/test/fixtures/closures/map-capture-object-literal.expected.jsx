@@ -16,11 +16,27 @@ interface State {
         name: string;
     }>;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { style }) => {
     const item = __cf_pattern_input.key("element");
-    const style = __cf_pattern_input.params.style;
     return (<span style={style}>{item.key("name")}</span>);
 }, {
+    type: "object",
+    properties: {
+        style: {
+            type: "object",
+            properties: {
+                color: {
+                    type: "string"
+                },
+                fontSize: {
+                    type: "number"
+                }
+            },
+            required: ["color", "fontSize"]
+        }
+    },
+    required: ["style"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -31,27 +47,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 }
             },
             required: ["name"]
-        },
-        params: {
-            type: "object",
-            properties: {
-                style: {
-                    type: "object",
-                    properties: {
-                        color: {
-                            type: "string"
-                        },
-                        fontSize: {
-                            type: "number"
-                        }
-                    },
-                    required: ["color", "fontSize"]
-                }
-            },
-            required: ["style"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -75,15 +73,15 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-capture-object-literal
 // Verifies: plain object literal closed over in .map() is captured as a non-reactive param
-//   .map(fn) → .mapWithPattern(pattern(...), { style: style })
+//   .map(fn) → .mapWithPattern(pattern(...).curry({ style: style }))
 //   style (object literal) → params.style accessed via .params (not .key) since it is non-reactive
 export default pattern((state) => {
     const style = { color: "red", fontSize: 14 };
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_1.curry({
                 style: style
-            })}
+            }))}
       </div>),
     };
 }, {

@@ -29,6 +29,7 @@ import type {
   DerivedInternalCellDescriptor,
   Pattern,
 } from "../src/builder/types.ts";
+import { isPattern } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import {
@@ -350,9 +351,13 @@ describe("stored-setup-build-repair", () => {
   };
 
   // The sub-pattern a node of `parent` instantiates.
-  const childOf = (parent: Pattern): object =>
-    (parent.nodes as { module: { type: string; implementation: object } }[])
-      .find((node) => node.module.type === "pattern")!.module.implementation;
+  const childOf = (parent: Pattern): object => {
+    const child = parent.nodes.find((node) => isPattern(node.module));
+    if (child !== undefined) return child.module as object;
+    return (parent.nodes as {
+      module: { type: string; implementation: object };
+    }[]).find((node) => node.module.type === "pattern")!.module.implementation;
+  };
 
   const positionalDescriptors = (pattern: Pattern): PositionalDescriptor[] =>
     (pattern.derivedInternalCells ?? []).filter(isPositional);

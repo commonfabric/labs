@@ -12,9 +12,9 @@ interface State {
 
 // FIXTURE: filter-basic
 // Verifies: .filter() + .map() chain on reactive arrays are both transformed
-//   .filter(fn) → .filterWithPattern(pattern(...), {})
-//   .map(fn)    → .mapWithPattern(pattern(...), {})
-// Context: No captured outer variables — params objects are empty {}. Basic
+//   .filter(fn) → .filterWithPattern(pattern(...))
+//   .map(fn)    → .mapWithPattern(pattern(...))
+// Context: No captured outer variables, so no `.curry(...)` is emitted. Basic
 //   filter-then-map chain where filter checks a boolean field and map renders.
 export default pattern<State>((state) => {
   return {

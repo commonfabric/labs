@@ -28,6 +28,119 @@ import { compileCfcPolicyManifestsForSource } from "./cfc-policy-authoring.ts";
 import { narrowEventCapabilities } from "./contract-capabilities.ts";
 import { reportOpaqueReservedResultKeys } from "./reserved-result-keys.ts";
 
+export type GeneratedToSchemaValue =
+  | { readonly resolved: true; readonly value: unknown }
+  | { readonly resolved: false };
+
+/** Generate the exact value emitted for a compiler-owned `toSchema<T>()`. */
+export function generateToSchemaValue(
+  node: ts.Node,
+  context: TransformationContext,
+  schemaGenerator = new SchemaGenerator(),
+): GeneratedToSchemaValue {
+  if (!isToSchemaNode(node)) return { resolved: false };
+
+  const { sourceFile, checker } = context;
+  const schemaSourceFile = context.program.getSourceFile(sourceFile.fileName) ??
+    sourceFile;
+  const { typeRegistry, schemaHints } = context.state;
+  const writerIdentityForSourceFile = (fileName: string) => {
+    const moduleIdentities = context.options.moduleIdentities;
+    const moduleIdentity = moduleIdentities?.get(fileName);
+    if (moduleIdentities && moduleIdentity === undefined) {
+      throw new Error(
+        `Cannot mint WriteAuthorizedBy claim: no module identity for defining source '${fileName}'`,
+      );
+    }
+    return {
+      file: normalizeWriterIdentityFile(
+        fileName,
+        context.options.canonicalWriterIdentityFile,
+      ),
+      ...(moduleIdentity !== undefined ? { moduleIdentity } : {}),
+    };
+  };
+
+  const typeArg = node.typeArguments![0]!;
+  const typeArguments = ts.isTypeReferenceNode(typeArg)
+    ? typeArg.typeArguments
+    : undefined;
+  const writeAuthorizedByIdentity = extractWriteAuthorizedByIdentity(
+    typeArg,
+    sourceFile.fileName,
+    checker,
+    writerIdentityForSourceFile,
+  );
+  let schemaTypeArg: ts.TypeNode = typeArg;
+  if (
+    writeAuthorizedByIdentity && isWriteAuthorizedByType(typeArg) &&
+    typeArguments?.length
+  ) {
+    schemaTypeArg = typeArguments[0]!;
+  }
+
+  const type = typeRegistry.get(node) ?? getTypeFromTypeNodeWithFallback(
+    schemaTypeArg,
+    checker,
+    typeRegistry,
+  );
+  const arg0 = node.arguments[0] && unwrapExpression(node.arguments[0]);
+  let optionsObj: Record<string, unknown> = {};
+  let widenLiterals: boolean | undefined;
+  if (arg0 && ts.isObjectLiteralExpression(arg0)) {
+    optionsObj = evaluateObjectLiteral(arg0, checker);
+    if (typeof optionsObj.widenLiterals === "boolean") {
+      widenLiterals = optionsObj.widenLiterals;
+      delete optionsObj.widenLiterals;
+    }
+  }
+
+  const generationOptions: SchemaGenerationOptions = {
+    ...(widenLiterals !== undefined ? { widenLiterals } : {}),
+    writerIdentityForSourceFile,
+  };
+  const schema = ((typeArg.pos === -1 && typeArg.end === -1 &&
+      (type.flags & ts.TypeFlags.Any)) ||
+      containsAnyOrUnknownTypeNode(typeArg))
+    ? schemaGenerator.generateSchemaFromSyntheticTypeNode(
+      schemaTypeArg,
+      checker,
+      typeRegistry,
+      schemaHints,
+      schemaSourceFile,
+      generationOptions,
+    )
+    : schemaGenerator.generateSchema(
+      type,
+      checker,
+      schemaTypeArg,
+      generationOptions,
+      schemaHints,
+      schemaSourceFile,
+      typeRegistry,
+    );
+
+  let finalSchema: unknown = typeof schema === "boolean"
+    ? schema
+    : { ...(schema as Record<string, unknown>), ...optionsObj };
+  finalSchema = attachUiContractFromSchemaHints(
+    finalSchema,
+    node,
+    schemaTypeArg,
+    schemaHints,
+  );
+  if (writeAuthorizedByIdentity && typeof finalSchema !== "boolean") {
+    finalSchema = attachWriteAuthorizedByMarker(
+      finalSchema as Record<string, unknown>,
+      writeAuthorizedByIdentity,
+    );
+  }
+  return {
+    resolved: true,
+    value: resolvePolicyOfMarkers(finalSchema, context, node),
+  };
+}
+
 export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
   transform(context: TransformationContext): ts.SourceFile {
     const schemaGenerator = new SchemaGenerator();
@@ -77,7 +190,6 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
         ) {
           schemaTypeArg = typeArguments[0]!;
         }
-
         // First check if we have a registered Type for this node or the typeArg
         // (from schema-injection when synthetic TypeNodes were created).
         //
@@ -372,7 +484,7 @@ function resolvePolicyOfMarkers(
   );
 }
 
-function createSchemaAst(
+export function createSchemaAst(
   schema: unknown,
   factory: ts.NodeFactory,
 ): ts.Expression {
@@ -396,7 +508,13 @@ function createSchemaAst(
     ) => {
       // Use createPropertyName which handles safe identifiers vs string literals
       // This includes checking for reserved words using TypeScript's scanner
-      const propertyName = createPropertyName(key, factory);
+      // `__proto__: value` is special object-literal syntax even when the key
+      // is quoted: it changes [[Prototype]] instead of creating an own data
+      // property. A computed key has ordinary property semantics and preserves
+      // the exact schema document.
+      const propertyName = key === "__proto__"
+        ? factory.createComputedPropertyName(factory.createStringLiteral(key))
+        : createPropertyName(key, factory);
 
       return factory.createPropertyAssignment(
         propertyName,

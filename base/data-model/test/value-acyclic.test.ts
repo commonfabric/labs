@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 
 import { assertAcyclicFabricValue, deepFreeze, type FabricValue } from "@";
 import { UnknownValue } from "@/codec-common";
+import { registerFabricFactory } from "@/fabric-factory.ts";
 
 describe("assertAcyclicFabricValue", () => {
   it("accepts shared frozen subtrees without changing them", () => {
@@ -34,5 +35,37 @@ describe("assertAcyclicFabricValue", () => {
     assertAcyclicFabricValue(value);
     value.self = value;
     expect(() => assertAcyclicFabricValue(value)).toThrow(/cyclic/);
+  });
+
+  it("validates admitted factory state instead of rejecting the callable", () => {
+    const factory = registerFabricFactory(() => undefined, "pattern", {
+      kind: "pattern",
+      ref: {
+        identity: "FAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        symbol: "main",
+      },
+      argumentSchema: true,
+      resultSchema: true,
+      paramsSchema: true,
+      params: { factor: 2 },
+    });
+
+    expect(() => assertAcyclicFabricValue(factory)).not.toThrow();
+    expect(() => assertAcyclicFabricValue({ factory })).not.toThrow();
+  });
+
+  it("checks live factory values without requiring an artifact ref", () => {
+    const params = { factor: 2 };
+    const factory = registerFabricFactory(() => undefined, "pattern", {
+      kind: "pattern",
+      rootToken: {},
+      argumentSchema: true,
+      resultSchema: true,
+      paramsSchema: true,
+      params,
+    });
+
+    expect(() => assertAcyclicFabricValue(factory)).not.toThrow();
+    expect(Object.isFrozen(params)).toBe(false);
   });
 });

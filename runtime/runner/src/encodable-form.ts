@@ -11,6 +11,10 @@
  * is left for the encoder to reject rather than being broken here.
  */
 
+import {
+  factoryStateOf,
+  isAdmittedFabricFactory,
+} from "@commonfabric/data-model/fabric-factory";
 import type { FabricExecPlainObject, FabricExecValue } from "@commonfabric/api";
 import { isPlainObject } from "@commonfabric/js-values/types";
 
@@ -20,8 +24,8 @@ import { isPlainObject } from "@commonfabric/js-values/types";
  * stringified.
  *
  * One name is asked for: `toEncodableForm`. Every builder artifact carries it
- * -- a module, a handler, a pattern, and the factory that carries a module's
- * members -- and so does a `Cell`, whose form is the link it names. A cell is
+ * -- a legacy module or handler descriptor and a pattern -- and so does a
+ * `Cell`, whose form is the link it names. A cell is
  * what a caller here is likeliest to hold that is not an artifact: a graph
  * feeding a content-derived id or a builder default can carry one, and neither
  * has a representation for the cell itself. The storage boundary is elsewhere
@@ -159,11 +163,11 @@ type AnyFunction = (...args: never[]) => unknown;
  * form, yielding a value the data model can represent. The hooks are the two
  * questions a caller answers for it (see `WalkHooks`).
  *
- * A builder artifact carries its serializer as a `toEncodableForm` method (see
- * `builder/module.ts` and `builder/pattern.ts`). A method is a function-valued
- * property and a `FabricPlainObject` has none, so an artifact has to be
- * replaced before the value crosses into the data model. An artifact sits
- * wherever a pattern author put it -- under a tool's `handler` key, in a
+ * A legacy builder artifact carries its serializer as a `toEncodableForm`
+ * method (see `builder/module.ts` and `builder/pattern.ts`). A method is a
+ * function-valued property and a `FabricPlainObject` has none, so an artifact
+ * has to be replaced before the value crosses into the data model. An artifact
+ * sits wherever a pattern author put it -- under a tool's `handler` key, in a
  * result, inside a node's `inputs` -- so finding one takes a walk.
  *
  * The `toEncodableForm` name is what bounds the subject to _builder artifacts_.
@@ -173,10 +177,14 @@ type AnyFunction = (...args: never[]) => unknown;
  * defined itself is user data, and the conversion rejects it, that `toJSON`
  * being a function-valued member.
  *
- * An artifact is reached in two shapes and both are covered: a module is an
- * object, and a factory is a _function_ carrying its module's members (the
- * `Object.assign` in `builder/module.ts`). A function is replaced but never
- * descended into: its members are the builder's, not content.
+ * An artifact is reached as either an object or a function. Ref-backed
+ * `Factory@1` callables are already Fabric values and remain atomic leaves.
+ * A capture-free hand-built PatternFactory has no durable ref and therefore
+ * cannot cross a Fabric boundary as `Factory@1`; it takes the established
+ * embedded-graph fallback instead. A closure-bearing keyless factory cannot
+ * take that fallback because its hidden params state would be lost. Other
+ * functions are replaced but never descended into because their members are
+ * builder state, not content.
  *
  * Subtrees carrying no artifact come back by identity, which keeps an already
  * deep-frozen `FabricValue` eligible for the conversion's identity fast path
@@ -247,11 +255,35 @@ function replace(
     return flattened === IN_PROGRESS ? value : flattened;
   }
 
-  // A factory is a function carrying its module's members. Replaced by its
-  // encodable form, never descended into: a function's own members belong to
-  // the builder, and a function that is not an artifact has no fabric
-  // representation for the conversion to find either way.
+  // A ref-backed admitted factory is already a Fabric value. A capture-free
+  // hand-built PatternFactory is deliberately different: without a content-
+  // addressed ref it has no cold reconstruction path, so its graph-local
+  // representation is the embedded graph. A closure-bearing keyless pattern
+  // would lose its params state in that form, while keyless module and handler
+  // factories have no graph fallback at all; leave each atomic so the data-
+  // model boundary rejects it.
+  // Other functions with an encodable form are legacy builder artifacts;
+  // arbitrary functions reach the data model unchanged and are rejected there.
   if (isFunction) {
+    if (isAdmittedFabricFactory(value)) {
+      const state = factoryStateOf(value);
+      if (
+        state.kind === "pattern" && state.ref === undefined &&
+        state.paramsSchema === undefined
+      ) {
+        const method = ownEncodableFormMethod(value);
+        if (method !== undefined) {
+          seen.set(value, IN_PROGRESS);
+          return copied(
+            replace(encodableFormFrom(method, value), seen, onCopy, hooks),
+            value,
+            seen,
+            onCopy,
+          );
+        }
+      }
+      return replaced(value, hooks, seen, onCopy);
+    }
     const method = ownEncodableFormMethod(value);
     if (method === undefined) {
       return replaced(value, hooks, seen, onCopy);

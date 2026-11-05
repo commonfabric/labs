@@ -360,40 +360,30 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_2 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { groupedByAisle }) => {
     const aisleName = __cf_pattern_input.key("element");
-    const groupedByAisle = __cf_pattern_input.key("params", "groupedByAisle");
     return (<div>
               <h3>{aisleName}</h3>
               {__cfLift_4({
             groupedByAisle: groupedByAisle,
             aisleName: aisleName
-        })!.mapWithPattern(__cfPattern_1, {})}
+        })!.mapWithPattern(__cfPattern_1)}
             </div>);
 }, {
     type: "object",
     properties: {
-        element: {
-            type: "string"
-        },
-        params: {
+        groupedByAisle: {
             type: "object",
-            properties: {
-                groupedByAisle: {
-                    type: "object",
-                    properties: {},
-                    additionalProperties: {
-                        type: "array",
-                        items: {
-                            $ref: "#/$defs/Assignment"
-                        }
-                    }
+            properties: {},
+            additionalProperties: {
+                type: "array",
+                items: {
+                    $ref: "#/$defs/Assignment"
                 }
-            },
-            required: ["groupedByAisle"]
+            }
         }
     },
-    required: ["element", "params"],
+    required: ["groupedByAisle"],
     $defs: {
         Assignment: {
             type: "object",
@@ -421,6 +411,14 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
             required: ["name", "done"]
         }
     }
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            type: "string"
+        }
+    },
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -447,7 +445,7 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 // and accesses the grouped object with each key.
 // FIXTURE: derived-property-access-with-derived-key
 // Verifies: .map() chains with derived keys and element access are fully transformed
-//   aisleNames.map(...)            → aisleNames.mapWithPattern(pattern(...), {captures})
+//   aisleNames.map(...)            → aisleNames.mapWithPattern(pattern(...).curry({captures}))
 //   groupedByAisle[aisleName].map  → lift over {groupedByAisle, aisleName} then .mapWithPattern(...)
 // Context: CT-1036 -- nested map with derived object indexed by derived key, two levels deep
 export default pattern((__cf_pattern_input) => {
@@ -464,9 +462,9 @@ export default pattern((__cf_pattern_input) => {
     // - Map over the result
     return {
         [UI]: (<div>
-          {aisleNames.mapWithPattern(__cfPattern_2, {
+          {aisleNames.mapWithPattern(__cfPattern_2.curry({
                 groupedByAisle: groupedByAisle
-            })}
+            }))}
         </div>),
     };
 }, {

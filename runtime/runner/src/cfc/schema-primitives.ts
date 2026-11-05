@@ -31,7 +31,7 @@ export const cfcSchemaToObject = (schema?: JSONSchema): JSONSchemaObj =>
  */
 export const cfcSchemaIsInternalKey = (key: string): boolean =>
   key === "ifc" || key === "asCell" || key === "asStream" ||
-  key === "scope";
+  key === "asFactory" || key === "scope";
 
 /**
  * Whether `schema` admits every value: `true`, or an object whose every

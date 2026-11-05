@@ -215,8 +215,8 @@ export default pattern((state) => {
     const rows = __cfLift_1({ state: {
             items: state.key("items")
         } }).for("rows", true);
-    const views = rows.mapWithPattern(__cfPattern_1, {}).for("views", true);
-    const labels = rows.mapWithPattern(__cfPattern_2, {}).for("labels", true);
+    const views = rows.mapWithPattern(__cfPattern_1).for("views", true);
+    const labels = rows.mapWithPattern(__cfPattern_2).for("labels", true);
     return { views, labels };
 }, {
     type: "object",

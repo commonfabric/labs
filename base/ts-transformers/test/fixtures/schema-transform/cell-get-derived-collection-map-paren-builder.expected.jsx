@@ -147,10 +147,10 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 //   transparent parens (§5.7 paren-invariance).
 export default pattern((__cf_pattern_input) => {
     const rows = __cf_pattern_input.key("rows");
-    const view = __cfLift_1({ rows: rows }).filterWithPattern(__cfPattern_1, {}).for("view", true);
+    const view = __cfLift_1({ rows: rows }).filterWithPattern(__cfPattern_1).for("view", true);
     return {
         [UI]: (<ul>
-        {view.mapWithPattern(__cfPattern_2, {})}
+        {view.mapWithPattern(__cfPattern_2)}
       </ul>),
         view,
     };

@@ -6,6 +6,7 @@ import {
   type FabricValuePlusTag,
   JS_PRIMITIVE_TYPE_VALUE_TAGS,
   type JsPrimitiveTypeValueTag,
+  registerFabricFactory,
 } from "@";
 import { FabricMap } from "@/fabric-instances";
 import { FABRIC_PRIMITIVE_VALUE_TAGS } from "@/fabric-primitives";
@@ -38,6 +39,7 @@ const TRACED_METHODS = [
   "visitFabricDurationNsec",
   "visitFabricEpochDay",
   "visitFabricEpochNsec",
+  "visitFabricFactory",
   "visitFabricHash",
   "visitFabricInstance",
   "visitFabricKeyPair",
@@ -160,6 +162,20 @@ for (
   const array = [1];
   const object = { a: 1 };
   const instance = new FabricMap(new Map());
+  const factory = registerFabricFactory(
+    (input: unknown) => input,
+    "module",
+    {
+      kind: "module",
+      rootToken: {},
+      ref: {
+        identity: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        symbol: "lift",
+      },
+      argumentSchema: true,
+      resultSchema: false,
+    },
+  );
   const date = new Date(0);
 
   CASES.push(
@@ -175,6 +191,10 @@ for (
       ["visitFabricInstance", instance],
       ["visitFabricContainerValue", instance, "FabricInstance"],
     ], DO_RECURSE_VALUES],
+    ["the tag `FabricFactory`", factory, "FabricFactory", [
+      ["visitFabricFactory", factory],
+      ["visitUnhandledValue", factory, "FabricFactory"],
+    ], UNHANDLED],
     ["the tag `PlusType`", date, "PlusType", [
       ["visitPlusType", date],
       ["visitUnhandledValue", date, "PlusType"],

@@ -1274,7 +1274,6 @@ const OP: any = {
     type: "object",
     properties: {
       element: { type: "string" },
-      params: { type: "object", properties: { from: { type: "string" } } },
     },
   },
   resultSchema: { type: "string" },
@@ -1287,15 +1286,15 @@ const OP: any = {
       implementation: "(x) => x",
       debugName: "${CUSTODY_SEAL_WRITER}",
     },
-    inputs: { $alias: { cell: "argument", path: ["params", "from"] } },
+    inputs: { $alias: { cell: "argument", path: ["element"] } },
     outputs: {
       $alias: { partialCause: "__patternResult", path: [], scope: "space" },
     },
   }],
 };
 
-export default pattern<{ items: string[]; from: string }>(({ items, from }) => ({
-  out: (items as any).mapWithPattern(OP, { from }),
+export default pattern<{ items: string[] }>(({ items }) => ({
+  out: (items as any).mapWithPattern(OP),
 }));
 `,
         }],
@@ -1335,8 +1334,7 @@ export default pattern<{ items: string[]; from: string }>(({ items, from }) => (
       );
       // deno-lint-ignore no-explicit-any
       const result = runtime.run(tx, pattern, {
-        items: ["a"],
-        from: source,
+        items: [source],
       }, resultCell) as any;
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).error).toBeUndefined();

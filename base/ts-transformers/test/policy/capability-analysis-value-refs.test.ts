@@ -568,10 +568,10 @@ export default lift(({ rows }: { rows: Row[] }): string => {
       expect(fields).toEqual(["id", "name", "note"]);
     });
 
-    it("narrows a builder's returned sorted copy to the fields its comparator reads", async () => {
-      // A builder's result is handed on by reference, so whoever reads the
-      // copy's elements reads the stored rows whole
-      // (`patterns/dev/checks/kept-element-references.test.tsx`).
+    it("keeps every field of a builder's returned sorted copy", async () => {
+      // Spreading the materialized snapshot copies complete elements before
+      // the comparator reads them. The resulting schema therefore retains the
+      // full row payload.
 
       const fields = await liftRowFields(`
 import { lift } from "commonfabric";
@@ -580,7 +580,7 @@ export default lift(({ rows }: { rows: Row[] }): Row[] =>
   [...rows].sort((a, b) => a.id - b.id)
 );
 `);
-      expect(fields).toEqual(["id"]);
+      expect(fields).toEqual(["id", "name", "note"]);
     });
 
     it("keeps every field of a returned sorted copy a callback passed by name filters", async () => {
@@ -610,7 +610,7 @@ export default lift(({ rows, enabled }: { rows: Row[]; enabled: boolean }): Row[
       expect(fields).toEqual(["id", "name", "note"]);
     });
 
-    it("keeps the field an inline callback reads through elements of a copy or another array", async () => {
+    it("keeps every field through elements of a copy or another array", async () => {
       const fields = await liftRowFields(`
 import { lift } from "commonfabric";
 interface Row { id: number; name: string; note: string }
@@ -619,7 +619,7 @@ export default lift(({ rows, other }: { rows: Row[]; other: Row[] }): Row[] =>
     .filter((row) => row.name === "A")
 );
 `);
-      expect(fields).toEqual(["id", "name"]);
+      expect(fields).toEqual(["id", "name", "note"]);
     });
 
     it("keeps the elements of a primitive array a shifted copy of it writes back as values", async () => {
@@ -733,7 +733,7 @@ export default handler<
       });
     });
 
-    it("keeps the field a destructured callback parameter compares through elements of a copy or another array", async () => {
+    it("keeps every field through destructured elements of a copy or another array", async () => {
       const fields = await liftRowFields(`
 import { lift } from "commonfabric";
 interface Row { id: number; name: string; note: string }
@@ -742,7 +742,7 @@ export default lift(({ rows, other }: { rows: Row[]; other: Row[] }): Row[] =>
     .filter(({ name }) => name === "A")
 );
 `);
-      expect(fields).toEqual(["id", "name"]);
+      expect(fields).toEqual(["id", "name", "note"]);
     });
 
     it("keeps comparing the elements of a copy the body only splices and writes back", async () => {

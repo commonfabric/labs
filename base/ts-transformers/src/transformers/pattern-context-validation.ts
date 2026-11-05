@@ -47,8 +47,10 @@
 
 import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
 import ts from "typescript";
+import { detectTrustedFactoryType } from "@commonfabric/schema-generator";
 import { reportNestedCollectionScans } from "../diagnostics/nested-collection-scan.ts";
 import { COMMONFABRIC_REACTIVE_ORIGIN_BUILDER_NAMES } from "../core/commonfabric-runtime-registry.ts";
+import { isCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
 import {
   unwrapExpression,
@@ -58,7 +60,9 @@ import {
   classifyArrayMethodCallSite,
   detectCallKind,
   detectDirectBuilderCall,
+  findEnclosingPatternBuilderCallbackDescriptor,
   getNodeText,
+  getPatternBuilderCallbackDescriptor,
   isInRestrictedReactiveContext,
   isInsideRestrictedContext,
   isInsideSafeCallbackWrapper,
@@ -88,12 +92,14 @@ import type {
 } from "../policy/callback-boundary.ts";
 
 const EMPTY_OPAQUE_ROOTS = new Set<string>();
+const AUTHORED_SECOND_PATTERN_PARAMETER =
+  "pattern-callback:authored-second-parameter";
+const AUTHORED_REST_PATTERN_INPUT = "pattern-callback:authored-rest-input";
 const SES_SELF_CONTAINED_CALLBACK_BOUNDARIES = new Set<
   SupportedCallbackBoundaryKind
 >([
   "event-handler",
   "reactive-array-method",
-  "pattern-tool",
   "pattern-builder",
   "render-builder",
   "lift-applied",
@@ -219,6 +225,34 @@ export class PatternContextValidationTransformer
         return ts.visitEachChild(node, visit, context.tsContext);
       }
 
+      if (ts.isCallExpression(node)) {
+        const descriptor = getPatternBuilderCallbackDescriptor(node, checker);
+        const firstParameter = descriptor?.callback.parameters[0];
+        if (firstParameter?.dotDotDotToken) {
+          context.reportDiagnosticOnce({
+            severity: "error",
+            type: AUTHORED_REST_PATTERN_INPUT,
+            message:
+              "Pattern callback argument 0 is one public input value and " +
+              "cannot be a rest parameter. Argument 1 is reserved for " +
+              "compiler-generated closure params metadata.",
+            node: firstParameter,
+          });
+        }
+        const secondParameter = descriptor?.callback.parameters[1];
+        if (secondParameter && !descriptor.paramsSchemaCarrier) {
+          context.reportDiagnosticOnce({
+            severity: "error",
+            type: AUTHORED_SECOND_PATTERN_PARAMETER,
+            message:
+              "Pattern callback argument 1 is reserved for compiler-generated " +
+              "closure params metadata. Authors may only declare public input " +
+              "as callback argument 0.",
+            node: secondParameter,
+          });
+        }
+      }
+
       // Check for function creation in pattern context
       if (
         ts.isArrowFunction(node) ||
@@ -319,9 +353,6 @@ export class PatternContextValidationTransformer
       if (ts.isCallExpression(node)) {
         // Check for lift/handler inside pattern
         this.#validateBuilderPlacement(node, context, checker);
-
-        // patternTool's first argument must be a pattern() (CT-1655)
-        this.#validatePatternToolFirstArgument(node, context, checker);
 
         const unsupportedCallRoot = classifyUnsupportedExpressionSiteCallRoot(
           node,
@@ -1108,40 +1139,6 @@ export class PatternContextValidationTransformer
     }
   }
 
-  /**
-   * Validates that `patternTool(...)`'s first argument is a `pattern(...)`, not a
-   * bare callback (CT-1655). Passing a function directly used to be auto-wrapped
-   * (`pattern(fn)`) by the runtime and auto-captured by a transformer strategy;
-   * both were removed in favor of an explicit, addressable pattern. Authors now
-   * wrap the callback themselves: `patternTool(pattern(fn), extraParams?)`.
-   */
-  #validatePatternToolFirstArgument(
-    node: ts.CallExpression,
-    context: TransformationContext,
-    checker: ts.TypeChecker,
-  ): void {
-    if (detectCallKind(node, checker)?.kind !== "pattern-tool") {
-      return;
-    }
-    const firstArg = node.arguments[0] && unwrapExpression(node.arguments[0]);
-    if (
-      !firstArg ||
-      !(ts.isArrowFunction(firstArg) || ts.isFunctionExpression(firstArg))
-    ) {
-      return;
-    }
-    context.reportDiagnostic({
-      severity: "error",
-      type: "pattern-context:patterntool-requires-pattern",
-      message:
-        `patternTool()'s first argument must be a pattern(), not a bare callback. ` +
-        `Wrap the callback in pattern(): patternTool(pattern(fn), extraParams?). ` +
-        `Module-scoped reactive values the callback reads are captured by the ` +
-        `pattern automatically; per-instance values go in extraParams.`,
-      node: firstArg,
-    });
-  }
-
   #validateCallbackSelfContainment(
     func: ts.ArrowFunction | ts.FunctionExpression,
     boundarySemantics: CallbackBoundarySemantics,
@@ -1157,6 +1154,12 @@ export class PatternContextValidationTransformer
     }
 
     const diagnosticsSeen = new Set<string>();
+    const permitsFactoryCaptures = this
+      .#isClosureConvertedNestedPatternBoundary(
+        func,
+        boundarySemantics,
+        checker,
+      );
 
     const report = (node: ts.Identifier): void => {
       if (diagnosticsSeen.has(node.text)) return;
@@ -1188,7 +1191,9 @@ export class PatternContextValidationTransformer
           declarations.some((decl) =>
             this.#isEnclosingFunctionScopedDeclaration(decl, func)
           ) &&
-          this.#isCallableReference(node, declarations, checker)
+          this.#isCallableReference(node, declarations, checker) &&
+          !(permitsFactoryCaptures &&
+            this.#isFirstClassFactoryReference(node, checker))
         ) {
           report(node);
         }
@@ -1206,45 +1211,77 @@ export class PatternContextValidationTransformer
   }
 
   /**
-   * Validates that standalone functions don't use reactive operations like
-   * computed(), lift(), or .map() on CellLike types.
-   *
-   * Standalone functions cannot have their closures captured automatically.
-   * Users should either:
-   * - Move the reactive operation out of the standalone function
-   * - Use patternTool() which handles closure capture automatically
-   *
-   * Exception: Functions passed inline to patternTool() are handled by the
-   * patternTool transformer and don't need validation here.
-   *
-   * Limitation: This check is purely syntactic — it only recognizes functions
-   * passed *inline* as the first argument to patternTool(). If a function is
-   * defined separately and then passed to patternTool(), e.g.:
-   *
-   *   const myFn = ({ query }) => { return computed(...) };
-   *   const tool = patternTool(myFn);
-   *
-   * ...the validator will still flag myFn, because it can't trace dataflow to
-   * see that it ends up as a patternTool argument. The workaround is to inline
-   * the function into the patternTool() call.
+   * Only nested patterns that the closure converter will hoist may carry a
+   * callable factory through their private params record. Other SES callback
+   * boundaries retain the ordinary callable-capture rejection.
    */
+  #isClosureConvertedNestedPatternBoundary(
+    func: ts.ArrowFunction | ts.FunctionExpression,
+    boundarySemantics: CallbackBoundarySemantics,
+    checker: ts.TypeChecker,
+  ): boolean {
+    const decision = boundarySemantics.decision;
+    if (
+      decision.kind !== "supported" ||
+      decision.boundaryKind !== "pattern-builder"
+    ) {
+      return false;
+    }
+
+    const ownPattern = findEnclosingPatternBuilderCallbackDescriptor(
+      func,
+      checker,
+    );
+    if (!ownPattern) return false;
+
+    let current: ts.Node | undefined = ownPattern.call.parent;
+    while (current) {
+      if (
+        ts.isCallExpression(current) &&
+        getPatternBuilderCallbackDescriptor(current, checker)
+      ) {
+        return true;
+      }
+      current = current.parent;
+    }
+    return false;
+  }
+
+  /** Recognize only branded factories declared by trusted Common Fabric types. */
+  #isFirstClassFactoryReference(
+    node: ts.Identifier,
+    checker: ts.TypeChecker,
+  ): boolean {
+    let type: ts.Type;
+    try {
+      type = checker.getTypeAtLocation(node);
+    } catch {
+      return false;
+    }
+
+    const members = type.isUnion()
+      ? type.types.filter((member) =>
+        (member.flags &
+          (ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Never)) ===
+          0
+      )
+      : [type];
+    return members.length > 0 &&
+      members.every((member) =>
+        detectTrustedFactoryType(member, checker) !== undefined &&
+        checker.getPropertiesOfType(member).some((property) =>
+          property.getName().startsWith("__@FABRIC_FACTORY_TYPE") &&
+          isCommonFabricSymbol(property, checker)
+        )
+      );
+  }
+
+  /** Validate that standalone functions do not perform reactive operations. */
   #validateStandaloneFunction(
     func: ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration,
     context: TransformationContext,
     checker: ts.TypeChecker,
   ): void {
-    // Skip if this function is passed to patternTool()
-    if (!ts.isFunctionDeclaration(func)) {
-      const boundarySemantics = getCallbackBoundarySemantics(
-        func,
-        checker,
-        context,
-      );
-      if (boundarySemantics.isPatternToolCallback) {
-        return;
-      }
-    }
-
     // Walk the function body looking for reactive operations
     const visitBody = (node: ts.Node): void => {
       // Skip nested function definitions - they have their own scope
@@ -1275,7 +1312,7 @@ export class PatternContextValidationTransformer
                 `${callKind.builderName}() is not allowed inside standalone functions. ` +
                 `Common Fabric builders must be authored in an allowed context ` +
                 `so their callbacks can be self-contained for SES sandboxing. ` +
-                `Move the ${callKind.builderName}() call to module scope, a pattern-owned context, or use patternTool() when closure capture is required.`,
+                `Move the ${callKind.builderName}() call to module scope or a pattern-owned context.`,
               node,
             });
             return;
@@ -1290,7 +1327,7 @@ export class PatternContextValidationTransformer
               message:
                 `Reactive computations are not allowed inside standalone functions. ` +
                 `Standalone functions cannot capture reactive closures. ` +
-                `Move the computed() call to the pattern body, or use patternTool() to enable automatic closure capture.`,
+                `Move the computed() call to a pattern-owned context.`,
               node,
             });
             return;
@@ -1303,7 +1340,7 @@ export class PatternContextValidationTransformer
               message:
                 `.${arrayMethodCallSite.family}() on reactive types is not allowed inside standalone functions. ` +
                 `Standalone functions cannot capture reactive closures. ` +
-                `Move the .${arrayMethodCallSite.family}() call to the pattern body, or use patternTool() to enable automatic closure capture. ` +
+                `Move the .${arrayMethodCallSite.family}() call to a pattern-owned context. ` +
                 `If this is an explicit Cell/Writable value and eager ${arrayMethodCallSite.family}ing is acceptable, use <cell>.get().${arrayMethodCallSite.family}(...).`,
               node,
             });

@@ -72,7 +72,7 @@ const extractDependencyList = (value: unknown, selfId: string): string[] => {
   return result;
 };
 
-const sanitizeIssueList = (value: unknown): Issue[] => {
+const sanitizeIssueList = (value: readonly IssueInput[]): Issue[] => {
   if (!Array.isArray(value)) return [];
   const raw: Issue[] = [];
   const seen = new Set<string>();

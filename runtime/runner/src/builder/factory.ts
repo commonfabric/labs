@@ -1,7 +1,6 @@
 /**
  * Factory function to create builder functions with runtime dependency injection
  */
-
 import {
   debugStr,
   FabricInstance,
@@ -61,7 +60,6 @@ import {
   llm,
   llmDialog,
   navigateTo,
-  patternTool,
   sqliteDatabase,
   sqliteQuery,
   str,
@@ -88,7 +86,12 @@ import {
   lift,
 } from "./module.ts";
 import { isTrustedPattern, setPatternProgram } from "./pattern-metadata.ts";
-import { pattern } from "./pattern.ts";
+import {
+  pattern,
+  withFrameworkProvidedPaths,
+  withPatternParamsSchema,
+} from "./pattern.ts";
+import { invokeFactory } from "./invoke-factory.ts";
 import { principalOf, principalsOf } from "./principal-of.ts";
 import { profileOwnerOf } from "./profile-owner-of.ts";
 import { linksOf } from "./links-of.ts";
@@ -103,6 +106,7 @@ import {
 import { grantSpaceAccess, revokeSpaceAccess } from "./space-access-change.ts";
 import type {
   BuilderFunctionsAndConstants,
+  InternalBuilderHelpers,
   ToSchemaFunction,
 } from "./types.ts";
 import {
@@ -183,11 +187,6 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
   const trustedStr =
     ((strings: TemplateStringsArray, ...values: unknown[]) =>
       trustValue(str(strings, ...values))) as typeof str;
-  const trustedPatternTool = ((...args: any[]) =>
-    trustValue(
-      (patternTool as (...args: any[]) => unknown)(...args),
-    )) as typeof patternTool;
-
   // Associate runtime programs with patterns after compilation and initial eval
   // and before compilation returns, so before any e.g. pattern would be
   // instantiated. This way they get saved with a way to rehydrate them.
@@ -212,7 +211,6 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
   const surface: Omit<BuilderFunctionsAndConstants, "__cfHelpers"> = {
     // Pattern creation
     pattern: trustedPattern,
-    patternTool: trustedPatternTool,
 
     // Module creation
     lift: trustedLift,
@@ -405,10 +403,16 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     tagCollectionKey,
   };
 
-  // The helpers object the transformer's output reaches for is this same
-  // surface, so it can only be attached once the surface exists.
+  const internalHelpers: InternalBuilderHelpers = {
+    ...surface,
+    invokeFactory,
+    withFrameworkProvidedPaths,
+    withPatternParamsSchema,
+  };
+
+  // Compiler-only helpers are not exposed as authored top-level API members.
   const commonfabric: BuilderFunctionsAndConstants = Object.assign(surface, {
-    __cfHelpers: surface,
+    __cfHelpers: internalHelpers,
   });
 
   return {

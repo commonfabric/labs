@@ -57,11 +57,11 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 // FIXTURE: map-destructured-string-alias
 // Verifies: object destructuring with string-property alias in .map() param is lowered to key()
 //   .map(({ couponCode: code }) => ...) → key("element", "couponCode") assigned to code
-//   .map(fn) → .mapWithPattern(pattern(...), {})
+//   .map(fn) → .mapWithPattern(pattern(...))
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {})}
+        {state.key("items").mapWithPattern(__cfPattern_1)}
       </div>),
     };
 }, {

@@ -64,12 +64,12 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 // FIXTURE: map-destructure-alias-action-collision
 // Verifies: destructured alias inside map callback body is lowered to explicit key() access
 //   const { spotNumber: sn } = spot → const sn = spot.key("spotNumber")
-//   .map(fn) → .mapWithPattern(pattern(...), {})
+//   .map(fn) → .mapWithPattern(pattern(...))
 // Context: Body destructuring from opaque map elements becomes explicit key() bindings
 export default pattern((state) => {
     return {
         [UI]: (<ul>
-        {state.key("spots").mapWithPattern(__cfPattern_1, {})}
+        {state.key("spots").mapWithPattern(__cfPattern_1)}
       </ul>),
     };
 }, {

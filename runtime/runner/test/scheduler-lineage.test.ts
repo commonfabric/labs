@@ -75,13 +75,22 @@ function queuedEvent(
   id: string,
   originTx?: IExtendedStorageTransaction,
 ): QueuedEvent {
+  const handler = () => {};
   return {
     id,
     enqueueSeq: nextEnqueueSeq++,
     originTx,
     eventLink,
     action: () => {},
-    handler: () => {},
+    handler,
+    handlerRegistration: {
+      ref: eventLink,
+      handler,
+      generation: 0,
+      readinessCancels: new Set(),
+      active: true,
+    },
+    handlerGeneration: 0,
     event: { id },
     retry: false,
   };

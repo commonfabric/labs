@@ -327,9 +327,8 @@ const __cfLift_5 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { Kind }) => {
     const item = __cf_pattern_input.key("element");
-    const Kind = __cf_pattern_input.params.Kind;
     return (<span>
               {__cfHelpers.ifElse({
         type: "boolean"
@@ -362,26 +361,25 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Item"
-        },
-        params: {
+        Kind: {
             type: "object",
             properties: {
-                Kind: {
-                    type: "object",
-                    properties: {
-                        Beta: {
-                            type: "string"
-                        }
-                    },
-                    required: ["Beta"]
+                Beta: {
+                    type: "string"
                 }
             },
-            required: ["Kind"]
+            required: ["Beta"]
         }
     },
-    required: ["element", "params"],
+    required: ["Kind"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Item"
+        }
+    },
+    required: ["element"],
     $defs: {
         Item: {
             type: "object",
@@ -491,11 +489,11 @@ export default pattern((__cf_pattern_input) => {
           <button type="button" onClick={viaClassExtends}>extends</button>
           <button type="button" onClick={viaInstantiation}>instantiate</button>
           <button type="button" onClick={viaEnums}>enums</button>
-          {items.mapWithPattern(__cfPattern_1, {
+          {items.mapWithPattern(__cfPattern_1.curry({
                 Kind: {
                     Beta: Kind.Beta
                 }
-            })}
+            }))}
         </div>),
     };
 }, {

@@ -224,7 +224,7 @@ describe("compiled pattern node alias schemas", () => {
     await runtime.idle();
 
     const childArgument = result.key("node").getArgumentCell(
-      serialized.nodes[0].module.implementation.argumentSchema,
+      serialized.nodes[0].module.argumentSchema,
     )!;
     const childRoot = childArgument.get();
     expect(isCell(childRoot)).toBe(true);

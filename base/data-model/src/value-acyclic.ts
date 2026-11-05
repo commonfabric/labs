@@ -1,7 +1,16 @@
 /** Cycle validation for boundaries whose value encoding cannot carry cycles. */
 
-import type { FabricContainerValue, FabricValue } from "./interface.ts";
+import type {
+  FabricContainerValue,
+  FabricFactory,
+  FabricValue,
+} from "./interface.ts";
 import { isValidDeepFrozenFabricValue } from "./deep-freeze.ts";
+import {
+  factoryStateOf,
+  isAdmittedFabricFactory,
+  mapFactoryStateValues,
+} from "./fabric-factory.ts";
 import { isFabricContainerValue } from "./types/index.ts";
 import {
   DefaultValueVisitor,
@@ -34,6 +43,18 @@ class AcyclicVisitor extends DefaultValueVisitor {
     return undefined;
   }
 
+  override visitFabricFactory(
+    value: FabricFactory,
+  ): VisitResult<never, FabricValue> {
+    if (this.#seen.has(value)) return { type: "mapTo", value };
+    this.#seen.add(value);
+    mapFactoryStateValues(factoryStateOf(value), (nested) => {
+      visitValue(nested as FabricValue, this);
+      return nested;
+    });
+    return { type: "mapTo", value };
+  }
+
   override visitCycle(): never {
     throw new Error("Cannot encode a cyclic Fabric value");
   }
@@ -50,7 +71,10 @@ class AcyclicVisitor extends DefaultValueVisitor {
  * successful checks of deep-frozen roots are memoized by identity.
  */
 export function assertAcyclicFabricValue(value: FabricValue): void {
-  if (!isFabricContainerValue(value) || acyclic.has(value)) return;
+  if (
+    (!isFabricContainerValue(value) && !isAdmittedFabricFactory(value)) ||
+    acyclic.has(value)
+  ) return;
   const visitor = new AcyclicVisitor();
   visitValue(value, visitor);
   if (isValidDeepFrozenFabricValue(value)) acyclic.add(value);

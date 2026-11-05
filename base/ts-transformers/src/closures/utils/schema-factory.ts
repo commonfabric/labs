@@ -16,15 +16,14 @@ import {
 import { isOptionalMemberSymbol } from "../../ast/mod.ts";
 
 /**
- * Build a TypeNode for an array method callback parameter.
- * Returns: { element: T, index?: number, array?: T[], params: {...} }
+ * Build the public TypeNode for an array method callback.
+ * Closure captures are carried by the pattern's private params schema.
  */
 export function createArrayMethodCallbackSchema(
   methodCall: ts.CallExpression,
   elemParam: ts.ParameterDeclaration | undefined,
   indexParam: ts.ParameterDeclaration | undefined,
   arrayParam: ts.ParameterDeclaration | undefined,
-  captureTree: Map<string, CaptureTreeNode>,
   context: TransformationContext,
 ): ts.TypeNode {
   const { checker, factory } = context;
@@ -83,26 +82,6 @@ export function createArrayMethodCallbackSchema(
         factory.createIdentifier("array"),
         factory.createToken(ts.SyntaxKind.QuestionToken),
         arrayTypeNode,
-      ),
-    );
-  }
-
-  // 5. Build params object type with hierarchical captures
-  const paramsProperties = buildTypeElementsFromCaptureTree(
-    captureTree,
-    context,
-  );
-
-  // 6. Add params property only when captures are present.
-  // Emitting an empty required `params` object for no-capture callbacks
-  // widens mapWithPattern input schemas and regresses fixture parity.
-  if (paramsProperties.length > 0) {
-    callbackParamProperties.push(
-      factory.createPropertySignature(
-        undefined,
-        factory.createIdentifier("params"),
-        undefined,
-        factory.createTypeLiteralNode(paramsProperties),
       ),
     );
   }

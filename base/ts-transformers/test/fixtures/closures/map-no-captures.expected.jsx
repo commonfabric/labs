@@ -66,13 +66,13 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-no-captures
 // Verifies: .map() on reactive array is transformed even with no captured outer variables
-//   .map(fn) → .mapWithPattern(pattern(...), {})
+//   .map(fn) → .mapWithPattern(pattern(...))
 // Context: Callback only references its own parameter (item); captures object is empty
 export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* No captures - just uses the callback parameter */}
-        {state.key("items").mapWithPattern(__cfPattern_1, {})}
+        {state.key("items").mapWithPattern(__cfPattern_1)}
       </div>),
     };
 }, {

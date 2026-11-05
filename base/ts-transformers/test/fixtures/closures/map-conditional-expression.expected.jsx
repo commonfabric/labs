@@ -86,9 +86,8 @@ const __cfLift_2 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const item = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
     return (<div>
             Price: ${__cfHelpers.ifElse({
         type: "boolean"
@@ -103,43 +102,42 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
             price: item.key("price")
         },
         state: {
-            threshold: state.key("threshold")
+            threshold: state.threshold
         }
     }), __cfLift_2({
         item: {
             price: item.key("price")
         },
         state: {
-            discount: state.key("discount")
+            discount: state.discount
         }
     }), item.key("price"))}
           </div>);
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Item"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        threshold: {
-                            type: "number"
-                        },
-                        discount: {
-                            type: "number"
-                        }
-                    },
-                    required: ["threshold", "discount"]
+                threshold: {
+                    type: "number"
+                },
+                discount: {
+                    type: "number"
                 }
             },
-            required: ["state"]
+            required: ["threshold", "discount"]
         }
     },
-    required: ["element", "params"],
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Item"
+        }
+    },
+    required: ["element"],
     $defs: {
         Item: {
             type: "object",
@@ -178,18 +176,18 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 // FIXTURE: map-conditional-expression
 // Verifies: ternary expression in .map() callback is transformed to ifElse() with lift-applied branches
 //   item.price > state.threshold ? ... : ... → ifElse(lift(...)(condition), lift(...)(trueBranch), falseBranch)
-//   .map(fn) → .mapWithPattern(pattern(...), { state: { threshold, discount } })
+//   .map(fn) → .mapWithPattern(pattern(...).curry({ state: { threshold, discount } }))
 // Context: Captures state.threshold (for condition) and state.discount (for true branch) from outer scope
 export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Ternary with captures in map callback */}
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_1.curry({
                 state: {
                     threshold: state.key("threshold"),
                     discount: state.key("discount")
                 }
-            })}
+            }))}
       </div>),
     };
 }, {

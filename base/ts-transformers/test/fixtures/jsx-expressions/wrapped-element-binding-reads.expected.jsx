@@ -109,9 +109,8 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { prefix }) => {
     const entry = __cf_pattern_input.key("element");
-    const prefix = __cf_pattern_input.key("params", "prefix");
     // Parenthesized: (entry).name
     const a = __cfLift_1({
         entry: {
@@ -137,20 +136,19 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Entry"
-        },
-        params: {
-            type: "object",
-            properties: {
-                prefix: {
-                    type: "string"
-                }
-            },
-            required: ["prefix"]
+        prefix: {
+            type: "string"
         }
     },
-    required: ["element", "params"],
+    required: ["prefix"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Entry"
+        }
+    },
+    required: ["element"],
     $defs: {
         Entry: {
             type: "object",
@@ -188,9 +186,9 @@ export default pattern((__cf_pattern_input) => {
     const prefix = __cf_pattern_input.key("prefix");
     return ({
         [UI]: (<div>
-      {entries.mapWithPattern(__cfPattern_1, {
+      {entries.mapWithPattern(__cfPattern_1.curry({
                 prefix: prefix
-            })}
+            }))}
     </div>),
     });
 }, {

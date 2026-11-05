@@ -126,7 +126,7 @@ export default pattern((state) => {
     const rows = __cfLift_1({ state: {
             items: state.key("items")
         } }).for("rows", true);
-    const labels = rows.mapWithPattern(__cfPattern_1, {}).for("labels", true);
+    const labels = rows.mapWithPattern(__cfPattern_1).for("labels", true);
     return { labels };
 }, {
     type: "object",

@@ -66,7 +66,9 @@ const sanitizeInventoryEntry = (
   return { sku, stock, reorderLevel };
 };
 
-const sanitizeInventoryList = (value: unknown): InventoryEntry[] => {
+const sanitizeInventoryList = (
+  value: readonly InventoryEntry[],
+): InventoryEntry[] => {
   if (!Array.isArray(value)) {
     return cloneInventory(defaultInventory);
   }

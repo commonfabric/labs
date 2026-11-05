@@ -5,6 +5,7 @@ import {
   equals,
   type FactoryInput,
   handler,
+  type JSONSchema,
   NAME,
   pattern,
   type PatternFactory,
@@ -18,7 +19,7 @@ import {
 } from "commonfabric";
 import AgentQueue, {
   type AgentQueueOutput,
-  withAgentQueueRunLinkSchema,
+  agentQueueRunLinkSchema,
 } from "../agent-queue/agent-queue.tsx";
 import FabriChatManager, {
   type FabriChatManagerOutput,
@@ -411,8 +412,26 @@ const renameSpaceHandler = handler<
 });
 
 const homeArgumentSchema = toSchema<Record<string, never>>();
+const generatedHomeResultSchema = toSchema<HomeOutput>() as Exclude<
+  JSONSchema,
+  boolean
+>;
+const generatedHomeAgentQueueEntrySchema = generatedHomeResultSchema.$defs!
+  .AgentQueueEntry as Exclude<JSONSchema, boolean>;
 const homeResultSchema = __cf_data(
-  withAgentQueueRunLinkSchema(toSchema<HomeOutput>()),
+  {
+    ...generatedHomeResultSchema,
+    $defs: {
+      ...generatedHomeResultSchema.$defs,
+      AgentQueueEntry: {
+        ...generatedHomeAgentQueueEntrySchema,
+        properties: {
+          ...generatedHomeAgentQueueEntrySchema.properties,
+          run: agentQueueRunLinkSchema,
+        },
+      },
+    },
+  } satisfies JSONSchema,
 );
 
 const Home = pattern(

@@ -15,7 +15,7 @@ interface Assignment {
 // and accesses the grouped object with each key.
 // FIXTURE: derived-property-access-with-derived-key
 // Verifies: .map() chains with derived keys and element access are fully transformed
-//   aisleNames.map(...)            → aisleNames.mapWithPattern(pattern(...), {captures})
+//   aisleNames.map(...)            → aisleNames.mapWithPattern(pattern(...).curry({captures}))
 //   groupedByAisle[aisleName].map  → lift over {groupedByAisle, aisleName} then .mapWithPattern(...)
 // Context: CT-1036 -- nested map with derived object indexed by derived key, two levels deep
 export default pattern<{ items: Item[] }>(

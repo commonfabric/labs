@@ -4,6 +4,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
+import { taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { type EntityDocument, resolveScopeKey } from "@commonfabric/memory/v2";
 import type { URI } from "@commonfabric/memory/interface";
@@ -30,6 +31,315 @@ const id = "of:wave-promotion" as URI;
 const actor = { principal: "did:key:wave-actor", sessionId: "session-a" };
 
 describe("memory-v2-wave-promotion", () => {
+  it("seals warm artifact publication as wire-only preparation", async () => {
+    const manager = StorageManager.emulate({ as: signer });
+    const replica = manager.open(signer.did()).replica;
+    const verdict = Promise.withResolvers<SealedCommitVerdict>();
+    let confirmed = false;
+    const artifactId = "cid:fid1:artifact-publication" as URI;
+    const sealed = replica.sealNative!(
+      {
+        operations: [{
+          op: "set",
+          id,
+          type: "application/json",
+          value: { value: { selected: artifactId } },
+        }],
+        preparations: [{
+          key: "artifact:warm",
+          prepare: () => [{
+            op: "ensure",
+            id: artifactId,
+            type: "application/json",
+            value: { value: { kind: "source" } },
+          }],
+          onConfirmed: () => {
+            confirmed = true;
+          },
+        }],
+      },
+      undefined,
+      verdict.promise,
+    );
+    try {
+      expect(replica.getDocument(id)?.value).toEqual({
+        selected: artifactId,
+      });
+      expect(replica.getDocument(artifactId)).toBeUndefined();
+      expect(await sealed.wireOperations).toEqual([{
+        op: "ensure",
+        id: artifactId,
+        scope: undefined,
+        value: { value: { kind: "source" } },
+      }]);
+      expect(confirmed).toBe(false);
+
+      verdict.resolve({ committed: { seq: 10 } });
+      expect(await sealed.settled).toEqual({ ok: {} });
+      expect(confirmed).toBe(true);
+    } finally {
+      verdict.resolve({ withdrawn: { message: "test cleanup" } });
+      await manager.close();
+    }
+  });
+
+  it("keeps ordinary content-addressed writes semantic beside publication", async () => {
+    const manager = StorageManager.emulate({ as: signer });
+    const replica = manager.open(signer.did()).replica;
+    const verdict = Promise.withResolvers<SealedCommitVerdict>();
+    const schemaValue = { kind: "schema" };
+    const schemaId = `cid:${taggedHashStringOf(schemaValue)}` as URI;
+    const artifactValue = { kind: "source" };
+    const artifactId = `cid:${taggedHashStringOf(artifactValue)}` as URI;
+    const sealed = replica.sealNative!(
+      {
+        operations: [{
+          op: "set",
+          id: schemaId,
+          type: "application/json",
+          value: { value: schemaValue },
+        }],
+        preparations: [{
+          key: "artifact:beside-schema",
+          prepare: () => [{
+            op: "ensure",
+            id: artifactId,
+            type: "application/json",
+            value: { value: artifactValue },
+          }],
+        }],
+      },
+      undefined,
+      verdict.promise,
+    );
+    try {
+      expect(replica.getDocument(schemaId)?.value).toEqual(schemaValue);
+      expect(replica.getDocument(artifactId)).toBeUndefined();
+      expect(await sealed.wireOperations).toEqual([{
+        op: "ensure",
+        id: artifactId,
+        scope: undefined,
+        value: { value: artifactValue },
+      }]);
+
+      verdict.resolve({ committed: { seq: 10 } });
+      expect(await sealed.settled).toEqual({ ok: {} });
+      expect(replica.getDocument(schemaId)?.value).toEqual(schemaValue);
+    } finally {
+      verdict.resolve({ withdrawn: { message: "test cleanup" } });
+      await manager.close();
+    }
+  });
+
+  it("keeps a semantic seal visible while cold publication prepares", async () => {
+    const manager = StorageManager.emulate({ as: signer });
+    const replica = manager.open(signer.did()).replica;
+    const verdict = Promise.withResolvers<SealedCommitVerdict>();
+    const publication = Promise.withResolvers<
+      readonly [{
+        op: "ensure";
+        id: URI;
+        type: "application/json";
+        value: { value: { kind: string } };
+      }]
+    >();
+    const artifactId = "cid:fid1:cold-artifact-publication" as URI;
+    const sealed = replica.sealNative!(
+      {
+        operations: [{
+          op: "set",
+          id,
+          type: "application/json",
+          value: { value: { selected: artifactId } },
+        }],
+        preparations: [{
+          key: "artifact:cold",
+          prepare: () => publication.promise,
+        }],
+      },
+      undefined,
+      verdict.promise,
+    );
+    try {
+      expect(replica.getDocument(id)?.value).toEqual({
+        selected: artifactId,
+      });
+      expect(replica.getDocument(artifactId)).toBeUndefined();
+
+      publication.resolve([{
+        op: "ensure",
+        id: artifactId,
+        type: "application/json",
+        value: { value: { kind: "source" } },
+      }]);
+      expect(await sealed.wireOperations).toEqual([{
+        op: "ensure",
+        id: artifactId,
+        scope: undefined,
+        value: { value: { kind: "source" } },
+      }]);
+    } finally {
+      verdict.resolve({ withdrawn: { message: "test cleanup" } });
+      await sealed.settled;
+      await manager.close();
+    }
+  });
+
+  it("prepends artifact publication to a wave's durable batch", async () => {
+    const server = newSharedServer();
+    const manager = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: manager,
+      experimental: { serverExecution: true },
+    });
+    const space = signer.did();
+    const engine = await server.engineForSpace(space);
+    const holder = executionLeaseHolder(`wave-artifact-publication:${space}`);
+    const lease = new ExecutionLeaseCycle({
+      leases: engine.executionLeases,
+      space,
+      holder,
+    });
+    expect(await lease.acquire()).toBe(true);
+    const wave = new WaveAccumulator({
+      space,
+      basisSeq: Engine.serverSeq(engine),
+      lease,
+      scopeKeyIdentity: runtime.scopeKeyIdentity,
+      replicaFor: (target) => manager.open(target).replica,
+    });
+    const sink = new EngineWaveCommitSink({
+      engineFor: () => engine,
+      sessionId: holder,
+    });
+    const artifactValue = { kind: "source" };
+    const artifactId = `cid:${taggedHashStringOf(artifactValue)}` as URI;
+    const doc = runtime.getCell<{ selected: URI }>(
+      space,
+      "wave-artifact-publication",
+    );
+    try {
+      runtime.installSealDestination(wave);
+      const tx = runtime.edit();
+      stampWaveRunContext(tx, {
+        actionId: "publish-artifact",
+        kind: "derivation",
+      });
+      doc.withTx(tx).set({ selected: artifactId });
+      tx.tx.addNativeCommitPreparation!(space, {
+        key: "artifact:warm-wave",
+        prepare: () => [{
+          op: "set",
+          id: artifactId,
+          type: "application/json",
+          value: { value: artifactValue },
+        }],
+      });
+      expect((await tx.commit().settled).error).toBeUndefined();
+      runtime.clearSealDestination();
+
+      expect(doc.get()).toEqual({ selected: artifactId });
+      expect(manager.open(space).replica.getDocument(artifactId))
+        .toBeUndefined();
+
+      const outcome = await wave.commitWave(sink);
+      await wave.settled();
+      expect(outcome.aborted).toBeUndefined();
+      expect(Engine.readState(engine, { id: artifactId })?.document?.value)
+        .toEqual(artifactValue);
+      expect(
+        Engine.readState(engine, { id: doc.getAsNormalizedFullLink().id })
+          ?.document?.value,
+      ).toEqual({ selected: artifactId });
+    } finally {
+      runtime.clearSealDestination();
+      wave.abandon("test cleanup");
+      await runtime.dispose();
+      await server.close();
+    }
+  });
+
+  it("withdraws only the contribution whose artifact publication fails", async () => {
+    const server = newSharedServer();
+    const manager = EmulatedStorageManager.connectTo(server, { as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: manager,
+      experimental: { serverExecution: true },
+    });
+    const space = signer.did();
+    const engine = await server.engineForSpace(space);
+    const holder = executionLeaseHolder(`wave-artifact-failure:${space}`);
+    const lease = new ExecutionLeaseCycle({
+      leases: engine.executionLeases,
+      space,
+      holder,
+    });
+    expect(await lease.acquire()).toBe(true);
+    const wave = new WaveAccumulator({
+      space,
+      basisSeq: Engine.serverSeq(engine),
+      lease,
+      scopeKeyIdentity: runtime.scopeKeyIdentity,
+      replicaFor: (target) => manager.open(target).replica,
+    });
+    const sink = new EngineWaveCommitSink({
+      engineFor: () => engine,
+      sessionId: holder,
+    });
+    const refused = runtime.getCell<number>(space, "refused-publication");
+    const survivor = runtime.getCell<number>(space, "surviving-publication");
+    try {
+      runtime.installSealDestination(wave);
+      const refusedTx = runtime.edit();
+      stampWaveRunContext(refusedTx, {
+        actionId: "refused-publication",
+        kind: "derivation",
+      });
+      refused.withTx(refusedTx).set(1);
+      refusedTx.tx.addNativeCommitPreparation!(space, {
+        key: "artifact:refused",
+        prepare: () => Promise.reject(new Error("artifact unavailable")),
+      });
+      expect((await refusedTx.commit().settled).error).toBeUndefined();
+
+      const survivorTx = runtime.edit();
+      stampWaveRunContext(survivorTx, {
+        actionId: "surviving-publication",
+        kind: "derivation",
+      });
+      survivor.withTx(survivorTx).set(2);
+      expect((await survivorTx.commit().settled).error).toBeUndefined();
+      runtime.clearSealDestination();
+
+      const outcome = await wave.commitWave(sink);
+      await wave.settled();
+      expect(outcome.aborted).toBeUndefined();
+      expect(outcome.dispositions).toEqual([
+        { kind: "dropped" },
+        { kind: "committed" },
+      ]);
+      expect(
+        Engine.readState(
+          engine,
+          { id: refused.getAsNormalizedFullLink().id },
+        )?.document,
+      ).toBeUndefined();
+      expect(
+        Engine.readState(
+          engine,
+          { id: survivor.getAsNormalizedFullLink().id },
+        )?.document?.value,
+      ).toBe(2);
+    } finally {
+      runtime.clearSealDestination();
+      wave.abandon("test cleanup");
+      await runtime.dispose();
+      await server.close();
+    }
+  });
+
   for (const scope of ["space", "user", "session"] as const) {
     it(`retains both ${scope} writes accepted at the same wave sequence`, async () => {
       const manager = StorageManager.emulate({ as: signer });

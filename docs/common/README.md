@@ -44,6 +44,7 @@ on the Common Fabric runtime.
 - [../features/collection-aggregates.md](../features/collection-aggregates.md) — named aggregates, numeric contracts, and collection computation costs
 - [concepts/action.md](concepts/action.md) — handling events with `action()`
 - [concepts/handler.md](concepts/handler.md) — reusable parameterized handlers with `handler()`
+- [concepts/factories.md](concepts/factories.md) — passing, storing, invoking, and closing over first-class factories
 - [concepts/identity.md](concepts/identity.md) — object identity, `equals()`, why `===` fails across cells
 - [concepts/piece-discovery.md](concepts/piece-discovery.md) — the piece registry, searchable collections, link walks, and the limits of orphan-piece discovery
 - [concepts/self-reference.md](concepts/self-reference.md) — self-referential types with `SELF`

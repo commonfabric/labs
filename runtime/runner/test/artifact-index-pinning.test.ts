@@ -84,11 +84,9 @@ describe("artifact index pinning (session-lifetime)", () => {
   });
 
   it("a cold compile persists the closure before the pattern exists", async () => {
-    // The refs-only boundary contract: artifact persistence is PART OF the
-    // compilation step, not a best-effort write racing session end. A cell
-    // write can only contain a $patternRef after compilePattern returned, so
-    // awaiting the cold write-back inside compilePattern guarantees every
-    // persisted ref has a durable closure behind it.
+    // Artifact persistence is PART OF the compilation step, not a best-effort
+    // write racing session end. Awaiting the cold write-back guarantees every
+    // persisted Factory@1 ref has a durable closure behind it.
     const pm = runtime.patternManager;
     const tx = runtime.edit();
     const writeBacks = observeCacheWriteBacks(runtime);

@@ -6,7 +6,7 @@ interface State {
 
 // FIXTURE: map-capture-cell-fn
 // Verifies: cell() variable closed over in .map() is captured with asCell schema annotation
-//   .map(fn) → .mapWithPattern(pattern(...), { count: count })
+//   .map(fn) → .mapWithPattern(pattern(...).curry({ count: count }))
 //   cell(0) capture → params.count with { type: "number", asCell: true }
 export default pattern<State>((state) => {
   const count = cell(0);

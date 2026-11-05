@@ -619,14 +619,14 @@ export function getNamedTypeKey(
     return undefined;
   }
 
-  // Also check for generic interface/class instantiations (e.g., PatternToolResult<E>)
+  // Also check for generic interface/class instantiations (e.g., Box<E>)
   // Type aliases use aliasTypeArguments (checked above), but interfaces and classes
   // store their type arguments in TypeReference.typeArguments instead.
   //
   // Important: Skip this check if the type has an alias name (like `type ItemTuple = [...]`).
   // The alias provides a unique, user-defined name that should be used for hoisting.
   // We only want to prevent hoisting for anonymous generic interface instantiations
-  // where different instantiations (e.g., PatternToolResult<A> vs PatternToolResult<B>)
+  // where different instantiations (e.g., Box<A> vs Box<B>)
   // would incorrectly collide under the same base name.
   if (objectFlags & ts.ObjectFlags.Reference && !aliasName) {
     const typeRef = type as ts.TypeReference;
@@ -686,6 +686,64 @@ export function getArrayElementInfo(
   typeNode?: ts.TypeNode,
 ): ArrayElementInfo | undefined {
   if (typeNode) {
+    while (ts.isParenthesizedTypeNode(typeNode)) {
+      typeNode = typeNode.type;
+    }
+    if (
+      ts.isTypeOperatorNode(typeNode) &&
+      typeNode.operator === ts.SyntaxKind.ReadonlyKeyword
+    ) {
+      typeNode = typeNode.type;
+    }
+
+    // Tuple schemas are emitted as arrays whose items are the union of every
+    // element. Preserve the authored element TypeNodes in a synthetic union so
+    // compiler-owned per-element schema hints (for example exact generated
+    // factory contracts) remain visible to UnionFormatter. Falling through to
+    // the semantic numeric index type alone would retain the Types but discard
+    // their node-keyed hints.
+    if (ts.isTupleTypeNode(typeNode)) {
+      const elementType = checker.getIndexTypeOfType(type, ts.IndexKind.Number);
+      const elementNodes = typeNode.elements.flatMap(
+        (element): ts.TypeNode[] => {
+          let current: ts.TypeNode = ts.isNamedTupleMember(element)
+            ? element.type
+            : element;
+          if (ts.isOptionalTypeNode(current)) {
+            current = current.type;
+          }
+          if (ts.isRestTypeNode(current)) {
+            current = current.type;
+            if (ts.isArrayTypeNode(current)) return [current.elementType];
+            if (ts.isTupleTypeNode(current)) {
+              return current.elements.flatMap((member) => {
+                let nested: ts.TypeNode = ts.isNamedTupleMember(member)
+                  ? member.type
+                  : member;
+                if (
+                  ts.isOptionalTypeNode(nested) || ts.isRestTypeNode(nested)
+                ) {
+                  nested = nested.type;
+                }
+                return ts.isArrayTypeNode(nested)
+                  ? [nested.elementType]
+                  : [nested];
+              });
+            }
+          }
+          return [current];
+        },
+      );
+      if (elementType && elementNodes.length > 0) {
+        return {
+          elementType,
+          elementNode: elementNodes.length === 1
+            ? elementNodes[0]!
+            : ts.factory.createUnionTypeNode(elementNodes),
+        };
+      }
+    }
+
     // Direct syntax T[]
     if (ts.isArrayTypeNode(typeNode)) {
       // For array types, get the element type from the parent array Type

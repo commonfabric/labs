@@ -29,7 +29,10 @@ import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { waitForLlmMessages, waitForLlmSettled } from "./support/llm-result.ts";
-import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import {
+  createTrustedBuilder,
+  installTestPatternArtifact,
+} from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("test operator fixtures");
 const space = signer.did();
@@ -55,9 +58,6 @@ describe("conversation fixtures", () => {
   let runtime: Runtime;
   let tx: IExtendedStorageTransaction;
   let Cell: ReturnType<typeof createBuilder>["commonfabric"]["Cell"];
-  let patternTool: ReturnType<
-    typeof createBuilder
-  >["commonfabric"]["patternTool"];
   let pattern: ReturnType<typeof createBuilder>["commonfabric"]["pattern"];
   let generateObject: ReturnType<
     typeof createBuilder
@@ -74,7 +74,7 @@ describe("conversation fixtures", () => {
     tx = runtime.edit();
 
     const { commonfabric } = createTrustedBuilder(runtime);
-    ({ pattern, generateObject, llmDialog, Cell, patternTool } = commonfabric);
+    ({ pattern, generateObject, llmDialog, Cell } = commonfabric);
   });
 
   afterEach(async () => {
@@ -112,7 +112,7 @@ describe("conversation fixtures", () => {
     );
 
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     const addMessage = await result.key("addMessage").pull();
 
@@ -152,6 +152,7 @@ describe("conversation fixtures", () => {
       } as const satisfies JSONSchema,
       { type: "string" },
     );
+    installTestPatternArtifact(runtime, getWeatherTool);
 
     const testPattern = pattern(
       () => {
@@ -159,9 +160,7 @@ describe("conversation fixtures", () => {
         const dialog = llmDialog({
           messages,
           tools: {
-            getWeather: patternTool(
-              getWeatherTool,
-            ) as unknown as BuiltInLLMTool,
+            getWeather: getWeatherTool as unknown as BuiltInLLMTool,
           },
         });
         return {
@@ -183,7 +182,7 @@ describe("conversation fixtures", () => {
     );
 
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     const addMessage = await result.key("addMessage").pull();
 
@@ -261,7 +260,7 @@ describe("conversation fixtures", () => {
     );
 
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     const addMessage = await result.key("addMessage").pull();
 
@@ -311,7 +310,7 @@ describe("conversation fixtures", () => {
     );
 
     const result = runtime.run(tx, testPattern, {}, resultCell);
-    tx.commit();
+    tx.commit().settled;
 
     await waitForLlmSettled(runtime, result);
 

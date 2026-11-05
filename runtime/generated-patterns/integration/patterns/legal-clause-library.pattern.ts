@@ -322,7 +322,7 @@ const defaultClauseRecords: ClauseRecord[] = [
 const cloneDefaultClauses = (): ClauseRecord[] =>
   defaultClauseRecords.map(cloneClause);
 
-const sanitizeClauseList = (value: unknown): ClauseRecord[] => {
+const sanitizeClauseList = (value: readonly ClauseInput[]): ClauseRecord[] => {
   if (!Array.isArray(value)) return cloneDefaultClauses();
   const dedup = new Map<string, ClauseRecord>();
   for (const raw of value) {

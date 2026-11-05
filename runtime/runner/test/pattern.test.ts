@@ -399,7 +399,6 @@ describe("pattern", () => {
               return { doubled: double(x) };
             }) as any)(element, index, array)
           ),
-          {},
         );
         return { doubled };
       },
@@ -746,9 +745,9 @@ describe("pattern", () => {
       ).toBe(first);
     });
 
-    it("holds deep-frozen copies of a nested pattern's schemas in the node that instantiates it", () => {
-      // Copies, for the reason a pattern's schemas are its own: the graph
-      // and the pattern nested in it must not share a schema object.
+    it("holds the nested factory's deep-frozen schemas in the node that instantiates it", () => {
+      // A nested pattern is the Factory@1 value itself, rather than a wrapper
+      // around a copied graph. Its schemas stay shared and deep-frozen.
       const inner = buildItemsPattern();
       const outer = pattern<{ count: number }, { doubled: number }>(
         ({ count }) => {
@@ -758,17 +757,15 @@ describe("pattern", () => {
         itemsArgumentSchema(),
         countResultSchema(),
       );
-      const patternNodes = outer.nodes.filter((node) =>
-        isModule(node.module) && node.module.type === "pattern"
-      );
+      const patternNodes = outer.nodes.filter((node) => isPattern(node.module));
       expect(patternNodes).toHaveLength(1);
-      const nested = (patternNodes[0].module as Module).implementation;
+      const nested = patternNodes[0].module;
       expect(isPattern(nested)).toBe(true);
-      const { argumentSchema, resultSchema } = nested as Pattern;
+      const { argumentSchema, resultSchema } = nested as unknown as Pattern;
       expect(argumentSchema).toEqual(inner.argumentSchema);
-      expect(argumentSchema).not.toBe(inner.argumentSchema);
+      expect(argumentSchema).toBe(inner.argumentSchema);
       expect(resultSchema).toEqual(inner.resultSchema);
-      expect(resultSchema).not.toBe(inner.resultSchema);
+      expect(resultSchema).toBe(inner.resultSchema);
       expect(isDeepFrozen(argumentSchema)).toBe(true);
       expect(isDeepFrozen(resultSchema)).toBe(true);
     });

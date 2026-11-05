@@ -156,7 +156,7 @@ export default pattern((state) => {
                 - inside the computed, item.subItems unwraps to a plain JS array
                 - .filter() returns a plain JS array
                 - Plain arrays don't have .mapWithPattern() */}
-        {state.key("items").mapWithPattern(__cfPattern_1, {})}
+        {state.key("items").mapWithPattern(__cfPattern_1)}
       </div>),
     };
 }, {

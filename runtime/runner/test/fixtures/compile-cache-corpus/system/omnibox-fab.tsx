@@ -5,7 +5,6 @@ import {
   NAME,
   navigateTo,
   pattern,
-  patternTool,
   Stream,
   UI,
   when,
@@ -174,15 +173,17 @@ Be matter-of-fact. Prefer action to explanation.`;
       calculator: {
         pattern: calculator,
       },
-      fetchAndRunPattern: patternTool(fetchAndRunPattern),
-      navigateTo: patternTool(navigateToPattern),
-      wishAndNavigate: patternTool(wishTool),
-      listMentionable: patternTool(listMentionable, { mentionable }),
-      updateProfile: patternTool(updateProfile),
-      bash: patternTool(bash),
-      searchSpace: patternTool(summarySearchPattern, {
-        entries: summaryEntries,
-      }),
+      fetchAndRunPattern,
+      navigateTo: navigateToPattern,
+      wishAndNavigate: wishTool,
+      listMentionable: pattern((_input: Record<string, never>) =>
+        listMentionable({ mentionable })
+      ),
+      updateProfile,
+      bash,
+      searchSpace: pattern(({ query }: { query: string }) =>
+        summarySearchPattern({ query, entries: summaryEntries })
+      ),
     };
 
     const allTools = computed(() => ({

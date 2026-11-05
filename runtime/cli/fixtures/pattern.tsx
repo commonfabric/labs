@@ -1,21 +1,20 @@
-import { handler, NAME, pattern, schema, str, UI } from "commonfabric";
+import { handler, NAME, pattern, str, UI } from "commonfabric";
 import "commonfabric/schema";
 
-// Different way to define the same schema, using 'schema' helper function,
-// let's as leave off `as const satisfies JSONSchema`.
-const model = schema({
+// Factory contracts use the static schema binding directly so the transformer
+// can embed the exact public contract without executing authored code.
+const modelSchema = {
   type: "object",
   properties: {
     value: { type: "number", default: 0, asCell: ["cell"] },
   },
   default: { value: 0 },
-});
-
-const increment = handler({}, model, (_, state) => {
+} as const;
+const increment = handler({}, modelSchema, (_, state) => {
   state.value.set(state.value.get() + 1);
 });
 
-const decrement = handler({}, model, (_, state) => {
+const decrement = handler({}, modelSchema, (_, state) => {
   state.value.set(state.value.get() - 1);
 });
 
@@ -36,6 +35,6 @@ export default pattern(
       value: cell.value,
     };
   },
-  model,
-  model,
+  modelSchema,
+  modelSchema,
 );

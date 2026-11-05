@@ -7,6 +7,7 @@ import {
 export const META_LINK_FIELDS = Object.freeze(
   [
     "argument",
+    "params",
     "result",
   ] as const,
 );
@@ -21,8 +22,9 @@ export type MetaLinkField = typeof META_LINK_FIELDS[number];
  *
  * The seam is the runtime's, to read as well as to write, so none of this
  * reaches the cell surface a pattern compiles against. `argument` links a
- * result cell to its argument cell. `internal` holds a manifest of links to
- * derived internal cells. `schema` stores the schema for a result cell.
+ * result cell to its argument cell. `params` links a child result to its
+ * private pattern-closure parameter cell. `internal` holds a manifest of links
+ * to derived internal cells. `schema` stores the schema for a result cell.
  * `patternSetupIdentity` records the pattern identity whose complete setup
  * state was installed on a result cell. `instanceChildren` lists, as
  * `{ name, child }` entries, the child a named sub-pattern instance runs in

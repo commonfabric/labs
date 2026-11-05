@@ -1,0 +1,324 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "system/knowledge-graph.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": true,
+      "compoundNodes": true,
+      "edges": {
+        "items": true,
+        "type": "array"
+      },
+      "getNeighbors": {
+        "asFactory": {
+          "argumentSchema": {
+            "$defs": {
+              "MentionablePiece": {
+                "properties": {
+                  "$NAME": {
+                    "type": "string"
+                  },
+                  "backlinks": {
+                    "items": {
+                      "$ref": "#/$defs/MentionablePiece"
+                    },
+                    "type": "array"
+                  },
+                  "isHidden": {
+                    "type": "boolean"
+                  },
+                  "isMentionable": {
+                    "type": "boolean"
+                  },
+                  "mentionable": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "$ref": "#/$defs/MentionablePiece"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "properties": {},
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "mentioned": {
+                    "items": {
+                      "$ref": "#/$defs/MentionablePiece"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "properties": {
+              "entity": {
+                "$ref": "#/$defs/MentionablePiece",
+                "asCell": [
+                  "cell"
+                ]
+              }
+            },
+            "required": [
+              "entity"
+            ],
+            "type": "object"
+          },
+          "kind": "pattern",
+          "resultSchema": {
+            "$defs": {
+              "EdgeResult": {
+                "properties": {
+                  "description": {
+                    "type": "string"
+                  },
+                  "from": {
+                    "$ref": "#/$defs/MentionablePiece",
+                    "asCell": [
+                      "cell"
+                    ]
+                  },
+                  "fromName": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "$ref": "#/$defs/MentionablePiece",
+                    "asCell": [
+                      "cell"
+                    ]
+                  },
+                  "toName": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "from",
+                  "to",
+                  "fromName",
+                  "toName",
+                  "description"
+                ],
+                "type": "object"
+              },
+              "MentionablePiece": {
+                "properties": {
+                  "$NAME": {
+                    "type": "string"
+                  },
+                  "backlinks": {
+                    "items": {
+                      "$ref": "#/$defs/MentionablePiece"
+                    },
+                    "type": "array"
+                  },
+                  "isHidden": {
+                    "type": "boolean"
+                  },
+                  "isMentionable": {
+                    "type": "boolean"
+                  },
+                  "mentionable": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "$ref": "#/$defs/MentionablePiece"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "properties": {},
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "mentioned": {
+                    "items": {
+                      "$ref": "#/$defs/MentionablePiece"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "properties": {
+              "incoming": {
+                "items": {
+                  "$ref": "#/$defs/EdgeResult"
+                },
+                "type": "array"
+              },
+              "outgoing": {
+                "items": {
+                  "$ref": "#/$defs/EdgeResult"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "incoming",
+              "outgoing"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "searchGraph": {
+        "asFactory": {
+          "argumentSchema": {
+            "properties": {
+              "query": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "type": "object"
+          },
+          "kind": "pattern",
+          "resultSchema": {
+            "$defs": {
+              "CompoundNode": {
+                "properties": {
+                  "$NAME": {
+                    "type": "string"
+                  },
+                  "linkedPieces": {
+                    "items": {
+                      "$ref": "#/$defs/MentionablePiece",
+                      "asCell": [
+                        "cell"
+                      ]
+                    },
+                    "type": "array"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "linkedPieces",
+                  "summary",
+                  "$NAME"
+                ],
+                "type": "object"
+              },
+              "EdgeResult": {
+                "properties": {
+                  "description": {
+                    "type": "string"
+                  },
+                  "from": {
+                    "$ref": "#/$defs/MentionablePiece",
+                    "asCell": [
+                      "cell"
+                    ]
+                  },
+                  "fromName": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "$ref": "#/$defs/MentionablePiece",
+                    "asCell": [
+                      "cell"
+                    ]
+                  },
+                  "toName": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "from",
+                  "to",
+                  "fromName",
+                  "toName",
+                  "description"
+                ],
+                "type": "object"
+              },
+              "MentionablePiece": {
+                "properties": {
+                  "$NAME": {
+                    "type": "string"
+                  },
+                  "backlinks": {
+                    "items": {
+                      "$ref": "#/$defs/MentionablePiece"
+                    },
+                    "type": "array"
+                  },
+                  "isHidden": {
+                    "type": "boolean"
+                  },
+                  "isMentionable": {
+                    "type": "boolean"
+                  },
+                  "mentionable": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "$ref": "#/$defs/MentionablePiece"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "properties": {},
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "mentioned": {
+                    "items": {
+                      "$ref": "#/$defs/MentionablePiece"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "properties": {
+              "compoundNodes": {
+                "items": {
+                  "$ref": "#/$defs/CompoundNode"
+                },
+                "type": "array"
+              },
+              "edges": {
+                "items": {
+                  "$ref": "#/$defs/EdgeResult"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "edges",
+              "compoundNodes"
+            ],
+            "type": "object"
+          }
+        }
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI",
+      "edges",
+      "compoundNodes",
+      "getNeighbors",
+      "searchGraph"
+    ],
+    "type": "object"
+  }
+}

@@ -117,7 +117,9 @@ const sanitizeResponseEntry = (
   };
 };
 
-const sanitizeResponses = (value: unknown): SurveyResponse[] => {
+const sanitizeResponses = (
+  value: readonly SurveyResponseInput[],
+): SurveyResponse[] => {
   if (!Array.isArray(value)) return [];
   const used = new Set<string>();
   const sanitized: SurveyResponse[] = [];
@@ -131,7 +133,7 @@ const sanitizeResponses = (value: unknown): SurveyResponse[] => {
   return sanitized;
 };
 
-const sanitizeQuestionList = (value: unknown): string[] => {
+const sanitizeQuestionList = (value: readonly string[]): string[] => {
   if (!Array.isArray(value)) return [];
   const set = new Set<string>();
   for (const entry of value) {

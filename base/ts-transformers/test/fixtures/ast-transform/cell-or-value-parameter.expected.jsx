@@ -156,7 +156,7 @@ export default pattern((__cf_pattern_input) => {
     const alias = maybe;
     const q = { p: maybe.for(["q", "p"], true) };
     const viaAlias = { p: alias.for(["viaAlias", "p"], true) };
-    const rows = each.mapWithPattern(__cfPattern_1, {}).for("rows", true);
+    const rows = each.mapWithPattern(__cfPattern_1).for("rows", true);
     return { record: record({ maybe, each, out }).for({ stream: ["__patternResult", "record"] }, true), q, viaAlias, rows };
 }, {
     type: "object",

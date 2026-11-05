@@ -30,6 +30,7 @@ import {
   deleteBranch,
   type Engine,
   entityIdExists,
+  headSeq,
   listBranches,
   listEntityIdPage,
   listEntityIds,
@@ -92,6 +93,483 @@ const toEntityDocument = (
   }
   return document as EntityDocument;
 };
+
+Deno.test("memory v2 ensure is idempotent and rejects identity mismatches", async () => {
+  const { engine, path } = await createEngine();
+  const expected = toEntityDocument({ source: "artifact source" });
+  const stored = toEntityDocument({
+    source: "artifact source",
+    annotations: { name: "existing product annotation" },
+  });
+
+  try {
+    const created = applyCommit(engine, {
+      sessionId: "session:artifact-publisher",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "ensure",
+          id: "artifact:closure",
+          value: stored,
+        }],
+      },
+    });
+    assertEquals(created.revisions.length, 1);
+    assertEquals(read(engine, { id: "artifact:closure" }), stored);
+
+    const alreadyPresent = applyCommit(engine, {
+      sessionId: "session:artifact-publisher",
+      commit: {
+        localSeq: 2,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "ensure",
+          id: "artifact:closure",
+          value: expected,
+          ignore: [toDocumentPath(["value", "annotations"])],
+        }],
+      },
+    });
+    assertEquals(alreadyPresent.revisions, []);
+
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "session:artifact-publisher",
+          commit: {
+            localSeq: 3,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "ensure",
+              id: "artifact:closure",
+              value: toEntityDocument({ source: "different source" }),
+              ignore: [toDocumentPath(["value", "annotations"])],
+            }],
+          },
+        }),
+      Error,
+      "content-addressed ensure mismatch",
+    );
+    assertEquals(read(engine, { id: "artifact:closure" }), stored);
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("memory v2 ensure applies ordinary document admission", async () => {
+  const { engine, path } = await createEngine();
+  const malformed = toEntityDocument(
+    { source: "artifact source" },
+    undefined,
+    {
+      schema: {
+        $ref: "cid:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        type: "object",
+      },
+    },
+  );
+
+  try {
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "session:artifact-publisher",
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "ensure",
+              id: "artifact:malformed-metadata",
+              value: malformed,
+            }],
+          },
+        }),
+      ProtocolError,
+      "malformed schema metadata",
+    );
+    assertEquals(read(engine, { id: "artifact:malformed-metadata" }), null);
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("memory v2 rejects empty ensure policy paths before writing", async () => {
+  const { engine, path } = await createEngine();
+  const artifactId = "artifact:empty-ensure-policy";
+  const stored = toEntityDocument({ source: "artifact source" });
+
+  try {
+    applyCommit(engine, {
+      sessionId: "session:artifact-publisher",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "ensure",
+          id: artifactId,
+          value: stored,
+        }],
+      },
+    });
+    const seqBefore = headSeq(engine);
+
+    for (const [index, family] of ["ignore", "addUnique"].entries()) {
+      const containingId = `artifact:empty-${family}-containing`;
+      assertThrows(
+        () =>
+          applyCommit(engine, {
+            sessionId: "session:artifact-publisher",
+            commit: {
+              localSeq: index + 2,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "ensure",
+                id: artifactId,
+                value: toEntityDocument({ source: "different source" }),
+                [family]: [toDocumentPath([])],
+              }, {
+                op: "set",
+                id: containingId,
+                value: toEntityDocument({ factory: artifactId }),
+              }],
+            },
+          }),
+        ProtocolError,
+        `memory v2 ensure ${family} paths must not be empty`,
+      );
+      assertEquals(headSeq(engine), seqBefore);
+      assertEquals(read(engine, { id: artifactId }), stored);
+      assertEquals(read(engine, { id: containingId }), null);
+    }
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("memory v2 ensure addUnique unions only an identity-excluded set", async () => {
+  const { engine, path } = await createEngine();
+  const rootsPath = toDocumentPath(["value", "roots"]);
+  const initial = toEntityDocument({
+    source: "artifact source",
+    roots: ["root:a"],
+  });
+
+  try {
+    applyCommit(engine, {
+      sessionId: "session:artifact-publisher",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "ensure",
+          id: "artifact:additive-roots",
+          value: initial,
+          addUnique: [rootsPath],
+        }],
+      },
+    });
+
+    const extended = applyCommit(engine, {
+      sessionId: "session:artifact-publisher",
+      commit: {
+        localSeq: 2,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "ensure",
+          id: "artifact:additive-roots",
+          value: toEntityDocument({
+            source: "artifact source",
+            roots: ["root:a", "root:b"],
+          }),
+          addUnique: [rootsPath],
+        }],
+      },
+    });
+    assertEquals(extended.revisions.length, 1);
+    assertEquals(
+      read(engine, { id: "artifact:additive-roots" }),
+      toEntityDocument({
+        source: "artifact source",
+        roots: ["root:a", "root:b"],
+      }),
+    );
+
+    const alreadySuperset = applyCommit(engine, {
+      sessionId: "session:artifact-publisher",
+      commit: {
+        localSeq: 3,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "ensure",
+          id: "artifact:additive-roots",
+          value: toEntityDocument({
+            source: "artifact source",
+            roots: ["root:b"],
+          }),
+          addUnique: [rootsPath],
+        }],
+      },
+    });
+    assertEquals(alreadySuperset.revisions, []);
+
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "session:artifact-publisher",
+          commit: {
+            localSeq: 4,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "ensure",
+              id: "artifact:additive-roots",
+              value: toEntityDocument({
+                source: "different source",
+                roots: ["root:c"],
+              }),
+              addUnique: [rootsPath],
+            }],
+          },
+        }),
+      Error,
+      "content-addressed ensure mismatch",
+    );
+    assertEquals(
+      read(engine, { id: "artifact:additive-roots" }),
+      toEntityDocument({
+        source: "artifact source",
+        roots: ["root:a", "root:b"],
+      }),
+    );
+
+    assertThrows(
+      () =>
+        applyCommit(engine, {
+          sessionId: "session:artifact-publisher",
+          commit: {
+            localSeq: 5,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "ensure",
+              id: "artifact:invalid-additive-roots",
+              value: toEntityDocument({
+                source: "artifact source",
+                roots: "not-an-array",
+              }),
+              addUnique: [rootsPath],
+            }],
+          },
+        }),
+      Error,
+      "ensure addUnique value is not an array",
+    );
+    assertEquals(read(engine, { id: "artifact:invalid-additive-roots" }), null);
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("memory v2 rejects overlapping ensure path policies before writing", async () => {
+  const parent = toDocumentPath(["value", "sets"]);
+  const child = toDocumentPath(["value", "sets", "0"]);
+  const permutations = [
+    { addUnique: [parent, child] },
+    { addUnique: [child, parent] },
+    { ignore: [parent], addUnique: [child] },
+    { ignore: [child], addUnique: [parent] },
+    { ignore: [parent], addUnique: [parent] },
+  ];
+
+  for (const [index, policy] of permutations.entries()) {
+    const { engine, path } = await createEngine();
+    try {
+      assertThrows(
+        () =>
+          applyCommit(engine, {
+            sessionId: "session:artifact-publisher",
+            commit: {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "ensure",
+                id: `artifact:overlapping-additive-paths-${index}`,
+                value: toEntityDocument({
+                  source: "artifact source",
+                  sets: [["root:a"]],
+                }),
+                ...policy,
+              }],
+            },
+          }),
+        ProtocolError,
+        "overlapping path policies",
+      );
+      assertEquals(
+        read(engine, { id: `artifact:overlapping-additive-paths-${index}` }),
+        null,
+      );
+      assertEquals(headSeq(engine), 0);
+    } finally {
+      close(engine);
+      await Deno.remove(path);
+    }
+  }
+});
+
+Deno.test("memory v2 rejects incompatible same-address ensure policies before writing", async () => {
+  const rootsPath = toDocumentPath(["value", "roots"]);
+  const additive = {
+    op: "ensure" as const,
+    id: "artifact:mixed-ensure-policies",
+    value: toEntityDocument({ source: "artifact source", roots: ["root:a"] }),
+    addUnique: [rootsPath],
+  };
+  const ignored = {
+    op: "ensure" as const,
+    id: "artifact:mixed-ensure-policies",
+    value: toEntityDocument({ source: "artifact source", roots: ["root:b"] }),
+    ignore: [rootsPath],
+  };
+
+  for (const operations of [[additive, ignored], [ignored, additive]]) {
+    const { engine, path } = await createEngine();
+    try {
+      assertThrows(
+        () =>
+          applyCommit(engine, {
+            sessionId: "session:artifact-publisher",
+            commit: {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              operations,
+            },
+          }),
+        ProtocolError,
+        "incompatible ensure path policies",
+      );
+      assertEquals(read(engine, { id: additive.id }), null);
+      assertEquals(headSeq(engine), 0);
+    } finally {
+      close(engine);
+      await Deno.remove(path);
+    }
+  }
+});
+
+Deno.test("memory v2 converges same-address ensures with equivalent normalized policies", async () => {
+  const { engine, path } = await createEngine();
+  const rootsPath = toDocumentPath(["value", "roots"]);
+  const tagsPath = toDocumentPath(["value", "tags"]);
+  const annotationsPath = toDocumentPath(["value", "annotations"]);
+  const cfcPath = toDocumentPath(["cfc"]);
+
+  try {
+    const applied = applyCommit(engine, {
+      sessionId: "session:artifact-publisher",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "ensure",
+          id: "artifact:equivalent-ensure-policies",
+          value: toEntityDocument({
+            source: "artifact source",
+            roots: ["root:a"],
+            tags: ["tag:a"],
+            annotations: { name: "first" },
+          }),
+          ignore: [annotationsPath, cfcPath, annotationsPath],
+          addUnique: [rootsPath, tagsPath, rootsPath],
+        }, {
+          op: "ensure",
+          id: "artifact:equivalent-ensure-policies",
+          value: toEntityDocument({
+            source: "artifact source",
+            roots: ["root:b"],
+            tags: ["tag:b"],
+            annotations: { name: "second" },
+          }),
+          ignore: [cfcPath, annotationsPath],
+          addUnique: [tagsPath, rootsPath],
+        }],
+      },
+    });
+
+    assertEquals(applied.revisions.length, 2);
+    assertEquals(
+      read(engine, { id: "artifact:equivalent-ensure-policies" }),
+      toEntityDocument({
+        source: "artifact source",
+        roots: ["root:a", "root:b"],
+        tags: ["tag:a", "tag:b"],
+        annotations: { name: "first" },
+      }),
+    );
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
+Deno.test("memory v2 rejects ensure plus an authored mutation at the same resolved address", async () => {
+  const { engine, path } = await createEngine();
+  const ensured = toEntityDocument({ source: "artifact source" });
+  const authoredMutations = [
+    {
+      op: "set" as const,
+      id: "artifact:ensure-set-collision",
+      scope: "space" as const,
+      value: toEntityDocument({ source: "authored replacement" }),
+    },
+    {
+      op: "patch" as const,
+      id: "artifact:ensure-patch-collision",
+      scope: "space" as const,
+      patches: [{
+        op: "replace" as const,
+        path: "/value/source",
+        value: "authored replacement",
+      }],
+    },
+    {
+      op: "delete" as const,
+      id: "artifact:ensure-delete-collision",
+      scope: "space" as const,
+    },
+  ];
+
+  try {
+    for (const [index, mutation] of authoredMutations.entries()) {
+      assertThrows(
+        () =>
+          applyCommit(engine, {
+            sessionId: "session:artifact-publisher",
+            commit: {
+              localSeq: index + 1,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "ensure",
+                id: mutation.id,
+                // Omitted scope and explicit `space` resolve to the same
+                // address; collision detection must use the resolved key.
+                value: ensured,
+              }, mutation],
+            },
+          }),
+        ProtocolError,
+        `cannot combine ensure with ${mutation.op}`,
+      );
+      assertEquals(read(engine, { id: mutation.id }), null);
+    }
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
 
 Deno.test("memory v2 engine reserves sync schema reference strings", async () => {
   const { engine, path } = await createEngine();

@@ -2,6 +2,7 @@ import {
   MERGEABLE_OP_METHODS,
   type MergeableOpMethodKind,
 } from "@commonfabric/api";
+import { detectTrustedFactoryType } from "@commonfabric/schema-generator";
 import type { CellBrand } from "@commonfabric/schema-generator/cell-brand";
 import { resolvesToCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
@@ -276,6 +277,16 @@ const ARRAY_IDENTITY_WRITER_METHODS = new Set([
   ...mergeableMethods("array-identity-writer"),
 ]);
 const ARRAY_IDENTITY_PRESERVING_CHAIN_METHODS = new Set(["slice"]);
+// Non-mutating array methods whose result retains complete source elements.
+// A callback returning that result can observe or publish every element field,
+// so root-only reads are insufficient even when no field is accessed directly.
+const FULL_SHAPE_ARRAY_COPY_METHODS = new Set([
+  "concat",
+  "slice",
+  "toReversed",
+  "toSpliced",
+  "with",
+]);
 /**
  * Array methods whose result is an array of the receiver's own elements, so
  * the result aliases the receiver.
@@ -470,6 +481,114 @@ function isInterproceduralSummaryTarget(
 ): declaration is CapabilityAnalyzableFunction {
   return isCapabilityAnalyzableFunction(declaration) &&
     declaration.getSourceFile() === sourceFile;
+}
+
+interface InterproceduralReturnProjection {
+  readonly parameterIndex: number;
+  readonly path: readonly string[];
+  readonly dynamic: boolean;
+  readonly arrayElement?: boolean;
+  readonly elementResult?: boolean;
+}
+
+function returnedExpression(
+  fn: CapabilityAnalyzableFunction,
+): ts.Expression | undefined {
+  if (!fn.body) return undefined;
+  if (!ts.isBlock(fn.body)) return fn.body;
+
+  const returns: ts.Expression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (node !== fn && isCapabilityAnalyzableFunction(node)) return;
+    if (ts.isReturnStatement(node)) {
+      if (node.expression) returns.push(node.expression);
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(fn.body);
+  return returns.length === 1 ? returns[0] : undefined;
+}
+
+/**
+ * Describe a helper result that preserves identity from one of its arguments.
+ * Interprocedural capability propagation accounts for what the helper itself
+ * reads, but callers may continue reading a returned object. Keeping that
+ * alias lets those caller-side reads extend the same source path instead of
+ * disappearing from the generated schema.
+ */
+function interproceduralReturnProjection(
+  fn: CapabilityAnalyzableFunction,
+  checker: ts.TypeChecker,
+): InterproceduralReturnProjection | undefined {
+  const project = (
+    expression: ts.Expression,
+  ): InterproceduralReturnProjection | undefined => {
+    const current = unwrapExpression(expression);
+    const access = extractAccessPath(current, checker);
+    if (access) {
+      const parameterIndex = fn.parameters.findIndex((parameter) =>
+        ts.isIdentifier(parameter.name) && parameter.name.text === access.root
+      );
+      return parameterIndex < 0 ? undefined : {
+        parameterIndex,
+        path: access.path,
+        dynamic: access.dynamic,
+      };
+    }
+
+    if (
+      ts.isCallExpression(current) &&
+      (ts.isPropertyAccessExpression(current.expression) ||
+        ts.isElementAccessExpression(current.expression))
+    ) {
+      const receiver = project(current.expression.expression);
+      if (!receiver) return undefined;
+      const methodName = ts.isPropertyAccessExpression(current.expression)
+        ? current.expression.name.text
+        : current.expression.argumentExpression &&
+            isLiteralElement(current.expression.argumentExpression)
+        ? getLiteralElementText(current.expression.argumentExpression)
+        : undefined;
+      if (
+        methodName === "find" || methodName === "findLast" ||
+        methodName === "at"
+      ) {
+        return {
+          ...receiver,
+          arrayElement: true,
+          elementResult: true,
+        };
+      }
+      if (
+        methodName === "filter" || methodName === "sort" ||
+        methodName === "toSorted" || methodName === "get"
+      ) {
+        return receiver;
+      }
+    }
+
+    if (ts.isConditionalExpression(current)) {
+      const whenTrue = project(current.whenTrue);
+      const whenFalse = project(current.whenFalse);
+      return whenTrue && whenFalse &&
+          whenTrue.parameterIndex === whenFalse.parameterIndex &&
+          whenTrue.dynamic === whenFalse.dynamic &&
+          !!whenTrue.arrayElement === !!whenFalse.arrayElement &&
+          !!whenTrue.elementResult === !!whenFalse.elementResult &&
+          whenTrue.path.length === whenFalse.path.length &&
+          whenTrue.path.every((segment, index) =>
+            segment === whenFalse.path[index]
+          )
+        ? whenTrue
+        : undefined;
+    }
+
+    return undefined;
+  };
+
+  const expression = returnedExpression(fn);
+  return expression ? project(expression) : undefined;
 }
 
 // Body analysis cannot see writes performed inside a callee whose body lives in
@@ -2281,9 +2400,17 @@ function holdsElementsWithoutIdentity(
 }
 
 function toCapability(state: MutableCapabilityState): ReactiveCapability {
-  const hasReads = state.reads.size > 0;
+  const hasReads = state.reads.size > 0 || state.fullShapeReads.size > 0;
   const hasWrites = state.writes.size > 0;
 
+  // Returning an opaque derivation of the root remains opaque even though
+  // escape tracking also retains its full shape. A plain full-shape copy has
+  // no opaque root use and is still a readonly capability.
+  if (
+    state.hasNonIdentityRootUse && state.reads.size === 0 && !hasWrites
+  ) {
+    return "opaque";
+  }
   if (hasReads && hasWrites) return "writable";
   if (hasReads) return "readonly";
   if (hasWrites) return "writeonly";
@@ -2728,6 +2855,43 @@ export function analyzeFunctionCapabilities(
       return isCellLikeType(checker.getTypeAtLocation(expr), checker);
     };
 
+    const isArrayLikeExpression = (expr: ts.Expression): boolean => {
+      if (!checker) return false;
+      const seen = new Set<ts.Type>();
+      const isArrayLikeType = (type: ts.Type): boolean => {
+        if (seen.has(type)) return false;
+        seen.add(type);
+        try {
+          if (checker.isArrayType(type) || checker.isTupleType(type)) {
+            return true;
+          }
+          if (type.isUnion()) {
+            return type.types.length > 0 && type.types.every(isArrayLikeType);
+          }
+          if (type.isIntersection()) {
+            return type.types.some(isArrayLikeType);
+          }
+          if ((type.flags & ts.TypeFlags.TypeParameter) !== 0) {
+            const constraint = checker.getBaseConstraintOfType(type);
+            return !!constraint && constraint !== type &&
+              isArrayLikeType(constraint);
+          }
+          const symbolName = type.aliasSymbol?.name ?? type.getSymbol()?.name;
+          if (symbolName === "Array" || symbolName === "ReadonlyArray") {
+            return true;
+          }
+          const apparent = checker.getApparentType(type);
+          return apparent !== type && isArrayLikeType(apparent);
+        } finally {
+          seen.delete(type);
+        }
+      };
+
+      return isArrayLikeType(
+        typeRegistry?.get(expr) ?? checker.getTypeAtLocation(expr),
+      );
+    };
+
     // The type the declaration of `ref`'s parameter gives the value at its
     // path, followed through cells, properties and array elements; undefined
     // for a root no parameter declares or a path the type does not name.
@@ -2951,6 +3115,15 @@ export function analyzeFunctionCapabilities(
     // body, where the caller reads it as a value, and not into the runtime,
     // which would store a proxy in it as a link.
     const helperReturnsToCaller = returnsToACaller(fn);
+    const callerVisibleReturnProjection = interprocedural && checker &&
+        helperReturnsToCaller
+      ? interproceduralReturnProjection(fn, checker)
+      : undefined;
+    const hasNarrowCallerVisibleReturnProjection =
+      callerVisibleReturnProjection !== undefined &&
+      (callerVisibleReturnProjection.path.length > 0 ||
+        callerVisibleReturnProjection.arrayElement === true ||
+        callerVisibleReturnProjection.elementResult === true);
 
     // Whether an identifier's value leaves the analysis whole. A value bound
     // to a local, or written into a local collection, stays tracked. An
@@ -2971,7 +3144,8 @@ export function analyzeFunctionCapabilities(
           return true;
         case "result":
           return destination.of === fn
-            ? helperReturnsToCaller
+            ? helperReturnsToCaller &&
+              !hasNarrowCallerVisibleReturnProjection
             : !isBuilderCallback(destination.of);
         case "argument":
           return !summaryHandledArgumentUses.has(destination.argument) &&
@@ -3278,6 +3452,36 @@ export function analyzeFunctionCapabilities(
       }
 
       const current = unwrapExpression(expression);
+      if (interprocedural && checker && ts.isCallExpression(current)) {
+        const signature = checker.getResolvedSignature(current);
+        const declaration = signature?.declaration;
+        if (
+          isInterproceduralSummaryTarget(declaration, summarySourceFile)
+        ) {
+          const projection = interproceduralReturnProjection(
+            declaration,
+            checker,
+          );
+          const hasEarlierSpread = projection && current.arguments
+            .slice(0, projection.parameterIndex + 1)
+            .some(ts.isSpreadElement);
+          const argument = projection && !hasEarlierSpread &&
+            current.arguments[projection.parameterIndex];
+          const argumentBinding = argument && resolveBinding(argument);
+          if (
+            projection && argumentBinding &&
+            isSourceRefBinding(argumentBinding)
+          ) {
+            return {
+              root: argumentBinding.root,
+              path: [...argumentBinding.path, ...projection.path],
+              dynamic: argumentBinding.dynamic || projection.dynamic,
+              arrayElement: projection.arrayElement,
+              elementResult: projection.elementResult,
+            };
+          }
+        }
+      }
       if (
         ts.isCallExpression(current) &&
         (
@@ -3578,6 +3782,69 @@ export function analyzeFunctionCapabilities(
         return;
       }
       trackFullShapeRead(ref.root, ref.path);
+    };
+
+    const trackRetainedPayloadExpression = (
+      expression: ts.Expression,
+    ): boolean => {
+      const current = unwrapExpression(expression);
+      if (ts.isSpreadElement(current)) {
+        return trackRetainedPayloadExpression(current.expression);
+      }
+
+      const direct = resolveSourceRef(current);
+      if (direct) {
+        trackReadRef(direct);
+        trackFullShapeReadRef(direct);
+        return true;
+      }
+
+      if (ts.isConditionalExpression(current)) {
+        const whenTrue = trackRetainedPayloadExpression(current.whenTrue);
+        const whenFalse = trackRetainedPayloadExpression(current.whenFalse);
+        return whenTrue || whenFalse;
+      }
+      if (
+        ts.isBinaryExpression(current) &&
+        FALLBACK_OPERATORS.has(current.operatorToken.kind)
+      ) {
+        const left = trackRetainedPayloadExpression(current.left);
+        const right = trackRetainedPayloadExpression(current.right);
+        return left || right;
+      }
+      if (
+        ts.isBinaryExpression(current) &&
+        current.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+      ) {
+        // The truthy RHS can become the retained payload; the LHS remains a
+        // normal control read (its falsy values are primitive payloads).
+        return trackRetainedPayloadExpression(current.right);
+      }
+      if (ts.isArrayLiteralExpression(current)) {
+        let tracked = false;
+        for (const element of current.elements) {
+          if (ts.isOmittedExpression(element)) continue;
+          tracked = trackRetainedPayloadExpression(element) || tracked;
+        }
+        return tracked;
+      }
+      if (ts.isObjectLiteralExpression(current)) {
+        let tracked = false;
+        for (const property of current.properties) {
+          const value = ts.isPropertyAssignment(property)
+            ? property.initializer
+            : ts.isShorthandPropertyAssignment(property)
+            ? property.name
+            : ts.isSpreadAssignment(property)
+            ? property.expression
+            : undefined;
+          if (value) {
+            tracked = trackRetainedPayloadExpression(value) || tracked;
+          }
+        }
+        return tracked;
+      }
+      return false;
     };
 
     const trackEscapeRef = (ref: SourceRef): void => {
@@ -4584,8 +4851,9 @@ export function analyzeFunctionCapabilities(
         if (isTopmostMemberNode(node)) {
           const parent = node.parent;
           if (
-            !(parent && ts.isCallExpression(parent) &&
-              parent.expression === node) &&
+            (!(parent && ts.isCallExpression(parent) &&
+              parent.expression === node) ||
+              isFirstClassFactoryExpression(node, checker)) &&
             !isOptionalAliasInitializerMemberUsage(node) &&
             // A member-access argument (e.g. `state.auth`) whose callee parameter
             // type already supplied the capability is accounted for, same as a
@@ -5006,14 +5274,36 @@ export function analyzeFunctionCapabilities(
               // so write-exhaustiveness is poisoned — fail closed. Value
               // receivers (e.g. array methods on a `.get()` snapshot) cannot
               // write through the cell and stay reads.
-              if (
-                !checker ||
-                isCellLikeExpression(receiverExpression)
-              ) {
+              const receiverIsCellLike = !checker ||
+                isCellLikeExpression(receiverExpression);
+              const copiesCompleteArrayElements =
+                FULL_SHAPE_ARRAY_COPY_METHODS.has(methodName) &&
+                isArrayLikeExpression(receiverExpression) &&
+                escapesWhole(node);
+              if (!checker || receiverIsCellLike) {
                 markUnverifiedCellUse(receiver.root);
               }
-              if (shouldTrackFullShape) {
+              if (shouldTrackFullShape || copiesCompleteArrayElements) {
+                if (copiesCompleteArrayElements) {
+                  trackReadRef(receiver);
+                }
                 trackFullShapeReadRef(receiver);
+                if (copiesCompleteArrayElements) {
+                  for (let index = 0; index < node.arguments.length; index++) {
+                    const argument = node.arguments[index];
+                    if (!argument) continue;
+                    const isSpread = ts.isSpreadElement(argument);
+                    const retainsArgumentPayload = methodName === "concat" ||
+                      (methodName === "toSpliced" &&
+                        (index >= 2 || isSpread)) ||
+                      (methodName === "with" &&
+                        (index === 1 || isSpread));
+                    if (!retainsArgumentPayload) continue;
+                    if (trackRetainedPayloadExpression(argument)) {
+                      capabilityHandledArgs.add(index);
+                    }
+                  }
+                }
               } else if (exact) {
                 trackReadRef(receiver);
               }
@@ -5112,7 +5402,15 @@ export function analyzeFunctionCapabilities(
           const writtenByIdentity = identityArrayLocal !== undefined &&
             identityArrayLocals.has(identityArrayLocal);
           if (ref) {
-            trackReadRef(ref);
+            if (node.parent && ts.isArrayLiteralExpression(node.parent)) {
+              // `[...snapshot]` observes every element value. Treating this as
+              // an array-root-only read lets type shrinking replace the item
+              // schema with `unknown`, so the runner materializes holes even
+              // though the callback immediately consumes the copied items.
+              trackFullShapeReadRef(ref);
+            } else {
+              trackReadRef(ref);
+            }
             // A primitive or nullish element has no identity of its own:
             // written back by identity it would become a link to the slot it
             // was read from, which names another value once the array's
@@ -5329,5 +5627,22 @@ export function analyzeFunctionCapabilities(
     return result;
   } finally {
     inProgress.delete(fn);
+  }
+}
+
+function isFirstClassFactoryExpression(
+  expression: ts.Expression,
+  checker: ts.TypeChecker | undefined,
+): boolean {
+  if (!checker) return false;
+  try {
+    const type = checker.getTypeAtLocation(expression);
+    const members = type.isUnion() ? type.types : [type];
+    return members.length > 0 &&
+      members.every((member) =>
+        detectTrustedFactoryType(member, checker) !== undefined
+      );
+  } catch {
+    return false;
   }
 }

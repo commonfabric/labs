@@ -4,7 +4,13 @@ import {
   deepFreeze,
   fabricFromConvertibleJsValue,
   type FabricValue,
+  isFabricSpecialObject,
 } from "@commonfabric/data-model";
+import {
+  factoryStateOf,
+  isAdmittedFabricFactory,
+  mapFactoryStateValues,
+} from "@commonfabric/data-model/fabric-factory";
 import {
   getModernCellRepConfig,
   resetModernCellRepConfig,
@@ -126,7 +132,10 @@ import { applyLocalExperimentalDefaults } from "./experimental-defaults.ts";
 import type { CompileTurns } from "./harness/compile-interleave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
-import type { CompiledModuleArtifact } from "./harness/types.ts";
+import type {
+  CacheableModule,
+  CompiledModuleArtifact,
+} from "./harness/types.ts";
 import {
   immutableCellsFor,
   liveImmutableSnapshotCount,
@@ -156,7 +165,10 @@ import {
   type PreparedSourceUpdate,
 } from "./pattern-manager.ts";
 import { profileLinkListSchema } from "./profile-order.ts";
-import { snapshotQueryResult } from "./query-result-proxy.ts";
+import {
+  isCellResultForDereferencing,
+  snapshotQueryResult,
+} from "./query-result-proxy.ts";
 import { AsyncSemaphoreQueue, type QueueConfig } from "./queue.ts";
 import {
   getReaderSchemaPrecedenceConfig,
@@ -217,6 +229,7 @@ import type {
   IExtendedStorageTransaction,
   IStorageManager,
   IStorageProvider,
+  IStorageTransaction,
   MemorySpace,
   TransactionSealDestination,
   UnexaminedAbsence,
@@ -230,6 +243,10 @@ import {
 } from "./storage/reactivity-log.ts";
 import { isRetryableCommitRejection } from "./storage/rejection.ts";
 import { getDirectTransactionReadActivities } from "./storage/transaction-inspection.ts";
+import {
+  hasTraversableFabricInstanceState,
+  mapFabricInstanceStateForTraversal,
+} from "./builder/factory-traversal.ts";
 import {
   getWriteStackTrace,
   setWriteStackTraceMatchers,
@@ -262,6 +279,174 @@ const isFullNormalizedLinkShape = (
     typeof link.space === "string" &&
     Array.isArray(link.path) &&
     (link.scope === undefined || isCellScope(link.scope));
+};
+
+const collectFactoryArtifactIdentities = (
+  value: unknown,
+  identities: Map<string, object[]>,
+  seen: Set<object> = new Set(),
+): void => {
+  if (value === null || value === undefined) return;
+  if (typeof value !== "object" && typeof value !== "function") return;
+  const object = value as object;
+  if (seen.has(object)) return;
+  seen.add(object);
+
+  if (isAdmittedFabricFactory(value)) {
+    const state = factoryStateOf(value);
+    if (state.ref === undefined) {
+      throw new Error("Factory has no durable artifact ref");
+    }
+    const factories = identities.get(state.ref.identity);
+    if (factories === undefined) {
+      identities.set(state.ref.identity, [object]);
+    } else {
+      factories.push(object);
+    }
+    mapFactoryStateValues(state, (nested) => {
+      collectFactoryArtifactIdentities(nested, identities, seen);
+      return nested;
+    });
+    return;
+  }
+
+  // These values become symbolic links at the write boundary. Traversing
+  // their implementation objects would discover unrelated runtime state.
+  if (
+    isCell(value) || isCellResultForDereferencing(value) || isCellLink(value)
+  ) {
+    return;
+  }
+
+  if (hasTraversableFabricInstanceState(value)) {
+    mapFabricInstanceStateForTraversal(value, (state) => {
+      collectFactoryArtifactIdentities(state, identities, seen);
+      return state;
+    });
+    return;
+  }
+
+  if (isFabricSpecialObject(value)) return;
+
+  for (const nested of Object.values(value)) {
+    collectFactoryArtifactIdentities(nested, identities, seen);
+  }
+};
+
+type PendingFactoryArtifactPublication = {
+  readonly owners: Map<symbol, readonly CacheableModule[] | undefined>;
+  readonly promise: Promise<readonly CacheableModule[] | undefined>;
+  readonly resolve: (modules?: readonly CacheableModule[]) => void;
+  readonly reject: (reason?: unknown) => void;
+};
+
+type FactoryArtifactPublicationRegistration = {
+  readonly sourceDependency?: Promise<
+    readonly CacheableModule[] | undefined
+  >;
+  readonly onPrepared: (modules: readonly CacheableModule[]) => void;
+  readonly onConfirmed: () => void;
+  readonly onRejected: (reason: unknown) => void;
+};
+
+type FactoryArtifactPublicationRegistrationRecord = {
+  readonly identity: string;
+  readonly source: MemorySpace;
+  readonly destination: MemorySpace;
+  readonly preparationKey: string;
+  readonly registration: FactoryArtifactPublicationRegistration;
+};
+
+// Runtime-private coordination for runtimes sharing one speculative storage
+// manager. Factory@1 wire state never carries or settles these gates.
+const pendingFactoryArtifactPublications = new WeakMap<
+  IStorageManager,
+  Map<string, PendingFactoryArtifactPublication>
+>();
+
+const factoryArtifactPublicationKey = (
+  space: MemorySpace,
+  identity: string,
+): string => `${space}\0${identity}`;
+
+const factoryArtifactPublicationMap = (
+  storageManager: IStorageManager,
+): Map<string, PendingFactoryArtifactPublication> => {
+  let publications = pendingFactoryArtifactPublications.get(storageManager);
+  if (publications === undefined) {
+    publications = new Map();
+    pendingFactoryArtifactPublications.set(storageManager, publications);
+  }
+  return publications;
+};
+
+const registerFactoryArtifactPublication = (
+  storageManager: IStorageManager,
+  identity: string,
+  source: MemorySpace,
+  destination: MemorySpace,
+): FactoryArtifactPublicationRegistration => {
+  const publications = factoryArtifactPublicationMap(storageManager);
+  const precedingSourcePublication = publications.get(
+    factoryArtifactPublicationKey(source, identity),
+  );
+  const sourceDependency = precedingSourcePublication?.promise;
+  const destinationKey = factoryArtifactPublicationKey(destination, identity);
+  let publication = publications.get(destinationKey);
+  if (source === destination && publication === precedingSourcePublication) {
+    publication = undefined;
+  }
+  if (publication === undefined) {
+    const pending = Promise.withResolvers<
+      readonly CacheableModule[] | undefined
+    >();
+    void pending.promise.catch(() => {});
+    publication = {
+      owners: new Map(),
+      promise: pending.promise,
+      resolve: pending.resolve,
+      reject: pending.reject,
+    };
+    publications.set(destinationKey, publication);
+  }
+  const owner = Symbol(destinationKey);
+  publication.owners.set(owner, undefined);
+
+  return {
+    sourceDependency,
+    onPrepared: (modules) => {
+      if (!publication.owners.has(owner)) return;
+      publication.owners.set(owner, modules);
+    },
+    onConfirmed: () => {
+      if (!publication.owners.has(owner)) return;
+      const modules = publication.owners.get(owner);
+      publication.owners.delete(owner);
+      if (publications.get(destinationKey) === publication) {
+        publications.delete(destinationKey);
+      }
+      publication.owners.clear();
+      publication.resolve(modules);
+    },
+    onRejected: (reason) => {
+      if (!publication.owners.has(owner)) return;
+      publication.owners.delete(owner);
+      if (publication.owners.size > 0) return;
+      if (publications.get(destinationKey) === publication) {
+        publications.delete(destinationKey);
+      }
+      const message = typeof reason === "object" && reason !== null &&
+          "message" in reason &&
+          typeof (reason as { message?: unknown }).message === "string"
+        ? (reason as { message: string }).message
+        : String(reason);
+      publication.reject(
+        reason instanceof Error
+          ? reason
+          : new Error(message, { cause: reason }),
+      );
+    },
+  };
 };
 
 // Deno/Node `AsyncLocalStorage` when available, the promise-aware fallback
@@ -1716,6 +1901,16 @@ export class Runtime {
   #defaultFrame?: Frame;
   #queues = new Map<string, AsyncSemaphoreQueue>();
   #writeDebugContext = new WriteDebugContextStorage<string>();
+  // Context-free Factory@1 shells retain only runner-private provenance for
+  // the containing cell that supplied them. This is never serialized.
+  #factoryArtifactSources = new WeakMap<object, Set<MemorySpace>>();
+  // Explicit prepare and commit-time prepare are both repeatable. Reuse one
+  // publication owner per transaction so keyed native preparations cannot
+  // leave an orphaned causal gate.
+  #factoryArtifactPublicationRegistrations = new WeakMap<
+    IStorageTransaction,
+    Map<string, FactoryArtifactPublicationRegistrationRecord>
+  >();
   #cfcStats: CfcRuntimeStats = initialCfcRuntimeStats();
   readonly #cfcRejections = new CfcRejectionTally();
 
@@ -2869,6 +3064,7 @@ export class Runtime {
       tx,
       this.#cfcInstrumentation,
       immutableCellsFor(this),
+      (preparedTx) => this.#prepareFactoryArtifactPublications(preparedTx),
     );
     wrapped.setCfcEnforcementMode(this.cfcEnforcementMode);
     wrapped.setCfcFlowLabelsMode(this.cfcFlowLabels);
@@ -4068,7 +4264,210 @@ export class Runtime {
    * patching every transaction the process makes.
    */
   prepareTxForCommit(tx: IExtendedStorageTransaction): void {
+    this.#prepareFactoryArtifactPublications(tx);
     tx.prepareForCommit();
+  }
+
+  assertFactoryArtifactsPublishableForWrite(
+    value: unknown,
+    destination: MemorySpace,
+  ): void {
+    const identities = new Map<string, object[]>();
+    collectFactoryArtifactIdentities(value, identities);
+    for (const [identity, factories] of identities) {
+      if (
+        !this.patternManager.isArtifactAvailableInSpace(
+          identity,
+          destination,
+        ) &&
+        this.#factoryArtifactSourceFor(factories) === undefined &&
+        this.patternManager.artifactSourceSpace(identity, destination) ===
+          undefined
+      ) {
+        this.patternManager.assertArtifactAvailableInSpace(
+          identity,
+          destination,
+        );
+      }
+    }
+  }
+
+  noteFactoryArtifactSource(value: unknown, source: MemorySpace): void {
+    const identities = new Map<string, object[]>();
+    collectFactoryArtifactIdentities(value, identities);
+    for (const factories of identities.values()) {
+      for (const factory of factories) {
+        let sources = this.#factoryArtifactSources.get(factory);
+        if (sources === undefined) {
+          sources = new Set();
+          this.#factoryArtifactSources.set(factory, sources);
+        }
+        sources.add(source);
+      }
+    }
+  }
+
+  #factoryArtifactSourceFor(
+    factories: readonly object[],
+  ): MemorySpace | undefined {
+    for (const factory of factories) {
+      for (const source of this.#factoryArtifactSources.get(factory) ?? []) {
+        return source;
+      }
+    }
+    return undefined;
+  }
+
+  #prepareFactoryArtifactPublications(
+    tx: IExtendedStorageTransaction,
+  ): void {
+    const desiredRegistrations = new Set<string>();
+    let registrations = this.#factoryArtifactPublicationRegistrations.get(
+      tx.tx,
+    );
+    const spaces = new Set<MemorySpace>();
+    for (const attempt of tx.getWriteAttemptLog?.() ?? []) {
+      spaces.add(attempt.space);
+    }
+    for (const write of tx.getReactivityLog?.().writes ?? []) {
+      spaces.add(write.space);
+    }
+
+    for (const destination of spaces) {
+      const native = tx.tx.getNativeCommit?.(destination);
+      if (native === undefined) continue;
+      const identities = new Map<string, object[]>();
+      for (const operation of native.operations) {
+        if (
+          operation.op === "set" || operation.op === "patch" ||
+          operation.op === "ensure"
+        ) {
+          collectFactoryArtifactIdentities(operation.value, identities);
+        }
+      }
+
+      for (const [identity, factories] of identities) {
+        if (
+          this.patternManager.isArtifactAvailableInSpace(identity, destination)
+        ) {
+          continue;
+        }
+        // Prefer already-verified runner authority over a Cell-read candidate.
+        // This lets a causally dependent copy await an earlier publication
+        // without racing its wire confirmation.
+        const source =
+          this.patternManager.artifactSourceSpace(identity, destination) ??
+            this.#factoryArtifactSourceFor(factories);
+        if (source === undefined) {
+          this.patternManager.assertArtifactAvailableInSpace(
+            identity,
+            destination,
+          );
+        }
+        if (tx.tx.addNativeCommitPreparation === undefined) {
+          throw new Error(
+            "storage transaction does not support atomic factory artifact publication",
+          );
+        }
+        const registrationKey = factoryArtifactPublicationKey(
+          destination,
+          identity,
+        );
+        if (registrations === undefined) {
+          registrations = new Map();
+          this.#factoryArtifactPublicationRegistrations.set(
+            tx.tx,
+            registrations,
+          );
+        }
+        const preparationKey = `factory-artifact:${identity}`;
+        desiredRegistrations.add(registrationKey);
+        let record = registrations.get(registrationKey);
+        if (record !== undefined && record.source !== source) {
+          this.#removeFactoryArtifactPublicationRegistration(
+            tx.tx,
+            registrationKey,
+            record,
+            new Error(
+              `factory artifact publication source changed before commit for ${identity}`,
+            ),
+          );
+          record = undefined;
+        }
+        if (record === undefined) {
+          const registration = registerFactoryArtifactPublication(
+            this.storageManager,
+            identity,
+            source!,
+            destination,
+          );
+          record = {
+            identity,
+            source: source!,
+            destination,
+            preparationKey,
+            registration,
+          };
+          registrations.set(registrationKey, record);
+        }
+        const activeRecord = record;
+        tx.tx.addNativeCommitPreparation(destination, {
+          key: preparationKey,
+          prepare: () =>
+            this.patternManager.prepareArtifactPublication(
+              identity,
+              source!,
+              destination,
+              activeRecord.registration.sourceDependency,
+              activeRecord.registration.onPrepared,
+            ),
+          onConfirmed: () => {
+            try {
+              this.patternManager.noteArtifactPublicationConfirmed(
+                identity,
+                destination,
+              );
+            } finally {
+              activeRecord.registration.onConfirmed();
+            }
+          },
+          onRejected: activeRecord.registration.onRejected,
+        });
+      }
+    }
+
+    for (const [key, record] of registrations ?? []) {
+      if (desiredRegistrations.has(key)) continue;
+      this.#removeFactoryArtifactPublicationRegistration(
+        tx.tx,
+        key,
+        record,
+        new Error(
+          `factory artifact publication was removed before commit for ${record.identity}`,
+        ),
+      );
+    }
+  }
+
+  #removeFactoryArtifactPublicationRegistration(
+    tx: IStorageTransaction,
+    registrationKey: string,
+    record: FactoryArtifactPublicationRegistrationRecord,
+    reason: Error,
+  ): void {
+    if (tx.removeNativeCommitPreparation === undefined) {
+      throw new Error(
+        "storage transaction does not support reconciling atomic factory artifact publication",
+      );
+    }
+    tx.removeNativeCommitPreparation(
+      record.destination,
+      record.preparationKey,
+    );
+    this.#factoryArtifactPublicationRegistrations.get(tx)?.delete(
+      registrationKey,
+    );
+    record.registration.onRejected(reason);
   }
 
   /**

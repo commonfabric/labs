@@ -520,7 +520,7 @@ const handlers: Record<
     // replicated from it.
     const evalResult = await runtime.patternManager.compileAndRegisterModules(
       program,
-      undefined,
+      { patternCoverage },
       { space },
     );
     const { main } = evalResult;

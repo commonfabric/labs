@@ -230,7 +230,7 @@ Deno.test("unknown reactive capture diagnostic", async (t) => {
   );
 
   await t.step(
-    "errors for an unknown capture inside a patternTool's pattern",
+    "deprecated patternTool does not suppress nested-pattern unknown capture errors",
     async () => {
       const source = `
         import { pattern, patternTool, computed } from "commonfabric";

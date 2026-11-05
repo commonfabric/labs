@@ -24,33 +24,31 @@ interface State {
     items: Item[];
     prefix: string;
 }
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { item }) => {
     const tag = __cf_pattern_input.key("element");
-    const item = __cf_pattern_input.key("params", "item");
-    return (<li>{item.key("name")} - {tag.key("name")}</li>);
+    return (<li>{item.name} - {tag.key("name")}</li>);
 }, {
+    type: "object",
+    properties: {
+        item: {
+            type: "object",
+            properties: {
+                name: {
+                    type: "string"
+                }
+            },
+            required: ["name"]
+        }
+    },
+    required: ["item"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
             $ref: "#/$defs/Tag"
-        },
-        params: {
-            type: "object",
-            properties: {
-                item: {
-                    type: "object",
-                    properties: {
-                        name: {
-                            type: "string"
-                        }
-                    },
-                    required: ["name"]
-                }
-            },
-            required: ["item"]
         }
     },
-    required: ["element", "params"],
+    required: ["element"],
     $defs: {
         Tag: {
             type: "object",
@@ -86,42 +84,40 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_2 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const item = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
     return (<div>
-            {state.key("prefix")}: {item.key("name")}
+            {state.prefix}: {item.key("name")}
             <ul>
-              {item.key("tags").mapWithPattern(__cfPattern_1, {
+              {item.key("tags").mapWithPattern(__cfPattern_1.curry({
             item: {
                 name: item.key("name")
             }
-        })}
+        }))}
             </ul>
           </div>);
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Item"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        prefix: {
-                            type: "string"
-                        }
-                    },
-                    required: ["prefix"]
+                prefix: {
+                    type: "string"
                 }
             },
-            required: ["state"]
+            required: ["prefix"]
         }
     },
-    required: ["element", "params"],
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Item"
+        }
+    },
+    required: ["element"],
     $defs: {
         Item: {
             type: "object",
@@ -177,18 +173,18 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-nested-callback
 // Verifies: nested .map() calls on reactive arrays are each transformed independently
-//   outer .map(fn) → .mapWithPattern(pattern(...), {state: {prefix}})
-//   inner .map(fn) → .mapWithPattern(pattern(...), {item: {name}})
+//   outer .map(fn) → .mapWithPattern(pattern(...).curry({state: {prefix}}))
+//   inner .map(fn) → .mapWithPattern(pattern(...).curry({item: {name}}))
 // Context: Inner map captures item.name from the outer map callback scope
 export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Outer map captures state.prefix, inner map closes over item from outer callback */}
-        {state.key("items").mapWithPattern(__cfPattern_2, {
+        {state.key("items").mapWithPattern(__cfPattern_2.curry({
                 state: {
                     prefix: state.key("prefix")
                 }
-            })}
+            }))}
       </div>),
     };
 }, {

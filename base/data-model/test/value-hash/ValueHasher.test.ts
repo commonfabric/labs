@@ -1460,7 +1460,9 @@ describe("ValueHasher", () => {
           // function-valued member, and functions have no hash.
           const obj = { toJSON: () => "hello" };
           // @ts-expect-error A function is not a `FabricValue`.
-          expect(() => hashBytesOf(obj)).toThrow("Cannot hash value");
+          expect(() => hashBytesOf(obj)).toThrow(
+            "Cannot hash an arbitrary function value",
+          );
         });
       });
 

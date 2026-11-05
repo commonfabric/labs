@@ -447,6 +447,8 @@ export {
   type FabricChaseResult,
   resolveFabricRefToIdentity,
 } from "./fabric-ref-resolution.ts";
+export { legacyFactoryCompatibilityCounts } from "./legacy-factory-compat.ts";
+export { FactoryArtifactUnavailableError } from "./factory-materialization.ts";
 export {
   type FabricRef,
   FabricRefError,

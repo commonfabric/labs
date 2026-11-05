@@ -32,7 +32,7 @@ const normalizeNumber = (input: unknown): number => {
   return Math.trunc(input);
 };
 
-const sanitizeNumbers = (input: unknown): number[] => {
+const sanitizeNumbers = (input: readonly number[]): number[] => {
   if (!Array.isArray(input)) {
     return [];
   }

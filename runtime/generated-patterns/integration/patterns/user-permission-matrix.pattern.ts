@@ -150,7 +150,7 @@ const ensureUniqueKey = (value: string, used: Set<string>): string => {
 };
 
 const sanitizePermissionList = (
-  value: unknown,
+  value: readonly PermissionDefinitionInput[],
 ): PermissionDefinition[] => {
   const source = Array.isArray(value) ? value : defaultPermissions;
   const sanitized: PermissionDefinition[] = [];

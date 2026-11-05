@@ -1052,10 +1052,9 @@ describe("closure replication: the in-flight sibling supplier race", () => {
         experimental: { serverExecution: true },
       });
       try {
-        const libPattern = await rt2.patternManager.loadPatternByIdentity(
+        const libPattern = runtime.patternManager.artifactFromIdentitySync(
           libIdentity,
           "libPattern",
-          spaceA,
         );
         expect(libPattern).toBeDefined();
 

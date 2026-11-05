@@ -13,7 +13,6 @@ import { expect } from "@std/expect";
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import type { BuiltInLLMTool } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
 import {
   clearMockResponses,
@@ -32,7 +31,10 @@ import {
 import { MAX_RETRIES_FOR_REACTIVE } from "../src/scheduler/constants.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { waitForLlmSettled } from "./support/llm-result.ts";
-import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import {
+  createTrustedBuilder,
+  installTestPatternArtifact,
+} from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -115,16 +117,18 @@ describe("generateObject under a refused commit", () => {
    */
   // deno-lint-ignore no-explicit-any
   function runRefusedRequest(cause: string): Cell<any> {
-    const { pattern, generateObject, patternTool, Cell: BuilderCell } =
-      commonfabric;
-    const helperPattern = pattern(
-      () => ({ ok: true }),
-      { type: "object", additionalProperties: false },
-      {
-        type: "object",
-        properties: { ok: { type: "boolean" } },
-        required: ["ok"],
-      },
+    const { pattern, generateObject, Cell: BuilderCell } = commonfabric;
+    const helperPattern = installTestPatternArtifact(
+      runtime,
+      pattern(
+        () => ({ ok: true }),
+        { type: "object", additionalProperties: false },
+        {
+          type: "object",
+          properties: { ok: { type: "boolean" } },
+          required: ["ok"],
+        },
+      ),
     );
     const testPattern = pattern<Record<string, never>>(() => {
       const briefing = BuilderCell.of([{
@@ -141,7 +145,7 @@ describe("generateObject under a refused commit", () => {
         tools: {
           helper: {
             description: "A tool the model never gets to call.",
-            ...(patternTool(helperPattern) as unknown as BuiltInLLMTool),
+            pattern: helperPattern,
           },
         },
         // deno-lint-ignore no-explicit-any

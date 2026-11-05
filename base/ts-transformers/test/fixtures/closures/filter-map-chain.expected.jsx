@@ -84,42 +84,40 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_2 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const item = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
     return (<div>
               Total: {__cfLift_1({
         item: {
             price: item.key("price")
         },
         state: {
-            taxRate: state.key("taxRate")
+            taxRate: state.taxRate
         }
     })}
             </div>);
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Item"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        taxRate: {
-                            type: "number"
-                        }
-                    },
-                    required: ["taxRate"]
+                taxRate: {
+                    type: "number"
                 }
             },
-            required: ["state"]
+            required: ["taxRate"]
         }
     },
-    required: ["element", "params"],
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Item"
+        }
+    },
+    required: ["element"],
     $defs: {
         Item: {
             type: "object",
@@ -160,19 +158,19 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: filter-map-chain
 // Verifies: filter+map chain with captured outer variables
-//   .filter(fn) → .filterWithPattern(pattern(...), {})  — no captures
-//   .map(fn)    → .mapWithPattern(pattern(...), { state: { taxRate } })
+//   .filter(fn) → .filterWithPattern(pattern(...))  — no captures
+//   .map(fn)    → .mapWithPattern(pattern(...).curry({ state: { taxRate } }))
 // Context: The map callback captures state.taxRate from outer scope, so it
-//   appears in the params object and the map body uses a lift-applied
+//   appears in the private curry captures and the map body uses a lift-applied
 //   computation for the reactive computation. The filter has no captures (only element properties).
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("items").filterWithPattern(__cfPattern_1, {}).mapWithPattern(__cfPattern_2, {
+        {state.key("items").filterWithPattern(__cfPattern_1).mapWithPattern(__cfPattern_2.curry({
                 state: {
                     taxRate: state.key("taxRate")
                 }
-            })}
+            }))}
       </div>),
     };
 }, {

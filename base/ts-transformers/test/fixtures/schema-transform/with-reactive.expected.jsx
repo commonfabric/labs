@@ -54,7 +54,7 @@ const __cfLift_1 = __cfHelpers.lift<{
 //   Cell<number> → { type: "number", asCell: true }
 //   toSchema<State>({default: ...}) → schema with "default" key preserved
 //   bare `cell.value.get() * 2` → auto-wraps, capturing cell.key("value") into lift(inputSchema, outputSchema, fn)
-export default pattern((cell) => {
+export default pattern<State, State>((cell) => {
     const doubled = __cfLift_1({ cell: {
             value: cell.key("value")
         } }).for("doubled", true);
@@ -65,25 +65,7 @@ export default pattern((cell) => {
       </div>),
         value: cell.key("value"),
     };
-}, {
-    type: "object",
-    properties: {
-        value: {
-            type: "number",
-            asCell: ["cell"]
-        }
-    },
-    required: ["value"]
-} as const satisfies __cfHelpers.JSONSchema, {
-    type: "object",
-    properties: {
-        value: {
-            type: "number",
-            asCell: ["cell"]
-        }
-    },
-    required: ["value"]
-} as const satisfies __cfHelpers.JSONSchema);
+}, model, model);
 // @ts-ignore: Internals
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);

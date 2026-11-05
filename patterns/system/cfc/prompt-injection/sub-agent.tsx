@@ -13,7 +13,7 @@ import {
   type ResultSchemaInput,
 } from "./result-schema.ts";
 
-type SubAgentInput = {
+export type SubAgentInput = {
   prompt: BuiltInLLMContent;
   messages?: BuiltInLLMMessage[];
   context?: Record<string, any>;

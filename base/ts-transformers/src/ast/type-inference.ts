@@ -230,7 +230,7 @@ export function inferParameterType(
  * Returns undefined if the type cannot be inferred
  */
 export function inferReturnType(
-  _fn: ts.ArrowFunction | ts.FunctionExpression,
+  _fn: ts.FunctionLikeDeclaration,
   signature: ts.Signature,
   checker: ts.TypeChecker,
 ): ts.Type | undefined {
@@ -943,7 +943,7 @@ function extractElementFromArrayType(
           aliasTypeArguments?: readonly ts.Type[];
         };
         if (
-          isDefaultAliasSymbol(innerAlias.aliasSymbol) &&
+          isDefaultAliasSymbol(innerAlias.aliasSymbol, checker) &&
           innerAlias.aliasTypeArguments?.[0]
         ) {
           return extractElementFromArrayType(
@@ -1065,8 +1065,34 @@ export function inferArrayElementType(
           };
         }
       } else {
-        elementType = extractElementFromArrayType(innerType, checker) ??
-          innerType;
+        // Check for Default<T[]> brand union: aliasSymbol = Default from @commonfabric/api,
+        // aliasTypeArguments[0] = T[]. Default<T,V> expands to a branded union at the type
+        // level; the type object retains aliasSymbol so we can detect and unwrap it here.
+        const innerAlias = innerType as {
+          aliasSymbol?: ts.Symbol;
+          aliasTypeArguments?: readonly ts.Type[];
+        };
+        if (
+          isDefaultAliasSymbol(innerAlias.aliasSymbol, checker) &&
+          innerAlias.aliasTypeArguments?.[0] &&
+          checker.isArrayType(innerAlias.aliasTypeArguments[0])
+        ) {
+          const baseArrayType = innerAlias.aliasTypeArguments[0];
+          const extracted = extractElementFromArrayType(baseArrayType, checker);
+          if (extracted) {
+            elementType = extracted;
+          } else {
+            return {
+              typeNode: factory.createKeywordTypeNode(
+                ts.SyntaxKind.UnknownKeyword,
+              ),
+            };
+          }
+        } else {
+          // It's already T
+          elementType = extractElementFromArrayType(innerType, checker) ??
+            innerType;
+        }
       }
 
       // Convert Type to TypeNode
@@ -1140,7 +1166,8 @@ function isEffectiveArrayMember(
     aliasTypeArguments?: readonly ts.Type[];
   };
   if (
-    isDefaultAliasSymbol(alias.aliasSymbol) && alias.aliasTypeArguments?.[0]
+    isDefaultAliasSymbol(alias.aliasSymbol, checker) &&
+    alias.aliasTypeArguments?.[0]
   ) {
     const baseT = alias.aliasTypeArguments[0];
     return checker.isArrayType(baseT) || checker.isTupleType(baseT);
@@ -1190,7 +1217,7 @@ export function hasArrayTypeArgument(
           aliasTypeArguments?: readonly ts.Type[];
         };
         if (
-          isDefaultAliasSymbol(innerAlias.aliasSymbol) &&
+          isDefaultAliasSymbol(innerAlias.aliasSymbol, checker) &&
           innerAlias.aliasTypeArguments?.[0]
         ) {
           const baseT = innerAlias.aliasTypeArguments[0];

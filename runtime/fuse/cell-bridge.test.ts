@@ -11,6 +11,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
+import { createFactoryShell } from "@commonfabric/data-model/fabric-factory";
 import { defer } from "@commonfabric/async/defer";
 import {
   createSession,
@@ -76,6 +77,23 @@ import {
 //
 
 const decoder = new TextDecoder();
+
+function patternFactoryValue(params: Record<string, unknown> = {}) {
+  return createFactoryShell({
+    kind: "pattern",
+    ref: {
+      identity: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      symbol: "search",
+    },
+    argumentSchema: {
+      type: "object",
+      properties: { query: { type: "string" } },
+    },
+    resultSchema: true,
+    paramsSchema: true,
+    ...(Object.keys(params).length > 0 ? { params } : {}),
+  });
+}
 
 class IterationCountingMap<K, V> extends Map<K, V> {
   iteratedEntries = 0;
@@ -887,17 +905,25 @@ describe("cell-bridge", () => {
             renders++;
             return {};
           });
+          const reconnectable = bridge.accessForTestingOnly;
 
-          // initStatus publishes once so the file has bytes before anyone reads
-          // it.
-          expect(renders).toBe(1);
+          try {
+            // initStatus publishes once so the file has bytes before anyone
+            // reads it.
+            expect(renders).toBe(1);
 
-          // Rendering the document walks every space and its piece map. Nothing
-          // that moves the state it reports should pay for that — the reader
-          // does.
-          bridge.setDebug(true);
-          bridge.markDisconnected("socket closed");
-          expect(renders).toBe(1);
+            // Rendering the document walks every space and its piece map.
+            // Nothing that moves the state it reports should pay for that —
+            // the reader does.
+            bridge.setDebug(true);
+            bridge.markDisconnected("socket closed");
+            expect(renders).toBe(1);
+          } finally {
+            if (reconnectable.reconnectTimer !== null) {
+              clearTimeout(reconnectable.reconnectTimer);
+              reconnectable.reconnectTimer = null;
+            }
+          }
         });
 
         it("renders when `.status` is read", () => {
@@ -3566,15 +3592,7 @@ describe("cell-bridge", () => {
 
           const makeResultCell = (title: string): FakeCell => {
             const searchToolCell = makeCell(
-              {
-                pattern: {
-                  argumentSchema: {
-                    type: "object",
-                    properties: { query: { type: "string" } },
-                  },
-                },
-                extraParams: { title },
-              },
+              patternFactoryValue({ title }),
               undefined,
             );
             return makeCell(
@@ -4042,15 +4060,7 @@ describe("cell-bridge", () => {
           const state = buildTestSpace(bridge, "home", []);
 
           const initialToolCell = makeCell(
-            {
-              pattern: {
-                argumentSchema: {
-                  type: "object",
-                  properties: { query: { type: "string" } },
-                },
-              },
-              extraParams: { source: "before" },
-            },
+            patternFactoryValue({ source: "before" }),
             undefined,
           );
           const initialResultCell = makeCell(
@@ -4105,15 +4115,7 @@ describe("cell-bridge", () => {
           expect(initialToolIno).toBeDefined();
 
           const rebuiltToolCell = makeCell(
-            {
-              pattern: {
-                argumentSchema: {
-                  type: "object",
-                  properties: { query: { type: "string" } },
-                },
-              },
-              extraParams: { source: "after" },
-            },
+            patternFactoryValue({ source: "after" }),
             undefined,
           );
           const rebuiltResultCell = makeCell(

@@ -102,13 +102,16 @@ export type ResolvedFullLink = NormalizedFullLink & {
  * selects nothing, which is information. Nor is a schema that declares a
  * stream: it selects every value too, but the document behind a stream holds
  * nothing, so the declaration is the only thing that says what the position
- * is, and a carried schema that lacks it cannot say so. Any other `asCell`
- * entry keeps carrying: its document holds a value, which the carried schema
- * is there to read.
+ * is, and a carried schema that lacks it cannot say so. A factory declaration
+ * likewise carries the callable's public contract even though it gives the
+ * stored value no object shape. Any other `asCell` entry keeps carrying: its
+ * document holds a value, which the carried schema is there to read.
  */
 const schemaConstrainsNothing = (schema: JSONSchema | undefined): boolean =>
   cfcSchemaGivesNoShape(schema) &&
-  !ContextualFlowControl.declaresStream(schema);
+  !ContextualFlowControl.declaresStream(schema) &&
+  !(typeof schema === "object" && schema !== null &&
+    Object.hasOwn(schema, "asFactory"));
 
 /**
  * `schema` with its references resolved against the documents `space` holds,
@@ -809,13 +812,15 @@ export function resolveLinkTracingDereferences(
         (probe.payload as CellLinkRefPayload).overwrite === "redirect")
     ) {
       const nextLink = hopAt(link, link.path, probe);
-      nextHop = {
-        link: nextLink,
-        storedTarget: nextLink,
-        source: { ...link, path: [...link.path] },
-        kind: hopKindForLink(nextLink),
-        depth: link.path.length,
-      };
+      if (nextLink !== undefined) {
+        nextHop = {
+          link: nextLink,
+          storedTarget: nextLink,
+          source: { ...link, path: [...link.path] },
+          kind: hopKindForLink(nextLink),
+          depth: link.path.length,
+        };
+      }
     } else if (probe.notFound !== undefined) {
       const lastValid = probe.notFound.slice(); // [] => doc missing
       if (lastValid.length === 0) deadEndDocMissing = true;
@@ -835,13 +840,15 @@ export function resolveLinkTracingDereferences(
           const parent = probeAt(link, lastValid);
           if (parent.payload !== undefined) {
             const nextLink = hopAt(link, lastValid, parent);
-            nextHop = {
-              link: nextLink,
-              storedTarget: nextLink,
-              source: { ...link, path: [...lastValid] },
-              kind: hopKindForLink(nextLink),
-              depth: lastValid.length,
-            };
+            if (nextLink !== undefined) {
+              nextHop = {
+                link: nextLink,
+                storedTarget: nextLink,
+                source: { ...link, path: [...lastValid] },
+                kind: hopKindForLink(nextLink),
+                depth: lastValid.length,
+              };
+            }
           }
         }
 
@@ -849,20 +856,22 @@ export function resolveLinkTracingDereferences(
           const remainingPath = link.path.slice(lastValid.length);
           let { schema, ...restLink } = nextHop.link;
           const storedSchema = schema;
-          if (schema !== undefined && remainingPath.length > 0) {
+          if (schema !== undefined) {
             // The stored schema's external cid: refs must be registered
-            // before the narrowing walks them; the documents travel with
-            // the referring document, so they live in the referrer's
-            // space. A ref the closure cannot resolve names a corrupt or
-            // malformed declaration (the loader logs it): the declaration
-            // is ignored — narrowing it would throw on the dangling ref.
+            // before either narrowing or carrying that schema across the hop;
+            // the documents travel with the referring document, so they live
+            // in the referrer's space. A ref the closure cannot resolve names
+            // a corrupt or malformed declaration (the loader logs it): the
+            // declaration is ignored rather than carried as a dangling ref.
             const closureComplete = ensureExternalSchemaClosure(
               tx,
               nextHop.source.space,
               schema,
             );
             schema = closureComplete
-              ? ContextualFlowControl.getSchemaAtPath(schema, remainingPath)
+              ? remainingPath.length === 0
+                ? schema
+                : ContextualFlowControl.getSchemaAtPath(schema, remainingPath)
               : undefined;
           }
           nextHop = {

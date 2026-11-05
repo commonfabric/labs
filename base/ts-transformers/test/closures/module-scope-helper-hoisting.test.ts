@@ -85,13 +85,37 @@ Deno.test("Closure Transformer does not hoist nested handler callbacks that also
   );
 });
 
+Deno.test("Closure Transformer keeps module helpers lexical in hoisted nested patterns", async () => {
+  const source = `import { pattern } from "commonfabric";
+
+const format = (value: string) => value.toUpperCase();
+
+export default pattern<{ prefix: string }>(({ prefix }) => ({
+  child: pattern<{ suffix: string }>(({ suffix }) => ({
+    value: format(prefix + suffix),
+  })),
+}));
+`;
+
+  const output = await transformSource(source, options);
+  const normalized = output.replace(/\s+/g, " ");
+
+  assertMatch(
+    normalized,
+    /const __cfPattern_\d+ = __cfHelpers\.pattern\(__cfHelpers\.withPatternParamsSchema/,
+  );
+  assertMatch(normalized, /format\(prefix \+ suffix\)/);
+  assertMatch(normalized, /__cfPattern_\d+\.curry\(\{ prefix: prefix \}\)/);
+  assertNotMatch(normalized, /\.curry\(\{[^}]*format:/);
+});
+
 Deno.test("CT-1655: whole synthesized mapWithPattern pattern() call is hoisted to module scope", async () => {
   // Source shape: a .map() callback whose body invokes a module-level
   // pattern factory (`EntryRow`) and reads a module-level constant
   // (`UI`). After the closure transformer rewrites .map() to
-  // `.mapWithPattern(__cfHelpers.pattern(cb, inSchema, outSchema), { params })`,
+  // `.mapWithPattern(__cfHelpers.pattern(cb, inSchema, outSchema))`,
   // the synthesized pattern callback closes only over module-scoped references —
-  // there are no per-call-site captures (the params object is empty).
+  // there are no per-call-site captures, so no `.curry(...)` is emitted.
   //
   // CT-1585 originally hoisted just the *callback* to `__cfModuleCallback_N`.
   // CT-1655 instead hoists the WHOLE `pattern(...)` call (the first argument of

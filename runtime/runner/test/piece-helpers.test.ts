@@ -65,6 +65,26 @@ describe("parseCellPath", () => {
 });
 
 describe("resolveCellPath", () => {
+  it("materializes the root when the requested path is empty", () => {
+    const root = { label: "copied label" };
+
+    assertEquals(resolveCellPath(makeCell(root) as never, []), root);
+  });
+
+  it("does not read unrelated siblings when the selected child is available", () => {
+    const child = makeCell("selected");
+    const cell: FakeCell = {
+      get() {
+        throw new Error("root contains a cold factory sibling");
+      },
+      key(segment) {
+        return segment === "lastMessage" ? child : makeCell(undefined);
+      },
+    };
+
+    assertEquals(resolveCellPath(cell as never, ["lastMessage"]), "selected");
+  });
+
   it("resolves schema-backed child cells when the parent object is sparse", () => {
     const cell = makeCell(undefined, {
       messageCount: makeCell(1),
@@ -146,6 +166,29 @@ describe("resolveCellPath through linked slots", () => {
     await tx.commit().settled;
     await runtime?.dispose();
     await storageManager?.close();
+  });
+
+  it("reads through a root asCell handle when the requested path is empty", () => {
+    const source = runtime.getCell(
+      space,
+      "root asCell source",
+      undefined,
+      tx,
+    );
+    source.set({ label: "root payload" });
+    const handle = runtime.getCell(
+      space,
+      "root asCell handle",
+      {
+        type: "object",
+        properties: { label: { type: "string" } },
+        asCell: ["cell"],
+      },
+      tx,
+    );
+    handle.set(source as never);
+
+    expect(resolveCellPath(handle, [])).toEqual({ label: "root payload" });
   });
 
   it("reads a leaf through multiple sparse projections with repeated path segments", () => {

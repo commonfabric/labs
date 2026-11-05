@@ -18,6 +18,10 @@ import {
   rewritePatternCallbackBody,
 } from "./pattern-body-reactive-root-lowering.ts";
 import { uniquePaths } from "../utils/path-serialization.ts";
+import {
+  extractBindingNames,
+  reserveIdentifier,
+} from "../utils/identifiers.ts";
 
 /** Property names that correspond to reactive data in map callback params. */
 const MAP_REACTIVE_PROPERTIES = new Set(["element", "index", "array"]);
@@ -187,7 +191,16 @@ export function transformPatternCallback(
         hasUnsupportedDestructuring = true;
       }
 
-      const inputIdentifier = factory.createIdentifier("__cf_pattern_input");
+      const usedParameterNames = new Set(
+        callback.parameters.flatMap((parameter) =>
+          extractBindingNames(parameter.name)
+        ),
+      );
+      const inputIdentifier = reserveIdentifier(
+        "__cf_pattern_input",
+        usedParameterNames,
+        factory,
+      );
       opaqueRoots.add(inputIdentifier.text);
       const inputSymbol = context.checker.getSymbolAtLocation(firstParam.name);
       if (inputSymbol) {

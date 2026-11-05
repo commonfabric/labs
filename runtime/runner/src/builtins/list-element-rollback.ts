@@ -28,6 +28,7 @@ export type SetupRecord = {
 export type ElementRun = SetupRecord & {
   resultCell: Cell<any>;
   lastIndex: number;
+  runGeneration?: number;
 };
 
 export interface ListSetupRollback {

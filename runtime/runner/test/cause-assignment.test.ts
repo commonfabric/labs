@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { createFactoryShell } from "@commonfabric/data-model/fabric-factory";
 
 import {
   ambiguousDescriptions,
@@ -19,11 +20,22 @@ const alias = (partialCause: unknown) => ({
 // identity `entryRefOf` gives each.
 const CHILD = {};
 const OTHER_CHILD = {};
+const CHILD_FACTORY = createFactoryShell({
+  kind: "pattern",
+  ref: {
+    identity: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    symbol: "ChildFactory",
+  },
+  argumentSchema: {},
+  resultSchema: {},
+});
 const entryRefOf = (artifact: object) =>
   artifact === CHILD
     ? { identity: "child-identity", symbol: "Child" }
     : artifact === OTHER_CHILD
     ? { identity: "child-identity", symbol: "Other" }
+    : artifact === CHILD_FACTORY
+    ? { identity: "factory-identity", symbol: "ChildFactory" }
     : undefined;
 
 /** The parts a test pattern level is made of, each taking the next number. */
@@ -117,6 +129,9 @@ describe("cause-assignment", () => {
           entryRefOf,
         ),
       ).toBe("sub-pattern");
+      expect(writerDescription(CHILD_FACTORY, entryRefOf)).toBe(
+        "sub-pattern factory-iden#ChildFactory",
+      );
     });
 
     it("returns any other module by its type", () => {
@@ -155,6 +170,26 @@ describe("cause-assignment", () => {
           hasState: true,
         },
       ]);
+    });
+
+    it("counts a directly branded pattern factory as a stateful child writer", () => {
+      expect(
+        numberedCells({
+          nodes: [{
+            module: CHILD_FACTORY,
+            outputs: alias({ $generated: 0 }),
+          }],
+          derivedInternalCells: [{
+            partialCause: { $generated: 0 },
+            kind: "computed",
+          }],
+        }, entryRefOf),
+      ).toEqual([{
+        number: 0,
+        description:
+          "cell, computed, written by sub-pattern factory-iden#ChildFactory",
+        hasState: true,
+      }]);
     });
 
     it("returns no cell for a cause that carries no `$generated` number, and reads no writer from a node without a module", () => {

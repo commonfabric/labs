@@ -22,8 +22,10 @@
  * A break the repository decides to ship — a surface removed on purpose, its
  * held state an accepted casualty — cannot be recorded away and must not be
  * deleted away. It is declared in `pattern-compat-accepted-breaks.ts`, which
- * forgives the paths it names over the `(pattern, baseline)` pairs it names,
- * and nothing else.
+ * forgives named `(pattern, baseline)` pairs and nothing else.
+ * A contract whose stored population has been explicitly retired remains in
+ * the append-only baseline tree but is excluded by the exact pairs in
+ * `pattern-compat-retirements.ts`.
  */
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -38,6 +40,7 @@ import {
 } from "./pattern-files.ts";
 import { UNEVALUABLE_PATTERNS } from "./pattern-compat-unevaluable.ts";
 import { ACCEPTED_CONTRACT_BREAKS } from "./pattern-compat-accepted-breaks.ts";
+import { PATTERN_BASELINE_RETIREMENTS } from "./pattern-compat-retirements.ts";
 import {
   deriveRequiredPatternKeys,
   recordExistsUnder,
@@ -50,11 +53,13 @@ import {
 import {
   acceptedBreakKey,
   checkPattern,
+  filterRetiredBaselines,
   type Finding,
   parseArgs,
   partitionAcceptedBreaks,
   type PatternContract,
   readBaselines,
+  retirementConfigurationIssues,
   selectItems,
   shouldRecord,
   unusedAcceptances,
@@ -200,6 +205,27 @@ async function main() {
 
   const findings: Finding[] = [];
 
+  const retirementBaselines = new Map(
+    await Promise.all(
+      [...new Set(PATTERN_BASELINE_RETIREMENTS.map(({ pattern }) => pattern))]
+        .map(async (pattern) =>
+          [pattern, await readBaselines(BASELINES_DIR, pattern)] as const
+        ),
+    ),
+  );
+  const retirementIssues = retirementConfigurationIssues(
+    PATTERN_BASELINE_RETIREMENTS,
+    retirementBaselines,
+    recordExistsUnder(),
+  );
+  if (retirementIssues.length > 0) {
+    console.error(
+      `Invalid pattern baseline retirement configuration:\n${
+        retirementIssues.map((issue) => `- ${issue}`).join("\n")
+      }`,
+    );
+    Deno.exit(1);
+  }
   const recorded: string[] = [];
   // Every `(pattern, baseline)` pair a deliberate break is allowed to fail
   // against, mapped to the schema paths it may blame. What none of them turned
@@ -249,7 +275,11 @@ async function main() {
     });
   for (const key of keys) {
     const current = contracts.get(key);
-    const baselines = await readBaselines(BASELINES_DIR, key);
+    const baselines = filterRetiredBaselines(
+      key,
+      await readBaselines(BASELINES_DIR, key),
+      PATTERN_BASELINE_RETIREMENTS,
+    );
     const checkStarted = performance.now();
     const allFindings = checkPattern(key, current, baselines);
     checkMsByKey.set(key, performance.now() - checkStarted);

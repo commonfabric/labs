@@ -1,7 +1,7 @@
 # TS Transformers Goals
 
 **Status:** Working goals (current understanding)\
-**Date:** March 17, 2026\
+**Date:** July 16, 2026\
 **Package:** `@commonfabric/ts-transformers`\
 **Related:**
 
@@ -93,15 +93,25 @@ Schema fidelity includes preserving meaningful optional/undefined distinctions
 It also includes preserving the semantic distinction between `unknown`
 (`{ type: "unknown" }`, opaque/unresolved) and `any` (`true`, accept anything).
 
+Executable factory contracts are the deliberate exception to graceful
+degradation: if a factory's kind, public schemas, execution exposure, or trusted
+provenance cannot be proved, transformation must fail closed rather than emit a
+guessed invocation contract.
+
 ## G-006 Explicit Closure Capture
 
 Eliminate hidden closure dependencies in transformed runtime-critical paths by
-making captures explicit in params objects/pattern wrappers.
+making captures explicit in params objects/pattern wrappers. For first-class
+factories, keep this private capture contract separate from the factory's public
+input/output contract.
 
 ## G-007 Deterministic, Explainable Rewrites
 
 Given the same source and options, output should be stable, predictable, and
 explainable via a small set of rules.
+
+Factory calls specifically should be explainable by value origin plus the
+nearest decisive execution boundary, not local syntax or union ordering.
 
 ## G-008 Test-Anchored Behavior
 
@@ -217,6 +227,21 @@ unshrunk schemas hides type mismatches that cause runtime surprises. This
 includes declared members whose own type is `unknown`, not just top-level
 `unknown` parameters.
 
+## G-017 First-Class Serializable Factory Values
+
+Authors should be able to store, pass, derive, capture, union, and invoke trusted
+`PatternFactory`, `ModuleFactory`, and `HandlerFactory` values without reverting
+to legacy tool descriptors or plain functions.
+
+The compiler/runtime contract must:
+
+1. preserve exact public input/output schemas independently of private captures
+2. distinguish eager symbolic invocation from scheduled materialized calls
+3. preserve trusted provenance and FrameworkProvided authority end to end
+4. support same-kind unions only when their executable contracts are exactly
+   compatible
+5. diagnose ambiguity instead of guessing
+
 ## 5. Non-Goals
 
 ## NG-001 Security Boundary
@@ -254,12 +279,16 @@ per-file opt-out.
 ## C-002 Ordered Multi-Stage Pipeline
 
 Stage order is part of behavior. Reordering is a design change requiring
-explicit validation.
+explicit validation. The current pipeline has 26 stages; factory authoring,
+FrameworkProvided forwarding, symbolic invocation, final authority metadata,
+closure conversion, schema injection, and schema generation have deliberate
+relative order.
 
 ## C-003 Shared Cross-Stage Registries
 
 Type and metadata propagation across stages (`typeRegistry`, callback markers,
-schema hints, diagnostics) is intentional and required for fidelity.
+schema hints, factory contracts/provenance, live derivation markers,
+diagnostics) is intentional and required for fidelity.
 
 ## C-004 Best-Effort On Synthetic Nodes
 
@@ -270,6 +299,10 @@ registry fallbacks and robust node handling.
 
 Transforms must target runtime helper contracts as implemented (not idealized
 future contracts).
+
+This includes `invokeFactory` / `NodeRef.expectedFactory`, `asFactory` schema
+shapes, independent nested contract documents, and FrameworkProvided callback
+metadata.
 
 ## C-006 Context Transitions In Nested Code
 
@@ -295,6 +328,10 @@ Examples of required behavior:
 When capability/path analysis is uncertain, behavior must degrade safely toward
 broader types and fewer aggressive rewrites rather than risking unsound
 narrowing.
+
+This conservative fallback does not permit an executable factory contract to
+degrade to a broader schema: uncertain factory authority or invocation exposure
+must diagnose.
 
 ## C-008 Optional-Chain Navigation And Call Semantics
 
@@ -335,6 +372,21 @@ Empty array literals passed to cell factories (constructor forms like
 `new Cell([])` / `new Writable([])`, plus legacy `.of()` calls) should require
 an explicit element type argument to avoid accidental `never[]` cell types.
 
+## C-013 Execution-Boundary Factory Exposure
+
+Factory invocation form is decided by value origin plus the nearest decisive
+boundary. Live and scheduled-materialized values remain direct; eager pattern
+public/private values are symbolic; nested eager patterns re-enter symbolic
+exposure. A helper reachable from mixed or unknown exposures must diagnose.
+
+## C-014 Factory Contract And Authority Separation
+
+The public executable factory contract, private closure params, and
+FrameworkProvided authority are distinct channels. Compiler-owned exact hints
+take precedence over reconstructed types; every callable union arm must carry
+its own provenance; protected paths are runtime metadata and are not serialized
+inside `asFactory`.
+
 ## 7. Success Criteria
 
 We are meeting goals when:
@@ -364,6 +416,11 @@ We are meeting goals when:
 13. schema shrink validation errors on `unknown` parameter types when property
     accesses are detected, and on concrete types missing accessed properties,
     with messages that name the missing paths and guide the fix
+14. factory fixtures demonstrate eager symbolic versus scheduled direct calls,
+    exact same-kind union compatibility, derivation provenance, and fail-closed
+    diagnostics for ambiguous contracts/exposure
+15. schema fixtures show all three `asFactory` shapes with independently rooted
+    input/output `$defs`, and reject recursive non-finite factory contracts
 
 ## 8. Policy For Future Changes
 
@@ -388,3 +445,5 @@ Near-term direction implied by the current delta backlog:
    regular parameter flow
 5. make context-scoped boundary emission explicit: broad opaque pattern
    boundaries plus least-capability/path-shrunk compute boundaries
+6. treat trusted factories as first-class serializable values while keeping
+   public contract, private captures, and system-provided authority separate

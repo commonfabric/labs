@@ -11,7 +11,7 @@ interface State {
 
 // FIXTURE: flatmap-basic
 // Verifies: .flatMap() on a reactive array is transformed
-//   .flatMap(fn) → .flatMapWithPattern(pattern(...), {})
+//   .flatMap(fn) → .flatMapWithPattern(pattern(...))
 // Context: flatMap renders each item as JSX. No captured outer variables.
 export default pattern<State>((state) => {
   return {

@@ -206,6 +206,30 @@ Deno.test("Schema Shrink Validation", async (t) => {
   );
 
   await t.step(
+    "errors when referenced lift callback passes unknown to opaque function",
+    async () => {
+      const source = [
+        'import { lift } from "commonfabric";',
+        "",
+        "const callback = (state: unknown) => console.log(state);",
+        "const fn = lift(callback);",
+      ].join("\n");
+      const { diagnostics } = await validateSource(source, {
+        types: COMMONFABRIC_TYPES,
+      });
+      const errors = getErrors(diagnostics);
+      const shrinkErrors = errors.filter(
+        (e) => e.type === "schema:unknown-type-access",
+      );
+      assertGreater(
+        shrinkErrors.length,
+        0,
+        "Expected referenced callbacks to retain unknown-type validation",
+      );
+    },
+  );
+
+  await t.step(
     "no error when any parameter is passed to opaque function in lift",
     async () => {
       const source = [
@@ -1527,6 +1551,41 @@ Deno.test("Schema Shrink Validation", async (t) => {
       assert(names.has("title"));
       assert(names.has("active"));
       assert(!names.has("owner"));
+    },
+  );
+
+  await t.step(
+    "lift preserves caller reads from same-file helper results",
+    async () => {
+      const source = [
+        "/// <cts-enable />",
+        'import { lift } from "commonfabric";',
+        "type Tile = { char: string; id: string; unused: string };",
+        "const findTile = (tiles: readonly Tile[], char: string) =>",
+        "  tiles.find((tile) => tile.char === char)!;",
+        "const liftTileId = lift((input: { tiles: readonly Tile[] }) => {",
+        '  const tile = findTile(input.tiles, "A");',
+        "  return tile.id;",
+        "});",
+      ].join("\n");
+
+      const result = await validateSource(source, {
+        types: COMMONFABRIC_TYPES,
+      });
+      const errors = getErrors(result.diagnostics);
+
+      assertEquals(
+        errors.length,
+        0,
+        `expected no validation errors but got: ${
+          errors.map((e) => `${e.type}: ${e.message}`).join("; ")
+        }`,
+      );
+      const names = schemaPropertyNames(schemasOf(result.output)[0]);
+      assert(names.has("tiles"));
+      assert(names.has("char"));
+      assert(names.has("id"));
+      assert(!names.has("unused"));
     },
   );
 

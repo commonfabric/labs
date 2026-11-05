@@ -8,7 +8,11 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
-import { ContextualFlowControl, deepEqual } from "@commonfabric/runner";
+import {
+  factoryStateOf,
+  isAdmittedFabricFactory,
+} from "@commonfabric/data-model/fabric-factory";
+import { deepEqual } from "@commonfabric/runner";
 import {
   cfcSchemaResolvedRoot,
   cfcSchemaWithInheritedDefs,
@@ -63,6 +67,75 @@ export interface PieceCallableListing {
   /** Listing mark: `@deprecated` JSDoc on the verb, lowered to the standard
    * schema annotation. Hidden from the default listing; always callable. */
   deprecated?: boolean;
+}
+
+/** The direct pattern factory carried by a callable entry or metadata wrapper. */
+export function patternFactoryFromCallableEntry(
+  value: unknown,
+): unknown | undefined {
+  if (isAdmittedFabricFactory(value)) {
+    return factoryStateOf(value).kind === "pattern" ? value : undefined;
+  }
+  if (!isObjectNotArray(value)) return undefined;
+  const pattern = value.pattern;
+  return isAdmittedFabricFactory(pattern) &&
+      factoryStateOf(pattern).kind === "pattern"
+    ? pattern
+    : undefined;
+}
+
+export function patternFactorySchemas(value: unknown): {
+  argumentSchema: JSONSchema;
+  resultSchema: JSONSchema;
+} | undefined {
+  const factory = patternFactoryFromCallableEntry(value);
+  if (!isAdmittedFabricFactory(factory)) return undefined;
+  const state = factoryStateOf(factory);
+  return state.kind === "pattern"
+    ? {
+      argumentSchema: state.argumentSchema,
+      resultSchema: state.resultSchema,
+    }
+    : undefined;
+}
+
+export function patternFactorySchemasFromSchema(
+  schema: JSONSchema | undefined,
+): {
+  argumentSchema: JSONSchema;
+  resultSchema: JSONSchema;
+} | undefined {
+  if (!isSchemaObject(schema)) return undefined;
+  if (
+    isObjectNotArray(schema.asFactory) && schema.asFactory.kind === "pattern"
+  ) {
+    return {
+      argumentSchema: schema.asFactory.argumentSchema as JSONSchema,
+      resultSchema: schema.asFactory.resultSchema as JSONSchema,
+    };
+  }
+
+  if (!isObjectNotArray(schema.properties)) return undefined;
+  const pattern = schema.properties.pattern;
+  if (!isSchemaObject(pattern) || !isObjectNotArray(pattern.asFactory)) {
+    return undefined;
+  }
+  return pattern.asFactory.kind === "pattern"
+    ? {
+      argumentSchema: pattern.asFactory.argumentSchema as JSONSchema,
+      resultSchema: pattern.asFactory.resultSchema as JSONSchema,
+    }
+    : undefined;
+}
+
+export function isPatternFactoryValue(value: unknown): boolean {
+  return patternFactoryFromCallableEntry(value) !== undefined;
+}
+
+export function isPatternFactorySchema(
+  schema: JSONSchema | undefined,
+): boolean {
+  return patternFactorySchemasFromSchema(schema) !== undefined;
 }
 
 /**
@@ -318,8 +391,8 @@ export function handlerVerbEvents(
  *   is the same stream written twice in the pattern's own terms
  *   (`handlerVerbEvents`) — the only source of a handler the declared result
  *   type omits;
- * - the result graph holds a tool at the property, inline as `patternTool`
- *   builds one — the only source of a tool the declared type omits.
+ * - the result graph holds a direct PatternFactory or an ordinary metadata
+ *   wrapper carrying one — the only source of a tool the declared type omits.
  *
  * A name meeting none of these is data, whatever else the pattern hangs at
  * it. An argument-side name is a verb when the declared argument type marks
@@ -328,9 +401,9 @@ export function handlerVerbEvents(
  *
  * A declared row serves the declared event type as its input schema and the
  * property's own prose and marks. A row the declared type omits serves the
- * handler module's event contract (`handlerVerbEvents`), or a tool's argument
- * schema less the parameters it binds, and carries no prose — nothing
- * declared it. A handler's declared result rides its node
+ * handler module's event contract (`handlerVerbEvents`), or a factory's
+ * public argument schema, and carries no prose — nothing declared it. A
+ * handler's declared result rides its node
  * (`handlerVerbResults`); a tool's rides the tool itself.
  *
  * Rows sort by byte order, not locale collation: this is a machine-readable
@@ -370,24 +443,19 @@ export function verbsFromCompiledPattern(
       : declared;
     const wired = graph[name];
     if (
-      isPatternToolSchema(resolved as JSONSchema) || isPatternToolValue(wired)
+      isPatternFactorySchema(resolved as JSONSchema) ||
+      isPatternFactoryValue(wired)
     ) {
-      const tool = isPatternToolValue(wired)
-        ? wired as {
-          pattern: { argumentSchema?: JSONSchema; resultSchema?: JSONSchema };
-          extraParams: unknown;
-        }
-        : undefined;
-      const outputSchema = tool?.pattern.resultSchema;
+      const schemas = patternFactorySchemas(wired) ??
+        patternFactorySchemasFromSchema(resolved as JSONSchema);
       listings.set(name, {
         name,
         kind: "tool",
         on: "result",
-        inputSchema: tool === undefined ? true : cloneWithoutBoundToolKeys(
-          tool.pattern.argumentSchema ?? true,
-          isObjectNotArray(tool.extraParams) ? tool.extraParams : {},
-        ),
-        ...(outputSchema !== undefined ? { outputSchema } : {}),
+        inputSchema: schemas?.argumentSchema ?? true,
+        ...(schemas?.resultSchema !== undefined
+          ? { outputSchema: schemas.resultSchema }
+          : {}),
         ...(declared !== undefined ? declaredVerbAnnotations(declared) : {}),
       });
       continue;
@@ -427,88 +495,4 @@ export function verbsFromCompiledPattern(
   }
 
   return [...listings.values()].sort((a, b) => utf8Compare(a.name, b.name));
-}
-
-function isPatternSchemaValue(value: unknown): boolean {
-  if (!isObjectNotArray(value)) {
-    return false;
-  }
-
-  return "argumentSchema" in value || "resultSchema" in value ||
-    "nodes" in value;
-}
-
-function isPatternSchemaSchema(schema: JSONSchema | undefined): boolean {
-  if (!isSchemaObject(schema)) return false;
-  if (ContextualFlowControl.getAsCellValues(schema).at(0) === "cell") {
-    return true;
-  }
-
-  const properties = schema.properties;
-  if (!isObjectNotArray(properties)) {
-    return false;
-  }
-
-  return "argumentSchema" in properties || "resultSchema" in properties ||
-    "nodes" in properties;
-}
-
-/** Whether `v` is a tool as a pattern builds one inline: a pattern beside
- * the parameters it binds. */
-export function isPatternToolValue(v: unknown): boolean {
-  if (!isObjectNotArray(v)) return false;
-  const obj = v as Record<string, unknown>;
-  return "pattern" in obj && "extraParams" in obj &&
-    isPatternSchemaValue(obj.pattern);
-}
-
-/** Whether `schema` declares a tool: a pattern beside the parameters it
- * binds. */
-export function isPatternToolSchema(schema: JSONSchema | undefined): boolean {
-  if (!isSchemaObject(schema)) return false;
-  const properties = schema.properties;
-  if (!isObjectNotArray(properties)) {
-    return false;
-  }
-
-  return "pattern" in properties && "extraParams" in properties &&
-    isPatternSchemaSchema(properties.pattern as JSONSchema | undefined);
-}
-
-/**
- * A tool's argument schema as a caller sees it: the schema less the `result`
- * slot and every parameter the tool binds through `extraParams`, which a
- * caller cannot set.
- */
-export function cloneWithoutBoundToolKeys(
-  schema: JSONSchema,
-  extraParams: Record<string, unknown>,
-): JSONSchema {
-  if (!isSchemaObject(schema)) return schema;
-  if (schema.type !== "object" && !schema.properties) return schema;
-
-  const rawProperties = schema.properties;
-  if (!isObjectNotArray(rawProperties)) {
-    return schema;
-  }
-
-  const properties = {
-    ...(rawProperties as Record<string, JSONSchema>),
-  };
-  delete properties.result;
-  for (const key of Object.keys(extraParams)) {
-    delete properties[key];
-  }
-
-  const required = Array.isArray(schema.required)
-    ? (schema.required as string[]).filter((key) =>
-      key !== "result" && !(key in extraParams)
-    )
-    : undefined;
-
-  return {
-    ...schema,
-    properties,
-    ...(required ? { required } : {}),
-  };
 }

@@ -47,6 +47,9 @@ export const useCancelGroup = (): [Cancel, AddCancel] => {
     if (cancelled) {
       return;
     }
+    // Latch before invoking children: a child may synchronously register more
+    // cleanup, and cleanup registered after owner teardown must run rather than
+    // reviving resources outside the canceled generation.
     cancelled = true;
 
     const errors: unknown[] = [];

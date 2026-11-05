@@ -256,7 +256,12 @@ describe("twin-lineage provenance (helper-unlink regression)", () => {
       apiUrl: new URL(import.meta.url),
       storageManager,
     });
-    const compiled = await runtime.patternManager.compilePattern(TWIN_PROGRAM);
+    // The dynamic list callback is a first-class Factory@1 value and therefore
+    // may cross a durable cell boundary only after its source closure is
+    // available in the containing space.
+    const compiled = await runtime.patternManager.compilePattern(TWIN_PROGRAM, {
+      space,
+    });
     await runtime.idle();
     return compiled as Pattern;
   };
@@ -264,9 +269,10 @@ describe("twin-lineage provenance (helper-unlink regression)", () => {
   it("every module node keeps provenance and serializes ref-carrying despite the byte-identical ghost lineage", async () => {
     const compiled = await setup();
     const modules = collectJavaScriptModules(compiled);
-    // Entry lifts + card lifts/handler ride the compiled graph; the exact
-    // count is allowed to evolve, but an empty walk means the collector broke.
-    expect(modules.length).toBeGreaterThanOrEqual(6);
+    // Entry lifts + card lifts/handler ride the compiled graph. The map
+    // callback itself is now a Factory@1 node input rather than an embedded
+    // compatibility pattern module, so it is intentionally absent here.
+    expect(modules.length).toBeGreaterThanOrEqual(5);
 
     for (const module of modules) {
       const impl = (module as { implementation?: unknown }).implementation;

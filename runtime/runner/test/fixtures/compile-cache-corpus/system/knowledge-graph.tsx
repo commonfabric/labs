@@ -7,7 +7,6 @@ import {
   llmDialog,
   NAME,
   pattern,
-  patternTool,
   Stream,
   toSchema,
   UI,
@@ -254,10 +253,13 @@ Use exact piece names from the piece list above for fromName/toName/pieceNames.`
     system: agentSystemPrompt,
     messages,
     tools: {
-      listPieces: patternTool(listPiecesPattern, { entries: summaryEntries }),
-      getNeighbors: patternTool(getNeighborsPattern, {
-        edges: allEdgesFromBase,
-      }),
+      listPieces: pattern((_input: Record<string, never>) =>
+        listPiecesPattern({ entries: summaryEntries })
+      ),
+      getNeighbors: pattern(
+        ({ entity }: { entity: Writable<MentionablePiece> }) =>
+          getNeighborsPattern({ entity, edges: allEdgesFromBase }),
+      ),
     },
     builtinTools: false,
     resultSchema: toSchema<GraphAnnotations>(),
@@ -413,11 +415,13 @@ Use exact piece names from the piece list above for fromName/toName/pieceNames.`
     ),
     edges: allEdges,
     compoundNodes,
-    getNeighbors: patternTool(getNeighborsPattern, { edges: allEdges }),
-    searchGraph: patternTool(searchGraphPattern, {
-      edges: allEdges,
-      compoundNodes,
-    }),
+    getNeighbors: pattern(
+      ({ entity }: { entity: Writable<MentionablePiece> }) =>
+        getNeighborsPattern({ entity, edges: allEdges }),
+    ),
+    searchGraph: pattern(({ query }: { query: string }) =>
+      searchGraphPattern({ query, edges: allEdges, compoundNodes })
+    ),
   };
 });
 

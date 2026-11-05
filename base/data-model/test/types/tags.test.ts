@@ -58,6 +58,7 @@ import {
   type JsTypeValueTag,
   type PlusTypePredicate,
   type PrimitiveValueTag,
+  registerFabricFactory,
   tagOfConvertibleJsValueElseNull,
   tagOfFabricPrimitive,
   tagOfFabricValue,
@@ -114,6 +115,24 @@ type PlusFn = () => void;
 /** Predicate for `PlusFn`. */
 const isPlusFn: PlusTypePredicate<PlusFn> = (value): value is PlusFn =>
   typeof value === "function";
+
+/** Makes one admitted callable for the factory-specific dispatch cases. */
+function admittedModuleFactory() {
+  return registerFabricFactory(
+    (input: unknown) => input,
+    "module",
+    {
+      kind: "module",
+      rootToken: {},
+      ref: {
+        identity: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        symbol: "lift",
+      },
+      argumentSchema: true,
+      resultSchema: false,
+    },
+  );
+}
 
 /**
  * Builds a predicate that records each value it is asked about and accepts
@@ -189,6 +208,7 @@ const RECOGNIZED: ReadonlyArray<[string, FabricValue, FabricValueTag]> = [
     new FabricMap(new Map([["a", 1]])),
     VALUE_TAGS.FabricInstance,
   ],
+  ["an admitted factory", admittedModuleFactory(), VALUE_TAGS.FabricFactory],
 ];
 
 describe("tags", () => {
@@ -292,10 +312,12 @@ describe("tags", () => {
       );
     });
 
-    it("is, with the primitive tags, the whole `FabricValue` vocabulary, in the type system", () => {
+    it("is, with primitive and factory tags, the whole `FabricValue` vocabulary, in the type system", () => {
       const _same: Same<
         FabricValueTag,
-        PrimitiveValueTag | FabricContainerValueTag
+        | PrimitiveValueTag
+        | FabricContainerValueTag
+        | typeof VALUE_TAGS.FabricFactory
       > = true;
       const _disjoint: Same<
         Extract<PrimitiveValueTag, FabricContainerValueTag>,
@@ -398,6 +420,15 @@ describe("tags", () => {
   });
 
   describe("tagOfFabricValue()", () => {
+    it("tags an admitted factory separately from an arbitrary function", () => {
+      const factory = admittedModuleFactory();
+
+      expect(tagOfFabricValue(factory)).toBe(VALUE_TAGS.FabricFactory);
+      expect(
+        tagOfFabricValueElseNull((() => {}) as unknown as FabricValue),
+      ).toBe(null);
+    });
+
     for (const [label, value, tag] of JS_PRIMITIVE_TAGS) {
       it(`returns \`${tag}\` for ${label}`, () => {
         expect(tagOfFabricValue(value)).toBe(tag);

@@ -235,7 +235,6 @@ export type CallKind =
   | { kind: "wish"; symbol?: ts.Symbol }
   | { kind: "generate-text"; symbol?: ts.Symbol }
   | { kind: "generate-object"; symbol?: ts.Symbol }
-  | { kind: "pattern-tool"; symbol?: ts.Symbol }
   | {
     kind: "runtime-call";
     symbol?: ts.Symbol;
@@ -360,39 +359,303 @@ export function isPatternBuilderCall(
     target.name.text === "pattern";
 }
 
-export function getPatternBuilderCallbackArgument(
+export interface PatternBuilderCallbackDescriptor {
+  /** The `pattern(...)` builder call that owns this callback. */
+  readonly call: ts.CallExpression;
+  /** The complete expression in pattern argument 0, including the carrier. */
+  readonly argument: ts.Expression;
+  /** The expression the carrier (when present) receives as argument 0. */
+  readonly callbackArgument: ts.Expression;
+  /** The resolved callback used by callback analysis and lowering. */
+  readonly callback: ts.ArrowFunction | ts.FunctionExpression;
+  /**
+   * The exact compiler-only params-schema carrier. This is deliberately a
+   * syntactic `__cfHelpers` check: authored aliases must not acquire trusted
+   * compiler-metadata semantics.
+   */
+  readonly paramsSchemaCarrier?: ts.CallExpression;
+  /** The carrier's schema argument, when compiler metadata is present. */
+  readonly paramsSchema?: ts.Expression;
+}
+
+function getPatternParamsSchemaCarrier(
+  expression: ts.Expression,
+): ts.CallExpression | undefined {
+  const target = stripWrappers(expression);
+  if (!ts.isCallExpression(target) || target.arguments.length !== 2) {
+    return undefined;
+  }
+
+  const callee = stripWrappers(target.expression);
+  if (
+    !ts.isPropertyAccessExpression(callee) ||
+    !ts.isIdentifier(callee.expression) ||
+    callee.expression.text !== CF_HELPERS_IDENTIFIER ||
+    callee.name.text !== "withPatternParamsSchema"
+  ) {
+    return undefined;
+  }
+
+  return target;
+}
+
+/**
+ * Describe a pattern callback without losing the compiler-only
+ * `withPatternParamsSchema(callback, schema)` carrier around it.
+ *
+ * Consumers that only analyze the callback can read `callback`. Consumers
+ * that rebuild argument 0 must retain `argument`/`paramsSchemaCarrier` (or use
+ * `updatePatternBuilderCallbackArgument`) so schema metadata reaches the eager
+ * runtime constructor.
+ */
+export function getPatternBuilderCallbackDescriptor(
   call: ts.CallExpression,
   checker: ts.TypeChecker,
-): ts.ArrowFunction | ts.FunctionExpression | undefined {
+): PatternBuilderCallbackDescriptor | undefined {
   if (!isPatternBuilderCall(call, checker)) {
     return undefined;
   }
 
-  const callbackArg = call.arguments[0];
-  return callbackArg
-    ? resolveCallbackFunctionExpression(callbackArg, checker)
+  const argument = call.arguments[0];
+  if (!argument) {
+    return undefined;
+  }
+
+  const paramsSchemaCarrier = getPatternParamsSchemaCarrier(argument);
+  const callbackArgument = paramsSchemaCarrier?.arguments[0] ?? argument;
+  const callback = callbackArgument
+    ? resolveCallbackFunctionExpression(callbackArgument, checker)
     : undefined;
+  if (!callback) {
+    return undefined;
+  }
+
+  return {
+    call,
+    argument,
+    callbackArgument,
+    callback,
+    ...(paramsSchemaCarrier && {
+      paramsSchemaCarrier,
+      paramsSchema: paramsSchemaCarrier.arguments[1],
+    }),
+  };
 }
 
-export function getPatternToolCallbackArgument(
+/**
+ * Find the owning pattern descriptor for an inline callback. The short
+ * ancestor walk crosses expression wrappers and the compiler params-schema
+ * carrier, but never crosses another function boundary.
+ */
+export function findEnclosingPatternBuilderCallbackDescriptor(
+  callback: ts.ArrowFunction | ts.FunctionExpression,
+  checker: ts.TypeChecker,
+): PatternBuilderCallbackDescriptor | undefined {
+  let current: ts.Node | undefined = callback.parent;
+  while (current) {
+    if (ts.isCallExpression(current)) {
+      const descriptor = getPatternBuilderCallbackDescriptor(current, checker);
+      if (descriptor?.callback === callback) {
+        return descriptor;
+      }
+    }
+    if (ts.isFunctionLike(current)) {
+      return undefined;
+    }
+    current = current.parent;
+  }
+  return undefined;
+}
+
+function replacePatternCallbackCarrier(
+  expression: ts.Expression,
+  carrier: ts.CallExpression,
+  replacement: ts.CallExpression,
+  factory: ts.NodeFactory,
+): ts.Expression {
+  if (expression === carrier) {
+    return replacement;
+  }
+  if (ts.isParenthesizedExpression(expression)) {
+    return factory.updateParenthesizedExpression(
+      expression,
+      replacePatternCallbackCarrier(
+        expression.expression,
+        carrier,
+        replacement,
+        factory,
+      ),
+    );
+  }
+  if (ts.isAsExpression(expression)) {
+    return factory.updateAsExpression(
+      expression,
+      replacePatternCallbackCarrier(
+        expression.expression,
+        carrier,
+        replacement,
+        factory,
+      ),
+      expression.type,
+    );
+  }
+  if (ts.isTypeAssertionExpression(expression)) {
+    return factory.updateTypeAssertion(
+      expression,
+      expression.type,
+      replacePatternCallbackCarrier(
+        expression.expression,
+        carrier,
+        replacement,
+        factory,
+      ),
+    );
+  }
+  if (ts.isNonNullExpression(expression)) {
+    return factory.updateNonNullExpression(
+      expression,
+      replacePatternCallbackCarrier(
+        expression.expression,
+        carrier,
+        replacement,
+        factory,
+      ),
+    );
+  }
+  if (ts.isSatisfiesExpression(expression)) {
+    return factory.updateSatisfiesExpression(
+      expression,
+      replacePatternCallbackCarrier(
+        expression.expression,
+        carrier,
+        replacement,
+        factory,
+      ),
+      expression.type,
+    );
+  }
+  if (ts.isPartiallyEmittedExpression(expression)) {
+    return factory.updatePartiallyEmittedExpression(
+      expression,
+      replacePatternCallbackCarrier(
+        expression.expression,
+        carrier,
+        replacement,
+        factory,
+      ),
+    );
+  }
+  return expression;
+}
+
+/** Rebuild pattern argument 0 while retaining compiler params metadata. */
+export function updatePatternBuilderCallbackArgument(
+  descriptor: PatternBuilderCallbackDescriptor,
+  callback: ts.ArrowFunction | ts.FunctionExpression,
+  factory: ts.NodeFactory,
+): ts.Expression {
+  const carrier = descriptor.paramsSchemaCarrier;
+  if (!carrier) {
+    return callback;
+  }
+
+  const updatedCarrier = factory.updateCallExpression(
+    carrier,
+    carrier.expression,
+    carrier.typeArguments,
+    [callback, ...carrier.arguments.slice(1)],
+  );
+  return replacePatternCallbackCarrier(
+    descriptor.argument,
+    carrier,
+    updatedCarrier,
+    factory,
+  );
+}
+
+export function getPatternBuilderCallbackArgument(
   call: ts.CallExpression,
   checker: ts.TypeChecker,
 ): ts.ArrowFunction | ts.FunctionExpression | undefined {
-  const callKind = detectCallKind(call, checker);
-  if (callKind?.kind !== "pattern-tool") {
-    const target = stripWrappers(call.expression);
-    if (
-      !ts.isPropertyAccessExpression(target) ||
-      target.name.text !== "patternTool"
-    ) {
-      return undefined;
-    }
+  return getPatternBuilderCallbackDescriptor(call, checker)?.callback;
+}
+
+export type LegacyPatternCarrierKind = "with-pattern";
+
+/**
+ * Classify a compatibility list carrier whose argument 0 contains a pattern
+ * builder call and whose sibling params must remain on the legacy reader path.
+ *
+ * Parentheses and type-only wrappers do not change argument ownership. Earlier
+ * transformer passes can also clone the pattern call without retaining a
+ * useful synthetic parent chain, so classification consults the authored
+ * original node as a second ancestry root. Keeping this in call-kind prevents
+ * closure conversion, callback-boundary policy, and late hoisting from
+ * disagreeing about the same carrier.
+ */
+export function classifyLegacyPatternCarrier(
+  patternCall: ts.CallExpression,
+): LegacyPatternCarrierKind | undefined {
+  const candidates = [patternCall];
+  const original = ts.getOriginalNode(patternCall);
+  if (
+    original !== patternCall && ts.isCallExpression(original)
+  ) {
+    candidates.push(original);
   }
 
-  const callbackArg = call.arguments[0];
-  return callbackArg
-    ? resolveCallbackFunctionExpression(callbackArg, checker)
-    : undefined;
+  for (const candidate of candidates) {
+    const carrier = findCallArgumentOwnerThroughTransparentWrappers(
+      candidate,
+      0,
+    );
+    if (!carrier) continue;
+
+    const callee = stripWrappers(carrier.expression);
+    if (
+      ts.isPropertyAccessExpression(callee) &&
+      isSyntheticNode(callee) &&
+      getArrayMethodAccessKindByName(callee.name.text)?.lowered
+    ) {
+      return "with-pattern";
+    }
+  }
+  return undefined;
+}
+
+function findCallArgumentOwnerThroughTransparentWrappers(
+  expression: ts.Expression,
+  argumentIndex: number,
+): ts.CallExpression | undefined {
+  let current = expression;
+  while (true) {
+    const parent = current.parent;
+    if (parent && isTransparentExpressionWrapperOf(parent, current)) {
+      current = parent;
+      continue;
+    }
+    return parent && ts.isCallExpression(parent) &&
+        parent.arguments[argumentIndex] === current
+      ? parent
+      : undefined;
+  }
+}
+
+function isTransparentExpressionWrapperOf(
+  node: ts.Node,
+  expression: ts.Expression,
+): node is
+  | ts.ParenthesizedExpression
+  | ts.AsExpression
+  | ts.TypeAssertion
+  | ts.SatisfiesExpression
+  | ts.NonNullExpression
+  | ts.PartiallyEmittedExpression {
+  return (
+    ts.isParenthesizedExpression(node) || ts.isAsExpression(node) ||
+    ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node) ||
+    ts.isNonNullExpression(node) || ts.isPartiallyEmittedExpression(node)
+  ) && node.expression === expression;
 }
 
 /**
@@ -402,14 +665,13 @@ export function getPatternToolCallbackArgument(
  * argument is a bare `pattern(...)` builder call, return that inner pattern call
  * (the hoistable unit). Otherwise return undefined. Recognition keys on the
  * array-method family's `lowered` flag, not a hardcoded method name, so new
- * `*WithPattern` lowerings are picked up automatically. The canonical shape is
- * `receiver.mapWithPattern(pattern(...), { params })`.
+ * `*WithPattern` lowerings are picked up automatically. This helper owns the
+ * capture-free canonical shape `receiver.mapWithPattern(pattern(...))`.
  *
  * This is how the hoisting stage finds the pattern call to relocate (CT-1655):
- * unlike lift/handler, the pattern call is not *applied* — it sits in the first
- * argument position of the enclosing `*WithPattern` call, with per-instance
- * captures threaded through that call's SECOND argument (the params object).
- * So the bare `pattern(...)` is capture-free and safe to evaluate once at
+ * unlike lift/handler, this capture-free pattern call is not *applied* — it
+ * sits in the first argument position of the enclosing `*WithPattern` call.
+ * The bare `pattern(...)` is safe to evaluate once at
  * module scope. The top-level `export default pattern(...)` is a direct call,
  * not a `*WithPattern` argument, so it is naturally excluded.
  */
@@ -423,42 +685,6 @@ export function getWithPatternHoistablePatternCall(
   }
   const accessKind = getArrayMethodAccessKindByName(callee.name.text);
   if (!accessKind?.lowered) {
-    return undefined;
-  }
-  const firstArg = call.arguments[0];
-  if (!firstArg) {
-    return undefined;
-  }
-  const patternCall = stripWrappers(firstArg);
-  if (
-    !ts.isCallExpression(patternCall) ||
-    !isPatternBuilderCall(patternCall, checker)
-  ) {
-    return undefined;
-  }
-  return patternCall;
-}
-
-/**
- * If `call` is a `patternTool(pattern(...), extraParams?)` call whose FIRST
- * argument is a bare `pattern(...)` builder call, return that inner pattern call
- * (the hoistable unit). Otherwise return undefined.
- *
- * Sibling of {@link getWithPatternHoistablePatternCall}: same hoist mechanic
- * (relocate the bare pattern call sitting in argument 0, leaving the enclosing
- * call's callee and remaining arguments intact), different enclosing call shape.
- * Per-instance values flow through patternTool's SECOND argument (`extraParams`)
- * and module-scoped reactive reads are absorbed by the pattern itself, so the
- * bare `pattern(...)` is capture-free and safe to evaluate once at module scope.
- * As of CT-1655 patternTool's first argument must be a pattern (enforced by
- * PatternContextValidation), so this recognizer covers every reactive
- * patternTool.
- */
-export function getPatternToolHoistablePatternCall(
-  call: ts.CallExpression,
-  checker: ts.TypeChecker,
-): ts.CallExpression | undefined {
-  if (detectCallKind(call, checker)?.kind !== "pattern-tool") {
     return undefined;
   }
   const firstArg = call.arguments[0];
@@ -2031,7 +2257,8 @@ function resolveBuilderSymbolKind(
   const name = resolved.getName();
   if (
     BUILDER_SYMBOL_NAMES.has(name) &&
-    (isCommonFabricSymbol(resolved) || isImportedFromCommonFabric(resolved) ||
+    (isCommonFabricSymbol(resolved, checker) ||
+      isImportedFromCommonFabric(resolved) ||
       isAmbientSymbol(resolved))
   ) {
     return {
@@ -2203,7 +2430,7 @@ function resolveSymbolKind(
   if (
     namedCallKind &&
     (
-      isCommonFabricSymbol(resolved) ||
+      isCommonFabricSymbol(resolved, checker) ||
       isImportedFromCommonFabric(resolved) ||
       isAmbientSymbol(resolved)
     )
@@ -2250,10 +2477,6 @@ function createNamedCallKind(
       return symbol
         ? { kind: "generate-object", symbol }
         : { kind: "generate-object" };
-    case "pattern-tool":
-      return symbol
-        ? { kind: "pattern-tool", symbol }
-        : { kind: "pattern-tool" };
     case "runtime-call":
       return symbol
         ? {
@@ -2349,7 +2572,8 @@ function detectCellConstructorExpressionName(
   const name = resolved.getName();
   if (
     CELL_LIKE_CLASSES.has(name) &&
-    (isCommonFabricSymbol(resolved) || isImportedFromCommonFabric(resolved))
+    (isCommonFabricSymbol(resolved, checker) ||
+      isImportedFromCommonFabric(resolved))
   ) {
     return name;
   }

@@ -9,11 +9,13 @@ import {
   contractHash,
   decodeBaseline,
   encodeBaseline,
+  filterRetiredBaselines,
   type Finding,
   parseArgs,
   partitionAcceptedBreaks,
   type PatternContract,
   readBaselines,
+  retirementConfigurationIssues,
   selectItems,
   shouldRecord,
   unusedAcceptances,
@@ -183,6 +185,65 @@ describe("checkPattern", () => {
       pattern: "system/gone.tsx",
       baselines: ["v1"],
     }]);
+  });
+});
+
+describe("filterRetiredBaselines", () => {
+  it("retires only an exact pattern and baseline label pair", () => {
+    const homeV1 = baseline("v1", EMPTY_ARGUMENT, RESULT_WITH_TITLE);
+    const homeV2 = baseline("v2", EMPTY_ARGUMENT, RESULT_WITHOUT_TITLE);
+    const result = filterRetiredBaselines(
+      "system/home.tsx",
+      [homeV1, homeV2],
+      [{
+        pattern: "system/home.tsx",
+        baseline: "v1",
+        reason: "Pre-launch data was wiped.",
+        decision: "docs/history/wipe.md",
+      }, {
+        pattern: "system/other.tsx",
+        baseline: "v2",
+        reason: "Different pattern.",
+        decision: "docs/history/other.md",
+      }],
+    );
+
+    expect(result).toEqual([homeV2]);
+  });
+
+  it("rejects duplicate, unexplained, and nonexistent retirements", () => {
+    const retirements = [{
+      pattern: "system/home.tsx",
+      baseline: "v1",
+      reason: "",
+      decision: "",
+    }, {
+      pattern: "system/home.tsx",
+      baseline: "v1",
+      reason: "Duplicate.",
+      decision: "docs/history/duplicate.md",
+    }, {
+      pattern: "system/home.tsx",
+      baseline: "missing",
+      reason: "No matching evidence.",
+      decision: "docs/history/missing.md",
+    }];
+    const issues = retirementConfigurationIssues(
+      retirements,
+      new Map([[
+        "system/home.tsx",
+        [baseline("v1", EMPTY_ARGUMENT, RESULT_WITH_TITLE)],
+      ]]),
+      (record) => record === "docs/history/duplicate.md",
+    );
+
+    expect(issues).toEqual([
+      "retirement system/home.tsx/v1 has no reason",
+      "retirement system/home.tsx/v1 has no decision record",
+      "duplicate retirement system/home.tsx/v1",
+      "retirement system/home.tsx/missing does not name a recorded baseline",
+      "retirement system/home.tsx/missing decision record does not exist: docs/history/missing.md",
+    ]);
   });
 });
 

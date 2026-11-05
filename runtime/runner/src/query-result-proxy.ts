@@ -25,6 +25,7 @@ import {
   mergeCfcLabelViews,
   rebaseCfcLabelView,
 } from "./cfc/label-view-state.ts";
+import { materializeFactoryForSchema } from "./factory-materialization.ts";
 
 // Maximum recursion depth to prevent infinite loops
 const MAX_RECURSION_DEPTH = 100;
@@ -161,6 +162,7 @@ const proxyCacheKey = (
   // them the same view. An unpinned handle has none and shares as it always
   // has.
   epoch: number | undefined,
+  materializeFactories: boolean,
   // A view's shape is bound to the kind of container it was built over, so a
   // document that changes kind gets a new view on its next read, while the
   // one built over the old kind refuses (`ViewDriftError`).
@@ -172,6 +174,7 @@ const proxyCacheKey = (
     link.path,
     cfcLabelView ?? null,
     epoch ?? null,
+    materializeFactories,
     kind,
   ]);
 
@@ -183,6 +186,15 @@ const childLabelView = (
   cfcLabelView: CfcLabelView | undefined,
   segment: string,
 ): CfcLabelView | undefined => rebaseCfcLabelView(cfcLabelView, [segment]);
+
+const childLink = (
+  link: NormalizedFullLink,
+  segment: string,
+): NormalizedFullLink => ({
+  ...link,
+  path: [...link.path, segment],
+  schema: ContextualFlowControl.getSchemaAtPath(link.schema, [segment]),
+});
 
 // Array.prototype's entries, and whether they modify the array
 enum ArrayMethodType {
@@ -262,6 +274,7 @@ export function createQueryResultProxy<T>(
   link: NormalizedFullLink,
   depth: number = 0,
   cfcLabelView?: CfcLabelView,
+  materializeFactories = false,
 ): T {
   // The transaction decides which of the two this is. Marked for lazy
   // materialization, the proxy is a view: it keeps this transaction and
@@ -288,6 +301,7 @@ export function createQueryResultProxy<T>(
     depth,
     cfcLabelView,
     pinned,
+    materializeFactories,
   );
 }
 
@@ -337,6 +351,7 @@ function createViewProxy<T>(
   depth: number,
   cfcLabelView: CfcLabelView | undefined,
   pinned: boolean,
+  materializeFactories: boolean,
 ): T {
   // The transaction a trap reads through, and the one a child view is built
   // over. A pinned view keeps the transaction it was created with for both; an
@@ -421,7 +436,9 @@ function createViewProxy<T>(
     : undefined;
   const viewKey = viewMemo === undefined
     ? ""
-    : `view:${pinned ? "pinned" : "handle"}:${resolved.memoKey}`;
+    : `view:${
+      pinned ? "pinned" : "handle"
+    }:factory=${materializeFactories}:${resolved.memoKey}`;
   const cached = viewMemo?.get(viewKey) as { view: unknown } | undefined;
   if (cached !== undefined) return cached.view as T;
   const remember = <V>(view: V): V => {
@@ -455,6 +472,17 @@ function createViewProxy<T>(
   }
 
   const value = viewTx.readValueOrThrow(link, SHAPE_READ) as any;
+
+  if (materializeFactories) {
+    const materialized = materializeFactoryForSchema(value, link.schema, {
+      runtime,
+      artifactSpace: link.space,
+    });
+    if (!Object.is(materialized, value)) {
+      viewTx.readValueOrThrow(link);
+      return remember(materialized as T);
+    }
+  }
 
   // The SHAPE_READ above only tracks the container's shape, but the stream
   // check depends on a specific field's VALUE. Register an explicit read of
@@ -638,13 +666,19 @@ function createViewProxy<T>(
   // one cache per transaction — which is right, because it describes the instant
   // that transaction saw.
   const txCache = getProxyCache(tx, runtime);
-  const cacheKey = proxyCacheKey(link, cfcLabelView, epoch, boundKind);
+  const cacheKey = proxyCacheKey(
+    link,
+    cfcLabelView,
+    epoch,
+    materializeFactories,
+    boundKind,
+  );
 
   // Check if we already have a proxy for this target in the cache.
   // The cache key is the original `value` (not the stub), ensuring that
   // the same frozen object always maps to the same proxy instance.
   const existingProxy = txCache.byLink.get(cacheKey) ??
-    (cfcLabelView === undefined && epoch === undefined
+    (cfcLabelView === undefined && epoch === undefined && !materializeFactories
       ? txCache.byValue.get(value)
       : undefined);
   if (existingProxy) return remember(existingProxy);
@@ -716,13 +750,11 @@ function createViewProxy<T>(
                           runtime,
                           accessTx,
                           tx,
-                          {
-                            ...link,
-                            path: [...link.path, String(index)],
-                          },
+                          childLink(link, String(index)),
                           depth + 1,
                           childLabelView(cfcLabelView, String(index)),
                           pinned,
+                          materializeFactories,
                         ),
                         done: false,
                       };
@@ -792,10 +824,11 @@ function createViewProxy<T>(
                     runtime,
                     accessTx,
                     tx,
-                    { ...link, path: [...link.path, String(i)] },
+                    childLink(link, String(i)),
                     depth + 1,
                     childLabelView(cfcLabelView, String(i)),
                     pinned,
+                    materializeFactories,
                   );
                 }
 
@@ -881,10 +914,11 @@ function createViewProxy<T>(
           runtime,
           accessTx,
           tx,
-          { ...link, path: [...link.path, prop] },
+          childLink(link, prop),
           depth + 1,
           childLabelView(cfcLabelView, String(prop)),
           pinned,
+          materializeFactories,
         );
       }),
     set: (_, prop) => {
@@ -990,10 +1024,11 @@ function createViewProxy<T>(
               runtime,
               accessTx,
               tx,
-              { ...link, path: [...link.path, prop as string] },
+              childLink(link, prop as string),
               depth + 1,
               childLabelView(cfcLabelView, String(prop)),
               pinned,
+              materializeFactories,
             ),
           };
         }
@@ -1071,7 +1106,9 @@ function createViewProxy<T>(
   // Not the by-value index for a pinned view: it names a value rather than an
   // instant, so it would hand a view taken at one epoch to a reader asking at
   // another.
-  if (cfcLabelView === undefined && epoch === undefined) {
+  if (
+    cfcLabelView === undefined && epoch === undefined && !materializeFactories
+  ) {
     txCache.byValue.set(value, proxy);
   }
   return remember(proxy);

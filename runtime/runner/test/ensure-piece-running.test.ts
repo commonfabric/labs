@@ -111,6 +111,53 @@ describe("ensurePieceRunning", () => {
     expect(result).toBe(false);
   });
 
+  it("does not start a piece after its load continuation is aborted", async () => {
+    const resultCell = runtime.getCell(
+      space,
+      "aborted-load-test-result",
+      undefined,
+      tx,
+    );
+    resultCell.set({ value: 1 });
+    resultCell.setMetaRaw("patternIdentity", {
+      identity: "aborted-load-pattern",
+      symbol: "default",
+    }, rawMetaWriteAuthorization);
+    await tx.commit().settled;
+    tx = runtime.edit();
+
+    const loadRequested = Promise.withResolvers<void>();
+    const loadResult = Promise.withResolvers<Pattern | undefined>();
+    const patternManager = runtime.patternManager as unknown as {
+      loadPatternByIdentity: () => Promise<Pattern | undefined>;
+    };
+    patternManager.loadPatternByIdentity = () => {
+      loadRequested.resolve();
+      return loadResult.promise;
+    };
+    let startCalls = 0;
+    const startableRuntime = runtime as unknown as {
+      start: () => Promise<boolean>;
+    };
+    startableRuntime.start = () => {
+      startCalls++;
+      return Promise.resolve(true);
+    };
+
+    const controller = new AbortController();
+    const attempt = ensurePieceRunning(
+      runtime,
+      resultCell.getAsNormalizedFullLink(),
+      { signal: controller.signal },
+    );
+    await loadRequested.promise;
+    controller.abort();
+    loadResult.resolve({} as Pattern);
+
+    expect(await attempt).toBe(false);
+    expect(startCalls).toBe(0);
+  });
+
   it("should start a piece with valid result metadata", async () => {
     // Create a simple pattern
     let patternRan = false;

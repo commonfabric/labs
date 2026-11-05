@@ -1,0 +1,115 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "ListItem": {
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "list": {
+        "items": {
+          "$ref": "#/$defs/ListItem"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "list"
+    ],
+    "type": "object"
+  },
+  "pattern": "system/common-fabric.tsx",
+  "resultSchema": {
+    "$defs": {
+      "BuiltInLLMTool": {
+        "anyOf": [
+          {
+            "asFactory": {
+              "argumentSchema": true,
+              "kind": "pattern",
+              "resultSchema": true
+            }
+          },
+          {
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "handler": {
+                "type": "undefined"
+              },
+              "pattern": {
+                "asFactory": {
+                  "argumentSchema": true,
+                  "kind": "pattern",
+                  "resultSchema": true
+                }
+              },
+              "useResultSchemaForObservation": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "pattern"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "handler": true,
+              "pattern": {
+                "type": "undefined"
+              }
+            },
+            "required": [
+              "handler"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ListItem": {
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "list": {
+        "items": {
+          "$ref": "#/$defs/ListItem"
+        },
+        "type": "array"
+      },
+      "tools": {
+        "additionalProperties": {
+          "$ref": "#/$defs/BuiltInLLMTool"
+        },
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "required": [
+      "tools",
+      "list"
+    ],
+    "type": "object"
+  }
+}

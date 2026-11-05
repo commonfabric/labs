@@ -7,6 +7,7 @@ import {
   cloneTypeNodeDeepForEmission,
   getPreservedBindingTypeNode,
 } from "../../src/ast/type-building.ts";
+import { registerTrustedCommonFabricTestSources } from "../trusted-commonfabric-sources.ts";
 
 // A wrapper counts only where its name resolves to the declaration
 // `commonfabric` exports, so the wrappers are declared in that module and each
@@ -61,6 +62,7 @@ function preserved(
     compilerOptions,
     host,
   );
+  registerTrustedCommonFabricTestSources(program, ["/commonfabric.d.ts"]);
   const sourceFile = program.getSourceFile(fileName)!;
   const input = sourceFile.statements.find((statement) =>
     ts.isInterfaceDeclaration(statement) && statement.name.text === "Input"

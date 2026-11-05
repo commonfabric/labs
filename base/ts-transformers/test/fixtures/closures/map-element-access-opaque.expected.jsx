@@ -44,13 +44,12 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["number", "undefined"]
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const tag = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
     return (<span>
             {tag}: {__cfLift_1({
         state: {
-            tagCounts: state.key("tagCounts")
+            tagCounts: state.tagCounts
         },
         tag: tag
     })}
@@ -58,30 +57,29 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            type: "string"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
+                tagCounts: {
                     type: "object",
-                    properties: {
-                        tagCounts: {
-                            type: "object",
-                            properties: {},
-                            additionalProperties: {
-                                type: "number"
-                            }
-                        }
-                    },
-                    required: ["tagCounts"]
+                    properties: {},
+                    additionalProperties: {
+                        type: "number"
+                    }
                 }
             },
-            required: ["state"]
+            required: ["tagCounts"]
         }
     },
-    required: ["element", "params"]
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            type: "string"
+        }
+    },
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -105,17 +103,17 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-element-access-opaque
 // Verifies: .map() on reactive array is transformed when callback uses bracket access on a captured opaque object
-//   .map(fn) → .mapWithPattern(pattern(...), {state: {tagCounts: ...}})
+//   .map(fn) → .mapWithPattern(pattern(...).curry({state: {tagCounts: ...}}))
 //   state.tagCounts[tag] → lift(...)(...) with opaque schema for dynamic key access
 // Context: Captures state.tagCounts for bracket-notation element access inside map
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("sortedTags").mapWithPattern(__cfPattern_1, {
+        {state.key("sortedTags").mapWithPattern(__cfPattern_1.curry({
                 state: {
                     tagCounts: state.key("tagCounts")
                 }
-            })}
+            }))}
       </div>),
     };
 }, {

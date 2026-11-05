@@ -165,7 +165,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const opaqueMap = lift((input: Writable<Item[]>) => input.mapWithPattern(__cfPattern_1, {}), {
+const opaqueMap = lift((input: Writable<Item[]>) => input.mapWithPattern(__cfPattern_1), {
     type: "array",
     items: {
         $ref: "#/$defs/Item"

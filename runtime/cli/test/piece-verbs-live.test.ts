@@ -72,7 +72,7 @@ const UNDECLARED_PROGRAM = {
   files: [{
     name: "/main.tsx",
     contents: [
-      'import { handler, pattern, patternTool, schema } from "commonfabric";',
+      'import { handler, pattern, schema } from "commonfabric";',
       'import "commonfabric/schema";',
       "",
       "const model = schema({",
@@ -101,7 +101,7 @@ const UNDECLARED_PROGRAM = {
       "  return {",
       "    increment: increment(cell),",
       "    decrement: decrement(cell),",
-      "    hiddenTool: patternTool(echo),",
+      "    hiddenTool: echo,",
       "    value: cell.value,",
       "    stringField: cell.stringField,",
       "    arrayField: cell.arrayField,",

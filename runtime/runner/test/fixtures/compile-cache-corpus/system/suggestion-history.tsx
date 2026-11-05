@@ -3,8 +3,7 @@ import {
   type Default,
   NAME,
   pattern,
-  patternTool,
-  type PatternToolResult,
+  type PatternFactory,
   UI,
   type VNode,
   wish,
@@ -20,7 +19,7 @@ export type SuggestionHistoryEntry = {
 type Input = Record<string, never>;
 export type Output = {
   entries: SuggestionHistoryEntry[];
-  search: PatternToolResult<{ entries: SuggestionHistoryEntry[] }>;
+  search: PatternFactory<{ query: string }, SuggestionHistoryEntry[]>;
   [UI]: VNode;
 };
 
@@ -113,7 +112,9 @@ const SuggestionHistory = pattern<Input, Output>(() => {
       </cf-screen>
     ),
     entries: allEntries,
-    search: patternTool(searchPattern, { entries: allEntries }),
+    search: pattern<{ query: string }, SuggestionHistoryEntry[]>(({ query }) =>
+      searchPattern({ query, entries: allEntries })
+    ),
   };
 });
 

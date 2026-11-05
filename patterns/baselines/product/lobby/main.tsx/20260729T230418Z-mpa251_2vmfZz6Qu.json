@@ -1,0 +1,380 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "LobbyAdminBootstrapRole": {
+        "$ref": "#/$defs/LobbyAdminRoleAssignment",
+        "ifc": {
+          "addIntegrity": [
+            "lobby-admin"
+          ]
+        }
+      },
+      "LobbyAdminList": {
+        "ifc": {
+          "requiredIntegrity": [
+            "lobby-admin"
+          ],
+          "uiContract": {
+            "action": "TrustedLobbyAction",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedLobbySurface"
+            ],
+            "trustedPattern": "TrustedLobbySurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/lobby/main.tsx",
+              "moduleIdentity": "zXYoyTIDIoBvU633QK_RbsRCKW5yoKhuZqdiJg3fZ98",
+              "path": [
+                "commitTrustedLobbyAction"
+              ]
+            }
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/LobbyAdminRole"
+        },
+        "type": "array"
+      },
+      "LobbyAdminRegistryStoredValue": {
+        "properties": {
+          "admins": {
+            "$ref": "#/$defs/LobbyAdminList"
+          },
+          "bootstrapAdmin": {
+            "$ref": "#/$defs/LobbyAdminBootstrapRole"
+          },
+          "everyoneIsAdmin": {
+            "$ref": "#/$defs/LobbyEveryoneAdminFlag"
+          }
+        },
+        "type": "object"
+      },
+      "LobbyAdminRegistryValue": {
+        "$ref": "#/$defs/LobbyAdminRegistryStoredValue"
+      },
+      "LobbyAdminRole": {
+        "$ref": "#/$defs/LobbyAdminRoleAssignment",
+        "ifc": {
+          "addIntegrity": [
+            "lobby-admin"
+          ]
+        }
+      },
+      "LobbyAdminRoleAssignment": {
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "subject": {
+            "$ref": "#/$defs/LobbyProfile",
+            "asCell": [
+              "cell"
+            ]
+          }
+        },
+        "required": [
+          "subject",
+          "displayName"
+        ],
+        "type": "object"
+      },
+      "LobbyEveryoneAdminFlag": {
+        "ifc": {
+          "uiContract": {
+            "action": "TrustedLobbyAction",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedLobbySurface"
+            ],
+            "trustedPattern": "TrustedLobbySurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/lobby/main.tsx",
+              "moduleIdentity": "zXYoyTIDIoBvU633QK_RbsRCKW5yoKhuZqdiJg3fZ98",
+              "path": [
+                "commitTrustedLobbyAction"
+              ]
+            }
+          }
+        },
+        "type": "boolean"
+      },
+      "LobbyExternalProfileLink": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "url"
+        ],
+        "type": "object"
+      },
+      "LobbyParticipant": {
+        "properties": {
+          "name": {
+            "description": "Durable fallback label for policy rows if the live profile is offline.",
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/LobbyProfile",
+            "asCell": [
+              "cell"
+            ]
+          }
+        },
+        "required": [
+          "profile",
+          "name"
+        ],
+        "type": "object"
+      },
+      "LobbyParticipantList": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/LobbyParticipant"
+        },
+        "type": "array"
+      },
+      "LobbyProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "bio": {
+            "type": "string"
+          },
+          "externalLinks": {
+            "description": "Connector-facing identity hints retained on the stored profile link.",
+            "items": {
+              "$ref": "#/$defs/LobbyExternalProfileLink"
+            },
+            "type": "array"
+          },
+          "initialNameApplied": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "verifiedIdentities": {
+            "description": "Transport original assertion cells; consumers validate their integrity.",
+            "items": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "unknown"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "LobbyRoster": {
+        "properties": {
+          "participants": {
+            "$ref": "#/$defs/LobbyParticipantList"
+          }
+        },
+        "required": [
+          "participants"
+        ],
+        "type": "object"
+      },
+      "LobbyRosterValue": {
+        "$ref": "#/$defs/LobbyRoster",
+        "default": {
+          "participants": []
+        }
+      }
+    },
+    "properties": {
+      "adminRegistry": {
+        "$ref": "#/$defs/LobbyAdminRegistryValue",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "description": "Shared durable trusted-admin policy."
+      },
+      "roster": {
+        "$ref": "#/$defs/LobbyRosterValue",
+        "description": "Shared durable presence list.",
+        "scope": "space"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "lobby/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "LobbyExternalProfileLink": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "url"
+        ],
+        "type": "object"
+      },
+      "LobbyParticipantView": {
+        "properties": {
+          "isAdmin": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "isAdmin"
+        ],
+        "type": "object"
+      },
+      "LobbyProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "bio": {
+            "type": "string"
+          },
+          "externalLinks": {
+            "description": "Connector-facing identity hints retained on the stored profile link.",
+            "items": {
+              "$ref": "#/$defs/LobbyExternalProfileLink"
+            },
+            "type": "array"
+          },
+          "initialNameApplied": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "verifiedIdentities": {
+            "description": "Transport original assertion cells; consumers validate their integrity.",
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "LobbyTrustedActionEvent": {
+        "properties": {
+          "detail": {
+            "properties": {
+              "checked": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "everyoneIsAdmin": {
+            "type": "boolean"
+          },
+          "profile": {
+            "$ref": "#/$defs/LobbyProfile",
+            "description": "Headless/test seam; real UI bindings supply profile cells as state."
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addSelf": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Agent-facing action: add the active Fabric profile, with no payload."
+      },
+      "allParticipants": {
+        "description": "Agent-facing, profile-free snapshot for downstream processing.",
+        "items": {
+          "$ref": "#/$defs/LobbyParticipantView"
+        },
+        "type": "array"
+      },
+      "currentUserIsAdmin": {
+        "type": "boolean"
+      },
+      "everyoneIsAdmin": {
+        "type": "boolean"
+      },
+      "join": {
+        "$ref": "#/$defs/LobbyTrustedActionEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "participantCount": {
+        "type": "number"
+      },
+      "participants": {
+        "description": "Backward-compatible alias for `allParticipants`.",
+        "items": {
+          "$ref": "#/$defs/LobbyParticipantView"
+        },
+        "type": "array"
+      },
+      "removeParticipant": {
+        "$ref": "#/$defs/LobbyTrustedActionEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "setEveryoneIsAdmin": {
+        "$ref": "#/$defs/LobbyTrustedActionEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "toggleParticipantAdmin": {
+        "$ref": "#/$defs/LobbyTrustedActionEvent",
+        "asCell": [
+          "stream"
+        ]
+      }
+    },
+    "required": [
+      "addSelf",
+      "allParticipants",
+      "participants",
+      "participantCount",
+      "currentUserIsAdmin",
+      "everyoneIsAdmin",
+      "join",
+      "removeParticipant",
+      "toggleParticipantAdmin",
+      "setEveryoneIsAdmin",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

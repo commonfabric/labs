@@ -7,10 +7,16 @@ import {
   type FabricContainerValue,
   type FabricValue,
   forEachFabricContainerValue,
+  registerFabricFactory,
 } from "@commonfabric/data-model";
 import { UnknownValue } from "@commonfabric/data-model/codec-common";
 
 describe("forEachFabricContainerValue", () => {
+  const factoryRef = {
+    identity: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    symbol: "__cfPattern_1",
+  } as const;
+
   it("weighs payloads and instance state without copying frozen graphs", () => {
     const payload = "x".repeat(100_000);
     const shared = deepFreeze({ payload });
@@ -38,6 +44,28 @@ describe("forEachFabricContainerValue", () => {
     expect(visited).toContain(instance);
     expect(visited).toContain(state);
     expect(Object.isFrozen(root)).toBe(false);
+  });
+
+  it("visits canonical state nested inside an admitted factory", () => {
+    const markerState = { count: 1 };
+    const marker = new UnknownValue("TraversalMarker@1", markerState);
+    const factory = registerFabricFactory(() => undefined, "pattern", {
+      kind: "pattern",
+      rootToken: {},
+      ref: factoryRef,
+      argumentSchema: true,
+      resultSchema: true,
+      paramsSchema: true,
+      params: { marker },
+    });
+    const visited: FabricContainerValue[] = [];
+
+    forEachFabricContainerValue({ factory }, (value) => visited.push(value));
+
+    expect(visited).toContain(marker);
+    expect(visited).toContain(markerState);
+    expect(estimateFabricValueSize(factory)).toBeGreaterThan(0);
+    expect(Object.isFrozen(markerState)).toBe(false);
   });
 
   it("visits each identity once when cycles are allowed", () => {

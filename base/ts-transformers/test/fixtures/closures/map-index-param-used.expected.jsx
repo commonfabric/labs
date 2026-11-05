@@ -44,19 +44,32 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const item = __cf_pattern_input.key("element");
     const index = __cf_pattern_input.key("index");
-    const state = __cf_pattern_input.key("params", "state");
     return (<div>
             Item #{__cfLift_1({
         index: index,
         state: {
-            offset: state.key("offset")
+            offset: state.offset
         }
     })}: {item.key("name")}
           </div>);
 }, {
+    type: "object",
+    properties: {
+        state: {
+            type: "object",
+            properties: {
+                offset: {
+                    type: "number"
+                }
+            },
+            required: ["offset"]
+        }
+    },
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -70,24 +83,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         },
         index: {
             type: "number"
-        },
-        params: {
-            type: "object",
-            properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        offset: {
-                            type: "number"
-                        }
-                    },
-                    required: ["offset"]
-                }
-            },
-            required: ["state"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -111,18 +109,18 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-index-param-used
 // Verifies: .map() on reactive array is transformed when index param is used with a capture
-//   .map(fn) → .mapWithPattern(pattern(...), {state: {offset: ...}})
+//   .map(fn) → .mapWithPattern(pattern(...).curry({state: {offset: ...}}))
 //   index + state.offset → lift(...)(...) combining index and captured state
 // Context: Both index parameter and state.offset are used in an expression
 export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Uses both index parameter and captures state.offset */}
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_1.curry({
                 state: {
                     offset: state.key("offset")
                 }
-            })}
+            }))}
       </div>),
     };
 }, {

@@ -162,7 +162,7 @@ const ensureUniqueId = (candidate: string, used: Set<string>): string => {
   return unique;
 };
 
-const sanitizeCatalog = (value: unknown): CatalogItem[] => {
+const sanitizeCatalog = (value: readonly CatalogItemInput[]): CatalogItem[] => {
   const entries = Array.isArray(value) && value.length > 0
     ? (value as CatalogItemInput[])
     : defaultCatalog;

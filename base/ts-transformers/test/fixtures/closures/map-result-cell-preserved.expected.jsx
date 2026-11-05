@@ -133,7 +133,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
-    const subs = items.mapWithPattern(__cfPattern_1, {}).for("subs", true);
+    const subs = items.mapWithPattern(__cfPattern_1).for("subs", true);
     return { subs };
 }, {
     type: "object",

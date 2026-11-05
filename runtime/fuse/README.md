@@ -176,6 +176,12 @@ Source-file writes normally preserve the same schema-compatibility guarantees as
 `--dangerously-allow-incompatible-schema`; source writes through that mount then
 bypass the old-to-new pattern and retained-link compatibility proofs.
 
+Tools are direct or metadata-wrapped `PatternFactory` values. The mount exposes
+their public argument schema through the `*.tool` interface and preserves stored
+factory values in JSON through the tagged Fabric codec. It never projects
+function source or `$implRef` as factory state; decoded JSON factories remain
+inert until a runner materializes them for invocation.
+
 ### Creating and Deleting
 
 ```bash

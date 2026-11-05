@@ -66,10 +66,8 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state, multiplier }) => {
     const item = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
-    const multiplier = __cf_pattern_input.params.multiplier;
     return (<span>
             Total: {__cfLift_1({
         item: {
@@ -77,8 +75,8 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
             quantity: item.key("quantity")
         },
         state: {
-            discount: state.key("discount"),
-            taxRate: state.key("taxRate")
+            discount: state.discount,
+            taxRate: state.taxRate
         },
         multiplier: multiplier
     })}
@@ -86,32 +84,31 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Item"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        discount: {
-                            type: "number"
-                        },
-                        taxRate: {
-                            type: "number"
-                        }
-                    },
-                    required: ["discount", "taxRate"]
+                discount: {
+                    type: "number"
                 },
-                multiplier: {
+                taxRate: {
                     type: "number"
                 }
             },
-            required: ["state", "multiplier"]
+            required: ["discount", "taxRate"]
+        },
+        multiplier: {
+            type: "number"
         }
     },
-    required: ["element", "params"],
+    required: ["state", "multiplier"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Item"
+        }
+    },
+    required: ["element"],
     $defs: {
         Item: {
             type: "object",
@@ -149,7 +146,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-multiple-captures
 // Verifies: .map() on reactive array captures multiple outer variables (state + local)
-//   .map(fn) → .mapWithPattern(pattern(...), {state: {discount, taxRate}, multiplier})
+//   .map(fn) → .mapWithPattern(pattern(...).curry({state: {discount, taxRate}, multiplier}))
 //   expression → lift(...)(...) combining item + state reactively with `multiplier`
 //     wired in as an explicit input (not via lexical closure)
 // Context: state.discount and state.taxRate are explicit lift-applied inputs;
@@ -161,13 +158,13 @@ export default pattern((state) => {
     const multiplier = 2;
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_1.curry({
                 state: {
                     discount: state.key("discount"),
                     taxRate: state.key("taxRate")
                 },
                 multiplier: multiplier
-            })}
+            }))}
       </div>),
     };
 }, {

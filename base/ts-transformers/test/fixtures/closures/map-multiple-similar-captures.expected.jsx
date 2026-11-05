@@ -75,9 +75,8 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const item = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
     return (<span>
             {__cfLift_1({
         item: {
@@ -85,15 +84,44 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         },
         state: {
             checkout: {
-                discount: state.key("checkout", "discount")
+                discount: state.checkout.discount
             },
             upsell: {
-                discount: state.key("upsell", "discount")
+                discount: state.upsell.discount
             }
         }
     })}
           </span>);
 }, {
+    type: "object",
+    properties: {
+        state: {
+            type: "object",
+            properties: {
+                checkout: {
+                    type: "object",
+                    properties: {
+                        discount: {
+                            type: "number"
+                        }
+                    },
+                    required: ["discount"]
+                },
+                upsell: {
+                    type: "object",
+                    properties: {
+                        discount: {
+                            type: "number"
+                        }
+                    },
+                    required: ["discount"]
+                }
+            },
+            required: ["checkout", "upsell"]
+        }
+    },
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -104,39 +132,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 }
             },
             required: ["price"]
-        },
-        params: {
-            type: "object",
-            properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        checkout: {
-                            type: "object",
-                            properties: {
-                                discount: {
-                                    type: "number"
-                                }
-                            },
-                            required: ["discount"]
-                        },
-                        upsell: {
-                            type: "object",
-                            properties: {
-                                discount: {
-                                    type: "number"
-                                }
-                            },
-                            required: ["discount"]
-                        }
-                    },
-                    required: ["checkout", "upsell"]
-                }
-            },
-            required: ["state"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -160,13 +158,13 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-multiple-similar-captures
 // Verifies: .map() correctly captures multiple state properties with the same leaf name
-//   .map(fn) → .mapWithPattern(pattern(...), {state: {checkout: {discount}, upsell: {discount}}})
+//   .map(fn) → .mapWithPattern(pattern(...).curry({state: {checkout: {discount}, upsell: {discount}}}))
 //   expression → lift(...)(...) with both discount paths distinguished
 // Context: state.checkout.discount and state.upsell.discount share the name "discount" but are separate captures
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_1.curry({
                 state: {
                     checkout: {
                         discount: state.key("checkout", "discount")
@@ -175,7 +173,7 @@ export default pattern((state) => {
                         discount: state.key("upsell", "discount")
                     }
                 }
-            })}
+            }))}
       </div>),
     };
 }, {

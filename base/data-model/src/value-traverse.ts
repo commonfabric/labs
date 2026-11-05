@@ -2,11 +2,13 @@
 
 import type {
   FabricContainerValue,
+  FabricFactory,
   FabricPlainObject,
   FabricValue,
 } from "./interface.ts";
 import { FabricBytes } from "./fabric-primitives/FabricBytes.ts";
 import { isDeepFrozen } from "./deep-freeze.ts";
+import { factoryStateOf, mapFactoryStateValues } from "./fabric-factory.ts";
 import {
   DefaultValueVisitor,
   DO_RECURSE_VALUES,
@@ -56,6 +58,18 @@ class ContainerVisitor extends DefaultValueVisitor {
 
   override visitPrimitiveValue(): undefined {
     return undefined;
+  }
+
+  override visitFabricFactory(
+    value: FabricFactory,
+  ): VisitResult<never, FabricValue> {
+    if (this.#seen.has(value)) return { type: "mapTo", value };
+    this.#seen.add(value);
+    mapFactoryStateValues(factoryStateOf(value), (nested) => {
+      visitValue(nested as FabricValue, this);
+      return nested;
+    });
+    return { type: "mapTo", value };
   }
 
   override visitCycle(
@@ -128,6 +142,19 @@ class SizeVisitor extends DefaultValueVisitor {
       this.#size += 16 + (Symbol.keyFor(value)?.length ?? 0) * 2;
     } else this.#size += 8;
     return undefined;
+  }
+
+  override visitFabricFactory(
+    value: FabricFactory,
+  ): VisitResult<never, FabricValue> {
+    if (this.#seen.has(value)) return { type: "mapTo", value };
+    this.#seen.add(value);
+    this.#size += 64;
+    mapFactoryStateValues(factoryStateOf(value), (nested) => {
+      visitValue(nested as FabricValue, this);
+      return nested;
+    });
+    return { type: "mapTo", value };
   }
 
   override visitCycle(

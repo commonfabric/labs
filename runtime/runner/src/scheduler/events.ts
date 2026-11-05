@@ -83,6 +83,7 @@ import {
   InSpaceTargetUnresolved,
   RetryImmediately,
 } from "./retry-immediately.ts";
+import { RetryWhenReady } from "./retry-when-ready.ts";
 import {
   hasAnnotatedWrites,
   trustedEventWriteCandidatesFromTransaction,
@@ -95,6 +96,7 @@ import {
 import {
   type Action,
   type EventHandler,
+  type EventHandlerRegistration,
   type EventPreflightTraceContext,
   LT1_LATE_SEAL_REFUSED,
   type PieceStartWake,
@@ -119,7 +121,8 @@ const EVENT_COMMIT_TELEMETRY_WRITE_LIMIT = 25;
  * that replaces another taking a new place at the end.
  */
 export class EventHandlerRegistry {
-  #byStream = new Map<string, readonly [NormalizedFullLink, EventHandler]>();
+  #byStream = new Map<string, EventHandlerRegistration>();
+  #nextGeneration = 0;
 
   /** Constructs an instance holding `registrations`, registered in order. */
   constructor(
@@ -135,7 +138,14 @@ export class EventHandlerRegistry {
 
   /** Returns the handler registered for the stream `link` names, if any. */
   get(link: NormalizedFullLink): EventHandler | undefined {
-    return this.#byStream.get(addressKey(link))?.[1];
+    const registration = this.#byStream.get(addressKey(link));
+    return registration?.active === true ? registration.handler : undefined;
+  }
+
+  /** Returns the independently cancelable current registration. */
+  capture(link: NormalizedFullLink): EventHandlerRegistration | undefined {
+    const registration = this.#byStream.get(addressKey(link));
+    return registration?.active === true ? registration : undefined;
   }
 
   /**
@@ -145,30 +155,71 @@ export class EventHandlerRegistry {
   registration(
     link: NormalizedFullLink,
   ): readonly [NormalizedFullLink, EventHandler] | undefined {
-    return this.#byStream.get(addressKey(link));
+    const registration = this.capture(link);
+    return registration === undefined
+      ? undefined
+      : [registration.ref, registration.handler];
   }
 
   /**
    * Registers `handler` for the stream `link` names, in place of any
    * handler registered for it.
    */
-  set(link: NormalizedFullLink, handler: EventHandler): void {
+  set(
+    link: NormalizedFullLink,
+    handler: EventHandler,
+  ): EventHandlerRegistration {
     const key = addressKey(link);
     // Removed first, so that a replacement is the newest registration.
-    this.#byStream.delete(key);
-    this.#byStream.set(key, [link, handler]);
+    const previous = this.#byStream.get(key);
+    if (previous !== undefined) {
+      this.#cancel(previous, "Event handler registration replaced");
+      this.#byStream.delete(key);
+    }
+    const registration: EventHandlerRegistration = {
+      ref: link,
+      handler,
+      generation: ++this.#nextGeneration,
+      readinessCancels: new Set(),
+      active: true,
+    };
+    this.#byStream.set(key, registration);
+    return registration;
   }
 
   /** Removes the registration for the stream `link` names, if any. */
-  delete(link: NormalizedFullLink): void {
-    this.#byStream.delete(addressKey(link));
+  delete(
+    link: NormalizedFullLink,
+    expected?: EventHandlerRegistration,
+  ): void {
+    const key = addressKey(link);
+    const registration = this.#byStream.get(key);
+    if (
+      registration === undefined ||
+      (expected !== undefined && registration !== expected)
+    ) return;
+    this.#byStream.delete(key);
+    this.#cancel(registration, "Event handler registration canceled");
+  }
+
+  #cancel(registration: EventHandlerRegistration, reason: string): void {
+    if (!registration.active) return;
+    registration.active = false;
+    for (const cancelReadiness of [...registration.readinessCancels]) {
+      cancelReadiness(reason);
+    }
+    registration.readinessCancels.clear();
   }
 
   /** Iterates the registrations, oldest first. */
-  [Symbol.iterator](): IterableIterator<
+  *[Symbol.iterator](): IterableIterator<
     readonly [NormalizedFullLink, EventHandler]
   > {
-    return this.#byStream.values();
+    for (const registration of this.#byStream.values()) {
+      if (registration.active) {
+        yield [registration.ref, registration.handler];
+      }
+    }
   }
 }
 
@@ -448,6 +499,7 @@ export interface SchedulerEventQueueState {
   readonly loadPieceForEvent?: (
     runtime: Runtime,
     eventLink: NormalizedFullLink,
+    options?: { signal?: AbortSignal },
   ) => Promise<EnsurePieceVerdict>;
   readonly queueExecution: () => void;
   readonly recordLineageEvent: (
@@ -554,6 +606,11 @@ export function dropQueuedEvent(
     callbackTx?: IExtendedStorageTransaction;
   } = {},
 ): void {
+  event.abortHandlerLoad?.(reason);
+  if (event.cancelPending !== undefined) {
+    event.cancelPending(reason);
+    return;
+  }
   const index = state.eventQueue.indexOf(event);
   if (index >= 0) state.eventQueue.splice(index, 1);
   event.endPieceStartWait?.("settled");
@@ -736,27 +793,67 @@ function beginPieceStartWait(
  * it finds the handler just registered there.
  */
 export function wakePieceStartWaits(
-  state: Pick<SchedulerEventQueueState, "pieceStartWaits">,
+  state: Pick<
+    SchedulerEventQueueState,
+    "eventHandlers" | "eventQueue" | "pieceStartWaits" | "queueExecution"
+  >,
   ref: NormalizedFullLink,
 ): void {
+  const registration = state.eventHandlers.capture(ref);
+  let hydrated = false;
+  if (registration !== undefined) {
+    for (const event of state.eventQueue) {
+      if (
+        event.handlerLoadPending !== true ||
+        event.served !== undefined ||
+        !areNormalizedLinksSame(event.eventLink, ref)
+      ) continue;
+      event.handlerRegistration = registration;
+      event.handlerGeneration = registration.generation;
+      event.handler = registration.handler;
+      event.action = (tx) => registration.handler(tx, event.event);
+      delete event.handlerLoadPending;
+      event.abortHandlerLoad?.(
+        "Event handler registered while its piece was loading",
+      );
+      hydrated = true;
+    }
+  }
   for (const event of [...state.pieceStartWaits]) {
     if (areNormalizedLinksSame(event.eventLink, ref)) {
       event.endPieceStartWait?.("handler-registered");
     }
   }
+  if (hydrated) state.queueExecution();
 }
 
 /**
- * Ends every piece-start wait, for a scheduler being disposed. The caller
- * also makes `pieceStartWaitsEnded()` report `true`, so that a start attempt
- * still in flight begins no new wait.
+ * Ends every piece-start wait and load-pending intent for a scheduler being
+ * disposed. The caller also makes `pieceStartWaitsEnded()` report `true`, so
+ * that a start attempt still in flight begins no new wait.
  */
 export function endPieceStartWaits(
-  state: Pick<SchedulerEventQueueState, "pieceStartWaits">,
+  state:
+    & Pick<
+      SchedulerEventQueueState,
+      "runtime" | "eventQueue" | "pieceStartWaits" | "queueExecution"
+    >
+    & Partial<Pick<SchedulerEventQueueState, "releaseLineageEvent">>,
 ): void {
   for (const event of [...state.pieceStartWaits]) {
     event.endPieceStartWait?.("disposed");
   }
+  let dropped = false;
+  for (const event of [...state.eventQueue]) {
+    if (event.handlerLoadPending !== true) continue;
+    dropQueuedEvent(
+      state,
+      event,
+      "Event dropped: runtime disposed before its handler registered",
+    );
+    dropped = true;
+  }
+  if (dropped) state.queueExecution();
 }
 
 /**
@@ -840,7 +937,7 @@ function readyQueuedEvent(args: {
   readonly id: string;
   readonly eventLink: NormalizedFullLink;
   readonly event: unknown;
-  readonly handler: EventHandler;
+  readonly registration: EventHandlerRegistration;
   readonly retries: boolean;
   readonly onCommit?: QueuedEvent["onCommit"];
   readonly eventId?: string;
@@ -857,8 +954,10 @@ function readyQueuedEvent(args: {
     time: args.time,
     originTx: args.originTx,
     eventLink: args.eventLink,
-    action: (tx) => args.handler(tx, args.event),
-    handler: args.handler,
+    action: (tx) => args.registration.handler(tx, args.event),
+    handler: args.registration.handler,
+    handlerRegistration: args.registration,
+    handlerGeneration: args.registration.generation,
     event: args.event,
     runtimeInjectedEventKeys: args.runtimeInjectedEventKeys,
     retry: args.retries,
@@ -932,11 +1031,13 @@ function chainOnCommit(
 function startEventPiece(
   runtime: Runtime,
   eventLink: NormalizedFullLink,
+  options: { signal?: AbortSignal } = {},
 ): Promise<EnsurePieceVerdict> {
   return ensurePieceRunningVerdict(runtime, eventLink, {
     startInputSources: runtime.experimental.serverExecution !== true ||
       runtime.servingPosture,
     originFollowed: runtime.pieceOriginFollowed,
+    signal: options.signal,
   });
 }
 
@@ -966,9 +1067,11 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
       args.parentEventId,
     );
   }
-  const handler = state.eventHandlers.get(args.eventLink);
+  const registration = state.eventHandlers.capture(args.eventLink);
+  const followPatternSwap = registration !== undefined &&
+    patternChangeHolding(state.runtime, registration.handler) !== undefined;
 
-  if (handler) {
+  if (registration !== undefined) {
     // W4: bound the per-(stream, handler) in-queue backlog. Below the cap,
     // events queue normally (ordinary delivery is unchanged); at the cap,
     // collapse the newest into the last pending entry (last-wins) instead of
@@ -1003,7 +1106,7 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
       let sameDeliveryId: QueuedEvent | undefined;
       for (const q of state.eventQueue) {
         if (
-          q.handler === handler &&
+          q.handlerRegistration === registration &&
           areNormalizedLinksSame(q.eventLink, args.eventLink)
         ) {
           pending++;
@@ -1057,7 +1160,7 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
         // into a log-flood amplifier; any telemetry added later must be
         // rate-limited.
         lastSameOrigin.event = args.event;
-        lastSameOrigin.action = (tx) => handler(tx, args.event);
+        lastSameOrigin.action = (tx) => registration.handler(tx, args.event);
         // Last-wins takes the newest event's injection provenance with its
         // payload — the marker must describe the payload that dispatches.
         lastSameOrigin.runtimeInjectedEventKeys = args.runtimeInjectedEventKeys;
@@ -1080,7 +1183,12 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
         return;
       }
     }
-    const queuedEvent = readyQueuedEvent({ ...args, id, handler });
+    const queuedEvent = readyQueuedEvent({
+      ...args,
+      id,
+      registration,
+    });
+    if (followPatternSwap) queuedEvent.followPatternSwap = true;
     state.eventQueue.push(queuedEvent);
     if (args.originTx !== undefined) {
       state.recordLineageEvent(args.originTx, queuedEvent);
@@ -1097,12 +1205,36 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
     const unavailableHandler: EventHandler = () => {
       throw new Error(`Event ${id} dispatched before its handler loaded`);
     };
+    const unavailableRegistration: EventHandlerRegistration = {
+      ref: args.eventLink,
+      handler: unavailableHandler,
+      generation: -1,
+      readinessCancels: new Set(),
+      active: true,
+    };
     const queuedEvent = readyQueuedEvent({
       ...args,
       id,
-      handler: unavailableHandler,
+      registration: unavailableRegistration,
     });
     queuedEvent.handlerLoadPending = true;
+    const loadController = new AbortController();
+    const loadCanceled = Promise.withResolvers<never>();
+    loadController.signal.addEventListener(
+      "abort",
+      () =>
+        loadCanceled.reject(
+          loadController.signal.reason ??
+            new Error("Event handler load canceled"),
+        ),
+      { once: true },
+    );
+    const abortHandlerLoad = (reason: string): void => {
+      if (!loadController.signal.aborted) {
+        loadController.abort(new Error(reason));
+      }
+    };
+    queuedEvent.abortHandlerLoad = abortHandlerLoad;
     state.eventQueue.push(queuedEvent);
     if (args.originTx !== undefined) {
       state.recordLineageEvent(args.originTx, queuedEvent);
@@ -1129,10 +1261,14 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
         while (true) {
           const rechecking = wait !== undefined;
           if (!rechecking) attempts++;
-          const verdict = await (state.loadPieceForEvent ?? startEventPiece)(
-            state.runtime,
-            args.eventLink,
-          );
+          const verdict = await Promise.race([
+            (state.loadPieceForEvent ?? startEventPiece)(
+              state.runtime,
+              args.eventLink,
+              { signal: loadController.signal },
+            ),
+            loadCanceled.promise,
+          ]);
           // The origin may have failed while the piece was loading.
           if (
             queuedEvent.finalOutcomeNotified ||
@@ -1142,11 +1278,16 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
             return;
           }
 
-          const loadedHandler = state.eventHandlers.get(args.eventLink);
-          if (loadedHandler) {
+          const loadedRegistration = state.eventHandlers.capture(
+            args.eventLink,
+          );
+          if (loadedRegistration !== undefined) {
             wait?.end("settled");
-            queuedEvent.handler = loadedHandler;
-            queuedEvent.action = (tx) => loadedHandler(tx, args.event);
+            queuedEvent.handlerRegistration = loadedRegistration;
+            queuedEvent.handlerGeneration = loadedRegistration.generation;
+            queuedEvent.handler = loadedRegistration.handler;
+            queuedEvent.action = (tx) =>
+              loadedRegistration.handler(tx, queuedEvent.event);
             delete queuedEvent.handlerLoadPending;
             return;
           }
@@ -1267,7 +1408,9 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
           wait.observe(verdict.observedDocs);
           const wake = await wait.woken;
           wait = undefined;
-          if (wake === "settled") return;
+          if (
+            wake === "settled" || queuedEvent.handlerLoadPending !== true
+          ) return;
           if (wake === "disposed") {
             dropQueuedEvent(
               state,
@@ -1281,12 +1424,15 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
           if (wake === "window-spent") windowSpent = true;
         }
       } catch (error) {
-        // Unlike the arms above, this one is reachable with the event
-        // ALREADY SETTLED: the finalOutcomeNotified/queue-membership
-        // recheck runs after the load await resolves, and a rejection
-        // never crosses it. A settled head holds no barrier — its
-        // disposition was someone else's (e.g. a lineage drop mid-load).
-        const alreadySettled = queuedEvent.finalOutcomeNotified === true;
+        if (
+          queuedEvent.finalOutcomeNotified === true ||
+          !state.eventQueue.includes(queuedEvent) ||
+          queuedEvent.handlerLoadPending !== true ||
+          loadController.signal.aborted
+        ) return;
+        // A rejection does not cross the post-await settlement check above,
+        // so the catch guard performs the equivalent check before assigning a
+        // terminal disposition and its arrival-order barrier.
         const reason = `Event dropped: starting the piece for ` +
           `${args.eventLink.id} failed: ${describeFailure(error)}`;
         if (queuedEvent.served === undefined) {
@@ -1300,15 +1446,16 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
           return;
         }
         dropQueuedEvent(state, queuedEvent, reason, "deferred");
-        if (!alreadySettled) {
-          // Same deferral disposition as the arm above — same barrier.
-          deferLaterSameSpaceServedEvents(
-            state,
-            queuedEvent,
-            "whose piece failed to start",
-          );
-        }
+        // Same deferral disposition as the arm above — same barrier.
+        deferLaterSameSpaceServedEvents(
+          state,
+          queuedEvent,
+          "whose piece failed to start",
+        );
       } finally {
+        if (queuedEvent.abortHandlerLoad === abortHandlerLoad) {
+          delete queuedEvent.abortHandlerLoad;
+        }
         state.queueExecution();
       }
     })();
@@ -1392,15 +1539,57 @@ export function addSchedulerEventHandler(state: {
     // same stream stays, whichever handler it carries.
     const registered = state.eventHandlers.registration(args.ref);
     if (registered?.[0] === args.ref && registered[1] === args.handler) {
-      state.eventHandlers.delete(args.ref);
+      const captured = state.eventHandlers.capture(args.ref);
+      state.eventHandlers.delete(args.ref, captured);
     }
   };
+}
+
+export function isQueuedEventRegistrationCurrent(
+  queuedEvent: QueuedEvent,
+): boolean {
+  return queuedEvent.handlerRegistration.active &&
+    queuedEvent.handlerRegistration.generation ===
+      queuedEvent.handlerGeneration;
+}
+
+/** Remove an event whose captured registration was canceled or replaced. */
+export function dropStaleQueuedEvent(state: {
+  readonly runtime: Runtime;
+  readonly eventQueue: QueuedEvent[];
+  readonly releaseLineageEvent: (
+    originTx: IExtendedStorageTransaction,
+    event: QueuedEvent,
+  ) => void;
+}, queuedEvent: QueuedEvent): boolean {
+  if (isQueuedEventRegistrationCurrent(queuedEvent)) return false;
+
+  const index = state.eventQueue.indexOf(queuedEvent);
+  if (index !== -1) state.eventQueue.splice(index, 1);
+  if (queuedEvent.originTx !== undefined) {
+    state.releaseLineageEvent(queuedEvent.originTx, queuedEvent);
+  }
+  if (queuedEvent.onCommit) {
+    const tx = state.runtime.edit();
+    tx.abort(new Error("Event handler registration superseded"));
+    try {
+      queuedEvent.onCommit(tx);
+    } catch (error) {
+      logger.error(
+        "schedule-error",
+        "Error in canceled event commit callback:",
+        error,
+      );
+    }
+  }
+  return true;
 }
 
 export interface SchedulerEventExecutionState {
   readonly runtime: Runtime;
   readonly eventHandlers: EventHandlerRegistry;
   readonly eventQueue: QueuedEvent[];
+  readonly pendingDurableEventReadiness: Set<Promise<void>>;
 
   /** Holds `idle()` open until `work` settles (`Scheduler.trackBackgroundTask`). */
   readonly trackBackgroundTask: (work: Promise<unknown>) => void;
@@ -1864,14 +2053,28 @@ function followRegisteredHandler(
   state: Pick<SchedulerEventExecutionState, "eventHandlers">,
   queuedEvent: QueuedEvent,
 ): boolean {
-  const current = state.eventHandlers.get(queuedEvent.eventLink);
+  const current = state.eventHandlers.capture(queuedEvent.eventLink);
   if (current === undefined) return false;
-  if (current !== queuedEvent.handler) {
-    queuedEvent.handler = current;
-    queuedEvent.action = (tx) => current(tx, queuedEvent.event);
+  queuedEvent.handlerRegistration = current;
+  queuedEvent.handlerGeneration = current.generation;
+  if (current.handler !== queuedEvent.handler) {
+    queuedEvent.handler = current.handler;
+    queuedEvent.action = (tx) => current.handler(tx, queuedEvent.event);
     delete queuedEvent.preflightImplementation;
   }
   return true;
+}
+
+/** Keep a stopped piece's queued event independent of its removed registry. */
+function detachQueuedEventRegistration(queuedEvent: QueuedEvent): void {
+  const detached: EventHandlerRegistration = {
+    ref: queuedEvent.eventLink,
+    handler: queuedEvent.handler,
+    generation: queuedEvent.handlerGeneration,
+    readinessCancels: new Set(),
+    active: true,
+  };
+  queuedEvent.handlerRegistration = detached;
 }
 
 /**
@@ -1907,10 +2110,8 @@ function holdHeadEventForPatternChange(
     // The wait also ends when the piece stops, or when the scheduler is
     // disposed, and then the event keeps the handler it was queued with, as
     // a stopped piece's event does on the ordinary path.
-    if (
-      !followRegisteredHandler(state, queuedEvent) &&
-      isReplacedGraphHandler(state, queuedEvent.handler)
-    ) {
+    const followed = followRegisteredHandler(state, queuedEvent);
+    if (!followed && isReplacedGraphHandler(state, queuedEvent.handler)) {
       // The pattern the piece settled on registered nothing for this
       // stream: events.md §5's drop predicate ("no runnable handler").
       state.dropEvent(
@@ -1919,6 +2120,7 @@ function holdHeadEventForPatternChange(
       );
       return;
     }
+    if (!followed) detachQueuedEventRegistration(queuedEvent);
     delete queuedEvent.patternChangePending;
   }).finally(() => state.queueExecution());
   state.trackBackgroundTask(task);
@@ -2095,13 +2297,22 @@ export async function processPullQueuedEventDuringExecute(
     ? undefined
     : patternChangeHolding(state.runtime, queuedEvent.handler);
   if (change !== undefined) {
+    queuedEvent.followPatternSwap = true;
     holdHeadEventForPatternChange(state, queuedEvent, change);
     return;
   }
-  if (
-    !followRegisteredHandler(state, queuedEvent) &&
-    isReplacedGraphHandler(state, queuedEvent.handler)
-  ) {
+  let followed = false;
+  if (queuedEvent.followPatternSwap === true) {
+    followed = followRegisteredHandler(state, queuedEvent);
+  } else {
+    // Ordinary queued intent belongs to the exact registration captured at
+    // enqueue time. A later registration for the same stream must not inherit
+    // it; only the runner-owned pattern-swap path above deliberately follows
+    // the replacement.
+    if (dropStaleQueuedEvent(state, queuedEvent)) return;
+    followed = true;
+  }
+  if (!followed && isReplacedGraphHandler(state, queuedEvent.handler)) {
     // The graph the piece replaced its handler's with registered nothing for
     // this stream: events.md §5's drop predicate ("no runnable handler").
     state.dropEvent(
@@ -2110,6 +2321,10 @@ export async function processPullQueuedEventDuringExecute(
     );
     return;
   }
+  if (!followed && queuedEvent.followPatternSwap === true) {
+    detachQueuedEventRegistration(queuedEvent);
+  }
+  delete queuedEvent.followPatternSwap;
 
   const { handler } = queuedEvent;
 
@@ -2231,6 +2446,7 @@ export async function processPullQueuedEventDuringExecute(
   await dispatchQueuedEvent({
     runtime: state.runtime,
     eventQueue: state.eventQueue,
+    pendingDurableEventReadiness: state.pendingDurableEventReadiness,
     backpressure: state.backpressure,
     setRunningPromise: (promise) => {
       state.setRunningPromise(promise);
@@ -2259,6 +2475,7 @@ export async function processPullQueuedEventDuringExecute(
 export async function dispatchQueuedEvent(state: {
   readonly runtime: Runtime;
   readonly eventQueue: QueuedEvent[];
+  readonly pendingDurableEventReadiness: Set<Promise<void>>;
   readonly backpressure: CommitBackpressurePolicy;
   readonly setRunningPromise: (promise: Promise<unknown>) => void;
   readonly getActionId: (action: Action | EventHandler) => string;
@@ -2563,6 +2780,7 @@ export async function dispatchQueuedEvent(state: {
     // originStatus() fallback ("confirmed") would let a descendant of a failed
     // origin run.
     const requeueForNameResolution = () => {
+      if (!isQueuedEventRegistrationCurrent(queuedEvent)) return;
       // A served name-resolution retry re-enters this scheduler settle. If it
       // runs before the flush deadline, the installed destination seals its
       // warmed-cache run into the current wave; a cut instead leaves the
@@ -2583,6 +2801,8 @@ export async function dispatchQueuedEvent(state: {
         action,
         eventLink: queuedEvent.eventLink,
         handler,
+        handlerRegistration: queuedEvent.handlerRegistration,
+        handlerGeneration: queuedEvent.handlerGeneration,
         event: eventValue,
         runtimeInjectedEventKeys: queuedEvent.runtimeInjectedEventKeys,
         retry,
@@ -2613,6 +2833,23 @@ export async function dispatchQueuedEvent(state: {
       return requeued;
     };
 
+    // Re-queue the exact captured intent once runner-owned factory loading is
+    // ready. This is lifecycle readiness, not authored retry policy, so an
+    // event with retries disabled still waits and runs again.
+    const requeueAfterReadiness = (): boolean => {
+      if (!isQueuedEventRegistrationCurrent(queuedEvent)) return false;
+      const requeued: QueuedEvent = {
+        ...queuedEvent,
+        notBefore: undefined,
+      };
+      insertInEnqueueOrder(state.eventQueue, requeued);
+      if (requeued.originTx !== undefined) {
+        state.recordLineageEvent(requeued.originTx, requeued);
+      }
+      state.queueExecution();
+      return true;
+    };
+
     // Re-queue a transient outcome for a later retry. With `runAt` the retry is
     // parked via notBefore so the scheduler backs off (capped exponential delay)
     // instead of busy-looping; without it the caller parks the requeued head on
@@ -2626,7 +2863,8 @@ export async function dispatchQueuedEvent(state: {
       deadline: number,
       runAt: number | undefined,
       notRunBackoffs: number | undefined = queuedEvent.notRunBackoffs,
-    ): QueuedEvent => {
+    ): QueuedEvent | undefined => {
+      if (!isQueuedEventRegistrationCurrent(queuedEvent)) return undefined;
       // Same served-absence assert as the name-resolution requeue above:
       // served copies queue with retries: false, so a stale-basis failure
       // classifies give-up "opt-out" and never reaches the backoff window —
@@ -2635,7 +2873,7 @@ export async function dispatchQueuedEvent(state: {
       // served retry semantics are undecided, so fail loudly instead.
       if (queuedEvent.served !== undefined) {
         throw new Error(
-          "requeueForBackoff reached with a served event; served retry " +
+          "requeueForRetry reached with a served event; served retry " +
             "semantics are undecided (see the comment at this assert)",
         );
       }
@@ -2651,6 +2889,8 @@ export async function dispatchQueuedEvent(state: {
         action,
         eventLink: queuedEvent.eventLink,
         handler,
+        handlerRegistration: queuedEvent.handlerRegistration,
+        handlerGeneration: queuedEvent.handlerGeneration,
         event: eventValue,
         runtimeInjectedEventKeys: queuedEvent.runtimeInjectedEventKeys,
         retry,
@@ -2703,6 +2943,7 @@ export async function dispatchQueuedEvent(state: {
         step.deadline,
         step.runAt,
       );
+      if (requeued === undefined) return;
       requeued.retryReadinessPending = true;
       await readiness;
       // An event a failed origin dropped while it waited is already out of
@@ -2729,6 +2970,101 @@ export async function dispatchQueuedEvent(state: {
     };
 
     const finalize = (error?: unknown): void => {
+      if (!isQueuedEventRegistrationCurrent(queuedEvent)) {
+        if (tx.status().status === "ready") {
+          tx.abort(new Error("Event handler registration superseded"));
+        }
+        runFinalCommitCallback();
+        return;
+      }
+      if (error instanceof RetryWhenReady) {
+        if (tx.status().status === "ready") tx.abort(error);
+        const durableReadiness = Promise.withResolvers<void>();
+        state.pendingDurableEventReadiness.add(durableReadiness.promise);
+        durableReadiness.promise.finally(() => {
+          state.pendingDurableEventReadiness.delete(durableReadiness.promise);
+        });
+        let parked = true;
+        const clearParkedReadiness = () => {
+          if (!parked) return false;
+          parked = false;
+          queuedEvent.handlerRegistration.readinessCancels.delete(
+            cancelParkedReadiness,
+          );
+          delete queuedEvent.cancelPending;
+          return true;
+        };
+        const cancelParkedReadiness = (reason: string) => {
+          if (!clearParkedReadiness()) return;
+          if (queuedEvent.originTx !== undefined) {
+            state.releaseLineageEvent(queuedEvent.originTx, queuedEvent);
+          }
+          runFinalCommitCallback();
+          logger.debug("scheduler", reason, { eventId: queuedEvent.id });
+          durableReadiness.resolve();
+        };
+        queuedEvent.cancelPending = cancelParkedReadiness;
+        queuedEvent.handlerRegistration.readinessCancels.add(
+          cancelParkedReadiness,
+        );
+        if (queuedEvent.originTx !== undefined) {
+          const originTx = queuedEvent.originTx;
+          state.recordLineageEvent(originTx, queuedEvent);
+          const originStatus = originTx.status().status;
+          if (
+            state.lineageStatus(originTx) === "failed" ||
+            originStatus === "error"
+          ) {
+            cancelParkedReadiness(
+              "Event readiness canceled after its speculative origin failed",
+            );
+          } else if (originStatus === "ready" || originStatus === "pending") {
+            originTx.addVerdictCallback((_settledTx, result) => {
+              if (result.error) {
+                cancelParkedReadiness(
+                  "Event readiness canceled after its speculative origin failed",
+                );
+              }
+            });
+          }
+        }
+        error.readiness.then(
+          () => {
+            if (!clearParkedReadiness()) return;
+            if (!requeueAfterReadiness()) {
+              if (queuedEvent.originTx !== undefined) {
+                state.releaseLineageEvent(
+                  queuedEvent.originTx,
+                  queuedEvent,
+                );
+              }
+              runFinalCommitCallback();
+            }
+            durableReadiness.resolve();
+          },
+          (readinessError) => {
+            if (!clearParkedReadiness()) return;
+            if (queuedEvent.originTx !== undefined) {
+              state.releaseLineageEvent(queuedEvent.originTx, queuedEvent);
+            }
+            if (!isQueuedEventRegistrationCurrent(queuedEvent)) {
+              runFinalCommitCallback();
+              durableReadiness.resolve();
+              return;
+            }
+            try {
+              state.handleError(
+                normalizeThrownError(readinessError),
+                action,
+              );
+            } finally {
+              runFinalCommitCallback();
+              durableReadiness.resolve();
+            }
+          },
+        );
+        return;
+      }
       // A served run that read a document this runtime does not admit
       // read an absence that is not the document's state, so whatever it
       // did with it — an `undefined` argument, a throw, a branch taken on
@@ -2760,6 +3096,7 @@ export async function dispatchQueuedEvent(state: {
           );
         }
         const requeued = requeueForNameResolution();
+        if (requeued === undefined) return;
         requeued.retryReadinessPending = true;
         const manager = state.runtime.storageManager;
         const identity = tx.tx.scopeKeyIdentity ??
@@ -3045,7 +3382,7 @@ export async function dispatchQueuedEvent(state: {
           parkKeys.length > 0 ? undefined : step.runAt,
           notRunBackoffs,
         );
-        if (parkKeys.length > 0) {
+        if (parkKeys.length > 0 && requeued !== undefined) {
           state.parkHeadEventForLoads(requeued, parkKeys);
         }
         return;
@@ -3288,6 +3625,13 @@ export async function dispatchQueuedEvent(state: {
             message: "Event handler aborted its transaction",
           });
         };
+
+        // A cancellation after commit kickoff cannot undo an already-applied
+        // local transaction, but it fences every later-generation behavior.
+        if (!isQueuedEventRegistrationCurrent(queuedEvent)) {
+          runFinalCommitCallback();
+          return;
+        }
 
         let requeue: Promise<void> | undefined;
         switch (disposition.kind) {
@@ -3604,6 +3948,10 @@ export function refusedReadIn(
     }
   }
   return undefined;
+}
+
+function normalizeThrownError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function formatEventCommitAddress(address: {

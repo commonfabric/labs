@@ -40,38 +40,36 @@ const __cfLift_1 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const value = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
     return (<span>{__cfLift_1({
         value: value,
         state: {
-            multiplier: state.key("multiplier")
+            multiplier: state.multiplier
         }
     })}</span>);
 }, {
     type: "object",
     properties: {
-        element: {
-            type: "number"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        multiplier: {
-                            type: "number"
-                        }
-                    },
-                    required: ["multiplier"]
+                multiplier: {
+                    type: "number"
                 }
             },
-            required: ["state"]
+            required: ["multiplier"]
         }
     },
-    required: ["element", "params"]
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            type: "number"
+        }
+    },
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -96,7 +94,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 // FIXTURE: cell-map-with-captures
 // Verifies: Cell.map() with outer-scope captures is transformed to mapWithPattern with params
 //   typedValues.map((value) => <span>{value * state.multiplier}</span>)
-//     → typedValues.mapWithPattern(pattern(...), { state: { multiplier: state.key("multiplier") } })
+//     → typedValues.mapWithPattern(pattern(...).curry({ state: { multiplier: state.key("multiplier") } }))
 //   value * state.multiplier → lift(...)({ value, state: { multiplier } })
 // Context: The map callback captures `state.multiplier` from the outer scope,
 //   which must be threaded through as a mapWithPattern param and re-derived inside.
@@ -110,11 +108,11 @@ export default pattern((state) => {
     } as const satisfies __cfHelpers.JSONSchema).for("typedValues", true);
     return {
         [UI]: (<div>
-        {typedValues.mapWithPattern(__cfPattern_1, {
+        {typedValues.mapWithPattern(__cfPattern_1.curry({
                 state: {
                     multiplier: state.key("multiplier")
                 }
-            })}
+            }))}
       </div>),
     };
 }, {

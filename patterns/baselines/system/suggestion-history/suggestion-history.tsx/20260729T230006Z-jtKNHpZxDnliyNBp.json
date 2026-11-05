@@ -1,0 +1,93 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "system/suggestion-history.tsx",
+  "resultSchema": {
+    "$defs": {
+      "SuggestionHistoryEntry": {
+        "properties": {
+          "messages": {
+            "items": true,
+            "type": "array"
+          },
+          "result": {},
+          "timestamp": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result",
+          "messages",
+          "timestamp"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "entries": {
+        "items": {
+          "$ref": "#/$defs/SuggestionHistoryEntry"
+        },
+        "type": "array"
+      },
+      "search": {
+        "asFactory": {
+          "argumentSchema": {
+            "properties": {
+              "query": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "type": "object"
+          },
+          "kind": "pattern",
+          "resultSchema": {
+            "$defs": {
+              "SuggestionHistoryEntry": {
+                "properties": {
+                  "messages": {
+                    "items": true,
+                    "type": "array"
+                  },
+                  "result": {
+                    "asCell": [
+                      "cell"
+                    ]
+                  },
+                  "timestamp": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "result",
+                  "messages",
+                  "timestamp"
+                ],
+                "type": "object"
+              }
+            },
+            "items": {
+              "$ref": "#/$defs/SuggestionHistoryEntry"
+            },
+            "type": "array"
+          }
+        }
+      }
+    },
+    "required": [
+      "entries",
+      "search",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

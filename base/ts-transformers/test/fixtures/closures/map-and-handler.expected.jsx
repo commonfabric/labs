@@ -70,22 +70,21 @@ const __cfHandler_1 = __cfHelpers.handler(false as const satisfies __cfHelpers.J
     },
     required: ["index", "state"]
 } as const satisfies __cfHelpers.JSONSchema, (__cf_handler_event, { state, index }) => state.selectedIndex.set(index));
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const item = __cf_pattern_input.key("element");
     const index = __cf_pattern_input.key("index");
-    const state = __cf_pattern_input.key("params", "state");
     return (<div>
             <span>{__cfLift_1({
         item: {
             price: item.key("price")
         },
         state: {
-            discount: state.key("discount")
+            discount: state.discount
         }
     })}</span>
             <button type="button" onClick={__cfHandler_1({
         state: {
-            selectedIndex: state.key("selectedIndex")
+            selectedIndex: state.selectedIndex
         },
         index: index
     })}>
@@ -93,6 +92,24 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
             </button>
           </div>);
 }, {
+    type: "object",
+    properties: {
+        state: {
+            type: "object",
+            properties: {
+                discount: {
+                    type: "number"
+                },
+                selectedIndex: {
+                    type: "number",
+                    asCell: ["cell"]
+                }
+            },
+            required: ["discount", "selectedIndex"]
+        }
+    },
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
     type: "object",
     properties: {
         element: {
@@ -106,28 +123,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         },
         index: {
             type: "number"
-        },
-        params: {
-            type: "object",
-            properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        discount: {
-                            type: "number"
-                        },
-                        selectedIndex: {
-                            type: "number",
-                            asCell: ["readonly"]
-                        }
-                    },
-                    required: ["discount", "selectedIndex"]
-                }
-            },
-            required: ["state"]
         }
     },
-    required: ["element", "params"]
+    required: ["element"]
 } as const satisfies __cfHelpers.JSONSchema, {
     anyOf: [{
             $ref: "https://commonfabric.org/schemas/vnode.json"
@@ -225,18 +223,18 @@ const __cfLift_3 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-and-handler
 // Verifies: .map() in JSX is transformed to .mapWithPattern() and inline handler inside map body is extracted
-//   state.items.map((item, index) => JSX) → state.key("items").mapWithPattern(pattern(...), { state: { discount, selectedIndex } })
+//   state.items.map((item, index) => JSX) → state.key("items").mapWithPattern(pattern(...).curry({ state: { discount, selectedIndex } }))
 //   onClick={() => state.selectedIndex.set(index)) → handler(false, { state: { selectedIndex: asCell }, index }, ...)
 // Context: Combines reactive array mapping with handler extraction; map callback becomes a sub-pattern
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("items").mapWithPattern(__cfPattern_1, {
+        {state.key("items").mapWithPattern(__cfPattern_1.curry({
                 state: {
                     discount: state.key("discount"),
                     selectedIndex: state.key("selectedIndex")
                 }
-            })}
+            }))}
         <div>
           Selected: {__cfLift_2({ state: {
                 items: state.key("items"),

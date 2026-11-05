@@ -10,6 +10,26 @@ export {
   RuntimeModuleIdentifiers,
 } from "./runtime-module-policy.ts";
 
+/**
+ * Resolver-owned runtime type sources that define Common Fabric APIs.
+ *
+ * This is intentionally an explicit registry rather than a module-name or
+ * filename heuristic. `EngineProgramResolver` converts whichever of these it
+ * actually supplies into exact `Source.name` values for the TypeScript
+ * compiler's provenance registry.
+ */
+export const CommonFabricRuntimeTypeIdentifiers = [
+  "commonfabric",
+  "commonfabric/cfc",
+  "commonfabric/schema",
+  "commontools",
+  "commontools/schema",
+  "@commontools/html",
+  "@commontools/builder",
+  "@commontools/runner",
+  "cfc.ts",
+] as const;
+
 export const getRuntimeModuleTypes = (() => {
   let depTypes:
     | Record<string, string>

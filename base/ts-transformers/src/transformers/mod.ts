@@ -5,6 +5,7 @@ export { CfcPolicyAuthoringTransformer } from "./cfc-policy-authoring.ts";
 export { CfcPolicyOfValidationTransformer } from "./cfc-policy-of-validation.ts";
 export { PatternCallbackLoweringTransformer } from "./pattern-callback-lowering.ts";
 export { EmptyArrayOfValidationTransformer } from "./empty-array-of-validation.ts";
+export { FactoryAuthoringValidationTransformer } from "./factory-authoring-validation.ts";
 export { HelperOwnedExpressionSiteLoweringTransformer } from "./helper-owned-expression-site-lowering.ts";
 export { JsxExpressionSiteRouterTransformer } from "./jsx-expression-site-router.ts";
 export { MergeablePushValidationTransformer } from "./mergeable-push-validation.ts";
@@ -21,4 +22,9 @@ export { PatternOwnedExpressionSiteLoweringTransformer } from "./pattern-owned-e
 export { ReactiveVariableForTransformer } from "./reactive-variable-for.ts";
 export { SchemaInjectionTransformer } from "./schema-injection.ts";
 export { SchemaGeneratorTransformer } from "./schema-generator.ts";
+export { SymbolicFactoryCallTransformer } from "./symbolic-factory-call.ts";
+export {
+  FrameworkProvidedForwardingTransformer,
+  FrameworkProvidedTransformer,
+} from "./framework-provided.ts";
 export { WriteAuthorizedByValidationTransformer } from "./write-authorized-by-validation.ts";

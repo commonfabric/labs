@@ -14,10 +14,15 @@ import {
   connectInputAndOutputs,
 } from "./node-utils.ts";
 import {
+  bindFactoryRootToken,
   brandTrustedBuilderArtifact,
+  type FrameworkProvidedPath,
   getArtifactEntryRef,
+  getDurableArtifactRefForRootToken,
+  noteDerivedCopy,
+  setFrameworkProvidedPaths,
 } from "./pattern-metadata.ts";
-import { getTopFrame } from "./pattern.ts";
+import { getTopFrame, readFrameworkProvidedPaths } from "./pattern.ts";
 import { reactive, stream } from "./reactive.ts";
 import { moduleToEncodableForm } from "./to-encodable-form.ts";
 import type {
@@ -42,9 +47,22 @@ import type {
   toEncodableForm,
   toJSON,
 } from "./types.ts";
+import { registerFabricFactory } from "@commonfabric/data-model/fabric-factory";
 
 export function createNodeFactory<T = any, R = any>(
   moduleSpec: Module,
+): ModuleFactory<T, R> {
+  return createNodeFactoryForRoot(
+    moduleSpec,
+    {},
+    readFrameworkProvidedPaths(moduleSpec.implementation),
+  );
+}
+
+function createNodeFactoryForRoot<T = any, R = any>(
+  moduleSpec: Module,
+  factoryRootToken: object,
+  frameworkProvidedPaths: readonly FrameworkProvidedPath[] = [],
 ): ModuleFactory<T, R> {
   // Attach source location and preview to function implementations for debugging
   if (typeof moduleSpec.implementation === "function") {
@@ -75,13 +93,19 @@ export function createNodeFactory<T = any, R = any>(
 
       connectInputAndOutputs(node);
       (outputs as OpaqueCell<R>).connect(node);
-
       return outputs;
     },
     module,
   ) as ModuleFactory<T, R>;
-  factory.asScope = (scope: CellScope) =>
-    createNodeFactory({ ...module, defaultScope: scope });
+  factory.asScope = (scope: CellScope) => {
+    const derived = createNodeFactoryForRoot<T, R>(
+      { ...module, defaultScope: scope },
+      factoryRootToken,
+      frameworkProvidedPaths,
+    );
+    noteDerivedCopy(derived, factory);
+    return derived;
+  };
   // Provenance brand: every node factory (lift / handler / byRef / the list-op
   // factories) is a trusted builder artifact, so a hoisted one registered via
   // `__cfReg` may receive a content-addressed `{ identity, symbol }` reference.
@@ -89,6 +113,25 @@ export function createNodeFactory<T = any, R = any>(
   // look-alike never acquires the brand. (Patterns brand separately in
   // builder/pattern.ts.)
   brandTrustedBuilderArtifact(factory);
+  setFrameworkProvidedPaths(factory, frameworkProvidedPaths);
+  bindFactoryRootToken(factory, factoryRootToken);
+  registerFabricFactory(factory, "module", () => {
+    const ref = getDurableArtifactRefForRootToken(factoryRootToken);
+    return {
+      kind: "module",
+      rootToken: factoryRootToken,
+      ...(ref === undefined ? {} : { ref }),
+      ...(module.argumentSchema === undefined
+        ? {}
+        : { argumentSchema: module.argumentSchema }),
+      ...(module.resultSchema === undefined
+        ? {}
+        : { resultSchema: module.resultSchema }),
+      ...(module.defaultScope === undefined
+        ? {}
+        : { defaultScope: module.defaultScope }),
+    };
+  });
   return factory;
 }
 
@@ -142,8 +185,11 @@ export function lift<T, R>(
       | undefined;
   const resolvedArgumentSchema = argumentSchema as JSONSchema | undefined;
   const resolvedResultSchema = resultSchema as JSONSchema | undefined;
+  const frameworkProvidedPaths = readFrameworkProvidedPaths(
+    resolvedImplementation,
+  );
 
-  return createNodeFactory({
+  const factory = createNodeFactory({
     type: "javascript",
     implementation: resolvedImplementation,
     ...(resolvedArgumentSchema !== undefined
@@ -159,6 +205,8 @@ export function lift<T, R>(
       ? { completeSchedulerScopeSummary: true as const }
       : {}),
   });
+  setFrameworkProvidedPaths(factory, frameworkProvidedPaths);
+  return factory;
 }
 
 interface DeriveSchedulerOptions {
@@ -203,6 +251,11 @@ function handlerInternal<E, T>(
         "help: automatic schema inference needs the CTS transforms, which run as part of the Common Fabric build; provide explicit schemas to go without them",
     );
   }
+
+  const factoryEventSchema = eventSchema as JSONSchema | undefined;
+  const factoryContextSchema = stateSchema as JSONSchema | undefined;
+  const frameworkProvidedPaths = readFrameworkProvidedPaths(handler);
+  const factoryRootToken = {};
 
   // Attach source location and preview to handler function for debugging
   if (typeof handler === "function") {
@@ -271,8 +324,23 @@ function handlerInternal<E, T>(
   // indexing, and a non-exported handler's `$implRef`/CFC provenance depends
   // on exactly that registration.
   brandTrustedBuilderArtifact(factory);
+  setFrameworkProvidedPaths(factory, frameworkProvidedPaths);
+  bindFactoryRootToken(factory, factoryRootToken);
 
-  return factory;
+  return registerFabricFactory(factory, "handler", () => {
+    const ref = getDurableArtifactRefForRootToken(factoryRootToken);
+    return {
+      kind: "handler",
+      rootToken: factoryRootToken,
+      ...(ref === undefined ? {} : { ref }),
+      ...(factoryContextSchema === undefined
+        ? {}
+        : { contextSchema: factoryContextSchema }),
+      ...(factoryEventSchema === undefined
+        ? {}
+        : { eventSchema: factoryEventSchema }),
+    };
+  });
 }
 
 export function handler<

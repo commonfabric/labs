@@ -126,7 +126,7 @@ export default pattern((__cf_pattern_input) => {
     const files = __cf_pattern_input.key("files");
     return {
         [UI]: (<div>
-        {files.filterWithPattern(__cfPattern_1, {}).mapWithPattern(__cfPattern_2, {})}
+        {files.filterWithPattern(__cfPattern_1).mapWithPattern(__cfPattern_2)}
       </div>),
     };
 }, {

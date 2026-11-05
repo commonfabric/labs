@@ -178,7 +178,7 @@ const buildOrderMap = (ids: readonly string[]): Map<string, number> => {
   return order;
 };
 
-const sanitizeStudents = (value: unknown): StudentRecord[] => {
+const sanitizeStudents = (value: readonly StudentInput[]): StudentRecord[] => {
   if (!Array.isArray(value)) return [];
   const used = new Set<string>();
   const sanitized: StudentRecord[] = [];
@@ -194,7 +194,9 @@ const sanitizeStudents = (value: unknown): StudentRecord[] => {
   return sanitized;
 };
 
-const sanitizeAssignments = (value: unknown): AssignmentRecord[] => {
+const sanitizeAssignments = (
+  value: readonly AssignmentInput[],
+): AssignmentRecord[] => {
   if (!Array.isArray(value)) return [];
   const used = new Set<string>();
   const sanitized: AssignmentRecord[] = [];

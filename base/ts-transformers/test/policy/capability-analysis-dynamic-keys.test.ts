@@ -19,6 +19,7 @@ import ts from "typescript";
 
 import { analyzeFunctionCapabilities } from "../../src/policy/mod.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import { registerTrustedCommonFabricTestSources } from "../trusted-commonfabric-sources.ts";
 import { callSchemas, parseModule } from "../transformed-ast.ts";
 import { transformSource } from "../utils.ts";
 
@@ -87,6 +88,7 @@ function usage(source: string): {
     },
     host,
   );
+  registerTrustedCommonFabricTestSources(program, ["/commonfabric.d.ts"]);
   const sourceFile = program.getSourceFile("/test.ts")!;
   let read: ts.ArrowFunction | undefined;
   for (const statement of sourceFile.statements) {

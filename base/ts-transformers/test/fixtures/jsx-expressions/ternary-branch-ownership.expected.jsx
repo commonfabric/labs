@@ -29,9 +29,7 @@ type State = {
 };
 const __cfLift_1 = __cfHelpers.lift<{
     state: {
-        items: {
-            value: number;
-        }[];
+        items: Item[];
     };
 }, Item[]>(({ state }) => [...state.items].sort((a, b) => a.value - b.value), {
     type: "object",
@@ -42,20 +40,28 @@ const __cfLift_1 = __cfHelpers.lift<{
                 items: {
                     type: "array",
                     items: {
-                        type: "object",
-                        properties: {
-                            value: {
-                                type: "number"
-                            }
-                        },
-                        required: ["value"]
+                        $ref: "#/$defs/Item"
                     }
                 }
             },
             required: ["items"]
         }
     },
-    required: ["state"]
+    required: ["state"],
+    $defs: {
+        Item: {
+            type: "object",
+            properties: {
+                name: {
+                    type: "string"
+                },
+                value: {
+                    type: "number"
+                }
+            },
+            required: ["name", "value"]
+        }
+    }
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "array",
     items: {
@@ -259,7 +265,7 @@ export default pattern((state) => {
                 }
             }
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_3({ state: state }), <span>No events yet</span>, <div>
-              {state.key("recentEvents").mapWithPattern(__cfPattern_1, {})}
+              {state.key("recentEvents").mapWithPattern(__cfPattern_1)}
             </div>)}
         {__cfHelpers.ifElse({
             type: "boolean",

@@ -1,23 +1,22 @@
 // Test file with named export instead of default export
-import { pattern, schema } from "commonfabric";
+import { pattern } from "commonfabric";
 import "commonfabric/schema";
 
-const model = schema({
+const modelSchema = {
   type: "object",
   properties: {
     message: { type: "string", default: "from named export" },
   },
   default: { message: "from named export" },
-});
-
+} as const;
 export const myNamedPattern = pattern(
   (cell) => {
     return {
       message: cell.message,
     };
   },
-  model,
-  model,
+  modelSchema,
+  modelSchema,
 );
 
 export default pattern(
@@ -26,6 +25,6 @@ export default pattern(
       message: "from default export",
     };
   },
-  model,
-  model,
+  modelSchema,
+  modelSchema,
 );

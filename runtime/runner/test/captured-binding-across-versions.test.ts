@@ -150,21 +150,15 @@ describe("captured-binding-across-versions", () => {
     expect(errors).toEqual([]);
   });
 
-  // Whether a trusted setup may re-point a captured slot when a pattern
-  // version names another cell for the same binding is open. Until it is
-  // settled, the slot keeps the cell it was first given, and re-pointing it
-  // is refused. A binding passed to a composed sub-pattern is re-pointed
-  // (see the last case).
-  it("refuses to re-point each row's capture under a version that makes the captured cell another way", async () => {
+  // A list callback's capture is part of its bound PatternFactory state. A new
+  // pattern version therefore installs the newly bound cell just as direct
+  // sub-pattern composition does; it does not preserve a sibling params slot
+  // from the prior version.
+  it("re-points each row's capture under a version that makes the captured cell another way", async () => {
     const { setupError, errors } = await upgradeTo("labels");
 
     expect(setupError).toBeUndefined();
-    expect(errors).not.toEqual([]);
-    for (const error of errors) {
-      expect(error).toContain(
-        "writeAuthorizedBy requires a trusted verified binding identity at /params/tags",
-      );
-    }
+    expect(errors).toEqual([]);
   });
 
   it("re-points a composed sub-pattern's binding under a version that makes the passed cell another way", async () => {

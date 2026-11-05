@@ -2,7 +2,8 @@ import ts from "typescript";
 import {
   classifyArrayMethodCall,
   getCapabilitySummaryCallbackArgument,
-  getPatternBuilderCallbackArgument,
+  getPatternBuilderCallbackDescriptor,
+  updatePatternBuilderCallbackArgument,
   visitEachChildWithJsx,
 } from "../ast/mod.ts";
 import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
@@ -115,9 +116,20 @@ function getCaptureSourceSymbol(
 
 function getArrayMethodCallbackInfo(
   patternCall: ts.CallExpression,
+  callback: ts.ArrowFunction | ts.FunctionExpression,
   scope: PatternScopeInfo | undefined,
   context: TransformationContext,
 ): ArrayMethodCallbackInfo {
+  // Canonical list lowering wraps captured callbacks in
+  // `pattern(withPatternParamsSchema(...)).curry(captures)`, so the pattern
+  // call is no longer the direct first argument of `*WithPattern`. The closure
+  // stage records the callback explicitly; prefer that exact compiler-owned
+  // marker. The structural branch below remains the named legacy adapter for
+  // old/manual `*WithPattern(pattern(...), params)` shapes.
+  if (context.isArrayMethodCallback(callback)) {
+    return { isArrayMethodCallback: true };
+  }
+
   const parent = patternCall.parent;
   if (
     !parent ||
@@ -192,11 +204,17 @@ export class PatternCallbackLoweringTransformer extends HelpersOnlyTransformer {
 
     // Main transform pass
     const visit: ts.Visitor = (node: ts.Node): ts.Node => {
-      const callback = ts.isCallExpression(node)
-        ? getPatternBuilderCallbackArgument(node, context.checker)
+      const descriptor = ts.isCallExpression(node)
+        ? getPatternBuilderCallbackDescriptor(node, context.checker)
         : undefined;
+      const callback = descriptor?.callback;
       const arrayMethodInfo = ts.isCallExpression(node) && callback
-        ? getArrayMethodCallbackInfo(node, scopeStack.at(-1), context)
+        ? getArrayMethodCallbackInfo(
+          node,
+          callback,
+          scopeStack.at(-1),
+          context,
+        )
         : undefined;
       const currentScope = callback
         ? buildPatternScope(callback, context)
@@ -215,23 +233,28 @@ export class PatternCallbackLoweringTransformer extends HelpersOnlyTransformer {
         return visitedNode;
       }
 
-      const callbackArg = getPatternBuilderCallbackArgument(
+      const callbackDescriptor = getPatternBuilderCallbackDescriptor(
         visitedNode,
         context.checker,
       );
-      if (callbackArg) {
+      if (callbackDescriptor) {
         const transformedCallback = transformPatternCallback(
-          callbackArg,
+          callbackDescriptor.callback,
           context,
           !!arrayMethodInfo?.isArrayMethodCallback,
           arrayMethodInfo?.nonReactiveCaptures,
+        );
+        const transformedArgument = updatePatternBuilderCallbackArgument(
+          callbackDescriptor,
+          transformedCallback,
+          context.factory,
         );
         const rewritten = context.factory.updateCallExpression(
           visitedNode,
           visitedNode.expression,
           visitedNode.typeArguments,
           [
-            transformedCallback,
+            transformedArgument,
             ...visitedNode.arguments.slice(1),
           ],
         );

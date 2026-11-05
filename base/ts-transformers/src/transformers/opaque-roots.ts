@@ -1,6 +1,6 @@
 import ts from "typescript";
 
-import { detectCallKind, isReactiveOriginExpression } from "../ast/mod.ts";
+import { isReactiveOriginExpression } from "../ast/mod.ts";
 import type { TransformationContext } from "../core/mod.ts";
 import {
   unwrapExpression,
@@ -8,7 +8,7 @@ import {
 } from "../utils/expression.ts";
 import { getStaticKeySegment } from "../utils/reactive-keys.ts";
 import type { PathSegment } from "./destructuring-lowering.ts";
-import { isPatternFactoryCalleeExpression } from "./structural-reactive-factory.ts";
+import { isFirstClassFactoryCalleeExpression } from "./structural-reactive-factory.ts";
 
 export interface OpaqueAccessInfo {
   root?: string;
@@ -115,15 +115,12 @@ export function isOpaqueOriginCall(
 ): boolean {
   if (isReactiveOriginExpression(expression, context.checker)) return true;
   if (ts.isNewExpression(expression)) return false;
-  if (detectCallKind(expression, context.checker)?.kind === "pattern-tool") {
-    return true;
-  }
   // User-authored pattern factories (callable values whose type has
   // `argumentSchema` + `resultSchema` and no `with`) return opaque-source
   // values by construction. Treat their invocations as opaque-origin so
   // bindings initialized from them (e.g. `const row = EntryRow({...})`)
   // participate in the same late `.key()` lowering as direct cell sources.
-  return isPatternFactoryCalleeExpression(
+  return isFirstClassFactoryCalleeExpression(
     expression.expression,
     context.checker,
   );

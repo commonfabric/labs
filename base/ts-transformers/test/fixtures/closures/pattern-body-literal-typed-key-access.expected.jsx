@@ -180,10 +180,10 @@ export default pattern((__cf_pattern_input) => {
             row: row,
             field: field
         }).for(["__patternResult", "chosen"], true),
-        rows: entries.mapWithPattern(__cfPattern_1, {}).for(["__patternResult", "rows"], true),
+        rows: entries.mapWithPattern(__cfPattern_1).for(["__patternResult", "rows"], true),
         [UI]: (<div>
         {row.key(KEY)}
-        {entries.mapWithPattern(__cfPattern_2, {})}
+        {entries.mapWithPattern(__cfPattern_2)}
       </div>)
     };
 }, {

@@ -32,7 +32,7 @@ const sanitizeNumber = (value: unknown): number => {
   return Math.round(value * 100) / 100;
 };
 
-const sanitizeValues = (value: unknown): number[] => {
+const sanitizeValues = (value: readonly number[] | undefined): number[] => {
   if (!Array.isArray(value)) {
     return [];
   }

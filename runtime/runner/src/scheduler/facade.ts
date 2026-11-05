@@ -315,6 +315,7 @@ export type {
   TriggerTraceValueSummary,
 } from "./types.ts";
 export { txToReactivityLog } from "./reactivity.ts";
+export { RetryWhenReady } from "./retry-when-ready.ts";
 
 export {
   allowMutableTransactionRead,
@@ -370,6 +371,12 @@ export class Scheduler {
 
   #actionChangeGroups = new WeakMap<Action, ChangeGroup>();
   readonly #retries = new WeakMap<Action, number>();
+  #actionGenerations = new WeakMap<Action, number>();
+  #actionReadinessAttempts = new WeakMap<Action, Map<string, symbol>>();
+  #activeActionRuns = new WeakMap<
+    Action,
+    Set<IExtendedStorageTransaction>
+  >();
   #offBudgetRetries = new WeakMap<Action, number>();
 
   // Effect/computation tracking for pull-based scheduling
@@ -524,6 +531,8 @@ export class Scheduler {
 
   #idlePromises: (() => void)[] = [];
   #backgroundTasks = new Set<Promise<unknown>>();
+  #pendingDurableReadiness = new Map<Promise<void>, Cancel>();
+  #pendingDurableEventReadiness = new Set<Promise<void>>();
 
   /** Loading event-queue heads waiting for a piece that could not be started
    * yet (`queueSchedulerEvent()`). */
@@ -851,6 +860,10 @@ export class Scheduler {
         throw new Error("`deferUntilDemand` requires a declared write surface");
       }
     }
+    // A refused registration does not supersede the live one. Advance only
+    // after every pre-registration check has accepted the replacement, but
+    // before scheduling it so its first run captures the new generation.
+    const generation = this.#advanceActionGeneration(action);
     // Tag the action with its owning pattern instance so pattern readers
     // always carry a pieceId (used to group shaped cell-flip wakes by
     // instance and to distinguish pattern readers from internal machinery —
@@ -887,7 +900,12 @@ export class Scheduler {
         options.awaitSyncBeforeInitialRun,
       );
     }
-    return cancel;
+    return () => {
+      if (this.#isActionGenerationCurrent(action, generation)) {
+        this.#advanceActionGeneration(action);
+        cancel();
+      }
+    };
   }
 
   /**
@@ -1012,6 +1030,7 @@ export class Scheduler {
     action: Action,
     options: { preserveChangeGroup?: boolean } = {},
   ): void {
+    this.#advanceActionGeneration(action);
     unsubscribeSchedulerAction(this.#unsubscribeState, action, options);
     this.#materializers.clearAction(action);
     // The node record outlives the registration, so its echo gate would
@@ -1019,6 +1038,80 @@ export class Scheduler {
     this.#echoBreaker.forget(this.#getActionId(action), performance.now());
     this.#gates.clearEchoBackoff(action);
     for (const observer of [...this.#unsubscribeObservers]) observer(action);
+  }
+
+  #advanceActionGeneration(action: Action): number {
+    const active = this.#activeActionRuns.get(action);
+    if (active !== undefined) {
+      for (const tx of active) {
+        if (tx.status().status === "ready") {
+          tx.abort(new Error("Scheduler action generation superseded"));
+        }
+      }
+      this.#activeActionRuns.delete(action);
+    }
+    const generation = (this.#actionGenerations.get(action) ?? 0) + 1;
+    this.#actionGenerations.set(action, generation);
+    this.#retries.delete(action);
+    return generation;
+  }
+
+  #getActionGeneration(action: Action): number {
+    return this.#actionGenerations.get(action) ?? 0;
+  }
+
+  #trackActiveActionRun(
+    action: Action,
+    tx: IExtendedStorageTransaction,
+  ): void {
+    let active = this.#activeActionRuns.get(action);
+    if (active === undefined) {
+      active = new Set();
+      this.#activeActionRuns.set(action, active);
+    }
+    active.add(tx);
+  }
+
+  #finishActiveActionRun(
+    action: Action,
+    tx: IExtendedStorageTransaction,
+  ): void {
+    const active = this.#activeActionRuns.get(action);
+    if (active === undefined) return;
+    active.delete(tx);
+    if (active.size === 0) this.#activeActionRuns.delete(action);
+  }
+
+  #beginActionReadinessAttempt(
+    action: Action,
+    instanceKey?: string,
+  ): symbol {
+    const attempt = Symbol("scheduler-action-readiness-attempt");
+    let attempts = this.#actionReadinessAttempts.get(action);
+    if (attempts === undefined) {
+      attempts = new Map();
+      this.#actionReadinessAttempts.set(action, attempts);
+    }
+    attempts.set(instanceKey ?? "", attempt);
+    return attempt;
+  }
+
+  #isActionGenerationCurrent(
+    action: Action,
+    generation: number,
+  ): boolean {
+    return this.#getActionGeneration(action) === generation;
+  }
+
+  #isActionReadinessAttemptCurrent(
+    action: Action,
+    generation: number,
+    attempt: symbol,
+    instanceKey?: string,
+  ): boolean {
+    return this.#isActionGenerationCurrent(action, generation) &&
+      this.#actionReadinessAttempts.get(action)?.get(instanceKey ?? "") ===
+        attempt;
   }
 
   /** Whether a registered action's last run read the document `entity` names. */
@@ -1079,8 +1172,45 @@ export class Scheduler {
     });
   }
 
+  /**
+   * Keep the client-facing durability barrier open for reactive work that is
+   * parked outside the scheduler's running set. Plain `idle()` remains free so
+   * unrelated actions can continue while the prerequisite is pending.
+   *
+   * The returned cancel releases the barrier without canceling `work`; owners
+   * use it during teardown to fence a prerequisite that can no longer produce
+   * a live result. The work's own success or failure also releases it.
+   */
+  trackDurableReadiness(work: PromiseLike<unknown>): Cancel {
+    const gate = Promise.withResolvers<void>();
+    let active = true;
+    const release = () => {
+      if (!active) return;
+      active = false;
+      this.#pendingDurableReadiness.delete(gate.promise);
+      gate.resolve();
+    };
+    this.#pendingDurableReadiness.set(gate.promise, release);
+    Promise.resolve(work).then(release, release);
+    return release;
+  }
+
   idle(): Promise<void> {
     return this.#waitForQuiescence(false);
+  }
+
+  /**
+   * Reach the reactive fixpoint a cell pull has always promised, and join the
+   * client durability barrier only when that pass discovers parked work whose
+   * result the pull depends on. This keeps ordinary pulls independent of
+   * unrelated commit confirmation while preventing a resumed list from being
+   * returned before its pre-synced rows can run.
+   */
+  async idleForPull(): Promise<void> {
+    await this.idle();
+    if (this.#pendingDurableReadiness.size > 0) {
+      await this.idleWithPendingCommits();
+    }
   }
 
   /**
@@ -1253,6 +1383,26 @@ export class Scheduler {
       return {
         kind: "settle",
         settled: () => this.runtime.patternManager.pendingPatternWorkSettled(),
+      };
+    }
+    if (
+      awaitPendingCommits && this.#pendingDurableEventReadiness.size > 0
+    ) {
+      return {
+        kind: "settle",
+        settled: () =>
+          Promise.allSettled([...this.#pendingDurableEventReadiness]).then(
+            () => undefined,
+          ),
+      };
+    }
+    if (awaitPendingCommits && this.#pendingDurableReadiness.size > 0) {
+      return {
+        kind: "settle",
+        settled: () =>
+          Promise.allSettled([...this.#pendingDurableReadiness.keys()]).then(
+            () => undefined,
+          ),
       };
     }
     // Everything below waits on `#idlePromises`, which only the execute loop
@@ -1942,9 +2092,12 @@ export class Scheduler {
     this.#errorHandlers.add(fn);
   }
 
-  /** Reports an action's asynchronous failure through the ordinary error handlers. */
-  reportError(error: Error, action: Action): void {
-    this.#handleError(error, action);
+  /** Reports an asynchronous failure through the ordinary error handlers. */
+  reportError(error: unknown, action: unknown = { name: "runner" }): void {
+    this.#handleError(
+      error instanceof Error ? error : new Error(String(error)),
+      action,
+    );
   }
 
   setEventPreflightTelemetryEnabled(enabled: boolean): void {
@@ -2755,6 +2908,9 @@ export class Scheduler {
     this.endPatternChangeWaits();
     this.#headEventLoadPark = null;
     this.#headEventLoadParkHistory = null;
+    for (const release of [...this.#pendingDurableReadiness.values()]) {
+      release();
+    }
     this.#disposed = true;
     for (const record of this.#nodes.nodes()) {
       record.cancelLocalReadWake?.();
@@ -3533,6 +3689,7 @@ export class Scheduler {
       runtime: this.runtime,
       eventHandlers: this.#eventHandlers,
       eventQueue: this.#eventQueue,
+      pendingDurableEventReadiness: this.#pendingDurableEventReadiness,
       trackBackgroundTask: (work) => this.trackBackgroundTask(work),
       patternChangeWaits: this.#patternChangeWaits,
       patternChangeWaitsEnded: () => this.#patternChangeWaitsEnded,
@@ -3658,6 +3815,27 @@ export class Scheduler {
       offBudgetRetries: this.#offBudgetRetries,
       pending: this.#pending,
       actionRunTrace: this.#actionRunTrace,
+      getActionGeneration: (target) => this.#getActionGeneration(target),
+      beginActionReadinessAttempt: (target, instanceKey) =>
+        this.#beginActionReadinessAttempt(target, instanceKey),
+      trackActiveActionRun: (target, tx) =>
+        this.#trackActiveActionRun(target, tx),
+      finishActiveActionRun: (target, tx) =>
+        this.#finishActiveActionRun(target, tx),
+      isActionGenerationCurrent: (target, generation) =>
+        this.#isActionGenerationCurrent(target, generation),
+      isActionReadinessAttemptCurrent: (
+        target,
+        generation,
+        attempt,
+        instanceKey,
+      ) =>
+        this.#isActionReadinessAttemptCurrent(
+          target,
+          generation,
+          attempt,
+          instanceKey,
+        ),
       nodes: this.#nodes,
       diagnosisHistory: this.#diagnosisHistory,
       diagnosisNonIdempotent: this.#diagnosisNonIdempotent,

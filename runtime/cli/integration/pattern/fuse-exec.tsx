@@ -3,9 +3,7 @@ import {
   handler,
   NAME,
   pattern,
-  patternTool,
-  type PatternToolResult,
-  schema,
+  type PatternFactory,
   str,
   type Stream,
 } from "commonfabric";
@@ -31,10 +29,13 @@ interface Output {
   recordMessage: Stream<{ message: string }>;
   recordNote: Stream<RecordNoteEvent>;
   legacyWrite: Stream<Record<string, never>>;
-  search: PatternToolResult<{ source: string }>;
+  search: PatternFactory<
+    { query: string; help?: string },
+    { query: string; help: string; source: string; summary: string }
+  >;
 }
 
-const model = schema({
+const model = {
   type: "object",
   properties: {
     lastMessage: { type: "string", default: "", asCell: ["cell"] },
@@ -53,7 +54,7 @@ const model = schema({
     legacyCount: 0,
     messages: [],
   },
-});
+} as const;
 
 const recordMessage = handler(
   {
@@ -158,8 +159,16 @@ export const customPatternExport = pattern<Input, Output>(
       recordMessage: recordMessage(cell),
       recordNote: recordNote(cell),
       legacyWrite: legacyWrite(cell),
-      search: patternTool(searchTool, {
-        source: "bound-source",
+      search: pattern<
+        { query: string; help?: string },
+        { query: string; help: string; source: string; summary: string }
+      >(({ query, help }) => {
+        const normalizedHelp = computed(() => help ?? "");
+        return searchTool({
+          query,
+          help: normalizedHelp,
+          source: "bound-source",
+        });
       }),
     };
   },

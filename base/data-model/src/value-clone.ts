@@ -43,6 +43,7 @@ import {
   DEEP_CLONE_CORE,
 } from "./fabric-bases/BaseFabricInstance.ts";
 import { toDebugKindString } from "@/value-debug";
+import { isAdmittedFabricFactory } from "./fabric-factory.ts";
 
 /** Options for `cloneIfNecessary()`. */
 export interface CloneOptions {
@@ -229,6 +230,17 @@ export function cloneHelper(
   force: boolean,
   seen: Set<object> | null = null,
 ): FabricValue {
+  // Callable factories are immutable logical atoms. Harden the one admitted
+  // callable and preserve its identity for every clone mode; an arbitrary
+  // function is not a Fabric value even though native tag dispatch otherwise
+  // groups functions with primitives.
+  if (typeof value === "function") {
+    if (!isAdmittedFabricFactory(value)) {
+      throw new Error("Cannot clone an arbitrary function value");
+    }
+    return deepFreeze(value);
+  }
+
   // Identity optimization: when `force` is off, check if the value's frozenness
   // already matches the requested state. Deep mode uses
   // `isValidDeepFrozenFabricValue()`; shallow mode uses `Object.isFrozen(v) ===

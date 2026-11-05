@@ -200,24 +200,23 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const person = __cf_pattern_input.key("element");
-    const state = __cf_pattern_input.key("params", "state");
     const personName = person.key("name"), email = person.key("email"), commuteMode = person.key("commuteMode"), priorityRank = person.key("priorityRank"), defaultSpot = person.key("defaultSpot"), spotPreferences = person.key("spotPreferences"), isFirst = person.key("isFirst"), isLast = person.key("isLast");
     const isEditing = __cfLift_1({
         state: {
-            editingPersonName: state.key("editingPersonName")
+            editingPersonName: state.editingPersonName
         },
         personName: personName
     }).for("isEditing", true);
     const isRemoveConfirm = __cfLift_2({
         state: {
-            removePersonConfirmTarget: state.key("removePersonConfirmTarget")
+            removePersonConfirmTarget: state.removePersonConfirmTarget
         },
         personName: personName
     }).for("isRemoveConfirm", true);
     const activeSpotOpts = __cfLift_3({ state: {
-            spots: state.key("spots")
+            spots: state.spots
         } }).for("activeSpotOpts", true);
     return (<section>
               <span>{personName}</span>
@@ -561,43 +560,34 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/Person"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        editingPersonName: {
-                            anyOf: [{
-                                    type: "string"
-                                }, {
-                                    type: "null"
-                                }]
-                        },
-                        removePersonConfirmTarget: {
-                            anyOf: [{
-                                    type: "string"
-                                }, {
-                                    type: "null"
-                                }]
-                        },
-                        spots: {
-                            type: "array",
-                            items: {
-                                $ref: "#/$defs/Spot"
-                            }
-                        }
-                    },
-                    required: ["editingPersonName", "removePersonConfirmTarget", "spots"]
+                editingPersonName: {
+                    anyOf: [{
+                            type: "string"
+                        }, {
+                            type: "null"
+                        }]
+                },
+                removePersonConfirmTarget: {
+                    anyOf: [{
+                            type: "string"
+                        }, {
+                            type: "null"
+                        }]
+                },
+                spots: {
+                    type: "array",
+                    items: {
+                        $ref: "#/$defs/Spot"
+                    }
                 }
             },
-            required: ["state"]
+            required: ["editingPersonName", "removePersonConfirmTarget", "spots"]
         }
     },
-    required: ["element", "params"],
+    required: ["state"],
     $defs: {
         Spot: {
             type: "object",
@@ -613,7 +603,17 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 }
             },
             required: ["active", "spotNumber"]
-        },
+        }
+    }
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/Person"
+        }
+    },
+    required: ["element"],
+    $defs: {
         Person: {
             type: "object",
             properties: {
@@ -678,13 +678,13 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 export default pattern((state) => {
     return {
         [UI]: (<div>
-        {state.key("people").mapWithPattern(__cfPattern_1, {
+        {state.key("people").mapWithPattern(__cfPattern_1.curry({
                 state: {
                     editingPersonName: state.key("editingPersonName"),
                     removePersonConfirmTarget: state.key("removePersonConfirmTarget"),
                     spots: state.key("spots")
                 }
-            })}
+            }))}
       </div>),
     };
 }, {

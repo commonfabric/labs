@@ -2,6 +2,7 @@ import { assert, assertEquals } from "@std/assert";
 
 import ts from "typescript";
 
+import { registerCommonFabricDeclarationSources } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { analyzeFunctionCapabilities } from "../../src/policy/mod.ts";
 
 // These cases drive `analyzeFunctionCapabilities` through branches that
@@ -74,6 +75,12 @@ function analyze(
   extraFiles: Record<string, string> = {},
 ) {
   const { program, sourceFile } = createProgram(source, extraFiles);
+  const commonFabric = program.getSourceFile("/commonfabric.d.ts");
+  if (commonFabric) {
+    registerCommonFabricDeclarationSources(program.getTypeChecker(), [
+      commonFabric,
+    ]);
+  }
   return analyzeFunctionCapabilities(findArrow(sourceFile, name), {
     checker: program.getTypeChecker(),
   });

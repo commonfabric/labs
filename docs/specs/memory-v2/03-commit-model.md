@@ -17,10 +17,22 @@ operation targets an entity by `id`.
 
 ```typescript
 // Shown at module scope.
+type DocumentPath = readonly string[] & {
+  readonly __memoryV2DocumentPath: unique symbol;
+};
+
 interface SetOperation {
   op: "set";
   id: EntityId;
   value: EntityDocument;
+}
+
+interface EnsureOperation {
+  op: "ensure";
+  id: EntityId;
+  value: EntityDocument;
+  ignore?: DocumentPath[];
+  addUnique?: DocumentPath[];
 }
 
 interface PatchWriteOperation {
@@ -34,7 +46,11 @@ interface DeleteOperation {
   id: EntityId;
 }
 
-type Operation = SetOperation | PatchWriteOperation | DeleteOperation;
+type Operation =
+  | SetOperation
+  | EnsureOperation
+  | PatchWriteOperation
+  | DeleteOperation;
 ```
 
 Operations do not include parent hashes or other version identifiers. The server
@@ -42,6 +58,39 @@ validates the read set, assigns a canonical `seq`, and records one or more
 sequenced revisions. `set` carries a logical `EntityDocument`; `patch` carries
 path-targeted edits whose leaf values use the shared FabricValue surface, not
 just a JSON subset.
+
+`ensure` is the idempotent content-addressed publication primitive. If the
+target is absent, the server records an ordinary `set` revision. For an existing
+target, the server first compares the canonical Fabric-value core, including
+codec-backed values rather than JavaScript object identity or enumerable
+properties. Runner-owned formats may name trusted incidental metadata paths in
+`ignore` and trusted additive-set paths in `addUnique`; both are removed from
+the core comparison. The paths are part of the operation and are never inferred
+from authored or stored values.
+
+If the canonical cores differ, the server rejects the complete commit as an
+integrity failure before applying an additive update. If they match, every
+`addUnique` path must be absent or an array on both sides. The server appends
+values from the operation's array that are not already present by stored-value
+equality, preserving existing order and deterministic input order. Missing
+paths are created. A changed set records one ordinary `patch` revision; an
+existing superset is a no-op and records no entity revision. Generic `ignore`
+paths are never merged. Without additive changes, equal cores remain the
+historical no-op. Factory artifact publication uses `ignore` only for
+non-normative product/runtime metadata and `addUnique` only for explicitly
+identity-excluded closure topology.
+
+A commit may carry multiple ensures for one resolved `(id, scope)` address only
+when their normalized path policies agree. Path lists are deduplicated and
+ordered canonically, so equivalent policies do not depend on declaration order.
+Every declared path MUST contain at least one segment; `[]` would remove the
+whole document from the core comparison and is therefore invalid in both
+families. No `ignore` or `addUnique` path may be an ancestor or descendant of
+another declared policy path, and the two families may not name the same path.
+The server rejects empty, overlapping, or incompatible policies before writing
+any revision. A commit also MUST NOT carry an authored `set`, `patch`, or
+`delete` for an ensured address; an authored operation cannot overwrite an
+artifact that the same atomic commit just ensured.
 
 ## 3.2 Transaction Structure
 
@@ -304,7 +353,10 @@ C2 submitted (pending, localSeq 2):
 If `C1` is later confirmed, the server resolves `C2`'s pending read to that
 confirmed commit. If `C1` is rejected, `C2` is invalid and must be rejected as
 well. Rejection therefore cascades through the stack of dependent pending
-commits.
+commits. The client reserves each commit's causal wire position in `localSeq`
+order before emitting its synchronous optimistic notification. A notification
+subscriber may construct `C2` reentrantly from `C1`'s speculative value, but C2
+MUST NOT reach the server before C1.
 
 The cascade cannot rely on each pending layer reading the layer beneath it:
 zero-read operations (mergeable collection writes) legally interleave into a

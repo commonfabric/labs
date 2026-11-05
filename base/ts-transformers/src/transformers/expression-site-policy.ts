@@ -38,7 +38,7 @@ import type { AnalyzeFn } from "./expression-rewrite/types.ts";
 import { classifyOpaquePathTerminalCall } from "./opaque-roots.ts";
 import type { ExpressionContainerKind } from "./expression-site-types.ts";
 import {
-  isPatternFactoryCalleeExpression,
+  isFirstClassFactoryCalleeExpression,
   isStructuralReactiveFactoryExpression,
   returnsReactiveResult,
 } from "./structural-reactive-factory.ts";
@@ -246,13 +246,12 @@ function classifyCallExpressionRoot(
     case "wish":
     case "generate-text":
     case "generate-object":
-    case "pattern-tool":
     case "runtime-call":
       return "other";
   }
 
   if (
-    isPatternFactoryCalleeExpression(expression.expression, context.checker)
+    isFirstClassFactoryCalleeExpression(expression.expression, context.checker)
   ) {
     return "other";
   }
@@ -703,7 +702,6 @@ const HELPER_BOUNDARY_KINDS = new Set<ExpressionSiteHelperBoundaryKind>([
   "when",
   "unless",
   "builder",
-  "pattern-tool",
 ]);
 
 function getHelperBoundaryKind(

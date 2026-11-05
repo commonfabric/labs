@@ -83,7 +83,6 @@ describe("Pattern Runner - Regressions", () => {
                 null,
               )) as any)(element, index, array)
           ),
-          {},
         );
         return { items, mapped };
       },

@@ -131,7 +131,7 @@ const cloneLoans = (loans: readonly LoanRecord[]): LoanRecord[] =>
 const cloneHolds = (holds: readonly HoldRecord[]): HoldRecord[] =>
   holds.map((hold) => ({ ...hold }));
 
-const sanitizeCatalogList = (value: unknown): LibraryItem[] => {
+const sanitizeCatalogList = (value: readonly LibraryItem[]): LibraryItem[] => {
   if (!Array.isArray(value) || value.length === 0) {
     return cloneCatalog(defaultCatalog);
   }

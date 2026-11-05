@@ -62,36 +62,34 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_2 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { state }) => {
     const date = __cf_pattern_input.key("element", "0");
     const pizza = __cf_pattern_input.key("element", "1");
-    const state = __cf_pattern_input.key("params", "state");
     return (<div>
-            {date}: {pizza} (scale: {state.key("scale")})
+            {date}: {pizza} (scale: {state.scale})
           </div>);
 }, {
     type: "object",
     properties: {
-        element: {
-            $ref: "#/$defs/PizzaEntry"
-        },
-        params: {
+        state: {
             type: "object",
             properties: {
-                state: {
-                    type: "object",
-                    properties: {
-                        scale: {
-                            type: "number"
-                        }
-                    },
-                    required: ["scale"]
+                scale: {
+                    type: "number"
                 }
             },
-            required: ["state"]
+            required: ["scale"]
         }
     },
-    required: ["element", "params"],
+    required: ["state"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
+        element: {
+            $ref: "#/$defs/PizzaEntry"
+        }
+    },
+    required: ["element"],
     $defs: {
         PizzaEntry: {
             type: "array",
@@ -123,21 +121,21 @@ const __cfPattern_2 = __cfHelpers.pattern(__cf_pattern_input => {
 } as const satisfies __cfHelpers.JSONSchema);
 // FIXTURE: map-array-destructured
 // Verifies: array destructuring in .map() is lowered, with and without captured outer state
-//   .map(([date, pizza]) => ...) → .mapWithPattern(pattern(...), {}) with index-based keys
+//   .map(([date, pizza]) => ...) → .mapWithPattern(pattern(...)) with index-based keys
 //   Closing over state.scale → captures { state: { scale: state.key("scale") } }
 // Context: Two map calls — one without captures (empty {}), one with a captured outer variable
 export default pattern((state) => {
     return {
         [UI]: (<div>
         {/* Map with array destructured parameter */}
-        {state.key("pizzas").mapWithPattern(__cfPattern_1, {})}
+        {state.key("pizzas").mapWithPattern(__cfPattern_1)}
 
         {/* Map with array destructured parameter and capture */}
-        {state.key("pizzas").mapWithPattern(__cfPattern_2, {
+        {state.key("pizzas").mapWithPattern(__cfPattern_2.curry({
                 state: {
                     scale: state.key("scale")
                 }
-            })}
+            }))}
       </div>),
     };
 }, {

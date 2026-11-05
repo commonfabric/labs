@@ -293,7 +293,7 @@ export default pattern((__cf_pattern_input) => {
     const all = __cfLift_2({ rows: rows }).for("all", true);
     const first = __cfLift_3({ rows: rows }).for("first", true);
     const joined = __cfLift_4({ rows: rows }).for("joined", true);
-    const recent = __cfLift_5({ rows: rows }).filterWithPattern(__cfPattern_1, {}).for("recent", true);
+    const recent = __cfLift_5({ rows: rows }).filterWithPattern(__cfPattern_1).for("recent", true);
     const optional = __cfLift_7({ label: label }).for("optional", true);
     return { count, all, first, joined, recent, optional };
 }, {

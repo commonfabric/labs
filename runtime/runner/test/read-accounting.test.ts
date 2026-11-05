@@ -18,6 +18,7 @@ import {
   preflightQueuedEventDependencies,
 } from "../src/scheduler/events.ts";
 import type {
+  EventHandlerRegistration,
   QueuedEvent,
   ServedEventFailureOutcome,
 } from "../src/scheduler/types.ts";
@@ -42,6 +43,19 @@ const schema = {
     items: { type: "array", items: { type: "number" } },
   },
 } as const satisfies JSONSchema;
+
+function testHandlerRegistration(
+  handler: EventHandler,
+  ref: QueuedEvent["eventLink"],
+): EventHandlerRegistration {
+  return {
+    ref,
+    handler,
+    generation: 1,
+    readinessCancels: new Set(),
+    active: true,
+  };
+}
 
 describe("read-accounting", () => {
   let storage: ReturnType<typeof StorageManager.emulate>;
@@ -425,12 +439,17 @@ describe("read-accounting", () => {
       },
     });
     const access = runtime.scheduler.accessForTestingOnly;
+    const eventLink = runtime.getCell(space, "source")
+      .getAsNormalizedFullLink();
+    const handlerRegistration = testHandlerRegistration(handler, eventLink);
     const queued: QueuedEvent = {
       id: "preflight-fault",
       enqueueSeq: 0,
-      eventLink: runtime.getCell(space, "source").getAsNormalizedFullLink(),
+      eventLink,
       action: handler,
       handler,
+      handlerRegistration,
+      handlerGeneration: handlerRegistration.generation,
       event: undefined,
       retry: false,
       onCommit: (tx) => {
@@ -491,13 +510,17 @@ describe("read-accounting", () => {
     const handler = () => {
       invoked = true;
     };
+    const eventLink = runtime.getCell(space, "fault-event")
+      .getAsNormalizedFullLink();
+    const handlerRegistration = testHandlerRegistration(handler, eventLink);
     const queued: QueuedEvent = {
       id: "setup-fault",
       enqueueSeq: 0,
-      eventLink: runtime.getCell(space, "fault-event")
-        .getAsNormalizedFullLink(),
+      eventLink,
       action: handler,
       handler,
+      handlerRegistration,
+      handlerGeneration: handlerRegistration.generation,
       event: undefined,
       retry: false,
       originTx: origin,

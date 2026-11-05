@@ -1,7 +1,7 @@
 import ts from "typescript";
 
 import { isCellInternalMarkerName } from "./cell-brand.ts";
-import { isCommonFabricDeclaration } from "./common-fabric-symbols.ts";
+import { isCommonFabricSymbol } from "./common-fabric-symbols.ts";
 
 const COMMON_FABRIC_HELPERS_IDENTIFIER = "__cfHelpers";
 const COMMON_FABRIC_KEY_NAMES = ["NAME", "UI", "SELF", "FS", "VIEWS"] as const;
@@ -25,6 +25,11 @@ export type ComputedPropertyKeyInfo =
 
 export interface ComputedPropertyKeyResolutionOptions {
   readonly commonFabricHelperIdentifier?: string;
+  /**
+   * Trust a matching helper access that has no checker-resolved canonical
+   * symbol. Callers may set this only for compiler-owned synthetic nodes.
+   */
+  readonly allowCompilerOwnedCommonFabricHelperAccess?: boolean;
 }
 
 function getLiteralComputedKeyValue(
@@ -66,16 +71,17 @@ function resolveAliasedSymbol(
   return symbol;
 }
 
-function isUniqueSymbolKeySymbol(
-  symbol: ts.Symbol,
+function getTrustedCommonFabricKeyName(
+  symbol: ts.Symbol | undefined,
   checker: ts.TypeChecker,
-): boolean {
-  const declaration = symbol.declarations?.[0];
-  if (!declaration) {
-    return false;
-  }
-  const type = checker.getTypeOfSymbolAtLocation(symbol, declaration);
-  return (type.flags & ts.TypeFlags.UniqueESSymbol) !== 0;
+): CommonFabricKeyName | undefined {
+  const resolved = resolveAliasedSymbol(symbol, checker);
+  if (!resolved) return undefined;
+  const resolvedName = resolved.getName() as CommonFabricKeyName;
+  return COMMON_FABRIC_KEY_NAME_SET.has(resolvedName) &&
+      isCommonFabricSymbol(resolved, checker)
+    ? resolvedName
+    : undefined;
 }
 
 function resolveCommonFabricComputedKeyName(
@@ -92,7 +98,16 @@ function resolveCommonFabricComputedKeyName(
     expr.expression.text === helperIdentifier &&
     COMMON_FABRIC_KEY_NAME_SET.has(expr.name.text as CommonFabricKeyName)
   ) {
-    return expr.name.text as CommonFabricKeyName;
+    if (checker) {
+      const trustedName = getTrustedCommonFabricKeyName(
+        checker.getSymbolAtLocation(expr.name),
+        checker,
+      );
+      if (trustedName) return trustedName;
+    }
+    return options.allowCompilerOwnedCommonFabricHelperAccess
+      ? expr.name.text as CommonFabricKeyName
+      : undefined;
   }
 
   if (!ts.isIdentifier(expr)) {
@@ -103,25 +118,10 @@ function resolveCommonFabricComputedKeyName(
     return undefined;
   }
 
-  const symbol = resolveAliasedSymbol(
+  return getTrustedCommonFabricKeyName(
     checker.getSymbolAtLocation(expr),
     checker,
   );
-  const resolvedName = symbol?.getName() as CommonFabricKeyName | undefined;
-  if (!resolvedName || !COMMON_FABRIC_KEY_NAME_SET.has(resolvedName)) {
-    return undefined;
-  }
-
-  const declaration = symbol?.declarations?.[0];
-  if (!declaration) {
-    return undefined;
-  }
-
-  if (isCommonFabricDeclaration(declaration)) {
-    return resolvedName;
-  }
-
-  return isUniqueSymbolKeySymbol(symbol, checker) ? resolvedName : undefined;
 }
 
 export function getComputedPropertyKeyInfo(

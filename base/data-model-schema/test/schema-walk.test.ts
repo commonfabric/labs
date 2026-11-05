@@ -171,6 +171,27 @@ describe("subschemaEdges (generator form)", () => {
     expect([...subschemaEdges(schema, { includeUnused: true })].length).toBe(1);
   });
 
+  it("skips absent schema-light factory fields and honors factory opt-out", () => {
+    const schemaLight = {
+      asFactory: { kind: "module" },
+    } as JSONSchema;
+    expect([...subschemaEdges(schemaLight)]).toEqual([]);
+
+    const handler = {
+      asFactory: {
+        kind: "handler",
+        contextSchema: { type: "object" },
+      },
+    } as unknown as JSONSchema;
+    expect([...subschemaEdges(handler)].map(({ keyword, key }) => ({
+      keyword,
+      key,
+    }))).toEqual([{ keyword: "asFactory", key: "contextSchema" }]);
+    expect([
+      ...subschemaEdges(handler, { includeFactorySchemas: false }),
+    ]).toEqual([]);
+  });
+
   it("supports early break", () => {
     const schema: JSONSchema = {
       properties: { a: { type: "string" }, b: { type: "number" } },
@@ -571,6 +592,34 @@ describe("values that are not schemas", () => {
     expect(result[0]!.key).toBe("0");
     expect(result[0]!.schema).toEqual({ type: "string" });
     expect(warnings).toEqual([]);
+  });
+
+  it("ignores malformed factory containers and child schemas", () => {
+    const malformedFactory = withWarnings(() =>
+      edgesOf({ asFactory: null } as unknown as JSONSchema)
+    );
+    expect(malformedFactory.result).toEqual([]);
+    expect(malformedFactory.warnings[0]).toContain("asFactory");
+
+    const malformedChild = withWarnings(() =>
+      edgesOf({
+        asFactory: {
+          kind: "pattern",
+          argumentSchema: "not a schema",
+          resultSchema: { type: "string" },
+        },
+      } as unknown as JSONSchema)
+    );
+    expect(malformedChild.result).toEqual([
+      {
+        schema: { type: "string" },
+        keyword: "asFactory",
+        key: "resultSchema",
+      },
+    ]);
+    expect(malformedChild.warnings[0]).toContain(
+      "asFactory/argumentSchema",
+    );
   });
 
   it("visits no edge for one under any keyword, in any tier", () => {

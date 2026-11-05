@@ -110,8 +110,8 @@ export default pattern((__cf_pattern_input) => {
     const items = __cf_pattern_input.key("items");
     return ({
         [UI]: (<div>
-      {items.mapWithPattern(__cfPattern_1, {})}
-      {items.mapWithPattern(__cfPattern_2, {})}
+      {items.mapWithPattern(__cfPattern_1)}
+      {items.mapWithPattern(__cfPattern_2)}
     </div>),
     });
 }, {

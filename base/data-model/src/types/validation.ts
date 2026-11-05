@@ -4,10 +4,12 @@
  * exactly what the predicate decides and exists to say why the answer was no.
  *
  * Membership turns on inertness: a `FabricValue` is data, so anything that is
- * live code is refused -- a function, an accessor-backed property, the
- * prototype of an `Array` subclass, a symbol that was never registry-interned.
- * Frozen-ness is a separate question and deliberately not asked here, so a
- * structurally-valid unfrozen value is a member.
+ * live code is refused -- an arbitrary function, an accessor-backed property,
+ * the prototype of an `Array` subclass, a symbol that was never
+ * registry-interned. The one callable exception is a directly branded,
+ * protocol-admitted factory. Frozen-ness is a separate question and
+ * deliberately not asked here, so a structurally-valid unfrozen value is a
+ * member.
  *
  * Each of these takes an `unknown`, that being what a caller holds before
  * membership is settled. The narrowings that ask a shape question of a value
@@ -38,6 +40,7 @@ import type {
 import { isFabricPlainObject, isFabricSpecialObject } from "./narrowing.ts";
 import { tagOfConvertibleJsValueElseNull } from "./tag-of.ts";
 import { VALUE_TAGS } from "./tags.ts";
+import { isAdmittedFabricFactory } from "../fabric-factory.ts";
 
 /**
  * Indicates whether the value is a `FabricValue`, accepting
@@ -92,12 +95,12 @@ export function isValidFabricValueLayer(
       return Symbol.keyFor(value) !== undefined;
     }
 
-    case "function":
+    case "function": {
+      return isAdmittedFabricFactory(value);
+    }
     default: {
-      // A note about functions: Values of type `function` are very
-      // intentionally _never_ considered to possibly be `FabricValue`s:
-      // `FabricValue` contractually represents that its contents are inert, and
-      // `function` is about as "ert" as a value can get.
+      // The `function` case above admits only branded protocol factories;
+      // every other function remains outside `FabricValue`.
       return false;
     }
   }
@@ -305,7 +308,7 @@ export function isValidFabricValueWithCache(
   // Fast leaf paths first, so a function or a primitive returns without
   // allocating the cycle-tracking set or the recursion closure below.
   if (typeof value === "function") {
-    return false;
+    return isAdmittedFabricFactory(value);
   } else if (typeof value === "symbol") {
     // Only registry-interned symbols are `FabricValue`s; unique (uninterned)
     // symbols are not portable across realms and are rejected, matching
@@ -320,7 +323,7 @@ export function isValidFabricValueWithCache(
   // the recursion callback once here, reusing the same closure at every layer.
   const seen = new Set<object>();
   const check = (item: unknown): boolean => {
-    if (typeof item === "function") return false;
+    if (typeof item === "function") return isAdmittedFabricFactory(item);
     if (typeof item === "symbol") return Symbol.keyFor(item) !== undefined;
     if (!isObjectOrArray(item)) {
       // A non-function, non-symbol primitive.

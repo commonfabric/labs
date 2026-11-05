@@ -254,7 +254,6 @@ describe("runtime-owned-store enrollment wiring", () => {
         pattern(({ element }: FactoryInput<any>) =>
           lift((value: number) => value * 2)(element)
         ),
-        {},
       ),
     }));
     const values = Array.from({ length: 6 }, (_, index) => index);

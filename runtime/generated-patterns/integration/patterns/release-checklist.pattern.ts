@@ -168,7 +168,7 @@ const compareTasks = (left: ReleaseTask, right: ReleaseTask): number => {
   return left.id.localeCompare(right.id);
 };
 
-const sanitizeTaskList = (value: unknown): ReleaseTask[] => {
+const sanitizeTaskList = (value: readonly ReleaseTask[]): ReleaseTask[] => {
   if (!Array.isArray(value)) {
     return cloneTasks(defaultTasks);
   }

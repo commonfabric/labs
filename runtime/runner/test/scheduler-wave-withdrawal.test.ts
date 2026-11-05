@@ -292,7 +292,12 @@ describe("reactive wave withdrawal", () => {
       }
       await runtime.scheduler.idleWithPendingCommits();
       expect(runs).toBe(reregistered ? 2 : 1);
-      expect(output.get()).toBe("b0");
+      // Replacing a registration while its body is still running retires its
+      // speculative writes immediately; the replacement above deliberately
+      // writes nothing.
+      expect(output.get()).toBe(
+        boundary === "body-reregistered" ? undefined : "b0",
+      );
       if (
         boundary === "repeated" || boundary === "partial" ||
         boundary === "local-acceptance"
@@ -318,7 +323,9 @@ describe("reactive wave withdrawal", () => {
       else {
         const outcome = await wave.commitWave(newSink());
         expect(outcome.dispositions).toEqual(
-          boundary === "accepted"
+          boundary === "body-reregistered"
+            ? [{ kind: "dropped" }]
+            : boundary === "accepted"
             ? [{ kind: "committed" }, { kind: "committed" }]
             : boundary === "partial" || boundary === "local-acceptance" ||
                 boundary === "repeated" || replacesOutput

@@ -7,7 +7,7 @@ interface State {
 
 // FIXTURE: map-single-capture-no-name
 // Verifies: .map() transform with single capture works when pattern uses inline type annotation
-//   .map(fn) → .mapWithPattern(pattern(...), {state: {discount: ...}})
+//   .map(fn) → .mapWithPattern(pattern(...).curry({state: {discount: ...}}))
 // Context: pattern((state: State) => ...) form without <State> generic type arg
 export default pattern((state: State) => {
   return {

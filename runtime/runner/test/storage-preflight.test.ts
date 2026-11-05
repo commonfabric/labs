@@ -13,6 +13,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { registerFabricFactory } from "@commonfabric/data-model/fabric-factory";
 
 import { type FabricValue, isValidFabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
@@ -42,6 +43,65 @@ describe("flattenBuilderArtifacts()", () => {
     const value = { tools: { send: { handler: artifact({ ok: true }) } } };
     expect(flattenBuilderArtifacts(value))
       .toEqual({ tools: { send: { handler: { ok: true } } } });
+  });
+
+  it("flattens a keyless PatternFactory through its embedded graph", () => {
+    const factory = Object.assign(() => {}, {
+      toEncodableForm: () => ({
+        argumentSchema: true,
+        resultSchema: true,
+        result: { value: 1 },
+        nodes: [],
+      }),
+    });
+    registerFabricFactory(factory, "pattern", {
+      kind: "pattern",
+      rootToken: {},
+      argumentSchema: true,
+      resultSchema: true,
+    });
+
+    const result = flattenBuilderArtifacts({ factory }) as {
+      factory: unknown;
+    };
+
+    expect(typeof result.factory).toBe("object");
+    expect(result.factory).toMatchObject({
+      argumentSchema: true,
+      resultSchema: true,
+      result: { value: 1 },
+      nodes: [],
+    });
+  });
+
+  it("leaves a bound keyless PatternFactory for Factory@1 validation", () => {
+    const factory = Object.assign(() => {}, {
+      toEncodableForm: () => ({
+        argumentSchema: true,
+        resultSchema: true,
+        result: { value: 1 },
+        nodes: [],
+      }),
+    });
+    registerFabricFactory(factory, "pattern", {
+      kind: "pattern",
+      rootToken: {},
+      argumentSchema: true,
+      resultSchema: true,
+      paramsSchema: {
+        type: "object",
+        properties: { offset: { type: "number" } },
+        required: ["offset"],
+        additionalProperties: false,
+      },
+      params: { offset: 1 },
+    });
+
+    const result = flattenBuilderArtifacts({ factory }) as {
+      factory: unknown;
+    };
+
+    expect(result.factory).toBe(factory);
   });
 
   it("records where each copy came from", () => {

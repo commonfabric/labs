@@ -18,6 +18,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import { createBuilder } from "../src/builder/factory.ts";
 import { createRef } from "../src/create-ref.ts";
 import { createCell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -125,13 +126,22 @@ describe("create-ref-cell-routes", () => {
   });
 
   it("derives from a builder artifact that is a function", () => {
-    // A factory is a function carrying `toEncodableForm` too, and is not
-    // reactive, which is what separates it from a method proxy: it derives from
-    // its serialized form.
-    const factory = Object.assign(() => {}, {
-      toEncodableForm: () => ({ serialized: true }),
-    });
-    expect(idOf(factory)).toBe(idOf({ serialized: true }));
+    const factory = createBuilder().commonfabric.pattern(() => ({ value: 1 }));
+    expect(idOf(factory)).toBe(idOf(factory.toJSON()));
+  });
+
+  it("derives from a legacy pattern graph containing nested builders", () => {
+    const { commonfabric } = createBuilder();
+    const double = commonfabric.lift((value: number) => value * 2);
+    const child = commonfabric.pattern<{ value: number }>(({ value }) => ({
+      doubled: double(value),
+    }));
+    const factory = commonfabric.pattern<{ value: number }>(({ value }) => ({
+      child: child({ value }),
+    }));
+
+    expect(() => idOf(factory)).not.toThrow();
+    expect(() => createRef(factory, "cause")).not.toThrow();
   });
 
   it("derives one id for a cell and its own query result", () => {

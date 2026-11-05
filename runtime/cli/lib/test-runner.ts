@@ -1448,7 +1448,7 @@ export async function runTestPattern(
       () =>
         runtime.patternManager.compileAndRegisterModules(
           program,
-          undefined,
+          { patternCoverage },
           options.compileOnly ? undefined : {
             space,
             when: (result) =>

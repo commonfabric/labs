@@ -18,13 +18,13 @@ describe("PiecesController.getPieceCell", () => {
         pieceSynced = true;
         return Promise.resolve();
       },
-      // A non-wrapper piece resolves to itself; get() canonicalizes the address
-      // (value-link slot -> result cell) before syncing + starting.
+      // An identity-less non-wrapper resolves to itself; get() canonicalizes
+      // identity-less addresses before starting them.
+      getMetaRaw: () => undefined,
       resolveAsCell: () => piece,
       asSchema: () => piece,
       // It carries no pattern pointer of its own, so get() resolves it.
       getAsNormalizedFullLink: () => ({ path: [] }),
-      getMetaRaw: () => undefined,
     };
     const runtime = {
       userIdentityDID: "did:key:home",

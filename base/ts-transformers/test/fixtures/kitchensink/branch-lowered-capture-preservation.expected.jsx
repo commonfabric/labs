@@ -278,18 +278,12 @@ const __cfLift_6 = __cfHelpers.lift<{
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
-const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
+const __cfPattern_1 = __cfHelpers.pattern(__cfHelpers.withPatternParamsSchema((__cf_pattern_input, { subPieces, editingNoteIndex, editingNoteText, settingsModuleIndex, expandedIndex, trashedSubPieces }) => {
     const entry = __cf_pattern_input.key("element", "entry");
     const index = __cf_pattern_input.key("element", "index");
     const isExpanded = __cf_pattern_input.key("element", "isExpanded");
     const isPinned = __cf_pattern_input.key("element", "isPinned");
     const allowMultiple = __cf_pattern_input.key("element", "allowMultiple");
-    const subPieces = __cf_pattern_input.key("params", "subPieces");
-    const editingNoteIndex = __cf_pattern_input.key("params", "editingNoteIndex");
-    const editingNoteText = __cf_pattern_input.key("params", "editingNoteText");
-    const settingsModuleIndex = __cf_pattern_input.key("params", "settingsModuleIndex");
-    const expandedIndex = __cf_pattern_input.key("params", "expandedIndex");
-    const trashedSubPieces = __cf_pattern_input.key("params", "trashedSubPieces");
     return ifElse({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {
@@ -541,6 +535,39 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 }, {
     type: "object",
     properties: {
+        subPieces: {
+            type: "array",
+            items: {
+                type: "string"
+            }
+        },
+        editingNoteIndex: {
+            type: ["number", "undefined"],
+            asCell: ["cell"]
+        },
+        editingNoteText: {
+            type: "string",
+            asCell: ["cell"]
+        },
+        settingsModuleIndex: {
+            type: ["number", "undefined"],
+            asCell: ["cell"]
+        },
+        expandedIndex: {
+            type: ["number", "undefined"],
+            asCell: ["cell"]
+        },
+        trashedSubPieces: {
+            type: "array",
+            items: {
+                type: "string"
+            }
+        }
+    },
+    required: ["subPieces", "editingNoteIndex", "editingNoteText", "settingsModuleIndex", "expandedIndex", "trashedSubPieces"]
+} as const satisfies __cfHelpers.JSONSchema), {
+    type: "object",
+    properties: {
         element: {
             type: "object",
             properties: {
@@ -561,43 +588,9 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
                 }
             },
             required: ["entry", "index", "isExpanded", "isPinned", "allowMultiple"]
-        },
-        params: {
-            type: "object",
-            properties: {
-                subPieces: {
-                    type: "array",
-                    items: {
-                        type: "string"
-                    }
-                },
-                editingNoteIndex: {
-                    type: ["number", "undefined"],
-                    asCell: ["readonly"]
-                },
-                editingNoteText: {
-                    type: "string",
-                    asCell: ["readonly"]
-                },
-                settingsModuleIndex: {
-                    type: ["number", "undefined"],
-                    asCell: ["readonly"]
-                },
-                expandedIndex: {
-                    type: ["number", "undefined"],
-                    asCell: ["readonly"]
-                },
-                trashedSubPieces: {
-                    type: "array",
-                    items: {
-                        type: "string"
-                    }
-                }
-            },
-            required: ["subPieces", "editingNoteIndex", "editingNoteText", "settingsModuleIndex", "expandedIndex", "trashedSubPieces"]
         }
     },
-    required: ["element", "params"],
+    required: ["element"],
     $defs: {
         Item: {
             type: "object",
@@ -666,14 +659,14 @@ export default pattern((__cf_pattern_input) => {
     const allEntries = __cfLift_1({ items: items }).for("allEntries", true);
     return {
         [UI]: (<div>
-        {allEntries.mapWithPattern(__cfPattern_1, {
+        {allEntries.mapWithPattern(__cfPattern_1.curry({
                 subPieces: subPieces,
                 editingNoteIndex: editingNoteIndex,
                 editingNoteText: editingNoteText,
                 settingsModuleIndex: settingsModuleIndex,
                 expandedIndex: expandedIndex,
                 trashedSubPieces: trashedSubPieces
-            })}
+            }))}
       </div>),
     };
 }, {

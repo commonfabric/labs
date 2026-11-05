@@ -16,6 +16,7 @@ import { reportFromFreshRealm } from "./value-debug-internal-worker-client.ts";
  */
 const RENDERS_NOTHING: ReadonlySet<string> = new Set([
   "./api",
+  "./fabric-factory",
   "./frozen-builtins",
 ]);
 

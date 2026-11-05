@@ -1,6 +1,7 @@
 import { Database } from "@db/sqlite";
 import type { FabricValue, JSONSchema } from "@commonfabric/api";
 import {
+  cloneWithoutValueAtPath,
   debugStr,
   hashStringOf,
   isFabricPlainContainer,
@@ -5920,24 +5921,26 @@ const applyOperation = (
   );
   const revisions: AppliedRevision[] = [];
   if (result.operations.length > 0) {
-    revisions.push(writeOperation(engine, {
-      branch,
-      seq,
-      opIndex,
-      principal,
-      sessionId,
-      scopeKeyOverride: options.scopeKeyOverride,
-      operation: {
-        op: "patch",
-        id: operation.id,
-        ...(operation.scope === undefined ? {} : { scope: operation.scope }),
-        patches: [{
-          op: "replace",
-          path: encodePointer(["value", ...operation.path]),
-          value: result.materialized,
-        }],
-      },
-    }));
+    revisions.push(
+      writeOperation(engine, {
+        branch,
+        seq,
+        opIndex,
+        principal,
+        sessionId,
+        scopeKeyOverride: options.scopeKeyOverride,
+        operation: {
+          op: "patch",
+          id: operation.id,
+          ...(operation.scope === undefined ? {} : { scope: operation.scope }),
+          patches: [{
+            op: "replace",
+            path: encodePointer(["value", ...operation.path]),
+            value: result.materialized,
+          }],
+        },
+      })!,
+    );
   }
   if (!sameAnchors(priorAnchors, nextAnchors)) {
     revisions.push(writeAnchorsDocument(engine, {
@@ -6015,7 +6018,7 @@ const writeAnchorsDocument = (
       ...(field.scope === undefined ? {} : { scope: field.scope }),
       value: { value: { epoch, version, anchors: [...anchors] } },
     },
-  });
+  })!;
 };
 
 /** Deletes the field's anchors document when it exists. */
@@ -6210,6 +6213,123 @@ const assertOperationFieldsPreserved = (
         `ordinary write changes active operation field: ${path.join(".")}`,
       );
     }
+  }
+};
+
+type EnsureOperation = Extract<Operation, { op: "ensure" }>;
+
+interface NormalizedEnsurePathPolicy {
+  readonly ignore: readonly string[][];
+  readonly addUnique: readonly string[][];
+  readonly signature: string;
+}
+
+const normalizeEnsurePaths = (
+  paths: readonly (readonly string[])[] | undefined,
+  family: "ignore" | "addUnique",
+): string[][] => {
+  if (paths !== undefined && !Array.isArray(paths)) {
+    throw new ProtocolError(
+      `memory v2 ensure ${family} must be an array of document paths`,
+    );
+  }
+  const unique = new Map<string, string[]>();
+  for (const path of paths ?? []) {
+    if (
+      !Array.isArray(path) ||
+      path.some((segment) => typeof segment !== "string")
+    ) {
+      throw new ProtocolError(
+        `memory v2 ensure ${family} paths must contain only string segments`,
+      );
+    }
+    if (path.length === 0) {
+      throw new ProtocolError(
+        `memory v2 ensure ${family} paths must not be empty`,
+      );
+    }
+    const copy = [...path];
+    unique.set(encodePointer(copy), copy);
+  }
+  return [...unique.entries()]
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .map(([, path]) => path);
+};
+
+const normalizeEnsurePathPolicy = (
+  operation: EnsureOperation,
+): NormalizedEnsurePathPolicy => {
+  const ignore = normalizeEnsurePaths(operation.ignore, "ignore");
+  const addUnique = normalizeEnsurePaths(operation.addUnique, "addUnique");
+  const ignorePointers = new Set(ignore.map(encodePointer));
+  const addUniquePointers = new Set(addUnique.map(encodePointer));
+  const declared = [
+    ...ignore.map((path) => ({ family: "ignore" as const, path })),
+    ...addUnique.map((path) => ({ family: "addUnique" as const, path })),
+  ];
+  for (let left = 0; left < declared.length; left += 1) {
+    for (let right = left + 1; right < declared.length; right += 1) {
+      const first = declared[left]!;
+      const second = declared[right]!;
+      if (!pathsOverlap(first.path, second.path)) continue;
+      const samePath = encodePointer(first.path) === encodePointer(second.path);
+      if (first.family === second.family && samePath) continue;
+      throw new ProtocolError(
+        `memory v2 ensure has overlapping path policies at ${
+          encodePointer(first.path)
+        } and ${encodePointer(second.path)}`,
+      );
+    }
+  }
+  return {
+    ignore,
+    addUnique,
+    signature: JSON.stringify([
+      [...ignorePointers].sort(),
+      [...addUniquePointers].sort(),
+    ]),
+  };
+};
+
+/**
+ * `ensure` is the wire-time integrity precondition for a content-addressed
+ * entity. A semantic mutation of that same resolved address in the containing
+ * commit would make the result depend on operation order (and could overwrite
+ * the artifact immediately after it was checked). Reject that ambiguous shape
+ * before the transaction writes any revision. Multiple ensures remain valid
+ * only when their normalized path policies agree, preserving one canonical
+ * interpretation for the address throughout the commit.
+ */
+const validateEnsureAddressIsolation = (
+  commit: ClientCommit,
+  options: { principal?: string; sessionId: SessionId },
+): void => {
+  const addressOf = (operation: Exclude<Operation, SqliteOperation>): string =>
+    JSON.stringify([
+      operation.id,
+      resolveScopeKey(operation.scope, options),
+    ]);
+  const ensuredAddresses = new Map<string, string>();
+  for (const operation of commit.operations) {
+    if (operation.op === "ensure") {
+      const address = addressOf(operation);
+      const policy = normalizeEnsurePathPolicy(operation);
+      const priorPolicy = ensuredAddresses.get(address);
+      if (priorPolicy !== undefined && priorPolicy !== policy.signature) {
+        throw new ProtocolError(
+          `memory v2 commit has incompatible ensure path policies for ${operation.id} in the same scope`,
+        );
+      }
+      ensuredAddresses.set(address, policy.signature);
+    }
+  }
+  if (ensuredAddresses.size === 0) return;
+  for (const operation of commit.operations) {
+    if (operation.op === "sqlite" || operation.op === "ensure") continue;
+    if (!ensuredAddresses.has(addressOf(operation))) continue;
+    throw new ProtocolError(
+      `memory v2 commit cannot combine ensure with ${operation.op} for ${operation.id} in the same scope`,
+    );
   }
 };
 
@@ -6540,6 +6660,8 @@ const applyCommitTransaction = (
       }
     }
   }
+  validateEnsureAddressIsolation(commit, { principal, sessionId });
+
   const hasPreconditions = (commit.preconditions?.length ?? 0) > 0;
   const hasReads = commit.reads.confirmed.length > 0 ||
     commit.reads.pending.length > 0;
@@ -6623,7 +6745,6 @@ const applyCommitTransaction = (
       }
     }
   }
-
   validateCommitPreconditions(engine, sessionKey, branch, commit, {
     principal,
     sessionId,
@@ -6887,7 +7008,7 @@ const applyCommitTransaction = (
       }
     }
     if (!operation.id.startsWith("cid:")) {
-      if (operation.op === "set") {
+      if (operation.op === "set" || operation.op === "ensure") {
         requireInlineLabelMetadata(
           operation.id,
           operation.value,
@@ -7510,6 +7631,19 @@ const applyCommitTransaction = (
       if (released) revisions.push(released);
       continue;
     }
+    if (operation.op === "ensure") {
+      const revision = writeOperation(engine, {
+        branch,
+        seq,
+        opIndex,
+        operation,
+        principal: scanPrincipal,
+        sessionId: scanSession,
+        scopeKeyOverride: scopeKeyByOpIndex.get(opIndex),
+      });
+      if (revision !== undefined) revisions.push(revision);
+      continue;
+    }
     if (operation.op === "delete") {
       const released = releaseEntityOperationFields(engine, {
         branch,
@@ -7571,7 +7705,7 @@ const applyCommitTransaction = (
       sessionId: delegated?.actingSession ?? sessionId,
       scopeKeyOverride: scopeKeyByOpIndex.get(opIndex),
     });
-    revisions.push(revision);
+    if (revision !== undefined) revisions.push(revision);
   }
 
   if (operationResolutions.length > 0) {
@@ -7705,7 +7839,7 @@ const maintainStreamEventWatermarks = (
     // returned revision JOINS the commit's revision list: snapshot
     // materialization, head maintenance, and subscriber push all ride
     // it.
-    revisions.push(writeOperation(engine, {
+    const watermarkRevision = writeOperation(engine, {
       branch,
       seq,
       opIndex: nextSyntheticOpIndex++,
@@ -7721,7 +7855,10 @@ const maintainStreamEventWatermarks = (
       },
       sessionId,
       scopeKeyOverride: revision.scopeKey,
-    }));
+    });
+    if (watermarkRevision !== undefined) {
+      revisions.push(watermarkRevision);
+    }
   }
 };
 
@@ -7807,7 +7944,11 @@ const writeOperation = (
     branch: BranchName;
     seq: number;
     opIndex: number;
-    operation: SetOperation | PatchOperation | DeleteOperation;
+    operation:
+      | SetOperation
+      | EnsureOperation
+      | PatchOperation
+      | DeleteOperation;
     principal?: string;
     sessionId: SessionId;
 
@@ -7818,7 +7959,7 @@ const writeOperation = (
      * resolve from. */
     scopeKeyOverride?: string;
   },
-): AppliedRevision => {
+): AppliedRevision | undefined => {
   const { branch, seq, opIndex, operation, principal, sessionId } = options;
   const scope = normalizeScope(operation.scope);
   const scopeKey = options.scopeKeyOverride ??
@@ -7827,6 +7968,160 @@ const writeOperation = (
     ? { scopeKey }
     : { scope, scopeKey };
   switch (operation.op) {
+    case "ensure": {
+      if (!isEntityDocument(operation.value)) {
+        throw new Error(
+          "memory v2 ensure operations require explicit document objects",
+        );
+      }
+      const policy = normalizeEnsurePathPolicy(operation);
+      const additivePathList = policy.addUnique;
+      const valueAtPath = (
+        root: FabricValue,
+        path: readonly string[],
+      ): FabricValue | undefined => {
+        let value: FabricValue = root;
+        for (const segment of path) {
+          if (value === null || typeof value !== "object") return undefined;
+          value = (value as Record<string, FabricValue>)[segment];
+        }
+        return value;
+      };
+      for (const path of additivePathList) {
+        const expected = valueAtPath(operation.value as FabricValue, path);
+        if (expected !== undefined && !Array.isArray(expected)) {
+          throw new Error(
+            `content-addressed ensure addUnique value is not an array at ${
+              encodePointer(path)
+            }`,
+          );
+        }
+      }
+      // Read the current local row directly so an ensure also observes an
+      // earlier operation on the same entity in this still-open commit. The
+      // branch head is deliberately advanced only after every operation.
+      const localRow = engine.statements.selectCurrentLocal.get({
+        branch,
+        id: operation.id,
+        scope_key: scopeKey,
+      }) as ReadRow | undefined;
+      const existing = localRow === undefined
+        ? readStateForScopeKey(engine, {
+          id: operation.id,
+          scope,
+          scopeKey,
+          branch,
+        })?.document
+        : localRow.op === "set"
+        ? decodeStoredDocument(localRow.data)
+        : localRow.op === "patch"
+        ? reconstructPatchedDocument(engine, {
+          id: operation.id,
+          scopeKey,
+          branch,
+          seq: localRow.seq,
+          opIndex: localRow.op_index,
+        }).document
+        : null;
+      if (existing !== null && existing !== undefined) {
+        let actualIdentity = existing as FabricValue;
+        let expectedIdentity = operation.value as FabricValue;
+        for (
+          const path of [
+            ...policy.ignore,
+            ...additivePathList,
+          ]
+        ) {
+          actualIdentity = cloneWithoutValueAtPath(actualIdentity, path);
+          expectedIdentity = cloneWithoutValueAtPath(expectedIdentity, path);
+        }
+        if (!valueEqual(actualIdentity, expectedIdentity)) {
+          throw new Error(
+            `content-addressed ensure mismatch for ${operation.id}`,
+          );
+        }
+        const patches: PatchOp[] = [];
+        for (const path of additivePathList) {
+          const actual = valueAtPath(existing as FabricValue, path);
+          const expected = valueAtPath(operation.value as FabricValue, path);
+          if (actual !== undefined && !Array.isArray(actual)) {
+            throw new Error(
+              `content-addressed ensure addUnique target is not an array at ${
+                encodePointer(path)
+              }`,
+            );
+          }
+          if (!Array.isArray(expected) || expected.length === 0) continue;
+          patches.push({
+            op: "add-unique",
+            path: encodePointer(path),
+            values: expected,
+            ...(actual === undefined ? { createsKey: true } : {}),
+          });
+        }
+        if (patches.length === 0) return undefined;
+        const merged = applyPatchToDocument(existing, patches);
+        if (valueEqual(merged, existing as FabricValue)) return undefined;
+        engine.statements.insertRevision.run({
+          branch,
+          id: operation.id,
+          scope_key: scopeKey,
+          seq,
+          op_index: opIndex,
+          op: "patch",
+          data: encodeMemoryBoundary(patches),
+          commit_seq: seq,
+        });
+        engine.statements.upsertHead.run({
+          branch,
+          id: operation.id,
+          scope_key: scopeKey,
+          seq,
+          op_index: opIndex,
+          op: "patch",
+        });
+        return {
+          id: operation.id,
+          ...revisionScopeFields,
+          branch,
+          seq,
+          opIndex,
+          commitSeq: seq,
+          op: "patch",
+          patches,
+        };
+      }
+      engine.statements.insertRevision.run({
+        branch,
+        id: operation.id,
+        scope_key: scopeKey,
+        seq,
+        op_index: opIndex,
+        // Ensure is a wire-time precondition. Once admitted, its durable
+        // history is an ordinary set so all existing readers can replay it.
+        op: "set",
+        data: encodeMemoryBoundary(operation.value),
+        commit_seq: seq,
+      });
+      engine.statements.upsertHead.run({
+        branch,
+        id: operation.id,
+        scope_key: scopeKey,
+        seq,
+        op_index: opIndex,
+        op: "set",
+      });
+      return {
+        id: operation.id,
+        ...revisionScopeFields,
+        branch,
+        seq,
+        opIndex,
+        commitSeq: seq,
+        op: "set",
+        document: operation.value,
+      };
+    }
     case "set": {
       if (!isEntityDocument(operation.value)) {
         throw new Error(

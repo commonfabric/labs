@@ -76,6 +76,8 @@ export interface NodeTypeLinks {
   printedWithin?: ts.TypeNode;
 }
 
+type FactoryContractHint = NonNullable<SchemaHint["factoryContracts"]>[number];
+
 /**
  * CrossStageState — the single owner of the pipeline's cross-transformer
  * communication registries.
@@ -150,6 +152,11 @@ export class CrossStageState {
   /** The other such channel, held to the same contract. */
   readonly schemaHints: SchemaHints = new WeakMap();
 
+  readonly factoryContractsBySymbol = new WeakMap<
+    ts.Symbol,
+    readonly FactoryContractHint[]
+  >();
+
   /**
    * NodeLinks-shaped side table for the transformer-internal,
    * non-cache-invalidating per-node channels (capabilitySummary, schemaInjected).
@@ -183,6 +190,8 @@ export class CrossStageState {
 
   /** The third marker-family WeakSet, held to the same contract. */
   readonly syntheticComputeOwnedNodeRegistry = new WeakSet<ts.Node>();
+
+  readonly liveFactoryDerivationRegistry = new WeakSet<ts.Node>();
 
   /** The fourth marker-family WeakSet, held to the same contract. */
   readonly syntheticReactiveCollectionRegistry:
@@ -239,6 +248,14 @@ export class CrossStageState {
     return this.#hasWithOriginal(this.syntheticComputeOwnedNodeRegistry, node);
   }
 
+  markLiveFactoryDerivation(node: ts.Node): void {
+    this.liveFactoryDerivationRegistry.add(node);
+  }
+
+  isLiveFactoryDerivation(node: ts.Node): boolean {
+    return this.#hasWithOriginal(this.liveFactoryDerivationRegistry, node);
+  }
+
   //
   // syntheticReactiveCollectionRegistry (keyed by ts.Symbol)
   //
@@ -256,10 +273,13 @@ export class CrossStageState {
   //
 
   recordSchemaHint(node: ts.Node, hint: SchemaHint): void {
-    this.#addSchemaHint(node, hint);
+    this.#addSchemaHint(node, { ...this.schemaHints.get(node), ...hint });
     const original = ts.getOriginalNode(node);
     if (original !== node) {
-      this.#addSchemaHint(original, hint);
+      this.#addSchemaHint(original, {
+        ...this.schemaHints.get(original),
+        ...hint,
+      });
     }
   }
 
@@ -313,6 +333,21 @@ export class CrossStageState {
   lookupSchemaHint(node: ts.Node): SchemaHint | undefined {
     return this.schemaHints.get(node) ??
       this.schemaHints.get(ts.getOriginalNode(node));
+  }
+
+  recordFactoryContractForSymbol(
+    symbol: ts.Symbol,
+    contract: FactoryContractHint,
+  ): void {
+    const existing = this.factoryContractsBySymbol.get(symbol) ?? [];
+    if (existing.includes(contract)) return;
+    this.factoryContractsBySymbol.set(symbol, [...existing, contract]);
+  }
+
+  lookupFactoryContractsForSymbol(
+    symbol: ts.Symbol,
+  ): readonly FactoryContractHint[] | undefined {
+    return this.factoryContractsBySymbol.get(symbol);
   }
 
   //

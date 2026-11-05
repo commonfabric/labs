@@ -40,7 +40,7 @@ describe("llmDialog demand and idempotency", () => {
   });
 
   it("writes the same tool catalog on a second run over the same inputs", async () => {
-    const { Cell, llmDialog, pattern, patternTool } = builder;
+    const { Cell, llmDialog, pattern } = builder;
     const echo = pattern(
       () => "pong",
       { type: "object" },
@@ -54,14 +54,8 @@ describe("llmDialog demand and idempotency", () => {
         system: "Base system prompt.",
         tools: {
           ping: {
+            pattern: echo,
             description: "Run the echo worker.",
-            ...patternTool(echo, {
-              system: "You are a worker.",
-              observationMaxConfidentiality: [
-                { type: "atom", class: "RiskA", subject: "did:example:a" },
-                { type: "atom", class: "RiskB", subject: "did:example:b" },
-              ],
-            }),
           } as unknown as BuiltInLLMTool,
         },
       });

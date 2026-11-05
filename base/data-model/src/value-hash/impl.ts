@@ -4,6 +4,7 @@
 
 import type { FabricValue } from "@/interface.ts";
 import type { FabricHash } from "@/fabric-primitives";
+import { isAdmittedFabricFactory } from "@/fabric-factory.ts";
 import { debugStr } from "@/value-debug";
 
 import {
@@ -69,6 +70,19 @@ function hashOfInternal(
         return frozenHash;
       }
 
+      return stringOkay
+        ? ValueHasher.computeHashAsString(value)
+        : ValueHasher.computeHash(value);
+    }
+
+    case "function": {
+      if (!isAdmittedFabricFactory(value)) {
+        throw new Error("Cannot hash an arbitrary function value");
+      }
+      const frozenHash = cachedFrozenObjectHashElseUndefined(value);
+      if (frozenHash !== undefined) {
+        return frozenHash;
+      }
       return stringOkay
         ? ValueHasher.computeHashAsString(value)
         : ValueHasher.computeHash(value);
