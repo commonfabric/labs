@@ -2447,8 +2447,12 @@ describe("running a lane's work", () => {
 });
 
 describe("annotateNotRun()", () => {
-  /** What it prints, inside a job or not. */
-  function annotating(reason: string, inJob: boolean): string[] {
+  /** What it prints, inside a job or not, with `annotated` raised already. */
+  function annotating(
+    reason: string,
+    inJob: boolean,
+    annotated = new Set<string>(),
+  ): string[] {
     const lines: string[] = [];
     const log = console.log;
     console.log = (line: string) => lines.push(line);
@@ -2456,6 +2460,7 @@ describe("annotateNotRun()", () => {
       annotateNotRun(
         "cli-fuse",
         reason,
+        annotated,
         (name) => inJob && name === "GITHUB_ACTIONS" ? "true" : undefined,
       );
     } finally {
@@ -2472,6 +2477,19 @@ describe("annotateNotRun()", () => {
 
   it("prints nothing outside a job", () => {
     expect(annotating("did not run", false)).toEqual([]);
+  });
+
+  it("counts itself among what the lane has annotated", () => {
+    const annotated = new Set<string>();
+    annotating("did not run", true, annotated);
+    expect(annotated.size).toBe(1);
+  });
+
+  it("prints nothing once the lane has annotated all it may", () => {
+    const annotated = new Set(
+      Array.from({ length: ANNOTATED_FAILURES }, (_, i) => `test ${i}`),
+    );
+    expect(annotating("did not run", true, annotated)).toEqual([]);
   });
 });
 

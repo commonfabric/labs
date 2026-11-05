@@ -2938,7 +2938,7 @@ export async function runLane(
         for (const { unit } of batch.units) {
           failedUnits.add(`${batch.suite.id}\t${unit}`);
         }
-        annotateNotRun(batch.suite.id, reason);
+        annotateNotRun(batch.suite.id, reason, annotated);
         continue;
       }
       const result = await runBatch(
@@ -3247,14 +3247,18 @@ export function notRunReason(
 
 /**
  * Raises a GitHub Actions annotation for a batch the lane did not run, which
- * has no failing test for `annotateLaneFailures()` to raise one for.
+ * has no failing test for `annotateLaneFailures()` to raise one for, within the
+ * same limit on what `annotated` holds.
  */
 export function annotateNotRun(
   suite: string,
   reason: string,
+  annotated: Set<string>,
   env: (name: string) => string | undefined = Deno.env.get,
 ): void {
   if (env("GITHUB_ACTIONS") !== "true") return;
+  if (annotated.size >= ANNOTATED_FAILURES) return;
+  annotated.add(`not run: ${suite}`);
   console.log(
     `::error title=${annotationProperty(suite)}::${annotationData(reason)}`,
   );
