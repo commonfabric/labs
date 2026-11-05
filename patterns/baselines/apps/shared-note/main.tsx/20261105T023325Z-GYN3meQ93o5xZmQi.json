@@ -117,7 +117,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "TxQIY_bHYmVEBteqKHxJacWiJFxAu6BtZxC1-cuMBXQ",
                   "path": [
                     "openComposer"
                   ]
@@ -128,7 +128,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "TxQIY_bHYmVEBteqKHxJacWiJFxAu6BtZxC1-cuMBXQ",
                   "path": [
                     "postComment"
                   ]
@@ -139,7 +139,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "TxQIY_bHYmVEBteqKHxJacWiJFxAu6BtZxC1-cuMBXQ",
                   "path": [
                     "addComment"
                   ]
@@ -150,7 +150,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "TxQIY_bHYmVEBteqKHxJacWiJFxAu6BtZxC1-cuMBXQ",
                   "path": [
                     "deleteComment"
                   ]
@@ -161,7 +161,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "TxQIY_bHYmVEBteqKHxJacWiJFxAu6BtZxC1-cuMBXQ",
                   "path": [
                     "discardDraft"
                   ]
@@ -185,7 +185,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/apps/shared-note/main.tsx",
-              "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+              "moduleIdentity": "TxQIY_bHYmVEBteqKHxJacWiJFxAu6BtZxC1-cuMBXQ",
               "path": [
                 "commitReply"
               ]
@@ -330,9 +330,9 @@
           }
         },
         "required": [
-          "id",
           "from",
-          "to"
+          "to",
+          "id"
         ],
         "type": "object"
       },
@@ -443,7 +443,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "TxQIY_bHYmVEBteqKHxJacWiJFxAu6BtZxC1-cuMBXQ",
                   "path": [
                     "openComposer"
                   ]
@@ -454,7 +454,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "TxQIY_bHYmVEBteqKHxJacWiJFxAu6BtZxC1-cuMBXQ",
                   "path": [
                     "postComment"
                   ]
@@ -465,7 +465,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "TxQIY_bHYmVEBteqKHxJacWiJFxAu6BtZxC1-cuMBXQ",
                   "path": [
                     "addComment"
                   ]
@@ -476,7 +476,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "TxQIY_bHYmVEBteqKHxJacWiJFxAu6BtZxC1-cuMBXQ",
                   "path": [
                     "deleteComment"
                   ]
@@ -487,7 +487,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+                  "moduleIdentity": "TxQIY_bHYmVEBteqKHxJacWiJFxAu6BtZxC1-cuMBXQ",
                   "path": [
                     "discardDraft"
                   ]
@@ -511,7 +511,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/apps/shared-note/main.tsx",
-              "moduleIdentity": "4dUlHSxu67Jx3WpbyBS-zfFmFQW34vlWt0MRzWNbYOI",
+              "moduleIdentity": "TxQIY_bHYmVEBteqKHxJacWiJFxAu6BtZxC1-cuMBXQ",
               "path": [
                 "commitReply"
               ]
@@ -522,6 +522,37 @@
     },
     "description": "Readable Markdown and the same compact view for standalone and embedded use.",
     "properties": {
+      "$FS": {
+        "description": "The note as `index.md`: the title in the frontmatter, then the body, both\nlinked to the fields below. A filesystem save writes both back. Once an\neditor has changed the body, a save that changes it too is refused, and\nthe body is edited through the verbs below instead.",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "text/markdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "frontmatter",
+          "content"
+        ],
+        "type": "object"
+      },
       "$NAME": {
         "type": "string"
       },
@@ -554,7 +585,7 @@
             "$ref": "#/$defs/FieldAnchors"
           }
         ],
-        "description": "Where each comment's text is now: the body's anchors, one per comment,\ndrafts included, under the comment's `id`, or `undefined` while the body\nhas none."
+        "description": "Where each comment's text is now: the body's anchors, one per comment,\ndrafts included, under the comment's `id`, or `undefined` until the body\nfirst holds one."
       },
       "comments": {
         "items": {
@@ -634,7 +665,8 @@
       "deleteComment",
       "$NAME",
       "$UI",
-      "$TILE_UI"
+      "$TILE_UI",
+      "$FS"
     ],
     "type": "object"
   }
