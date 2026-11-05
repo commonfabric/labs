@@ -2793,6 +2793,104 @@ export default pattern<
     });
   });
 
+  /**
+   * A pattern whose `offer` handler sends to the `receive` stream of an inbox
+   * its holder links to, through a cell that carries no stream schema, as
+   * FabriChat's offers reach a profile's inbox.
+   */
+  const OFFERING_HANDLER_PATTERN = `
+import { type Cell, handler, pattern, type Stream } from "commonfabric";
+type Inbox = { receive: Stream<{ title: string }> };
+type Holder = { inbox?: Cell<unknown> };
+function inboxOf(link: unknown): Cell<Inbox>;
+function inboxOf(link: unknown): unknown {
+  return link;
+}
+const offer = handler<{ title: string }, { holder: Holder }>(
+  (event, { holder }) => {
+    inboxOf(holder.inbox!.resolveAsCell()).key("receive").send({
+      title: event.title,
+    });
+  },
+);
+export default pattern<{ holder: Holder }, { offer: Stream<{ title: string }> }>(
+  ({ holder }) => ({ offer: offer({ holder }) }),
+);`;
+
+  it("delivers a served handler's send to a foreign stream, through a link to a document the serving runtime has not loaded", async () => {
+    // Read without a stream schema, the target's stream marker is what tells
+    // a send from a write, and on a document the replica has not loaded it is
+    // unknowable. The run is withdrawn and runs again once the load lands,
+    // rather than writing into the foreign space and losing the event.
+    let inbox: Cell<unknown> | undefined;
+    const { result, entries } = await standUpServed(
+      "send-unloaded-stream",
+      OFFERING_HANDLER_PATTERN,
+      async (client) => {
+        inbox = await foreignDocument(
+          client,
+          "send-unloaded-stream-inbox",
+          "space",
+          { receive: { $stream: true } },
+        );
+        return { holder: { inbox } };
+      },
+    );
+
+    result.key("offer").send({ title: "hello" });
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0].status).toBeUndefined();
+    const foreign = await server.engineForSpace(foreignSpace);
+    const sidecarId = streamEntriesDocId({
+      id: inbox!.getAsNormalizedFullLink().id,
+      path: ["receive"],
+    });
+    const delivered = () =>
+      (readDoc(foreign, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined)?.entries ?? [];
+    await awaitAdmitted(server, () => delivered().length > 0);
+    expect(delivered().map((entry) => entry.payload)).toEqual([
+      { title: "hello" },
+    ]);
+  });
+
+  it("ends a served handler's send to a foreign target confirmed absent, rather than waiting on it", async () => {
+    // The run waits only while the target's load is in flight: once the load
+    // confirms there is no document, the send writes as before, which the
+    // transaction refuses, and the event ends there, delivering nothing.
+    let inbox: Cell<unknown> | undefined;
+    const { result, entries } = await standUpServed(
+      "send-absent-stream",
+      OFFERING_HANDLER_PATTERN,
+      (client) => {
+        inbox = client.getCell(
+          foreignSpace,
+          "send-absent-stream-inbox",
+          undefined,
+        );
+        return { holder: { inbox } };
+      },
+    );
+
+    result.key("offer").send({ title: "hello" });
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    const foreign = await server.engineForSpace(foreignSpace);
+    const sidecarId = streamEntriesDocId({
+      id: inbox!.getAsNormalizedFullLink().id,
+      path: ["receive"],
+    });
+    expect(readDoc(foreign, { id: sidecarId })).toBeNull();
+    // The handler ran and failed on its write, once; it was not withdrawn
+    // dispatch after dispatch until the drain gave up on it.
+    expect(entries()[0].error).toContain("Can not open transaction writer");
+    expect(entries()[0].reason).toBeUndefined();
+  });
+
   it("runs a served event whose declared value is a foreign space-scope document", async () => {
     let target: Cell<unknown> | undefined;
     const { result, entries, stored } = await standUpServed(

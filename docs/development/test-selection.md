@@ -279,8 +279,14 @@ workflow. A run's lanes come from two jobs.
   take, and the manifest it was packed against. It then prints a line as it
   begins to open each capability, one just before each command that setup
   runs, one once each capability has opened, and one as each batch starts.
-  Setup captures its commands' output, so in a lane that stops without saying
-  why, the last of these lines names the step it stopped in.
+  Setup captures the output of most of its commands, so in a lane that stops
+  without saying why, the last of these lines names the step it stopped in.
+  `apt-get` writes to the job's log directly, so that a stall shows how far it
+  got, and each `apt-get` command is stopped after five minutes.
+- A capability that fails to open costs only the batches needing it. The lane
+  says why it did not open, runs every other batch, and fails, with each batch
+  it did not run named in its closing summary and raised as an error annotation
+  saying it did not run and why.
 - After each batch, the lane raises GitHub Actions error annotations for the
   failures it fails for, with a local rerun command where one exists. These
   appear while the remaining batches, diagnostic reruns, and coverage work
@@ -301,7 +307,9 @@ workflow. A run's lanes come from two jobs.
   signal is one an error it did not catch stopped, and is recorded as failed.
   The lane then prints the end of each server's log, keeps its working
   directory for the upload of what a failing lane left behind, and exits
-  without converting its coverage, which takes longer than GitHub waits.
+  without converting its coverage, which takes longer than GitHub waits. Its
+  closing summary says which pass it was running and which batches it did not
+  start, and does not report anything it stopped as having run no test.
 
 Only the `🧪 Run the lane` step is given `GITHUB_TOKEN` in its
 environment, and `tasks/ci-workflow.test.ts` fails a lane job in which the

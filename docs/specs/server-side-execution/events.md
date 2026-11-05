@@ -608,7 +608,15 @@ loop's duty).
   carries the entry's pre-stamped `consequenced` mark (§4), is
   WITHDRAWN whole. The entry stays pending-unconsequenced, the
   standard re-drain re-delivers it, and the retried handler's
-  cause-derived (idempotent) writes converge. Sealing the skip is the
+  cause-derived (idempotent) writes converge. A handler's write into
+  another space at a link-hop target whose document has not arrived
+  (`pendingHopDoc`) records the same skip while that document's load
+  is in flight: read without a stream schema, the target's stream
+  marker is what tells a send from a write, and there it is
+  unknowable, so the write is neither sent nor attempted (a value
+  write would open a second space's writer, which the transaction
+  refuses, and lose the event); the re-run reads the loaded document
+  and sends. A target the load confirms absent writes as before. Sealing the skip is the
   defect this rule prevents: the mark committed ALONE — a 1-op derived
   commit, the user's event permanently consumed with zero effects and
   no error (the b1-lifts a04 red, seqs 53/56). Consequence atomicity

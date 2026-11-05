@@ -3164,6 +3164,34 @@ export class CellImpl<T extends FabricValue>
         );
       }
 
+      // A handler's write into another space, at a link-hop target whose
+      // document has not arrived (`pendingHopDoc`), cannot tell a send to a
+      // stream from a write: the stream marker is unknowable there, not
+      // absent. Written as a value, it would open a writer in a second space,
+      // which the transaction refuses, and lose the event. So while that
+      // document's load is in flight the run is withdrawn, and the dispatch
+      // runs it again once the load lands (events.md §5), as a cell resolved
+      // through a loading document is (`resolveAsCell()`); the resolution
+      // above kicked that load. A target confirmed absent, a same-space
+      // target, or one outside a handler, writes as before.
+      if (resolvedToValueLink.pendingHopDoc === true) {
+        const run = patternRun(this.#runtime);
+        if (
+          run?.kind === "handler" && run.space !== undefined &&
+          resolvedToValueLink.space !== run.space
+        ) {
+          withdrawHandlerWhileLoading(
+            this.#runtime,
+            run.tx,
+            resolvedToValueLink,
+            `a write into another space reached \`${resolvedToValueLink.id}\` while its document was still loading`,
+          );
+          if (run.tx.dispatchedHandlerNotRun !== undefined) {
+            return this as unknown as Cell<T>;
+          }
+        }
+      }
+
       // No await for the sync, just kicking this off, so we have the data to
       // retry on conflict.
       if (!this.#synced) this.#startLoad();
@@ -5391,13 +5419,17 @@ function patternRunTx(
 }
 
 /**
- * Returns the kind and the transaction of the handler or lift of `runtime`
- * that is running, while that transaction is open.
+ * Returns the kind, the transaction and the space of the handler or lift of
+ * `runtime` that is running, while that transaction is open.
  */
 function patternRun(
   runtime: Runtime,
 ):
-  | { kind: "handler" | "lift"; tx: IExtendedStorageTransaction }
+  | {
+    kind: "handler" | "lift";
+    tx: IExtendedStorageTransaction;
+    space: MemorySpace | undefined;
+  }
   | undefined {
   let frame = getTopFrame();
   while (frame !== undefined && frame.frameKind === undefined) {
@@ -5405,7 +5437,7 @@ function patternRun(
   }
   const tx = frame?.runtime === runtime ? frame.tx : undefined;
   return frame?.frameKind !== undefined && tx?.status().status === "ready"
-    ? { kind: frame.frameKind, tx }
+    ? { kind: frame.frameKind, tx, space: frame.space }
     : undefined;
 }
 
