@@ -4954,6 +4954,23 @@ export type EqualsFunction = (
 ) => boolean;
 
 /**
+ * Returns a string that two values share exactly when `equals` returns `true`
+ * for them in the same run, so that a `Set` or a `Map` keyed by it finds the
+ * distinct references in a list, or joins one list to another, in one pass
+ * where `equals` compares them in pairs. Like `equals`, it follows links
+ * first, so an alias and the document it names share a key.
+ *
+ * Returns `undefined` for a value with no place in the graph — a fresh object
+ * literal, a primitive, `undefined` — which `equals` matches to nothing but
+ * itself. A key holds for the run that made it, as `equals` does: compare it
+ * with keys from the same run, and do not store it. Its form is not part of
+ * the contract.
+ */
+export type EqualsKeyFunction = (
+  value: AnyCell<any> | object | undefined,
+) => string | undefined;
+
+/**
  * Deep structural equality for two values, intended for `FabricValue`-shaped
  * data. Compares primitives with `Object.is` (so `NaN` equals `NaN` and `-0`
  * is distinct from `0`). Unlike `equals`, it compares values directly and does
@@ -5047,6 +5064,7 @@ export declare const multiUserTest: <T extends MultiUserTestDescriptor>(
 export declare const cell: CellTypeConstructor<AsCell>["of"];
 
 export declare const equals: EqualsFunction;
+export declare const equalsKey: EqualsKeyFunction;
 export declare const valueEqual: ValueEqualFunction;
 export declare const byRef: ByRefFunction;
 export function getPatternEnvironment(): PatternEnvironment {
