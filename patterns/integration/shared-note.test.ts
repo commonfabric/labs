@@ -410,6 +410,15 @@ describe("shared-note", () => {
     await editorState(adaPage, { anchor: cafe, head: cafe + "Café".length });
     await waitForDisabled(adaPage, "#shared-note-comment-button", false);
     await clickCfButton(adaPage, "#shared-note-comment-button");
+    // Ada types once the composer shows, as a person would; typing into it
+    // while hidden races the handler that opens it.
+    await waitForCondition(
+      adaPage,
+      (probe) =>
+        probe.collect("#shared-note-comment-draft").some((element) =>
+          probe.isRendered(element)
+        ),
+    );
     await fillCfTextarea(
       adaPage,
       "#shared-note-comment-draft",
