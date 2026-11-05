@@ -395,9 +395,38 @@ Within the apply steps of §7.7.1:
    submission integrated (§7.5), in order. A submission that integrates
    nothing maps nothing.
 3. Where an anchor moved, the engine replaces the document's value with the
-   mapped anchors, under the same ids, as a `patch` of the value alone. Whatever else the document's envelope holds, a CFC label among
-   it, is left as its writer wrote it. Where no anchor moved, the document is
-   not written.
+   mapped anchors, under the same ids, as a `patch`. Where no anchor moved,
+   the document is not written.
+4. The same `patch` labels each anchor that moved with the confidentiality of
+   the field, since a moved offset is computed from the field's edits
+   whoever wrote the anchor. That a moved offset takes the field's
+   confidentiality is a rule of Contextual Flow Control; what follows is how
+   the engine arranges it. The engine reads the stored CFC envelope of the
+   field's document, in the field's scope instance and in each broader
+   instance, and takes the confidentiality of every label entry whose path
+   is the field's path, a prefix of it, or beneath it, a `*` segment standing
+   for any key. A label an entry names by document is read from that
+   document. Integrity is not taken. Where that confidentiality is not
+   empty, the engine adds to the anchors document's envelope, for each moved
+   anchor, an entry at the anchor's path, of origin `derived` and class
+   `value`, holding it, unless the envelope already holds that entry. An
+   anchors document with no envelope gets one, naming the schema document of
+   the schema that declares nothing, which the engine stores in the same
+   commit where the store does not hold it. Whatever else the envelope holds
+   is left as its writer wrote it.
+
+The engine refuses the operation, and so the commit, where it cannot read the
+field's envelope or the anchors document's: one of a version other than 1 and
+2, one with no label map, an entry with no path, a label holding anything but
+`confidentiality` and `integrity` arrays, or a label reference no stored
+document backs. An edit that moves no anchor reads no envelope and is not
+refused for one.
+
+The label is a record of the field at the edit, and it is the document's
+writers that end it. A writer's CFC pass drops a derived `value` entry at a
+path the writer replaces, so an anchor written again carries its writer's
+label alone, and the engine labels it again when a later edit moves it. A
+change to the field's label moves no anchor and changes no anchor's label.
 
 Anchors are not operations: they enter no submitted or integrated row and
 advance no version. A commit that writes the anchors document and also applies
@@ -519,7 +548,8 @@ anchors. The engine does not check an offset against the field's value, which
 it cannot find; the codec takes an offset past the end as the end (§7.5).
 
 The engine itself writes the document only to map its anchors through an
-integrated operation (§7.7.4), and deletes it only with the field's entity:
+integrated operation and to label the ones it moved (§7.7.4), and deletes it
+only with the field's entity:
 deleting an entity deletes the anchors document of each of its fields that
 has ever been active. Releasing a field leaves the document as it is. The
 released value still holds the text the anchors refer to, and an ordinary
@@ -781,14 +811,6 @@ range-level provenance (§7.14) can reference the history they name.
 ## 7.17 Deferred Decisions
 
 - The representation and algebra for range-level CFC side-data.
-- The CFC label of what the engine derives into a field's anchors document.
-  The engine rewrites the offsets from the field's edits and leaves the
-  document's label as its writers left it. Anchors written by a transaction
-  that read the field carry the field's confidentiality by ordinary flow;
-  anchors written by one that did not carry none of it, though their offsets
-  then follow the field's edits, and a reader of them learns where the field
-  was edited without the field's taint. §7.14's label mapper is where the
-  label covering the field's path would be joined onto the document.
 - Collaborative branch merge semantics.
 - Retention durations for submitted audit payloads.
 - Whether mature deployments move codec execution into a more isolated

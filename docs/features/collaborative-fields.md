@@ -161,9 +161,10 @@ changes the anchors by writing that document, as they would any entity, and
 Memory refuses a write that leaves anything other than such a map in it
 ([`../specs/memory-v2/07-op-views-and-annotations.md`](../specs/memory-v2/07-op-views-and-annotations.md),
 §7.8). When an edit moves an anchor, Memory rewrites the document's value in
-the transaction that integrates the edit and leaves the rest of the document,
-its label included, as it was. An edit that moves no anchor leaves the
-document alone.
+the transaction that integrates the edit, and labels each anchor it moved
+with the field's confidentiality, as described below. The rest of the
+document is left as it was. An edit that moves no anchor leaves the document
+alone.
 
 Releasing a field keeps its anchors, since the released text is the text they
 refer to. Deleting the field's entity deletes the anchors of each of its
@@ -202,24 +203,49 @@ returns it as a cell
 writes the anchors.
 
 An anchor says something about the field's text: where text is, how far apart
-two points are, and whatever its writer put in the id. Contextual Flow Control
-has no rule of its own for anchors, so the anchors document carries the label
-its writers' transactions gave it. A handler that reads the field before it
-writes the anchors writes them under the field's confidentiality, by the
-ordinary flow from what a transaction read to what it wrote, and a later
-reader of those anchors is tainted as a reader of the field is.
+two points are, and whatever its writer put in the id. The anchors document
+carries a Contextual Flow Control label from two sources.
 
-A writer that does not read the field leaves the anchors under whatever it did
-read, and Memory adds no label when it rewrites their offsets, although the
-offsets it writes follow the field's edits. A reader of such anchors learns
-where the field was edited and by how much, and the field's length from an
-anchor written past its end, without the field's taint. Whether Memory should
-join the field's label onto the document is an open decision (the spec's
-deferred decisions, §7.17).
+The first is the transaction that writes an anchor. A handler that reads the
+field before it writes the anchors writes them under the field's
+confidentiality, by the ordinary flow from what a transaction read to what it
+wrote. A writer that does not read the field leaves the anchors under whatever
+it did read, which for a writer that read nothing is no label at all: an
+offset its writer chose says nothing about the field.
 
-The anchors take none of the field's integrity, and the field's write policy
-does not govern them: a pattern that wants only certain handlers to move
-anchors declares a write policy on the anchors cell.
+The second is Memory. An offset Memory computed from an edit says where the
+field was edited and by how much, and, for an anchor written past the end of
+the text, how long the field is. So when an edit moves an anchor, Memory
+labels that anchor with the confidentiality the field's document holds over
+the field at that edit, in the same transaction. It reads the label entries
+of the field's stored envelope that lie at, above or inside the field's path,
+in the field's scope instance and in each broader instance of the same
+document, and writes their confidentiality as a derived label of the moved
+anchor's offset. A later reader of that offset is tainted as a reader of the
+field was, whoever wrote the anchor. An anchor the edit left where it was
+gets no label from it.
+
+The label is of the offset Memory wrote, and lasts as long as that offset
+does:
+
+- A later edit that moves the anchor again labels it with what the field
+  holds then, beside what it already carries.
+- The field's label changing without an edit that moves the anchor leaves
+  the anchor's label as it was.
+- A write that replaces the anchor's offset replaces the label with the
+  writer's own, as a write of any derived value does. An offset written by a
+  transaction that read nothing confidential is unlabeled again.
+- Releasing the field leaves the labels in place, with the anchors.
+
+Where Memory cannot read the field's envelope, or the anchors document's, it
+refuses the edit and moves nothing, so that no offset is stored that is less
+confidential than the field it came from. An envelope of a version Memory
+does not read, a label of a shape it does not know, and a label reference no
+stored document backs are each such a case.
+
+The anchors take none of the field's integrity, from either source, and the
+field's write policy does not govern them: a pattern that wants only certain
+handlers to move anchors declares a write policy on the anchors cell.
 
 ## Checkpoints, reconnect, and reset
 
