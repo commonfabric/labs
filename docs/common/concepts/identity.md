@@ -101,6 +101,32 @@ const hasItem = lift<{ item: Item, items: Item[] }>(
 
 **Tip:** For removing items, use `array.remove(item)`, it uses the same `equals()` under the hood.
 
+### Keying by identity with `equalsKey()`
+
+`equals()` compares two values, so finding the distinct references in a list of `n`, or matching one list against another, compares every pair. `equalsKey()` returns a string that two values share exactly when `equals()` returns `true` for them, so a `Set` or a `Map` keyed by it does the same work in one pass:
+
+```typescript
+// Shown at module scope.
+import { equalsKey, lift } from 'commonfabric';
+
+interface Item {
+  name: string;
+}
+
+// Each item at its first position, however many positions name it.
+const distinctItems = lift<{ items: Item[] }>(({ items }) => {
+  const seen = new Set<unknown>();
+  return items.filter((item) => {
+    const key = equalsKey(item) ?? item;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+});
+```
+
+Like `equals()`, it follows links first, so an alias and the document it names share a key. A value with no place in the graph has no key, and `equalsKey()` returns `undefined` for it; the `?? item` above keeps such a value apart from every other, as `equals()` does. A key holds for the run that made it: compare keys made in the same handler or computation, and do not store one.
+
 ### In `.map()` Callbacks
 
 When iterating with `.map()`, you have a reference to each item. Use that reference directly:
