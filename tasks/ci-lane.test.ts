@@ -110,6 +110,7 @@ import {
   DISCRETIONARY_SECONDS,
   FULL_LANE_BOUND_SECONDS,
   FULL_LANE_BUDGET_SECONDS,
+  FULL_LANES_MAX,
   LANE_BOUND_SECONDS,
   LANE_BUDGET_SECONDS,
   LANE_PROLOGUE_SECONDS,
@@ -1123,32 +1124,36 @@ describe("how many lanes a run asks for", () => {
     expect(await lanesOf(options, deps)).toBe(4);
   });
 
-  /** What `lanesOf` answers, and what it said on the error stream. */
-  async function saying(deps: LaneDeps) {
+  /**
+   * What `lanesOf` answers for the full run, or for `run`, and what it said
+   * on the error stream.
+   */
+  async function saying(deps: LaneDeps, run: LaneOptions = options) {
     const error = console.error;
     const said: string[] = [];
     console.error = (line: string) => said.push(line);
     try {
-      return { lanes: await lanesOf(options, deps), said: said.join("\n") };
+      return { lanes: await lanesOf(run, deps), said: said.join("\n") };
     } finally {
       console.error = error;
     }
   }
 
   it("says when the cap holds back a measured run", async () => {
-    // Two tests to a lane, and two lanes more than the cap allows.
+    // Two tests to a lane, and two lanes more than the full run's cap allows.
     const capped = await saying(
-      corpus((LANES_MAX + 2) * 2, FULL_LANE_BUDGET_SECONDS * 0.45),
+      corpus((FULL_LANES_MAX + 2) * 2, FULL_LANE_BUDGET_SECONDS * 0.45),
     );
-    expect(capped.lanes).toBe(LANES_MAX);
+    expect(capped.lanes).toBe(FULL_LANES_MAX);
     expect(capped.said).toContain(
-      `needs more than ${LANES_MAX} lanes and takes ${LANES_MAX}`,
+      `needs more than ${FULL_LANES_MAX} lanes and takes ${FULL_LANES_MAX}, ` +
+        "the most FULL_LANES_MAX allows",
     );
     // And says nothing of the cap where the run fits under it.
     const fits = await saying(
-      corpus(LANES_MAX * 2, FULL_LANE_BUDGET_SECONDS * 0.45),
+      corpus(FULL_LANES_MAX * 2, FULL_LANE_BUDGET_SECONDS * 0.45),
     );
-    expect(fits.lanes).toBe(LANES_MAX);
+    expect(fits.lanes).toBe(FULL_LANES_MAX);
     expect(fits.said).not.toContain("needs more than");
   });
 
@@ -1322,16 +1327,37 @@ describe("how many lanes a run asks for", () => {
     // A lane per suite is the floor with nothing measured, and a tree with
     // more suites than the cap would otherwise ask for a runner apiece.
     const suites = Array.from(
-      { length: LANES_MAX + 10 },
+      { length: FULL_LANES_MAX + 10 },
+      (_, i) => suite({ id: `suite-${i}`, units: [`s${i}/one.test.ts`] }),
+    );
+    const { lanes, said } = await saying(
+      {
+        topology: () => Promise.resolve(suites),
+        manifest: () => Promise.resolve({ absent: "the store is gone" }),
+      },
+      { ...options, full: false, base: "HEAD" },
+    );
+    expect(lanes).toBe(LANES_MAX);
+    expect(said).toContain(
+      `needs more than ${LANES_MAX} lanes and takes ${LANES_MAX}`,
+    );
+  });
+
+  it("takes no more lanes than FULL_LANES_MAX for the full run, however many it needs", async () => {
+    // A lane per suite is the floor with nothing measured, and a tree with
+    // more suites than the cap would otherwise ask for a runner apiece. The
+    // run is the full one, so the cap is the full run's.
+    const suites = Array.from(
+      { length: FULL_LANES_MAX + 10 },
       (_, i) => suite({ id: `suite-${i}`, units: [`s${i}/one.test.ts`] }),
     );
     const { lanes, said } = await saying({
       topology: () => Promise.resolve(suites),
       manifest: () => Promise.resolve({ absent: "the store is gone" }),
     });
-    expect(lanes).toBe(LANES_MAX);
+    expect(lanes).toBe(FULL_LANES_MAX);
     expect(said).toContain(
-      `needs more than ${LANES_MAX} lanes and takes ${LANES_MAX}`,
+      `needs more than ${FULL_LANES_MAX} lanes and takes ${FULL_LANES_MAX}`,
     );
   });
 

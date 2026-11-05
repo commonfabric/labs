@@ -802,8 +802,8 @@ same answer.
 A pull request's plan has a discretionary target: `DISCRETIONARY_SECONDS`
 times the run's scale, which is the seconds the value, density and
 exploration passes are to fill between them. The full run's target is zero,
-since it chooses nothing. A run takes the fewest lanes, up to `LANES_MAX`,
-whose plan holds it. A plan holds a run where:
+since it chooses nothing. A run takes the fewest lanes, up to `LANES_MAX`, or
+`FULL_LANES_MAX` for the full run, whose plan holds it. A plan holds a run where:
 
 - no mandatory identity overflows, which is to say each one either fits
   inside a lane's budget or runs alone in a lane of its own; and

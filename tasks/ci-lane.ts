@@ -94,6 +94,7 @@ import {
   type GateChoice,
   type LaneCount,
   laneCount,
+  lanesMaxOf,
   type Plan,
   plan,
   type PlanInput,
@@ -134,7 +135,6 @@ import {
   DISCRETIONARY_SECONDS,
   FULL_RUN_LABEL,
   LANE_PROLOGUE_SECONDS,
-  LANES_MAX,
   RERUN_BUDGET_SECONDS,
   RERUN_EXECUTIONS,
 } from "./test-selection/policy.ts";
@@ -2576,7 +2576,7 @@ export interface RunLanes {
 
 /**
  * How many lanes a run takes, and what to tell each of them: as many as
- * it needs, up to `LANES_MAX`.
+ * it needs, up to `LANES_MAX`, or `FULL_LANES_MAX` for the full run.
  *
  * This is the whole of what the job ahead of the lanes decides. The lanes
  * then read the same tree against the same manifest and take their own
@@ -2608,6 +2608,7 @@ export async function runLanes(
   );
   const { laid } = planOver({ ...input, lanes });
   if (capped) {
+    const most = input.full ? "FULL_LANES_MAX" : "LANES_MAX";
     const short = [
       ...(laid.overflowed > 0 ? ["a lane may run past its budget"] : []),
       ...(laid.discretionarySeconds < laid.discretionaryTargetSeconds
@@ -2619,8 +2620,8 @@ export async function runLanes(
         : []),
     ];
     console.error(
-      `ci-lane: this run needs more than ${LANES_MAX} lanes and takes ` +
-        `${LANES_MAX}, the most LANES_MAX allows` +
+      `ci-lane: this run needs more than ${lanes} lanes and takes ` +
+        `${lanes}, the most ${most} allows` +
         (short.length === 0 ? "" : `, so ${short.join(", and ")}`),
     );
   }
@@ -2676,7 +2677,7 @@ export function describeLanes(laid: Plan, prologue: number): void {
 }
 
 /**
- * How many lanes a run takes, up to `LANES_MAX`, counted over the tree
+ * How many lanes a run takes, up to `lanesMaxOf()`, counted over the tree
  * priced with no suite measured, which is how its plan is first packed.
  */
 function lanesNeeded(input: RunInput, read: Census): LaneCount {
@@ -2712,6 +2713,7 @@ function lanesNeeded(input: RunInput, read: Census): LaneCount {
       return suite.units.some((unit) => !unavailable.has(unit));
     });
     const byCost = laneCount(packing);
+    const most = lanesMaxOf(packing);
     const wanted = Math.max(1, running.length, byCost.lanes);
     console.error(
       `ci-lane: nothing in this tree has a measured cost, so the lane ` +
@@ -2720,8 +2722,8 @@ function lanesNeeded(input: RunInput, read: Census): LaneCount {
         `than a projection from costs nobody has measured`,
     );
     return {
-      lanes: Math.min(wanted, LANES_MAX),
-      capped: byCost.capped || wanted > LANES_MAX,
+      lanes: Math.min(wanted, most),
+      capped: byCost.capped || wanted > most,
     };
   }
   return laneCount(packing);
