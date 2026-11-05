@@ -18,6 +18,30 @@ and fall back locally when a style is unknown. Hover previews remain ephemeral
 viewer state and send no action. Space WRITE or OWNER authority admits changes;
 READ viewers observe them.
 
+The page is the panels and nothing else, so what a Loom holds fills the screen.
+A Loom showing one panel shows it alone, edge to edge: a piece with no card and
+no title above it, since the piece names itself. With several, each is a card, a
+piece under its title when it has one. The Loom's title is its `[NAME]`, for a
+host to show; the page does not repeat it. While anything is staged or focused,
+a note says so; otherwise the page carries no status.
+
+Arranging is offered through `[VIEWS].menu` rather than as controls on the page,
+for a host to draw in a menu of its own. `menu.sections` holds a section of the
+Loom's own actions (Stage all for everyone, Clear focus, Clear stage), then one
+per shown panel headed by its title (Open on its own, Focus for everyone, Move
+first, Move last, Select in this session, Duplicate, Hide for me, Remove, or
+Remove from my view for a private panel), then "Hidden for you" with a Show for
+each hidden panel. A Loom showing one panel offers that panel's actions in its
+own section. Each action is a `label` and a `run` stream that takes no event.
+The menu is each session's own and holds only what that viewer may do now:
+arranging what everyone sees takes WRITE or OWNER, so a READ member is offered
+only Open, Select, Hide and their own panels' actions, and an action that would
+change nothing, such as moving the first panel first, is absent rather than
+disabled. Remove is offered to every WRITE member; the handler still refuses one
+on a panel someone else added, since who added a panel can be checked only in a
+handler. `PanelView`, a panel on a page of its own, keeps its title and a link
+to its piece.
+
 A panel is a `piece`, `document`, or HTTP(S) `url`. Piece and document targets
 are native cell references. Their complete space, scope, document, and path
 survive registration and duplication. Adding a foreign piece links it and
@@ -127,11 +151,11 @@ the run that wrote the value minted one, names that writer rather than whomever
 the value names. So a reader takes the adder from the label, and from the value
 alone only where no entry exists. A panel with neither field names no adder.
 
-The root's own Duplicate button acts under the session's `actingProfile` in
-`viewerState` when it holds one, and otherwise under the viewer's `#profile`;
-with neither, the copy records the principal the duplication acted for. A
-duplication under a profile that is not the viewer's own is refused, as any
-other event naming one is.
+The menu's Duplicate acts under the session's `actingProfile` in `viewerState`
+when it holds one, and otherwise under the viewer's `#profile`; with neither,
+the copy records the principal the duplication acted for. A duplication under a
+profile that is not the viewer's own is refused, as any other event naming one
+is.
 
 `pieceRegistry` derives from piece panels in order, including duplicates.
 `addPiece({piece, as?})` idempotently adds a registration occurrence; for a
@@ -182,9 +206,9 @@ in for the field's; the typed pattern API authors no redirect, so no pattern can
 place one there. An occurrence that is not in the Loom is left alone without a
 check. `removePiece` applies the same check to every occurrence of the piece and
 removes all of them or none, so a piece that another principal also registered
-is unregistered one occurrence at a time, with `removePanel`. The root's Remove
-button sends `removePanel`, so it is refused on an occurrence someone else,
-still in the Loom, added.
+is unregistered one occurrence at a time, with `removePanel`. The menu's Remove
+sends `removePanel`, so it is refused on an occurrence someone else, still in
+the Loom, added.
 
 `setPresentation({stagedPanels, focusedPanel?})` replaces staging and focus in
 one transaction. Staged occurrences must belong to the current collection and be
@@ -217,10 +241,9 @@ changes nothing for one already hidden. `unhidePanel({panel})` takes one off the
 list, including one removed from the Loom since. A hide changes no other user's
 view and leaves `panels` as it is. `viewerPanels` is the viewer's own list:
 `panels` without the occurrences they have hidden, in the shared order, with
-their private panels placed as described below. The root renders the shared
-panels with a Hide button on each and a Show button for each hidden one. The
-list decides what the viewer is shown, not what they may read: a hidden
-occurrence stays in `panels`.
+their private panels placed as described below. The menu offers Hide for me on
+each shown panel and a Show for each hidden one. The list decides what the
+viewer is shown, not what they may read: a hidden occurrence stays in `panels`.
 
 `privatePanels` holds one user's private panels, a per-user input as
 `hiddenPanels` is. Each entry is `{panel, before?}`: an occurrence that lives in
@@ -238,9 +261,10 @@ and without `before` the panel shows after every shared one.
 as it is. In `viewerPanels`, each private panel shows just ahead of its anchor,
 or after the shared panels while its anchor is not shown, and private panels
 anchored alike keep the order of the list. The root renders the viewer's private
-panels as cards of their own, after the shared ones, each with a Remove button.
-A private loom shown in a social loom is a private panel whose piece is that
-loom's root, so several social looms can each show one private loom.
+panels as cards of their own, each marked as the viewer's alone, and the menu
+offers Remove from my view on each. A private loom shown in a social loom is a
+private panel whose piece is that loom's root, so several social looms can each
+show one private loom.
 
 `participants` lists the Fabric profiles of the Loom's participants, each as the
 live profile cell in its own space. It records no DID and no name: a profile

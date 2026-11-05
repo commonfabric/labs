@@ -8,6 +8,7 @@ import {
   NAME,
   navigateTo,
   pattern,
+  type PerSession,
   spaceAccess,
   type SpaceAccessLevel,
   spaceOf,
@@ -577,17 +578,23 @@ const unhidePanel = handler<
 });
 
 /**
- * Present one linked occurrence without reading a piece's protected fields. A
- * piece panel shown `bare`, as a Loom's only panel is, is the piece alone: its
- * own rendering names it, so a title above it would name it twice.
+ * Where a panel is shown: `alone`, as a Loom's only panel, whose own rendering
+ * names it; in a `card` among others, under its title when it has one; or
+ * `standalone`, on its own page, under its title and with a link to its piece.
  */
-function renderPanel(panel: Writable<Panel>, bare = false) {
+type Framing = "alone" | "card" | "standalone";
+
+/** Present one linked occurrence without reading a piece's protected fields. */
+function renderPanel(panel: Writable<Panel>, framing: Framing) {
   const value = panel.get();
   if (value.kind === "piece") {
-    if (bare || !value.titleOverride) return <cf-render $cell={value.piece} />;
+    if (framing === "alone") return <cf-render $cell={value.piece} />;
     return (
       <cf-vstack gap="2">
-        <h3>{value.titleOverride}</h3>
+        {value.titleOverride ? <h3>{value.titleOverride}</h3> : null}
+        {framing === "standalone"
+          ? <cf-cell-link $cell={value.piece}>Open piece</cf-cell-link>
+          : null}
         <cf-render $cell={value.piece} />
       </cf-vstack>
     );
@@ -645,17 +652,6 @@ function renderPanel(panel: Writable<Panel>, bare = false) {
       />
     </cf-vstack>
   );
-}
-
-/**
- * A short name for a hidden panel, without reading a piece's protected fields:
- * its title, else its URL, else its kind.
- */
-function panelLabel(panel: Writable<Panel>): string {
-  const value = panel.get();
-  if (value === undefined) return "A panel no longer in this Loom";
-  if (value.titleOverride) return `Hidden: ${value.titleOverride}`;
-  return value.kind === "url" ? `Hidden: ${value.url}` : `Hidden ${value.kind}`;
 }
 
 /**
@@ -850,7 +846,7 @@ function loomMenu(
 export const PanelView = pattern<{ panel: Writable<Panel> }, { [UI]: VNode }>((
   { panel },
 ) => ({
-  [UI]: computed(() => renderPanel(panel)),
+  [UI]: computed(() => renderPanel(panel, "standalone")),
 }));
 
 /**
@@ -952,9 +948,15 @@ export default pattern<LoomInput, LoomOutput>(
       moveLast: sendPanel({ panel, to: move }),
       remove: sendPanel({ panel, to: remove }),
     }));
-    const privateActions = privatePanels.map((entry) => ({
-      panel: entry.panel,
-      run: sendPanel({ panel: entry.panel, to: removePrivate }),
+    // Mapped through a computed list of the panels, as the page maps them: a
+    // map over the per-user list itself would store per-user links in shared
+    // data.
+    const mine = computed(() =>
+      (privatePanels.get() ?? []).map((entry) => entry.panel)
+    );
+    const privateActions = mine.map((panel) => ({
+      panel,
+      run: sendPanel({ panel, to: removePrivate }),
     }));
     const hiddenActions = hiddenPanels.map((panel) => ({
       panel,
@@ -965,7 +967,8 @@ export default pattern<LoomInput, LoomOutput>(
       clearStage: clearStage({ present }),
       clearFocus: clearFocus({ presentation, present }),
     };
-    const menu = computed(() =>
+    // Each session's own: it turns on who is viewing and what they selected.
+    const menu = computed((): PerSession<LoomMenu> =>
       loomMenu(
         {
           level: spaceAccess(panels),
@@ -1014,7 +1017,7 @@ export default pattern<LoomInput, LoomOutput>(
                     privatePanels.get(),
                   );
                   return shown.length === 1
-                    ? renderPanel(shown[0], true)
+                    ? renderPanel(shown[0], "alone")
                     : null;
                 }),
                 <cf-vstack gap="4" padding="4">
@@ -1029,12 +1032,12 @@ export default pattern<LoomInput, LoomOutput>(
                             <cf-text variant="caption">
                               Only you see this panel
                             </cf-text>
-                            {computed(() => renderPanel(mine))}
+                            {computed(() => renderPanel(mine, "card"))}
                           </cf-card>
                         ))}
                         <cf-card>
                           {/* Stateless panel views need no durable child setup by READ viewers. */}
-                          {computed(() => renderPanel(panel))}
+                          {computed(() => renderPanel(panel, "card"))}
                         </cf-card>
                       </cf-vstack>,
                       null,
@@ -1045,7 +1048,7 @@ export default pattern<LoomInput, LoomOutput>(
                       <cf-text variant="caption">
                         Only you see this panel
                       </cf-text>
-                      {computed(() => renderPanel(panel))}
+                      {computed(() => renderPanel(panel, "card"))}
                     </cf-card>
                   ))}
                 </cf-vstack>,

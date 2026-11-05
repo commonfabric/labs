@@ -289,6 +289,7 @@ export default pattern(() => {
         assertion: assert(() =>
           hasText(loom[UI], "Staged for everyone") &&
           countElements(loom[UI], "cf-button") === 0 &&
+          countElements(loom[UI], "cf-cell-link") === 0 &&
           !menuLabels(loom[VIEWS].menu).includes("Stage all for everyone")
         ),
       },

@@ -323,7 +323,7 @@ export interface LoomMenu {
 export interface LoomOutput {
   [NAME]: string;
   [UI]: VNode;
-  [VIEWS]: { menu: LoomMenu };
+  [VIEWS]: { menu: PerSession<LoomMenu> };
   title: string;
 
   /** Confirmed appearance for all participants. */
