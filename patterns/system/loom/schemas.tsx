@@ -10,6 +10,7 @@ import type {
   PerUser,
   Stream,
   UI,
+  VIEWS,
   VNode,
   Writable,
 } from "commonfabric";
@@ -293,10 +294,36 @@ export interface ViewerState {
   actingProfile?: ParticipantProfile;
 }
 
+/** One action a host may draw in a menu of its own, under the label it shows. */
+export interface LoomMenuAction {
+  label: string;
+  run: Stream<void>;
+}
+
+/**
+ * Actions about the whole Loom, with no heading, or about one panel, headed by
+ * that panel's title.
+ */
+export interface LoomMenuSection {
+  heading?: string;
+  actions: LoomMenuAction[];
+}
+
+/**
+ * The arranging a viewer may do, offered for a host to draw in its own menu
+ * rather than as controls on the page. It holds only what this viewer may do
+ * now: an action their access forbids, or one that would change nothing, is
+ * absent rather than disabled.
+ */
+export interface LoomMenu {
+  sections: LoomMenuSection[];
+}
+
 /** Standard default-pattern exports and the public composition actions. */
 export interface LoomOutput {
   [NAME]: string;
   [UI]: VNode;
+  [VIEWS]: { menu: LoomMenu };
   title: string;
 
   /** Confirmed appearance for all participants. */

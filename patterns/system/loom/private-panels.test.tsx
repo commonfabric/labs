@@ -2,13 +2,21 @@
  * A viewer's private panels: shown to them where they anchored them, moved and
  * removed by them, and refused when they live in the Loom's own space.
  */
-import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
 import {
-  clickButton,
+  action,
+  assert,
+  pattern,
+  TESTS,
+  UI,
+  VIEWS,
+  Writable,
+} from "commonfabric";
+import {
   countElements,
   textContent,
 } from "../../tools/test-support/vnode-helpers.ts";
 import Loom from "./main.tsx";
+import { panelSections } from "./menu-test-fixture.ts";
 import type { Panel } from "./schemas.tsx";
 
 /** A URL panel's occurrence, created in a space of its own. */
@@ -87,9 +95,13 @@ export default pattern(() => {
       panel: PrivateUrl.inSpace()({ url: "https://example.com/another" }),
     })
   );
-  const removeFromUI = action(() =>
-    clickButton(loom[UI], "Remove from my view")
-  );
+  const removeFromUI = action(() => {
+    const own = panelSections(loom[VIEWS].menu).flatMap((section) =>
+      section.actions
+    ).find((entry) => entry.label === "Remove from my view");
+    if (own === undefined) throw new Error("No private panel to remove");
+    own.run.send();
+  });
   return {
     allowRuntimeErrors: true,
     expectRuntimeErrors: 3,
@@ -186,8 +198,8 @@ export default pattern(() => {
           loom.viewerPanels.length === 2
         ),
       },
-      // The root shows a private panel as a card of its own, and its Remove
-      // button takes it off the viewer's private panels.
+      // The root shows a private panel as a card of its own, and its menu's
+      // Remove from my view takes it off the viewer's private panels.
       { action: addAnother },
       { render: loom[UI] },
       {

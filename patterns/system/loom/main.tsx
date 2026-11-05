@@ -6,10 +6,14 @@ import {
   handler,
   ifElse,
   NAME,
+  navigateTo,
   pattern,
+  spaceAccess,
+  type SpaceAccessLevel,
   spaceOf,
   type Stream,
   UI,
+  VIEWS,
   type VNode,
   wish,
   Writable,
@@ -28,6 +32,9 @@ import type {
   ChatRoomCell,
   ChatRoomChoice,
   LoomInput,
+  LoomMenu,
+  LoomMenuAction,
+  LoomMenuSection,
   LoomOutput,
   LoomStyle,
   MeetingAssociationCell,
@@ -569,14 +576,18 @@ const unhidePanel = handler<
   hiddenPanels.removeByValue(panel);
 });
 
-/** Present one linked occurrence without reading a piece's protected fields. */
-function renderPanel(panel: Writable<Panel>) {
+/**
+ * Present one linked occurrence without reading a piece's protected fields. A
+ * piece panel shown `bare`, as a Loom's only panel is, is the piece alone: its
+ * own rendering names it, so a title above it would name it twice.
+ */
+function renderPanel(panel: Writable<Panel>, bare = false) {
   const value = panel.get();
   if (value.kind === "piece") {
+    if (bare || !value.titleOverride) return <cf-render $cell={value.piece} />;
     return (
       <cf-vstack gap="2">
-        {value.titleOverride ? <h3>{value.titleOverride}</h3> : null}
-        <cf-cell-link $cell={value.piece}>Open piece</cf-cell-link>
+        <h3>{value.titleOverride}</h3>
         <cf-render $cell={value.piece} />
       </cf-vstack>
     );
@@ -645,6 +656,194 @@ function panelLabel(panel: Writable<Panel>): string {
   if (value === undefined) return "A panel no longer in this Loom";
   if (value.titleOverride) return `Hidden: ${value.titleOverride}`;
   return value.kind === "url" ? `Hidden: ${value.url}` : `Hidden ${value.kind}`;
+}
+
+/**
+ * A heading for `panel` in a menu, without reading a piece's protected fields:
+ * its title, else its URL or its document's own title, else its place.
+ */
+function panelHeading(panel: Writable<Panel>, place: number): string {
+  const value = panel.get();
+  if (value?.titleOverride) return value.titleOverride;
+  if (value?.kind === "url") return value.url;
+  const source = value?.kind === "document"
+    ? value.content.get()?.source
+    : undefined;
+  if (source?.kind === "page-excerpt") return source.title;
+  if (source !== undefined) return source.name;
+  return `Panel ${place}`;
+}
+
+// Each of these runs one composition action on a panel bound in advance, so a
+// host's menu can offer it as an action that takes no event.
+
+const sendPanel = handler<
+  void,
+  { panel: Writable<Panel>; to: Stream<{ panel: Writable<Panel> }> }
+>((_, { panel, to }) => to.send({ panel }));
+
+const moveFirst = handler<
+  void,
+  {
+    panel: Writable<Panel>;
+    panels: Writable<Writable<Panel>[]>;
+    move: Stream<PanelPosition>;
+  }
+>((_, { panel, panels, move }) =>
+  move.send({ panel, before: panels.get()[0] })
+);
+
+/** Focuses `panel` for everyone, staging it too if it is not staged. */
+const focusPanel = handler<
+  void,
+  {
+    panel: Writable<Panel>;
+    presentation: Writable<Presentation>;
+    present: Stream<Presentation>;
+  }
+>((_, { panel, presentation, present }) => {
+  const staged = presentation.get().stagedPanels;
+  present.send({
+    stagedPanels: staged.some((member) => member.equals(panel))
+      ? [...staged]
+      : [...staged, panel],
+    focusedPanel: panel,
+  });
+});
+
+const openPiece = handler<void, { panel: Writable<Panel> }>(
+  (_, { panel }) => {
+    const value = panel.get();
+    if (value.kind === "piece") return navigateTo(value.piece);
+  },
+);
+
+const stageAll = handler<
+  void,
+  { panels: Writable<Writable<Panel>[]>; present: Stream<Presentation> }
+>((_, { panels, present }) =>
+  present.send({ stagedPanels: [...panels.get()] })
+);
+
+const clearStage = handler<void, { present: Stream<Presentation> }>(
+  (_, { present }) => present.send({ stagedPanels: [] }),
+);
+
+const clearFocus = handler<
+  void,
+  { presentation: Writable<Presentation>; present: Stream<Presentation> }
+>((_, { presentation, present }) =>
+  present.send({ stagedPanels: [...presentation.get().stagedPanels] })
+);
+
+/** The actions bound to one shared panel. */
+interface SharedPanelActions {
+  panel: Writable<Panel>;
+  focus: Stream<void>;
+  select: Stream<void>;
+  duplicate: Stream<void>;
+  open: Stream<void>;
+  hide: Stream<void>;
+  moveFirst: Stream<void>;
+  moveLast: Stream<void>;
+  remove: Stream<void>;
+}
+
+/** The one action bound to one of the viewer's private or hidden panels. */
+interface OwnPanelAction {
+  panel: Writable<Panel>;
+  run: Stream<void>;
+}
+
+/** What the menu reads besides the bound actions. */
+interface MenuFacts {
+  level: SpaceAccessLevel | undefined;
+  shared: readonly Writable<Panel>[];
+  shown: readonly Writable<Panel>[];
+  presentation: Presentation;
+  selected: Writable<Panel> | undefined;
+  loom: {
+    stageAll: Stream<void>;
+    clearStage: Stream<void>;
+    clearFocus: Stream<void>;
+  };
+}
+
+/**
+ * The viewer's menu: the Loom's own arranging first, then one section for each
+ * panel they are shown, in the order they are shown it, and last a way to show
+ * each panel they hid. The actions of a Loom's only panel join the Loom's own,
+ * since the panel is all the page shows. Arranging what everyone sees takes
+ * WRITE or OWNER; hiding, selecting and a viewer's own panels take nothing.
+ */
+function loomMenu(
+  facts: MenuFacts,
+  sharedActions: readonly SharedPanelActions[],
+  privateActions: readonly OwnPanelAction[],
+  hiddenActions: readonly OwnPanelAction[],
+): LoomMenu {
+  const { level, shared, shown, presentation, selected, loom } = facts;
+  const arranges = level === "OWNER" || level === "WRITE";
+  const staged = presentation.stagedPanels;
+  const focused = presentation.focusedPanel?.get() === undefined
+    ? undefined
+    : presentation.focusedPanel;
+  const own: LoomMenuAction[] = [];
+  if (arranges && shared.length > 0 && staged.length < shared.length) {
+    own.push({ label: "Stage all for everyone", run: loom.stageAll });
+  }
+  if (arranges && focused !== undefined) {
+    own.push({ label: "Clear focus", run: loom.clearFocus });
+  }
+  if (arranges && staged.length > 0) {
+    own.push({ label: "Clear stage", run: loom.clearStage });
+  }
+  const panelSections: LoomMenuSection[] = shown.map((panel, place) => {
+    const heading = panelHeading(panel, place + 1);
+    const mine = privateActions.find((entry) => entry.panel.equals(panel));
+    if (mine !== undefined) {
+      return {
+        heading,
+        actions: [{ label: "Remove from my view", run: mine.run }],
+      };
+    }
+    const bound = sharedActions.find((entry) => entry.panel.equals(panel));
+    if (bound === undefined) return { heading, actions: [] };
+    const index = shared.findIndex((member) => member.equals(panel));
+    const actions: LoomMenuAction[] = [];
+    if (panel.get()?.kind === "piece") {
+      actions.push({ label: "Open on its own", run: bound.open });
+    }
+    if (arranges && !(focused?.equals(panel) ?? false)) {
+      actions.push({ label: "Focus for everyone", run: bound.focus });
+    }
+    if (arranges && index > 0) {
+      actions.push({ label: "Move first", run: bound.moveFirst });
+    }
+    if (arranges && index >= 0 && index < shared.length - 1) {
+      actions.push({ label: "Move last", run: bound.moveLast });
+    }
+    if (!(selected?.equals(panel) ?? false)) {
+      actions.push({ label: "Select in this session", run: bound.select });
+    }
+    if (arranges) actions.push({ label: "Duplicate", run: bound.duplicate });
+    actions.push({ label: "Hide for me", run: bound.hide });
+    if (arranges) actions.push({ label: "Remove", run: bound.remove });
+    return { heading, actions };
+  });
+  const sections: LoomMenuSection[] = shown.length === 1
+    ? [{ actions: [...own, ...panelSections[0].actions] }]
+    : [{ actions: own }, ...panelSections];
+  if (hiddenActions.length > 0) {
+    sections.push({
+      heading: "Hidden for you",
+      actions: hiddenActions.map((entry, place) => ({
+        label: `Show ${panelHeading(entry.panel, place + 1)}`,
+        run: entry.run,
+      })),
+    });
+  }
+  return { sections: sections.filter((section) => section.actions.length > 0) };
 }
 
 /** Standalone view of one linked panel occurrence. */
@@ -737,146 +936,125 @@ export default pattern<LoomInput, LoomOutput>(
     const hide = hidePanel({ panels, hiddenPanels });
     const unhide = unhidePanel({ hiddenPanels });
     const removePrivate = removePrivatePanel({ privatePanels });
+    const sharedActions = panels.map((panel) => ({
+      panel,
+      focus: focusPanel({ panel, presentation, present }),
+      select: selectPanel({ panel, viewerState }),
+      duplicate: duplicateAsViewer({
+        panel,
+        duplicate,
+        claimed: viewerState.key("actingProfile"),
+        wished: viewerProfile.result,
+      }),
+      open: openPiece({ panel }),
+      hide: sendPanel({ panel, to: hide }),
+      moveFirst: moveFirst({ panel, panels, move }),
+      moveLast: sendPanel({ panel, to: move }),
+      remove: sendPanel({ panel, to: remove }),
+    }));
+    const privateActions = privatePanels.map((entry) => ({
+      panel: entry.panel,
+      run: sendPanel({ panel: entry.panel, to: removePrivate }),
+    }));
+    const hiddenActions = hiddenPanels.map((panel) => ({
+      panel,
+      run: sendPanel({ panel, to: unhide }),
+    }));
+    const loomActions = {
+      stageAll: stageAll({ panels, present }),
+      clearStage: clearStage({ present }),
+      clearFocus: clearFocus({ presentation, present }),
+    };
+    const menu = computed(() =>
+      loomMenu(
+        {
+          level: spaceAccess(panels),
+          shared: panels.get(),
+          shown: viewerPanels,
+          presentation: presentation.get(),
+          selected: viewerState.key("selectedPanel").get(),
+          loom: loomActions,
+        },
+        sharedActions,
+        privateActions,
+        hiddenActions,
+      )
+    );
+    // What everyone is shown as staged or focused, said only while it holds.
+    const presentationNote = computed(() => {
+      const { stagedPanels, focusedPanel } = presentation.get();
+      if (focusedPanel?.get() !== undefined) return "Focused for everyone";
+      if (stagedPanels.length > 0) return "Staged for everyone";
+      return "";
+    });
+    const alone = computed(() => viewerPanels.length === 1);
     return {
       [NAME]: title,
+      // The page is the panels and nothing else. Arranging them is offered
+      // through [VIEWS].menu for a host to draw in its own menu, so the page
+      // carries no controls of its own beyond a note while something is
+      // staged or focused. A Loom's only panel is shown alone, edge to edge.
       [UI]: (
         <cf-theme>
           <cf-screen>
-            <cf-toolbar slot="header">
-              <h1 slot="start">{title}</h1>
-              <cf-hstack slot="end" gap="2" wrap>
-                <cf-button
-                  onClick={() =>
-                    present.send({ stagedPanels: [...panels.get()] })}
-                >
-                  Stage all
-                </cf-button>
-                <cf-button onClick={() => present.send({ stagedPanels: [] })}>
-                  Clear stage
-                </cf-button>
-                <cf-button
-                  onClick={() =>
-                    present.send({
-                      stagedPanels: [...presentation.get().stagedPanels],
-                    })}
-                >
-                  Clear focus
-                </cf-button>
-              </cf-hstack>
-            </cf-toolbar>
+            {ifElse(
+              computed(() => presentationNote !== ""),
+              <cf-hstack slot="header" padding="2">
+                <cf-badge>{presentationNote}</cf-badge>
+              </cf-hstack>,
+              null,
+            )}
             <cf-vscroll>
-              <cf-vstack gap="4" padding="4">
-                {panels.map((panel) =>
-                  ifElse(
-                    computed(() => !isHidden(hiddenPanels.get(), panel)),
-                    <cf-vstack gap="4">
-                      {computed(() =>
-                        privatePanelsBefore(privatePanels.get(), panel)
-                      ).map((mine) => (
+              {ifElse(
+                alone,
+                computed(() => {
+                  const shown = viewerList(
+                    panels.get(),
+                    hiddenPanels.get(),
+                    privatePanels.get(),
+                  );
+                  return shown.length === 1
+                    ? renderPanel(shown[0], true)
+                    : null;
+                }),
+                <cf-vstack gap="4" padding="4">
+                  {panels.map((panel) =>
+                    ifElse(
+                      computed(() => !isHidden(hiddenPanels.get(), panel)),
+                      <cf-vstack gap="4">
+                        {computed(() =>
+                          privatePanelsBefore(privatePanels.get(), panel)
+                        ).map((mine) => (
+                          <cf-card>
+                            <cf-text variant="caption">
+                              Only you see this panel
+                            </cf-text>
+                            {computed(() => renderPanel(mine))}
+                          </cf-card>
+                        ))}
                         <cf-card>
-                          <cf-hstack gap="2" wrap>
-                            <span>Only you see this panel</span>
-                            <cf-button
-                              onClick={() =>
-                                removePrivate.send({ panel: mine })}
-                            >
-                              Remove from my view
-                            </cf-button>
-                          </cf-hstack>
-                          {computed(() => renderPanel(mine))}
+                          {/* Stateless panel views need no durable child setup by READ viewers. */}
+                          {computed(() => renderPanel(panel))}
                         </cf-card>
-                      ))}
-                      <cf-card>
-                        <cf-hstack gap="2" wrap>
-                          <cf-button
-                            onClick={selectPanel({ panel, viewerState })}
-                          >
-                            {viewerState.key("selectedPanel").equals(panel)
-                              ? "Selected in this session"
-                              : "Select"}
-                          </cf-button>
-                          <cf-button
-                            onClick={duplicateAsViewer({
-                              panel,
-                              duplicate,
-                              claimed: viewerState.key("actingProfile"),
-                              wished: viewerProfile.result,
-                            })}
-                          >
-                            Duplicate
-                          </cf-button>
-                          <cf-button onClick={() => remove.send({ panel })}>
-                            Remove
-                          </cf-button>
-                          <cf-button onClick={() => hide.send({ panel })}>
-                            Hide for me
-                          </cf-button>
-                          <cf-button
-                            onClick={() =>
-                              move.send({ panel, before: panels.get()[0] })}
-                          >
-                            Move first
-                          </cf-button>
-                          <cf-button onClick={() => move.send({ panel })}>
-                            Move last
-                          </cf-button>
-                          <cf-button
-                            disabled={!presentation.get().stagedPanels.some((
-                              member,
-                            ) => member.equals(panel))}
-                            onClick={() =>
-                              present.send({
-                                stagedPanels: [
-                                  ...presentation.get().stagedPanels,
-                                ],
-                                focusedPanel: panel,
-                              })}
-                          >
-                            {presentation.get().focusedPanel?.equals(panel)
-                              ? "Focused for everyone"
-                              : "Focus"}
-                          </cf-button>
-                          <span>
-                            {presentation.get().stagedPanels.some((member) =>
-                                member.equals(panel)
-                              )
-                              ? "Staged for everyone"
-                              : "Not staged"}
-                          </span>
-                        </cf-hstack>
-                        {/* Stateless panel views need no durable child setup by READ viewers. */}
-                        {computed(() => renderPanel(panel))}
-                      </cf-card>
-                    </cf-vstack>,
-                    null,
-                  )
-                )}
-                {trailingPrivates.map((panel) => (
-                  <cf-card>
-                    <cf-hstack gap="2" wrap>
-                      <span>Only you see this panel</span>
-                      <cf-button
-                        onClick={() => removePrivate.send({ panel })}
-                      >
-                        Remove from my view
-                      </cf-button>
-                    </cf-hstack>
-                    {computed(() => renderPanel(panel))}
-                  </cf-card>
-                ))}
-                {hiddenPanels.map((panel) => (
-                  <cf-hstack gap="2">
-                    <span>{computed(() => panelLabel(panel))}</span>
-                    <cf-button onClick={() => unhide.send({ panel })}>
-                      Show
-                    </cf-button>
-                  </cf-hstack>
-                ))}
-              </cf-vstack>
+                      </cf-vstack>,
+                      null,
+                    )
+                  )}
+                  {trailingPrivates.map((panel) => (
+                    <cf-card>
+                      <cf-text variant="caption">
+                        Only you see this panel
+                      </cf-text>
+                      {computed(() => renderPanel(panel))}
+                    </cf-card>
+                  ))}
+                </cf-vstack>,
+              )}
             </cf-vscroll>
           </cf-screen>
         </cf-theme>
       ),
+      [VIEWS]: { menu },
       title,
       style: normalizedStyle(style.get()),
       panels,

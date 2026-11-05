@@ -13,13 +13,11 @@ import {
   TESTS,
   type TrustedActionWrite,
   UI,
+  VIEWS,
   Writable,
 } from "commonfabric";
-import {
-  clickButton,
-  findElement,
-} from "../../tools/test-support/vnode-helpers.ts";
 import Loom from "./main.tsx";
+import { runPanelAction } from "./menu-test-fixture.ts";
 import type { Panel } from "./schemas.tsx";
 
 /** The reviewed surface and action a person writes their own profile from. */
@@ -210,7 +208,7 @@ export default pattern(() => {
     loom.viewerState.key("actingProfile").set(member)
   );
   const duplicateFromUI = action(() =>
-    clickButton(findElement(loom[UI], "cf-card"), "Duplicate")
+    runPanelAction(loom[VIEWS].menu, 0, "Duplicate")
   );
   // A profile that names nobody is no one's to add under, through any of the
   // streams, including where the event would otherwise change nothing.

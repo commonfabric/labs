@@ -8,23 +8,23 @@ import {
   principalOf,
   TESTS,
   UI,
+  VIEWS,
   Writable,
 } from "commonfabric";
 import {
-  childNodes,
-  clickButton,
   countElements,
   findElement,
   hasText,
-  propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
 import Loom from "./main.tsx";
+import {
+  menuLabels,
+  panelSections,
+  runLoomAction,
+  runPanelAction,
+  runShowHidden,
+} from "./menu-test-fixture.ts";
 import type { Panel, PublishedDocument } from "./schemas.tsx";
-
-/** Invokes a control on the first rendered occurrence. */
-function clickFirstPanel(root: unknown, label: string): void {
-  clickButton(findElement(root, "cf-card"), label);
-}
 
 export default pattern(() => {
   const loom = Loom({});
@@ -85,7 +85,9 @@ export default pattern(() => {
     loom.duplicatePanel.send({ panel: documentPanel })
   );
   const duplicateUrl = action(() => loom.duplicatePanel.send({ panel: url }));
-  const stageFromUI = action(() => clickButton(loom[UI], "Stage all"));
+  const stageFromUI = action(() =>
+    runLoomAction(loom[VIEWS].menu, "Stage all for everyone")
+  );
   const addOtherPiece = action(() => loom.addPiece.send({ piece: otherPiece }));
   const duplicatePiece = action(() =>
     loom.duplicatePanel.send({ panel: loom.panels[1] })
@@ -100,16 +102,51 @@ export default pattern(() => {
   const removeOtherPiece = action(() =>
     loom.removePiece.send({ piece: otherPiece })
   );
-  const selectFromUI = action(() => clickFirstPanel(loom[UI], "Select"));
-  const focusFromUI = action(() => clickFirstPanel(loom[UI], "Focus"));
-  const clearFocusFromUI = action(() => clickButton(loom[UI], "Clear focus"));
-  const clearStageFromUI = action(() => clickButton(loom[UI], "Clear stage"));
-  const duplicateFromUI = action(() => clickFirstPanel(loom[UI], "Duplicate"));
-  const moveLastFromUI = action(() => clickFirstPanel(loom[UI], "Move last"));
-  const moveFirstFromUI = action(() => clickFirstPanel(loom[UI], "Move first"));
-  const removeFromUI = action(() => clickFirstPanel(loom[UI], "Remove"));
-  const hideFromUI = action(() => clickFirstPanel(loom[UI], "Hide for me"));
-  const showFromUI = action(() => clickButton(loom[UI], "Show"));
+  const selectFromUI = action(() =>
+    runPanelAction(loom[VIEWS].menu, 0, "Select in this session")
+  );
+  const focusFromUI = action(() =>
+    runPanelAction(loom[VIEWS].menu, 0, "Focus for everyone")
+  );
+  const clearFocusFromUI = action(() =>
+    runLoomAction(loom[VIEWS].menu, "Clear focus")
+  );
+  const clearStageFromUI = action(() =>
+    runLoomAction(loom[VIEWS].menu, "Clear stage")
+  );
+  const duplicateFromUI = action(() =>
+    runPanelAction(loom[VIEWS].menu, 0, "Duplicate")
+  );
+  const moveLastFromUI = action(() =>
+    runPanelAction(loom[VIEWS].menu, 0, "Move last")
+  );
+  const moveFirstFromUI = action(() =>
+    runPanelAction(loom[VIEWS].menu, 4, "Move first")
+  );
+  const removeFromUI = action(() =>
+    runPanelAction(loom[VIEWS].menu, 0, "Remove")
+  );
+  const hideFromUI = action(() =>
+    runPanelAction(loom[VIEWS].menu, 0, "Hide for me")
+  );
+  const showFromUI = action(() => runShowHidden(loom[VIEWS].menu));
+  // A Loom with one piece shows that piece alone, with no frame or title.
+  const lone = Loom({});
+  const lonePiece = new Writable({ title: "Lone target" });
+  const addLone = action(() => lone.addPiece.send({ piece: lonePiece }));
+  const retitleLone = action(() =>
+    lone.retitlePanel.send({
+      panel: lone.panels[0],
+      titleOverride: "Retitled lone panel",
+    })
+  );
+  const secondUrl = new Writable<Panel>({
+    kind: "url",
+    url: "https://example.com/second",
+  });
+  const addSecondToLone = action(() =>
+    lone.addPanel.send({ panel: secondUrl })
+  );
   const me = new Writable("");
   const recordMe = action(() => me.set(currentPrincipal() ?? ""));
   // DID Core admits empty inner segments and percent-encodings.
@@ -141,8 +178,7 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           namedLoom.title === "Configured Loom" &&
-          namedLoom[NAME] === "Configured Loom" &&
-          hasText(namedLoom[UI], "Configured Loom")
+          namedLoom[NAME] === "Configured Loom"
         ),
       },
       { action: rename },
@@ -150,21 +186,19 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           namedLoom.title === "Renamed Loom" &&
-          namedLoom[NAME] === "Renamed Loom" &&
-          hasText(namedLoom[UI], "Renamed Loom")
+          namedLoom[NAME] === "Renamed Loom"
         ),
       },
+      // The page carries no controls and no title of its own: the title is
+      // the Loom's name, for a host to show, and an empty Loom offers nothing
+      // to arrange.
       {
-        assertion: assert(() => {
-          const slots = childNodes(findElement(loom[UI], "cf-toolbar"));
-          const start = slots.find((child) =>
-            propValue(child, "slot") === "start"
-          );
-          const end = slots.find((child) => propValue(child, "slot") === "end");
-          return hasText(start, "Shared Loom") &&
-            hasText(end, "Stage all") && hasText(end, "Clear stage") &&
-            hasText(end, "Clear focus");
-        }),
+        assertion: assert(() =>
+          countElements(loom[UI], "cf-button") === 0 &&
+          countElements(loom[UI], "cf-toolbar") === 0 &&
+          !hasText(loom[UI], "Shared Loom") &&
+          loom[VIEWS].menu.sections.length === 0
+        ),
       },
       { action: add },
       { assertion: assert(() => loom.panels.length === 1) },
@@ -254,7 +288,8 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           hasText(loom[UI], "Staged for everyone") &&
-          !hasText(loom[UI], "Not staged")
+          countElements(loom[UI], "cf-button") === 0 &&
+          !menuLabels(loom[VIEWS].menu).includes("Stage all for everyone")
         ),
       },
       { action: addOtherPiece },
@@ -289,13 +324,24 @@ export default pattern(() => {
       { render: loom[UI] },
       {
         assertion: assert(() =>
-          hasText(loom[UI], "Selected in this session") &&
+          !panelSections(loom[VIEWS].menu)[0].actions.some((entry) =>
+            entry.label === "Select in this session"
+          ) &&
+          panelSections(loom[VIEWS].menu)[1].actions.some((entry) =>
+            entry.label === "Select in this session"
+          ) &&
           loom.viewerState.key("selectedPanel").equals(loom.panels[0])
         ),
       },
       { action: focusFromUI },
       { render: loom[UI] },
-      { assertion: assert(() => hasText(loom[UI], "Focused for everyone")) },
+      {
+        assertion: assert(() =>
+          hasText(loom[UI], "Focused for everyone") &&
+          loom.presentation.focusedPanel?.equals(loom.panels[0]) === true &&
+          menuLabels(loom[VIEWS].menu).includes("Clear focus")
+        ),
+      },
       { action: clearFocusFromUI },
       { render: loom[UI] },
       {
@@ -305,13 +351,32 @@ export default pattern(() => {
         ),
       },
       { action: clearStageFromUI },
-      { assertion: assert(() => loom.presentation.stagedPanels.length === 0) },
+      { render: loom[UI] },
+      {
+        assertion: assert(() =>
+          loom.presentation.stagedPanels.length === 0 &&
+          !hasText(loom[UI], "Staged for everyone") &&
+          !menuLabels(loom[VIEWS].menu).includes("Clear stage")
+        ),
+      },
       { action: duplicateFromUI },
       { assertion: assert(() => loom.panels.length === 5) },
       { action: moveLastFromUI },
       { assertion: assert(() => loom.panels[4].equals(documentPanel)) },
+      // The first panel is offered no Move first, and the last no Move last.
+      {
+        assertion: assert(() => {
+          const sections = panelSections(loom[VIEWS].menu);
+          const labels = (place: number) =>
+            sections[place].actions.map((entry) => entry.label);
+          return !labels(0).includes("Move first") &&
+            labels(0).includes("Move last") &&
+            !labels(4).includes("Move last") &&
+            labels(4).includes("Move first");
+        }),
+      },
       { action: moveFirstFromUI },
-      { assertion: assert(() => !loom.panels[0].equals(documentPanel)) },
+      { assertion: assert(() => loom.panels[0].equals(documentPanel)) },
       { action: removeFromUI },
       { assertion: assert(() => loom.panels.length === 4) },
       // Hiding a panel from the UI takes it out of this viewer's cards and
@@ -322,7 +387,10 @@ export default pattern(() => {
         assertion: assert(() =>
           loom.panels.length === 4 && loom.viewerPanels.length === 3 &&
           countElements(loom[UI], "cf-card") === 3 &&
-          hasText(loom[UI], "Hidden")
+          !hasText(loom[UI], "Hidden") &&
+          loom[VIEWS].menu.sections.some((section) =>
+            section.heading === "Hidden for you"
+          )
         ),
       },
       { action: showFromUI },
@@ -331,7 +399,9 @@ export default pattern(() => {
         assertion: assert(() =>
           loom.viewerPanels.length === 4 &&
           countElements(loom[UI], "cf-card") === 4 &&
-          !hasText(loom[UI], "Hidden")
+          !loom[VIEWS].menu.sections.some((section) =>
+            section.heading === "Hidden for you"
+          )
         ),
       },
       // Each occurrence the root created records the principal its event
@@ -373,6 +443,38 @@ export default pattern(() => {
           attributed.panels[2].get().kind === "url" &&
           attributed.panels[2].get().addedBy === me.get() &&
           claimedUrl.get().addedBy === claimedAdder
+        ),
+      },
+      { action: addLone },
+      { action: retitleLone },
+      { render: lone[UI] },
+      // One piece is shown alone: no card, no title above it, no controls.
+      // Its actions are the Loom's own, in the one unheaded section.
+      {
+        assertion: assert(() =>
+          countElements(lone[UI], "cf-render") === 1 &&
+          countElements(lone[UI], "cf-card") === 0 &&
+          countElements(lone[UI], "cf-button") === 0 &&
+          countElements(lone[UI], "cf-cell-link") === 0 &&
+          !hasText(lone[UI], "Retitled lone panel") &&
+          lone[VIEWS].menu.sections.length === 1 &&
+          lone[VIEWS].menu.sections[0].heading === undefined &&
+          menuLabels(lone[VIEWS].menu).includes("Hide for me") &&
+          menuLabels(lone[VIEWS].menu).includes("Stage all for everyone") &&
+          !menuLabels(lone[VIEWS].menu).includes("Move first")
+        ),
+      },
+      // A second panel puts each in a card, the piece under its title, and
+      // gives each a section of its own.
+      { action: addSecondToLone },
+      { render: lone[UI] },
+      {
+        assertion: assert(() =>
+          countElements(lone[UI], "cf-card") === 2 &&
+          hasText(findElement(lone[UI], "cf-card"), "Retitled lone panel") &&
+          panelSections(lone[VIEWS].menu).length === 2 &&
+          panelSections(lone[VIEWS].menu)[0].heading ===
+            "Retitled lone panel"
         ),
       },
     ],
