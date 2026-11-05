@@ -4984,15 +4984,21 @@ export class Runtime {
     const provider = this.storageManager.open(space);
     const aclUri = aclDocId(space) as URI;
     const spaceCell = this.getSpaceCell(space);
+    const spaceId = spaceCell.getAsNormalizedFullLink().id;
     const loads = await Promise.all([
       provider.sync(aclUri),
-      provider.sync(spaceCell.getAsNormalizedFullLink().id),
+      provider.sync(spaceId),
     ]);
     const denied = this.storageManager.spaceAccessError?.(space) ??
       this.storageManager.authorizationError?.(space);
     if (denied !== undefined) return true;
     for (const { error } of loads) {
       if (error !== undefined) throw error;
+    }
+    // Neither reads as absent while a quarantine holds it back.
+    for (const id of [aclUri, spaceId]) {
+      const failure = await provider.replica.quarantineFailure?.(id);
+      if (failure !== undefined) throw failure;
     }
     const tx = this.edit();
     try {
