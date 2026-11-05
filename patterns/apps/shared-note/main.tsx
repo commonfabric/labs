@@ -732,14 +732,13 @@ const addComment = handler<AddCommentEvent, AddCommentState>(
   },
 );
 
-/** What the comment verbs other than `addComment` work on. */
-interface CommentActState {
-  anchors: AnchorsCell;
+/** What replying to a comment works on. */
+interface ReplyState {
   comments: CommentsCell;
   myProfile: ProfileCell | undefined;
 }
 
-const commitReply = handler<CommentReplyEvent, CommentActState>(
+const commitReply = handler<CommentReplyEvent, ReplyState>(
   (event, { comments, myProfile }) => {
     const profile = resolvedProfile(myProfile);
     if (profile === undefined) throw new Error(NO_PROFILE);
@@ -754,23 +753,34 @@ const commitReply = handler<CommentReplyEvent, CommentActState>(
   },
 );
 
-const resolveComment = handler<CommentIdEvent, CommentActState>(
+/** What resolving or reopening a comment works on. */
+interface ResolveState {
+  comments: CommentsCell;
+}
+
+const resolveComment = handler<CommentIdEvent, ResolveState>(
   (event, { comments }) => {
     commentNamed(comments, event.id).get().resolved.set(true);
   },
 );
 
-const reopenComment = handler<CommentIdEvent, CommentActState>(
+const reopenComment = handler<CommentIdEvent, ResolveState>(
   (event, { comments }) => {
     commentNamed(comments, event.id).get().resolved.set(false);
   },
 );
 
+/** What deleting a comment works on. */
+interface DeleteCommentState {
+  anchors: AnchorsCell;
+  comments: CommentsCell;
+}
+
 /**
  * Deletes a comment and its anchors. Only the person the comment is labeled
  * as written by can delete it.
  */
-const deleteComment = handler<CommentIdEvent, CommentActState>(
+const deleteComment = handler<CommentIdEvent, DeleteCommentState>(
   (event, { anchors, comments }) => {
     const record = commentNamed(comments, event.id);
     const actor = currentPrincipal();
@@ -876,11 +886,10 @@ export const SharedNoteCore = pattern<
   const recoveryText = computed(() => recovery.get() ?? "");
 
   const anchors = anchorsOf(content);
-  const acts = { anchors, comments, myProfile };
-  const replyVerb = commitReply(acts);
-  const resolveVerb = resolveComment(acts);
-  const reopenVerb = reopenComment(acts);
-  const deleteVerb = deleteComment(acts);
+  const replyVerb = commitReply({ comments, myProfile });
+  const resolveVerb = resolveComment({ comments });
+  const reopenVerb = reopenComment({ comments });
+  const deleteVerb = deleteComment({ anchors, comments });
   const discardVerb = discardDraft({ anchors, comments });
   const selection = new Writable.perSession<NoteSelection>(NOTHING_SELECTED);
   const composing = new Writable.perSession<Composing>(NOT_COMPOSING);
@@ -1328,7 +1337,7 @@ export const SharedNoteCore = pattern<
     appendLine: appendLine({ content }),
     prependLine: prependLine({ content }),
     replaceText: replaceText({ content }),
-    addComment: addComment({ content, ...acts }),
+    addComment: addComment({ content, anchors, comments, myProfile }),
     replyToComment: replyVerb,
     resolveComment: resolveVerb,
     reopenComment: reopenVerb,

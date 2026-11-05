@@ -53,6 +53,7 @@ import {
   operationBaselineHash,
   type OperationCodec,
   type OperationCodecRegistry,
+  sameAnchors,
 } from "./operation-codec.ts";
 import {
   containsReservedSchemaRefSubstring,
@@ -5164,12 +5165,6 @@ const requireOperationCodec = (engine: Engine, id: string): OperationCodec => {
   } catch {
     throw new UnsupportedOpCodecError(`unknown operation codec: ${id}`);
   }
-};
-
-const sameAnchors = (a: FieldAnchors, b: FieldAnchors): boolean => {
-  const ids = Object.keys(a);
-  return ids.length === Object.keys(b).length &&
-    ids.every((id) => a[id] === b[id]);
 };
 
 /**

@@ -69,6 +69,7 @@ import {
   type PresenceRecord,
   type PresenceRoomHandle,
   type RuntimeClient,
+  sameAnchors,
 } from "@commonfabric/runtime-client";
 import { GFM } from "@lezer/markdown";
 import { consume } from "@lit/context";
@@ -146,7 +147,6 @@ import {
   codeMirrorRewriteDedupeEffect,
   type CodeMirrorSynchronizationSnapshot,
   hasConfirmedCursor,
-  sameAnchors,
 } from "./codemirror-collaboration.ts";
 import {
   codeMirrorPresence,

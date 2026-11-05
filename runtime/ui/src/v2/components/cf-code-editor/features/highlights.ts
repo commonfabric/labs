@@ -14,12 +14,12 @@ import {
   StateField,
 } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
-import type { FieldAnchors } from "@commonfabric/runtime-client";
-
 import {
-  type CodeMirrorSynchronizationSnapshot,
+  type FieldAnchors,
   mapFieldAnchors,
-} from "../codemirror-collaboration.ts";
+} from "@commonfabric/runtime-client";
+
+import type { CodeMirrorSynchronizationSnapshot } from "../codemirror-collaboration.ts";
 import { composePendingChangeDesc } from "../codemirror-presence.ts";
 
 /**

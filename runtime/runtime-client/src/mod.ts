@@ -26,5 +26,6 @@ export type {
 export type { PresenceEvent } from "@commonfabric/memory/v2/client";
 export {
   CODEMIRROR_CHANGESET_CODEC,
-  mapAnchor,
+  mapFieldAnchors,
+  sameAnchors,
 } from "@commonfabric/memory/v2/operation-codec";

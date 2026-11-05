@@ -35,9 +35,10 @@ export type OperationCodec = {
   /**
    * Maps `anchors` through integrated `operations`, in order, and returns
    * them stated against the value after, under the same ids. Deterministic:
-   * the same anchors and operations map to the same offsets in every process. An anchor past the end of the value it is
-   * stated against maps as one at its end, since Memory cannot check an
-   * anchor against the field when a client writes it.
+   * the same anchors and operations map to the same offsets in every
+   * process. An anchor past the end of the value it is stated against maps
+   * as one at its end, since Memory cannot check an anchor against the field
+   * when a client writes it.
    */
   mapAnchors(input: OperationCodecAnchorInput): FieldAnchors;
 };
@@ -51,6 +52,35 @@ export type OperationCodec = {
  */
 export const mapAnchor = (offset: number, changes: ChangeDesc): number =>
   changes.mapPos(Math.min(offset, changes.length), -1);
+
+/**
+ * Maps every anchor of `anchors` through `changes` by {@link mapAnchor},
+ * under the same ids. Returns `anchors` itself when `changes` moves none of
+ * them, so a caller can tell that nothing moved by comparing the two.
+ */
+export const mapFieldAnchors = (
+  anchors: FieldAnchors,
+  changes: ChangeDesc,
+): FieldAnchors => {
+  let moved = false;
+  // `Object.fromEntries()` defines each id as an own property, whatever the
+  // id is; an assignment would lose an anchor whose id is `__proto__`.
+  const mapped = Object.fromEntries(
+    Object.entries(anchors).map(([id, offset]) => {
+      const next = mapAnchor(offset, changes);
+      if (next !== offset) moved = true;
+      return [id, next];
+    }),
+  );
+  return moved ? mapped : anchors;
+};
+
+/** Whether `a` and `b` hold the same anchors at the same offsets. */
+export const sameAnchors = (a: FieldAnchors, b: FieldAnchors): boolean => {
+  const ids = Object.keys(a);
+  return ids.length === Object.keys(b).length &&
+    ids.every((id) => Object.hasOwn(b, id) && a[id] === b[id]);
+};
 
 export class OperationCodecRegistry {
   readonly #codecs = new Map<string, OperationCodec>();
@@ -218,14 +248,9 @@ const codeMirrorChangeSetCodec: OperationCodec = {
     };
   },
   mapAnchors({ anchors, operations }) {
-    const changes = operations.flatMap(decodePayload).map(({ update }) =>
-      update.changes.desc
-    );
-    return Object.fromEntries(
-      Object.entries(anchors).map(([id, offset]) => [
-        id,
-        changes.reduce(mapAnchor, offset),
-      ]),
+    return operations.flatMap(decodePayload).reduce(
+      (mapped, { update }) => mapFieldAnchors(mapped, update.changes.desc),
+      anchors,
     );
   },
 };

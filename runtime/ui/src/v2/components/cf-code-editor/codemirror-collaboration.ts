@@ -21,10 +21,11 @@ import {
   CODEMIRROR_CHANGESET_CODEC,
   type FieldAnchors,
   type JSONValue,
-  mapAnchor,
+  mapFieldAnchors,
   type OpCursor,
   type OperationFieldSnapshot,
   type RuntimeClient,
+  sameAnchors,
 } from "@commonfabric/runtime-client";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
@@ -91,37 +92,6 @@ export const hasConfirmedCursor = (
 ): snapshot is CodeMirrorConfirmedSynchronization =>
   snapshot !== null && snapshot !== undefined &&
   snapshot.confirmedCursor !== null;
-
-/** Whether `a` and `b` hold the same anchors at the same offsets. */
-export const sameAnchors = (a: FieldAnchors, b: FieldAnchors): boolean => {
-  const ids = Object.keys(a);
-  return ids.length === Object.keys(b).length &&
-    ids.every((id) => Object.hasOwn(b, id) && a[id] === b[id]);
-};
-
-/**
- * Maps every anchor of `anchors` through `changes` with `mapAnchor()`, the
- * rule Memory moves an anchor by: text inserted at an anchor lands after it,
- * and an anchor inside deleted text lands where the deletion began. Returns
- * `anchors` itself when `changes` moves none of them, so a caller can tell
- * that nothing moved by comparing the two.
- */
-export const mapFieldAnchors = (
-  anchors: FieldAnchors,
-  changes: ChangeDesc,
-): FieldAnchors => {
-  let moved = false;
-  // `Object.fromEntries()` defines each id as an own property, whatever the
-  // id is; an assignment would lose an anchor whose id is `__proto__`.
-  const mapped = Object.fromEntries(
-    Object.entries(anchors).map(([id, offset]) => {
-      const next = mapAnchor(offset, changes);
-      if (next !== offset) moved = true;
-      return [id, next];
-    }),
-  );
-  return moved ? mapped : anchors;
-};
 
 /** Preserves both values when a new epoch cannot absorb unconfirmed edits. */
 export class CodeMirrorReconciliationError extends Error {

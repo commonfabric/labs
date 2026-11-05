@@ -945,10 +945,10 @@ export type OpCursor = {
 export type { FieldAnchors };
 
 /** The most anchors a field's anchors document may hold. */
-export const MAX_FIELD_ANCHORS = 1024;
+const MAX_FIELD_ANCHORS = 1024;
 
 /** The most characters an anchor's id may run to. */
-export const MAX_ANCHOR_ID_LENGTH = 256;
+const MAX_ANCHOR_ID_LENGTH = 256;
 
 /**
  * Reads `value` as a field's anchors
@@ -970,7 +970,7 @@ export const parseFieldAnchors = (
   if (entries.length > MAX_FIELD_ANCHORS) {
     return { fault: `holds more than ${MAX_FIELD_ANCHORS} anchors` };
   }
-  const anchors: Record<string, number> = {};
+  const anchors: [string, number][] = [];
   for (const [id, offset] of entries) {
     if (id.length === 0 || id.length > MAX_ANCHOR_ID_LENGTH) {
       return {
@@ -986,9 +986,11 @@ export const parseFieldAnchors = (
           `holds anchor ${id} at something other than a non-negative integer offset`,
       };
     }
-    anchors[id] = offset;
+    anchors.push([id, offset]);
   }
-  return { anchors };
+  // `Object.fromEntries()` defines each id as an own property, whatever the
+  // id is; an assignment would lose an anchor whose id is `__proto__`.
+  return { anchors: Object.fromEntries(anchors) };
 };
 
 export const CODEMIRROR_CHANGESET_CODEC = "codemirror-changeset@1";
