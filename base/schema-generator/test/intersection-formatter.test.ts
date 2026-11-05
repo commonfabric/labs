@@ -158,8 +158,6 @@ describe("IntersectionFormatter", () => {
         type: "array",
         items: { type: "string" },
         description: "The tags. #taglist\n\nOther words.",
-        $comment:
-          "Docs inherited from intersection constituents. Sources: Tags, Words.",
       });
     });
   });
