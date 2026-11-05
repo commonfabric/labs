@@ -32,15 +32,18 @@ dial](test-selection.md#every-dial) lists with the reason to move each:
   prologue decide what a pull request's lane packs against.
 - `FULL_LANE_BOUND_SECONDS`, the same for a lane of the full run, which decides
   how many lanes the full run needs.
-- `LANES_MAX`, the most lanes any run takes.
+- `LANES_MAX`, the most lanes a run takes, and `FULL_LANES_MAX`, the same for
+  the full run.
 
 GitHub's Team plan allows the organization
 [60 parallel hosted runners](https://docs.github.com/en/actions/reference/limits#job-concurrency-limits-for-github-hosted-runners).
 That capacity is shared by every workflow and repository in the organization.
 Keep the first dependency-free wave of this workflow below half the limit so
 two overlapping runs do not queue behind one another and later jobs can start
-as soon as their dependencies finish. `LANES_MAX` holds every run's lanes to the
-same half. `tasks/ci-workflow.test.ts` checks both.
+as soon as their dependencies finish. `LANES_MAX` holds a run's lanes to the same
+half, and `FULL_LANES_MAX` holds the full run's to two thirds of the limit, so
+that a full run still leaves room for what runs beside it, and two at that size
+overlap only by queueing. `tasks/ci-workflow.test.ts` checks all three.
 
 ## Required Pull Request Checks
 
@@ -74,7 +77,7 @@ Revisit CI wall time when at least one of these holds across normal runs:
   bound `LANE_BOUND_SECONDS` states.
 - The lanes of one run finish far apart: the slowest more than 50% slower than
   the rest, and at least 30 seconds slower in absolute terms.
-- The full run takes `LANES_MAX` lanes and they still run past their
+- The full run takes `FULL_LANES_MAX` lanes and they still run past their
   budget.
 - `Plan the Run`, which every lane of every run waits for, takes more than a
   minute.
@@ -390,9 +393,9 @@ of the same job definition and take the same bounds, so a pull-request lane that
 hangs is stopped only at the lane step's bound, although it is packed to finish
 in five minutes. A lane's mandatory work can exceed its budget, for example when
 a test costing more than a whole budget is mandatory, or a run is capped at
-`LANES_MAX`. Such a lane runs long rather than being stopped with its later
-batches unrun and unmeasured, and its job log says how far its plan was
-projected past the budget. So moving either lane bound in `policy.ts` moves
+`LANES_MAX`, or the full run at `FULL_LANES_MAX`. Such a lane runs long rather
+than being stopped with its later batches unrun and unmeasured, and its job log
+says how far its plan was projected past the budget. So moving either lane bound in `policy.ts` moves
 nothing in the workflow, unless it moves past the lane step's bound.
 
 A lane its step bound does stop loses little. The lane appends each batch's
