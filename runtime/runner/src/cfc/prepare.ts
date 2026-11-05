@@ -14036,12 +14036,18 @@ export function* prepareBoundaryCommitSteps(
       // A build-decided result wiring's membership carries the trigger reads
       // alone (§8.9.1.3), and no `TransformedBy`: the runtime placed its
       // references, not the function the join would name. Its frozen
-      // existence entry keeps the whole join.
+      // existence entry keeps the whole join, and so does a container a
+      // coordinator declared here, whose membership its selection decided.
       const wiringNarrowed = resultWirings.get(key)?.buildDecided === true;
-      const membershipJoin = wiringNarrowed
-        ? wiringConfidentiality()
-        : flowConfidentiality;
-      const membershipTransformedBy = wiringNarrowed ? [] : flowTransformedBy;
+      const isDeclaredContainer = (path: readonly string[]) =>
+        structureContainerPath !== undefined &&
+        pathKey(structureContainerPath) === pathKey(path);
+      const membershipJoinAt = (path: readonly string[]) =>
+        wiringNarrowed && !isDeclaredContainer(path)
+          ? wiringConfidentiality()
+          : flowConfidentiality;
+      const membershipTransformedByAt = (path: readonly string[]) =>
+        wiringNarrowed && !isDeclaredContainer(path) ? [] : flowTransformedBy;
       // A container this transaction reaches only by restating a result
       // wiring existed before it and was not written by it, so no existence
       // entry is minted there: one would record a creation this attempt did
@@ -14052,10 +14058,11 @@ export function* prepareBoundaryCommitSteps(
       for (const written of valueTarget?.paths ?? []) writtenHere.add(written);
       const reachedByRestatementAlone = (path: readonly string[]) =>
         restatedRoot && !writtenHere.hasPrefixOf(path) &&
-        !(structureContainerPath !== undefined &&
-          pathKey(structureContainerPath) === pathKey(path));
+        !isDeclaredContainer(path);
       for (const path of structureStampPaths) {
         const at = declaredOnwardKey({ ...targetFromKey(key), path });
+        const membershipJoin = membershipJoinAt(path);
+        const membershipTransformedBy = membershipTransformedByAt(path);
         // A covering derived stamp at-or-above already labels the shape;
         // structure stamps don't cover each other (exact-path semantics),
         // so they only collapse against derived ancestors-or-equal. A path a
