@@ -1,5 +1,4 @@
 {
-  "$comment": "Docs inherited from intersection constituents. Missing docs for: { bar: number; }.",
   "description": "Doc A",
   "properties": {
     "bar": {

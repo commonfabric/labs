@@ -942,6 +942,45 @@ describe("stranded-state comparison", () => {
     });
   });
 
+  describe("a schema held inline on both sides", () => {
+    // A stored pattern carries its schemas written out, as `summaryIndex`'s
+    // `search` does in the committed `default-app.tsx` fixture.
+
+    const NOTE = "Docs inherited from intersection constituents. Missing docs";
+    const searchWith = (comment?: string) => ({
+      search: {
+        pattern: {
+          argumentSchema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            ...(comment === undefined ? {} : { $comment: comment }),
+          },
+        },
+      },
+    });
+
+    it("reports nothing when only the generator's inherited-docs note differs or goes", () => {
+      const before = searchWith(
+        `${NOTE} for: { summary?: string | undefined; }.`,
+      );
+      const after = searchWith(`${NOTE} for: { summary?: string; }.`);
+      expect(strandedKeys(before, after)).toEqual([]);
+      expect(strandedKeys(before, searchWith())).toEqual([]);
+    });
+
+    it("grades the comment before the note as lost when it goes", () => {
+      const held =
+        "Conflicting docs across intersection constituents; using first";
+      const findings = strandedKeys(
+        searchWith(`${held} ${NOTE} for: { summary?: string; }.`),
+        searchWith(),
+      );
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["search", true],
+      ]);
+    });
+  });
+
   it("grades PARTIAL loss as lost, not merely changed", () => {
     // The class whole-value grading missed. `isEmptyValue` is shallow, so
     // judging emptiness only at the top means a key fails only when it empties

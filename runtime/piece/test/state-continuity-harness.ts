@@ -640,10 +640,30 @@ function isVNode(value: object): boolean {
 }
 
 /**
+ * How a note on inherited docs opens. A schema a vintage holds can carry one:
+ * an earlier schema generator wrote it into the `$comment` of an intersection
+ * its constituents documented, after any comment already there. The note
+ * names those constituents as the checker printed them, so it changed with
+ * the checker's options rather than with the schema.
+ */
+const INHERITED_DOCS_NOTE = "Docs inherited from intersection constituents.";
+
+/**
+ * `comment`, a `$comment`'s value, cut where a note on inherited docs opens,
+ * or `undefined` when nothing comes before the note.
+ */
+function withoutInheritedDocsNote(comment: string): string | undefined {
+  const note = comment.indexOf(INHERITED_DOCS_NOTE);
+  if (note === -1) return comment;
+  const kept = comment.slice(0, note).trimEnd();
+  return kept === "" ? undefined : kept;
+}
+
+/**
  * A materialized root, detached and reduced to something two of can be
  * COMPARED.
  *
- * A materialized root is not plain data, and three of the things in it defeat a
+ * A materialized root is not plain data, and these things in it defeat a
  * structural comparison outright:
  *
  * - **A live cell.** At every `asCell`/`asStream` position — the six handler
@@ -684,6 +704,14 @@ function isVNode(value: object): boolean {
  *   recorded hoist roots and took the gate to exit 1, for a change that stores
  *   nothing. Reduced by SHAPE here, so a rendering is out of the comparison
  *   wherever it sits rather than only where it is named.
+ * - **A note on inherited docs.** A schema the state holds written out, as a
+ *   stored pattern's `argumentSchema` is, can carry one in a `$comment`
+ *   ({@link INHERITED_DOCS_NOTE}), and the same schema compiled again carries
+ *   none. Measured on the committed `default-app.tsx` fixture:
+ *   `summaryIndex.search` holds such a pattern, and an update compiled without
+ *   the note reported `summaryIndex` and `search` stranded, a `$comment` having
+ *   gone from something to nothing. Cut here from where the note opens, so a
+ *   `$comment` compares by what it held before the note.
  *
  * Everything else is copied plainly, and `bigint` and `undefined` pass through
  * as themselves — the two values a JSON round-trip could not carry.
@@ -721,7 +749,13 @@ export function comparableState(value: unknown): unknown {
       if (Array.isArray(current)) return current.map(walk);
       const copy: Record<string, unknown> = {};
       for (const key of Object.keys(current)) {
-        copy[key] = walk((current as Record<string, unknown>)[key]);
+        const value = (current as Record<string, unknown>)[key];
+        if (key === "$comment" && typeof value === "string") {
+          const comment = withoutInheritedDocsNote(value);
+          if (comment !== undefined) copy[key] = comment;
+          continue;
+        }
+        copy[key] = walk(value);
       }
       return copy;
     } finally {
@@ -986,16 +1020,9 @@ export function isReduction(value: unknown): boolean {
  */
 
 /**
- * How the schema generator's note on inherited docs opens. The generator
- * appends the note to a `$comment` the schema already carries.
- */
-const INHERITED_DOCS_NOTE = "Docs inherited from intersection constituents.";
-
-/**
  * `schema` without what only describes it, at any depth: the keywords
- * {@link isInertAnnotationKey} names, and the schema generator's note on
- * inherited docs, which prints a TypeScript type the way the checker's
- * options have it print. The note is cut from where it opens. What a
+ * {@link isInertAnnotationKey} names, and a note on inherited docs
+ * ({@link INHERITED_DOCS_NOTE}). The note is cut from where it opens. What a
  * `$comment` held before it stays, as does every other `$comment`, because a
  * reader of a schema can act on one: `rejectedProperty` is one such.
  */
@@ -1004,9 +1031,8 @@ function withoutDescriptiveAnnotations(schema: JSONSchemaObj): JSONSchemaObj {
   for (const [key, value] of Object.entries(schema)) {
     if (isInertAnnotationKey(key)) continue;
     if (key === "$comment" && typeof value === "string") {
-      const note = value.indexOf(INHERITED_DOCS_NOTE);
-      const comment = note === -1 ? value : value.slice(0, note).trimEnd();
-      if (comment !== "") kept[key] = comment;
+      const comment = withoutInheritedDocsNote(value);
+      if (comment !== undefined) kept[key] = comment;
       continue;
     }
     kept[key] = value;
