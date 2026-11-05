@@ -610,20 +610,20 @@ const inboxPointerOf = (
   profile?.key("inbox").get()?.piece;
 
 /**
- * Whether `read`, what a read of a `receive` through an inbox pointer found, is a
- * stream. A stream reads as its handle there, and stored data reads as itself.
+ * Whether `read`, what a read of a `receive` through an inbox pointer found, is
+ * a stream. A stream reads as its handle there, and stored data reads as itself.
  */
 const isStreamHandle = (read: unknown): boolean =>
   typeof (read as { send?: unknown } | undefined)?.send === "function";
 
 /**
  * Whether the share inbox `pointer` points at takes offers, as this run finds
- * it: its space isn't deleted, and its `receive` is a stream. A pointer can name
- * a piece with no such stream, or an inbox in a space this run can't read. A
- * send to a path holding no stream writes the event there, and in another space
- * that write throws, which takes the handler's other sends with it. A runtime
- * still holding an inbox it read before its space stopped admitting this user
- * finds the stream, and the offer it sends is lost.
+ * it: its space isn't deleted, and its `receive` is a stream. A pointer can
+ * name a piece with no such stream, or an inbox in a space this run can't read.
+ * A send to a path holding no stream writes the event there, and in another
+ * space that write throws, which takes the handler's other sends with it. A
+ * runtime still holding an inbox it read before its space stopped admitting
+ * this user finds the stream, and the offer it sends is lost.
  */
 const takesOffers = (pointer: Cell<ShareInboxPiece>): boolean => {
   const inbox = pointer.resolveAsCell();
