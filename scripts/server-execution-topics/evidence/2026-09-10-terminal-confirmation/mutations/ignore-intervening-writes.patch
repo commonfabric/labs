@@ -1,0 +1,11 @@
+--- a/packages/runner/src/executor/space-server.ts
++++ b/packages/runner/src/executor/space-server.ts
+@@ -4083,7 +4083,7 @@
+                 .some((id) => changedDocs.has(id));
+               const shadowed = runtime.storageManager.open(this.#options.space)
+                 .replica.unappliedForeignSeqFloor?.() !== undefined;
+-              if (changed || shadowed) {
++              if (shadowed) {
+                 this.#pendingStructureLoads.delete(key);
+                 this.#rearmedAwaitingSettle.add(key);
+                 this.#pendingStructureRetryWake = true;

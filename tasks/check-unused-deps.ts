@@ -59,6 +59,7 @@
 import { parse as parseJsonc } from "@std/jsonc";
 import { walk } from "@std/fs/walk";
 import { dirname, fromFileUrl, join, relative } from "@std/path";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -73,7 +74,7 @@ export const ALLOWLIST: ReadonlyMap<string, string> = new Map([
   // writes and reads back; the direct declaration is how the version is held to
   // one. No toolshed source imports it by name.
   [
-    "packages/toolshed/deno.jsonc\t@arizeai/openinference-semantic-conventions",
+    "runtime/toolshed/deno.jsonc\t@arizeai/openinference-semantic-conventions",
     "pinned for check-single-copy-deps; reaches the tree only via " +
     "@arizeai/openinference-vercel",
   ],
@@ -140,7 +141,7 @@ export function importsAlias(source: string, alias: string): boolean {
 export function parseImportMap(configText: string): Record<string, string> {
   const config = parseJsonc(configText) as { imports?: unknown } | null;
   const imports = config?.imports;
-  if (imports === null || typeof imports !== "object") return {};
+  if (!isObjectOrArray(imports)) return {};
   const result: Record<string, string> = {};
   for (const [alias, specifier] of Object.entries(imports)) {
     if (typeof specifier === "string") result[alias] = specifier;
@@ -151,8 +152,7 @@ export function parseImportMap(configText: string): Record<string, string> {
 /**
  * Returns the workspace member that owns `relPath`, or undefined when the path
  * lies under no member. The longest matching member wins, so a file under a
- * nested member (`packages/patterns/auth`) is attributed to it rather than to
- * the member that contains it (`packages/patterns`).
+ * member that sits inside another member's tree is attributed to the inner one.
  */
 export function owningMember(
   relPath: string,

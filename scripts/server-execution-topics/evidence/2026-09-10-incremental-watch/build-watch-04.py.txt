@@ -1,0 +1,37 @@
+from pathlib import Path
+import subprocess,os,hashlib,json,datetime
+root=Path('/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09')
+source=Path('/Users/berni/.codex/worktrees/topics-campaign-watch/labs')
+build=Path('/Users/berni/.codex/worktrees/topics-campaign-watch-build/labs')
+old=json.loads((root/'metadata/watch-builds-03.json').read_text())
+sha=lambda path:hashlib.sha256(path.read_bytes()).hexdigest()
+now=lambda:datetime.datetime.now(datetime.timezone.utc).isoformat()
+for path,expected in old['sourceHashes'].items():
+ assert sha(build/path)==expected,(path,sha(build/path),expected)
+head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=source,text=True).strip()
+assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=build,text=True).strip()==head
+patch=root/'source/watch-build-04.patch'
+patch.write_bytes(subprocess.check_output(['git','diff','HEAD','--binary','--','packages'],cwd=source))
+for path in old['sourceHashes']:
+ (build/path).write_bytes((source/path).read_bytes())
+manifest={'startedAt':now(),'head':head,'sourceRoot':str(source),'buildRoot':str(build),'patch':str(patch),'patchSha256':sha(patch),'sourceHashes':{p:sha(source/p) for p in old['sourceHashes']},'binaries':[]}
+path=root/'metadata/watch-builds-04.json'
+def save():path.write_text(json.dumps(manifest,indent=2)+'\n')
+save()
+for role in ['default','opposite']:
+ output=build/f'.ci-cache/binaries/toolshed-baked-{role}'
+ previous=output.with_name(output.name+'-03')
+ assert not previous.exists()
+ output.rename(previous)
+ env=os.environ.copy();env.pop('EXPERIMENTAL_SERVER_EXECUTION',None);env['COMMIT_SHA']=head
+ if role=='opposite':env['EXPERIMENTAL_SERVER_EXECUTION']='true'
+ log=root/f'validation/watch-build-{role}-04.log'
+ row={'role':role,'command':['deno','task','build-binaries','toolshed'],'flags':{k:v for k,v in env.items() if k.startswith('EXPERIMENTAL_') or k=='COMMIT_SHA'},'startedAt':now(),'log':str(log),'previousBinary':str(previous),'previousSha256':sha(previous)}
+ manifest['binaries'].append(row);save()
+ with log.open('w') as f: result=subprocess.run(row['command'],cwd=build,env=env,stdout=f,stderr=subprocess.STDOUT)
+ row.update(exitCode=result.returncode,endedAt=now());save()
+ if result.returncode:raise SystemExit(result.returncode)
+ (build/'dist/toolshed').rename(output)
+ row.update(path=str(output),sha256=sha(output));save();print(role,row['sha256'],flush=True)
+for p,expected in manifest['sourceHashes'].items():assert sha(source/p)==expected,p
+manifest['completedAt']=now();save()

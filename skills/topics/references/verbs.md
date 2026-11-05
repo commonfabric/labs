@@ -5,8 +5,7 @@ the running board and its Topics accept.
 
 The running piece is authoritative. Choose discovery by what you need:
 
-- To survey Topics, read the projected board `index` in
-  `skills/topics/references/reading.md`.
+- To survey Topics, use `deno task -q topics search`.
 - To discover a piece's readable fields and operations, use
   `deno task cf piece describe --cell "$TOPICS_BOARD" --json`. It documents
   fields; `deno task cf cell get --cell "$TOPICS_BOARD" <field>` reads their
@@ -53,19 +52,20 @@ and call that Topic directly.
 
 The current declared contract is:
 
-| Piece | Verb            | Input                                           | Declared result         |
-| ----- | --------------- | ----------------------------------------------- | ----------------------- |
-| Board | `addTopic`      | `title`, optional `body`, `agentName`           | created `topic`, `name` |
-| Board | `backfillNames` | `agentName`                                     | the names it wrote      |
-| Topic | `addComment`    | `body`, `agentName`                             | appended `comment`      |
-| Topic | `addLink`       | `url`, optional `kind` and `label`, `agentName` | appended `link`         |
-| Topic | `setBody`       | complete `body`, `agentName`                    | body and attribution    |
-| Topic | `setTitle`      | `title`, `agentName`                            | title and attribution   |
-| Topic | `mention`       | Topic reference                                 | none                    |
-| Topic | `unmention`     | Topic reference                                 | none                    |
-| Topic | `editComment`   | comment reference, `body`, `agentName`          | body and `editedAt`     |
-| Topic | `removeComment` | comment reference, `agentName`                  | the retraction stamp    |
-| Topic | `removeLink`    | link reference **or** `url`, `agentName`        | url and stamp           |
+| Piece | Verb            | Input                                           | Declared result                |
+| ----- | --------------- | ----------------------------------------------- | ------------------------------ |
+| Board | `addTopic`      | `title`, optional `body`, `agentName`           | created `topic`, `name`        |
+| Board | `backfillNames` | `agentName`                                     | `assigned`, `named`, `pending` |
+| Topic | `addComment`    | `body`, `agentName`                             | appended `comment`             |
+| Topic | `addLink`       | `url`, optional `kind` and `label`, `agentName` | appended `link`                |
+| Topic | `setBody`       | complete `body`, `agentName`                    | body and attribution           |
+| Topic | `setTitle`      | `title`, `agentName`                            | title and attribution          |
+| Topic | `mention`       | Topic reference                                 | none                           |
+| Topic | `unmention`     | Topic reference                                 | none                           |
+| Topic | `editComment`   | comment reference, `body`, `agentName`          | body and `editedAt`            |
+| Topic | `removeComment` | comment reference, `agentName`                  | the retraction stamp           |
+| Topic | `removeLink`    | link reference **or** `url`, `agentName`        | url and stamp                  |
+| Topic | `recordName`    | `name`, the number the board allocated          | `name` and `wrote`             |
 
 A retraction stamps the record rather than deleting it: the comment or link
 stays, carrying what it always said, while readers stop showing it and

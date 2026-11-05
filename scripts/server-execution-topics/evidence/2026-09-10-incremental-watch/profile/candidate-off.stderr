@@ -1,0 +1,3 @@
+{"phase":"posture","size":100,"serverExecution":false,"client":"memory v2 loopback; no execution runtime","shell":null}
+{"phase":"posture","size":1000,"serverExecution":false,"client":"memory v2 loopback; no execution runtime","shell":null}
+{"phase":"posture","size":10000,"serverExecution":false,"client":"memory v2 loopback; no execution runtime","shell":null}

@@ -1,0 +1,212 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Card": {
+        "properties": {
+          "rank": {
+            "enum": [
+              "10",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "8",
+              "9",
+              "A",
+              "J",
+              "K",
+              "Q"
+            ]
+          },
+          "suit": {
+            "enum": [
+              "clubs",
+              "diamonds",
+              "hearts",
+              "spades"
+            ]
+          }
+        },
+        "required": [
+          "suit",
+          "rank"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "pile1": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [
+          {
+            "rank": "A",
+            "suit": "hearts"
+          },
+          {
+            "rank": "K",
+            "suit": "spades"
+          },
+          {
+            "rank": "7",
+            "suit": "diamonds"
+          }
+        ],
+        "items": {
+          "$ref": "#/$defs/Card"
+        },
+        "type": "array"
+      },
+      "pile2": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [
+          {
+            "rank": "Q",
+            "suit": "clubs"
+          },
+          {
+            "rank": "10",
+            "suit": "hearts"
+          },
+          {
+            "rank": "3",
+            "suit": "spades"
+          }
+        ],
+        "items": {
+          "$ref": "#/$defs/Card"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "pile1",
+      "pile2"
+    ],
+    "type": "object"
+  },
+  "pattern": "card-piles/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Card": {
+        "properties": {
+          "rank": {
+            "enum": [
+              "10",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "8",
+              "9",
+              "A",
+              "J",
+              "K",
+              "Q"
+            ]
+          },
+          "suit": {
+            "enum": [
+              "clubs",
+              "diamonds",
+              "hearts",
+              "spades"
+            ]
+          }
+        },
+        "required": [
+          "suit",
+          "rank"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "moveToPile1": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "detail": {
+            "properties": {
+              "sourceCell": {
+                "$ref": "#/$defs/Card"
+              }
+            },
+            "required": [
+              "sourceCell"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "type": "object"
+      },
+      "moveToPile2": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "detail": {
+            "properties": {
+              "sourceCell": {
+                "$ref": "#/$defs/Card"
+              }
+            },
+            "required": [
+              "sourceCell"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "type": "object"
+      },
+      "pile1": {
+        "items": {
+          "$ref": "#/$defs/Card"
+        },
+        "type": "array"
+      },
+      "pile2": {
+        "items": {
+          "$ref": "#/$defs/Card"
+        },
+        "type": "array"
+      },
+      "shuffle": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      }
+    },
+    "required": [
+      "pile1",
+      "pile2",
+      "shuffle",
+      "moveToPile1",
+      "moveToPile2",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

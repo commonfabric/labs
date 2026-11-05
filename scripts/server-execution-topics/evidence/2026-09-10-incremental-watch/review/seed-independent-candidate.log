@@ -1,0 +1,10 @@
+{"fallback":false,"flag":"unset","expected":false}
+{"fallback":false,"flag":"false","expected":false}
+{"fallback":false,"flag":"false","faultyParserRejected":true}
+{"fallback":false,"flag":"true","expected":true}
+{"fallback":false,"flag":"true","faultyParserRejected":true}
+{"fallback":true,"flag":"unset","expected":true}
+{"fallback":true,"flag":"false","expected":false}
+{"fallback":true,"flag":"false","faultyParserRejected":true}
+{"fallback":true,"flag":"true","expected":true}
+{"fallback":true,"flag":"true","faultyParserRejected":true}

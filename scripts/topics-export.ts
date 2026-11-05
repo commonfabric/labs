@@ -40,6 +40,7 @@
  * the program ever reached the network at all.
  */
 
+import type { FabricValue } from "@commonfabric/data-model";
 import {
   annotate,
   getValueAt,
@@ -108,7 +109,7 @@ const PIECE_LIMIT = 1_000_000;
 // reads the `$link` shape that annotation produces. Reading the raw value
 // instead would quietly change what the export records.
 const space = openSpace(await resolveSpace(snapshot));
-const annotateFully = (value: unknown) =>
+const annotateFully = (value: FabricValue) =>
   annotate(value, Number.POSITIVE_INFINITY);
 
 const listing = listEntityModels(space, { limit: PIECE_LIMIT, kind: "piece" });
@@ -145,9 +146,7 @@ if (!isCompleteScan(listing.extent)) {
 // sweep is what makes finding them affordable.
 const infos: PieceInfo[] = [];
 for (const row of listing.entities) {
-  const document = getValueAt(space, { id: row.id }).document as
-    | Record<string, unknown>
-    | undefined;
+  const document = getValueAt(space, { id: row.id }).document;
   if (!document) continue;
   const value = document.value as Record<string, unknown> | undefined;
   const identity = document.patternIdentity as

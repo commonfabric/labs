@@ -8,41 +8,39 @@
  * comment that tells it. Everything here is a pure function over three
  * runs' records — this one, the one before it on the default branch, and
  * the pull request's own — the manifest that pull request's run
- * resolved, and the coverage figures the two default-branch runs
- * measured. The gathering and the posting are in
- * `tasks/post-main-report.ts`.
+ * resolved, the identities this run did not fail for, and the coverage
+ * figures the two default-branch runs measured. The gathering and the
+ * posting are in `tasks/post-main-report.ts`.
  *
- * Five properties keep this on the right side of the wall's rule that
- * reporting is about the system and never about individuals, and each is
- * a constraint on what is written here rather than an observation about
- * it. The comment's subject is a commit and a test, and no author is
- * named. Nothing is counted per author, per team, or per anything, and
- * no history is kept anywhere. A test the selector declined to run is
- * described as coverage this design traded away, because the author did
- * not miss it. A test the store has seen disagreeing with itself is
- * labelled as one, with the evidence behind the label. And every note
- * says what to do, in a comment that is edited in place rather than
- * repeated.
+ * Five properties keep this on the right side of the dashboard's rule
+ * that reporting is about the system and never about individuals, and
+ * each is a constraint on what is written here rather than an
+ * observation about it. The comment's subject is a commit and a test,
+ * and no author is named. Nothing is counted per author, per team, or
+ * per anything, and no history is kept anywhere. A test the selector
+ * declined to run is described by what the plan the lanes computed says
+ * about leaving it out, which is never something the author missed. A
+ * test the store has seen disagreeing with itself is labelled as one,
+ * with the evidence behind the label. And every note says what to do, in a comment that
+ * is edited in place rather than repeated.
  */
 
 import {
-  ALIAS_FILE,
+  ALIAS_DIRECTORY,
+  type CoverageFigures,
   type FlakeEvidence,
   type TestIdentity,
   testIdentityKey,
   testIdentityOfKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
-import {
-  coverageMetricGroupName,
-  ownTestsCoverageMember,
-} from "../ci-check-lib.ts";
+import { maxOf } from "@commonfabric/collections/math";
+import { excusedMeasurement, isLaneMeasurement } from "../lane-measurement.ts";
 import type { WithheldReason } from "./manifest.ts";
 import {
   COVERAGE_COMMENT_LINES,
   EXCLUDED_FROM_COVERAGE_GATE,
   FLAKE_WINDOW_DAYS,
-  LOCAL_COVERAGE_MAX_PACKAGES,
   RENAME_MARGIN,
   RENAME_SIMILARITY,
   RENAME_SUGGESTIONS,
@@ -55,41 +53,100 @@ import {
 export const MAIN_REPORT_MARKER = "<!-- main-run-report -->";
 
 /**
- * What one identity did across a whole run. A run holds several records
- * for one identity whenever a lane repeats it, whenever it is sharded,
- * and whenever an attempt is re-run, so the outcome of a run is a fold
- * of those rather than any one of them. `mixed` is the test disagreeing
- * with itself at one commit, which is the same judgement the scorer
- * makes and the only evidence of a flake a single run can hold.
+ * What one identity did across a whole run, folded to one word. `mixed`
+ * is the test disagreeing with itself at one commit, which is the same
+ * judgement the scorer makes and the only evidence of a flake a single
+ * run can hold.
  */
 export type Verdict = "pass" | "fail" | "mixed" | "skip";
 
+/**
+ * What one identity did across a whole run: how many of its runs passed
+ * and how many failed. A run holds several records for one identity
+ * whenever a lane repeats it, whenever it is sharded, and whenever an
+ * attempt is re-run, and each record is one of its runs. A skip judged
+ * nothing, so it counts as neither.
+ */
+export interface Outcome {
+  passed: number;
+  failed: number;
+}
+
 /** What every identity in one run did, by its canonical key. */
-export type RunOutcomes = ReadonlyMap<string, Verdict>;
+export type RunOutcomes = ReadonlyMap<string, Outcome>;
 
-/** Uncovered lines per coverage metric, as a run measured them. */
-export type CoverageFigures = ReadonlyMap<string, number>;
+/**
+ * The verdict one identity's runs come to, or nothing for an identity
+ * the run holds no record of. An identity whose every record is a skip
+ * is `skip`.
+ */
+export function verdictOf(outcome: Outcome | undefined): Verdict | undefined {
+  if (outcome === undefined) return undefined;
+  const { passed, failed } = outcome;
+  return passed > 0 && failed > 0
+    ? "mixed"
+    : failed > 0
+    ? "fail"
+    : passed > 0
+    ? "pass"
+    : "skip";
+}
 
-/** Folds a run's records into one verdict per identity. */
+/**
+ * Counts a run's records into one outcome per identity, leaving out the
+ * lane's measurements of itself.
+ *
+ * A lane writes what its setup and each of its batches cost through the
+ * record machinery every test uses, and a batch that ended badly is
+ * written as a failure. Those are not tests, and what this feeds is a
+ * comment about tests.
+ */
 export function outcomesOf(
   records: Iterable<TestRecord>,
-): Map<string, Verdict> {
-  const seen = new Map<string, { pass: boolean; fail: boolean }>();
+): Map<string, Outcome> {
+  const outcomes = new Map<string, Outcome>();
   for (const record of records) {
+    if (isLaneMeasurement(record.test)) continue;
     const key = testIdentityKey(record.test);
-    const already = seen.get(key) ?? { pass: false, fail: false };
-    if (record.outcome === "pass") already.pass = true;
-    if (record.outcome === "fail") already.fail = true;
-    seen.set(key, already);
-  }
-  const outcomes = new Map<string, Verdict>();
-  for (const [key, { pass, fail }] of seen) {
-    outcomes.set(
-      key,
-      pass && fail ? "mixed" : fail ? "fail" : pass ? "pass" : "skip",
-    );
+    const outcome = outcomes.get(key) ?? { passed: 0, failed: 0 };
+    if (record.outcome === "pass") outcome.passed++;
+    if (record.outcome === "fail") outcome.failed++;
+    outcomes.set(key, outcome);
   }
   return outcomes;
+}
+
+/**
+ * The identities a run's lanes recorded excusing: those whose failures
+ * the run did not fail for. A run that recorded none excused nothing,
+ * which is every run whose tests did not run in lanes.
+ *
+ * `reports` holds one list of records per report, and every attempt of
+ * every job writes a report of its own. A re-run lane can excuse in one
+ * attempt a test it failed in another without excusing, and that other
+ * attempt failed the run for it. So an identity is excused only where
+ * some report excused it and every report that failed it excused it.
+ */
+export function excusedIn(
+  reports: Iterable<Iterable<TestRecord>>,
+): Set<string> {
+  const excused = new Set<string>();
+  const unexcused = new Set<string>();
+  for (const records of reports) {
+    const failed = new Set<string>();
+    const excusing = new Set<string>();
+    for (const record of records) {
+      if (isLaneMeasurement(record.test)) {
+        const key = excusedMeasurement(record.test.n);
+        if (key !== undefined) excusing.add(key);
+      } else if (record.outcome === "fail") {
+        failed.add(testIdentityKey(record.test));
+      }
+    }
+    for (const key of excusing) excused.add(key);
+    for (const key of failed) if (!excusing.has(key)) unexcused.add(key);
+  }
+  return new Set([...excused].filter((key) => !unexcused.has(key)));
 }
 
 /**
@@ -115,8 +172,27 @@ export interface PullRequestView {
   /** The identities the packing over that manifest reached. */
   selected: ReadonlySet<string>;
 
+  /**
+   * Every unit the packing placed anything of, as `"<suite>\t<unit>"`.
+   * A test the manifest does not hold runs wherever its unit runs, so
+   * this is what says whether it was to have run.
+   */
+  placed: ReadonlySet<string>;
+
   /** The identities that manifest held back, against the reason. */
   withheld: ReadonlyMap<string, WithheldReason>;
+
+  /**
+   * The identities the packing held back because their unit runs whole
+   * and holds a test that manifest withholds.
+   */
+  heldWithUnit: ReadonlySet<string>;
+
+  /** The identities the packing found no lane could hold. */
+  unschedulable: ReadonlySet<string>;
+
+  /** Whether the packing placed nothing beyond the tests that had to run. */
+  crowded: boolean;
 
   /**
    * How often the store saw each identity disagree with itself, and over
@@ -127,15 +203,19 @@ export interface PullRequestView {
    */
   flakes: ReadonlyMap<string, FlakeEvidence | undefined>;
 
-  /** The weighted catches behind each identity the store knows. */
-  catches: ReadonlyMap<string, number>;
+  /**
+   * The weighted new real test failures behind each identity the store
+   * knows.
+   */
+  newRealTestFailures: ReadonlyMap<string, number>;
 
   /**
-   * The invocation unit each identity the store knows lives in, as
-   * `"<suite>\t<unit>"`. What it answers is whether a unit ran at all:
-   * records exist only for tests that ran, so a test missing from a run
-   * whose unit produced no records at all is a test nothing judged
-   * rather than a test that left.
+   * The invocation unit each identity lives in, as `"<suite>\t<unit>"`:
+   * where the manifest places it, and for one the manifest does not hold,
+   * where this tree places the record the run under report wrote of it.
+   * What it answers is whether a unit ran at all: records exist only for
+   * tests that ran, so a test missing from a run whose unit produced no
+   * records at all is a test nothing judged rather than a test that left.
    */
   units: ReadonlyMap<string, string>;
 }
@@ -145,9 +225,13 @@ export function unknownPullRequest(): PullRequestView {
   return {
     manifest: false,
     selected: new Set(),
+    placed: new Set(),
     withheld: new Map(),
+    heldWithUnit: new Set(),
+    unschedulable: new Set(),
+    crowded: false,
     flakes: new Map(),
-    catches: new Map(),
+    newRealTestFailures: new Map(),
     units: new Map(),
   };
 }
@@ -158,6 +242,9 @@ export type Selection =
   | "failed-there"
   | "skipped-there"
   | "withheld-flaky"
+  | "withheld-unit"
+  | "unschedulable"
+  | "crowded-out"
   | "not-selected"
   | "unrecorded"
   | "did-not-run"
@@ -184,6 +271,32 @@ export interface FirstFailure {
   flakes?: FlakeEvidence;
 }
 
+/**
+ * A test too flaky to judge a change by that failed every one of its
+ * runs at this commit and passed every one at the parent.
+ *
+ * Its failures did not fail the run, and several runs of it at one
+ * commit are what make this the one thing worth saying about it. The
+ * counts are carried rather than judged, because one failure after one
+ * pass is what the test does on its own and five after five is not.
+ */
+export interface ExcusedFailure {
+  test: TestIdentity;
+
+  /** Its runs at this commit, every one of which failed. */
+  failed: number;
+
+  /** Its runs at the parent, every one of which passed. */
+  passed: number;
+
+  /**
+   * How often the store saw it disagree with itself, and over how many
+   * runs, which is what calls it flaky. Absent where the manifest carries
+   * no counts for it.
+   */
+  flakes?: FlakeEvidence;
+}
+
 /** A rise in the repository's whole uncovered-line count. */
 export interface CoverageRise {
   from: number;
@@ -196,25 +309,28 @@ export interface CoverageRise {
   groups: Array<{ group: string; from: number; to: number }>;
 }
 
-/** Which route let a package's rise reach the default branch. */
-export type PackageRoute =
+/** Which route let a measured set's rise reach the default branch. */
+export type MeasuredSetRoute =
   | "excluded"
-  | "over-the-cap"
+  | "not-chosen"
+  | "unplanned"
   | "elsewhere"
   | "gated";
 
-/** A rise in one covered package's own-tests number. */
-export interface PackageRise {
+/** A rise in one measured set's number. */
+export interface MeasuredSetRise {
+  /** The suite and the member the set pairs, as one name. */
+  set: string;
+
+  /** The workspace member whose lines rose. */
   member: string;
+
   from: number;
   to: number;
-  route: PackageRoute;
+  route: MeasuredSetRoute;
 
   /** Present for `excluded`: the reason the exclusion list gives. */
   reason?: string;
-
-  /** Present for `over-the-cap`: how many covered packages were touched. */
-  touched?: number;
 }
 
 /** A test this change added which has already disagreed with itself. */
@@ -227,8 +343,8 @@ export interface RenameSuggestion {
   from: TestIdentity;
   to: TestIdentity;
 
-  /** The weighted catches the bridge would bring back. */
-  catches: number;
+  /** The weighted new real test failures the bridge would bring back. */
+  newRealTestFailures: number;
 
   /** The line to append to the alias file, exactly as it must be written. */
   aliasLine: string;
@@ -237,8 +353,9 @@ export interface RenameSuggestion {
 /** Everything one run on the default branch has to tell one pull request. */
 export interface Report {
   firstFailures: FirstFailure[];
+  excusedFailures: ExcusedFailure[];
   coverageRise?: CoverageRise;
-  packageRises: PackageRise[];
+  measuredSetRises: MeasuredSetRise[];
   flakyNewTests: FlakyNewTest[];
   renames: RenameSuggestion[];
 }
@@ -246,8 +363,9 @@ export interface Report {
 /** Whether a report holds anything at all worth saying. */
 export function reportIsEmpty(report: Report): boolean {
   return report.firstFailures.length === 0 &&
+    report.excusedFailures.length === 0 &&
     report.coverageRise === undefined &&
-    report.packageRises.length === 0 &&
+    report.measuredSetRises.length === 0 &&
     report.flakyNewTests.length === 0 &&
     report.renames.length === 0;
 }
@@ -267,6 +385,15 @@ export interface ReportInput {
   /** What the pull request behind this commit did, and what it knew. */
   pullRequest: PullRequestView;
 
+  /**
+   * The identities this run did not fail for, as its lanes recorded
+   * excusing them, against the flake counts the manifest it resolved
+   * carries for each where those could be read. Empty for a run that
+   * recorded excusing nothing, which a run whose tests did not run in
+   * lanes never does.
+   */
+  nonGating: ReadonlyMap<string, FlakeEvidence | undefined>;
+
   /** Every coverage figure this run measured. */
   coverage: CoverageFigures;
 
@@ -275,6 +402,15 @@ export interface ReportInput {
 
   /** The source groups this change touched. */
   touched: ReadonlySet<string>;
+
+  /**
+   * The measured sets the change reached, and those whose gates the plan
+   * over its pull request's manifest chose, by the same packing the lanes
+   * and the gate ran, so the note and the gate cannot come to different
+   * answers about which sets were measured. Which were chosen is absent
+   * where no manifest was resolved for that run.
+   */
+  coverageGate: { reached: readonly string[]; chosen?: readonly string[] };
 
   /** The day the comment is written, which dates an alias line. */
   day: string;
@@ -294,14 +430,16 @@ function identityOf(key: string): TestIdentity {
  *
  * Its own records decide first, because whether it ran a test is a fact
  * about what it did rather than a projection of what it would have done.
- * The manifest only says why it did not.
+ * The plan packed over the manifest only says why it did not: a test the
+ * manifest holds by what the plan did with it, and one the manifest does
+ * not hold by what the plan did with its unit.
  */
 export function selectionOf(
   view: PullRequestView,
   key: string,
 ): Selection {
   if (view.ran === undefined) return "unknown";
-  const there = view.ran.get(key);
+  const there = verdictOf(view.ran.get(key));
   if (there === "pass") return "passed-there";
   if (there === "fail" || there === "mixed") return "failed-there";
   // A skip and no record at all ask the same question — why did this run
@@ -310,19 +448,26 @@ export function selectionOf(
   // not say either way.
   const withheld = view.withheld.get(key);
   if (withheld === "flaky") return "withheld-flaky";
-  // With a manifest, the packing says whether the test was to have run:
-  // an identity the packing reached, and one the store has never seen,
-  // are both identities that run.
-  if (view.manifest && view.flakes.has(key) && !view.selected.has(key)) {
-    return "not-selected";
+  if (view.heldWithUnit.has(key)) return "withheld-unit";
+  // With a manifest, the packing says whether the test was to have run.
+  // One the manifest holds runs where the packing reached it, and one the
+  // manifest does not hold runs wherever its unit runs.
+  const unit = view.units.get(key);
+  const passedOver = view.flakes.has(key)
+    ? !view.selected.has(key)
+    : unit !== undefined && !view.placed.has(unit);
+  if (view.manifest && passedOver) {
+    if (view.unschedulable.has(key)) return "unschedulable";
+    return view.crowded ? "crowded-out" : "not-selected";
   }
   if (there === "skip") return "skipped-there";
   return view.manifest ? "unrecorded" : "did-not-run";
 }
 
 /**
- * The tests that failed for the first time at this commit: each passed in
- * the previous run on the default branch and failed in this one.
+ * The identities that passed in the previous run on the default branch
+ * and failed in this one, which is what failing for the first time at
+ * this commit means.
  *
  * The comparison is what stops the comment landing on whoever merged
  * next after somebody else broke something. A test that was already
@@ -331,29 +476,98 @@ export function selectionOf(
  *
  * A test that both passed and failed in this run produces nothing
  * either. That is the test disagreeing with itself at one commit, which
- * is what the scorer calls flake evidence rather than a catch, and
- * calling it a first failure would say the change broke something that
- * broke on its own.
+ * is what the scorer calls flake evidence rather than a new real test
+ * failure. Calling it a first failure would say the change broke
+ * something that broke on its own.
  *
  * Nor does a test the pull request's own run failed. This comment
  * carries what a later run found that the pull request's run could not
  * have found for itself, and a failure it reported is not that.
  */
-export function firstFailures(input: ReportInput): FirstFailure[] {
-  const failures: FirstFailure[] = [];
-  for (const [key, verdict] of input.current) {
-    if (verdict !== "fail") continue;
-    if (input.previous.get(key) !== "pass") continue;
+function failingFromHere(input: ReportInput): FailingFromHere[] {
+  const found: FailingFromHere[] = [];
+  for (const [key, here] of input.current) {
+    const there = input.previous.get(key);
+    if (verdictOf(here) !== "fail" || !passedThroughout(there)) continue;
     const selection = selectionOf(input.pullRequest, key);
     if (selection === "failed-there") continue;
-    const flakes = input.pullRequest.flakes.get(key);
-    failures.push({
-      test: identityOf(key),
+    found.push({
+      key,
       selection,
-      ...(flakes === undefined || flakes.flakes === 0 ? {} : { flakes }),
+      failed: here.failed,
+      passed: there.passed,
     });
   }
-  return failures.sort(byIdentity);
+  return found;
+}
+
+/** Whether a run judged an identity and every run of it passed. */
+function passedThroughout(outcome: Outcome | undefined): outcome is Outcome {
+  return verdictOf(outcome) === "pass";
+}
+
+/** One identity failing for the first time here, and what is known of it. */
+interface FailingFromHere {
+  key: string;
+  selection: ReportedSelection;
+
+  /** Its runs here, every one of which failed. */
+  failed: number;
+
+  /** Its runs at the parent, every one of which passed. */
+  passed: number;
+}
+
+/**
+ * The tests that failed for the first time at this commit and failed the
+ * run doing it. One this run did not fail for is an excused failure
+ * instead, which says something different about it.
+ */
+export function firstFailures(input: ReportInput): FirstFailure[] {
+  return failingFromHere(input)
+    .filter(({ key }) => !input.nonGating.has(key))
+    .map(({ key, selection }) => ({
+      test: identityOf(key),
+      selection,
+      ...withEvidence(input.pullRequest.flakes.get(key)),
+    }))
+    .sort(byIdentity);
+}
+
+/**
+ * The tests that failed for the first time at this commit without
+ * failing the run: each is one this run's lanes recorded excusing, which
+ * they do for a test held back from pull requests as too flaky to judge a
+ * change by, and each failed every one of its runs here and passed every
+ * one at the parent.
+ *
+ * That is the one statement about such a test that several runs at one
+ * commit make available, and nothing weaker is said about it. A test
+ * that passed as well as failed here is disagreeing with itself, which is
+ * what it is held back for, and one the parent did not pass throughout is
+ * one this commit cannot be compared against.
+ */
+export function excusedFailures(input: ReportInput): ExcusedFailure[] {
+  return failingFromHere(input)
+    .filter(({ key }) => input.nonGating.has(key))
+    .map(({ key, failed, passed }) => ({
+      test: identityOf(key),
+      failed,
+      passed,
+      ...withEvidence(input.nonGating.get(key)),
+    }))
+    .sort(byIdentity);
+}
+
+/**
+ * The store's counts for a test, where they say it has disagreed with
+ * itself at all. A label on no evidence tells somebody a real failure
+ * may be noise, which is the thing the label exists to avoid saying.
+ */
+function withEvidence(
+  flakes: FlakeEvidence | undefined,
+): { flakes?: FlakeEvidence } {
+  return flakes === undefined || flakes.flakes === 0 ? {} : { flakes };
 }
 
 function byIdentity(
@@ -363,39 +577,6 @@ function byIdentity(
   const left = testIdentityKey(a.test);
   const right = testIdentityKey(b.test);
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-/**
- * Every source group in a set of figures: a package's source measured by
- * every test the run ran. Under selection a pull request measures a
- * sample of this, so it is a trend rather than something to compare.
- */
-export function groupFigures(figures: CoverageFigures): Map<string, number> {
-  return figuresNamed(figures, coverageMetricGroupName);
-}
-
-/**
- * Every covered package's own-tests figure: its source measured by only
- * its own tests. A run measures the whole of this however much of the
- * corpus it ran, which is what makes it the one per-package figure worth
- * comparing between two runs.
- */
-export function ownTestsFigures(
-  figures: CoverageFigures,
-): Map<string, number> {
-  return figuresNamed(figures, ownTestsCoverageMember);
-}
-
-function figuresNamed(
-  figures: CoverageFigures,
-  nameOf: (metric: string) => string | null,
-): Map<string, number> {
-  const named = new Map<string, number>();
-  for (const [metric, lines] of figures) {
-    const name = nameOf(metric);
-    if (name !== null) named.set(name, lines);
-  }
-  return named;
 }
 
 /**
@@ -410,12 +591,15 @@ function figuresNamed(
  * A change that touched no source at all is not asked about. The
  * repository-wide figure moves a little between runs on its own, so a
  * documentation or workflow change would otherwise be told about a rise
- * it could not have caused.
+ * it could not have caused. Nor is a pair of runs only one of which found
+ * the compile cache cold: a cold run reaches compile branches a warm one
+ * does not, so its count sits lower with nothing about the tests changed.
  */
 export function coverageRise(input: ReportInput): CoverageRise | undefined {
   if (input.touched.size === 0) return undefined;
-  const wasBy = groupFigures(input.coverageBefore);
-  const isBy = groupFigures(input.coverage);
+  if (input.coverageBefore.cold !== input.coverage.cold) return undefined;
+  const wasBy = input.coverageBefore.groups;
+  const isBy = input.coverage.groups;
   const before = wasBy.get("workspace");
   const after = isBy.get("workspace");
   if (before === undefined || after === undefined) return undefined;
@@ -430,61 +614,53 @@ export function coverageRise(input: ReportInput): CoverageRise | undefined {
   return { from: before, to: after, groups };
 }
 
-/** The covered packages a change touched, which is what the cap counts. */
-export function coveredPackagesTouched(
-  touched: ReadonlySet<string>,
-): string[] {
-  return [...touched]
-    .filter((group) =>
-      group.startsWith("packages/") && !EXCLUDED_FROM_COVERAGE_GATE.has(group)
-    )
-    .sort();
-}
-
 /**
- * Each covered package whose own-tests number rose, and what let the
- * rise past the per-package gate.
+ * Each measured set whose number rose, and what let the rise past the
+ * coverage gate.
  *
- * Three of the four are the ways a rise reaches the default branch with
- * the gate never having had an opinion, and they call for different
- * things: nothing, a look at the exclusion list, and a look at the
- * change respectively. The fourth is the state where the gate did
- * measure the package and passed it, which means the two measurements
+ * Four of the five are the ways a rise reaches the default branch with
+ * the gate never having had an opinion: the member is excluded, the plan
+ * did not choose the set's gate, no plan can say whether it did, and the
+ * change did not reach the set. The fifth is the state where the gate did
+ * measure the set and passed it, which means the two measurements
  * disagree and is worth saying plainly rather than describing as one of
- * the other three.
+ * the others.
  */
-export function packageRises(input: ReportInput): PackageRise[] {
+export function measuredSetRises(input: ReportInput): MeasuredSetRise[] {
   // A change that touched no source at all could not have moved which
-  // lines any package's own tests reach, and the figures move a little
-  // between runs on their own.
+  // lines any set's tests reach, and the figures move a little between
+  // runs on their own.
   if (input.touched.size === 0) return [];
-  const before = ownTestsFigures(input.coverageBefore);
-  const after = ownTestsFigures(input.coverage);
-  const touched = coveredPackagesTouched(input.touched);
-  const rises: PackageRise[] = [];
-  for (const [member, lines] of after) {
-    const was = before.get(member);
+  const before = input.coverageBefore.sets;
+  const after = input.coverage.sets;
+  const { reached, chosen } = input.coverageGate;
+  const rises: MeasuredSetRise[] = [];
+  for (const [set, lines] of after) {
+    const was = before.get(set);
     if (was === undefined || lines <= was) continue;
-    // The exclusion list is asked first, because a package on it is one
-    // the gate would not have measured whatever else the change touched.
+    const member = set.slice(set.indexOf("/") + 1);
+    // The exclusion list is asked first, because a member on it carries
+    // no set the gate would have measured whatever else was reached.
     const excluded = EXCLUDED_FROM_COVERAGE_GATE.get(member);
-    const rise: PackageRise = {
+    const rise: MeasuredSetRise = {
+      set,
       member,
       from: was,
       to: lines,
       route: excluded !== undefined
         ? "excluded"
-        : touched.length > LOCAL_COVERAGE_MAX_PACKAGES
-        ? "over-the-cap"
-        : touched.includes(member)
+        : !reached.includes(set)
+        ? "elsewhere"
+        : chosen === undefined
+        ? "unplanned"
+        : chosen.includes(set)
         ? "gated"
-        : "elsewhere",
+        : "not-chosen",
     };
-    if (rise.route === "over-the-cap") rise.touched = touched.length;
     if (rise.route === "excluded") rise.reason = excluded;
     rises.push(rise);
   }
-  return rises.sort((a, b) => a.member < b.member ? -1 : 1);
+  return rises.sort((a, b) => a.set < b.set ? -1 : 1);
 }
 
 /**
@@ -504,8 +680,8 @@ export function packageRises(input: ReportInput): PackageRise[] {
 export function flakyNewTests(input: ReportInput): FlakyNewTest[] {
   const flaky: FlakyNewTest[] = [];
   if (!input.pullRequest.manifest) return flaky;
-  for (const [key, verdict] of input.current) {
-    if (verdict !== "mixed") continue;
+  for (const [key, outcome] of input.current) {
+    if (verdictOf(outcome) !== "mixed") continue;
     if (input.previous.has(key)) continue;
     if (input.pullRequest.flakes.has(key)) continue;
     flaky.push({ test: identityOf(key) });
@@ -565,21 +741,21 @@ function subsequenceShare(left: string, right: string): number {
 
 /**
  * The renames that discarded history, each with the line that brings it
- * back and the catches that line is worth.
+ * back and the new real test failures that line is worth.
  *
- * A rename is never inferred into the alias file: this suggests a line
- * and says what it would restore, and somebody appends it. Three things
- * have to hold before one is offered, because a wrong bridge silently
- * credits one test with another's record and the whole score rests on
- * catch attribution. The departing test must have caught something, or
- * there is nothing to bring back. The arriving name must be one the
- * store has never seen, or it is not a new name at all. And the pairing
- * must be clear: alike past `RENAME_SIMILARITY`, and ahead of every
- * other candidate by `RENAME_MARGIN`, because two candidates the same
- * distance away is a question rather than an answer, and an arrival two
- * departures both point at answers for neither. And the unit the
- * departing test lived in has to have run here, or its absence is a
- * suite that did not run rather than a test that left.
+ * A rename is never inferred into the alias file: this suggests a line and says
+ * what it would restore, and somebody appends it. Three things have to hold
+ * before one is offered, because a wrong bridge silently credits one test with
+ * another's record and the whole score rests on attributing each new real test
+ * failure to the right test. The departing test must have had new real test
+ * failures, or there is nothing to bring back. The arriving name must be one
+ * the store has never seen, or it is not a new name at all. And the pairing
+ * must be clear: alike past `RENAME_SIMILARITY`, and ahead of every other
+ * candidate by `RENAME_MARGIN`, because two candidates the same distance away
+ * is a question rather than an answer, and an arrival two departures both point
+ * at answers for neither. And the unit the departing test lived in has to have
+ * run here, or its absence is a suite that did not run rather than a test that
+ * left.
  *
  * At most `RENAME_SUGGESTIONS` are offered. A change that ends a whole
  * area produces as many departures as it removed tests, and a wall of
@@ -588,7 +764,8 @@ function subsequenceShare(left: string, right: string): number {
 export function renames(input: ReportInput): RenameSuggestion[] {
   const ranHere = unitsThatRan(input);
   const gone = [...input.previous.keys()].filter((key) =>
-    !input.current.has(key) && (input.pullRequest.catches.get(key) ?? 0) > 0 &&
+    !input.current.has(key) &&
+    (input.pullRequest.newRealTestFailures.get(key) ?? 0) > 0 &&
     ranHere.has(input.pullRequest.units.get(key) ?? "")
   );
   const arrived = [...input.current.keys()].filter((key) =>
@@ -615,7 +792,7 @@ export function renames(input: ReportInput): RenameSuggestion[] {
     suggestions.push({
       from,
       to: best.test,
-      catches: input.pullRequest.catches.get(key)!,
+      newRealTestFailures: input.pullRequest.newRealTestFailures.get(key)!,
       aliasLine: aliasLineFor(from, best.test, input.day),
     });
   }
@@ -672,8 +849,9 @@ export function buildReport(input: ReportInput): Report {
   const rise = coverageRise(input);
   return {
     firstFailures: firstFailures(input),
+    excusedFailures: excusedFailures(input),
     ...(rise === undefined ? {} : { coverageRise: rise }),
-    packageRises: packageRises(input),
+    measuredSetRises: measuredSetRises(input),
     flakyNewTests: flakyNewTests(input),
     renames: renames(input),
   };
@@ -695,7 +873,7 @@ export function shownIdentity(test: TestIdentity): string {
   );
   const longest = Math.max(
     0,
-    ...[...text.matchAll(/`+/g)].map((run) => run[0].length),
+    maxOf([...text.matchAll(/`+/g)].map((run) => run[0].length)),
   );
   const fence = "`".repeat(longest + 1);
   const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";
@@ -716,12 +894,28 @@ const SELECTION_PROSE: Record<ReportedSelection, string> = {
   "skipped-there": "This pull request's own run reached it and skipped " +
     "it, and no manifest says selection is why, so the test skips itself " +
     "under some condition that held there and not here.",
-  "not-selected": "This pull request did not run it. Test selection traded " +
-    "that coverage away deliberately: the test was not worth its time " +
-    "against the budget, so nothing here was missed. This failure raises " +
-    "its score, so the next change in this area will run it.",
+  "not-selected": "This pull request did not run it. The lanes ran the " +
+    "tests that had to run and filled the rest of their budget with other " +
+    "tests, and this was not one of them.",
+  "crowded-out": "This pull request did not run it, and nothing about " +
+    "this test decided that. The tests that had to run, which are the " +
+    "ones the change's edits reach and the units nothing had measured " +
+    "that the default branch had not already gained, left no room in the " +
+    "lanes for anything else.",
+  "withheld-unit": "This pull request did not run it: its unit runs as " +
+    "a whole, and the store holds back another test in that unit as too " +
+    "flaky to judge a change by, so a pull request runs the unit only " +
+    "where it is one that must run.",
+  unschedulable: "This pull request did not run it: no lane can hold it, " +
+    "because what a lane running nothing else would pay for it, its " +
+    "suite's and unit's fixed charges included, is past the bound a lane " +
+    "is packed to finish inside.",
   "withheld-flaky": "This pull request could not have run it: the store " +
-    "holds it back as too flaky to judge a change by.",
+    "holds it back as too flaky to judge a change by. It runs on the " +
+    "default branch anyway, where no execution of it passed at this " +
+    "commit and none failed in the previous run. What the store counts " +
+    "as a flake is a test passing and failing at one commit, which is " +
+    "not what either of those two runs saw.",
   unrecorded: "This pull request's own run was to have run it and " +
     "recorded nothing for it, so what it did there is not known. A test " +
     "job that fails before it uploads leaves its share of a run's records " +
@@ -732,20 +926,43 @@ const SELECTION_PROSE: Record<ReportedSelection, string> = {
     "nothing to say about whether it ran this test.",
 };
 
-/** What the comment says about each route past the per-package gate. */
-const ROUTE_PROSE: Record<PackageRoute, string> = {
-  excluded: "The package is on `EXCLUDED_FROM_COVERAGE_GATE`, so nothing " +
-    "gates it. The exclusion list is what to look at.",
-  "over-the-cap": "The change touched more covered packages than " +
-    `\`LOCAL_COVERAGE_MAX_PACKAGES\` (${LOCAL_COVERAGE_MAX_PACKAGES}) ` +
-    "allows, so the per-package gate did not run at all. There is nothing " +
-    "to do about the gate; the rise itself is the thing to look at.",
-  elsewhere: "The change did not touch this package, so the gate had " +
-    "nothing to compare and something elsewhere moved which lines the " +
-    "package's own tests reach. The change is what to look at.",
-  gated: "The gate measured this package on the pull request and passed " +
-    "it, so the two measurements disagree. That is worth looking at on " +
-    "its own, before the rise.",
+/**
+ * How often the store saw a test disagree with itself, and over how many
+ * runs, as the end of a sentence. The counts rather than the share, so a
+ * reader can weigh them: seven in nine hundred is not the claim seven in
+ * nine is.
+ */
+function disagreed({ flakes, runs }: FlakeEvidence): string {
+  return `disagree with itself ${
+    flakes === 1 ? "once" : `${flakes} times`
+  } in ${runs} ${runs === 1 ? "run" : "runs"} over the last ` +
+    `${FLAKE_WINDOW_DAYS} days`;
+}
+
+/** Every one of a number of runs, as the object of a sentence. */
+function everyRun(count: number): string {
+  return count === 1 ? "its one run" : `all ${count} of its runs`;
+}
+
+/** What the comment says about each route past the coverage gate. */
+const ROUTE_PROSE: Record<MeasuredSetRoute, string> = {
+  excluded: "The member is on `EXCLUDED_FROM_COVERAGE_GATE`, so it carries " +
+    "no measured set and nothing gates it. The exclusion list is what to " +
+    "look at.",
+  "not-chosen": "The change reached this set, and the plan for its pull " +
+    "request did not choose the set's coverage gate, so nothing measured " +
+    "the set there. The rise itself is the thing to look at.",
+  unplanned: "The change reached this set, and no manifest could be " +
+    "resolved for its pull request's run, so whether that run chose the " +
+    "set's coverage gate cannot be said. The rise itself is the thing to " +
+    "look at.",
+  elsewhere: "The change did not touch this member, so the gate had " +
+    "nothing to compare and something elsewhere moved which lines this " +
+    "set's tests reach. The change is what to look at.",
+  gated: "The plan for the pull request chose this set's gate, so the " +
+    "gate measured the set there. Either the pull request's description " +
+    "accepted the rise, or the gate found none and the two measurements " +
+    "disagree, which is worth looking at on its own, before the rise.",
 };
 
 /**
@@ -779,13 +996,45 @@ export function renderReport(
       out.push(`- ${shownIdentity(failure.test)}`);
       out.push(`  ${SELECTION_PROSE[failure.selection]}`);
       if (failure.flakes !== undefined) {
-        const { flakes, runs } = failure.flakes;
         out.push(
-          `  The store has seen this test disagree with itself ${
-            flakes === 1 ? "once" : `${flakes} times`
-          } in ${runs} ${runs === 1 ? "run" : "runs"} over the last ` +
-            `${FLAKE_WINDOW_DAYS} days, so this failure may be its own ` +
-            "and not the change's.",
+          `  The store has seen this test ${disagreed(failure.flakes)}, ` +
+            "so this failure may be its own and not the change's.",
+        );
+      }
+    }
+  }
+
+  if (report.excusedFailures.length > 0) {
+    out.push("");
+    out.push(
+      report.excusedFailures.length === 1
+        ? "### A known flaky test that failed every time it ran"
+        : "### Known flaky tests that failed every time they ran",
+    );
+    out.push("");
+    out.push(
+      "Test selection holds a test like this back from pull requests as " +
+        "too flaky to judge a change by. The default branch runs it " +
+        "anyway, and its failures never fail the run, so the run's result " +
+        "says nothing about it. Each test listed failed every one of its " +
+        "runs at this commit and passed every one at the commit before. " +
+        "The more runs that is, the less likely the test did it " +
+        "on its own, but a test's runs at one commit share a lane, so one " +
+        "bad runner does it too, and this is weak evidence either way. " +
+        "Look at the failures in the run: if they come from this change, " +
+        "the change broke the test and nothing else will say so, and if " +
+        "they do not, nothing needs doing.",
+    );
+    for (const failure of report.excusedFailures) {
+      out.push("");
+      out.push(
+        `- ${shownIdentity(failure.test)} failed ` +
+          `${everyRun(failure.failed)} at this commit and passed ` +
+          `${everyRun(failure.passed)} at the commit before.`,
+      );
+      if (failure.flakes !== undefined) {
+        out.push(
+          `  The store has seen it ${disagreed(failure.flakes)}.`,
         );
       }
     }
@@ -823,25 +1072,22 @@ export function renderReport(
     }
   }
 
-  if (report.packageRises.length > 0) {
+  if (report.measuredSetRises.length > 0) {
     out.push("");
-    out.push("### A covered package's own tests reach less than they did");
+    out.push("### A measured set reaches less of its package than it did");
     out.push("");
     out.push(
-      "The per-package coverage gate exists to catch this before it lands. " +
-        "It did not, and this is why.",
+      "The coverage gate exists to catch this before it lands. It did not, " +
+        "and this is why.",
     );
-    for (const rise of report.packageRises) {
+    for (const rise of report.measuredSetRises) {
       out.push("");
       out.push(
-        `- \`${rise.member}\`: ${rise.from} to ${rise.to} uncovered lines. ` +
+        `- \`${rise.set}\`: ${rise.from} to ${rise.to} uncovered lines. ` +
           ROUTE_PROSE[rise.route],
       );
       if (rise.reason !== undefined) {
         out.push(`  The list gives the reason: ${rise.reason}`);
-      }
-      if (rise.touched !== undefined) {
-        out.push(`  The change touched ${rise.touched} covered packages.`);
       }
     }
   }
@@ -866,8 +1112,9 @@ export function renderReport(
     out.push("### A rename that discarded a test's history");
     out.push("");
     out.push(
-      "A test's score is built on what it has caught, over unbounded " +
-        `history, so a renamed test drops to the floor. \`${ALIAS_FILE}\` ` +
+      "A test's score is built on its new real test failures, over " +
+        "unbounded history, so a renamed test drops to the floor. A line in " +
+        `\`${ALIAS_DIRECTORY}/\`, in the file named after the test's file, ` +
         "bridges the two halves. A rename is never inferred, so this is a " +
         "suggestion rather than a change: append the line if the pairing " +
         "is right, and ignore it if it is not.",
@@ -877,7 +1124,8 @@ export function renderReport(
       out.push(
         `- ${shownIdentity(rename.from)} appears to have become ` +
           `${shownIdentity(rename.to)}, which would bring back ` +
-          `${rename.catches.toFixed(1)} weighted catches.`,
+          `${rename.newRealTestFailures.toFixed(1)} weighted new real test ` +
+          "failures.",
       );
       out.push("");
       out.push("  ```json");

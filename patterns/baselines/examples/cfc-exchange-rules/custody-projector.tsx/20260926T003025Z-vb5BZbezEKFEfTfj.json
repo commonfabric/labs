@@ -1,0 +1,426 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Box": {
+        "additionalProperties": {
+          "$ref": "#/$defs/BoxEntry"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "BoxEntry": {
+        "properties": {
+          "instance": {
+            "type": "string"
+          },
+          "stance": {
+            "$ref": "#/$defs/Stance"
+          },
+          "terms": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance",
+          "terms",
+          "stance"
+        ],
+        "type": "object"
+      },
+      "CustodyTerms": {
+        "properties": {
+          "answers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "question": {
+            "type": "string"
+          },
+          "seats": {
+            "description": "A cell per seat, whose stored label attests the seat's member.",
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "stanceSchema": {
+            "properties": {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "properties": {
+                "properties": {
+                  "ratings": {
+                    "properties": {
+                      "items": {
+                        "properties": {
+                          "enum": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "enum"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": {
+                        "enum": [
+                          3
+                        ],
+                        "type": "number"
+                      },
+                      "minItems": {
+                        "enum": [
+                          3
+                        ],
+                        "type": "number"
+                      },
+                      "type": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "items",
+                      "minItems",
+                      "maxItems"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "ratings"
+                ],
+                "type": "object"
+              },
+              "required": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "properties",
+              "required",
+              "additionalProperties"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "question",
+          "answers",
+          "seats",
+          "stanceSchema"
+        ],
+        "type": "object"
+      },
+      "Rating": {
+        "enum": [
+          "no",
+          "maybe",
+          "yes"
+        ]
+      },
+      "Stance": {
+        "properties": {
+          "ratings": {
+            "items": {
+              "$ref": "#/$defs/Rating"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ratings"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "box": {
+        "$ref": "#/$defs/Box",
+        "asCell": [
+          "cell"
+        ],
+        "default": {},
+        "description": "Receives a link to the instance's box from the host once a seat seals.\nIt declares no label of its own: every entry of the box already carries\nthe room's policy, and a read through the link carries it.\n\nTODO(custody-box-link): declaring `Record<string, Sealed<BoxEntry>>` here\nis refused. Repro: give `box` that type, then write a link to the sealed\nbox into it as `cf-custody-seal` does, a blind UI write\n(`runtime.commitUiCellWrite(cell, link, { blind: true })`); commit\npreparation crashes with `type changed incompatibly at /box: [\"object\"]\n-> [\"array\"]`, as the schema merge sets the input's record schema\nagainst an array schema. `integration/cfc-custody-projector.test.ts`\nmakes that write; change this type back to reproduce."
+      },
+      "policy": {
+        "asCell": [
+          "cell"
+        ],
+        "description": "Declared with the room's policy, so that once written its label carries\nthe policy's reference, with this room as its subject, for the host to\nread. It has no default: `propose` writes it.",
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "LbLTovRxB3anussS6YyFFqP_9uMA7mfKcqFu6WQn2VU",
+              "policyDigest": "vEAAHDOJDz5ER_QzPoVzJNaVGiCm359QoxPEEksx8_8",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "custodyRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        },
+        "type": "boolean"
+      },
+      "terms": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CustodyTerms"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "asCell": [
+          "cell"
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "terms",
+      "policy",
+      "box"
+    ],
+    "type": "object"
+  },
+  "pattern": "cfc-exchange-rules/custody-projector.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Box": {
+        "additionalProperties": {
+          "$ref": "#/$defs/BoxEntry"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "BoxEntry": {
+        "properties": {
+          "instance": {
+            "type": "string"
+          },
+          "stance": {
+            "$ref": "#/$defs/Stance"
+          },
+          "terms": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance",
+          "terms",
+          "stance"
+        ],
+        "type": "object"
+      },
+      "CustodyTerms": {
+        "properties": {
+          "answers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "question": {
+            "type": "string"
+          },
+          "seats": {
+            "description": "A cell per seat, whose stored label attests the seat's member.",
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "stanceSchema": {
+            "properties": {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "properties": {
+                "properties": {
+                  "ratings": {
+                    "properties": {
+                      "items": {
+                        "properties": {
+                          "enum": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "enum"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": {
+                        "enum": [
+                          3
+                        ],
+                        "type": "number"
+                      },
+                      "minItems": {
+                        "enum": [
+                          3
+                        ],
+                        "type": "number"
+                      },
+                      "type": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "items",
+                      "minItems",
+                      "maxItems"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "ratings"
+                ],
+                "type": "object"
+              },
+              "required": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "properties",
+              "required",
+              "additionalProperties"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "question",
+          "answers",
+          "seats",
+          "stanceSchema"
+        ],
+        "type": "object"
+      },
+      "Rating": {
+        "enum": [
+          "no",
+          "maybe",
+          "yes"
+        ]
+      },
+      "Stance": {
+        "properties": {
+          "ratings": {
+            "items": {
+              "$ref": "#/$defs/Rating"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ratings"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "box": {
+        "$ref": "#/$defs/Box"
+      },
+      "choice": {
+        "description": "The projected answer: a room reader sees it once the rule releases it.",
+        "type": "string"
+      },
+      "policy": {
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "LbLTovRxB3anussS6YyFFqP_9uMA7mfKcqFu6WQn2VU",
+              "policyDigest": "vEAAHDOJDz5ER_QzPoVzJNaVGiCm359QoxPEEksx8_8",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "custodyRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        },
+        "type": "boolean"
+      },
+      "propose": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "seats": {
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "seats"
+        ],
+        "type": "object"
+      },
+      "rating": {
+        "description": "One member's sealed rating, which no rule releases.",
+        "type": "string"
+      },
+      "terms": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CustodyTerms"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "terms",
+      "policy",
+      "box",
+      "choice",
+      "rating",
+      "propose",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

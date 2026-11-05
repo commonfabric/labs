@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-net --allow-env --allow-read --allow-write --allow-run=git,unzip
+#!/usr/bin/env -S deno run --allow-net --allow-env --allow-read --allow-write --allow-run=git,unzip,deno
 
 /**
  * Tells a pull request what a later run on the default branch found.
@@ -24,16 +24,22 @@
  * this exists for.
  *
  * The pull request's own run is read from the store instead, because the
- * relay is where the trust decision about it was made. Records from a
- * fork run are authored by the fork, and the relay ships them only for a
- * member; reading that run's artifacts would take fork-authored claims
- * about which tests passed and put them in a comment. What the store
- * holds is what this repository was willing to believe.
+ * relay is where the trust decision about it was made: it ships a fork
+ * run only for a team member, and the store is what that decision
+ * produced. Reading the run's own artifacts would go around the gate and
+ * put a fork's claims about which tests passed into a comment.
+ *
+ * What the run under report did not fail for is read from its own
+ * records, where its lanes wrote each identity they excused. The
+ * pull request's manifest says why its run did not run a test, and the
+ * run under report's supplies the flake counts behind a note about a
+ * test it excused. Each is resolved at the moment the lanes of its run
+ * resolved it: when the commit that run tested was made.
  *
  * Environment:
  *   GITHUB_TOKEN         - Required.
  *   GITHUB_EVENT_PATH    - The workflow_run payload naming the run.
- *   GITHUB_REPOSITORY    - Optional, defaults to "commontoolsinc/labs".
+ *   GITHUB_REPOSITORY    - Optional, defaults to "commonfabric/labs".
  *   MAIN_REPORT_RUN_ID   - Optional, the run to report on in place of the
  *                          payload's, for running this by hand.
  *
@@ -41,11 +47,14 @@
  *
  *   GITHUB_TOKEN=$(gh auth token) MAIN_REPORT_RUN_ID=<id> \
  *     deno run --allow-net --allow-env --allow-read --allow-write \
- *     --allow-run=git,unzip tasks/post-main-report.ts --dry-run
+ *     --allow-run=git,unzip,deno tasks/post-main-report.ts --dry-run
  */
 
 import { join } from "@std/path";
 import {
+  coverageArtifactAttempt,
+  type CoverageFigures,
+  coverageFiguresOf,
   datePartition,
   type FlakeEvidence,
   listObjects,
@@ -60,7 +69,6 @@ import {
   type Artifact,
   coverageGroupsForChangedFiles,
   downloadAndExtractArtifact,
-  downloadAndParseCoverageBaseline,
   fetchArtifactsForRun,
   fetchIssueComments,
   githubGet,
@@ -68,22 +76,28 @@ import {
   githubPost,
   isNotFound,
   type IssueComment,
-  newestArtifactsByName,
-  PERF_METRICS_ARTIFACT_NAME,
   REPO,
   TOKEN,
   WORKFLOW_FILE,
   type WorkflowRun,
 } from "./ci-check-lib.ts";
-import { capabilitiesBySuite, loadTopology } from "./test-topology.ts";
-import type { Suite } from "./test-topology/suite.ts";
-import { census } from "./test-selection/census.ts";
-import { plan } from "./test-selection/plan.ts";
+import { claimsFor, loadTopology } from "./test-topology.ts";
+import type { LocatableRecord, Suite } from "./test-topology/suite.ts";
+import { gainedSince, planOver, requestedRun } from "./ci-lane.ts";
+import { unknownIdentity } from "./test-selection/census.ts";
+import { isLaneMeasurement } from "./lane-measurement.ts";
+import {
+  coverageGateIdentity,
+  measuredSetName,
+  reachedSets,
+} from "./test-topology/coverage-gates.ts";
+import { placedOnlyMandatory } from "./test-selection/plan.ts";
 import { fetchManifest, type ManifestFetch } from "./test-selection/store.ts";
 import type { Manifest, WithheldReason } from "./test-selection/manifest.ts";
 import {
   buildReport,
-  type CoverageFigures,
+  excusedFailures,
+  excusedIn,
   MAIN_REPORT_MARKER,
   outcomesOf,
   type PullRequestView,
@@ -175,9 +189,15 @@ export async function runAt(
 }
 
 /**
- * Every record in one extracted `test-records-*` artifact. The gather
- * step always writes the file, so one that is not there is a truncated
- * artifact and contributes nothing.
+ * Every record in one extracted `test-records-*` artifact.
+ *
+ * The gather step writes `records.ndjson` last, so an artifact without it
+ * is one whose gathering stopped part way, and it contributes no records.
+ * That is safe where an artifact that could not be downloaded is not. An
+ * artifact cannot change once uploaded, so every report on the run reads
+ * this one the same way, and a run's records are read across all of its
+ * attempts together. The records it lacks can therefore leave a note
+ * unwritten, but cannot withdraw one an earlier report made.
  */
 export async function recordsInDirectory(
   directory: string,
@@ -215,26 +235,59 @@ export function runPartitions(run: WorkflowRun): string[] {
 }
 
 /**
- * What every test in one run did, from the store. Undefined where the
- * store holds nothing for it, because a run whose records never arrived
- * is a run nothing is known about, and reading it as a run that skipped
- * everything is what makes a test it ran look unrun.
+ * What every test in one run did, from the store, and the commit it did
+ * it at. Undefined where the store holds nothing for it, because a run
+ * whose records never arrived is a run nothing is known about, and
+ * reading it as a run that skipped everything is what makes a test it ran
+ * look unrun.
  */
 export async function outcomesFromStore(
   run: WorkflowRun,
-): Promise<RunOutcomes | undefined> {
+): Promise<StoredRun | undefined> {
   const bucket = storeBucket();
   const records: TestRecord[] = [];
+  const commits = new Set<string>();
   let objects = 0;
   for (const day of runPartitions(run)) {
     const prefix = `${ciSubmissionsPrefix()}/v${RECORD_SCHEMA_VERSION}/` +
       `${day}/run-${run.id}-`;
     for (const objectName of await listObjects({ bucket, prefix })) {
       objects++;
-      records.push(...(await readObject({ bucket, objectName })).records);
+      const object = await readObject({ bucket, objectName });
+      for (const record of object.records) records.push(record);
+      for (const report of object.reports) {
+        if (report.context !== undefined) commits.add(report.context.commit);
+      }
     }
   }
-  return objects === 0 ? undefined : outcomesOf(records);
+  if (objects === 0) return undefined;
+  const commit = commits.size === 1 ? [...commits][0] : undefined;
+  return {
+    outcomes: outcomesOf(records),
+    laned: records.some((record) => isLaneMeasurement(record.test)),
+    ...(commit === undefined ? {} : { commit }),
+  };
+}
+
+/** What one run recorded, as the store holds it. */
+export interface StoredRun {
+  outcomes: RunOutcomes;
+
+  /**
+   * Whether the run's tests ran in lanes, which is whether a manifest
+   * decided what it ran: a lane measures itself, and nothing else writes
+   * those records.
+   */
+  laned: boolean;
+
+  /**
+   * The commit every report of the run names as the one its tests ran
+   * against. For a pull request's run that is the merge the
+   * continuous-integration provider built, not the branch tip. Absent
+   * where the reports name several, since none of them is then the commit
+   * the run tested.
+   */
+  commit?: string;
 }
 
 /**
@@ -243,18 +296,34 @@ export async function outcomesFromStore(
  * Every `test-records-*` artifact counts, including a re-run attempt's,
  * so an identity that passed in one attempt and failed in another folds
  * into the test disagreeing with itself rather than into whichever
- * attempt was uploaded last. Undefined where one of them could not be
- * read, because a run read in part reads as a run that ran less.
+ * attempt was uploaded last. The coverage artifact counts too, since it
+ * holds the record of each coverage gate the run judged; the coverage
+ * figures beside them are measurements, which `outcomesOf` passes over and
+ * `coverageOfRun` reads. Undefined where one of them could not be read,
+ * because a run read in part reads as a run that ran less.
  */
 export async function outcomesFromArtifacts(
   runId: number,
   listed?: readonly Artifact[],
 ): Promise<RunOutcomes | undefined> {
+  const reports = await reportsFromArtifacts(runId, listed);
+  return reports === undefined ? undefined : outcomesOf(reports.flat());
+}
+
+/**
+ * The records in each of one run's `test-records-*` artifacts, as
+ * `outcomesFromArtifacts` reads them, or nothing where one of them could
+ * not be read. Each artifact is one job's attempt, and so one report.
+ */
+export async function reportsFromArtifacts(
+  runId: number,
+  listed?: readonly Artifact[],
+): Promise<TestRecord[][] | undefined> {
   const artifacts = (listed ?? await fetchArtifactsForRun(runId))
     .filter((artifact) =>
       artifact.name.startsWith("test-records-") && !artifact.expired
     );
-  const records: TestRecord[] = [];
+  const reports: TestRecord[][] = [];
   for (let at = 0; at < artifacts.length; at += ARTIFACTS_AT_ONCE) {
     const batch = artifacts.slice(at, at + ARTIFACTS_AT_ONCE);
     for (const read of await Promise.all(batch.map(readArtifact))) {
@@ -269,10 +338,10 @@ export async function outcomesFromArtifacts(
         );
         return undefined;
       }
-      records.push(...read);
+      reports.push(read);
     }
   }
-  return outcomesOf(records);
+  return reports;
 }
 
 /**
@@ -298,23 +367,81 @@ async function readArtifact(
   }
 }
 
-/** Every coverage figure one run measured, from its metrics artifact. */
+/**
+ * Every coverage figure one run measured, from the newest of its coverage
+ * artifacts, since a re-run attempt measures the run again. Artifact ids
+ * grow with upload.
+ */
 export async function coverageOfRun(
   runId: number,
   listed?: readonly Artifact[],
 ): Promise<CoverageFigures> {
-  const artifact = newestArtifactsByName([
-    ...listed ?? await fetchArtifactsForRun(runId),
-  ])
-    .find((candidate) =>
-      candidate.name === PERF_METRICS_ARTIFACT_NAME && !candidate.expired
+  const artifact = (listed ?? await fetchArtifactsForRun(runId))
+    .filter((candidate) =>
+      coverageArtifactAttempt(candidate.name) !== undefined &&
+      !candidate.expired
+    )
+    .sort((a, b) => b.id - a.id)[0];
+  const records = artifact === undefined ? [] : await readArtifact(artifact);
+  return coverageFiguresOf(records ?? []);
+}
+
+/**
+ * The coverage figures a push run at `commit` measured, from the first
+ * upload of the earliest such run to make one, and when that run was
+ * created; nothing where no run has, or where what one uploaded cannot be
+ * read.
+ *
+ * A run is read whatever its status. Its coverage artifact is uploaded
+ * whole at the end of its `Status` job, so it is there, and complete, from
+ * then on, while the run goes on attesting and deploying. The earliest
+ * upload rather than the newest, so that every reader asking once one
+ * exists reads the same figures however often the commit is pushed or its
+ * run attempted again. An earlier run is passed over only once it has
+ * finished without uploading, since one still going may yet upload, and
+ * a reader taking a later run's figures meanwhile would read different
+ * figures from one asking after it did.
+ */
+export async function firstCoverageAt(
+  commit: string,
+): Promise<{ figures: CoverageFigures; startedAt: string } | undefined> {
+  const listed: WorkflowRun[] = [];
+  const perPage = 100;
+  for (let page = 1;; page++) {
+    const params = new URLSearchParams({
+      event: "push",
+      branch: DEFAULT_BRANCH,
+      head_sha: commit,
+      per_page: `${perPage}`,
+      page: `${page}`,
+    });
+    const data = await githubGet<{ workflow_runs: WorkflowRun[] }>(
+      `/repos/${REPO}/actions/workflows/${WORKFLOW_FILE}/runs?${params}`,
     );
-  if (artifact === undefined) return new Map();
-  const parsed = await downloadAndParseCoverageBaseline(artifact.id);
-  if (parsed === null) return new Map();
-  return new Map(
-    [...parsed.metrics].map(([name, sample]) => [name, sample.uncoveredLines]),
-  );
+    const found = data.workflow_runs ?? [];
+    for (const run of found) listed.push(run);
+    if (found.length < perPage) break;
+  }
+  const runs = listed.toSorted((a, b) => a.id - b.id);
+  for (const run of runs) {
+    const artifact = (await fetchArtifactsForRun(run.id))
+      .filter((candidate) =>
+        coverageArtifactAttempt(candidate.name) !== undefined &&
+        !candidate.expired
+      )
+      .sort((a, b) => a.id - b.id)[0];
+    if (artifact === undefined) {
+      if (run.status === "completed") continue;
+      return undefined;
+    }
+    const records = await readArtifact(artifact);
+    if (records === undefined) return undefined;
+    return {
+      figures: coverageFiguresOf(records),
+      startedAt: run.created_at,
+    };
+  }
+  return undefined;
 }
 
 /**
@@ -333,7 +460,7 @@ export interface ReportDeps {
   topology?: () => Promise<Suite[]>;
 
   /** The manifest the store holds at a moment. */
-  manifest?: (at: string) => Promise<ManifestFetch>;
+  manifest?: (options: { at: string }) => Promise<ManifestFetch>;
 }
 
 /** Runs git in the checkout and returns what it printed. */
@@ -351,30 +478,38 @@ export async function runGit(...args: string[]): Promise<string> {
   return new TextDecoder().decode(stdout);
 }
 
+/** What the report reads of one pull request. */
+export interface PullRequestFacts {
+  /** The commit at the head of its branch, which its runs are listed under. */
+  head: string;
+
+  /**
+   * The labels it carries, which say how much its runs ran. They are the
+   * labels its last run read unless somebody changed them since.
+   */
+  labels: string[];
+}
+
 /**
- * The commit at the head of one pull request's branch, and the committer
- * date it carries.
- *
- * That date is the moment the manifest is resolved at, and it is the
- * branch tip's rather than the tip's merge with the default branch. The
- * tip is a commit somebody made, so its date is stable; the merge is
- * built by the continuous-integration provider and dated whenever it
- * last rebuilt it, which moves as the default branch moves.
+ * The head of one pull request's branch, and its labels.
  *
  * Undefined when the pull request cannot be read. The report is worth
  * more with a note saying its own run could not be read than it is worth
- * not being written, so this is the one place the reporter carries on
+ * not being written, so this is one place the reporter carries on
  * without an answer.
  */
-export async function pullRequestHead(
+export async function pullRequestFacts(
   pullRequest: number,
-): Promise<{ sha: string; at: string } | "absent" | undefined> {
-  let head: string;
+): Promise<PullRequestFacts | "absent" | undefined> {
   try {
-    const info = await githubGet<{ head: { sha: string } }>(
-      `/repos/${REPO}/pulls/${pullRequest}`,
-    );
-    head = info.head.sha;
+    const info = await githubGet<{
+      head: { sha: string };
+      labels?: { name: string }[];
+    }>(`/repos/${REPO}/pulls/${pullRequest}`);
+    return {
+      head: info.head.sha,
+      labels: (info.labels ?? []).map((label) => label.name),
+    };
   } catch (error) {
     // A number in a commit subject may name an issue rather than a pull
     // request, and an issue takes comments just as a pull request does.
@@ -383,19 +518,62 @@ export async function pullRequestHead(
     console.warn(`  Warning: could not read PR #${pullRequest}: ${error}`);
     return undefined;
   }
+}
+
+/**
+ * The moment a commit was made, as its committer date in UTC, which is
+ * the moment the lanes testing that commit resolve their manifest at.
+ * Undefined where the commit or its date cannot be read.
+ */
+export async function committedAt(commit: string): Promise<string | undefined> {
   try {
-    const commit = await githubGet<{ commit: { committer: { date: string } } }>(
-      `/repos/${REPO}/commits/${head}`,
+    const found = await githubGet<{ commit: { committer: { date: string } } }>(
+      `/repos/${REPO}/commits/${commit}`,
     );
-    const at = Date.parse(commit.commit.committer.date);
-    if (Number.isNaN(at)) return undefined;
-    return { sha: head, at: new Date(at).toISOString() };
+    const at = Date.parse(found.commit.committer.date);
+    return Number.isNaN(at) ? undefined : new Date(at).toISOString();
   } catch (error) {
-    console.warn(
-      `  Warning: could not read PR #${pullRequest}'s head commit: ${error}`,
-    );
+    console.warn(`  Warning: could not read commit ${commit}: ${error}`);
     return undefined;
   }
+}
+
+/**
+ * The manifest a pull request's own run resolved, or why there is none
+ * to read.
+ *
+ * Its lanes resolved it at the moment the commit they tested was made,
+ * and the commit a pull request's run tests is the merge its records
+ * name, which is made later than the branch tip. A manifest published
+ * between the two is one those lanes read and the tip's moment misses, so
+ * the moment is that merge's. A run that names no one commit, or whose
+ * commit's date cannot be read, has no moment to stand behind, and no
+ * manifest is resolved for it: one resolved at any other moment would
+ * explain the run's selection from a manifest it may never have read.
+ * Nor is one resolved for a run whose tests did not run in lanes, since
+ * no manifest decided what that run ran.
+ */
+async function manifestOfTheirRun(
+  ran: StoredRun | undefined,
+  resolve: (options: { at: string }) => Promise<ManifestFetch>,
+): Promise<ManifestFetch> {
+  if (ran === undefined) {
+    return { absent: "the store holds no records of the pull request's run" };
+  }
+  if (!ran.laned) {
+    return {
+      absent: "the pull request's own run did not run in lanes, so no " +
+        "manifest decided what it ran",
+    };
+  }
+  if (ran.commit === undefined) {
+    return { absent: "the pull request's own run names no commit it tested" };
+  }
+  const at = await committedAt(ran.commit);
+  if (at === undefined) {
+    return { absent: `the date of ${ran.commit} could not be read` };
+  }
+  return await resolve({ at });
 }
 
 /**
@@ -405,39 +583,124 @@ export async function pullRequestHead(
  * Reading the tree is what makes this the answer a lane would give
  * rather than a summary of the manifest, because the capabilities a
  * suite opens are most of what a lane's budget goes on and the manifest
- * holds neither the suites nor which units still exist.
+ * holds neither the suites nor which units still exist. `run` is what the
+ * pull request's labels asked its run to be: the full one, or a budgeted
+ * one at a scale.
+ *
+ * `recorded` is what the run under report recorded. The tree places each
+ * of its records the manifest has no identity for in a unit, since such
+ * a test ran on the pull request wherever its unit did.
  */
 export function manifestView(
   manifest: Manifest,
-  suites: Awaited<ReturnType<typeof loadTopology>>,
+  suites: readonly Suite[],
   changed: ReadonlySet<string>,
+  landed: ReadonlySet<string>,
+  recorded: Iterable<LocatableRecord>,
+  run: { full: boolean; scale: number },
 ): Omit<PullRequestView, "ran"> {
-  const seen = census(suites, manifest, changed);
-  const packed = plan({
-    manifest: seen.manifest,
-    mandatory: seen.mandatory,
-    capabilities: capabilitiesBySuite(suites),
-  });
+  // A pull request's run, packed into as many lanes as it would take.
+  const packed = planOver({ suites, manifest, changed, landed, ...run }).laid;
   const selected = new Set<string>();
+  const placed = new Set<string>();
   for (const lane of packed.lanes) {
     for (const selection of lane.selections) {
       selected.add(testIdentityKey(selection.entry.test));
+      placed.add(`${selection.entry.suite}\t${selection.entry.unit}`);
     }
   }
+  // A gate is in no lane, and the packing chose it all the same.
+  for (const gate of packed.gates) {
+    selected.add(testIdentityKey(gate.entry.test));
+  }
   const withheld = new Map<string, WithheldReason>();
-  for (const entry of seen.manifest.withheld) {
+  for (const entry of packed.withheld) {
     withheld.set(testIdentityKey(entry.test), entry.reason);
   }
+  const unschedulable = new Set(
+    packed.unschedulable.map((entry) => testIdentityKey(entry.test)),
+  );
+  const heldWithUnit = new Set(packed.heldWithUnit.map(testIdentityKey));
   const flakes = new Map<string, FlakeEvidence | undefined>();
-  const catches = new Map<string, number>();
+  const newRealTestFailures = new Map<string, number>();
   const units = new Map<string, string>();
   for (const entry of manifest.entries) {
     const key = testIdentityKey(entry.test);
     flakes.set(key, entry.flakeEvidence);
-    catches.set(key, entry.inputs.catches);
+    newRealTestFailures.set(key, entry.inputs.catches);
     units.set(key, `${entry.suite}\t${entry.unit}`);
   }
-  return { manifest: true, selected, withheld, flakes, catches, units };
+  const heldUnits = new Set(
+    [...heldWithUnit].flatMap((key) => units.get(key) ?? []),
+  );
+  for (const record of recorded) {
+    const key = testIdentityKey(record.test);
+    if (units.has(key)) continue;
+    const [claim, ...others] = claimsFor(suites, record);
+    if (claim?.unit === undefined || others.length > 0) continue;
+    const unit = `${claim.suite.id}\t${claim.unit}`;
+    units.set(key, unit);
+    // A unit that runs whole runs this test as well, so a unit held back
+    // for a flaky test in it held this one back too.
+    if (heldUnits.has(unit)) heldWithUnit.add(key);
+    // A unit nothing has measured is packed as one stand-in, so no lane
+    // being able to hold the stand-in holds of every test in the unit.
+    const standing = testIdentityKey(unknownIdentity(claim.suite, claim.unit));
+    if (unschedulable.has(standing)) unschedulable.add(key);
+  }
+  return {
+    manifest: true,
+    selected,
+    placed,
+    withheld,
+    heldWithUnit,
+    unschedulable,
+    crowded: placedOnlyMandatory(packed),
+    flakes,
+    newRealTestFailures,
+    units,
+  };
+}
+
+/**
+ * The flake counts the manifest a run on the default branch resolved
+ * carries for each of the identities given.
+ *
+ * The run's lanes resolved it at the moment the commit they tested was
+ * made, which the checkout holds. The counts only label a note, so
+ * failing to read either the moment or the manifest leaves the note
+ * without them rather than stopping the report.
+ */
+async function flakeCountsAt(
+  commit: string,
+  keys: Iterable<string>,
+  git: (...args: string[]) => Promise<string>,
+  resolve: (options: { at: string }) => Promise<ManifestFetch>,
+): Promise<Map<string, FlakeEvidence | undefined>> {
+  const counts = new Map<string, FlakeEvidence | undefined>(
+    [...keys].map((key) => [key, undefined]),
+  );
+  let at: number;
+  try {
+    at = Date.parse((await git("log", "-1", "--format=%cI", commit)).trim());
+  } catch (error) {
+    console.warn(`  Warning: could not read when ${commit} was made: ${error}`);
+    return counts;
+  }
+  if (Number.isNaN(at)) {
+    console.warn(`  Warning: ${commit} carries no usable date.`);
+    return counts;
+  }
+  const fetched = await resolve({ at: new Date(at).toISOString() });
+  if (fetched.manifest === undefined) {
+    console.log(`No manifest for the run at ${commit}: ${fetched.absent}`);
+    return counts;
+  }
+  for (const entry of fetched.manifest.entries) {
+    const key = testIdentityKey(entry.test);
+    if (counts.has(key)) counts.set(key, entry.flakeEvidence);
+  }
+  return counts;
 }
 
 /**
@@ -555,8 +818,9 @@ export async function main(
   }
 
   const listedHere = await fetchArtifactsForRun(run.id);
-  const current = await outcomesFromArtifacts(run.id, listedHere);
-  if (current === undefined || current.size === 0) {
+  const reportsHere = await reportsFromArtifacts(run.id, listedHere);
+  const current = outcomesOf(reportsHere?.flat() ?? []);
+  if (reportsHere === undefined || current.size === 0) {
     console.log(
       `Nothing readable from run ${run.id}, so there is nothing to say.`,
     );
@@ -568,44 +832,92 @@ export async function main(
       .split("\n").map((line) => line.trim()).filter((line) => line.length > 0),
   );
 
-  const head = await pullRequestHead(pullRequest);
-  if (head === "absent") {
+  const manifestAt = deps.manifest ?? fetchManifest;
+  const facts = await pullRequestFacts(pullRequest);
+  if (facts === "absent") {
     console.log(
       `${commit}'s subject names #${pullRequest}, which is not a pull ` +
         "request. Nothing to post.",
     );
     return;
   }
+  const suites = await (deps.topology ?? loadTopology)();
   let view: PullRequestView = unknownPullRequest();
-  if (head !== undefined) {
-    const theirRun = await runAt(head.sha, "pull_request");
+  if (facts !== undefined) {
+    const theirRun = await runAt(facts.head, "pull_request");
     const ran = theirRun === undefined
       ? undefined
       : await outcomesFromStore(theirRun);
-    const fetched = await (deps.manifest ?? ((at: string) =>
-      fetchManifest({ at })))(head.at);
+    const fetched = await manifestOfTheirRun(ran, manifestAt);
     if (fetched.manifest === undefined) {
-      console.log(`No manifest at ${head.at}: ${fetched.absent}`);
+      console.log(`No manifest for PR #${pullRequest}: ${fetched.absent}`);
+    }
+    // Labels that ask for no run this can read leave no plan to explain
+    // what the run left out by.
+    const requested = requestedRun(facts.labels);
+    if (!requested.ok) {
+      console.log(`No plan for PR #${pullRequest}: ${requested.problem}`);
     }
     view = {
-      ...(fetched.manifest === undefined ? unknownPullRequest() : manifestView(
-        fetched.manifest,
-        await (deps.topology ?? loadTopology)(),
-        changed,
-      )),
-      ...(ran === undefined ? {} : { ran }),
+      ...(fetched.manifest === undefined || !requested.ok
+        ? unknownPullRequest()
+        : manifestView(
+          fetched.manifest,
+          suites,
+          changed,
+          await gainedSince(git, fetched.manifest.commit, parent),
+          reportsHere.flat(),
+          requested,
+        )),
+      ...(ran === undefined ? {} : { ran: ran.outcomes }),
     };
   }
 
-  const input: ReportInput = {
+  // The same declarations the gate reads, and the same packing its plan
+  // chose gates by, so the note about a rise and the gate that was
+  // supposed to catch it cannot disagree about which sets were measured.
+  const reached = reachedSets(suites, changed);
+  const uncounted: ReportInput = {
     current,
     previous,
     pullRequest: view,
+    nonGating: new Map(
+      [...excusedIn(reportsHere)].map((key) => [key, undefined]),
+    ),
     coverage: await coverageOfRun(run.id, listedHere),
     coverageBefore: await coverageOfRun(previousRun.id, listedThere),
     touched: coverageGroupsForChangedFiles(changed),
+    coverageGate: {
+      reached: reached.map(measuredSetName),
+      // A gate the pull request's run recorded ran there, whatever packing
+      // chose it; a run of every test chooses every gate, which the plan
+      // this packs for a pull request does not.
+      ...(view.manifest
+        ? {
+          chosen: reached
+            .filter((ref) => {
+              const key = testIdentityKey(coverageGateIdentity(ref));
+              return view.selected.has(key) || view.ran?.has(key) === true;
+            })
+            .map(measuredSetName),
+        }
+        : {}),
+    },
     day: new Date().toISOString().slice(0, 10),
   };
+  // The store's counts label only the note about a test the run excused,
+  // so the manifest they come from is read only where there is one.
+  const input: ReportInput = excusedFailures(uncounted).length === 0
+    ? uncounted
+    : {
+      ...uncounted,
+      nonGating: await flakeCountsAt(
+        commit,
+        uncounted.nonGating.keys(),
+        git,
+        manifestAt,
+      ),
+    };
   console.log(
     `Run ${run.id} judged ${input.current.size} identities, run ` +
       `${previousRun.id} at ${parent.slice(0, 12)} judged ` +

@@ -9,27 +9,28 @@ subscriber's watch set covers, and which of them a write has invalidated.
 The two must give the same answer. If a server thinks a schema reaches five
 documents and a client thinks it reaches six, the sixth never arrives and the
 client waits on a document nobody will send. So there is one implementation of
-graph traversal, in `packages/runner/src/traverse.ts`, and the memory server
+graph traversal, in `runtime/runner/src/traverse.ts`, and the memory server
 calls it. That is the reason for the import edge from `memory` to `runner`, and
 it is the reason the edge is not going away.
 
 ## What the two packages exchange
 
-`packages/memory/v2/query.ts` is the only file in `memory` that imports `runner`
+`runtime/memory/v2/query.ts` is the only file in `memory` that imports `runner`
 for the graph query, and everything that query needs comes from one place:
 `@commonfabric/runner/graph-query`.
 
 `memory` reaches `runner` for one other thing, and reaches it by relative path
-rather than through a package export. Both `query.ts` and `v2/engine.ts` import
-`schema-decompose.ts` and `schema-walk.ts`, which decompose a content-addressed
-schema. `query.ts` adds `schema-registry.ts` on top of those. `engine.ts` takes
-the `JSONSchema` type from `builder/types.ts`, where `@commonfabric/api` exports
-the same type and would cost that file nothing.
+rather than through a package export: `query.ts` imports `schema-registry.ts`,
+the realm-wide registry of verified schema documents that result assembly
+registers into. The vocabulary of content-addressed schema references — the
+reference form and its scan, the grammar of the `schema` metadata member, the
+subschema walk, and the walk over a document's `$ref` closure — lives in
+`@commonfabric/data-model-schema`, below both packages, and `query.ts` and
+`v2/engine.ts` take it from there.
 
-Content-addressed schemas are a different subject from graph traversal, and they
-are what is left to fold in — by exporting the schema-document registry, or by
-moving it below both packages. The traversal seam described below is already
-narrow.
+The registry is a different subject from graph traversal, and it is what is
+left to fold in — by exporting it, or by moving it below both packages. The
+traversal seam described below is already narrow.
 
 The graph-query module holds the driver: it takes documents from wherever the
 caller keeps them, walks them under a schema, and records what it reached.
@@ -64,11 +65,23 @@ caller keeps them, walks them under a schema, and records what it reached.
   fire for them changes which documents a traversal re-walks and what
   consumers of traversed values observe; see the OFF-ARM NEUTRALITY note at
   that site for what gates enabling it.
+- A walk reports each tracker record it makes, or finds the tracker already
+  holding, to the `onTrackedDoc` hook of its options, with the document whose
+  walk needed it: the document holding the link that was followed, the
+  document whose schema or `cfc` envelope named a schema document, or the
+  referrer `visit()` was given for a root. `memory` attributes its tracker
+  with that, so a document nothing reaches any more can leave a session's
+  result (`../specs/memory-v2/04-protocol.md`, section 4.6.3). A visit a
+  memory server's incremental passes make to a document it already tracks,
+  for a root added again, a covered root walked on its own, or a document
+  walked again for its attributions, asks for a `rewalk`, which traverses
+  the document itself even where the shared memo holds it, so that its links
+  are reported again; a graph's first evaluation does not.
 - The rest is vocabulary the two sides name in common:
   `MapSetStringToPathSelectors` (the tracker), `schemaTrackerCoversSelector`
-  (whether a tracker already covers a selector), `createSchemaMemo` and
-  `SchemaMemo` (traversal results reused across walks), and the address and
-  selector types.
+  and `coveringSelector` (whether a tracker already covers a selector, and
+  which record does), `createSchemaMemo` and `SchemaMemo` (traversal results
+  reused across walks), and the address and selector types.
 
 Everything else about a query — the engine reads, the entity snapshots, the
 watch bookkeeping, the branch and sequence handling — stays in `memory`.
@@ -76,36 +89,39 @@ watch bookkeeping, the branch and sequence handling — stays in `memory`.
 ## Sharing a tracker and a memo across walks
 
 A walk owns its pointer-cycle tracker, which is what makes a cycle of documents
-that link to each other terminate. It does not own the schema tracker or the
-schema memo: those are handed in, so they can outlive any one walk and
-accumulate across a whole query. A tracked graph keeps both — the tracker is
-the query's accumulated reach, and the memo holds traversal results a later
-walk can skip recomputing.
+that link to each other terminate. Walks within one evaluation share a schema
+memo, so repeated visits can reuse their traversal results. The memo is released
+when that evaluation finishes. Establishment, extension, root removal, and dirty
+refresh each take a fresh memo.
 
-`trackGraph` gives every root of a query one shared walk. Re-evaluating a
-document after a write gives that document a walk of its own, over the query's
-existing tracker. A write-triggered refresh takes a fresh memo, so a retarget is
-not answered from a memoized result computed before it; the memo keys on a
-document address and a schema rather than on a value, so a memo carried across a
-write can still answer with what that document used to reach.
+A tracked graph keeps its tracker and the attributions that say which roots and
+links keep each record alive. That is the state later operations need to
+preserve delivery and retire unreachable documents. Coverage in this tracker
+lets an extension skip already-covered links without retaining the narrowed
+values computed by past evaluations.
+
+Memo keys contain a document address and schema, not a document revision or the
+current set of watch roots. Keeping those results across evaluations would
+retain obsolete schemas and could reuse results whose traversal effects have
+retired. A cache shared across evaluations must instead validate revisions and
+replay effects; a bare schema memo has neither contract.
 
 ## What this coupling costs
 
 The edge is one import statement, but the module behind it is not a leaf.
 `runner/src/graph-query.ts` imports `traverse.ts` and the extended storage
 transaction, and those reach `cell.ts`, which reaches the runtime and its
-builtins. Loading `packages/memory/v2/server.ts` therefore loads 395 modules and
-163,000 lines, 234 of those modules from `runner` and the rest reached through
+builtins. Loading `runtime/memory/v2/server.ts` therefore loads 459 modules and
+210,000 lines, 267 of those modules from `runner` and the rest reached through
 it — `js-compiler`, `llm`, and `html` among the packages that arrive this way.
-Counting dynamic imports as well takes it to 527 modules.
+Counting dynamic imports as well takes it to 596 modules.
 
-The transactional core carries the same weight, and not because of this seam.
-`packages/memory/v2/engine.ts` reaches 381 modules, 233 of them `runner`,
-because it decomposes content-addressed schemas with runner's
-`schema-decompose.ts` and `schema-walk.ts`. So there is no runner-free storage
-core to extract: what is left below the runtime is the protocol vocabulary and
-the codecs, `packages/memory/v2.ts` at 83 modules and its SQLite surface at 92,
-neither of which is a working store.
+The transactional core does not: `runtime/memory/v2/engine.ts` reaches 124
+modules and 35,000 lines, none of them from `runner`, since the
+content-addressed schema vocabulary it validates commits with sits in
+`@commonfabric/data-model-schema`. The engine is a runner-free store; what the
+runtime's weight attaches to is the query and delivery layer above it, through
+the seam this document describes.
 
 Those figures are the static closure over value imports, which
 `deno info --json <entry>` reports: walk `dependencies[].code` from the root,

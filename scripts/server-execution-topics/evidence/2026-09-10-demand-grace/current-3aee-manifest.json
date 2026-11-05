@@ -1,0 +1,49 @@
+{
+  "head": "3aee034aff7672391bf037a4eba44d9d279cb986",
+  "command": [
+    "deno",
+    "run",
+    "--frozen",
+    "-A",
+    "tools/server-execution-topics/demand-grace-probe.ts"
+  ],
+  "cwd": "/Users/berni/.codex/worktrees/topics-campaign-grace/labs",
+  "sourceSha256": "fb91315d0353cd03437b7c108e1f431c621f4d09444f823288344c090cfccb31",
+  "patchSha256": "ab6941ad7774623f3e43465b28c606f76a9404fc9eee2fea11ef6a57954fbd34",
+  "controllerSha256": "88759ba8578031504975d7386b7873e056b5f69792900903092d4e9c0d3c0886",
+  "runtime": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3\n",
+  "fixture": "Three plain durable roots; synthetic demand notifications and one admitted system input; fresh emulated store",
+  "cache": "Fresh process/runtime/store; no prior pattern compilation",
+  "posture": "Serving runtime ON, asserted by probe; no browser/client/baked shell in this mechanism rig",
+  "kind": "Controlled scheduling mechanism; no latency claim",
+  "startedAt": "2026-09-10T23:50:22.467196+00:00",
+  "loadBefore": [
+    99.24169921875,
+    84.7998046875,
+    82.05419921875
+  ],
+  "sourceChecks": [
+    {
+      "phase": "before",
+      "status": " M docs/specs/server-side-execution/serving-loop.md\n M docs/specs/server-side-execution/testing.md\n M packages/runner/src/executor/space-server.ts\n M packages/runner/src/executor/stats.ts\n?? tools/server-execution-topics/demand-grace-probe.ts\n"
+    },
+    {
+      "phase": "after",
+      "status": " M docs/specs/server-side-execution/serving-loop.md\n M docs/specs/server-side-execution/testing.md\n M packages/runner/src/executor/space-server.ts\n M packages/runner/src/executor/stats.ts\n?? tools/server-execution-topics/demand-grace-probe.ts\n"
+    }
+  ],
+  "exitCode": 0,
+  "endedAt": "2026-09-10T23:50:24.053438+00:00",
+  "loadAfter": [
+    99.24169921875,
+    84.7998046875,
+    82.05419921875
+  ],
+  "files": {
+    "stderr.log": "45f339016020312701124f9880e38fc6e2c8e54f47cfbaf6c537d0689d6790cb",
+    "candidate.patch": "ab6941ad7774623f3e43465b28c606f76a9404fc9eee2fea11ef6a57954fbd34",
+    "stdout.log": "bdb56c1c4643f6bfff0a8df1aadc6ac43ba56564c3e2c155948c32ecf524ecd9",
+    "probe.ts.txt": "fb91315d0353cd03437b7c108e1f431c621f4d09444f823288344c090cfccb31"
+  },
+  "captureDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/grace-current-3aee-02"
+}

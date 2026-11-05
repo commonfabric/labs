@@ -1,0 +1,43 @@
+{
+  "at": "2026-09-10T07:35:39.919467+00:00",
+  "classification": "clock-controlled mechanism observation, not latency",
+  "base": "a5ed830f06827ce1b9bc0dfbe0b6a023315f3268",
+  "loadBefore": [
+    9.73486328125,
+    7.98681640625,
+    7.5
+  ],
+  "runtime": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3\n",
+  "patchSha256": "7432e189e31e544d656de126cbc63177b6ae475f72d72311b77c761dea7af421",
+  "workloadSha256": "2ae3749bc3766d8c3cb3241120a1b0e14b9bc73a65646aebfb795ae440eb6ab3",
+  "posture": {
+    "serverExecution": true,
+    "servingRuntime": true,
+    "shell": "not applicable; in-process test"
+  },
+  "store": "fresh independent in-memory engine",
+  "cache": "existing dependency/compiler disk caches; adjacent baseline then fixed",
+  "command": [
+    "deno",
+    "test",
+    "--no-check",
+    "--preload=test/clock-preload.ts",
+    "--allow-ffi",
+    "--allow-env",
+    "--allow-read",
+    "--allow-write=/tmp,/var/folders",
+    "--allow-run=git,deno",
+    "test/executor/visibility-matched.probe.ts"
+  ],
+  "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner",
+  "envOverrides": {
+    "ENV": "test"
+  },
+  "exitCode": 1,
+  "loadAfter": [
+    9.73486328125,
+    7.98681640625,
+    7.5
+  ],
+  "finishedAt": "2026-09-10T07:35:40.475946+00:00"
+}

@@ -1,0 +1,251 @@
+{
+  "version": 2,
+  "mode": "correctness",
+  "role": "opposite",
+  "expectedPosture": {
+    "role": "opposite",
+    "enabled": true,
+    "label": "ON",
+    "experimentalValue": "true",
+    "recordVariant": "server-execution"
+  },
+  "workloadHead": "a5ed830f06827ce1b9bc0dfbe0b6a023315f3268",
+  "sourcePaths": [
+    "tools/server-execution-topics/run-arm.ts",
+    "tools/server-execution-topics/seed-check.ts",
+    "packages/patterns/integration/topic-board-fixture.ts"
+  ],
+  "artifactRoot": ".",
+  "store": "store",
+  "provenance": {
+    "checkout": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs",
+    "captureDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/event-visibility-replay-manifest-01",
+    "commands": [
+      {
+        "command": "git",
+        "args": [
+          "rev-parse",
+          "HEAD"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs"
+      },
+      {
+        "command": "git",
+        "args": [
+          "diff",
+          "HEAD",
+          "--binary"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs"
+      },
+      {
+        "command": "/usr/sbin/sysctl",
+        "args": [
+          "-n",
+          "machdep.cpu.brand_string"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs"
+      },
+      {
+        "command": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/.ci-cache/binaries/toolshed-baked-opposite",
+        "args": [
+          "--port=53986",
+          "--background",
+          "--log-file=/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/event-visibility-replay-manifest-01/toolshed-53986.log"
+        ],
+        "cwd": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/event-visibility-replay-manifest-01/store"
+      },
+      {
+        "command": "shasum",
+        "args": [
+          "-a",
+          "256",
+          "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/.ci-cache/binaries/toolshed-baked-opposite"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs"
+      },
+      {
+        "command": "/opt/homebrew/bin/deno",
+        "args": [
+          "eval",
+          "console.log(JSON.stringify({replayManifestControl:true}))"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs"
+      }
+    ],
+    "workloadEnvironment": {
+      "API_URL": "http://localhost:53986",
+      "MEMORY_URL": "http://localhost:53986",
+      "TOOLSHED_URL": "http://localhost:53986",
+      "TOOLSHED_PORT": "53986",
+      "EXPERIMENTAL_SERVER_EXECUTION": "true",
+      "FRONTEND_URL": "http://localhost:53986",
+      "SPACE_NAME": "topics-campaign-9882417d-d96c-4b22-bd3f-7436592edf17",
+      "HEADLESS": "1",
+      "CF_LOG_LEVEL": "silent",
+      "CF_CAMPAIGN_RUN_DIR": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/event-visibility-replay-manifest-01"
+    }
+  },
+  "cache": "fresh store and server; existing Deno dependency cache",
+  "machine": {
+    "cpu": "Apple M3 Max",
+    "arch": "aarch64",
+    "os": "darwin",
+    "logicalCpus": 16,
+    "totalmem": 137438953472
+  },
+  "runtime": {
+    "deno": "2.9.4",
+    "v8": "15.0.245.2-rusty",
+    "typescript": "6.0.3"
+  },
+  "flags": {
+    "EXPERIMENTAL_SERVER_EXECUTION": "true"
+  },
+  "samples": [
+    {
+      "at": "2026-09-10T08:10:32.724Z",
+      "load": [
+        7.00439453125,
+        12.31103515625,
+        10.92236328125
+      ]
+    },
+    {
+      "at": "2026-09-10T08:10:42.952Z",
+      "load": [
+        7.5576171875,
+        12.25146484375,
+        10.9169921875
+      ]
+    },
+    {
+      "at": "2026-09-10T08:10:42.976Z",
+      "load": [
+        7.5576171875,
+        12.25146484375,
+        10.9169921875
+      ]
+    }
+  ],
+  "status": "passed",
+  "meta": {
+    "did": "did:key:z6MksHnZGdHxNoCqcC3kPvBSo2goCzLSWheQ8LrVpAtQwgwW",
+    "gitSha": "a5ed830f06827ce1b9bc0dfbe0b6a023315f3268",
+    "shellServerExecutionDefine": "true",
+    "experimental": {
+      "commitPreconditions": true,
+      "computedCellIds": true,
+      "contentAddressedSchemas": true,
+      "lazyMaterialization": true,
+      "modernCellRep": false,
+      "plainResultReceipts": true,
+      "readerSchemaPrecedence": true,
+      "serverExecution": true
+    },
+    "cfc": {
+      "provenance": "resolved",
+      "enforcementMode": {
+        "rung": "enforce-explicit",
+        "diagnosticOnly": false,
+        "decidesOn": "a recorded reason, which rejects the commit"
+      },
+      "flowLabels": {
+        "rung": "off",
+        "diagnosticOnly": true,
+        "decidesOn": "nothing; no derived label component comes into existence"
+      },
+      "writeFloor": {
+        "rung": "off",
+        "diagnosticOnly": true,
+        "decidesOn": "nothing; the write-side integrity floor is not checked"
+      },
+      "triggerReadGating": false,
+      "decomposedEnvelopes": false,
+      "policyEvaluation": {
+        "rung": "off",
+        "diagnosticOnly": true,
+        "decidesOn": "nothing; gated labels reach the gates un-rewritten"
+      },
+      "labelMetadataProtection": {
+        "rung": "off",
+        "diagnosticOnly": true,
+        "decidesOn": "nothing; label metadata writes are not gated"
+      },
+      "declaredMonotonicity": {
+        "rung": "off",
+        "diagnosticOnly": true,
+        "decidesOn": "nothing; a declared-monotonicity violation is not checked"
+      },
+      "policyDigest": null,
+      "sinks": [
+        {
+          "sink": "fetchBinary",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "fetchText",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "fetchJson",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "fetchJsonUnchecked",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "fetchProgram",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "streamData",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "llm",
+          "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+        },
+        {
+          "sink": "llmDialog",
+          "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+        },
+        {
+          "sink": "generateText",
+          "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+        },
+        {
+          "sink": "generateObject",
+          "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+        }
+      ],
+      "deviations": [
+        {
+          "what": "sink `llm` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+          "owner": "CFC runtime (Epic B, sink governance)",
+          "retirement": "a boundary-scoped admission mechanism exists — a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+        },
+        {
+          "what": "sink `llmDialog` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+          "owner": "CFC runtime (Epic B, sink governance)",
+          "retirement": "a boundary-scoped admission mechanism exists — a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+        },
+        {
+          "what": "sink `generateText` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+          "owner": "CFC runtime (Epic B, sink governance)",
+          "retirement": "a boundary-scoped admission mechanism exists — a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+        },
+        {
+          "what": "sink `generateObject` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+          "owner": "CFC runtime (Epic B, sink governance)",
+          "retirement": "a boundary-scoped admission mechanism exists — a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+        }
+      ]
+    }
+  },
+  "serverBuildHead": "a5ed830f06827ce1b9bc0dfbe0b6a023315f3268",
+  "binarySha256": "61514c45f5bca75daa1d78c68b0c2d8a3ec427a5bd974592b3975481fec9426f",
+  "exitCode": 0,
+  "latencyEligible": false
+}

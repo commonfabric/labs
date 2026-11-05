@@ -1,0 +1,2500 @@
+{
+  "base": "a4f0ac827fd2111e77bd102d2634bdaaa7d7bc91",
+  "machine": {
+    "platform": "macOS-26.4.1-arm64-arm-64bit-Mach-O",
+    "cpu": "Apple M3 Max"
+  },
+  "runs": [
+    {
+      "pair": 1,
+      "arm": "baseline",
+      "start": 1789417416.198844,
+      "load": [
+        10.7001953125,
+        9.705078125,
+        10.3388671875
+      ],
+      "loadAfter": [
+        10.56396484375,
+        9.693359375,
+        10.33056640625
+      ],
+      "duration": 3.4880800247192383,
+      "output": {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.33737499999961074
+          },
+          {
+            "name": "field labels 128",
+            "ms": 1.730167000000165
+          },
+          {
+            "name": "root label 458",
+            "ms": 0.9857910000000629
+          },
+          {
+            "name": "field labels 458",
+            "ms": 19.395457999999962
+          },
+          {
+            "name": "root label 916",
+            "ms": 1.9722919999999249
+          },
+          {
+            "name": "field labels 916",
+            "ms": 80.66162500000019
+          },
+          {
+            "name": "root label 1832",
+            "ms": 4.789041999999881
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 311.0116659999999
+          },
+          {
+            "name": "root label 2668",
+            "ms": 6.802583000000141
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 631.108792
+          }
+        ]
+      },
+      "diagnostics": "{\"layout\":\"root label\",\"sources\":128,\"reads\":64,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":128,\"reads\":64,\"labelEntries\":64,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":458,\"reads\":229,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":458,\"reads\":229,\"labelEntries\":229,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":916,\"reads\":458,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":916,\"reads\":458,\"labelEntries\":458,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":1832,\"reads\":916,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":1832,\"reads\":916,\"labelEntries\":916,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1334,\"collectorCalls\":1}\n"
+    },
+    {
+      "pair": 1,
+      "arm": "fixed",
+      "start": 1789417419.6879501,
+      "load": [
+        10.56396484375,
+        9.693359375,
+        10.33056640625
+      ],
+      "loadAfter": [
+        10.56396484375,
+        9.693359375,
+        10.33056640625
+      ],
+      "duration": 1.731947898864746,
+      "output": {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.3542080000001988
+          },
+          {
+            "name": "field labels 128",
+            "ms": 0.4463749999999891
+          },
+          {
+            "name": "root label 458",
+            "ms": 1.0816669999999249
+          },
+          {
+            "name": "field labels 458",
+            "ms": 1.762124999999969
+          },
+          {
+            "name": "root label 916",
+            "ms": 2.6618750000002365
+          },
+          {
+            "name": "field labels 916",
+            "ms": 3.4368750000001
+          },
+          {
+            "name": "root label 1832",
+            "ms": 4.6248749999999745
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 6.857833000000028
+          },
+          {
+            "name": "root label 2668",
+            "ms": 6.657333000000108
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 10.23845899999992
+          }
+        ]
+      },
+      "diagnostics": "{\"layout\":\"root label\",\"sources\":128,\"reads\":64,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":128,\"reads\":64,\"labelEntries\":64,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":458,\"reads\":229,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":458,\"reads\":229,\"labelEntries\":229,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":916,\"reads\":458,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":916,\"reads\":458,\"labelEntries\":458,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":1832,\"reads\":916,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":1832,\"reads\":916,\"labelEntries\":916,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1334,\"collectorCalls\":1}\n"
+    },
+    {
+      "pair": 2,
+      "arm": "fixed",
+      "start": 1789417421.421247,
+      "load": [
+        10.56396484375,
+        9.693359375,
+        10.33056640625
+      ],
+      "loadAfter": [
+        10.56396484375,
+        9.693359375,
+        10.33056640625
+      ],
+      "duration": 1.5969300270080566,
+      "output": {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.4090000000001055
+          },
+          {
+            "name": "field labels 128",
+            "ms": 0.5203329999999369
+          },
+          {
+            "name": "root label 458",
+            "ms": 1.2296250000001692
+          },
+          {
+            "name": "field labels 458",
+            "ms": 2.0103750000000673
+          },
+          {
+            "name": "root label 916",
+            "ms": 2.5488329999998314
+          },
+          {
+            "name": "field labels 916",
+            "ms": 3.8261250000000473
+          },
+          {
+            "name": "root label 1832",
+            "ms": 4.883333000000221
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 7.785374999999931
+          },
+          {
+            "name": "root label 2668",
+            "ms": 7.470166000000063
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 11.059582999999975
+          }
+        ]
+      },
+      "diagnostics": "{\"layout\":\"root label\",\"sources\":128,\"reads\":64,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":128,\"reads\":64,\"labelEntries\":64,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":458,\"reads\":229,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":458,\"reads\":229,\"labelEntries\":229,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":916,\"reads\":458,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":916,\"reads\":458,\"labelEntries\":458,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":1832,\"reads\":916,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":1832,\"reads\":916,\"labelEntries\":916,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1334,\"collectorCalls\":1}\n"
+    },
+    {
+      "pair": 2,
+      "arm": "baseline",
+      "start": 1789417423.019495,
+      "load": [
+        10.56396484375,
+        9.693359375,
+        10.33056640625
+      ],
+      "loadAfter": [
+        11.0791015625,
+        9.814453125,
+        10.36962890625
+      ],
+      "duration": 3.824083089828491,
+      "output": {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.37770799999998417
+          },
+          {
+            "name": "field labels 128",
+            "ms": 2.041874999999891
+          },
+          {
+            "name": "root label 458",
+            "ms": 1.169499999999971
+          },
+          {
+            "name": "field labels 458",
+            "ms": 23.47466600000007
+          },
+          {
+            "name": "root label 916",
+            "ms": 2.2030409999997573
+          },
+          {
+            "name": "field labels 916",
+            "ms": 100.1691249999999
+          },
+          {
+            "name": "root label 1832",
+            "ms": 6.388374999999996
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 359.43512499999997
+          },
+          {
+            "name": "root label 2668",
+            "ms": 6.939833999999792
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 597.6579590000001
+          }
+        ]
+      },
+      "diagnostics": "{\"layout\":\"root label\",\"sources\":128,\"reads\":64,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":128,\"reads\":64,\"labelEntries\":64,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":458,\"reads\":229,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":458,\"reads\":229,\"labelEntries\":229,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":916,\"reads\":458,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":916,\"reads\":458,\"labelEntries\":458,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":1832,\"reads\":916,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":1832,\"reads\":916,\"labelEntries\":916,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1334,\"collectorCalls\":1}\n"
+    },
+    {
+      "pair": 3,
+      "arm": "baseline",
+      "start": 1789417426.844806,
+      "load": [
+        11.0791015625,
+        9.814453125,
+        10.36962890625
+      ],
+      "loadAfter": [
+        10.99267578125,
+        9.8173828125,
+        10.3671875
+      ],
+      "duration": 3.6730809211730957,
+      "output": {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.36066600000003746
+          },
+          {
+            "name": "field labels 128",
+            "ms": 1.7640839999999116
+          },
+          {
+            "name": "root label 458",
+            "ms": 1.1098750000001019
+          },
+          {
+            "name": "field labels 458",
+            "ms": 19.17108300000018
+          },
+          {
+            "name": "root label 916",
+            "ms": 2.049916999999823
+          },
+          {
+            "name": "field labels 916",
+            "ms": 80.07645899999989
+          },
+          {
+            "name": "root label 1832",
+            "ms": 4.922375000000102
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 291.76150000000007
+          },
+          {
+            "name": "root label 2668",
+            "ms": 5.762457999999697
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 610.041041
+          }
+        ]
+      },
+      "diagnostics": "{\"layout\":\"root label\",\"sources\":128,\"reads\":64,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":128,\"reads\":64,\"labelEntries\":64,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":458,\"reads\":229,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":458,\"reads\":229,\"labelEntries\":229,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":916,\"reads\":458,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":916,\"reads\":458,\"labelEntries\":458,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":1832,\"reads\":916,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":1832,\"reads\":916,\"labelEntries\":916,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1334,\"collectorCalls\":1}\n"
+    },
+    {
+      "pair": 3,
+      "arm": "fixed",
+      "start": 1789417430.518983,
+      "load": [
+        10.99267578125,
+        9.8173828125,
+        10.3671875
+      ],
+      "loadAfter": [
+        10.99267578125,
+        9.8173828125,
+        10.3671875
+      ],
+      "duration": 1.557136058807373,
+      "output": {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.3689159999998992
+          },
+          {
+            "name": "field labels 128",
+            "ms": 0.44591700000000856
+          },
+          {
+            "name": "root label 458",
+            "ms": 1.0254999999999654
+          },
+          {
+            "name": "field labels 458",
+            "ms": 1.5642499999999018
+          },
+          {
+            "name": "root label 916",
+            "ms": 2.041917000000012
+          },
+          {
+            "name": "field labels 916",
+            "ms": 3.072125000000142
+          },
+          {
+            "name": "root label 1832",
+            "ms": 4.0566660000001775
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 6.531625000000076
+          },
+          {
+            "name": "root label 2668",
+            "ms": 5.985208000000057
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 9.201000000000022
+          }
+        ]
+      },
+      "diagnostics": "{\"layout\":\"root label\",\"sources\":128,\"reads\":64,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":128,\"reads\":64,\"labelEntries\":64,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":458,\"reads\":229,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":458,\"reads\":229,\"labelEntries\":229,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":916,\"reads\":458,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":916,\"reads\":458,\"labelEntries\":458,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":1832,\"reads\":916,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":1832,\"reads\":916,\"labelEntries\":916,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1334,\"collectorCalls\":1}\n"
+    },
+    {
+      "pair": 4,
+      "arm": "fixed",
+      "start": 1789417432.077931,
+      "load": [
+        10.99267578125,
+        9.8173828125,
+        10.3671875
+      ],
+      "loadAfter": [
+        10.9130859375,
+        9.8203125,
+        10.36474609375
+      ],
+      "duration": 1.6505920886993408,
+      "output": {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.40145799999982046
+          },
+          {
+            "name": "field labels 128",
+            "ms": 0.5180000000000291
+          },
+          {
+            "name": "root label 458",
+            "ms": 1.193166999999903
+          },
+          {
+            "name": "field labels 458",
+            "ms": 1.8301249999999527
+          },
+          {
+            "name": "root label 916",
+            "ms": 2.4202500000001237
+          },
+          {
+            "name": "field labels 916",
+            "ms": 3.7919999999999163
+          },
+          {
+            "name": "root label 1832",
+            "ms": 4.773332999999866
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 7.928333000000066
+          },
+          {
+            "name": "root label 2668",
+            "ms": 7.027332999999999
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 10.506125000000111
+          }
+        ]
+      },
+      "diagnostics": "{\"layout\":\"root label\",\"sources\":128,\"reads\":64,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":128,\"reads\":64,\"labelEntries\":64,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":458,\"reads\":229,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":458,\"reads\":229,\"labelEntries\":229,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":916,\"reads\":458,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":916,\"reads\":458,\"labelEntries\":458,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":1832,\"reads\":916,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":1832,\"reads\":916,\"labelEntries\":916,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1334,\"collectorCalls\":1}\n"
+    },
+    {
+      "pair": 4,
+      "arm": "baseline",
+      "start": 1789417433.730575,
+      "load": [
+        10.9130859375,
+        9.8203125,
+        10.36474609375
+      ],
+      "loadAfter": [
+        10.9130859375,
+        9.8203125,
+        10.36474609375
+      ],
+      "duration": 3.5653908252716064,
+      "output": {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.37354199999981574
+          },
+          {
+            "name": "field labels 128",
+            "ms": 2.015124999999898
+          },
+          {
+            "name": "root label 458",
+            "ms": 1.1038750000002437
+          },
+          {
+            "name": "field labels 458",
+            "ms": 21.389250000000175
+          },
+          {
+            "name": "root label 916",
+            "ms": 2.0387080000000424
+          },
+          {
+            "name": "field labels 916",
+            "ms": 85.27375000000029
+          },
+          {
+            "name": "root label 1832",
+            "ms": 4.534624999999778
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 275.1242500000003
+          },
+          {
+            "name": "root label 2668",
+            "ms": 5.086083000000144
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 572.2777499999997
+          }
+        ]
+      },
+      "diagnostics": "{\"layout\":\"root label\",\"sources\":128,\"reads\":64,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":128,\"reads\":64,\"labelEntries\":64,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":458,\"reads\":229,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":458,\"reads\":229,\"labelEntries\":229,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":916,\"reads\":458,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":916,\"reads\":458,\"labelEntries\":458,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":1832,\"reads\":916,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":1832,\"reads\":916,\"labelEntries\":916,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1334,\"collectorCalls\":1}\n"
+    },
+    {
+      "pair": 5,
+      "arm": "baseline",
+      "start": 1789417437.29725,
+      "load": [
+        10.9130859375,
+        9.8203125,
+        10.36474609375
+      ],
+      "loadAfter": [
+        10.359375,
+        9.7236328125,
+        10.3271484375
+      ],
+      "duration": 3.002918004989624,
+      "output": {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.33799999999996544
+          },
+          {
+            "name": "field labels 128",
+            "ms": 1.7351249999999254
+          },
+          {
+            "name": "root label 458",
+            "ms": 0.9493750000001455
+          },
+          {
+            "name": "field labels 458",
+            "ms": 20.009834000000183
+          },
+          {
+            "name": "root label 916",
+            "ms": 2.3344999999999345
+          },
+          {
+            "name": "field labels 916",
+            "ms": 80.56874999999991
+          },
+          {
+            "name": "root label 1832",
+            "ms": 4.635500000000093
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 280.8549170000001
+          },
+          {
+            "name": "root label 2668",
+            "ms": 7.09958400000005
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 577.555167
+          }
+        ]
+      },
+      "diagnostics": "{\"layout\":\"root label\",\"sources\":128,\"reads\":64,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":128,\"reads\":64,\"labelEntries\":64,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":458,\"reads\":229,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":458,\"reads\":229,\"labelEntries\":229,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":916,\"reads\":458,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":916,\"reads\":458,\"labelEntries\":458,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":1832,\"reads\":916,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":1832,\"reads\":916,\"labelEntries\":916,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1334,\"collectorCalls\":1}\n"
+    },
+    {
+      "pair": 5,
+      "arm": "fixed",
+      "start": 1789417440.3014169,
+      "load": [
+        10.359375,
+        9.7236328125,
+        10.3271484375
+      ],
+      "loadAfter": [
+        10.359375,
+        9.7236328125,
+        10.3271484375
+      ],
+      "duration": 1.010594129562378,
+      "output": {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.21270800000002055
+          },
+          {
+            "name": "field labels 128",
+            "ms": 0.26587499999993724
+          },
+          {
+            "name": "root label 458",
+            "ms": 0.61525000000006
+          },
+          {
+            "name": "field labels 458",
+            "ms": 1.3421660000000202
+          },
+          {
+            "name": "root label 916",
+            "ms": 1.6875
+          },
+          {
+            "name": "field labels 916",
+            "ms": 2.136416000000054
+          },
+          {
+            "name": "root label 1832",
+            "ms": 2.6334170000000086
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 4.20433300000002
+          },
+          {
+            "name": "root label 2668",
+            "ms": 3.6566250000000764
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 5.95191699999998
+          }
+        ]
+      },
+      "diagnostics": "{\"layout\":\"root label\",\"sources\":128,\"reads\":64,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":128,\"reads\":64,\"labelEntries\":64,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":458,\"reads\":229,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":458,\"reads\":229,\"labelEntries\":229,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":916,\"reads\":458,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":916,\"reads\":458,\"labelEntries\":458,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":1832,\"reads\":916,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":1832,\"reads\":916,\"labelEntries\":916,\"collectorCalls\":1}\n{\"layout\":\"root label\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1,\"collectorCalls\":1}\n{\"layout\":\"field labels\",\"sources\":2668,\"reads\":1334,\"labelEntries\":1334,\"collectorCalls\":1}\n"
+    }
+  ],
+  "summary": [
+    {
+      "name": "root label 128",
+      "samples": {
+        "baseline": [
+          0.33737499999961074,
+          0.37770799999998417,
+          0.36066600000003746,
+          0.37354199999981574,
+          0.33799999999996544
+        ],
+        "fixed": [
+          0.3542080000001988,
+          0.4090000000001055,
+          0.3689159999998992,
+          0.40145799999982046,
+          0.21270800000002055
+        ]
+      },
+      "min": {
+        "baseline": 0.33737499999961074,
+        "fixed": 0.21270800000002055
+      },
+      "mean": {
+        "baseline": 0.3574581999998827,
+        "fixed": 0.3492580000000089
+      },
+      "trimmedMean": {
+        "baseline": 0.3574026666666062,
+        "fixed": 0.3748606666666395
+      },
+      "medianPairedRatio": 0.9524770756149533
+    },
+    {
+      "name": "field labels 128",
+      "samples": {
+        "baseline": [
+          1.730167000000165,
+          2.041874999999891,
+          1.7640839999999116,
+          2.015124999999898,
+          1.7351249999999254
+        ],
+        "fixed": [
+          0.4463749999999891,
+          0.5203329999999369,
+          0.44591700000000856,
+          0.5180000000000291,
+          0.26587499999993724
+        ]
+      },
+      "min": {
+        "baseline": 1.730167000000165,
+        "fixed": 0.26587499999993724
+      },
+      "mean": {
+        "baseline": 1.8572751999999582,
+        "fixed": 0.43929999999998015
+      },
+      "trimmedMean": {
+        "baseline": 1.838111333333245,
+        "fixed": 0.47009733333334225
+      },
+      "medianPairedRatio": 3.924169714394702
+    },
+    {
+      "name": "root label 458",
+      "samples": {
+        "baseline": [
+          0.9857910000000629,
+          1.169499999999971,
+          1.1098750000001019,
+          1.1038750000002437,
+          0.9493750000001455
+        ],
+        "fixed": [
+          1.0816669999999249,
+          1.2296250000001692,
+          1.0254999999999654,
+          1.193166999999903,
+          0.61525000000006
+        ]
+      },
+      "min": {
+        "baseline": 0.9493750000001455,
+        "fixed": 0.61525000000006
+      },
+      "mean": {
+        "baseline": 1.063683200000105,
+        "fixed": 1.0290418000000046
+      },
+      "trimmedMean": {
+        "baseline": 1.066513666666803,
+        "fixed": 1.1001113333332644
+      },
+      "medianPairedRatio": 0.9511029785502165
+    },
+    {
+      "name": "field labels 458",
+      "samples": {
+        "baseline": [
+          19.395457999999962,
+          23.47466600000007,
+          19.17108300000018,
+          21.389250000000175,
+          20.009834000000183
+        ],
+        "fixed": [
+          1.762124999999969,
+          2.0103750000000673,
+          1.5642499999999018,
+          1.8301249999999527,
+          1.3421660000000202
+        ]
+      },
+      "min": {
+        "baseline": 19.17108300000018,
+        "fixed": 1.3421660000000202
+      },
+      "mean": {
+        "baseline": 20.688058200000114,
+        "fixed": 1.7018081999999821
+      },
+      "trimmedMean": {
+        "baseline": 20.26484733333344,
+        "fixed": 1.7188333333332746
+      },
+      "medianPairedRatio": 11.687316440134268
+    },
+    {
+      "name": "root label 916",
+      "samples": {
+        "baseline": [
+          1.9722919999999249,
+          2.2030409999997573,
+          2.049916999999823,
+          2.0387080000000424,
+          2.3344999999999345
+        ],
+        "fixed": [
+          2.6618750000002365,
+          2.5488329999998314,
+          2.041917000000012,
+          2.4202500000001237,
+          1.6875
+        ]
+      },
+      "min": {
+        "baseline": 1.9722919999999249,
+        "fixed": 1.6875
+      },
+      "mean": {
+        "baseline": 2.1196915999998964,
+        "fixed": 2.272075000000041
+      },
+      "trimmedMean": {
+        "baseline": 2.0972219999998742,
+        "fixed": 2.336999999999989
+      },
+      "medianPairedRatio": 0.8643332066086334
+    },
+    {
+      "name": "field labels 916",
+      "samples": {
+        "baseline": [
+          80.66162500000019,
+          100.1691249999999,
+          80.07645899999989,
+          85.27375000000029,
+          80.56874999999991
+        ],
+        "fixed": [
+          3.4368750000001,
+          3.8261250000000473,
+          3.072125000000142,
+          3.7919999999999163,
+          2.136416000000054
+        ]
+      },
+      "min": {
+        "baseline": 80.07645899999989,
+        "fixed": 2.136416000000054
+      },
+      "mean": {
+        "baseline": 85.34994180000004,
+        "fixed": 3.252708200000052
+      },
+      "trimmedMean": {
+        "baseline": 82.1680416666668,
+        "fixed": 3.4336666666667193
+      },
+      "medianPairedRatio": 26.065495056352262
+    },
+    {
+      "name": "root label 1832",
+      "samples": {
+        "baseline": [
+          4.789041999999881,
+          6.388374999999996,
+          4.922375000000102,
+          4.534624999999778,
+          4.635500000000093
+        ],
+        "fixed": [
+          4.6248749999999745,
+          4.883333000000221,
+          4.0566660000001775,
+          4.773332999999866,
+          2.6334170000000086
+        ]
+      },
+      "min": {
+        "baseline": 4.534624999999778,
+        "fixed": 2.6334170000000086
+      },
+      "mean": {
+        "baseline": 5.05398339999997,
+        "fixed": 4.194324800000049
+      },
+      "trimmedMean": {
+        "baseline": 4.782305666666692,
+        "fixed": 4.484958000000006
+      },
+      "medianPairedRatio": 1.2134040613646493
+    },
+    {
+      "name": "field labels 1832",
+      "samples": {
+        "baseline": [
+          311.0116659999999,
+          359.43512499999997,
+          291.76150000000007,
+          275.1242500000003,
+          280.8549170000001
+        ],
+        "fixed": [
+          6.857833000000028,
+          7.785374999999931,
+          6.531625000000076,
+          7.928333000000066,
+          4.20433300000002
+        ]
+      },
+      "min": {
+        "baseline": 275.1242500000003,
+        "fixed": 4.20433300000002
+      },
+      "mean": {
+        "baseline": 303.6374916000001,
+        "fixed": 6.6614998000000245
+      },
+      "trimmedMean": {
+        "baseline": 294.5426943333334,
+        "fixed": 7.058277666666679
+      },
+      "medianPairedRatio": 45.35130353859574
+    },
+    {
+      "name": "root label 2668",
+      "samples": {
+        "baseline": [
+          6.802583000000141,
+          6.939833999999792,
+          5.762457999999697,
+          5.086083000000144,
+          7.09958400000005
+        ],
+        "fixed": [
+          6.657333000000108,
+          7.470166000000063,
+          5.985208000000057,
+          7.027332999999999,
+          3.6566250000000764
+        ]
+      },
+      "min": {
+        "baseline": 5.086083000000144,
+        "fixed": 3.6566250000000764
+      },
+      "mean": {
+        "baseline": 6.338108399999965,
+        "fixed": 6.159333000000061
+      },
+      "trimmedMean": {
+        "baseline": 6.501624999999876,
+        "fixed": 6.556624666666721
+      },
+      "medianPairedRatio": 0.9627832483014195
+    },
+    {
+      "name": "field labels 2668",
+      "samples": {
+        "baseline": [
+          631.108792,
+          597.6579590000001,
+          610.041041,
+          572.2777499999997,
+          577.555167
+        ],
+        "fixed": [
+          10.23845899999992,
+          11.059582999999975,
+          9.201000000000022,
+          10.506125000000111,
+          5.95191699999998
+        ]
+      },
+      "min": {
+        "baseline": 572.2777499999997,
+        "fixed": 5.95191699999998
+      },
+      "mean": {
+        "baseline": 597.7281418,
+        "fixed": 9.391416800000002
+      },
+      "trimmedMean": {
+        "baseline": 595.0847223333334,
+        "fixed": 9.98186133333335
+      },
+      "medianPairedRatio": 61.64099421602459
+    }
+  ],
+  "sources": {
+    "/tmp/cfc-7179-followups/prepare-baseline.ts": {
+      "sha256": "5b8faac32e8952c0e269deeae5e535c209f29fce6f4e6f1680b6ead4fcb6dfa5"
+    },
+    "/tmp/cfc-7179-followups/prepare-fixed.ts": {
+      "sha256": "510a8ce69a0d832eaa831d4b8aeb0be5acfe3d4234a8113727badb96c06f1f93"
+    },
+    "/Users/berni/.codex/worktrees/e181/labs/packages/runner/src/cfc/consumed-label-index.ts": {
+      "sha256": "689cedb0cdf99891807fd76d2be9962fba71c6a8789c16f886ea3dbbd9471256",
+      "content": "/**\n * Indexes the label paths a consumed read can overlap, in label-map order.\n * Concrete paths follow one trie branch; a wildcard on either side uses the\n * same prefix predicate as a scan. Callers still apply origin and read-depth\n * rules to the candidates, which include both ancestors and descendants.\n */\n\nimport { canonicalizeLogicalPath } from \"./canonical.ts\";\nimport { isPrefix } from \"./path-prefix-index.ts\";\nimport type { LabelMapEntry } from \"./types.ts\";\n\n/** A label entry with its canonical path and original label-map position. */\ntype IndexedEntry = {\n  /** The validated entry supplied by the label map. */\n  entry: LabelMapEntry;\n\n  /** The logical path after removing the storage root segment. */\n  path: readonly string[];\n\n  /** Position in the label map, used to restore encounter order. */\n  ordinal: number;\n};\n\n/** Exact entries and the inclusive subtree, each retained in label-map order. */\ntype Node = {\n  /** The next concrete segment of each indexed path. */\n  children: Map<string, Node>;\n\n  /** Entries ending at this node. */\n  exact: IndexedEntry[];\n\n  /** Entries at this node and below it, in original map order. */\n  descendants: IndexedEntry[];\n};\n\n/** An empty path node. */\nconst createNode = (): Node => ({\n  children: new Map(),\n  exact: [],\n  descendants: [],\n});\n\n/** A collection-local snapshot of one validated label map. */\nexport class ConsumedLabelIndex {\n  #root = createNode();\n  #wildcard = false;\n\n  /** Constructs an instance over validated entries, canonicalizing each path once. */\n  constructor(entries: readonly LabelMapEntry[]) {\n    for (const [ordinal, entry] of entries.entries()) {\n      const path = canonicalizeLogicalPath(entry.path);\n      const indexed = { entry, path, ordinal };\n      if (path.includes(\"*\")) this.#wildcard = true;\n      let current = this.#root;\n      current.descendants.push(indexed);\n      for (const segment of path) {\n        let child = current.children.get(segment);\n        if (child === undefined) {\n          child = createNode();\n          current.children.set(segment, child);\n        }\n        current = child;\n        current.descendants.push(indexed);\n      }\n      current.exact.push(indexed);\n    }\n  }\n\n  /**\n   * Ancestor, equal, and descendant entries in their original map order.\n   * `path` must already be canonical: a payload field named `value` must not\n   * lose another segment when querying the index.\n   */\n  overlapping(path: readonly string[]): readonly IndexedEntry[] {\n    if (path.length === 0) return this.#root.descendants;\n    if (this.#wildcard || path.includes(\"*\")) {\n      return this.#root.descendants.filter((source) =>\n        isPrefix(source.path, path) || isPrefix(path, source.path)\n      );\n    }\n    const candidates: IndexedEntry[] = [];\n    let current = this.#root;\n    for (const segment of path) {\n      for (const entry of current.exact) candidates.push(entry);\n      const child = current.children.get(segment);\n      if (child === undefined) {\n        return candidates.sort((a, b) => a.ordinal - b.ordinal);\n      }\n      current = child;\n    }\n    for (const entry of current.descendants) candidates.push(entry);\n    return candidates.sort((a, b) => a.ordinal - b.ordinal);\n  }\n}\n",
+      "stage": "Final source; only documentation, spacing, and the createNode helper name changed after measurement."
+    },
+    "/tmp/cfc-7179-followups/replay.ts": {
+      "sha256": "e31066a91b364c53f8a9e4577ad365e4e7df5d76112e7efe610c23caf1e777a1",
+      "content": "// Diagnostic runner: execute the maintained benchmark bodies once per process.\n// Their module-level validation provides one warm collection at each size.\nconst cases: Deno.BenchDefinition[] = [];\nDeno.bench = ((definition: Deno.BenchDefinition) => {\n  cases.push(definition);\n}) as typeof Deno.bench;\nawait import(\"file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts\");\nconst results = [];\nfor (const definition of cases) {\n  let start = NaN;\n  let elapsed = NaN;\n  const context = {\n    name: definition.name,\n    origin: import.meta.url,\n    start: () => { start = performance.now(); },\n    end: () => { elapsed = performance.now() - start; },\n  } satisfies Deno.BenchContext;\n  await definition.fn(context);\n  if (!Number.isFinite(elapsed)) throw new Error(\"Missing explicit timer\");\n  results.push({ name: definition.name, ms: elapsed });\n}\nconsole.log(JSON.stringify({ runtime: Deno.version, results }));\n"
+    },
+    "/tmp/cfc-7179-followups/measure.py": {
+      "sha256": "51eb2d462cf828b901fc576c26c35eed29be7c994ae1947193935c51f28372d6",
+      "content": "import hashlib\nimport json\nimport os\nfrom pathlib import Path\nimport subprocess\nimport time\n\nroot = Path('/Users/berni/.codex/worktrees/e181/labs')\nscratch = Path('/tmp/cfc-7179-followups')\ntarget = root / 'packages/runner/src/cfc/prepare.ts'\nfixed = (scratch/'prepare-fixed.ts').read_bytes()\nruns = []\ntry:\n    for pair in range(5):\n        for arm in (['baseline', 'fixed'] if pair % 2 == 0 else ['fixed', 'baseline']):\n            target.write_bytes((scratch/f'prepare-{arm}.ts').read_bytes())\n            started = time.time()\n            load = os.getloadavg()\n            result = subprocess.run(['deno','run','--no-lock','--no-check','-A','--config','deno.jsonc',str(scratch/'replay.ts')],cwd=root,capture_output=True,text=True,check=True)\n            runs.append(dict(pair=pair+1, arm=arm, start=started, load=load, loadAfter=os.getloadavg(), duration=time.time()-started, output=json.loads(result.stdout), diagnostics=result.stderr))\n            (scratch/'paired.json').write_text(json.dumps(runs,indent=2))\n            print(pair+1,arm,round(time.time()-started,2),flush=True)\nfinally:\n    target.write_bytes(fixed)\n\nprint('Restored fixed source', hashlib.sha256(fixed).hexdigest())\n"
+    }
+  },
+  "limitations": [
+    "No untouched machine calibration arm. All ratios compare paired collector calls, not pane timings.",
+    "Metadata-wide fixture is synthetic emulated storage, not Loom injected SQLite.",
+    "Index helper documentation and createNode name were clarified after measurement; collector algorithm is unchanged."
+  ],
+  "shapeProbes": {
+    "flat": {
+      "nested": false,
+      "size": 14,
+      "width": 8,
+      "ms": 436.6528750000002,
+      "value": [
+        "row-0",
+        "row-1",
+        "row-2",
+        "row-3",
+        "row-4",
+        "row-5",
+        "row-6",
+        "row-7",
+        "row-8",
+        "row-9",
+        "row-10",
+        "row-11",
+        "row-12",
+        "row-13"
+      ],
+      "cfc": {
+        "cfcRelevantTx": 19,
+        "flowLabelProbesComputed": 6,
+        "flowLabelProbeMemoHits": 3,
+        "dereferenceTracesRecorded": 56,
+        "dereferenceTracesMax": 17,
+        "cfcPreparedTx": 19,
+        "cfcPrepareRejects": 0,
+        "cfcDigestInvalidations": 0,
+        "cfcOutboxFlushes": 0,
+        "sinkDedupHits": 0,
+        "sinkReleaseRejects": 0,
+        "prefixProvenanceSummaries": 0,
+        "prefixProtectedWrites": 0,
+        "prefixGatedReads": 0,
+        "prefixTxGlobalGatedReads": 0,
+        "prefixBoundReal": 0,
+        "prefixBoundInfinityFallback": 0,
+        "prefixBoundClockLess": 0,
+        "prefixS7ExemptionFires": 0,
+        "prefixClockLessReads": 0
+      },
+      "timings": {
+        "scheduler": {
+          "scheduler/run/action": {
+            "count": 20,
+            "min": 0.36850000000004,
+            "max": 71.01941599999986,
+            "totalTime": 102.7260809999998,
+            "average": 5.13630404999999,
+            "countSinceBaseline": 0,
+            "totalTimeSinceBaseline": 0,
+            "averageSinceBaseline": 0,
+            "p50": 1.1513749999999163,
+            "p95": 71.01941599999986,
+            "lastTime": 1.2922499999999673,
+            "lastTimestamp": 1601.774125,
+            "cdf": [
+              {
+                "x": 0.36850000000004,
+                "y": 0.05
+              },
+              {
+                "x": 0.7710419999998521,
+                "y": 0.1
+              },
+              {
+                "x": 0.8572079999999005,
+                "y": 0.15
+              },
+              {
+                "x": 0.8725409999999556,
+                "y": 0.2
+              },
+              {
+                "x": 0.9213330000002316,
+                "y": 0.25
+              },
+              {
+                "x": 0.9446250000000873,
+                "y": 0.3
+              },
+              {
+                "x": 1.0755000000001473,
+                "y": 0.35
+              },
+              {
+                "x": 1.0904999999997926,
+                "y": 0.4
+              },
+              {
+                "x": 1.1336659999999483,
+                "y": 0.45
+              },
+              {
+                "x": 1.1459999999999582,
+                "y": 0.5
+              },
+              {
+                "x": 1.1513749999999163,
+                "y": 0.55
+              },
+              {
+                "x": 1.2487909999999829,
+                "y": 0.6
+              },
+              {
+                "x": 1.2922499999999673,
+                "y": 0.65
+              },
+              {
+                "x": 1.6103339999999662,
+                "y": 0.7
+              },
+              {
+                "x": 1.7111250000000382,
+                "y": 0.75
+              },
+              {
+                "x": 2.4671249999998963,
+                "y": 0.8
+              },
+              {
+                "x": 2.6625420000000304,
+                "y": 0.85
+              },
+              {
+                "x": 3.0369170000001304,
+                "y": 0.9
+              },
+              {
+                "x": 7.345291000000088,
+                "y": 0.95
+              },
+              {
+                "x": 71.01941599999986,
+                "y": 1
+              }
+            ],
+            "cdfSinceBaseline": null
+          },
+          "scheduler/run/commit": {
+            "count": 20,
+            "min": 0.28212500000017826,
+            "max": 84.08724999999981,
+            "totalTime": 111.90241600000036,
+            "average": 5.595120800000018,
+            "countSinceBaseline": 0,
+            "totalTimeSinceBaseline": 0,
+            "averageSinceBaseline": 0,
+            "p50": 1.234208000000308,
+            "p95": 84.08724999999981,
+            "lastTime": 2.458167000000003,
+            "lastTimestamp": 1604.261625,
+            "cdf": [
+              {
+                "x": 0.28212500000017826,
+                "y": 0.05
+              },
+              {
+                "x": 0.2983750000000782,
+                "y": 0.1
+              },
+              {
+                "x": 0.8550000000000182,
+                "y": 0.15
+              },
+              {
+                "x": 0.8604169999998703,
+                "y": 0.2
+              },
+              {
+                "x": 0.9317499999999654,
+                "y": 0.25
+              },
+              {
+                "x": 1.0257500000000164,
+                "y": 0.3
+              },
+              {
+                "x": 1.0422909999999774,
+                "y": 0.35
+              },
+              {
+                "x": 1.0704169999999067,
+                "y": 0.4
+              },
+              {
+                "x": 1.1285840000000462,
+                "y": 0.45
+              },
+              {
+                "x": 1.1640419999998812,
+                "y": 0.5
+              },
+              {
+                "x": 1.234208000000308,
+                "y": 0.55
+              },
+              {
+                "x": 1.234749999999849,
+                "y": 0.6
+              },
+              {
+                "x": 1.3180830000001151,
+                "y": 0.65
+              },
+              {
+                "x": 1.4422910000002958,
+                "y": 0.7
+              },
+              {
+                "x": 1.571292000000085,
+                "y": 0.75
+              },
+              {
+                "x": 2.00266600000009,
+                "y": 0.8
+              },
+              {
+                "x": 2.458167000000003,
+                "y": 0.85
+              },
+              {
+                "x": 3.6019999999998618,
+                "y": 0.9
+              },
+              {
+                "x": 4.292957999999999,
+                "y": 0.95
+              },
+              {
+                "x": 84.08724999999981,
+                "y": 1
+              }
+            ],
+            "cdfSinceBaseline": null
+          }
+        },
+        "runner": {
+          "action/readInputs": {
+            "count": 15,
+            "min": 0.5114589999998316,
+            "max": 4.324167000000216,
+            "totalTime": 14.677418000000443,
+            "average": 0.9784945333333629,
+            "countSinceBaseline": 0,
+            "totalTimeSinceBaseline": 0,
+            "averageSinceBaseline": 0,
+            "p50": 0.7007500000001983,
+            "p95": 4.324167000000216,
+            "lastTime": 0.5230000000001382,
+            "lastTimestamp": 1597.982375,
+            "cdf": [
+              {
+                "x": 0.5114589999998316,
+                "y": 0.06666666666666667
+              },
+              {
+                "x": 0.5141249999999218,
+                "y": 0.13333333333333333
+              },
+              {
+                "x": 0.5230000000001382,
+                "y": 0.2
+              },
+              {
+                "x": 0.5764160000001084,
+                "y": 0.26666666666666666
+              },
+              {
+                "x": 0.6433329999999842,
+                "y": 0.3333333333333333
+              },
+              {
+                "x": 0.6455829999999878,
+                "y": 0.4
+              },
+              {
+                "x": 0.6900840000000699,
+                "y": 0.4666666666666667
+              },
+              {
+                "x": 0.7007500000001983,
+                "y": 0.5333333333333333
+              },
+              {
+                "x": 0.711790999999721,
+                "y": 0.6
+              },
+              {
+                "x": 0.7395420000000286,
+                "y": 0.6666666666666666
+              },
+              {
+                "x": 0.7398339999999735,
+                "y": 0.7333333333333333
+              },
+              {
+                "x": 0.8520000000000891,
+                "y": 0.8
+              },
+              {
+                "x": 0.9186670000001413,
+                "y": 0.8666666666666667
+              },
+              {
+                "x": 1.586667000000034,
+                "y": 0.9333333333333333
+              },
+              {
+                "x": 4.324167000000216,
+                "y": 1
+              }
+            ],
+            "cdfSinceBaseline": null
+          }
+        }
+      }
+    },
+    "nested": {
+      "nested": true,
+      "size": 14,
+      "width": 8,
+      "ms": 297.738375,
+      "value": [
+        "row-0",
+        "row-1",
+        "row-2",
+        "row-3",
+        "row-4",
+        "row-5",
+        "row-6",
+        "row-7",
+        "row-8",
+        "row-9",
+        "row-10",
+        "row-11",
+        "row-12",
+        "row-13"
+      ],
+      "cfc": {
+        "cfcRelevantTx": 19,
+        "flowLabelProbesComputed": 6,
+        "flowLabelProbeMemoHits": 3,
+        "dereferenceTracesRecorded": 56,
+        "dereferenceTracesMax": 17,
+        "cfcPreparedTx": 19,
+        "cfcPrepareRejects": 0,
+        "cfcDigestInvalidations": 0,
+        "cfcOutboxFlushes": 0,
+        "sinkDedupHits": 0,
+        "sinkReleaseRejects": 0,
+        "prefixProvenanceSummaries": 0,
+        "prefixProtectedWrites": 0,
+        "prefixGatedReads": 0,
+        "prefixTxGlobalGatedReads": 0,
+        "prefixBoundReal": 0,
+        "prefixBoundInfinityFallback": 0,
+        "prefixBoundClockLess": 0,
+        "prefixS7ExemptionFires": 0,
+        "prefixClockLessReads": 0
+      },
+      "timings": {
+        "scheduler": {
+          "scheduler/run/action": {
+            "count": 20,
+            "min": 0.22520800000006602,
+            "max": 42.822,
+            "totalTime": 64.93854300000032,
+            "average": 3.2469271500000163,
+            "countSinceBaseline": 0,
+            "totalTimeSinceBaseline": 0,
+            "averageSinceBaseline": 0,
+            "p50": 1.0098329999999578,
+            "p95": 42.822,
+            "lastTime": 0.9695830000000569,
+            "lastTimestamp": 912.840958,
+            "cdf": [
+              {
+                "x": 0.22520800000006602,
+                "y": 0.05
+              },
+              {
+                "x": 0.5722500000000537,
+                "y": 0.1
+              },
+              {
+                "x": 0.6243340000000899,
+                "y": 0.15
+              },
+              {
+                "x": 0.6308330000000524,
+                "y": 0.2
+              },
+              {
+                "x": 0.6780410000000074,
+                "y": 0.25
+              },
+              {
+                "x": 0.7928339999999707,
+                "y": 0.3
+              },
+              {
+                "x": 0.8727910000000065,
+                "y": 0.35
+              },
+              {
+                "x": 0.9517500000000609,
+                "y": 0.4
+              },
+              {
+                "x": 0.9695830000000569,
+                "y": 0.45
+              },
+              {
+                "x": 0.9934170000000222,
+                "y": 0.5
+              },
+              {
+                "x": 1.0098329999999578,
+                "y": 0.55
+              },
+              {
+                "x": 1.0171250000000782,
+                "y": 0.6
+              },
+              {
+                "x": 1.0766670000000431,
+                "y": 0.65
+              },
+              {
+                "x": 1.0768339999999625,
+                "y": 0.7
+              },
+              {
+                "x": 1.0921659999999065,
+                "y": 0.75
+              },
+              {
+                "x": 1.308334000000059,
+                "y": 0.8
+              },
+              {
+                "x": 1.9067919999999958,
+                "y": 0.85
+              },
+              {
+                "x": 2.7921669999999494,
+                "y": 0.9
+              },
+              {
+                "x": 3.5255839999999807,
+                "y": 0.95
+              },
+              {
+                "x": 42.822,
+                "y": 1
+              }
+            ],
+            "cdfSinceBaseline": null
+          },
+          "scheduler/run/commit": {
+            "count": 20,
+            "min": 0.17966699999999491,
+            "max": 53.102499999999964,
+            "totalTime": 74.2147060000002,
+            "average": 3.7107353000000103,
+            "countSinceBaseline": 0,
+            "totalTimeSinceBaseline": 0,
+            "averageSinceBaseline": 0,
+            "p50": 1.0030000000000427,
+            "p95": 53.102499999999964,
+            "lastTime": 1.7647499999999354,
+            "lastTimestamp": 914.630416,
+            "cdf": [
+              {
+                "x": 0.17966699999999491,
+                "y": 0.05
+              },
+              {
+                "x": 0.1809170000000222,
+                "y": 0.1
+              },
+              {
+                "x": 0.6582500000000664,
+                "y": 0.15
+              },
+              {
+                "x": 0.6734579999999823,
+                "y": 0.2
+              },
+              {
+                "x": 0.7069999999999936,
+                "y": 0.25
+              },
+              {
+                "x": 0.7308329999999614,
+                "y": 0.3
+              },
+              {
+                "x": 0.8433749999999236,
+                "y": 0.35
+              },
+              {
+                "x": 0.86525000000006,
+                "y": 0.4
+              },
+              {
+                "x": 0.9505000000000337,
+                "y": 0.45
+              },
+              {
+                "x": 0.9539579999999432,
+                "y": 0.5
+              },
+              {
+                "x": 1.0030000000000427,
+                "y": 0.55
+              },
+              {
+                "x": 1.0590420000000904,
+                "y": 0.6
+              },
+              {
+                "x": 1.084875000000011,
+                "y": 0.65
+              },
+              {
+                "x": 1.1900410000000647,
+                "y": 0.7
+              },
+              {
+                "x": 1.2805830000000924,
+                "y": 0.75
+              },
+              {
+                "x": 1.7647499999999354,
+                "y": 0.8
+              },
+              {
+                "x": 1.9474159999999756,
+                "y": 0.85
+              },
+              {
+                "x": 2.480207999999948,
+                "y": 0.9
+              },
+              {
+                "x": 2.5590830000001006,
+                "y": 0.95
+              },
+              {
+                "x": 53.102499999999964,
+                "y": 1
+              }
+            ],
+            "cdfSinceBaseline": null
+          }
+        },
+        "runner": {
+          "action/readInputs": {
+            "count": 15,
+            "min": 0.33408299999996416,
+            "max": 2.0579999999999927,
+            "totalTime": 10.8534149999997,
+            "average": 0.72356099999998,
+            "countSinceBaseline": 0,
+            "totalTimeSinceBaseline": 0,
+            "averageSinceBaseline": 0,
+            "p50": 0.5404999999999518,
+            "p95": 2.0579999999999927,
+            "lastTime": 0.7959170000000313,
+            "lastTimestamp": 909.289166,
+            "cdf": [
+              {
+                "x": 0.33408299999996416,
+                "y": 0.06666666666666667
+              },
+              {
+                "x": 0.38658299999997325,
+                "y": 0.13333333333333333
+              },
+              {
+                "x": 0.3921669999999722,
+                "y": 0.2
+              },
+              {
+                "x": 0.4237910000000511,
+                "y": 0.26666666666666666
+              },
+              {
+                "x": 0.44562500000006366,
+                "y": 0.3333333333333333
+              },
+              {
+                "x": 0.48187499999994543,
+                "y": 0.4
+              },
+              {
+                "x": 0.49224999999989905,
+                "y": 0.4666666666666667
+              },
+              {
+                "x": 0.5404999999999518,
+                "y": 0.5333333333333333
+              },
+              {
+                "x": 0.6365409999999656,
+                "y": 0.6
+              },
+              {
+                "x": 0.6554170000000568,
+                "y": 0.6666666666666666
+              },
+              {
+                "x": 0.6723329999999805,
+                "y": 0.7333333333333333
+              },
+              {
+                "x": 0.7514169999999467,
+                "y": 0.8
+              },
+              {
+                "x": 0.7959170000000313,
+                "y": 0.8666666666666667
+              },
+              {
+                "x": 1.7869159999999056,
+                "y": 0.9333333333333333
+              },
+              {
+                "x": 2.0579999999999927,
+                "y": 1
+              }
+            ],
+            "cdfSinceBaseline": null
+          }
+        }
+      }
+    },
+    "nested64": {
+      "nested": true,
+      "size": 14,
+      "width": 64,
+      "ms": 355.076542,
+      "value": [
+        "row-0",
+        "row-1",
+        "row-2",
+        "row-3",
+        "row-4",
+        "row-5",
+        "row-6",
+        "row-7",
+        "row-8",
+        "row-9",
+        "row-10",
+        "row-11",
+        "row-12",
+        "row-13"
+      ],
+      "cfc": {
+        "cfcRelevantTx": 19,
+        "flowLabelProbesComputed": 6,
+        "flowLabelProbeMemoHits": 3,
+        "dereferenceTracesRecorded": 56,
+        "dereferenceTracesMax": 17,
+        "cfcPreparedTx": 19,
+        "cfcPrepareRejects": 0,
+        "cfcDigestInvalidations": 0,
+        "cfcOutboxFlushes": 0,
+        "sinkDedupHits": 0,
+        "sinkReleaseRejects": 0,
+        "prefixProvenanceSummaries": 0,
+        "prefixProtectedWrites": 0,
+        "prefixGatedReads": 0,
+        "prefixTxGlobalGatedReads": 0,
+        "prefixBoundReal": 0,
+        "prefixBoundInfinityFallback": 0,
+        "prefixBoundClockLess": 0,
+        "prefixS7ExemptionFires": 0,
+        "prefixClockLessReads": 0
+      },
+      "timings": {
+        "scheduler": {
+          "scheduler/run/action": {
+            "count": 20,
+            "min": 0.29308400000002166,
+            "max": 49.98741700000005,
+            "totalTime": 78.79520899999989,
+            "average": 3.9397604499999943,
+            "countSinceBaseline": 0,
+            "totalTimeSinceBaseline": 0,
+            "averageSinceBaseline": 0,
+            "p50": 1.1962499999999636,
+            "p95": 49.98741700000005,
+            "lastTime": 1.6762499999999818,
+            "lastTimestamp": 1168.927667,
+            "cdf": [
+              {
+                "x": 0.29308400000002166,
+                "y": 0.05
+              },
+              {
+                "x": 0.6063750000000709,
+                "y": 0.1
+              },
+              {
+                "x": 0.7004159999999047,
+                "y": 0.15
+              },
+              {
+                "x": 0.7458750000000691,
+                "y": 0.2
+              },
+              {
+                "x": 0.8093750000000455,
+                "y": 0.25
+              },
+              {
+                "x": 0.8337079999998878,
+                "y": 0.3
+              },
+              {
+                "x": 0.8969589999999243,
+                "y": 0.35
+              },
+              {
+                "x": 0.9710000000000036,
+                "y": 0.4
+              },
+              {
+                "x": 0.9914999999998599,
+                "y": 0.45
+              },
+              {
+                "x": 1.150707999999895,
+                "y": 0.5
+              },
+              {
+                "x": 1.1962499999999636,
+                "y": 0.55
+              },
+              {
+                "x": 1.275209000000018,
+                "y": 0.6
+              },
+              {
+                "x": 1.2977920000000722,
+                "y": 0.65
+              },
+              {
+                "x": 1.6762499999999818,
+                "y": 0.7
+              },
+              {
+                "x": 1.9627080000000205,
+                "y": 0.75
+              },
+              {
+                "x": 2.158333000000084,
+                "y": 0.8
+              },
+              {
+                "x": 3.2253330000000915,
+                "y": 0.85
+              },
+              {
+                "x": 3.2347919999999704,
+                "y": 0.9
+              },
+              {
+                "x": 4.782124999999951,
+                "y": 0.95
+              },
+              {
+                "x": 49.98741700000005,
+                "y": 1
+              }
+            ],
+            "cdfSinceBaseline": null
+          },
+          "scheduler/run/commit": {
+            "count": 20,
+            "min": 0.21258299999999508,
+            "max": 60.011417000000165,
+            "totalTime": 82.90921200000003,
+            "average": 4.145460600000002,
+            "countSinceBaseline": 0,
+            "totalTimeSinceBaseline": 0,
+            "averageSinceBaseline": 0,
+            "p50": 1.1227919999998903,
+            "p95": 60.011417000000165,
+            "lastTime": 2.4437920000000304,
+            "lastTimestamp": 1171.423875,
+            "cdf": [
+              {
+                "x": 0.21258299999999508,
+                "y": 0.05
+              },
+              {
+                "x": 0.2234169999999267,
+                "y": 0.1
+              },
+              {
+                "x": 0.7082920000000286,
+                "y": 0.15
+              },
+              {
+                "x": 0.7738329999999678,
+                "y": 0.2
+              },
+              {
+                "x": 0.8165000000001328,
+                "y": 0.25
+              },
+              {
+                "x": 0.8672080000001188,
+                "y": 0.3
+              },
+              {
+                "x": 0.9012089999998807,
+                "y": 0.35
+              },
+              {
+                "x": 0.914792000000034,
+                "y": 0.4
+              },
+              {
+                "x": 0.9435829999999896,
+                "y": 0.45
+              },
+              {
+                "x": 0.9833340000000135,
+                "y": 0.5
+              },
+              {
+                "x": 1.1227919999998903,
+                "y": 0.55
+              },
+              {
+                "x": 1.1672499999999673,
+                "y": 0.6
+              },
+              {
+                "x": 1.184541999999965,
+                "y": 0.65
+              },
+              {
+                "x": 1.1917920000000777,
+                "y": 0.7
+              },
+              {
+                "x": 1.2069169999999758,
+                "y": 0.75
+              },
+              {
+                "x": 1.5412089999999807,
+                "y": 0.8
+              },
+              {
+                "x": 2.4437920000000304,
+                "y": 0.85
+              },
+              {
+                "x": 2.5306249999998727,
+                "y": 0.9
+              },
+              {
+                "x": 3.1641250000000127,
+                "y": 0.95
+              },
+              {
+                "x": 60.011417000000165,
+                "y": 1
+              }
+            ],
+            "cdfSinceBaseline": null
+          }
+        },
+        "runner": {
+          "action/readInputs": {
+            "count": 15,
+            "min": 0.36725000000001273,
+            "max": 2.8327090000000226,
+            "totalTime": 13.610376000000088,
+            "average": 0.9073584000000058,
+            "countSinceBaseline": 0,
+            "totalTimeSinceBaseline": 0,
+            "averageSinceBaseline": 0,
+            "p50": 0.6462500000000091,
+            "p95": 2.8327090000000226,
+            "lastTime": 0.5615829999999278,
+            "lastTimestamp": 1164.772833,
+            "cdf": [
+              {
+                "x": 0.36725000000001273,
+                "y": 0.06666666666666667
+              },
+              {
+                "x": 0.4052919999999176,
+                "y": 0.13333333333333333
+              },
+              {
+                "x": 0.4574170000000777,
+                "y": 0.2
+              },
+              {
+                "x": 0.47070899999994253,
+                "y": 0.26666666666666666
+              },
+              {
+                "x": 0.5287080000000515,
+                "y": 0.3333333333333333
+              },
+              {
+                "x": 0.5615829999999278,
+                "y": 0.4
+              },
+              {
+                "x": 0.5923750000001746,
+                "y": 0.4666666666666667
+              },
+              {
+                "x": 0.6462500000000091,
+                "y": 0.5333333333333333
+              },
+              {
+                "x": 0.6677919999999631,
+                "y": 0.6
+              },
+              {
+                "x": 0.6733329999999569,
+                "y": 0.6666666666666666
+              },
+              {
+                "x": 0.7541249999999309,
+                "y": 0.7333333333333333
+              },
+              {
+                "x": 0.774541999999883,
+                "y": 0.8
+              },
+              {
+                "x": 1.3304160000000138,
+                "y": 0.8666666666666667
+              },
+              {
+                "x": 2.5478750000002037,
+                "y": 0.9333333333333333
+              },
+              {
+                "x": 2.8327090000000226,
+                "y": 1
+              }
+            ],
+            "cdfSinceBaseline": null
+          }
+        }
+      }
+    },
+    "jsx-flat": {
+      "nested": false,
+      "size": 14,
+      "width": 8,
+      "ms": 227.22745900000018,
+      "value": {
+        "children": [
+          [
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-0"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-1"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-2"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-3"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-4"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-5"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-6"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-7"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-8"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-9"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-10"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-11"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-12"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-13"
+              ]
+            }
+          ]
+        ],
+        "name": "div",
+        "props": {},
+        "type": "vnode"
+      },
+      "cfc": {
+        "cfcRelevantTx": 5,
+        "flowLabelProbesComputed": 5,
+        "flowLabelProbeMemoHits": 3,
+        "dereferenceTracesRecorded": 5,
+        "dereferenceTracesMax": 3,
+        "cfcPreparedTx": 5,
+        "cfcPrepareRejects": 0,
+        "cfcDigestInvalidations": 0,
+        "cfcOutboxFlushes": 0,
+        "sinkDedupHits": 0,
+        "sinkReleaseRejects": 0,
+        "prefixProvenanceSummaries": 0,
+        "prefixProtectedWrites": 0,
+        "prefixGatedReads": 0,
+        "prefixTxGlobalGatedReads": 0,
+        "prefixBoundReal": 0,
+        "prefixBoundInfinityFallback": 0,
+        "prefixBoundClockLess": 0,
+        "prefixS7ExemptionFires": 0,
+        "prefixClockLessReads": 0
+      },
+      "timings": {
+        "scheduler": {
+          "scheduler/run/action": {
+            "count": 5,
+            "min": 0.3595829999999296,
+            "max": 38.15866700000015,
+            "totalTime": 49.14379199999985,
+            "average": 9.82875839999997,
+            "countSinceBaseline": 0,
+            "totalTimeSinceBaseline": 0,
+            "averageSinceBaseline": 0,
+            "p50": 4.139124999999694,
+            "p95": 38.15866700000015,
+            "lastTime": 4.139124999999694,
+            "lastTimestamp": 2898.198208,
+            "cdf": [
+              {
+                "x": 0.3595829999999296,
+                "y": 0.2
+              },
+              {
+                "x": 2.129791999999725,
+                "y": 0.4
+              },
+              {
+                "x": 4.139124999999694,
+                "y": 0.6
+              },
+              {
+                "x": 4.356625000000349,
+                "y": 0.8
+              },
+              {
+                "x": 38.15866700000015,
+                "y": 1
+              }
+            ],
+            "cdfSinceBaseline": null
+          },
+          "scheduler/run/commit": {
+            "count": 5,
+            "min": 0.19425000000001091,
+            "max": 50.459166000000096,
+            "totalTime": 60.44445700000051,
+            "average": 12.088891400000103,
+            "countSinceBaseline": 0,
+            "totalTimeSinceBaseline": 0,
+            "averageSinceBaseline": 0,
+            "p50": 3.180083000000195,
+            "p95": 50.459166000000096,
+            "lastTime": 6.363582999999835,
+            "lastTimestamp": 2904.768208,
+            "cdf": [
+              {
+                "x": 0.19425000000001091,
+                "y": 0.2
+              },
+              {
+                "x": 0.2473750000003747,
+                "y": 0.4
+              },
+              {
+                "x": 3.180083000000195,
+                "y": 0.6
+              },
+              {
+                "x": 6.363582999999835,
+                "y": 0.8
+              },
+              {
+                "x": 50.459166000000096,
+                "y": 1
+              }
+            ],
+            "cdfSinceBaseline": null
+          }
+        },
+        "runner": {
+          "action/readInputs": {
+            "count": 1,
+            "min": 2.501333999999588,
+            "max": 2.501333999999588,
+            "totalTime": 2.501333999999588,
+            "average": 2.501333999999588,
+            "countSinceBaseline": 0,
+            "totalTimeSinceBaseline": 0,
+            "averageSinceBaseline": 0,
+            "p50": 2.501333999999588,
+            "p95": 2.501333999999588,
+            "lastTime": 2.501333999999588,
+            "lastTimestamp": 2792.636458,
+            "cdf": [
+              {
+                "x": 2.501333999999588,
+                "y": 1
+              }
+            ],
+            "cdfSinceBaseline": null
+          }
+        }
+      }
+    },
+    "jsx-nested64": {
+      "nested": true,
+      "size": 14,
+      "width": 64,
+      "ms": 273.70475000000033,
+      "value": {
+        "children": [
+          [
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-0"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-1"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-2"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-3"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-4"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-5"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-6"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-7"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-8"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-9"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-10"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-11"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-12"
+              ]
+            },
+            {
+              "type": "vnode",
+              "name": "button",
+              "props": {},
+              "children": [
+                "row-13"
+              ]
+            }
+          ]
+        ],
+        "name": "div",
+        "props": {},
+        "type": "vnode"
+      },
+      "cfc": {
+        "cfcRelevantTx": 5,
+        "flowLabelProbesComputed": 5,
+        "flowLabelProbeMemoHits": 3,
+        "dereferenceTracesRecorded": 5,
+        "dereferenceTracesMax": 3,
+        "cfcPreparedTx": 5,
+        "cfcPrepareRejects": 0,
+        "cfcDigestInvalidations": 0,
+        "cfcOutboxFlushes": 0,
+        "sinkDedupHits": 0,
+        "sinkReleaseRejects": 0,
+        "prefixProvenanceSummaries": 0,
+        "prefixProtectedWrites": 0,
+        "prefixGatedReads": 0,
+        "prefixTxGlobalGatedReads": 0,
+        "prefixBoundReal": 0,
+        "prefixBoundInfinityFallback": 0,
+        "prefixBoundClockLess": 0,
+        "prefixS7ExemptionFires": 0,
+        "prefixClockLessReads": 0
+      },
+      "timings": {
+        "scheduler": {
+          "scheduler/run/action": {
+            "count": 5,
+            "min": 0.33462500000041473,
+            "max": 40.67574999999988,
+            "totalTime": 52.974624000000404,
+            "average": 10.594924800000081,
+            "countSinceBaseline": 0,
+            "totalTimeSinceBaseline": 0,
+            "averageSinceBaseline": 0,
+            "p50": 4.597792000000027,
+            "p95": 40.67574999999988,
+            "lastTime": 4.597792000000027,
+            "lastTimestamp": 2244.263333,
+            "cdf": [
+              {
+                "x": 0.33462500000041473,
+                "y": 0.2
+              },
+              {
+                "x": 2.3741660000000593,
+                "y": 0.4
+              },
+              {
+                "x": 4.597792000000027,
+                "y": 0.6
+              },
+              {
+                "x": 4.992291000000023,
+                "y": 0.8
+              },
+              {
+                "x": 40.67574999999988,
+                "y": 1
+              }
+            ],
+            "cdfSinceBaseline": null
+          },
+          "scheduler/run/commit": {
+            "count": 5,
+            "min": 0.21225000000004002,
+            "max": 64.50708299999997,
+            "totalTime": 75.61212499999965,
+            "average": 15.12242499999993,
+            "countSinceBaseline": 0,
+            "totalTimeSinceBaseline": 0,
+            "averageSinceBaseline": 0,
+            "p50": 3.9662920000000668,
+            "p95": 64.50708299999997,
+            "lastTime": 6.679499999999734,
+            "lastTimestamp": 2251.158791,
+            "cdf": [
+              {
+                "x": 0.21225000000004002,
+                "y": 0.2
+              },
+              {
+                "x": 0.24699999999984357,
+                "y": 0.4
+              },
+              {
+                "x": 3.9662920000000668,
+                "y": 0.6
+              },
+              {
+                "x": 6.679499999999734,
+                "y": 0.8
+              },
+              {
+                "x": 64.50708299999997,
+                "y": 1
+              }
+            ],
+            "cdfSinceBaseline": null
+          }
+        },
+        "runner": {
+          "action/readInputs": {
+            "count": 1,
+            "min": 2.869459000000006,
+            "max": 2.869459000000006,
+            "totalTime": 2.869459000000006,
+            "average": 2.869459000000006,
+            "countSinceBaseline": 0,
+            "totalTimeSinceBaseline": 0,
+            "averageSinceBaseline": 0,
+            "p50": 2.869459000000006,
+            "p95": 2.869459000000006,
+            "lastTime": 2.869459000000006,
+            "lastTimestamp": 2119.296791,
+            "cdf": [
+              {
+                "x": 2.869459000000006,
+                "y": 1
+              }
+            ],
+            "cdfSinceBaseline": null
+          }
+        }
+      }
+    }
+  },
+  "shapeDrivers": {
+    "map-shape.ts": "import { Identity } from \"@commonfabric/identity\";\nimport { getTimingStatsBreakdown, resetAllTimingStats, setGlobalLogFloor } from \"@commonfabric/utils/logger\";\nimport { Runtime } from \"/Users/berni/.codex/worktrees/e181/labs/packages/runner/src/runtime.ts\";\nimport { StorageManager } from \"/Users/berni/.codex/worktrees/e181/labs/packages/runner/src/storage/cache.deno.ts\";\nimport { createTrustedBuilder } from \"/Users/berni/.codex/worktrees/e181/labs/packages/runner/test/support/trusted-builder.ts\";\nimport { writeSeedEnvelopeDoc, SEED_ENVELOPE_SCHEMA_HASH } from \"/Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-seed-envelope.ts\";\n\nconst signer = await Identity.fromPassphrase(\"cfc-map-shape-probe\");\nsetGlobalLogFloor(\"error\");\nconst nested = Deno.args[0] === \"nested\";\nconst size = Number(Deno.args[1] ?? 14);\nconst width = Number(Deno.args[2] ?? 8);\nconst sm = StorageManager.emulate({as: signer});\nconst runtime = new Runtime({apiUrl: new URL(\"https://example.com\"), storageManager: sm, cfcFlowLabels: \"persist\", experimental: {serverExecution: false}});\ntry {\n  const {commonfabric: cf} = createTrustedBuilder(runtime);\n  const str = {type: \"string\"};\n  const row = {type: \"object\", properties: {name: str, ...(nested ? {handles: {type: \"array\",items:str}, messages:{type:\"array\",items:str}} : {})}, required: nested ? [\"name\",\"handles\",\"messages\"] : [\"name\"], additionalProperties:false};\n  const list = {type:\"array\",items:row};\n  const input = {type:\"object\",properties:{rows:list},required:[\"rows\"],additionalProperties:false};\n  const output = {type:\"object\",properties:{mapped:{type:\"array\",items:str}},required:[\"mapped\"],additionalProperties:false};\n  const identity = cf.lift((rows: unknown[]) => rows, list as any, list as any);\n  const name = cf.lift((element: {name:string}) => element.name, row as any, str as any);\n  const child = cf.pattern(({element}: any) => name(element), {type:\"object\",properties:{element:row},required:[\"element\"]} as any, str as any);\n  const parent = cf.pattern(({rows}: any) => ({mapped: (identity(rows) as any).mapWithPattern(child, {})}), input as any, output as any);\n  const seed = runtime.edit();\n  const rows = runtime.getCell(signer.did(), \"rows\", list as any, seed);\n  const payload = Array.from({length:size},(_,i)=>({name:`row-${i}`, ...(nested?{handles:Array.from({length:width},(_,j)=>`h-${i}-${j}`),messages:Array.from({length:width},(_,j)=>`m-${i}-${j}`)}:{})}));\n  writeSeedEnvelopeDoc(seed, signer.did());\n  seed.writeOrThrow({...rows.getAsNormalizedFullLink(),path:[]},{value:payload,cfc:{version:1,schemaHash:SEED_ENVELOPE_SCHEMA_HASH,labelMap:{version:1,entries:[{path:[],label:{confidentiality:[\"private\"]}}]}}});\n  const seeded=await seed.commit(); if(seeded.error)throw seeded.error;\n  resetAllTimingStats();\n  const start=performance.now();\n  const tx=runtime.edit();\n  const resultCell=runtime.getCell(signer.did(),\"output\",output as any,tx);\n  const result=runtime.run(tx,parent,{rows},resultCell);\n  const committed=await tx.commit();if(committed.error)throw committed.error;\n  await result.key(\"mapped\").pull();\n  await runtime.idle();\n  const ms=performance.now()-start;\n  const value=result.key(\"mapped\").get();\n  console.error(JSON.stringify({nested,size,width,ms,value,cfc:runtime.getCfcStats(),timings:getTimingStatsBreakdown()}));\n} finally {await runtime.dispose();await sm.close();}\n",
+    "jsx-shape.ts": "import { Identity } from \"@commonfabric/identity\";\nimport { getTimingStatsBreakdown, resetAllTimingStats, setGlobalLogFloor } from \"@commonfabric/utils/logger\";\nimport { Runtime } from \"/Users/berni/.codex/worktrees/e181/labs/packages/runner/src/runtime.ts\";\nimport { StorageManager } from \"/Users/berni/.codex/worktrees/e181/labs/packages/runner/src/storage/cache.deno.ts\";\nimport { createTrustedBuilder } from \"/Users/berni/.codex/worktrees/e181/labs/packages/runner/test/support/trusted-builder.ts\";\nimport { writeSeedEnvelopeDoc, SEED_ENVELOPE_SCHEMA_HASH } from \"/Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-seed-envelope.ts\";\n\nconst signer = await Identity.fromPassphrase(\"cfc-map-shape-probe\");\nsetGlobalLogFloor(\"error\");\nconst nested = Deno.args[0] === \"nested\";\nconst size = Number(Deno.args[1] ?? 14);\nconst width = Number(Deno.args[2] ?? 8);\nconst sm = StorageManager.emulate({as: signer});\nconst runtime = new Runtime({apiUrl: new URL(\"https://example.com\"), storageManager: sm, cfcFlowLabels: \"persist\", experimental: {serverExecution: false}});\ntry {\n  const {commonfabric: cf} = createTrustedBuilder(runtime);\n  const str = {type: \"string\"};\n  const row = {type: \"object\", properties: {name: str, ...(nested ? {handles: {type: \"array\",items:str}, messages:{type:\"array\",items:str}} : {})}, required: nested ? [\"name\",\"handles\",\"messages\"] : [\"name\"], additionalProperties:false};\n  const list = {type:\"array\",items:row};\n  const input = {type:\"object\",properties:{rows:list},required:[\"rows\"],additionalProperties:false};\n  const output = {type:\"object\",properties:{mapped:{type:\"array\",items:str}},required:[\"mapped\"],additionalProperties:false};\n  const parent = await runtime.patternManager.compilePattern({main:\"/main.tsx\",files:[{name:\"/main.tsx\",contents:`\nimport { lift, pattern, UI } from \"commonfabric\";\ninterface Row { name: string; ${nested ? \"handles: string[]; messages: string[];\" : \"\"} }\nconst identity = lift((rows: Row[]): Row[] => rows);\nexport default pattern<{rows: Row[]}>(({rows}) => {\n const made = identity(rows);\n return { [UI]: <div>{made.map(row => <button>{row.name}</button>)}</div> };\n});\n`} ]}, {space:signer.did()});\n  const seed = runtime.edit();\n  const rows = runtime.getCell(signer.did(), \"rows\", list as any, seed);\n  const payload = Array.from({length:size},(_,i)=>({name:`row-${i}`, ...(nested?{handles:Array.from({length:width},(_,j)=>`h-${i}-${j}`),messages:Array.from({length:width},(_,j)=>`m-${i}-${j}`)}:{})}));\n  writeSeedEnvelopeDoc(seed, signer.did());\n  seed.writeOrThrow({...rows.getAsNormalizedFullLink(),path:[]},{value:payload,cfc:{version:1,schemaHash:SEED_ENVELOPE_SCHEMA_HASH,labelMap:{version:1,entries:[{path:[],label:{confidentiality:[\"private\"]}}]}}});\n  const seeded=await seed.commit(); if(seeded.error)throw seeded.error;\n  resetAllTimingStats();\n  const start=performance.now();\n  const tx=runtime.edit();\n  const resultCell=runtime.getCell(signer.did(),\"output\",parent.resultSchema,tx);\n  const result=runtime.run(tx,parent,{rows},resultCell);\n  const committed=await tx.commit();if(committed.error)throw committed.error;\n  await result.key(\"$UI\").pull();\n  await runtime.idle();\n  const ms=performance.now()-start;\n  const value=result.key(\"$UI\").get();\n  console.error(JSON.stringify({nested,size,width,ms,value,cfc:runtime.getCfcStats(),timings:getTimingStatsBreakdown()}));\n} finally {await runtime.dispose();await sm.close();}\n"
+  },
+  "productionDiff": "diff --git a/packages/runner/src/cfc/prepare.ts b/packages/runner/src/cfc/prepare.ts\nindex e5ed0e99be..fac4a37493 100644\n--- a/packages/runner/src/cfc/prepare.ts\n+++ b/packages/runner/src/cfc/prepare.ts\n@@ -85,6 +85,7 @@ import {\n   isOrClause,\n   normalizeClause,\n } from \"./clause.ts\";\n+import { ConsumedLabelIndex } from \"./consumed-label-index.ts\";\n import { collectDeclaredMonotonicityViolations } from \"./declared-monotonicity.ts\";\n import {\n   type CfcGrantConsumptionContext,\n@@ -5441,6 +5442,9 @@ export const collectConsumedLabel = (\n   const modulePolicySpaces = new Map<string, Set<MemorySpace>>();\n   const sources: ConsumedAtomSource[] = [];\n   const sourceBuckets = new Map<string, ConsumedAtomSource[]>();\n+  // Collection is synchronous and read-only. Share one validated metadata\n+  // snapshot per document here; another collection observes its current view.\n+  const labelIndexes = new Map<string, ConsumedLabelIndex | undefined>();\n   const noteSource = (\n     atom: unknown,\n     read: CfcAddress,\n@@ -5484,14 +5488,20 @@ export const collectConsumedLabel = (\n     ]\n   ) {\n     if (isInternalVerifierRead(read.meta)) continue;\n-    const metadata = storedMetadataFor(\n-      tx,\n-      read.space,\n-      read.id,\n-      normalizeCellScope(read.scope),\n-      read.type ?? \"application/json\",\n-    );\n-    if (metadata === undefined) continue;\n+    const scope = normalizeCellScope(read.scope);\n+    const type = read.type ?? \"application/json\";\n+    const metadataKey = JSON.stringify([read.space, read.id, scope, type]);\n+    if (!labelIndexes.has(metadataKey)) {\n+      const metadata = storedMetadataFor(tx, read.space, read.id, scope, type);\n+      labelIndexes.set(\n+        metadataKey,\n+        metadata === undefined\n+          ? undefined\n+          : new ConsumedLabelIndex(metadata.labelMap.entries),\n+      );\n+    }\n+    const labels = labelIndexes.get(metadataKey);\n+    if (labels === undefined) continue;\n     const path = canonicalizeLogicalPath(read.path);\n     // A recursive read at `path` observes the value at `path` and everything\n     // below it, so its confidentiality is the union of every labelMap entry\n@@ -5502,8 +5512,7 @@ export const collectConsumedLabel = (\n     // #3993). A nonRecursive read sees ONLY the value at `path`, so it counts\n     // ancestor-or-equal entries but NOT descendants \u2014 counting those would\n     // false-reject valid commits (review round 2 on #3993).\n-    for (const entry of metadata.labelMap.entries) {\n-      const entryPath = canonicalizeLogicalPath(entry.path);\n+    for (const { entry, path: entryPath } of labels.overlapping(path)) {\n       // CONCRETE structure entries label only the container node's shape:\n       // an ancestor structure entry does not apply to a read strictly\n       // below it (same exact-path rule as `labelAtPath`); as a descendant\n",
+  "benchmark": {
+    "path": "packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+    "sha256": "a032dc07b6b4d23c5fb01fbd0584a0dc9e7dddec77e889173edb8e93bdca589f"
+  },
+  "validation": {
+    "runner": "1409 tests / 9929 steps / 0 failed / 1 ignored step",
+    "cfc": "184 tests / 1786 steps / 0 failed; final focused index and collector: 2 tests / 12 steps / 0 failed",
+    "typecheck": "46 groups passed",
+    "format": "6336 files checked",
+    "lint": "6011 files checked",
+    "historyIndex": "271 entries covering 341 documents",
+    "review": "Independent subagent; all findings addressed"
+  }
+}

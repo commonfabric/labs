@@ -4,14 +4,22 @@ Normative expansion of [README.md](README.md) §3.5. One entry per
 built-in family; an implementer should be able to port a built-in to the
 serving loop from its row plus the referenced sections.
 
-## Anchors (verified on main, 2026-08-02 — re-verify before coding)
+## Anchors
 
-- Inventory: `packages/runner/src/builtins/` (registered via
+- Inventory: `runtime/runner/src/builtins/` (registered via
   `registerBuiltins(runtime)` in `index.ts`).
 - Raw builtin shape (from `navigate-to.ts`): a factory
   `(inputsCell, sendResult, addCancel, cause, parentCell, runtime) =>
   RawBuiltinResult` whose `action(tx)` runs under the scheduler. Served
   built-ins keep this shape — the serving loop hosts the same runtime.
+
+The negotiated
+[view-scoped client mode](../../features/view-scoped-client-replication.md) uses
+stored output links for raw builtin boundaries. It constructs neither their
+factories nor request-input hash computations. This also conservatively defers
+pure raw structural builtins and dynamic child setup; the ordinary client's
+speculation permissions below remain broader. The UI keeps authoritative
+pending/error state until the server updates it.
 
 ## 1. Pure structural — serve as-is, speculable
 
@@ -61,10 +69,11 @@ reported rather than written into the conversation.
 | built-in | request inputs (memo key basis) | result cell | authority | notes |
 | --- | --- | --- | --- | --- |
 | `fetch` (`fetchData`) | url, method, headers (allowlisted), body, response schema | `{ result?, error?, pending }`; the memo hash is committed in the internal cell `{requestId, lastActivity, inputHash}` (`fetch.ts`) | capability handle bound at wiring (README §3.8) | redirects/deadlines per existing `fetch-request-deadlines` doc; the memo base is `` `${kind.name}:${inputHash}` ``; the served outbox key also names the target document and its resolved user or session instance |
-| `fetch-program` | program source ref + integrity | compiled program ref | same | feeds `compile-and-run` |
+| `fetch-program` | URL | `{ pending, result?, error? }`; successful `result` contains source `files` and `main` | same | the durable cache is keyed by input hash; served outbox keys also name the cache document and resolved user or session instance |
 | `llm` (`generateText` / `generateObject`) | model, messages/prompt, schema, params | settled result only (protocol.md §6 — no partial commits in v2); `requestHash` on the result cell selects the pending request and accompanies its settled result or error | broker-held provider keys; grant from handle | temperature etc. are inputs, so nondeterminism is memo-stable by construction |
 | `llm-dialog` | dialog state + params | settled turns | same | multi-turn = new key per turn |
-| `sqlite*` | database link, statement, params, reader principal | one cleared result cell per (query, reader) | read served under the reader's clearance | clearance = per-reader materialization (RULED 2026-08-02) — see below |
+| `sqlite*` | database link, statement, params, `reactOn`, optional `requestKey`, declared ceiling, `onExceed`, `readClearance`, reader principal and applicable session, the run's effective read ceiling (the serving runtime's option met with the ceiling of the session the run acts as — `WaveRunContext.readCeiling`, serving-loop.md §3c) | one cleared result cell per (query, reader) | read served under the reader's clearance and the run's ceiling | clearance = per-reader materialization (RULED 2026-08-02) — see below; runtime ceilings filter session-scoped results, giving different sessions distinct cells and hashes; shared results retain their complete labels and each cell read enforces the observing run’s ceiling |
+| `agent` | task text, input links, result schema, `maxConfidentiality`, tool names | `{ pending, result?, error?, requestHash?, run?, host? }`; `result` and `run` are links, to the result document the run's harness wrote and to the `AgentRun` record | the requester's, held by the runner that claims the record | the outbox effect creates the `AgentRun` record (per user, in the requesting space) and indexes it in the requester's home space; the result cell derives from the record, so the memo is the record's existence, and a node that finds a `queued` record it did not stage indexes it again; behind the `agentBuiltin` flag |
 
 The shared `fetch.ts` builtins retain independent request lifecycles for each
 served result instance. The requesting run's identity resolves the outbox key
@@ -84,6 +93,45 @@ requests selecting another target for the same binding. Distinct bindings can
 announce a shared result independently without changing another request's
 result fields. Unstamped client runs use the runtime's own identity and keep
 one local lifecycle.
+
+`fetchProgram` retains accepted requests per resolved cache instance and input
+hash, including requests waiting for dispatch. Cell handles are shared per
+symbolic scope; each request captures its issuing identity for completion,
+refusal, and teardown reads and writes. Different URLs may resolve concurrently
+and remain cached, so returning to an earlier URL can use its original request.
+Only the selected URL is projected into the published result. Stopping the node
+releases its accepted claims and suppresses writeback from every dispatched
+resolution. Cancellation does not reach `HttpProgramResolver` network requests.
+Accepted publication owns the raw node's physical binding independently from
+cache state. A late refusal cannot replace another actor's accepted target, while
+distinct bindings can announce the same pending result. Attempts for one physical
+binding share an accepted-publication sequence; a retry supersedes an earlier
+refusal only when its publication commits. Staging retains one record per binding
+and target, including after a refusal write fails, until an accepted publication
+covers it or the node stops. A rejected release check
+releases a claim with no dispatched owner. Accepted request records retire when
+their work settles.
+
+Served `llmDialog` captures the issuing handler's identity for transcript reads,
+claim checks, and turn-completion writes. Each asynchronous read phase uses a
+fresh transaction for that identity. Cell handles are shared per symbolic
+scope, while active turns are tracked per resolved result instance and retire
+when their model, tool, and error-write work settles. Stream markers are
+initialized independently in each instance. A cancellation takes effect only
+after its transaction and wave accept; withdrawing it leaves the accepted turn
+running. Refusal restores a binding while its attempt owns that physical
+publication coordinate; an accepted selection of another target supersedes it,
+while a withdrawn publication does not. Refusal does not append an assistant
+response for an uncommitted user message. Accepted claims retain local ownership
+before outbox dispatch, even when the stored `lastActivity` timestamp is older
+than the five-minute threshold for considering another replica's request
+inactive (`REQUEST_TIMEOUT` in `llm-dialog.ts`). Graph stop aborts active turns
+and clears matching accepted claims; later acceptance or
+dispatch cannot restart the stopped dialog. A provider release rejection clears
+its undispatched claim without replacing an active turn. These lifecycle
+guarantees do not establish actor partitioning for management-tool reads or the
+tool input integrity gate; those remain tracked under verification-coverage.md
+OW28 and OW53.
 
 Served `llm`, `generateText`, and `generateObject` bind lifecycle state and
 outbox identity to the resolved output instance. The pending request writes
@@ -106,11 +154,64 @@ state, so a scope change can return to an existing target. Settled in-memory
 instance state retires once no staging or dispatched work owns it; durable
 result cells retain memoization.
 
+`agent` differs from the rest of the table in what its effect does: nothing is
+sent. The post-commit effect writes an `AgentRun` record — the request fields,
+`state: queued` — in the requesting space under the requester's user instance,
+re-reading the request under its own transaction so the record carries that
+read's labels, and appends a `{run, host}` entry to the home-space index a
+runner process subscribes to. The record commits outside the wave, as an effect
+completion does. The index entry is a bookkeeping write that seals into the
+wave, and when the requester's home space is not the served space it crosses
+there on the delegated carriage of the run that staged the request
+(serving-loop.md §3d). A wave that drops the index write has it issued once
+more. A record whose index write is refused, dropped twice, or withdrawn with
+its wave for any other reason ends `refused`, unless it has been listed or has
+left `queued` by the time that refusal commits. The effect can fail to end the
+record too: its process can stop between the two writes, and a tenure that
+parks abandons the wave and disposes of the runtime that would write the
+refusal. Such a record stays `queued` with no index entry naming it. A node
+that finds a `queued` record it did not stage the request for therefore derives
+its result from the record as any memo hit does, and also enqueues an effect
+that makes the same index write, and the same refusal when that write fails.
+The index write adds an entry only for a record not already listed, so a record
+that is listed is left as it is. That effect passes the same sink gate as the
+request's first staging. A release check that refuses it after commit leaves the
+record as it is and the result cell following it, and the node's next run
+enqueues the effect again. The runner
+claims the record, runs the harness as the requester, and writes the terminal
+fields as an authored client. The builtin writes the record only to create it,
+or to end it while it is still `queued` and no index lists it, which is what
+keeps the runner's authored writes and the effect's derived writes from ever
+overlapping. Inputs reach the record as links, so what the sink gate measures is
+the task text plus the pointer label of each reference. A request whose
+consumed label exceeds its own `maxConfidentiality` settles with an error before
+it is staged, and one naming a tool the requester's registered runner does not
+offer settles with `INVALID_INPUT` before its record is created.
+
 Named queues retain their issued work when inputs are cleared. Queued
 `generateText` and `generateObject` publish each completion even when a later
 request is queued; `llm` publishes only its latest request's successful result.
 Queue completion writes remain bound to the issuing identity and read the live
 input label basis. This queue behavior applies with server execution on or off.
+
+Served space-local `sqliteQuery` keeps equal non-clearance query hashes across readers,
+while its outbox key and in-flight RPC set resolve the result's user or session
+instance. Each completion and refusal captures its result target and binds the
+issuing identity before reading the stored claim. Pending publication ownership
+is separate for each result and physical output binding; accepted actions and
+refusal publications supersede older targets only after commit and wave
+acceptance. Distinct bindings may link the same pending or settled result.
+These tokens retire on acceptance, refusal, or replacement; memoization stays
+in the result cells.
+
+Foreign `sqliteQuery` resolves the provider from the referenced handle's space,
+narrows results to at least user scope, and includes the reader in request
+identity (with session identity only for session-scoped results). Served foreign
+reads carry the complete scoped reader identity to a server advertising
+`sqliteQueryReader`. That server checks the source-space session and the carried
+reader before and after the read, and resolves scoped databases against the
+carried identity. Space-local queries retain transport-session database selection.
+See [SQLite execution](../sqlite-builtin/04-server-execution-and-transactions.md#referenced-databases-and-reader-authorization).
 
 `sqlite*` row clearance — RULED 2026-08-02: **per-reader
 materialization**, today's shape. The reader principal is part of
@@ -207,7 +308,8 @@ session's `scope_key` (protocol.md §5, T9) — as part of the wave's
 derived commit. The CLIENT half
 subscribes to its effects doc, enacts, acks by nonce. Optimistic
 enactment from the speculative handler run is allowed; the nonce
-reconciles it.
+reconciles it in either order, so an intent that arrives before the
+speculative run seals stands that run's enactment down.
 
 Implementation note: the served half needs the firing session's
 identity — it comes from the event's `firedAt`, which is
@@ -257,8 +359,9 @@ stream is passed to other spaces, which then append intents to it.
 - `wish` home-space materialization under serving — LIFTED by Phase 5
   as **per-demanding-identity wish resolution** (RULED 2026-08-14;
   supersedes the (c)-ruled interim refusal): on a serving runtime the
-  wish's home-space targets (`#favorites`/`#journal`/`#profile`
-  family) resolve against the RUN's demanding identity — the
+  wish's home-space targets (favorite hashtags and the
+  `#favorites`/`#journal`/`#agent_queue`/`#profile` family) resolve against the
+  RUN's demanding identity — the
   demand-supplied instance identity (P2-F's run supply) or the
   event's stamped actor, read from the stamped run context — NEVER
   the service identity (`Runtime.homeSpacePrincipalFor`); a
@@ -267,9 +370,10 @@ stream is passed to other spaces, which then append intents to it.
   resolution backstop). Its home-space bootstrap writes ride
   protocol.md §2b's `.inSpace` sanctioned crossing — authored-class,
   foreign-first, under the demanding principal's acting identity +
-  grant, ADMITTED at the wave's accept gate because the target IS the
-  demander's own home space (the gate's owner-by-identity structural
-  grant, serving-loop.md §3d — carriage alone admits nothing). A
+  grant, ADMITTED at the wave's accept gate because the target's ACL
+  names the demander OWNER of their own home space (the gate's
+  structural grant, serving-loop.md §3d — carriage alone admits
+  nothing). A
   carriage-less or UNGRANTED foreign write — the lunch-wall class,
   and an actor reaching beyond its authority — still refuses at
   accumulation, action-scoped and counted (`foreignWriteRefusals`).

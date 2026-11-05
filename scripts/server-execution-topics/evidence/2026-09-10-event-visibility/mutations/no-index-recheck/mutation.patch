@@ -1,0 +1,14 @@
+--- a/packages/runner/src/executor/space-server.ts
++++ b/packages/runner/src/executor/space-server.ts
+@@ -3111,10 +3111,7 @@
+             stored = ((Engine.read(engine, { id: doc.id })?.value ??
+               {}) as StreamEventsDocValue).entries ?? [];
+             sidecar.stored = stored;
+-            index = stored.findIndex((candidate) =>
+-              candidate?.eventId === entry.eventId &&
+-              candidate?.seq === entry.seq
+-            );
++
+             if (index < 0 || stored[index].consequenced === true) continue;
+             viewEntry = readViewEntry();
+             if (matches(viewEntry)) {

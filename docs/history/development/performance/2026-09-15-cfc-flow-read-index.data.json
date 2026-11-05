@@ -1,0 +1,1499 @@
+{
+  "cpu": "Apple M3 Max",
+  "runtime": "Deno/2.9.4 aarch64-apple-darwin",
+  "rows": {
+    "E=100 R=50": {
+      "before": [
+        {
+          "n": 148,
+          "min": 961292.0,
+          "max": 69134584.0,
+          "avg": 3377180.0,
+          "p75": 1551083.0,
+          "p99": 49505750.0,
+          "p995": 69134584.0,
+          "p999": 69134584.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 292,
+          "min": 1316792.0,
+          "max": 6734459.0,
+          "avg": 1652485.0,
+          "p75": 1610916.0,
+          "p99": 3401750.0,
+          "p995": 3485125.0,
+          "p999": 6734459.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 354,
+          "min": 1116333.0,
+          "max": 2812042.0,
+          "avg": 1366052.0,
+          "p75": 1355500.0,
+          "p99": 2610542.0,
+          "p995": 2746167.0,
+          "p999": 2812042.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 295,
+          "min": 1430459.0,
+          "max": 4036709.0,
+          "avg": 1646293.0,
+          "p75": 1602042.0,
+          "p99": 3234333.0,
+          "p995": 3346375.0,
+          "p999": 4036709.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 372,
+          "min": 970500.0,
+          "max": 3091750.0,
+          "avg": 1309824.0,
+          "p75": 1345041.0,
+          "p99": 2622125.0,
+          "p995": 2783208.0,
+          "p999": 3091750.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ],
+      "after": [
+        {
+          "n": 1214,
+          "min": 181125.0,
+          "max": 6531584.0,
+          "avg": 292211.0,
+          "p75": 287750.0,
+          "p99": 1558625.0,
+          "p995": 2462750.0,
+          "p999": 4063500.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 1189,
+          "min": 241875.0,
+          "max": 3070291.0,
+          "avg": 335253.0,
+          "p75": 316792.0,
+          "p99": 2089583.0,
+          "p995": 2424708.0,
+          "p999": 2899084.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 1001,
+          "min": 282666.0,
+          "max": 20216750.0,
+          "avg": 391909.0,
+          "p75": 327584.0,
+          "p99": 2585833.0,
+          "p995": 3968583.0,
+          "p999": 5270083.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 987,
+          "min": 278625.0,
+          "max": 13984667.0,
+          "avg": 421153.0,
+          "p75": 321792.0,
+          "p99": 4405917.0,
+          "p995": 8063667.0,
+          "p999": 13984667.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 1315,
+          "min": 202333.0,
+          "max": 3819833.0,
+          "avg": 301891.0,
+          "p75": 305792.0,
+          "p99": 1735583.0,
+          "p995": 2271833.0,
+          "p999": 3589042.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ]
+    },
+    "E=100 R=200": {
+      "before": [
+        {
+          "n": 79,
+          "min": 3438166.0,
+          "max": 89605500.0,
+          "avg": 8898632.0,
+          "p75": 6266959.0,
+          "p99": 89605500.0,
+          "p995": 89605500.0,
+          "p999": 89605500.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 92,
+          "min": 5178834.0,
+          "max": 8497542.0,
+          "avg": 5897074.0,
+          "p75": 6256958.0,
+          "p99": 8497542.0,
+          "p995": 8497542.0,
+          "p999": 8497542.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 99,
+          "min": 4434417.0,
+          "max": 7227666.0,
+          "avg": 5361972.0,
+          "p75": 5356583.0,
+          "p99": 7227666.0,
+          "p995": 7227666.0,
+          "p999": 7227666.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 87,
+          "min": 5178125.0,
+          "max": 7281583.0,
+          "avg": 6248222.0,
+          "p75": 6294542.0,
+          "p99": 7281583.0,
+          "p995": 7281583.0,
+          "p999": 7281583.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 89,
+          "min": 5211833.0,
+          "max": 7550459.0,
+          "avg": 6020649.0,
+          "p75": 6243500.0,
+          "p99": 7550459.0,
+          "p995": 7550459.0,
+          "p999": 7550459.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ],
+      "after": [
+        {
+          "n": 629,
+          "min": 455000.0,
+          "max": 17657500.0,
+          "avg": 663843.0,
+          "p75": 590500.0,
+          "p99": 2167167.0,
+          "p995": 3814416.0,
+          "p999": 17657500.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 372,
+          "min": 815042.0,
+          "max": 6479958.0,
+          "avg": 1126567.0,
+          "p75": 956250.0,
+          "p99": 5655750.0,
+          "p995": 6300041.0,
+          "p999": 6479958.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 378,
+          "min": 849000.0,
+          "max": 5788875.0,
+          "avg": 1082311.0,
+          "p75": 975042.0,
+          "p99": 3748167.0,
+          "p995": 4907417.0,
+          "p999": 5788875.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 377,
+          "min": 874458.0,
+          "max": 6892375.0,
+          "avg": 1095600.0,
+          "p75": 959958.0,
+          "p99": 3735625.0,
+          "p995": 6517917.0,
+          "p999": 6892375.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 402,
+          "min": 840291.0,
+          "max": 4066750.0,
+          "avg": 1021200.0,
+          "p75": 929584.0,
+          "p99": 3121417.0,
+          "p995": 3155333.0,
+          "p999": 4066750.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ]
+    },
+    "E=100 R=800": {
+      "before": [
+        {
+          "n": 20,
+          "min": 16249791.0,
+          "max": 143332625.0,
+          "avg": 42760200.0,
+          "p75": 34197500.0,
+          "p99": 143332625.0,
+          "p995": 143332625.0,
+          "p999": 143332625.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 30,
+          "min": 24524917.0,
+          "max": 35217042.0,
+          "avg": 25834736.0,
+          "p75": 26043084.0,
+          "p99": 35217042.0,
+          "p995": 35217042.0,
+          "p999": 35217042.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 30,
+          "min": 18262208.0,
+          "max": 39226792.0,
+          "avg": 25179156.0,
+          "p75": 26823125.0,
+          "p99": 39226792.0,
+          "p995": 39226792.0,
+          "p999": 39226792.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 30,
+          "min": 24420375.0,
+          "max": 36489333.0,
+          "avg": 25694170.0,
+          "p75": 25449708.0,
+          "p99": 36489333.0,
+          "p995": 36489333.0,
+          "p999": 36489333.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 29,
+          "min": 20911833.0,
+          "max": 35881209.0,
+          "avg": 25595750.0,
+          "p75": 26217083.0,
+          "p99": 35881209.0,
+          "p995": 35881209.0,
+          "p999": 35881209.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ],
+      "after": [
+        {
+          "n": 127,
+          "min": 1710125.0,
+          "max": 126418958.0,
+          "avg": 3584976.0,
+          "p75": 2964166.0,
+          "p99": 18350584.0,
+          "p995": 126418958.0,
+          "p999": 126418958.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 107,
+          "min": 3255208.0,
+          "max": 11511875.0,
+          "avg": 4056499.0,
+          "p75": 3928542.0,
+          "p99": 10055875.0,
+          "p995": 11511875.0,
+          "p999": 11511875.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 118,
+          "min": 3285041.0,
+          "max": 7502500.0,
+          "avg": 3690111.0,
+          "p75": 3558958.0,
+          "p99": 7036334.0,
+          "p995": 7502500.0,
+          "p999": 7502500.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 110,
+          "min": 3281916.0,
+          "max": 19097250.0,
+          "avg": 4121894.0,
+          "p75": 4040083.0,
+          "p99": 7802833.0,
+          "p995": 19097250.0,
+          "p999": 19097250.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 156,
+          "min": 2064750.0,
+          "max": 4886875.0,
+          "avg": 2864811.0,
+          "p75": 2990625.0,
+          "p99": 4833833.0,
+          "p995": 4886875.0,
+          "p999": 4886875.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ]
+    },
+    "E=300 R=50": {
+      "before": [
+        {
+          "n": 157,
+          "min": 2645958.0,
+          "max": 9268334.0,
+          "avg": 3265277.0,
+          "p75": 3609792.0,
+          "p99": 8811667.0,
+          "p995": 9268334.0,
+          "p999": 9268334.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 121,
+          "min": 3597167.0,
+          "max": 7736667.0,
+          "avg": 4384701.0,
+          "p75": 4382083.0,
+          "p99": 6791708.0,
+          "p995": 7736667.0,
+          "p999": 7736667.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 132,
+          "min": 3584875.0,
+          "max": 5507166.0,
+          "avg": 4055428.0,
+          "p75": 4316250.0,
+          "p99": 5199959.0,
+          "p995": 5507166.0,
+          "p999": 5507166.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 122,
+          "min": 4076250.0,
+          "max": 7558541.0,
+          "avg": 4379080.0,
+          "p75": 4327666.0,
+          "p99": 5895166.0,
+          "p995": 7558541.0,
+          "p999": 7558541.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 158,
+          "min": 2630000.0,
+          "max": 5208833.0,
+          "avg": 3393351.0,
+          "p75": 3689333.0,
+          "p99": 5051500.0,
+          "p995": 5208833.0,
+          "p999": 5208833.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ],
+      "after": [
+        {
+          "n": 1202,
+          "min": 199750.0,
+          "max": 17071208.0,
+          "avg": 367090.0,
+          "p75": 367666.0,
+          "p99": 1354750.0,
+          "p995": 1897792.0,
+          "p999": 9511750.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 836,
+          "min": 383708.0,
+          "max": 5505709.0,
+          "avg": 518021.0,
+          "p75": 429416.0,
+          "p99": 3190291.0,
+          "p995": 3966625.0,
+          "p999": 5505709.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 846,
+          "min": 391500.0,
+          "max": 7215500.0,
+          "avg": 517329.0,
+          "p75": 429000.0,
+          "p99": 2518541.0,
+          "p995": 2934625.0,
+          "p999": 7215500.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 831,
+          "min": 386916.0,
+          "max": 4355167.0,
+          "avg": 528746.0,
+          "p75": 429250.0,
+          "p99": 3059916.0,
+          "p995": 3534417.0,
+          "p999": 4355167.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 854,
+          "min": 393417.0,
+          "max": 24416250.0,
+          "avg": 510347.0,
+          "p75": 425125.0,
+          "p99": 1829584.0,
+          "p995": 1883084.0,
+          "p999": 24416250.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ]
+    },
+    "E=300 R=200": {
+      "before": [
+        {
+          "n": 52,
+          "min": 9757833.0,
+          "max": 25544083.0,
+          "avg": 12752134.0,
+          "p75": 14439375.0,
+          "p99": 25544083.0,
+          "p995": 25544083.0,
+          "p999": 25544083.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 39,
+          "min": 14310416.0,
+          "max": 18695083.0,
+          "avg": 16982881.0,
+          "p75": 17483791.0,
+          "p99": 18695083.0,
+          "p995": 18695083.0,
+          "p999": 18695083.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 37,
+          "min": 14393666.0,
+          "max": 24753375.0,
+          "avg": 17443874.0,
+          "p75": 17930292.0,
+          "p99": 24753375.0,
+          "p995": 24753375.0,
+          "p999": 24753375.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 38,
+          "min": 12320250.0,
+          "max": 27206833.0,
+          "avg": 16710516.0,
+          "p75": 17830791.0,
+          "p99": 27206833.0,
+          "p995": 27206833.0,
+          "p999": 27206833.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 40,
+          "min": 10808083.0,
+          "max": 22161833.0,
+          "avg": 15561861.0,
+          "p75": 17833000.0,
+          "p99": 22161833.0,
+          "p995": 22161833.0,
+          "p999": 22161833.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ],
+      "after": [
+        {
+          "n": 326,
+          "min": 879958.0,
+          "max": 20085292.0,
+          "avg": 1313827.0,
+          "p75": 1056084.0,
+          "p99": 6448041.0,
+          "p995": 9129167.0,
+          "p999": 20085292.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 252,
+          "min": 1020792.0,
+          "max": 25983583.0,
+          "avg": 1737969.0,
+          "p75": 1146959.0,
+          "p99": 13952875.0,
+          "p995": 23265542.0,
+          "p999": 25983583.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 333,
+          "min": 1017333.0,
+          "max": 7314833.0,
+          "avg": 1255846.0,
+          "p75": 1130000.0,
+          "p99": 4447375.0,
+          "p995": 4539917.0,
+          "p999": 7314833.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 296,
+          "min": 933125.0,
+          "max": 24435458.0,
+          "avg": 1439372.0,
+          "p75": 1129500.0,
+          "p99": 7383083.0,
+          "p995": 8726042.0,
+          "p999": 24435458.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 456,
+          "min": 636458.0,
+          "max": 2821167.0,
+          "avg": 917274.0,
+          "p75": 890292.0,
+          "p99": 2457458.0,
+          "p995": 2609833.0,
+          "p999": 2821167.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ]
+    },
+    "E=300 R=800": {
+      "before": [
+        {
+          "n": 16,
+          "min": 42840291.0,
+          "max": 200655375.0,
+          "avg": 85493133.0,
+          "p75": 95667458.0,
+          "p99": 200655375.0,
+          "p995": 200655375.0,
+          "p999": 200655375.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 17,
+          "min": 60487417.0,
+          "max": 96203875.0,
+          "avg": 73249035.0,
+          "p75": 76308750.0,
+          "p99": 96203875.0,
+          "p995": 96203875.0,
+          "p999": 96203875.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 17,
+          "min": 68303125.0,
+          "max": 75831292.0,
+          "avg": 69689412.0,
+          "p75": 69774000.0,
+          "p99": 75831292.0,
+          "p995": 75831292.0,
+          "p999": 75831292.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 18,
+          "min": 52487375.0,
+          "max": 80428209.0,
+          "avg": 63943781.0,
+          "p75": 68503083.0,
+          "p99": 80428209.0,
+          "p995": 80428209.0,
+          "p999": 80428209.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 18,
+          "min": 48966500.0,
+          "max": 76306292.0,
+          "avg": 58881170.0,
+          "p75": 68319834.0,
+          "p99": 76306292.0,
+          "p995": 76306292.0,
+          "p999": 76306292.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ],
+      "after": [
+        {
+          "n": 119,
+          "min": 2929334.0,
+          "max": 15152667.0,
+          "avg": 3801200.0,
+          "p75": 3660916.0,
+          "p99": 9441125.0,
+          "p995": 15152667.0,
+          "p999": 15152667.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 113,
+          "min": 2980166.0,
+          "max": 9270083.0,
+          "avg": 3908970.0,
+          "p75": 3792958.0,
+          "p99": 8338667.0,
+          "p995": 9270083.0,
+          "p999": 9270083.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 105,
+          "min": 3461167.0,
+          "max": 11980375.0,
+          "avg": 4271295.0,
+          "p75": 4205250.0,
+          "p99": 11193666.0,
+          "p995": 11980375.0,
+          "p999": 11980375.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 107,
+          "min": 3444625.0,
+          "max": 9879334.0,
+          "avg": 4264498.0,
+          "p75": 4331125.0,
+          "p99": 9247917.0,
+          "p995": 9879334.0,
+          "p999": 9879334.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 132,
+          "min": 2503958.0,
+          "max": 5372583.0,
+          "avg": 3274363.0,
+          "p75": 3470875.0,
+          "p99": 5254166.0,
+          "p995": 5372583.0,
+          "p999": 5372583.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ]
+    },
+    "E=1000 R=50": {
+      "before": [
+        {
+          "n": 37,
+          "min": 10082083.0,
+          "max": 77899625.0,
+          "avg": 17496395.0,
+          "p75": 14758458.0,
+          "p99": 77899625.0,
+          "p995": 77899625.0,
+          "p999": 77899625.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 41,
+          "min": 14104666.0,
+          "max": 21295750.0,
+          "avg": 15759994.0,
+          "p75": 16563667.0,
+          "p99": 21295750.0,
+          "p995": 21295750.0,
+          "p999": 21295750.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 47,
+          "min": 11480208.0,
+          "max": 14366625.0,
+          "avg": 13172378.0,
+          "p75": 13742667.0,
+          "p99": 14366625.0,
+          "p995": 14366625.0,
+          "p999": 14366625.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 46,
+          "min": 11817750.0,
+          "max": 18214209.0,
+          "avg": 14129333.0,
+          "p75": 14572625.0,
+          "p99": 18214209.0,
+          "p995": 18214209.0,
+          "p999": 18214209.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 44,
+          "min": 12553375.0,
+          "max": 18195084.0,
+          "avg": 14606383.0,
+          "p75": 14841667.0,
+          "p99": 18195084.0,
+          "p995": 18195084.0,
+          "p999": 18195084.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ],
+      "after": [
+        {
+          "n": 462,
+          "min": 776750.0,
+          "max": 3843083.0,
+          "avg": 1025524.0,
+          "p75": 960459.0,
+          "p99": 2262417.0,
+          "p995": 2374917.0,
+          "p999": 3843083.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 434,
+          "min": 772125.0,
+          "max": 5724542.0,
+          "avg": 1084767.0,
+          "p75": 984125.0,
+          "p99": 3227500.0,
+          "p995": 3574500.0,
+          "p999": 5724542.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 393,
+          "min": 913000.0,
+          "max": 13662541.0,
+          "avg": 1198835.0,
+          "p75": 1092792.0,
+          "p99": 4115500.0,
+          "p995": 5371791.0,
+          "p999": 13662541.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 398,
+          "min": 913458.0,
+          "max": 6451417.0,
+          "avg": 1190668.0,
+          "p75": 1085917.0,
+          "p99": 4524458.0,
+          "p995": 4798208.0,
+          "p999": 6451417.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 474,
+          "min": 653042.0,
+          "max": 7460125.0,
+          "avg": 1000791.0,
+          "p75": 946666.0,
+          "p99": 3142375.0,
+          "p995": 5665583.0,
+          "p999": 7460125.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ]
+    },
+    "E=1000 R=200": {
+      "before": [
+        {
+          "n": 21,
+          "min": 31993083.0,
+          "max": 218704417.0,
+          "avg": 85366935.0,
+          "p75": 132002834.0,
+          "p99": 218704417.0,
+          "p995": 218704417.0,
+          "p999": 218704417.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 19,
+          "min": 50027666.0,
+          "max": 82630375.0,
+          "avg": 62240255.0,
+          "p75": 66942417.0,
+          "p99": 82630375.0,
+          "p995": 82630375.0,
+          "p999": 82630375.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 19,
+          "min": 46517375.0,
+          "max": 112848041.0,
+          "avg": 58107340.0,
+          "p75": 56881500.0,
+          "p99": 112848041.0,
+          "p995": 112848041.0,
+          "p999": 112848041.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 21,
+          "min": 40272667.0,
+          "max": 61694666.0,
+          "avg": 50957818.0,
+          "p75": 56728500.0,
+          "p99": 61694666.0,
+          "p995": 61694666.0,
+          "p999": 61694666.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 22,
+          "min": 34992708.0,
+          "max": 63854750.0,
+          "avg": 48013722.0,
+          "p75": 56206000.0,
+          "p99": 63854750.0,
+          "p995": 63854750.0,
+          "p999": 63854750.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ],
+      "after": [
+        {
+          "n": 244,
+          "min": 1512583.0,
+          "max": 7209583.0,
+          "avg": 1801592.0,
+          "p75": 1673916.0,
+          "p99": 4678000.0,
+          "p995": 5682084.0,
+          "p999": 7209583.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 224,
+          "min": 1542875.0,
+          "max": 8893666.0,
+          "avg": 1889495.0,
+          "p75": 1944958.0,
+          "p99": 4184542.0,
+          "p995": 4254875.0,
+          "p999": 8893666.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 234,
+          "min": 1534209.0,
+          "max": 6077917.0,
+          "avg": 1868345.0,
+          "p75": 1776542.0,
+          "p99": 4980584.0,
+          "p995": 5192792.0,
+          "p999": 6077917.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 228,
+          "min": 1520666.0,
+          "max": 5203208.0,
+          "avg": 1904972.0,
+          "p75": 1880500.0,
+          "p99": 5056875.0,
+          "p995": 5123125.0,
+          "p999": 5203208.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 284,
+          "min": 948459.0,
+          "max": 3352042.0,
+          "avg": 1524878.0,
+          "p75": 1590458.0,
+          "p99": 3266709.0,
+          "p995": 3297250.0,
+          "p999": 3352042.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ]
+    },
+    "E=1000 R=800": {
+      "before": [
+        {
+          "n": 12,
+          "min": 172038125.0,
+          "max": 556118500.0,
+          "avg": 377535542.0,
+          "p75": 530722375.0,
+          "p99": 556118500.0,
+          "p995": 556118500.0,
+          "p999": 556118500.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 13,
+          "min": 181472833.0,
+          "max": 279731625.0,
+          "avg": 205915456.0,
+          "p75": 211665125.0,
+          "p99": 279731625.0,
+          "p995": 279731625.0,
+          "p999": 279731625.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 13,
+          "min": 220484084.0,
+          "max": 249047417.0,
+          "avg": 230434783.0,
+          "p75": 236108959.0,
+          "p99": 249047417.0,
+          "p995": 249047417.0,
+          "p999": 249047417.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 13,
+          "min": 174803000.0,
+          "max": 231623208.0,
+          "avg": 207095077.0,
+          "p75": 227326917.0,
+          "p99": 231623208.0,
+          "p995": 231623208.0,
+          "p999": 231623208.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 13,
+          "min": 170030375.0,
+          "max": 245413333.0,
+          "avg": 216029007.0,
+          "p75": 227159167.0,
+          "p99": 245413333.0,
+          "p995": 245413333.0,
+          "p999": 245413333.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ],
+      "after": [
+        {
+          "n": 90,
+          "min": 3482750.0,
+          "max": 27208583.0,
+          "avg": 5088941.0,
+          "p75": 5194917.0,
+          "p99": 27208583.0,
+          "p995": 27208583.0,
+          "p999": 27208583.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 96,
+          "min": 3657834.0,
+          "max": 8620209.0,
+          "avg": 4700013.0,
+          "p75": 4824333.0,
+          "p99": 8620209.0,
+          "p995": 8620209.0,
+          "p999": 8620209.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 84,
+          "min": 4073000.0,
+          "max": 11666667.0,
+          "avg": 5343888.0,
+          "p75": 6461417.0,
+          "p99": 11666667.0,
+          "p995": 11666667.0,
+          "p999": 11666667.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 83,
+          "min": 4073750.0,
+          "max": 10391333.0,
+          "avg": 5337436.0,
+          "p75": 6167666.0,
+          "p99": 10391333.0,
+          "p995": 10391333.0,
+          "p999": 10391333.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        {
+          "n": 95,
+          "min": 2719917.0,
+          "max": 11860083.0,
+          "avg": 4654914.0,
+          "p75": 4861375.0,
+          "p99": 11860083.0,
+          "p995": 11860083.0,
+          "p999": 11860083.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        }
+      ]
+    }
+  },
+  "fixtureSha256": "f5b1b159ff6ccb98174931ef8a2553adb6de80cf8868aba42c6e849a0ea7edc0",
+  "profiles": {
+    "before": {
+      "cfc": {
+        "effectiveReadLabel": {
+          "count": 10695,
+          "totalMs": 20.992975000002843
+        },
+        "deriveFlowJoin": {
+          "count": 18,
+          "totalMs": 61.63978899999893
+        },
+        "preparedDigestFor": {
+          "count": 36,
+          "totalMs": 1262.8413750000022
+        },
+        "collectConsumedLabel": {
+          "count": 3,
+          "totalMs": 8.500583999999435
+        }
+      },
+      "render": {
+        "11": {
+          "materializeMs": 142.13358300000027,
+          "effectiveReadLabelCount": 332,
+          "effectiveReadLabelMs": 0.40787600000794555
+        },
+        "50": {
+          "materializeMs": 562.9498750000002,
+          "effectiveReadLabelCount": 1463,
+          "effectiveReadLabelMs": 2.49740200000997
+        },
+        "150": {
+          "materializeMs": 4272.867375,
+          "effectiveReadLabelCount": 4363,
+          "effectiveReadLabelMs": 11.93330100000685
+        }
+      },
+      "isPrefixSelfMsByAncestor": {
+        "authoritativeCoverFor": 571.0659999999989,
+        "effectiveReadLabel": 6.787,
+        "other": 1.119
+      }
+    },
+    "after": {
+      "cfc": {
+        "effectiveReadLabel": {
+          "count": 10695,
+          "totalMs": 5.903620000021874
+        },
+        "deriveFlowJoin": {
+          "count": 18,
+          "totalMs": 58.67558199999985
+        },
+        "preparedDigestFor": {
+          "count": 36,
+          "totalMs": 1695.3830429999987
+        },
+        "collectConsumedLabel": {
+          "count": 3,
+          "totalMs": 10.342792000002191
+        }
+      },
+      "render": {
+        "11": {
+          "materializeMs": 125.31524999999965,
+          "effectiveReadLabelCount": 332,
+          "effectiveReadLabelMs": 0.1499590000007629
+        },
+        "50": {
+          "materializeMs": 575.9190000000003,
+          "effectiveReadLabelCount": 1463,
+          "effectiveReadLabelMs": 0.6135589999930744
+        },
+        "150": {
+          "materializeMs": 6139.676374999999,
+          "effectiveReadLabelCount": 4363,
+          "effectiveReadLabelMs": 1.8162100000181454
+        }
+      },
+      "isPrefixSelfMsByAncestor": {
+        "effectiveReadLabel": 0.592,
+        "authoritativeCoverFor": 765.7529999999974,
+        "other": 0.448
+      }
+    }
+  },
+  "runtimeRuns": [
+    {
+      "arm": "after",
+      "trial": 0,
+      "cfc": {
+        "effectiveReadLabel": {
+          "count": 10695,
+          "totalMs": 4.951112999961197
+        },
+        "deriveFlowJoin": {
+          "count": 18,
+          "totalMs": 37.77149999999938
+        },
+        "preparedDigestFor": {
+          "count": 36,
+          "totalMs": 1245.3192909999987
+        },
+        "collectConsumedLabel": {
+          "count": 3,
+          "totalMs": 6.658957999999529
+        }
+      },
+      "renderMs": {
+        "11": 136.6098750000001,
+        "50": 778.9620420000001,
+        "150": 4015.016958
+      }
+    },
+    {
+      "arm": "before",
+      "trial": 0,
+      "cfc": {
+        "effectiveReadLabel": {
+          "count": 10695,
+          "totalMs": 30.41594600007238
+        },
+        "deriveFlowJoin": {
+          "count": 18,
+          "totalMs": 61.65399800000091
+        },
+        "preparedDigestFor": {
+          "count": 36,
+          "totalMs": 1306.0562960000016
+        },
+        "collectConsumedLabel": {
+          "count": 3,
+          "totalMs": 8.895459000000756
+        }
+      },
+      "renderMs": {
+        "11": 131.72133299999996,
+        "50": 690.7731249999997,
+        "150": 4391.233542
+      }
+    },
+    {
+      "arm": "after",
+      "trial": 1,
+      "cfc": {
+        "effectiveReadLabel": {
+          "count": 10695,
+          "totalMs": 4.002216000001681
+        },
+        "deriveFlowJoin": {
+          "count": 18,
+          "totalMs": 30.671584000001076
+        },
+        "preparedDigestFor": {
+          "count": 36,
+          "totalMs": 1072.5059979999996
+        },
+        "collectConsumedLabel": {
+          "count": 3,
+          "totalMs": 6.235831999999846
+        }
+      },
+      "renderMs": {
+        "11": 100.28079200000002,
+        "50": 540.0819160000001,
+        "150": 3567.3442919999998
+      }
+    },
+    {
+      "arm": "before",
+      "trial": 1,
+      "cfc": {
+        "effectiveReadLabel": {
+          "count": 10695,
+          "totalMs": 18.729879000021583
+        },
+        "deriveFlowJoin": {
+          "count": 18,
+          "totalMs": 46.32533400000034
+        },
+        "preparedDigestFor": {
+          "count": 36,
+          "totalMs": 1049.328458
+        },
+        "collectConsumedLabel": {
+          "count": 3,
+          "totalMs": 7.127040999999508
+        }
+      },
+      "renderMs": {
+        "11": 116.18312500000002,
+        "50": 499.75629200000003,
+        "150": 3744.361584
+      }
+    },
+    {
+      "arm": "after",
+      "trial": 2,
+      "cfc": {
+        "effectiveReadLabel": {
+          "count": 10695,
+          "totalMs": 4.394771999997374
+        },
+        "deriveFlowJoin": {
+          "count": 18,
+          "totalMs": 33.04183300000045
+        },
+        "preparedDigestFor": {
+          "count": 36,
+          "totalMs": 998.6092940000005
+        },
+        "collectConsumedLabel": {
+          "count": 3,
+          "totalMs": 7.17145800000003
+        }
+      },
+      "renderMs": {
+        "11": 115.34941600000002,
+        "50": 513.9602500000001,
+        "150": 3526.6735000000003
+      }
+    },
+    {
+      "arm": "before",
+      "trial": 2,
+      "cfc": {
+        "effectiveReadLabel": {
+          "count": 10695,
+          "totalMs": 21.669911999991655
+        },
+        "deriveFlowJoin": {
+          "count": 18,
+          "totalMs": 46.75579400000015
+        },
+        "preparedDigestFor": {
+          "count": 36,
+          "totalMs": 1015.2767120000008
+        },
+        "collectConsumedLabel": {
+          "count": 3,
+          "totalMs": 7.010707999999568
+        }
+      },
+      "renderMs": {
+        "11": 97.1065000000001,
+        "50": 473.43550000000005,
+        "150": 3521.4113340000004
+      }
+    },
+    {
+      "arm": "after",
+      "trial": 3,
+      "cfc": {
+        "effectiveReadLabel": {
+          "count": 10695,
+          "totalMs": 3.9300230000251304
+        },
+        "deriveFlowJoin": {
+          "count": 18,
+          "totalMs": 30.095121999999947
+        },
+        "preparedDigestFor": {
+          "count": 36,
+          "totalMs": 1115.1293739999996
+        },
+        "collectConsumedLabel": {
+          "count": 3,
+          "totalMs": 5.972416999999723
+        }
+      },
+      "renderMs": {
+        "11": 101.77304200000003,
+        "50": 485.45329100000026,
+        "150": 3949.7946250000005
+      }
+    },
+    {
+      "arm": "before",
+      "trial": 3,
+      "cfc": {
+        "effectiveReadLabel": {
+          "count": 10695,
+          "totalMs": 23.43679599999814
+        },
+        "deriveFlowJoin": {
+          "count": 18,
+          "totalMs": 46.1843740000013
+        },
+        "preparedDigestFor": {
+          "count": 36,
+          "totalMs": 981.8481650000015
+        },
+        "collectConsumedLabel": {
+          "count": 3,
+          "totalMs": 8.212667000000692
+        }
+      },
+      "renderMs": {
+        "11": 99.29762499999993,
+        "50": 423.73362499999985,
+        "150": 3501.2941249999994
+      }
+    },
+    {
+      "arm": "after",
+      "trial": 4,
+      "cfc": {
+        "effectiveReadLabel": {
+          "count": 10695,
+          "totalMs": 3.9846730000422212
+        },
+        "deriveFlowJoin": {
+          "count": 18,
+          "totalMs": 26.919539999998506
+        },
+        "preparedDigestFor": {
+          "count": 36,
+          "totalMs": 1043.9864979999993
+        },
+        "collectConsumedLabel": {
+          "count": 3,
+          "totalMs": 7.905124999999998
+        }
+      },
+      "renderMs": {
+        "11": 98.888375,
+        "50": 471.8595839999998,
+        "150": 3449.893
+      }
+    },
+    {
+      "arm": "before",
+      "trial": 4,
+      "cfc": {
+        "effectiveReadLabel": {
+          "count": 10695,
+          "totalMs": 19.75493000001711
+        },
+        "deriveFlowJoin": {
+          "count": 18,
+          "totalMs": 47.12683099999981
+        },
+        "preparedDigestFor": {
+          "count": 36,
+          "totalMs": 1017.0869139999988
+        },
+        "collectConsumedLabel": {
+          "count": 3,
+          "totalMs": 7.10454199999981
+        }
+      },
+      "renderMs": {
+        "11": 96.85312500000009,
+        "50": 530.4181250000001,
+        "150": 3312.9572089999997
+      }
+    }
+  ]
+}

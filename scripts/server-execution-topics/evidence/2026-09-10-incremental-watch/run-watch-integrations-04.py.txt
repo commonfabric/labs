@@ -1,0 +1,11 @@
+from pathlib import Path
+import subprocess,os,json,datetime
+root=Path('/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09');w=Path('/Users/berni/.codex/worktrees/topics-campaign-watch/labs');rows=[]
+tests=['topic-board-fixture','topic-board-child-contract','topic-create-onscreen','sx2-events','lunch-poll-vote','cfc-group-chat-chained-event-gate-multi-runtime']
+for role in ['default','opposite']:
+ env=os.environ.copy();env['EXPERIMENTAL_SERVER_EXECUTION']='true' if role=='default' else 'false'
+ cmd=['deno','run','-A','tools/server-execution-topics/run-arm.ts',role,str(root/f'runs/watch-integration-{role}-04'),'correctness','test','--no-check','-A',*[f'packages/patterns/integration/{name}.test.ts' for name in tests]]
+ log=root/f'validation/watch-integration-{role}-04.log';row={'role':role,'command':cmd,'parentExecutionFlag':env['EXPERIMENTAL_SERVER_EXECUTION'],'startedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()};rows.append(row)
+ with log.open('w') as f:r=subprocess.run(cmd,cwd=w,env=env,stdout=f,stderr=subprocess.STDOUT)
+ row.update(exitCode=r.returncode,endedAt=datetime.datetime.now(datetime.timezone.utc).isoformat());(root/'metadata/watch-integrations-04.json').write_text(json.dumps(rows,indent=2)+'\n');print(role,r.returncode,flush=True)
+ if r.returncode:raise SystemExit(r.returncode)

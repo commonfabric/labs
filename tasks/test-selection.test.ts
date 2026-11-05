@@ -1,4 +1,4 @@
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -8,6 +8,7 @@ import {
   explainLines,
   gatedMembers,
   laneArgument,
+  momentArgument,
   parseIdentityArgument,
   planLines,
   type Sources,
@@ -15,19 +16,19 @@ import {
   verdictFor,
 } from "./test-selection.ts";
 import type { TestIdentity } from "@commonfabric/test-support/records";
+import { type LanePlan, lanePlan, manifestMoment } from "./ci-lane.ts";
 import {
   freeCalibration,
+  repositoryCommittedAt,
   sampleEntry,
   sampleManifest,
 } from "./test-selection/testing.ts";
-import type { ManifestEntry } from "./test-selection/manifest.ts";
+import type { Manifest, ManifestEntry } from "./test-selection/manifest.ts";
+import { alarms } from "./test-selection/health.ts";
 import type { Suite } from "./test-topology/suite.ts";
-import {
-  DIALS,
-  dialValue,
-  EXCLUDED_FROM_COVERAGE_GATE,
-  LANES,
-} from "./test-selection/policy.ts";
+import { coverageGateSuite } from "./test-topology/coverage-gates.ts";
+import { DIALS, EXCLUDED_FROM_COVERAGE_GATE } from "./test-selection/policy.ts";
+import { packageDirOf } from "./package-layout.ts";
 
 const TEST = { k: "unit", s: "memory", n: "space > writes" };
 
@@ -43,14 +44,46 @@ function suiteHolding(units: readonly string[]): Suite {
     needs: ["deno"],
     units: [...units],
     unavailable: [],
+    whole: [],
     locate: () => undefined,
     command: () => Promise.resolve([]),
   };
 }
 
 const TOPOLOGY: Suite[] = [
-  suiteHolding(["packages/memory/test/memory.test.ts"]),
+  {
+    ...suiteHolding(["runtime/memory/test/memory.test.ts"]),
+    measured: [{
+      member: "runtime/memory",
+      reachedBy: ["runtime/memory/"],
+      units: ["runtime/memory/test/memory.test.ts"],
+    }],
+  },
 ];
+
+/**
+ * What the lanes plan over `suites` when `manifest` is the manifest they
+ * resolve. The moment is named, so no checkout is read for one.
+ */
+function planned(
+  manifest: Manifest,
+  suites: readonly Suite[] = TOPOLOGY,
+  of?: number,
+): Promise<LanePlan> {
+  return lanePlan(
+    {
+      lane: 1,
+      ...(of === undefined ? {} : { of }),
+      full: false,
+      dryRun: true,
+      laneCount: false,
+      root: Deno.cwd(),
+      at: "2026-09-01T00:00:00.000Z",
+    },
+    suites,
+    { manifest: () => Promise.resolve({ manifest }) },
+  );
+}
 
 describe("test-selection", () => {
   describe("parseIdentityArgument()", () => {
@@ -96,10 +129,33 @@ describe("test-selection", () => {
 
     it("says an identity with no records is mandatory", () => {
       const lines = explainLines(manifest(), { ...TEST, n: "never seen" });
-      expect(lines.join("\n")).toContain("no record of it");
+      expect(lines.join("\n")).toContain(
+        "An available unit no manifest knows is mandatory",
+      );
     });
 
-    it("prints the catches behind a score", () => {
+    it("says what does not run rather than only what does", () => {
+      // The name reaches the same branch a new test's does, and nothing
+      // in an identity tells any of them apart, so the answer has to
+      // cover them all rather than assert one for every case. A unit a
+      // configuration declares unavailable gets no stand-in, so nothing
+      // in it is mandatory either.
+      const lines = explainLines(manifest(), { ...TEST, n: "never seen" });
+      expect(lines.join("\n")).toContain(
+        "Nothing runs a test the tree no longer holds",
+      );
+      expect(lines.join("\n")).toContain("declares unavailable");
+    });
+
+    it("does not claim the store or the tree holds nothing for it", () => {
+      // The store holds every record it ever took, and the tree holds
+      // every identity whose records do not say which unit they are in.
+      // What has no entry is the manifest.
+      const lines = explainLines(manifest(), { ...TEST, n: "never seen" });
+      expect(lines.join("\n")).toContain("The manifest has no entry for it");
+    });
+
+    it("prints the new real test failures behind a score", () => {
       const held = manifest();
       held.entries[0]!.inputs = {
         catches: 3,
@@ -108,15 +164,15 @@ describe("test-selection", () => {
         lastCatch: "2026-08-20",
       };
       const text = explainLines(held, TEST, { selected: true }).join("\n");
-      expect(text).toContain("3.0 weighted catches");
+      expect(text).toContain("3.0 weighted new real test failures");
       expect(text).toContain("2 sources");
       expect(text).toContain("2026-08-20");
       expect(text).toContain("selects it");
     });
 
-    it("says a test has never caught anything", () => {
+    it("says a test has never had a new real test failure", () => {
       expect(explainLines(manifest(), TEST).join("\n")).toContain(
-        "never caught anything",
+        "never had a new real test failure",
       );
     });
 
@@ -130,6 +186,26 @@ describe("test-selection", () => {
       expect(explainLines(held, TEST).join("\n")).toContain(
         "too flaky to judge a change by",
       );
+    });
+
+    it("says how many runs a withheld identity a change reaches gets", () => {
+      // The three answers do not partition: a withheld identity the
+      // change reaches is selected, and has a repeat count like any
+      // other.
+      const held = manifest();
+      held.withheld = [{
+        test: TEST,
+        suite: "workspace-unit",
+        reason: "flaky",
+      }];
+      const text = explainLines(held, TEST, { selected: true, repeats: 3 })
+        .join("\n");
+      expect(text).toContain("withheld");
+      expect(text).toContain("run 3 times");
+      expect(text).toContain("this commit's manifest selects it");
+      // And nothing that contradicts the line above it: a change that
+      // reaches a withheld test runs it here.
+      expect(text).not.toContain("not here");
     });
 
     it("reports the repeat count the packing settled on", () => {
@@ -162,107 +238,327 @@ describe("test-selection", () => {
       DIALS.forEach((dial, index) => {
         expect(lines[index * 3]).toContain(dial.name);
         expect(lines[index * 3]).toContain(
-          `${dialValue(dial)} ${dial.unit} (${dial.setBy})`,
+          `${dial.value} ${dial.unit} (${dial.setBy})`,
         );
         expect(lines[index * 3 + 1]).toContain(dial.why);
       });
     });
-
-    it("says a dial that is off is off rather than printing nothing", () => {
-      expect(dialLines().join("\n")).toContain("off");
-    });
   });
 
   describe("planLines()", () => {
-    it("summarizes what each lane would run", () => {
+    it("summarizes what each lane would run", async () => {
       const manifest = sampleManifest({
         entries: [
           sampleEntry({ k: "unit", s: "memory", n: "one" }, { cost: 1 }),
           sampleEntry({ k: "unit", s: "memory", n: "two" }, { cost: 1 }),
         ],
       });
-      const text = planLines(manifest, TOPOLOGY, undefined).join("\n");
+      const plan = await planned(manifest);
+      const text = planLines(plan, undefined).join("\n");
       expect(text).toContain("2 identities in this tree");
-      expect(text).toContain(`${LANES} lanes`);
+      expect(text).toContain(`\n${plan.laid.lanes.length} lanes, `);
       expect(text).toContain("lane 1:");
     });
 
-    it("counts the corpus the lanes were packed from", () => {
+    it("counts the corpus the lanes were packed from", async () => {
       // The manifest's own entries are not that corpus: one of these
       // names a unit this tree does not have, and no lane can run it.
       const manifest = sampleManifest({
         entries: [
           sampleEntry({ k: "unit", s: "memory", n: "here" }, {
-            unit: "packages/memory/test/memory.test.ts",
+            unit: "runtime/memory/test/memory.test.ts",
           }),
           sampleEntry({ k: "unit", s: "memory", n: "gone" }, {
-            unit: "packages/memory/test/deleted.test.ts",
+            unit: "runtime/memory/test/deleted.test.ts",
           }),
         ],
       });
-      const text = planLines(manifest, TOPOLOGY, undefined).join("\n");
+      const text = planLines(await planned(manifest), undefined).join("\n");
       expect(text).toContain("1 identities in this tree");
     });
 
-    it("prints one lane when asked for one", () => {
+    it("prints one lane when asked for one", async () => {
       const manifest = sampleManifest({
         entries: [sampleEntry({ k: "unit", s: "memory", n: "one" })],
       });
-      const text = planLines(manifest, TOPOLOGY, 3).join("\n");
+      const text = planLines(await planned(manifest, TOPOLOGY, 5), 3)
+        .join("\n");
       expect(text).toContain("lane 3:");
       expect(text).not.toContain("lane 1:");
     });
 
-    it("names an identity no lane can hold", () => {
+    it("names a suite no lane can hold, and not the tests inside it", async () => {
+      // Every identity of such a suite is past the bound by the suite's
+      // charge, so the report names the suite and drops the identities
+      // that would otherwise repeat it once each.
+      const manifest = sampleManifest({
+        entries: [
+          sampleEntry({ k: "unit", s: "memory", n: "cheap" }, {
+            cost: 0.001,
+            unit: "runtime/memory/test/memory.test.ts",
+          }),
+        ],
+        calibration: {
+          setupCost: {},
+          suites: {
+            "workspace-unit": { overhead: 400, correction: 1, unitOverhead: 0 },
+          },
+          prologue: 0,
+        },
+      });
+      const text = planLines(await planned(manifest), undefined).join("\n");
+      expect(text).toContain(
+        "workspace-unit costs 6m40s before it runs anything",
+      );
+      expect(text).toContain("none of its 1 tests ran");
+      expect(text).not.toContain("unschedulable");
+    });
+
+    it("says how far the mandatory set alone puts a lane past its budget", async () => {
+      // A unit no manifest has seen is mandatory, and is charged what its
+      // suite's measured units cost. Ten of them at 150 seconds each are
+      // more than the lanes together can hold; one is not.
+      const tree = (added: number) =>
+        suiteHolding([
+          "runtime/memory/test/memory.test.ts",
+          ...Array.from(
+            { length: added },
+            (_, n) => `runtime/memory/test/new-${n}.test.ts`,
+          ),
+        ]);
+      const manifest = sampleManifest({
+        entries: [sampleEntry({ k: "unit", s: "memory", n: "measured" }, {
+          cost: 150,
+          unit: "runtime/memory/test/memory.test.ts",
+        })],
+      });
+      expect(
+        planLines(await planned(manifest, [tree(10)], 5), undefined)
+          .join("\n"),
+      ).toMatch(
+        /the mandatory set alone puts a lane (\d+(\.\d)?[hms])+ past its budget/,
+      );
+      expect(
+        planLines(await planned(manifest, [tree(1)], 5), undefined)
+          .join("\n"),
+      ).not
+        .toContain("the mandatory set alone");
+    });
+
+    it("names an identity no lane can hold", async () => {
       const manifest = sampleManifest({
         entries: [sampleEntry({ k: "unit", s: "memory", n: "huge" }, {
           cost: 10_000,
         })],
       });
-      expect(planLines(manifest, TOPOLOGY, undefined).join("\n")).toContain(
-        "unschedulable",
-      );
+      const text = planLines(await planned(manifest), undefined).join("\n");
+      expect(text).toContain("unschedulable");
     });
   });
 });
 
 describe("coverageLines()", () => {
-  it("names the baseline a member is gated against", () => {
+  const workspaceUnit = {
+    suite: "workspace-unit",
+    set: {
+      member: "runtime/memory",
+      reachedBy: ["runtime/memory/"],
+      units: ["runtime/memory/one.test.ts", "runtime/memory/two.test.ts"],
+    },
+  };
+  const first = (commits: readonly string[]) => Promise.resolve(commits[0]);
+
+  it("names the baseline a measured set is compared against", async () => {
     const manifest = sampleManifest({
       coverageBaselines: [{
-        member: "packages/memory",
+        suite: "workspace-unit",
+        member: "runtime/memory",
         commit: "abcdef0",
-        day: "2026-08-20",
+        createdAt: "2026-08-20T00:00:00.000Z",
         uncoveredLines: 41,
       }],
     });
-    expect(coverageLines(manifest, ["packages/memory"])).toEqual([
-      "packages/memory  gated, against 41 uncovered lines at abcdef0",
+    expect(await coverageLines(manifest, [workspaceUnit], [], first)).toEqual([
+      "workspace-unit/runtime/memory  2 units, against 41 uncovered lines " +
+      "at abcdef0; its gate has no record yet",
+    ]);
+    expect(
+      (await coverageLines(
+        manifest,
+        [{
+          suite: "workspace-unit",
+          set: { ...workspaceUnit.set, units: ["runtime/memory/one.test.ts"] },
+        }],
+        [],
+        first,
+      ))[0],
+    ).toContain("1 unit,");
+  });
+
+  it("keeps two sets over one member apart", async () => {
+    const manifest = sampleManifest({
+      coverageBaselines: [
+        {
+          suite: "workspace-unit",
+          member: "runtime/memory",
+          commit: "abcdef0",
+          createdAt: "2026-08-20T00:00:00.000Z",
+          uncoveredLines: 41,
+        },
+        {
+          suite: "memory-integration",
+          member: "runtime/memory",
+          commit: "abcdef0",
+          createdAt: "2026-08-20T00:00:00.000Z",
+          uncoveredLines: 900,
+        },
+      ],
+    });
+    const lines = await coverageLines(
+      manifest,
+      [
+        workspaceUnit,
+        { suite: "memory-integration", set: workspaceUnit.set },
+      ],
+      [],
+      first,
+    );
+    expect(lines[0]).toContain("41 uncovered lines");
+    expect(lines[1]).toContain("900 uncovered lines");
+  });
+
+  it("names the baseline at the newest commit the checkout holds", async () => {
+    const at = (commit: string, uncoveredLines: number) => ({
+      suite: "workspace-unit",
+      member: "runtime/memory",
+      commit,
+      createdAt: "2026-08-20T00:00:00.000Z",
+      uncoveredLines,
+    });
+    // Newest first, as the publisher orders them: "ahead" is a commit the
+    // checkout does not hold, "near" its newest that it does.
+    const manifest = sampleManifest({
+      coverageBaselines: [at("ahead", 10), at("near", 20), at("far", 30)],
+    });
+    const history = ["near", "far"];
+    const asked: (readonly string[])[] = [];
+    const lines = await coverageLines(manifest, [workspaceUnit], [], (
+      commits,
+    ) => {
+      asked.push(commits);
+      return Promise.resolve(
+        history.find((commit) => commits.includes(commit)),
+      );
+    });
+    expect(lines).toEqual([
+      "workspace-unit/runtime/memory  2 units, against 20 uncovered lines " +
+      "at near; its gate has no record yet",
+    ]);
+    expect(asked).toEqual([["ahead", "near", "far"]]);
+    expect(
+      await coverageLines(
+        manifest,
+        [workspaceUnit],
+        [],
+        () => Promise.resolve(undefined),
+      ),
+    ).toEqual([
+      "workspace-unit/runtime/memory  2 units, against no baseline yet; " +
+      "its gate has no record yet",
     ]);
   });
 
-  it("says so when a member has no baseline yet", () => {
-    const lines = coverageLines(sampleManifest(), ["packages/memory"]);
-    expect(lines).toEqual(["packages/memory  gated, against no baseline yet"]);
+  it("says so when a set has no baseline yet", async () => {
+    const lines = await coverageLines(
+      sampleManifest(),
+      [workspaceUnit],
+      [],
+      first,
+    );
+    expect(lines).toEqual([
+      "workspace-unit/runtime/memory  2 units, against no baseline yet; " +
+      "its gate has no record yet",
+    ]);
   });
 
-  it("gives the reason for a member the gate leaves alone", () => {
+  it("names the score of a set's gate", async () => {
+    const manifest = sampleManifest({
+      entries: [sampleEntry(
+        { k: "gate", s: "memory", n: "coverage-gate workspace-unit" },
+        {
+          suite: "coverage-gate",
+          unit: "workspace-unit/runtime/memory",
+          score: 0.4,
+        },
+      )],
+    });
+    expect((await coverageLines(manifest, [workspaceUnit], [], first))[0])
+      .toContain("its gate scores 0.400");
+  });
+
+  it("gives the reason for a member that carries no set", async () => {
     const member = [...EXCLUDED_FROM_COVERAGE_GATE.keys()][0]!;
-    const lines = coverageLines(sampleManifest(), [member]);
-    expect(lines[0]).toContain("not gated: ");
+    const lines = await coverageLines(sampleManifest(), [], [member], first);
+    expect(lines[0]).toContain("no measured set: ");
     expect(lines[0]).toContain(EXCLUDED_FROM_COVERAGE_GATE.get(member)!);
   });
 
-  it("reads a manifest that is missing the same as one with no baselines", () => {
-    const members = ["packages/memory", "packages/runner"];
-    expect(coverageLines(undefined, members))
-      .toEqual(coverageLines(sampleManifest(), members));
+  it("says a member outside the list has no Deno-only tests", async () => {
+    const lines = await coverageLines(sampleManifest(), [], [
+      "runtime/nowhere",
+    ], first);
+    expect(lines[0]).toContain("no measured set: it has no Deno-only tests");
   });
 
-  it("pads every member to one width, so the column lines up", () => {
-    const lines = coverageLines(undefined, ["packages/a", "packages/longer"]);
-    const at = lines.map((line) => line.indexOf("gated"));
+  it("leaves a member that carries a set out of the ungated half", async () => {
+    const lines = await coverageLines(
+      sampleManifest(),
+      [workspaceUnit],
+      ["runtime/memory"],
+      first,
+    );
+    expect(lines).toHaveLength(1);
+  });
+
+  it("reads a manifest that is missing the same as one with no baselines", async () => {
+    expect(
+      await coverageLines(
+        undefined,
+        [workspaceUnit],
+        ["runtime/runner"],
+        first,
+      ),
+    )
+      .toEqual(
+        await coverageLines(sampleManifest(), [workspaceUnit], [
+          "runtime/runner",
+        ], first),
+      );
+  });
+
+  it("pads every name to one width, so the column lines up", async () => {
+    const lines = await coverageLines(undefined, [], [
+      "runtime/a",
+      "runtime/longer",
+    ], first);
+    const at = lines.map((line) => line.indexOf("no measured set"));
     expect(at[0]).toBe(at[1]);
+  });
+});
+
+describe("momentArgument()", () => {
+  it("is nothing at all when the flag is absent", () => {
+    expect(momentArgument(["plan", "--dry-run"])).toBeUndefined();
+  });
+
+  it("returns the moment in UTC, whatever offset it was written with", () => {
+    expect(momentArgument(["coverage", "--at", "2026-09-01T10:41:59-07:00"]))
+      .toBe("2026-09-01T17:41:59.000Z");
+  });
+
+  it("rejects what is not a moment, including a missing value", () => {
+    expect(momentArgument(["coverage", "--at", "soon"])).toBe("invalid");
+    expect(momentArgument(["coverage", "--at"])).toBe("invalid");
   });
 });
 
@@ -271,14 +567,14 @@ describe("laneArgument()", () => {
     expect(laneArgument(["plan", "--dry-run"])).toBeUndefined();
   });
 
-  it("takes a lane inside the range", () => {
+  it("takes any lane from one up, which the plan then holds to its count", () => {
     expect(laneArgument(["plan", "--lane", "1"])).toBe(1);
-    expect(laneArgument(["plan", "--lane", String(LANES)])).toBe(LANES);
+    expect(laneArgument(["plan", "--lane", "40"])).toBe(40);
   });
 
-  it("rejects a lane outside the range, at either end", () => {
+  it("rejects a lane below one", () => {
     expect(laneArgument(["plan", "--lane", "0"])).toBe("invalid");
-    expect(laneArgument(["plan", "--lane", String(LANES + 1)])).toBe("invalid");
+    expect(laneArgument(["plan", "--lane", "-1"])).toBe("invalid");
   });
 
   it("rejects what is not a whole number, including a missing value", () => {
@@ -295,9 +591,9 @@ describe("verdictFor()", () => {
   const manifestOf = (...entries: ManifestEntry[]) =>
     sampleManifest({ entries, calibration: freeCalibration() });
 
-  it("reports a test the packer takes, and how often it takes it", () => {
+  it("reports a test the packer takes, and how often it takes it", async () => {
     const manifest = sampleManifest({ entries: [entry("cheap", 0.1)] });
-    const verdict = verdictFor(manifest, TOPOLOGY, {
+    const verdict = verdictFor(await planned(manifest), {
       k: "unit",
       s: "memory",
       n: "cheap",
@@ -307,35 +603,69 @@ describe("verdictFor()", () => {
     expect(verdict.unschedulable).toBeUndefined();
   });
 
-  it("carries the cost the bound was compared against", () => {
+  it("carries the cost the bound was compared against", async () => {
     const manifest = sampleManifest({
       entries: [sampleEntry({ k: "unit", s: "memory", n: "heavy" }, {
         cost: 200,
-        unit: "packages/memory/test/memory.test.ts",
+        unit: "runtime/memory/test/memory.test.ts",
       })],
       calibration: {
         setupCost: {},
-        suites: { "workspace-unit": { overhead: 400, correction: 1 } },
-        unitOverhead: {},
+        suites: {
+          "workspace-unit": { overhead: 400, correction: 1, unitOverhead: 0 },
+        },
         prologue: 0,
       },
     });
     const test = { k: "unit", s: "memory", n: "heavy" };
-    const verdict = verdictFor(manifest, TOPOLOGY, test);
+    const verdict = verdictFor(await planned(manifest), test);
     expect(verdict.unschedulable).toBe(true);
     expect(verdict.loneSeconds).toBeCloseTo(600, 5);
     // What `explain` prints is that figure, not the entry's own 200: a
-    // reader told "200s is past the bound" would go looking for a bound
-    // below 200 that does not exist.
+    // reader told "3m20s is past the bound" would go looking for a bound
+    // below 3m20s that does not exist.
     const said = explainLines(manifest, test, verdict).join("\n");
-    expect(said).toContain("600.0s is past the bound");
-    expect(said).not.toContain("200.0s is past the bound");
+    expect(said).toContain("10m is past the bound");
+    expect(said).not.toContain("3m20s is past the bound");
   });
 
-  it("reports a test no lane could hold as unschedulable, not selected", () => {
+  it("says whether the plan placed anything beyond what had to run", async () => {
+    const test = { k: "unit", s: "memory", n: "space > writes" };
+    const roomy = await planned(manifestOf(entry("space > writes", 0.1)));
+    expect(verdictFor(roomy, test).crowded).toBeUndefined();
+    const crowded = verdictFor(
+      { ...roomy, laid: { ...roomy.laid, lanes: [] } },
+      test,
+    );
+    expect(crowded.crowded).toBe(true);
+    const manifest = crowded.corpus;
+    const passedOver = explainLines(manifest, test, { selected: false });
+    expect(passedOver.join("\n")).toContain(
+      "leave of their budget with other tests",
+    );
+    expect(passedOver.join("\n")).not.toContain("no room");
+    expect(explainLines(manifest, test, crowded).join("\n")).toContain(
+      "leave no room in the lanes for anything else",
+    );
+  });
+
+  it("says a test was held back with its unit", async () => {
+    const test = { k: "unit", s: "memory", n: "space > writes" };
+    const roomy = await planned(manifestOf(entry("space > writes", 0.1)));
+    expect(verdictFor(roomy, test).heldWithUnit).toBeUndefined();
+    const verdict = verdictFor({
+      ...roomy,
+      laid: { ...roomy.laid, lanes: [], heldWithUnit: [test] },
+    }, test);
+    expect(verdict.heldWithUnit).toBe(true);
+    const text = explainLines(verdict.corpus, test, verdict).join("\n");
+    expect(text).toContain("held back with its unit");
+    expect(text).not.toContain("no room");
+  });
+
+  it("reports a test no lane could hold as unschedulable, not selected", async () => {
     const verdict = verdictFor(
-      manifestOf(entry("enormous", 100_000)),
-      TOPOLOGY,
+      await planned(manifestOf(entry("enormous", 100_000))),
       {
         k: "unit",
         s: "memory",
@@ -346,9 +676,9 @@ describe("verdictFor()", () => {
     expect(verdict.unschedulable).toBe(true);
   });
 
-  it("reports a test the manifest has never heard of as unselected", () => {
+  it("reports a test the manifest has never heard of as unselected", async () => {
     const manifest = manifestOf(entry("cheap", 0.1));
-    const verdict = verdictFor(manifest, TOPOLOGY, {
+    const verdict = verdictFor(await planned(manifest), {
       k: "unit",
       s: "memory",
       n: "absent",
@@ -358,7 +688,7 @@ describe("verdictFor()", () => {
     expect(verdict.unschedulable).toBeUndefined();
   });
 
-  it("hands back the corpus its verdict was reached over", () => {
+  it("hands back the corpus its verdict was reached over", async () => {
     // Whatever explains an identity has to explain it against the set
     // the verdict came from. The published manifest is a different set:
     // it names units this tree has dropped and misses units it has
@@ -366,27 +696,27 @@ describe("verdictFor()", () => {
     // test the verdict beside it says a lane runs.
     const manifest = manifestOf(
       sampleEntry({ k: "unit", s: "memory", n: "gone" }, {
-        unit: "packages/memory/test/deleted.test.ts",
+        unit: "runtime/memory/test/deleted.test.ts",
       }),
     );
-    const verdict = verdictFor(manifest, TOPOLOGY, {
+    const verdict = verdictFor(await planned(manifest), {
       k: "unit",
       s: "memory",
       n: "gone",
     });
     const units = verdict.corpus.entries.map((e) => e.unit);
-    expect(units).not.toContain("packages/memory/test/deleted.test.ts");
-    expect(units).toContain("packages/memory/test/memory.test.ts");
+    expect(units).not.toContain("runtime/memory/test/deleted.test.ts");
+    expect(units).toContain("runtime/memory/test/memory.test.ts");
   });
 
-  it("tells two configurations of one name apart", () => {
+  it("tells two configurations of one name apart", async () => {
     const manifest = manifestOf(
       sampleEntry({ k: "unit", s: "memory", n: "both", v: "on" }, {
         cost: 0.1,
       }),
     );
     expect(
-      verdictFor(manifest, TOPOLOGY, {
+      verdictFor(await planned(manifest), {
         k: "unit",
         s: "memory",
         n: "both",
@@ -395,7 +725,7 @@ describe("verdictFor()", () => {
         .selected,
     ).toBe(true);
     expect(
-      verdictFor(manifest, TOPOLOGY, { k: "unit", s: "memory", n: "both" })
+      verdictFor(await planned(manifest), { k: "unit", s: "memory", n: "both" })
         .selected,
     ).toBe(false);
   });
@@ -405,13 +735,12 @@ describe("gatedMembers()", () => {
   it("is every package in the workspace, and nothing else", async () => {
     const members = await gatedMembers();
     expect(members.length).toBeGreaterThan(10);
-    expect(members.every((member) => member.startsWith("packages/"))).toBe(
-      true,
-    );
+    expect(members.every((member) => packageDirOf(member) !== undefined))
+      .toBe(true);
     // The workspace file lists members with a leading "./", and the
     // coverage baselines a manifest carries do not.
     expect(members.some((member) => member.startsWith("./"))).toBe(false);
-    expect(members).toContain("packages/test-support");
+    expect(members).toContain("base/test-support");
     expect([...members].sort()).toEqual(members);
   });
 
@@ -430,6 +759,7 @@ describe("dispatch()", () => {
   async function ran(
     args: readonly string[],
     sources: Partial<Sources> = {},
+    root?: string,
   ): Promise<{ code: number; out: string; err: string; stop?: Stop }> {
     const out: string[] = [];
     const err: string[] = [];
@@ -439,13 +769,15 @@ describe("dispatch()", () => {
     console.error = (...parts: unknown[]) => err.push(parts.join(" "));
     try {
       const code = await dispatch(args, {
-        manifest: () => Promise.resolve(sampleManifest()),
-        members: () => Promise.resolve(["packages/memory"]),
+        manifest: () => Promise.resolve({ manifest: sampleManifest() }),
+        members: () => Promise.resolve(["runtime/memory"]),
         aliases: () =>
           Promise.resolve({ resolve: (test: TestIdentity) => test }),
         topology: () => Promise.resolve(TOPOLOGY),
+        nearest: () => (commits: readonly string[]) =>
+          Promise.resolve(commits[0]),
         ...sources,
-      } as Sources);
+      } as Sources, root);
       return { code, out: out.join("\n"), err: err.join("\n") };
     } catch (error) {
       if (!(error instanceof Stop)) throw error;
@@ -455,6 +787,156 @@ describe("dispatch()", () => {
       console.error = warn;
     }
   }
+
+  describe("the manifest it reads", () => {
+    // What every mode reads is the manifest the lanes testing this
+    // checkout's commit read: the newest the store holds at or before
+    // the commit was made, not the newest there is.
+
+    const roots: string[] = [];
+
+    afterEach(async () => {
+      for (const root of roots.splice(0)) {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    /** A repository whose one commit was made at `committed`. */
+    async function committedAt(committed: string): Promise<string> {
+      const root = await repositoryCommittedAt(committed);
+      roots.push(root);
+      return root;
+    }
+
+    /**
+     * A store holding a manifest generated on each of `days`, which
+     * resolves a moment the way the real one does, and records every
+     * moment it was asked about.
+     */
+    function storeOf(days: readonly string[]) {
+      const asked: string[] = [];
+      const manifest: Sources["manifest"] = ({ at }) => {
+        asked.push(at);
+        const newest = days.filter((day) => day <= at).sort().at(-1);
+        return Promise.resolve(
+          newest === undefined ? { absent: `nothing at or before ${at}` } : {
+            manifest: sampleManifest({ generatedAt: newest }),
+            objectName: newest,
+          },
+        );
+      };
+      return { asked, manifest };
+    }
+
+    it("reads the one the commit was made against, not the newest", async () => {
+      const store = storeOf([
+        "2026-08-31T00:00:00.000Z",
+        "2026-09-02T00:00:00.000Z",
+      ]);
+      const root = await committedAt("2026-09-01T10:41:59-07:00");
+      const result = await ran(["plan", "--dry-run"], store, root);
+      expect(result.code).toBe(0);
+      expect(result.out).toContain("manifest of 2026-08-31T00:00:00.000Z");
+      expect(result.out).not.toContain("2026-09-02");
+
+      const later = await committedAt("2026-09-03T00:00:00Z");
+      const newer = await ran(["plan", "--dry-run"], store, later);
+      expect(newer.out).toContain("manifest of 2026-09-02T00:00:00.000Z");
+    });
+
+    it("asks for the moment a lane of the commit asks for, in every mode", async () => {
+      const root = await committedAt("2026-09-01T10:41:59-07:00");
+      const lane = manifestMoment({ root });
+      expect(lane).toBe("2026-09-01T17:41:59.000Z");
+      for (
+        const args of [
+          ["coverage"],
+          ["explain", '["unit","memory","one"]'],
+          ["plan", "--dry-run"],
+          ["plan", "--verify"],
+        ]
+      ) {
+        const store = storeOf(["2026-08-31T00:00:00.000Z"]);
+        await ran(args, store, root);
+        expect({ args, asked: store.asked }).toEqual({ args, asked: [lane] });
+      }
+    });
+
+    it("reads the one current at a moment `--at` names, in every mode", async () => {
+      const root = await committedAt("2026-09-01T10:41:59-07:00");
+      for (
+        const args of [
+          ["coverage"],
+          ["explain", '["unit","memory","one"]'],
+          ["plan", "--dry-run"],
+          ["plan", "--verify"],
+        ]
+      ) {
+        const store = storeOf(["2026-08-31T00:00:00.000Z"]);
+        await ran([...args, "--at", "2026-09-03T00:00:00+02:00"], store, root);
+        expect({ args, asked: store.asked }).toEqual({
+          args,
+          asked: ["2026-09-02T22:00:00.000Z"],
+        });
+      }
+
+      const store = storeOf([
+        "2026-08-31T00:00:00.000Z",
+        "2026-09-02T00:00:00.000Z",
+      ]);
+      const result = await ran(
+        ["plan", "--dry-run", "--at", "2026-09-03T00:00:00Z"],
+        store,
+        root,
+      );
+      expect(result.out).toContain("manifest of 2026-09-02T00:00:00.000Z");
+    });
+
+    it("stops on an `--at` it cannot read, without reading anything", async () => {
+      const store = storeOf(["2026-08-31T00:00:00.000Z"]);
+      const result = await ran(["plan", "--dry-run", "--at", "soon"], store);
+      expect(result.code).toBe(2);
+      expect(result.stop?.message).toContain("--at takes a moment");
+      expect(store.asked).toEqual([]);
+    });
+
+    it("stops outside a repository without asking the store, in every mode", async () => {
+      // With no commit to read a date from, the manifest its lanes would
+      // read is unknown, and any other answer would describe a plan
+      // those lanes are not following.
+
+      const root = await Deno.makeTempDir({ prefix: "test-selection-" });
+      roots.push(root);
+      for (
+        const args of [
+          ["coverage"],
+          ["explain", '["unit","memory","one"]'],
+          ["plan", "--dry-run"],
+          ["plan", "--verify"],
+        ]
+      ) {
+        const store = storeOf(["2026-08-31T00:00:00.000Z"]);
+        await expect(ran(args, store, root)).rejects.toThrow(
+          `cannot read the date of the commit checked out at \`${root}\``,
+        );
+        expect({ args, asked: store.asked }).toEqual({ args, asked: [] });
+      }
+    });
+
+    it("reads the one current at a moment `--at` names outside a repository", async () => {
+      const root = await Deno.makeTempDir({ prefix: "test-selection-" });
+      roots.push(root);
+      const store = storeOf(["2026-08-31T00:00:00.000Z"]);
+      const result = await ran(
+        ["plan", "--dry-run", "--at", "2026-09-01T00:00:00Z"],
+        store,
+        root,
+      );
+      expect(result.code).toBe(0);
+      expect(result.out).toContain("manifest of 2026-08-31T00:00:00.000Z");
+      expect(store.asked).toEqual(["2026-09-01T00:00:00.000Z"]);
+    });
+  });
 
   it("prints the usage for no mode, and for either help flag", async () => {
     for (const args of [[], ["--help"], ["-h"]]) {
@@ -480,13 +962,32 @@ describe("dispatch()", () => {
     expect(result.out).toContain(DIALS[0]!.name);
   });
 
-  it("names the gated members, and carries on with no manifest", async () => {
+  it("names the measured sets, and carries on with no manifest", async () => {
     const result = await ran(["coverage"], {
-      manifest: () => Promise.resolve(undefined),
+      manifest: () => Promise.resolve({ absent: "the store holds none" }),
     });
     expect(result.code).toBe(0);
-    expect(result.out).toContain("packages/memory");
+    expect(result.out).toContain("workspace-unit/runtime/memory");
     expect(result.out).toContain("no baseline yet");
+    expect(result.out).not.toContain("with coverage on");
+  });
+
+  it("says what the measured sets cost with coverage on, as far as it can", async () => {
+    // The manifest has fitted no suite's batches with coverage on, so
+    // what the set costs is something it cannot say yet.
+    const result = await ran(["coverage"]);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain(
+      "no lane has run workspace-unit with coverage on",
+    );
+  });
+
+  it("names a member that carries no set beside the sets", async () => {
+    const result = await ran(["coverage"], {
+      members: () => Promise.resolve(["runtime/memory", "runtime/runner"]),
+    });
+    expect(result.out).toContain("workspace-unit/runtime/memory");
+    expect(result.out).toContain("no measured set: Its whole set is past");
   });
 
   it("stops when explain is given no identity, or a bad one", async () => {
@@ -500,9 +1001,11 @@ describe("dispatch()", () => {
     const asked: TestIdentity[] = [];
     const result = await ran(["explain", '["unit","memory","old name"]'], {
       manifest: () =>
-        Promise.resolve(sampleManifest({
-          entries: [sampleEntry({ k: "unit", s: "memory", n: "new name" })],
-        })),
+        Promise.resolve({
+          manifest: sampleManifest({
+            entries: [sampleEntry({ k: "unit", s: "memory", n: "new name" })],
+          }),
+        }),
       aliases: () =>
         Promise.resolve({
           resolve: (test: TestIdentity) => {
@@ -514,7 +1017,7 @@ describe("dispatch()", () => {
     expect(result.code).toBe(0);
     expect(asked[0]?.n).toBe("old name");
     expect(result.out).toContain("new name");
-    expect(result.out).toContain("the current manifest selects it");
+    expect(result.out).toContain("this commit's manifest selects it");
   });
 
   it(
@@ -523,7 +1026,7 @@ describe("dispatch()", () => {
       // Printing nothing and exiting zero reads as "no test would run".
       for (const args of [["explain", '["unit","memory","a"]'], ["plan"]]) {
         const result = await ran(args, {
-          manifest: () => Promise.resolve(undefined),
+          manifest: () => Promise.resolve({ absent: "the store holds none" }),
         });
         expect(result.code).toBe(1);
       }
@@ -531,24 +1034,31 @@ describe("dispatch()", () => {
   );
 
   it("prints the plan, and only the lane asked for", async () => {
+    // Enough work chosen by score to take several lanes.
+    const units = Array.from(
+      { length: 12 },
+      (_, i) => `runtime/memory/test/case-${i}.test.ts`,
+    );
     const manifest = sampleManifest({
-      entries: Array.from(
-        { length: 12 },
-        (_, i) =>
-          sampleEntry({ k: "unit", s: "memory", n: `case ${i}` }, {
-            unit: `packages/memory/test/case-${i}.test.ts`,
-          }),
+      entries: units.map((unit, i) =>
+        sampleEntry({ k: "unit", s: "memory", n: `case ${i}` }, {
+          unit,
+          cost: 100,
+        })
       ),
     });
-    const all = await ran(["plan", "--dry-run"], {
-      manifest: () => Promise.resolve(manifest),
-    });
+    const sources = {
+      manifest: () => Promise.resolve({ manifest }),
+      topology: () => Promise.resolve([suiteHolding(units)]),
+    };
+    const all = await ran(["plan", "--dry-run"], sources);
     expect(all.code).toBe(0);
-    expect(all.out.match(/^ {2}lane \d+:/gm)?.length).toBe(LANES);
+    const lanes = (await planned(manifest, [suiteHolding(units)])).laid
+      .lanes.length;
+    expect(lanes).toBeGreaterThan(1);
+    expect(all.out.match(/^ {2}lane \d+:/gm)?.length).toBe(lanes);
 
-    const one = await ran(["plan", "--dry-run", "--lane", "2"], {
-      manifest: () => Promise.resolve(manifest),
-    });
+    const one = await ran(["plan", "--dry-run", "--lane", "2"], sources);
     expect(one.out.match(/^ {2}lane \d+:/gm)?.length).toBe(1);
     expect(one.out).toContain("  lane 2:");
   });
@@ -556,7 +1066,12 @@ describe("dispatch()", () => {
   it("stops on a lane number no lane has", async () => {
     const result = await ran(["plan", "--lane", "9"]);
     expect(result.code).toBe(2);
-    expect(result.stop?.message).toContain("whole number from 1 to");
+    expect(result.stop?.message).toContain(
+      "--lane names lane 9, and this plan has 1",
+    );
+    const zero = await ran(["plan", "--lane", "0"]);
+    expect(zero.code).toBe(2);
+    expect(zero.stop?.message).toContain("whole number from 1");
   });
 
   it("verifies the manifest against the tree", async () => {
@@ -569,15 +1084,15 @@ describe("dispatch()", () => {
     // A manifest holding nothing for a test that does not run is the
     // manifest being right, so it is not something to fail on.
     const suite = suiteHolding([
-      "packages/memory/test/memory.test.ts",
-      "packages/memory/test/skipped.test.ts",
+      "runtime/memory/test/memory.test.ts",
+      "runtime/memory/test/skipped.test.ts",
     ]);
     const result = await ran(["plan", "--verify"], {
       topology: () =>
         Promise.resolve([{
           ...suite,
           unavailable: [{
-            unit: "packages/memory/test/skipped.test.ts",
+            unit: "runtime/memory/test/skipped.test.ts",
             phase: "phase-2",
             reason: "the server-execution arm cannot run it yet",
           }],
@@ -593,10 +1108,10 @@ describe("dispatch()", () => {
     // does not fail: a manifest is hours old, so a unit deleted since it
     // was published is expected to linger in it.
     const result = await ran(["plan", "--verify"], {
-      topology: () => Promise.resolve([suiteHolding(["packages/memory/x.ts"])]),
+      topology: () => Promise.resolve([suiteHolding(["runtime/memory/x.ts"])]),
     });
     expect(result.out).toContain(
-      "no longer enumerates packages/memory/test/memory.test.ts",
+      "no longer enumerates runtime/memory/test/memory.test.ts",
     );
   });
 
@@ -608,12 +1123,144 @@ describe("dispatch()", () => {
       topology: () =>
         Promise.resolve([
           suiteHolding([
-            "packages/memory/test/memory.test.ts",
+            "runtime/memory/test/memory.test.ts",
             "unrun.test.ts",
           ]),
         ]),
     });
     expect(result.code).toBe(1);
     expect(result.out).toContain("no identity for workspace-unit: unrun");
+  });
+
+  it("fails --verify on a gate nothing has recorded, which no lane runs", async () => {
+    const memory: Suite = {
+      ...suiteHolding(["runtime/memory/test/memory.test.ts"]),
+      measured: [{
+        member: "runtime/memory",
+        reachedBy: ["runtime/memory/"],
+        units: ["runtime/memory/test/memory.test.ts"],
+      }],
+    };
+    const result = await ran(["plan", "--verify"], {
+      topology: () => Promise.resolve([memory, coverageGateSuite([memory])]),
+    });
+    expect(result.code).toBe(1);
+    expect(result.out).toContain(
+      "no record of the gate coverage-gate: workspace-unit/runtime/memory, " +
+        "so a change is offered it at the floor of the score",
+    );
+    expect(result.out).not.toContain("runs it as unknown");
+  });
+
+  describe("health", () => {
+    /**
+     * A manifest carrying health that says `pattern-unit` costs `fixed`,
+     * judged as the publisher judges it.
+     */
+    function carrying(fixed: number): Manifest {
+      const figures = {
+        suites: { "pattern-unit": { fixed, tooLong: 0, batches: 0 } },
+        lanes: { observed: 0, pastBound: 0, projectedInside: 0, overran: 0 },
+      };
+      return sampleManifest({
+        health: { ...figures, alarms: alarms(figures) },
+      });
+    }
+
+    it("reads the newest manifest rather than the commit's", async () => {
+      const asked: string[] = [];
+      const before = new Date().toISOString();
+      const result = await ran(["health"], {
+        manifest: ({ at }) => {
+          asked.push(at);
+          return Promise.resolve({ manifest: carrying(10) });
+        },
+      });
+      expect(result.code).toBe(0);
+      expect(asked).toHaveLength(1);
+      expect(asked[0]! >= before).toBe(true);
+    });
+
+    it("reads the manifest current at --at", async () => {
+      const asked: string[] = [];
+      await ran(["health", "--at", "2026-09-25T20:45:00Z"], {
+        manifest: ({ at }) => {
+          asked.push(at);
+          return Promise.resolve({ manifest: carrying(10) });
+        },
+      });
+      expect(asked).toEqual(["2026-09-25T20:45:00.000Z"]);
+    });
+
+    it("passes and says so for a model that holds", async () => {
+      const result = await ran(["health"], {
+        manifest: () => Promise.resolve({ manifest: carrying(10) }),
+      });
+      expect(result.code).toBe(0);
+      expect(result.out).toContain("the cost model holds");
+    });
+
+    it("fails naming the suite and the figure for a model that broke", async () => {
+      const result = await ran(["health"], {
+        manifest: () => Promise.resolve({ manifest: carrying(351) }),
+      });
+      expect(result.code).toBe(1);
+      expect(result.out).toContain(
+        "the cost model is broken: pattern-unit: a lane pays 5m51s before " +
+          "it runs any of it",
+      );
+    });
+
+    it("measures a manifest carrying no health against the one before it", async () => {
+      // A manifest published before the publisher measured its model is
+      // judged on what it and its predecessor hold.
+      const asked: string[] = [];
+      const newest = sampleManifest({
+        generatedAt: "2026-09-25T20:25:44.885Z",
+        unschedulable: Array.from({ length: 30 }, (_, i) => ({
+          test: { k: "unit", s: "memory", n: `slow ${i}` },
+          suite: "workspace-unit",
+          cost: 400,
+        })),
+      });
+      const result = await ran(["health"], {
+        manifest: ({ at }) => {
+          asked.push(at);
+          return Promise.resolve({
+            manifest: asked.length === 1
+              ? newest
+              : sampleManifest({ generatedAt: "2026-09-25T16:30:32.893Z" }),
+          });
+        },
+      });
+      expect(asked[1]).toBe("2026-09-25T20:25:44.885Z");
+      expect(result.code).toBe(1);
+      expect(result.out).toContain(
+        "30 tests are too long for any lane, up from 0: workspace-unit 30",
+      );
+    });
+
+    it("fails where there is no manifest to judge", async () => {
+      const result = await ran(["health"], {
+        manifest: () => Promise.resolve({ absent: "the store holds none" }),
+      });
+      expect(result.code).toBe(1);
+      expect(result.err).toContain("the store holds none");
+    });
+
+    it("fails where the manifest before one carrying no health cannot be read", async () => {
+      let calls = 0;
+      const result = await ran(["health"], {
+        manifest: () =>
+          Promise.resolve(
+            calls++ === 0 ? { manifest: sampleManifest() } : {
+              absent: "listing failed",
+              unreachable: true as const,
+            },
+          ),
+      });
+      expect(result.code).toBe(1);
+      expect(result.err).toContain("no previous manifest: listing failed");
+    });
   });
 });

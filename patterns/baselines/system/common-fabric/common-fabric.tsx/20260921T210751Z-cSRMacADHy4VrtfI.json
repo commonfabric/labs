@@ -1,0 +1,130 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "ListItem": {
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "list": {
+        "items": {
+          "$ref": "#/$defs/ListItem"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "list"
+    ],
+    "type": "object"
+  },
+  "pattern": "system/common-fabric.tsx",
+  "resultSchema": {
+    "$defs": {
+      "BuiltInLLMTool": {
+        "anyOf": [
+          {
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "extraParams": {
+                "additionalProperties": true,
+                "properties": {},
+                "type": "object"
+              },
+              "handler": {
+                "type": "undefined"
+              },
+              "pattern": {
+                "$ref": "#/$defs/Pattern"
+              },
+              "useResultSchemaForObservation": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "pattern"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "handler": true,
+              "pattern": {
+                "type": "undefined"
+              }
+            },
+            "required": [
+              "handler"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "CellScope": {
+        "enum": [
+          "space",
+          "user",
+          "session"
+        ]
+      },
+      "ListItem": {
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "Pattern": {
+        "properties": {
+          "argumentSchema": true,
+          "defaultScope": {
+            "$ref": "#/$defs/CellScope"
+          },
+          "resultSchema": true
+        },
+        "required": [
+          "argumentSchema",
+          "resultSchema"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "list": {
+        "items": {
+          "$ref": "#/$defs/ListItem"
+        },
+        "type": "array"
+      },
+      "tools": {
+        "additionalProperties": {
+          "$ref": "#/$defs/BuiltInLLMTool"
+        },
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "required": [
+      "tools",
+      "list"
+    ],
+    "type": "object"
+  }
+}

@@ -66,10 +66,12 @@ composite web component; use a flattened-tree tool or the pierce fallback below.
    const shell = new ShellIntegration();
    shell.bindLifecycle(); // Sets up beforeAll/afterAll hooks
 
-   // shell.goto() handles navigation, applyConsoleFormatter, and login
+   // shell.goto() handles navigation, applyConsoleFormatter, and login.
+   // `space` is the DID `createTestSpace(identity)` returned: opening a space
+   // never creates one, so a test makes its own.
    await shell.goto({
      frontendUrl: FRONTEND_URL,
-     view: { spaceName: SPACE_NAME, pieceId },
+     view: { spaceDid: space, pieceId },
      identity,
    });
 
@@ -90,7 +92,7 @@ composite web component; use a flattened-tree tool or the pierce fallback below.
    whose shell is still booting.
 
    Every such page is also opened at a fixed viewport, `SHELL_VIEWPORT` in
-   `packages/integration/shell-utils.ts`, wide enough for the shell's desktop
+   `runtime/integration/shell-utils.ts`, wide enough for the shell's desktop
    header layout. The header switches layouts on the viewport width, and a
    browser left to its own default picks a width that varies by platform, so
    without the pin which layout a suite drives would be a property of the
@@ -173,32 +175,36 @@ const path = ["x-root", "#shadow-root", "cf-input", "#shadow-root", "input"];
 ```typescript
 // Shown at module scope.
 import {
+  createTestSpace,
   env,
   waitForCondition,
 } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
   clickCfButton,
   fillCfInput,
 } from "./cfc-browser-helpers.ts";
 
-const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+const { API_URL, FRONTEND_URL } = env;
 
 describe("shadow DOM component test", () => {
   const shell = new ShellIntegration();
   shell.bindLifecycle();
 
   let identity: Identity;
+  let space: DID;
   let cc: PiecesController;
   let pieceId: string;
 
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
+    // Opening a space never creates one, so the test makes its own.
+    space = await createTestSpace(identity);
     cc = await PiecesController.initialize({
-      space: SPACE_NAME,
+      space,
       apiUrl: new URL(API_URL),
       identity: identity,
     });
@@ -216,7 +222,7 @@ describe("shadow DOM component test", () => {
     // Setup: shell.goto() handles navigation, applyConsoleFormatter, and login
     await shell.goto({
       frontendUrl: FRONTEND_URL,
-      view: { spaceName: SPACE_NAME, pieceId },
+      view: { spaceDid: space, pieceId },
       identity,
     });
 
@@ -298,8 +304,13 @@ await waitForCondition(page, (probe) =>
   probe.collect("cf-modal[open]").length > 0);
 ```
 
+To read the page as a wait reads it without waiting for anything, for a report
+or an assertion on a state already reached, `readWithProbe(page, reader)`
+evaluates `reader` once against the same probe a predicate is handed, so the
+read and the wait agree on what is visible.
+
 Pattern integration tests can use the higher-level wrappers in
-`packages/patterns/integration/cfc-browser-helpers.ts` — `waitForText`,
+`patterns/integration/cfc-browser-helpers.ts` — `waitForText`,
 `fillCfInput`, `clickCfButton`, `clickCfButtonAndWaitForText` — which bundle
 the common waiting and interaction sequences. Every one of them that clicks
 proceeds only when the same target remains rendered before and after a settle,
@@ -322,7 +333,7 @@ Each of the following is what `awaitViewSettled` replaces. They are either racy
   is not interactivity, and every poll is a CDP `evaluate` round trip. The
   `waitFor` helper re-runs its predicate from the test process on a fixed
   interval; prefer `waitForCondition`, whose in-page waiter resolves on the DOM
-  mutation itself (see `packages/integration/utils.ts`).
+  mutation itself (see `runtime/integration/utils.ts`).
 - **`await waitFor(() => clickButtonWithText(page, "X"))`, re-clicking until it
   "takes"** — fires the stimulus speculatively. It can double-fire (creating
   duplicate state) and, against a `dismissable` overlay such as `cf-modal`,
@@ -367,7 +378,7 @@ file by hand, point it at the compiled binary (`deno task build-binaries`, then
 | `PIPE_CONSOLE` | Set to `true` or `1` to forward browser console output to the test runner |
 | `API_URL` | Server URL (default: `http://localhost:8000`) |
 | `FRONTEND_URL` | Frontend URL (default: `API_URL`) |
-| `SPACE_NAME` | Target a specific space (default: random UUID) |
+| `SPACE_NAME` | A legacy name of an existing space, for a test that targets one rather than creating its own (default: unset) |
 
 Example: `PIPE_CONSOLE=1 deno task integration`
 
@@ -434,5 +445,7 @@ If semantic locators are not finding your element:
 
 - [TESTING.md](TESTING.md) — running the suites and the general unit and
   integration test structure.
-- [COVERAGE.md](COVERAGE.md) — how CI measures coverage and feeds the
-  coverage-debt gate.
+- [COVERAGE.md](COVERAGE.md) — how CI measures coverage. A member's measured set
+  counts the V8 coverage of the member's Deno-only half, its `deno-test` task,
+  so its browser tests never feed it. The authored-pattern coverage the browser
+  worker collects feeds the repository-wide trend, not a measured set.

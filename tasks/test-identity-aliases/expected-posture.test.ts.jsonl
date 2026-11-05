@@ -1,0 +1,1 @@
+{"date":"2026-09-08","from":{"k":"unit","s":"cf-harness","n":"the expected-posture spec > comparing a record against a spec > names every field the fleet posture misses against that profile"},"to":{"k":"unit","s":"cf-harness","n":"the expected-posture spec > comparing a record against a spec > names a rung field and a sink field a posture below that profile misses"}}

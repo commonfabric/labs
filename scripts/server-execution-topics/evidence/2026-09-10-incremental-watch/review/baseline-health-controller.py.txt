@@ -1,0 +1,27 @@
+from pathlib import Path
+import subprocess,os,json,datetime,hashlib
+root=Path('/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09')
+w=Path('/Users/berni/.codex/worktrees/topics-campaign-watch-baseline/labs')
+source=Path('/Users/berni/.codex/worktrees/topics-campaign-watch/labs')
+head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=w,text=True).strip()
+assert head=='27f10d2d4f02f125c0492e5d6288acb3f0da148b'
+assert not subprocess.check_output(['git','diff','HEAD','--','packages','tasks'],cwd=w)
+manifest={'head':head,'checkout':str(w),'purpose':'Matched baseline ON health characterization; no latency claim','source':{},'commands':[]}
+for name in ['run-arm.ts','seed-check.ts']:
+ data=subprocess.check_output(['git','show','f6bc2af1e36b5a3d817be75c1d3632bc964e3e37:tools/server-execution-topics/'+name],cwd=source)
+ p=w/'tools/server-execution-topics'/name;p.parent.mkdir(parents=True,exist_ok=True);assert not p.exists();p.write_bytes(data)
+ manifest['source'][name]=hashlib.sha256(data).hexdigest()
+(root/'source/watch-baseline-health-helper.ts.txt').write_bytes((w/'tools/server-execution-topics/run-arm.ts').read_bytes())
+env=os.environ.copy();env['EXPERIMENTAL_SERVER_EXECUTION']='true';env['COMMIT_SHA']=head
+now=lambda:datetime.datetime.now(datetime.timezone.utc).isoformat()
+def run(cmd,label):
+ row={'command':cmd,'flags':{k:v for k,v in env.items() if k.startswith('EXPERIMENTAL_') or k=='COMMIT_SHA'},'startedAt':now()};manifest['commands'].append(row)
+ with (root/f'validation/watch-baseline-health-{label}-01.log').open('w') as f:r=subprocess.run(cmd,cwd=w,env=env,stdout=f,stderr=subprocess.STDOUT)
+ row.update(exitCode=r.returncode,endedAt=now());(root/'metadata/watch-baseline-health-01.json').write_text(json.dumps(manifest,indent=2)+'\n')
+ if r.returncode:raise SystemExit(r.returncode)
+run(['deno','task','build-binaries','toolshed'],'build')
+p=w/'.ci-cache/binaries/toolshed-baked-opposite';p.parent.mkdir(parents=True,exist_ok=True);assert not p.exists();(w/'dist/toolshed').rename(p)
+manifest['binarySha256']=hashlib.sha256(p.read_bytes()).hexdigest()
+tests=['topic-board-fixture','topic-board-child-contract','topic-create-onscreen','sx2-events','lunch-poll-vote','cfc-group-chat-chained-event-gate-multi-runtime']
+run(['deno','run','-A','tools/server-execution-topics/run-arm.ts','opposite',str(root/'runs/watch-baseline-health-01'),'correctness','test','--no-check','-A',*[f'packages/patterns/integration/{n}.test.ts' for n in tests]],'integration')
+print('baseline health control passed',flush=True)

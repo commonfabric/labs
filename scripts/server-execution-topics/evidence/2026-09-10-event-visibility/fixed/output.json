@@ -1,0 +1,5 @@
+{
+  "encoding": "utf-8",
+  "rawSha256": "772cd42f6084fe2d987612da979c4dd4975b86aafd6f5506ff8413f72e54b897",
+  "text": "running 1 test from ./test/executor/visibility-matched.probe.ts\nSpaceServer ...\n  commits admitted events in arrival order before its watermark covers them ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n{\"observation\":\"matched-visibility-wave\",\"snapshots\":[{\"watermark\":3,\"entries\":[{\"eventId\":\"visibility-0\",\"seq\":2,\"consequenced\":true},{\"eventId\":\"visibility-1\",\"seq\":3,\"consequenced\":true}],\"log\":[\"A\",\"B\"]}],\"counters\":{\"waves\":1,\"derivedCommits\":1,\"wavesBudgetExhausted\":0,\"visibilityBarriers\":1,\"visibilityRecoveries\":1,\"visibilityDeferrals\":0,\"deferredRescansArmed\":0,\"deferredRescansFired\":0}}\n----- output end -----\n  commits admitted events in arrival order before its watermark covers them ... ok (77ms)\nSpaceServer ... ok (84ms)\n\nok | 1 passed (1 step) | 0 failed (88ms)\n\n"
+}

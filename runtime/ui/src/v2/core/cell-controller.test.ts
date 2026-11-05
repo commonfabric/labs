@@ -1,0 +1,1792 @@
+import { expect } from "@std/expect";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { FakeTime } from "@std/testing/time";
+
+import {
+  CellHandle,
+  type CellRef,
+  isCellHandle,
+} from "@commonfabric/runtime-client";
+import type { ReactiveControllerHost } from "lit";
+
+import {
+  createMockCellHandle,
+  holdReads,
+  holdWrites,
+  pushRefusal,
+  pushUpdate,
+  refuseReads,
+  writesSent,
+} from "../test-utils/mock-cell-handle.ts";
+import {
+  ArrayCellController,
+  BooleanCellController,
+  CellController,
+  createArrayCellController,
+  createBooleanCellController,
+  createCellController,
+  createStringCellController,
+  StringCellController,
+} from "./cell-controller.ts";
+
+/** Minimal mock host satisfying Lit's ReactiveControllerHost interface. */
+function createMockHost(): ReactiveControllerHost {
+  return {
+    addController: () => {},
+    removeController: () => {},
+    requestUpdate: () => {},
+    updateComplete: Promise.resolve(true),
+  } as unknown as ReactiveControllerHost;
+}
+
+//
+// createMockCellHandle sanity checks
+//
+
+describe("createMockCellHandle", () => {
+  it("passes isCellHandle()", () => {
+    const h = createMockCellHandle("x");
+    expect(isCellHandle(h)).toBe(true);
+  });
+
+  it("get() returns the initial value", () => {
+    const h = createMockCellHandle("hello");
+    expect(h.get()).toBe("hello");
+  });
+
+  it("set() updates get() and notifies subscribers", async () => {
+    const h = createMockCellHandle("a");
+    const values: (string | undefined)[] = [];
+    h.subscribe((v) => {
+      values.push(v);
+    }, { onRefused: () => {} });
+    await h.set("b");
+    expect(h.get()).toBe("b");
+    expect(values).toEqual(["a", "b"]); // initial + update
+  });
+
+  it("key() returns a child CellHandle", () => {
+    const h = createMockCellHandle({ foo: 42 });
+    const child = h.key("foo");
+    expect(isCellHandle(child)).toBe(true);
+    expect(child.get()).toBe(42);
+  });
+
+  it("subscribe() calls callback immediately with current value", () => {
+    const h = createMockCellHandle("now");
+    let received: string | undefined;
+    h.subscribe((v) => {
+      received = v;
+    }, { onRefused: () => {} });
+    expect(received).toBe("now");
+  });
+
+  it("child.set() propagates to parent value and fires parent subscribers", async () => {
+    const parent = createMockCellHandle({ name: "Alice", age: 30 });
+    const values: unknown[] = [];
+    parent.subscribe((v) => {
+      values.push(structuredClone(v));
+    }, { onRefused: () => {} });
+
+    const child = parent.key("name");
+    await child.set("Bob");
+
+    expect(parent.get()).toEqual({ name: "Bob", age: 30 });
+    // values[0] = initial ({name:"Alice",age:30}), values[1] = after child.set
+    expect(values.length).toBeGreaterThanOrEqual(2);
+    expect(values[values.length - 1]).toEqual({ name: "Bob", age: 30 });
+  });
+
+  it("child.set() on array element propagates to parent", async () => {
+    const parent = createMockCellHandle(["x", "y", "z"]);
+    const item = parent.key(1 as keyof string[]);
+    await item.set("Y" as any);
+    expect(parent.get()).toEqual(["x", "Y", "z"]);
+  });
+
+  it("holdWrites() keeps a child's write from its parent until released", () => {
+    const cell = createMockCellHandle({ name: "before" });
+    const release = holdWrites(cell);
+
+    void cell.key("name").set("after");
+    expect(cell.get()).toEqual({ name: "before" });
+
+    release();
+    expect(cell.get()).toEqual({ name: "after" });
+  });
+
+  it("pushUpdate() simulates backend-pushed value change", () => {
+    const cell = createMockCellHandle("original");
+    const received: (string | undefined)[] = [];
+    cell.subscribe((v) => {
+      received.push(v);
+    }, { onRefused: () => {} });
+    received.length = 0; // clear initial
+
+    pushUpdate(cell, "from-backend");
+    expect(cell.get()).toBe("from-backend");
+    expect(received).toEqual(["from-backend"]);
+  });
+
+  it("pushUpdate() suppresses callback when value is equal", () => {
+    const cell = createMockCellHandle(42);
+    let callCount = 0;
+    cell.subscribe(() => {
+      callCount++;
+    }, { onRefused: () => {} });
+    const afterSubscribe = callCount;
+
+    pushUpdate(cell, 42); // same value
+    expect(callCount).toBe(afterSubscribe);
+  });
+});
+
+//
+// CellController
+//
+
+describe("CellController", () => {
+  it("binds a CellHandle and reads its value", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle("init");
+    ctrl.bind(cell);
+    expect(ctrl.getValue()).toBe("init");
+    expect(ctrl.hasCell()).toBe(true);
+    expect(ctrl.getCell()).toBe(cell);
+  });
+
+  it("binds a plain value", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+    });
+    ctrl.bind("plain" as any);
+    expect(ctrl.getValue()).toBe("plain");
+    expect(ctrl.hasCell()).toBe(false);
+    expect(ctrl.getCell()).toBeNull();
+  });
+
+  it("setValue updates the underlying CellHandle", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle("before");
+    ctrl.bind(cell);
+    ctrl.setValue("after");
+    // CellHandle.set is async but updates local cache synchronously
+    expect(cell.get()).toBe("after");
+  });
+
+  it("calls onChange when setValue is invoked", () => {
+    const host = createMockHost();
+    const changes: Array<{ newVal: string; oldVal: string }> = [];
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+      onChange: (n, o) => changes.push({ newVal: n, oldVal: o }),
+    });
+    const cell = createMockCellHandle("a");
+    ctrl.bind(cell);
+    // bind() sets up subscription which fires onChange("a", undefined) initially.
+    // Clear those so we can test setValue in isolation.
+    changes.length = 0;
+
+    ctrl.setValue("b");
+    // setValue fires onChange directly, and then the cell subscription callback
+    // also fires onChange when it sees the new value.
+    const setValueChange = changes.find((c) => c.newVal === "b");
+    expect(setValueChange).toBeDefined();
+    expect(setValueChange!.oldVal).toBe("a");
+  });
+
+  it("announces a 0 -> -0 delivery as a change", async () => {
+    // `0` and `-0` are distinct values under the system's equality
+    // (`Object.is` semantics); the subscription gate must not swallow the
+    // update.
+    const host = createMockHost();
+    const changes: Array<{ newVal: number; oldVal: number | undefined }> = [];
+    const ctrl = new CellController<number>(host, {
+      timing: { strategy: "immediate" },
+      onChange: (n, o) => changes.push({ newVal: n, oldVal: o }),
+    });
+    const cell = createMockCellHandle(0);
+    ctrl.bind(cell);
+    changes.length = 0;
+
+    await cell.set(-0);
+    expect(changes.length).toBe(1);
+    expect(Object.is(changes[0].newVal, -0)).toBe(true);
+  });
+
+  it("does not re-announce an unchanged NaN delivery", async () => {
+    const host = createMockHost();
+    const changes: Array<{ newVal: number; oldVal: number | undefined }> = [];
+    const ctrl = new CellController<number>(host, {
+      timing: { strategy: "immediate" },
+      onChange: (n, o) => changes.push({ newVal: n, oldVal: o }),
+    });
+    const cell = createMockCellHandle(NaN);
+    ctrl.bind(cell);
+    changes.length = 0;
+
+    await cell.set(NaN);
+    expect(changes.length).toBe(0);
+  });
+
+  it("requestUpdate is called when cell subscription fires", async () => {
+    let updateCount = 0;
+    const host: ReactiveControllerHost = {
+      addController: () => {},
+      removeController: () => {},
+      requestUpdate: () => {
+        updateCount++;
+      },
+      updateComplete: Promise.resolve(true),
+    } as unknown as ReactiveControllerHost;
+
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle("x");
+    ctrl.bind(cell);
+    // bind sets up subscription which calls requestUpdate immediately
+    const initialCount = updateCount;
+    await cell.set("y");
+    expect(updateCount).toBeGreaterThan(initialCount);
+  });
+
+  it("re-bind to a different cell cleans up old subscription", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+    });
+    // Use distinct refs so CellHandle.equals() returns false
+    const cell1 = createMockCellHandle("one", {
+      id: "of:cell-1" as any,
+    });
+    const cell2 = createMockCellHandle("two", {
+      id: "of:cell-2" as any,
+    });
+    ctrl.bind(cell1);
+    ctrl.bind(cell2);
+    expect(ctrl.getValue()).toBe("two");
+    expect(ctrl.getCell()).toBe(cell2);
+  });
+
+  it("hostDisconnected cleans up subscription", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle("val");
+    ctrl.bind(cell);
+    ctrl.hostDisconnected();
+    // After disconnect, the controller should still return the last known value
+    // but shouldn't crash
+    expect(ctrl.getValue()).toBe("val");
+  });
+
+  it("getValue returns undefined when nothing is bound", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+    });
+    expect(ctrl.getValue()).toBeUndefined();
+  });
+
+  it("setValue is a no-op when nothing is bound", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+    });
+    // Should not throw
+    ctrl.setValue("ignored");
+  });
+
+  it("bind() with schema parameter creates schema-annotated handle when cell has no schema", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+    });
+    // Create a handle WITHOUT a schema so bind() will apply one via asSchema
+    const cell = createMockCellHandle("typed", {
+      schema: undefined,
+    });
+    const schema = { type: "string" } as const;
+    ctrl.bind(cell, schema);
+    // bind(cell, schema) calls cell.asSchema(schema) — the controller should
+    // hold a different handle than the original, with the schema on its ref.
+    expect(ctrl.getValue()).toBe("typed");
+    expect(ctrl.hasCell()).toBe(true);
+    const bound = ctrl.getCell()!;
+    expect(bound).not.toBe(cell); // asSchema creates a new handle
+    expect(bound.ref().schema).toEqual(schema);
+  });
+
+  it("bind() preserves existing schema when cell already has one", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+    });
+    // Create a handle WITH a schema (as pattern compiler would)
+    const patternSchema = { type: "array", items: { type: "string" } } as const;
+    const cell = createMockCellHandle("from-pattern", {
+      schema: patternSchema,
+    });
+    const componentSchema = {
+      type: "array",
+      items: { type: "object" },
+    } as const;
+    ctrl.bind(cell, componentSchema);
+    // bind() should NOT call asSchema — the controller should use the
+    // original handle directly, preserving the pattern's schema.
+    expect(ctrl.getValue()).toBe("from-pattern");
+    expect(ctrl.hasCell()).toBe(true);
+    const bound = ctrl.getCell()!;
+    expect(bound).toBe(cell); // same handle, no asSchema
+    expect(bound.ref().schema).toEqual(patternSchema); // pattern schema preserved
+  });
+
+  it("hostConnected() re-establishes subscription after disconnect", () => {
+    let updateCount = 0;
+    const host: ReactiveControllerHost = {
+      addController: () => {},
+      removeController: () => {},
+      requestUpdate: () => {
+        updateCount++;
+      },
+      updateComplete: Promise.resolve(true),
+    } as unknown as ReactiveControllerHost;
+
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle("a");
+    ctrl.bind(cell);
+
+    ctrl.hostDisconnected();
+    updateCount = 0;
+    pushUpdate(cell, "while-disconnected");
+    expect(updateCount).toBe(0); // no updates while disconnected
+
+    ctrl.hostConnected();
+    updateCount = 0;
+    pushUpdate(cell, "after-reconnect");
+    expect(updateCount).toBeGreaterThan(0); // subscription restored
+  });
+
+  it("hostDisconnected stops requestUpdate on external cell changes", () => {
+    let updateCount = 0;
+    const host: ReactiveControllerHost = {
+      addController: () => {},
+      removeController: () => {},
+      requestUpdate: () => {
+        updateCount++;
+      },
+      updateComplete: Promise.resolve(true),
+    } as unknown as ReactiveControllerHost;
+
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle("a");
+    ctrl.bind(cell);
+    updateCount = 0;
+
+    ctrl.hostDisconnected();
+    pushUpdate(cell, "ignored");
+    expect(updateCount).toBe(0);
+  });
+
+  it("onChange fires on backend-pushed value change (without setValue)", () => {
+    const host = createMockHost();
+    const changes: Array<{ newVal: string; oldVal: string }> = [];
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+      onChange: (n, o) => changes.push({ newVal: n, oldVal: o }),
+    });
+    const cell = createMockCellHandle("initial");
+    ctrl.bind(cell);
+    changes.length = 0; // clear bind-time onChange calls
+
+    pushUpdate(cell, "external");
+    const change = changes.find((c) => c.newVal === "external");
+    expect(change).toBeDefined();
+    expect(change!.oldVal).toBe("initial");
+  });
+});
+
+//
+// CellController.flush()
+//
+
+describe("CellController — flush", () => {
+  it("runs a pending debounced write immediately", () => {
+    const cell = createMockCellHandle("initial");
+    const ctrl = new CellController<string>(createMockHost(), {
+      timing: { strategy: "debounce", delay: 300 },
+    });
+    ctrl.bind(cell);
+    ctrl.setValue("updated");
+    // Debounced: the write has not landed yet.
+    expect(cell.get()).toBe("initial");
+    ctrl.flush();
+    // flush() drains the pending write to the cell.
+    expect(cell.get()).toBe("updated");
+  });
+
+  it("is a no-op when nothing is pending", () => {
+    const cell = createMockCellHandle("x");
+    const ctrl = new CellController<string>(createMockHost(), {
+      timing: { strategy: "debounce", delay: 300 },
+    });
+    ctrl.bind(cell);
+    ctrl.flush();
+    expect(cell.get()).toBe("x");
+  });
+});
+
+//
+// StringCellController
+//
+
+describe("StringCellController", () => {
+  it("defaults to empty string for undefined cell value", () => {
+    const host = createMockHost();
+    const ctrl = new StringCellController(host);
+    const cell = createMockCellHandle<string>(undefined as any);
+    ctrl.bind(cell);
+    expect(ctrl.getValue()).toBe("");
+  });
+
+  it("returns the cell's string value", () => {
+    const host = createMockHost();
+    const ctrl = new StringCellController(host);
+    const cell = createMockCellHandle("hello");
+    ctrl.bind(cell);
+    expect(ctrl.getValue()).toBe("hello");
+  });
+
+  it("returns plain string value", () => {
+    const host = createMockHost();
+    const ctrl = new StringCellController(host);
+    ctrl.bind("world" as any);
+    expect(ctrl.getValue()).toBe("world");
+  });
+
+  it("preserves empty string (not falsy coerced)", () => {
+    const host = createMockHost();
+    const ctrl = new StringCellController(host);
+    ctrl.bind("" as any);
+    expect(ctrl.getValue()).toBe("");
+  });
+});
+
+//
+// BooleanCellController
+//
+
+describe("BooleanCellController", () => {
+  it("defaults to false for undefined cell value", () => {
+    const host = createMockHost();
+    const ctrl = new BooleanCellController(host);
+    const cell = createMockCellHandle<boolean>(undefined as any);
+    ctrl.bind(cell);
+    expect(ctrl.getValue()).toBe(false);
+  });
+
+  it("reads boolean from cell", () => {
+    const host = createMockHost();
+    const ctrl = new BooleanCellController(host);
+    const cell = createMockCellHandle(true);
+    ctrl.bind(cell);
+    expect(ctrl.getValue()).toBe(true);
+  });
+
+  it("toggle() flips the value", () => {
+    const host = createMockHost();
+    const ctrl = new BooleanCellController(host);
+    const cell = createMockCellHandle(false);
+    ctrl.bind(cell);
+    ctrl.toggle();
+    expect(cell.get()).toBe(true);
+  });
+});
+
+//
+// ArrayCellController
+//
+
+describe("ArrayCellController", () => {
+  it("defaults to empty array for undefined cell value", () => {
+    const host = createMockHost();
+    const ctrl = new ArrayCellController<number>(host);
+    const cell = createMockCellHandle<number[]>(undefined as any);
+    ctrl.bind(cell);
+    expect(ctrl.getValue()).toEqual([]);
+  });
+
+  it("reads array from cell", () => {
+    const host = createMockHost();
+    const ctrl = new ArrayCellController<number>(host);
+    const cell = createMockCellHandle([1, 2, 3]);
+    ctrl.bind(cell);
+    expect(ctrl.getValue()).toEqual([1, 2, 3]);
+  });
+
+  it("addItem appends via cell.push()", () => {
+    const host = createMockHost();
+    const ctrl = new ArrayCellController<number>(host);
+    const cell = createMockCellHandle([1, 2]);
+    ctrl.bind(cell);
+    ctrl.addItem(3);
+    expect(cell.get()).toEqual([1, 2, 3]);
+  });
+
+  it("removeItem filters out the item", () => {
+    const host = createMockHost();
+    const ctrl = new ArrayCellController<string>(host);
+    const cell = createMockCellHandle(["a", "b", "c"]);
+    ctrl.bind(cell);
+    ctrl.removeItem("b");
+    expect(cell.get()).toEqual(["a", "c"]);
+  });
+
+  it("removeItem removes a NaN element and keeps -0 distinct from 0", () => {
+    // `Object.is` matching: `NaN` is removable; removing `0` must not take a
+    // stored `-0` with it.
+    const host = createMockHost();
+    const ctrl = new ArrayCellController<number>(host);
+    const cell = createMockCellHandle([NaN, -0, 1]);
+    ctrl.bind(cell);
+
+    ctrl.removeItem(NaN);
+    let result = cell.get() as number[];
+    expect(result.length).toBe(2);
+    expect(Object.is(result[0], -0)).toBe(true);
+
+    ctrl.removeItem(0);
+    result = cell.get() as number[];
+    expect(result.length).toBe(2);
+    expect(Object.is(result[0], -0)).toBe(true);
+  });
+
+  it("updateItem finds a NaN element", () => {
+    const host = createMockHost();
+    const ctrl = new ArrayCellController<number>(host);
+    const cell = createMockCellHandle([1, NaN, 3]);
+    ctrl.bind(cell);
+    ctrl.updateItem(NaN, 2);
+    expect(cell.get()).toEqual([1, 2, 3]);
+  });
+
+  it("updateItem replaces item via cell.key().set() and propagates to parent", () => {
+    const host = createMockHost();
+    const ctrl = new ArrayCellController<string>(host);
+    const cell = createMockCellHandle(["x", "y", "z"]);
+    ctrl.bind(cell);
+    ctrl.updateItem("y", "Y");
+    // With parent-child propagation, the child's set() updates the parent
+    expect(cell.get()).toEqual(["x", "Y", "z"]);
+  });
+});
+
+//
+// A refused read
+//
+
+describe("CellController — a cell whose read the worker refuses", () => {
+  // A refused handle holds nothing of its cell. A controller over one reads
+  // as its empty value without throwing from a render, and writes nothing:
+  // each value below would be made from that empty value and replace one the
+  // host was never shown.
+  const refusal = { refusedBy: "display-ceiling" } as const;
+
+  /**
+   * What `act` asked the handle to write, as the handle's own refusal of it
+   * logs: the controller is to ask nothing, not to lean on that refusal.
+   */
+  const attemptedWrites = (act: () => void): unknown[][] => {
+    const logged: unknown[][] = [];
+    const real = console.error;
+    console.error = (...args: unknown[]) => logged.push(args);
+    try {
+      act();
+    } finally {
+      console.error = real;
+    }
+    return logged;
+  };
+
+  it("reads as each controller's empty value, and names the refusal", () => {
+    const host = createMockHost();
+    const cases = [
+      [new CellController<string>(host), "a secret", undefined],
+      [new StringCellController(host), "a secret", ""],
+      [new BooleanCellController(host), true, false],
+      [new ArrayCellController<string>(host), ["a secret"], []],
+    ] as const;
+    for (const [ctrl, value, empty] of cases) {
+      const cell = createMockCellHandle<unknown>(value);
+      (ctrl as CellController<unknown>).bind(cell);
+
+      pushRefusal(cell, refusal);
+
+      expect(ctrl.getValue()).toEqual(empty);
+      expect(ctrl.refusal).toEqual(refusal);
+    }
+  });
+
+  it("writes nothing for `removeItem()`, which would write the rest of an empty list", () => {
+    const ctrl = new ArrayCellController<string>(createMockHost());
+    const cell = createMockCellHandle(["kept", "removed"]);
+    ctrl.bind(cell);
+    pushRefusal(cell, refusal);
+
+    expect(attemptedWrites(() => ctrl.removeItem("removed"))).toEqual([]);
+
+    expect(writesSent(cell)).toEqual([]);
+    expect(ctrl.getValue()).toEqual([]);
+  });
+
+  it("writes nothing for `toggle()`, which would write `true` over an unseen value", () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const cell = createMockCellHandle(true);
+    ctrl.bind(cell);
+    pushRefusal(cell, refusal);
+
+    expect(attemptedWrites(() => ctrl.toggle())).toEqual([]);
+
+    expect(writesSent(cell)).toEqual([]);
+    expect(ctrl.getValue()).toBe(false);
+  });
+
+  it("writes nothing for a selection added to an empty list, as a multi-select makes", () => {
+    const ctrl = new CellController<string[]>(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle(["chosen before"]);
+    ctrl.bind(cell);
+    pushRefusal(cell, refusal);
+
+    expect(
+      attemptedWrites(() =>
+        ctrl.setValue([...(ctrl.getValue() ?? []), "chosen now"])
+      ),
+    ).toEqual([]);
+
+    expect(writesSent(cell)).toEqual([]);
+    expect(ctrl.getValue()).toBeUndefined();
+  });
+
+  it("writes nothing for `addItem()` or `updateItem()`", () => {
+    const ctrl = new ArrayCellController<string>(createMockHost());
+    const cell = createMockCellHandle(["an item"]);
+    ctrl.bind(cell);
+    pushRefusal(cell, refusal);
+
+    expect(
+      attemptedWrites(() => {
+        ctrl.addItem("added");
+        ctrl.updateItem("an item", "updated");
+      }),
+    ).toEqual([]);
+
+    expect(writesSent(cell)).toEqual([]);
+  });
+
+  it("writes again, and shows the value, once an admitted update arrives", () => {
+    const ctrl = new ArrayCellController<string>(createMockHost());
+    const cell = createMockCellHandle(["kept", "removed"]);
+    ctrl.bind(cell);
+    pushRefusal(cell, refusal);
+
+    pushUpdate(cell, ["kept", "removed"]);
+    ctrl.removeItem("removed");
+
+    expect(ctrl.refusal).toBeUndefined();
+    expect(writesSent(cell)).toEqual([
+      expect.objectContaining({ value: ["kept"] }),
+    ]);
+  });
+
+  it("asks its host to render again when a refusal arrives", () => {
+    let updates = 0;
+    const host = {
+      ...createMockHost(),
+      requestUpdate: () => {
+        updates++;
+      },
+    };
+    const ctrl = new StringCellController(host);
+    const cell = createMockCellHandle("shown before the seal");
+    ctrl.bind(cell);
+    const before = updates;
+
+    pushRefusal(cell, refusal);
+
+    expect(updates).toBe(before + 1);
+    expect(ctrl.getValue()).toBe("");
+  });
+});
+
+describe("CellController — a refusal that arrives while a write waits", () => {
+  let time: FakeTime;
+
+  beforeEach(() => {
+    time = new FakeTime();
+  });
+  afterEach(() => {
+    time.restore();
+  });
+
+  /** What the handle logged while `act` ran: a write it was asked for. */
+  const handleErrors = (act: () => void): unknown[][] => {
+    const logged: unknown[][] = [];
+    const real = console.error;
+    console.error = (...args: unknown[]) => logged.push(args);
+    try {
+      act();
+    } finally {
+      console.error = real;
+    }
+    return logged;
+  };
+
+  it("drops the debounced write and the pending edit", () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "debounce", delay: 200 },
+    });
+    const cell = createMockCellHandle("before");
+    ctrl.bind(cell);
+    ctrl.setValue("typed");
+
+    pushRefusal(cell, { refusedBy: "display-ceiling" });
+    expect(handleErrors(() => time.tick(200))).toEqual([]);
+
+    expect(writesSent(cell)).toEqual([]);
+    expect(ctrl.getValue()).toBe("");
+  });
+
+  it("shows no edit typed into it while refused, even while the write would wait", () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "debounce", delay: 200 },
+    });
+    const cell = createMockCellHandle("before");
+    ctrl.bind(cell);
+    pushRefusal(cell, { refusedBy: "display-ceiling" });
+
+    ctrl.setValue("typed over the seal");
+
+    expect(ctrl.getValue()).toBe("");
+    expect(handleErrors(() => time.tick(200))).toEqual([]);
+    expect(writesSent(cell)).toEqual([]);
+  });
+});
+
+describe("CellController — a handle that has read nothing yet", () => {
+  // A handle the worker has not answered for holds nothing, which is not a
+  // cell that holds nothing: a toggle computed from it would write `true`
+  // over a value nobody was shown.
+  const REFUSAL = { refusedBy: "display-ceiling" } as const;
+  const RELABELED: CellRef["cfcLabelView"] = {
+    version: 1,
+    entries: [{ path: [], label: { integrity: ["relabeled"] } }],
+  };
+
+  it("keeps a refusal across a rebind to a fresh handle for the same cell, and computes nothing from it", () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const first = createMockCellHandle(true);
+    ctrl.bind(first);
+    pushRefusal(first, REFUSAL);
+    // The same cell under a new label view: a fresh handle, which has read
+    // nothing, and whose read the worker has not answered.
+    const rebound = createMockCellHandle<boolean>(undefined, {
+      cfcLabelView: RELABELED,
+    });
+    holdReads(rebound);
+    ctrl.bind(rebound);
+
+    ctrl.toggle();
+
+    expect(ctrl.refusal).toEqual(REFUSAL);
+    expect(writesSent(rebound)).toEqual([]);
+  });
+
+  it("computes no toggle until the worker answers the handle's read", () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const cell = createMockCellHandle<boolean>();
+    holdReads(cell);
+    ctrl.bind(cell);
+
+    ctrl.toggle();
+
+    expect(writesSent(cell)).toEqual([]);
+  });
+
+  it("toggles a cell that holds nothing once the worker answers so", async () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const cell = createMockCellHandle<boolean>();
+    ctrl.bind(cell);
+
+    // Settles once the worker answered the read it waits on.
+    await ctrl.toggle();
+
+    expect(writesSent(cell)).toEqual([
+      expect.objectContaining({ type: "cell:set", value: true }),
+    ]);
+  });
+
+  it("computes nothing once the read it asked for is refused, though an update raced it", async () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const cell = createMockCellHandle<boolean>();
+    refuseReads(cell);
+    ctrl.bind(cell);
+
+    const toggled = ctrl.toggle();
+    // An update arrives while the read is on the way; the read's refusal is
+    // then not the latest answer, but it is the answer to the toggle.
+    pushUpdate(cell, false);
+    await toggled;
+
+    expect(writesSent(cell)).toEqual([]);
+  });
+
+  it("still writes a value typed in, which is computed from nothing it read", () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle<string>();
+    holdReads(cell);
+    ctrl.bind(cell);
+
+    ctrl.setValue("typed");
+
+    expect(writesSent(cell)).toEqual([
+      expect.objectContaining({ type: "cell:set", value: "typed" }),
+    ]);
+  });
+});
+
+describe("CellController — a refusal, then an admission, while a write waits", () => {
+  let time: FakeTime;
+
+  beforeEach(() => {
+    time = new FakeTime();
+  });
+  afterEach(() => {
+    time.restore();
+  });
+
+  it("drops a write waiting on its timing when it is bound to another cell, rather than make it there", () => {
+    const ctrl = new CellController<string[]>(createMockHost(), {
+      timing: { strategy: "debounce", delay: 50 },
+    });
+    const first = createMockCellHandle(["a"]);
+    ctrl.bind(first);
+    ctrl.setValue(["a", "x"]);
+
+    const other = createMockCellHandle<string[]>(undefined, {
+      id: "of:another-cell",
+    });
+    ctrl.bind(other);
+    time.tick(50);
+
+    expect(writesSent(other)).toEqual([]);
+  });
+
+  it("drops the write typed before the refusal, rather than make it over the admitted value", () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "debounce", delay: 500 },
+    });
+    const cell = createMockCellHandle("before");
+    ctrl.bind(cell);
+    ctrl.setValue("typed");
+
+    pushRefusal(cell, { refusedBy: "display-ceiling" });
+    pushUpdate(cell, "after admission");
+    time.tick(500);
+
+    expect(writesSent(cell)).toEqual([]);
+    expect(ctrl.getValue()).toBe("after admission");
+  });
+});
+
+//
+// Factory functions
+//
+
+describe("factory functions", () => {
+  it("createCellController returns CellController", () => {
+    const ctrl = createCellController<string>(createMockHost());
+    expect(ctrl).toBeInstanceOf(CellController);
+  });
+
+  it("createStringCellController returns StringCellController", () => {
+    const ctrl = createStringCellController(createMockHost());
+    expect(ctrl).toBeInstanceOf(StringCellController);
+  });
+
+  it("createBooleanCellController returns BooleanCellController", () => {
+    const ctrl = createBooleanCellController(createMockHost());
+    expect(ctrl).toBeInstanceOf(BooleanCellController);
+  });
+
+  it("createArrayCellController returns ArrayCellController", () => {
+    const ctrl = createArrayCellController<number>(createMockHost());
+    expect(ctrl).toBeInstanceOf(ArrayCellController);
+  });
+});
+
+//
+// CellController — timing integration
+//
+
+describe("CellController — timing integration", () => {
+  let time: FakeTime;
+
+  beforeEach(() => {
+    time = new FakeTime();
+  });
+  afterEach(() => {
+    time.restore();
+  });
+
+  it("setValue with debounce delays the cell update", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "debounce", delay: 200 },
+    });
+    const cell = createMockCellHandle("old");
+    ctrl.bind(cell);
+
+    ctrl.setValue("new");
+    // Debounce: cell should NOT be updated yet
+    expect(cell.get()).toBe("old");
+
+    time.tick(200);
+    expect(cell.get()).toBe("new");
+  });
+
+  it("setValue with blur strategy only commits on onBlur()", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "blur" },
+    });
+    const cell = createMockCellHandle("before");
+    ctrl.bind(cell);
+
+    ctrl.setValue("pending");
+    expect(cell.get()).toBe("before");
+
+    ctrl.onBlur();
+    expect(cell.get()).toBe("pending");
+  });
+
+  it("setValue with throttle fires immediately on leading edge", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "throttle", delay: 100 },
+    });
+    const cell = createMockCellHandle("start");
+    ctrl.bind(cell);
+
+    ctrl.setValue("first");
+    expect(cell.get()).toBe("first"); // leading edge fires immediately
+  });
+
+  it("cancel() prevents pending debounced update from firing", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "debounce", delay: 100 },
+    });
+    const cell = createMockCellHandle("original");
+    ctrl.bind(cell);
+
+    ctrl.setValue("pending");
+    ctrl.cancel();
+    time.tick(200);
+    expect(cell.get()).toBe("original");
+  });
+
+  it("updateTimingOptions changes strategy at runtime", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "debounce", delay: 100 },
+    });
+    const cell = createMockCellHandle("old");
+    ctrl.bind(cell);
+
+    ctrl.updateTimingOptions({ strategy: "immediate" });
+    ctrl.setValue("instant");
+    expect(cell.get()).toBe("instant");
+  });
+});
+
+//
+// CellController — pending local edits vs stale bound state
+//
+// Regression coverage for the cf-input early-boot wipe: a user types before
+// the cell's initial echo/subscription has settled; the worker re-renders and
+// the applicator hands the element a FRESH CellHandle for the same cell
+// (cfcLabelView drift during CFC settling makes `equals()` false), whose value
+// has not hydrated yet. The controller used to adopt that handle's stale/empty
+// state, and the next repaint wiped the user's typed text until the backend
+// echo restored it. The local edit must win until the echo confirms it or a
+// genuinely newer remote value arrives.
+//
+
+/**
+ * A cfcLabelView that differs from the (absent) label view on the default mock
+ * ref. `CellHandle.equals()` compares cfcLabelView, so a rebind with this ref
+ * replaces the bound handle — the production wipe vector (the applicator's
+ * `setBinding` makes a fresh, value-less handle whenever the authored link's
+ * label view drifts during early CFC settling).
+ */
+const DRIFTED_LABEL_VIEW: CellRef["cfcLabelView"] = {
+  version: 1,
+  entries: [{ path: [], label: { confidentiality: ["did:key:z-someone"] } }],
+};
+
+/** Let in-flight CellHandle.set() round-trips settle (mock resolves async). */
+const settleWrites = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe("CellController — pending local edits vs stale bound state", () => {
+  it("keeps a settled local edit when a same-cell rebind delivers a not-yet-hydrated handle", async () => {
+    // The confirmed lunch-poll trace: commit() resolved (write durable), THEN
+    // the host re-render swapped in a fresh handle with no value yet.
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const initial = createMockCellHandle<string>("");
+    ctrl.bind(initial);
+
+    ctrl.setValue("Alice"); // user types; optimistic write
+    await settleWrites(); // the set() round-trip completes
+
+    const rebound = createMockCellHandle<string>(undefined, {
+      cfcLabelView: DRIFTED_LABEL_VIEW,
+    });
+    ctrl.bind(rebound);
+    // The typed value must survive the rebind — there is no newer remote
+    // value, only a handle that has not hydrated yet.
+    expect(ctrl.getValue()).toBe("Alice");
+
+    // The durable echo hydrates the fresh handle.
+    pushUpdate(rebound, "Alice");
+    expect(ctrl.getValue()).toBe("Alice");
+
+    // Once hydrated, remote updates (including a clear) apply normally.
+    pushUpdate(rebound, "");
+    expect(ctrl.getValue()).toBe("");
+  });
+
+  it("suppresses a stale pre-write value delivered by a same-cell rebind until the echo confirms", async () => {
+    const changes: Array<string | undefined> = [];
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "immediate" },
+      onChange: (newValue) => changes.push(newValue),
+    });
+    const initial = createMockCellHandle<string>("");
+    ctrl.bind(initial);
+
+    ctrl.setValue("Alice");
+    changes.length = 0;
+
+    // A re-render-driven rebind hands over a handle still holding the
+    // pre-write snapshot.
+    const rebound = createMockCellHandle<string>("", {
+      cfcLabelView: DRIFTED_LABEL_VIEW,
+    });
+    ctrl.bind(rebound);
+    expect(ctrl.getValue()).toBe("Alice");
+    // The stale "" must not be announced as a change either — the UI never
+    // showed it.
+    expect(changes).not.toContain("");
+    await settleWrites();
+    expect(ctrl.getValue()).toBe("Alice");
+
+    // Echo confirms; later remote edits apply normally.
+    pushUpdate(rebound, "Alice");
+    expect(ctrl.getValue()).toBe("Alice");
+    pushUpdate(rebound, "Bob");
+    expect(ctrl.getValue()).toBe("Bob");
+  });
+
+  it("keeps the latest keystroke when a partial echo of an earlier write arrives", () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle<string>("");
+    ctrl.bind(cell);
+
+    ctrl.setValue("Al");
+    ctrl.setValue("Alice");
+    // The echo of the first keystroke arrives after the second was typed.
+    pushUpdate(cell, "Al");
+    expect(ctrl.getValue()).toBe("Alice");
+
+    pushUpdate(cell, "Alice");
+    expect(ctrl.getValue()).toBe("Alice");
+  });
+
+  it("keeps the typed value when a late initial hydration arrives during a debounce window", async () => {
+    const time = new FakeTime();
+    try {
+      const ctrl = new StringCellController(createMockHost(), {
+        timing: { strategy: "debounce", delay: 300 },
+      });
+      // Early boot: the cell has not hydrated at bind time.
+      const cell = createMockCellHandle<string>(undefined);
+      ctrl.bind(cell);
+
+      ctrl.setValue("Al"); // user typing; write still debounced
+      pushUpdate(cell, ""); // late initial hydration (pre-write snapshot)
+      expect(ctrl.getValue()).toBe("Al");
+
+      time.tick(300); // debounced write lands
+      expect(cell.get()).toBe("Al");
+      await time.runMicrotasks();
+      expect(ctrl.getValue()).toBe("Al");
+    } finally {
+      time.restore();
+    }
+  });
+
+  it("keeps an uncommitted edit over a remote update while using the blur strategy", () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "blur" },
+    });
+    const cell = createMockCellHandle<string>("");
+    ctrl.bind(cell);
+
+    ctrl.setValue("Ali"); // typed, not yet committed (commits on blur)
+    pushUpdate(cell, "remote-edit");
+    // The in-progress local edit wins; the blur-time write will overwrite the
+    // remote value anyway (last-write-wins set).
+    expect(ctrl.getValue()).toBe("Ali");
+
+    ctrl.onBlur(); // commits the edit
+    expect(cell.get()).toBe("Ali");
+  });
+
+  it("accepts remote updates — including a clear back to the pre-edit value — once the write settled", async () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle<string>("");
+    ctrl.bind(cell);
+
+    ctrl.setValue("Alice");
+    await settleWrites();
+
+    // A genuinely newer remote value must repaint...
+    pushUpdate(cell, "Bob");
+    expect(ctrl.getValue()).toBe("Bob");
+
+    ctrl.setValue("Carol");
+    await settleWrites();
+
+    // ...and so must a remote clear that matches the pre-edit baseline.
+    pushUpdate(cell, "Bob");
+    expect(ctrl.getValue()).toBe("Bob");
+  });
+
+  it("shows an authoritative remote clear-to-undefined instead of the last known value", () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle<string>("Alice");
+    ctrl.bind(cell);
+    expect(ctrl.getValue()).toBe("Alice");
+
+    // The backend clears the cell. Unlike a fresh rebound handle's initial
+    // no-delivery state, this undefined is authoritative and must repaint the
+    // normal empty fallback.
+    pushUpdate(cell, undefined as unknown as string);
+    expect(ctrl.getValue()).toBe("");
+  });
+
+  it("does not resurrect the previous value on a same-cell rebind after a remote clear", () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle<string>("Alice");
+    ctrl.bind(cell);
+    pushUpdate(cell, undefined as unknown as string); // authoritative clear
+    expect(ctrl.getValue()).toBe("");
+
+    // A label-view drift rebind hands over a fresh unhydrated handle; the
+    // cleared value must not come back.
+    const rebound = createMockCellHandle<string>(undefined, {
+      cfcLabelView: DRIFTED_LABEL_VIEW,
+    });
+    ctrl.bind(rebound);
+    expect(ctrl.getValue()).toBe("");
+  });
+
+  it("releases a settled-but-unconverged edit when an authoritative clear arrives", async () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const initial = createMockCellHandle<string>("");
+    ctrl.bind(initial);
+
+    ctrl.setValue("Alice");
+    // Rebind swaps in a pre-write snapshot, so the write settles unconverged.
+    const rebound = createMockCellHandle<string>("", {
+      cfcLabelView: DRIFTED_LABEL_VIEW,
+    });
+    ctrl.bind(rebound);
+    await settleWrites();
+    expect(ctrl.getValue()).toBe("Alice");
+
+    // The write was lost and the cell cleared: the post-settle delivery is
+    // authoritative even when it is undefined — the edit must not be shown
+    // forever.
+    pushUpdate(rebound, undefined as unknown as string);
+    expect(ctrl.getValue()).toBe("");
+  });
+
+  it("drops local-edit protection when rebinding to a different cell", () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const cellA = createMockCellHandle<string>("a", { id: "of:cell-a" as any });
+    ctrl.bind(cellA);
+    ctrl.setValue("typed");
+
+    const cellB = createMockCellHandle<string>("other", {
+      id: "of:cell-b" as any,
+    });
+    ctrl.bind(cellB);
+    expect(ctrl.getValue()).toBe("other");
+  });
+
+  it("lets a genuinely newer remote value supersede a settled-but-unconverged edit", async () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const initial = createMockCellHandle<string>("");
+    ctrl.bind(initial);
+
+    ctrl.setValue("Alice");
+    const rebound = createMockCellHandle<string>("", {
+      cfcLabelView: DRIFTED_LABEL_VIEW,
+    });
+    ctrl.bind(rebound);
+    await settleWrites();
+
+    // Deliveries after settle reflect post-write state: a third value means a
+    // newer remote edit won and must repaint without waiting for our echo.
+    pushUpdate(rebound, "Zed");
+    expect(ctrl.getValue()).toBe("Zed");
+  });
+
+  it("a write settling after a rebind to a different cell does not release its edit", async () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const cellA = createMockCellHandle<string>("", { id: "of:cell-a" as any });
+    ctrl.bind(cellA);
+    ctrl.setValue("typed"); // write in flight against cell A
+
+    const cellB = createMockCellHandle<string>("b-val", {
+      id: "of:cell-b" as any,
+    });
+    ctrl.bind(cellB);
+    ctrl.setValue("fresh-edit"); // pending edit on cell B
+
+    // Cell A's write settles now; it must not touch cell B's pending edit.
+    await settleWrites();
+    expect(ctrl.getValue()).toBe("fresh-edit");
+    pushUpdate(cellB, "fresh-edit"); // echo confirms on B
+    expect(ctrl.getValue()).toBe("fresh-edit");
+  });
+
+  it("cancel() abandons the pending edit and bound state repaints", () => {
+    const time = new FakeTime();
+    try {
+      const ctrl = new StringCellController(createMockHost(), {
+        timing: { strategy: "debounce", delay: 300 },
+      });
+      const cell = createMockCellHandle<string>("orig");
+      ctrl.bind(cell);
+
+      ctrl.setValue("temp");
+      expect(ctrl.getValue()).toBe("temp"); // pending edit shows
+      ctrl.cancel();
+      expect(ctrl.getValue()).toBe("orig"); // bound state authoritative again
+      time.tick(300);
+      expect(cell.get()).toBe("orig"); // and the write never landed
+    } finally {
+      time.restore();
+    }
+  });
+
+  it("confirms an array edit structurally when the echo arrives on a rebound handle", () => {
+    const ctrl = new ArrayCellController<string | { k: string }>(
+      createMockHost(),
+    );
+    const initial = createMockCellHandle<(string | { k: string })[]>([]);
+    ctrl.bind(initial);
+
+    ctrl.setValue(["x", { k: "v" }]);
+    const rebound = createMockCellHandle<(string | { k: string })[]>(
+      undefined,
+      { cfcLabelView: DRIFTED_LABEL_VIEW },
+    );
+    ctrl.bind(rebound);
+    expect(ctrl.getValue()).toEqual(["x", { k: "v" }]);
+
+    // The echo is a fresh deserialized instance — equal by structure, not
+    // identity — and must still confirm (and release) the edit.
+    pushUpdate(rebound, ["x", { k: "v" }]);
+    expect(ctrl.getValue()).toEqual(["x", { k: "v" }]);
+    pushUpdate(rebound, ["x"]);
+    expect(ctrl.getValue()).toEqual(["x"]);
+  });
+
+  it("drops local-edit protection when rebinding to a different scope of the same doc", () => {
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    // Same id/space/path, user scope: a scoped cell is partitioned storage.
+    const userScoped = createMockCellHandle<string>("", { scope: "user" });
+    ctrl.bind(userScoped);
+    ctrl.setValue("typed");
+
+    // Rebind to the space-scoped cell at the same address (plus label-view
+    // drift so equals() is false): a different cell — no edit carry-over.
+    const spaceScoped = createMockCellHandle<string>("shared", {
+      scope: "space",
+      cfcLabelView: DRIFTED_LABEL_VIEW,
+    });
+    ctrl.bind(spaceScoped);
+    expect(ctrl.getValue()).toBe("shared");
+  });
+
+  it("treats a delivery holding a different cell link as not confirming the edit", () => {
+    const ctrl = new CellController<unknown>(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const cell = createMockCellHandle<unknown>("plain");
+    ctrl.bind(cell);
+
+    const linkA = createMockCellHandle("a", { id: "of:link-a" as any });
+    const linkB = createMockCellHandle("b", { id: "of:link-b" as any });
+    ctrl.setValue(linkA);
+    // A stale delivery carrying a DIFFERENT link must not read as the echo of
+    // our edit (links compare by identity, not structure).
+    pushUpdate(cell, linkB);
+    expect(ctrl.getValue()).toBe(linkA);
+  });
+
+  it("does not confirm on structurally different partial echoes (array and object)", () => {
+    const arrCtrl = new ArrayCellController<string>(createMockHost());
+    const arrCell = createMockCellHandle<string[]>([]);
+    arrCtrl.bind(arrCell);
+    arrCtrl.setValue(["a", "b"]);
+    // Shorter partial echo of an earlier state must not confirm or repaint.
+    pushUpdate(arrCell, ["a"]);
+    expect(arrCtrl.getValue()).toEqual(["a", "b"]);
+
+    const objCtrl = new CellController<{ k: string }>(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+    const objCell = createMockCellHandle<{ k: string }>({ k: "" });
+    objCtrl.bind(objCell);
+    objCtrl.setValue({ k: "v" });
+    // Extra keys make it a different value — not our echo.
+    pushUpdate(objCell, { k: "v", extra: 1 } as unknown as { k: string });
+    expect(objCtrl.getValue()).toEqual({ k: "v" });
+  });
+
+  it("setValue on a plain (non-cell) binding leaves the value to the host property system", () => {
+    const changes: Array<[string, string]> = [];
+    const ctrl = new StringCellController(createMockHost(), {
+      timing: { strategy: "immediate" },
+      onChange: (n, o) => changes.push([n, o]),
+    });
+    ctrl.bind("plain" as unknown as CellHandle<string>);
+    ctrl.setValue("next");
+    // No cell to write; the controller only reports the change.
+    expect(ctrl.getValue()).toBe("plain");
+    expect(changes).toContainEqual(["next", "plain"]);
+  });
+});
+
+//
+// CellController — custom options
+//
+
+describe("CellController — custom options", () => {
+  it("custom getValue transforms the cell value", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+      getValue: (value) => {
+        if (isCellHandle(value)) {
+          return ((value as CellHandle<string>).get() ?? "").toUpperCase();
+        }
+        return (value as string).toUpperCase();
+      },
+    });
+    const cell = createMockCellHandle("hello");
+    ctrl.bind(cell);
+    expect(ctrl.getValue()).toBe("HELLO");
+  });
+
+  it("custom setValue intercepts the write", () => {
+    const host = createMockHost();
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+      setValue: (value, newValue, _oldValue) => {
+        if (isCellHandle(value)) {
+          (value as CellHandle<string>).set(newValue + "!");
+        }
+      },
+    });
+    const cell = createMockCellHandle("start");
+    ctrl.bind(cell);
+    ctrl.setValue("hi");
+    expect(cell.get()).toBe("hi!");
+  });
+
+  it("triggerUpdate:false suppresses host.requestUpdate()", () => {
+    let updateCount = 0;
+    const host: ReactiveControllerHost = {
+      addController: () => {},
+      removeController: () => {},
+      requestUpdate: () => {
+        updateCount++;
+      },
+      updateComplete: Promise.resolve(true),
+    } as unknown as ReactiveControllerHost;
+
+    const ctrl = new CellController<string>(host, {
+      timing: { strategy: "immediate" },
+      triggerUpdate: false,
+    });
+    const cell = createMockCellHandle("a");
+    ctrl.bind(cell);
+    updateCount = 0;
+
+    pushUpdate(cell, "b");
+    expect(updateCount).toBe(0);
+  });
+});
+
+describe("CellController — writes land in the order they were made", () => {
+  // An update computed from the cell waits on the worker where the handle has
+  // read nothing; a write made meanwhile waits behind it, as a person made
+  // them: first the step, then the click.
+  const values = <V>(cell: CellHandle<V>) =>
+    writesSent(cell).map((write) => write.value);
+  const immediate = () =>
+    new CellController<number>(createMockHost(), {
+      timing: { strategy: "immediate" },
+    });
+
+  it("makes a value set while an update waits on the worker after that update", async () => {
+    const ctrl = immediate();
+    const cell = createMockCellHandle<number>();
+    const answer = holdReads(cell);
+    ctrl.bind(cell);
+
+    const stepped = ctrl.updateValue((held) => (held ?? 0) + 1);
+    ctrl.setValue(30);
+    answer({ value: 50 });
+    await stepped;
+    await settleWrites();
+
+    expect(values(cell)).toEqual([51, 30]);
+    expect(ctrl.getValue()).toBe(30);
+  });
+
+  it("computes an update from the writes queued before it", async () => {
+    const ctrl = immediate();
+    const cell = createMockCellHandle<number>();
+    const answer = holdReads(cell);
+    ctrl.bind(cell);
+
+    void ctrl.updateValue((held) => (held ?? 0) + 1);
+    ctrl.setValue(30);
+    const second = ctrl.updateValue((held) => (held ?? 0) + 1);
+    answer({ value: 50 });
+    await second;
+    await settleWrites();
+
+    expect(values(cell)).toEqual([51, 30, 31]);
+  });
+
+  it("removes, then adds back, an item in that order", async () => {
+    const changes: unknown[] = [];
+    const ctrl = new ArrayCellController<string>(createMockHost(), {
+      onChange: (value) => changes.push(value),
+    });
+    const cell = createMockCellHandle<string[]>();
+    const answer = holdReads(cell);
+    ctrl.bind(cell);
+
+    void ctrl.removeItem("x");
+    ctrl.addItem("x");
+    answer({ value: ["x"] });
+    await settleWrites();
+
+    expect(writesSent(cell).map((write) => write.type)).toEqual([
+      "cell:set",
+      "cell:push",
+    ]);
+    expect(cell.get()).toEqual(["x"]);
+    // The removal's turn came after the add was asked for, so it shows and
+    // announces nothing over the add.
+    expect(ctrl.getValue()).toEqual(["x"]);
+    expect(changes).not.toContainEqual([]);
+  });
+
+  it("makes the writes asked for on one cell there, and shows none of them once another is bound", async () => {
+    const changes: unknown[] = [];
+    const ctrl = new CellController<number>(createMockHost(), {
+      timing: { strategy: "immediate" },
+      onChange: (value) => changes.push(value),
+    });
+    const first = createMockCellHandle<number>();
+    const answer = holdReads(first);
+    ctrl.bind(first);
+    void ctrl.updateValue((held) => (held ?? 0) + 1);
+    ctrl.setValue(30);
+
+    const other = createMockCellHandle<number>(5, { id: "of:another-cell" });
+    ctrl.bind(other);
+    changes.length = 0;
+    answer({ value: 50 });
+    await settleWrites();
+
+    expect(values(first)).toEqual([51, 30]);
+    expect(values(other)).toEqual([]);
+    expect(ctrl.getValue()).toBe(5);
+    expect(changes).toEqual([]);
+  });
+
+  it("writes at once on another cell, whatever the old cell's read waits on", async () => {
+    const ctrl = immediate();
+    const stuck = createMockCellHandle<number>();
+    holdReads(stuck);
+    ctrl.bind(stuck);
+    void ctrl.updateValue((held) => (held ?? 0) + 1);
+
+    const other = createMockCellHandle<number>(5, { id: "of:another-cell" });
+    ctrl.bind(other);
+    ctrl.setValue(7);
+    await ctrl.updateValue((held) => (held ?? 0) + 1);
+    await settleWrites();
+
+    expect(values(other)).toEqual([7, 8]);
+  });
+
+  it("writes nothing for an update whose read is refused, and still sets a value asked for after it", async () => {
+    const ctrl = immediate();
+    const cell = createMockCellHandle<number>();
+    const answer = holdReads(cell);
+    ctrl.bind(cell);
+    const stepped = ctrl.updateValue((held) => (held ?? 0) + 1);
+    // A value set is not computed from the read, so its refusal does not
+    // stand against it.
+    ctrl.setValue(30);
+
+    answer({ refused: { refusedBy: "display-ceiling" } });
+    await stepped;
+    await settleWrites();
+
+    expect(values(cell)).toEqual([30]);
+  });
+
+  it("keeps showing a toggle over a stale delivery while its write is in flight", () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const cell = createMockCellHandle(false);
+    ctrl.bind(cell);
+
+    void ctrl.toggle();
+    // A delivery from before the write, arriving while it is in flight.
+    pushUpdate(cell, false);
+
+    expect(ctrl.getValue()).toBe(true);
+  });
+
+  it("makes a write waiting on its timing before an update computed after it", async () => {
+    const time = new FakeTime();
+    try {
+      const ctrl = new StringCellController(createMockHost(), {
+        timing: { strategy: "debounce", delay: 300 },
+      });
+      const cell = createMockCellHandle("a");
+      ctrl.bind(cell);
+
+      ctrl.setValue("ab");
+      const updated = ctrl.updateValue((held) => `${held}!`);
+      await time.runMicrotasks();
+      await updated;
+      time.tick(300);
+
+      expect(values(cell)).toEqual(["ab", "ab!"]);
+    } finally {
+      time.restore();
+    }
+  });
+
+  it("shows and announces nothing of an update whose turn comes after another cell is bound", async () => {
+    const changes: unknown[] = [];
+    const ctrl = new CellController<number>(createMockHost(), {
+      timing: { strategy: "immediate" },
+      onChange: (value) => changes.push(value),
+    });
+    const first = createMockCellHandle<number>();
+    const answer = holdReads(first);
+    ctrl.bind(first);
+    void ctrl.updateValue((held) => (held ?? 0) + 1);
+
+    const other = createMockCellHandle<number>(5, { id: "of:another-cell" });
+    ctrl.bind(other);
+    changes.length = 0;
+    answer({ value: 50 });
+    await settleWrites();
+
+    expect(values(first)).toEqual([51]);
+    expect(changes).toEqual([]);
+    expect(ctrl.getValue()).toBe(5);
+  });
+
+  it("writes nothing, and shows nothing, for an update whose cell is refused while it reads", async () => {
+    const changes: unknown[] = [];
+    const ctrl = new BooleanCellController(createMockHost(), {
+      onChange: (value) => changes.push(value),
+    });
+    const cell = createMockCellHandle<boolean>();
+    const answer = holdReads(cell);
+    ctrl.bind(cell);
+
+    const toggled = ctrl.toggle();
+    pushRefusal(cell);
+    answer({ value: false });
+    await toggled;
+    await settleWrites();
+
+    expect(values(cell)).toEqual([]);
+    expect(ctrl.getValue()).toBe(false);
+    expect(changes).not.toContain(true);
+  });
+
+  it("shows a newer value from the cell once a toggle's write settles", async () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const cell = createMockCellHandle(false);
+    ctrl.bind(cell);
+
+    await ctrl.toggle();
+    await settleWrites();
+    pushUpdate(cell, false);
+
+    expect(ctrl.getValue()).toBe(false);
+  });
+
+  it("announces a toggle as it announces the value set in its place", async () => {
+    const announced = async (write: (ctrl: BooleanCellController) => void) => {
+      const changes: unknown[] = [];
+      const ctrl = new BooleanCellController(createMockHost(), {
+        onChange: (value, oldValue) => changes.push([value, oldValue]),
+      });
+      ctrl.bind(createMockCellHandle(false));
+      changes.length = 0;
+      write(ctrl);
+      await settleWrites();
+      return changes;
+    };
+
+    expect(await announced((ctrl) => void ctrl.toggle())).toEqual(
+      await announced((ctrl) => ctrl.setValue(true)),
+    );
+  });
+
+  it("still writes a toggle whose onChange throws, and hands the failure to its caller", async () => {
+    const ctrl = new BooleanCellController(createMockHost(), {
+      onChange: (value) => {
+        if (value) throw new Error("listener failed");
+      },
+    });
+    const cell = createMockCellHandle(false);
+    ctrl.bind(cell);
+
+    await expect(ctrl.toggle()).rejects.toThrow("listener failed");
+    await settleWrites();
+
+    expect(values(cell)).toEqual([true]);
+  });
+
+  it("refuses an update on a cell written through a custom setter, which it cannot order", () => {
+    const ctrl = new CellController<number>(createMockHost(), {
+      timing: { strategy: "immediate" },
+      setValue: (value, next) => {
+        if (isCellHandle(value)) void (value as CellHandle<number>).set(next);
+      },
+    });
+    const cell = createMockCellHandle(1);
+    ctrl.bind(cell);
+
+    expect(() => ctrl.updateValue((held) => (held ?? 0) + 1)).toThrow(
+      "custom `setValue`",
+    );
+    expect(values(cell)).toEqual([]);
+  });
+
+  it("settles an update in its turn, before the worker has taken its write", async () => {
+    const ctrl = new BooleanCellController(createMockHost());
+    const cell = createMockCellHandle(false);
+    ctrl.bind(cell);
+    const release = holdWrites(cell);
+
+    await ctrl.toggle();
+
+    expect(values(cell)).toEqual([true]);
+    release();
+  });
+
+  it("goes on with the writes queued behind an update whose read fails", async () => {
+    const ctrl = immediate();
+    const cell = createMockCellHandle<number>();
+    const answer = holdReads(cell);
+    ctrl.bind(cell);
+    void ctrl.updateValue((held) => (held ?? 0) + 1);
+    ctrl.setValue(30);
+
+    const logged = console.error;
+    console.error = () => {};
+    try {
+      answer(new Error("the worker went away"));
+      await settleWrites();
+    } finally {
+      console.error = logged;
+    }
+
+    expect(values(cell)).toEqual([30]);
+  });
+
+  it("goes on with the writes queued behind an update whose computation throws", async () => {
+    const ctrl = immediate();
+    const cell = createMockCellHandle<number>();
+    const answer = holdReads(cell);
+    ctrl.bind(cell);
+    const failed = ctrl.updateValue(() => {
+      throw new Error("no step from here");
+    });
+    ctrl.setValue(30);
+
+    answer({ value: 50 });
+    await expect(failed).rejects.toThrow("no step from here");
+    await settleWrites();
+
+    expect(values(cell)).toEqual([30]);
+  });
+});

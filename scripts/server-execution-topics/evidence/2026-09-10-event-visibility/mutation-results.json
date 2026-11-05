@@ -1,0 +1,42 @@
+[
+  {
+    "name": "control-before",
+    "exitCode": 0,
+    "expectedExit": 0
+  },
+  {
+    "name": "no-barrier",
+    "exitCode": 1,
+    "expectedExit": 1
+  },
+  {
+    "name": "no-floor",
+    "exitCode": 1,
+    "expectedExit": 1
+  },
+  {
+    "name": "no-sequence-validation",
+    "exitCode": 1,
+    "expectedExit": 1
+  },
+  {
+    "name": "no-index-recheck",
+    "exitCode": 1,
+    "expectedExit": 1
+  },
+  {
+    "name": "no-consumed-recheck",
+    "exitCode": 1,
+    "expectedExit": 1
+  },
+  {
+    "name": "full-durability-wait",
+    "exitCode": 1,
+    "expectedExit": 1
+  },
+  {
+    "name": "control-after",
+    "exitCode": 0,
+    "expectedExit": 0
+  }
+]

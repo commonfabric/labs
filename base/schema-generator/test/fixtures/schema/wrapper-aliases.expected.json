@@ -1,0 +1,73 @@
+{
+  "$defs": {
+    "AnonymousType_1": {
+      "items": {
+        "$ref": "#/$defs/RecursiveItem"
+      },
+      "type": "array"
+    },
+    "RecursiveItem": {
+      "properties": {
+        "children": {
+          "$ref": "#/$defs/AnonymousType_1"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "aliasedCell": {
+      "asCell": [
+        "cell"
+      ],
+      "items": {
+        "$ref": "#/$defs/RecursiveItem"
+      },
+      "type": "array"
+    },
+    "aliasedDefault": {
+      "$ref": "#/$defs/AnonymousType_1",
+      "default": []
+    },
+    "aliasedStream": {
+      "asCell": [
+        "stream"
+      ],
+      "items": {
+        "$ref": "#/$defs/RecursiveItem"
+      },
+      "type": "array"
+    },
+    "directCell": {
+      "$ref": "#/$defs/AnonymousType_1",
+      "asCell": [
+        "cell"
+      ]
+    },
+    "directDefault": {
+      "$ref": "#/$defs/AnonymousType_1",
+      "default": []
+    },
+    "directStream": {
+      "$ref": "#/$defs/AnonymousType_1",
+      "asCell": [
+        "stream"
+      ]
+    }
+  },
+  "required": [
+    "aliasedCell",
+    "aliasedDefault",
+    "aliasedStream",
+    "directCell",
+    "directDefault",
+    "directStream"
+  ],
+  "type": "object"
+}

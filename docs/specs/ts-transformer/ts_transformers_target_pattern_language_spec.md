@@ -60,13 +60,16 @@ Each construct family is classified as one of:
 | Construct family | Status | Intended meaning |
 | --- | --- | --- |
 | Reactive property access in JSX or helper-owned expressions | Supported | Authored reactive reads like `state.user.name` should remain natural and lower to explicit reactive access as needed |
-| Reactive element access with static or known-symbol keys | Supported | Forms like `items[0]`, `item[NAME]`, `state["foo"]` should lower predictably when the access path is statically representable |
+| Reactive element access with static or known-symbol keys | Supported | Forms like `items[0]`, `item[NAME]`, `state["foo"]`, and `row[KEY]` with `const KEY = "k"` should lower predictably when the access path is statically representable, and to the same read wherever they are written: the pattern body, JSX, or a reactive collection callback |
+| `input[SELF]` on a pattern's own input parameter, in the pattern body, JSX, a plain-array callback, or a handler's bound state | Supported | `SELF` names the pattern's own result, and on the input the pattern body receives `input[SELF]` reads the same result as a destructured `[SELF]: self` binding, including a path read through it (`input[SELF].title`, `input[SELF].items.map(...)`), a well-known key read through it (`input[SELF][NAME]`), a local bound to it (`const self = input[SELF]`), and a `[SELF]` destructured off the input in the body |
+| `x[SELF]` inside an explicit computation callback, inside a reactive collection callback, or on anything but the pattern's own input parameter itself | Unsupported | Only the input the pattern body receives knows the pattern's result. `computed` / `action` / `lift` / `handler` callbacks see plain values, a reactive collection callback sees a captured reference to the input, and a value read off the input or another pattern's result is not the input, so `[SELF]` on any of them is `undefined`. The receiver must be the parameter itself: a local holding the input (`const i = input; i[SELF]`) is not followed back to it, and is reported too. The compiler reports all of these; write `input[SELF]` or destructure `[SELF]: self`, in the pattern body, and capture that local where a callback needs it. A value built from an object literal holds whatever keys it was given and is outside this row |
 | Reactive ternary control flow in supported lowered value-expression sites | Supported | Authored `cond ? x : y` should preserve JavaScript branch meaning in JSX, top-level pattern-body value sites, and callback-local values inside supported collection callbacks |
 | Callback-local value bindings inside a plain-array `map` callback | Supported | A plain-array `map` callback in a pattern body runs during pattern build and its result is collected rather than read, so its value-expression sites are pattern-body value sites: a binding such as `const isToday = weekDates?.[colIdx] === todayDate` inside `COLUMN_INDICES.map(...)` lowers to a per-iteration lift-applied computation, and reads the same as the equivalent binding written directly in the pattern body |
 | Callback-local value bindings inside a result-interpreting array callback | Unsupported | `filter`, `find`, `some`, `every`, `sort`, `flatMap`, and `reduce` read what their callback returns while they run — as a boolean, a number, an array test, or the next accumulator. A lifted binding returned from one of those is a cell rather than the value the method expects, so these callbacks carry no pattern-owned wrapper site and a reactive computation in one still moves into `computed(...)` |
 | Reactive logical control flow in supported lowered pattern-owned expression sites (`&&`, `||`, `??`) | Supported | Reactive short-circuiting should preserve authored JavaScript meaning where the expression-site policy admits lowering |
 | Authored helper control flow (`ifElse`, `when`, `unless`) | Supported | These are first-class reactive control-flow forms, not mere implementation helpers |
 | `map` / `filter` / `flatMap` on reactive receivers in pattern-facing contexts | Supported | These operators are core language forms and may be structurally rewritten to explicit reactive collection operators |
+| Keyed indexes on explicit array-valued cells | Supported | `groupBy` and `keyBy` accept one-element selectors and return typed lookup handles. Cell keys denote identity; primitive keys denote values; nullish keys omit the occurrence. Index and whole-array selector parameters are not supported; see [index documentation](../../features/collection-indexes.md) |
 | Named aggregates on explicit array-valued cells | Supported | `count`, `sum`, `min`, `max`, `minBy`, and `maxBy` build reactive aggregates. Predicate and score callbacks lower to per-element patterns. Ordinary array-typed receivers do not expose these extra methods through the public types; see [aggregate contracts](../../features/collection-aggregates.md) |
 | Callback-local plain JS arrays in rewritten callbacks | Supported | Plain JS arrays inside callbacks stay plain; they are not implicitly promoted into pattern-owned array operators |
 | Direct JSX sink chains over structural array results | Supported | Terminal sink chains like `.filter(...).join(", ")` and ordinary receiver-method chains above that sink are valid JSX expression forms |
@@ -85,6 +88,7 @@ Each construct family is classified as one of:
 | Direct top-level `.get()` reads with no lowerable expression site | Unsupported | A read with nothing to carry it stays outside the language, because there is no site to lower into a lift: statement position (`count.get();`) and a reactive array-method callback (`rows.map((row) => row.cell.get())`), whose callback becomes a sub-pattern over per-element cells rather than pattern-body code. These move into an explicit computation callback such as `computed`, `action`, `lift`, or `handler` |
 | `.get()` on ordinary opaque/reactive values | Unsupported | Pattern inputs, `computed` results, `lift` results, and other ordinary reactive values should be read directly rather than through `.get()` |
 | Statement-boundary imperative constructs in top-level pattern-owned code (`let`, loops, function creation, early return) | Unsupported | Top-level pattern context is intentionally declarative; imperative statement structure belongs in explicit callback bodies such as `computed`, `action`, `lift`, or `handler` |
+| `let` and `var` at module scope, exported or not | Unsupported | Module state is `const`. A value that changes belongs in a cell the pattern owns, and imperative code that needs a `let` or `var` belongs inside a function body, where both are ordinary code. The compiler reports either keyword at module scope; an ambient `declare let` or `declare var` emits nothing and is outside this row |
 
 ## 4.1 Authoring Context Guide
 
@@ -208,6 +212,7 @@ action(() => state.name.trim())
 ```ts
 // Shown inside a pattern body.
 computed(() => derivedValue.get())
+computed(() => input[SELF])
 ```
 
 Why:
@@ -215,6 +220,10 @@ Why:
 - dynamic access, receiver methods, and true-cell eager reads are valid here
 - `.get()` on ordinary opaque/reactive values is still not part of the
   language, even inside a computation callback
+- `input[SELF]` looks like any other key read off the input, and dynamic access
+  such as `computed(() => input[key])` is valid here, but the callback sees the
+  input as a plain value, on which `SELF` names nothing; `const self =
+  input[SELF]` in the pattern body, captured here, is the form that works
 
 ### Where A Builder's Callback May Come From
 

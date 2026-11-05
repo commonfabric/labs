@@ -1,0 +1,2572 @@
+{
+  "methodology": {
+    "sizes": [
+      11,
+      25,
+      50,
+      100
+    ],
+    "repetitions": 3,
+    "orderPerArm": [
+      [
+        11,
+        25,
+        50,
+        100
+      ],
+      [
+        25,
+        50,
+        100,
+        11
+      ],
+      [
+        50,
+        100,
+        11,
+        25
+      ]
+    ],
+    "armsInExecutionOrder": [
+      "baseline-r1",
+      "final-r1",
+      "final-r2",
+      "baseline-r2",
+      "baseline-r3",
+      "final-r3"
+    ],
+    "launch": "CF_CFC_PREPARE_LADDER=1 CF_CFC_PREPARE_REPS=1 CF_CFC_PREPARE_START_REP=<1|2|3> CF_CFC_PREPARE_OUT=<arm-directory> deno task integration patterns cfc-prepare",
+    "execution": "Isolated integration toolshed/shell servers; no Loom. Explicitly dispose prior browser runtime before navigation to prevent CPU profiler selecting stale idle workers. Fresh piece for every observation.",
+    "runtimePosture": {
+      "serverExecution": false,
+      "cfcEnforcementMode": "enforce-explicit",
+      "cfcFlowLabels": "persist",
+      "evidence": "Harness logs record serverExecution=false; author runtime explicitly declares enforce-explicit/persist; shell uses existing enforce-explicit/persist defaults."
+    },
+    "boundary": "Visible duration starts at native button click event (browser performance.now), ends when MutationObserver-driven predicate sees exactly N expected bubble elements with nonzero layout boxes and visible display/visibility. Pre-settle and target marking outside timer. No post-click runtime idle or view settle drives the measurement. StepTimer independently records click dispatch plus DOM-wait wall time.",
+    "profile": "attachWorkerProfiler/startWorkerProfile/writeWorkerProfile; V8 worker samples with prepareCfc anywhere in parent chain form CFC bucket. Each repetition has nonzero prepareCfc samples. Inclusive function breakdowns overlap and must not be summed.",
+    "counters": "before/after worker getLoggerCounts snapshots; counts are differences. Logger baselines reset before interaction. scheduler/run/action and scheduler/run/commit totals are worker milliseconds. Statistics sampled immediately after profile stop, so an asynchronous tail may extend beyond the first visible frame.",
+    "load": "uptime load averages recorded independently for every raw row.",
+    "slope": "Ordinary least squares log(median event-to-visible milliseconds) against log(N), four size medians.",
+    "labelFence": "awaitViewSettled after event-to-visible, profile, counters and load snapshots, before all property/label reads.",
+    "diagnosticGap": "Between baseline-r1 and final-r1, interrupted CFC-only final-r1 and N11 candidate correctness diagnostic ran. Final-r1 was completely rerun with candidate before recorded pair comparison.",
+    "readme": "Exact normalized full snapshot comparison executable: /tmp/cfc-round2-browser-compare-v3.py. Raw row files and profiles remain in each arm directory."
+  },
+  "limitations": [
+    "SQLite fixture seeds one thread row whose labeled packed column already contains N-message JSON array; direct aggregate query was separately tried and failed identically on baseline and final (3 pattern assertions passed,5 undefined after selection). The timed selector/parser/natural-map boundary is representative post-SQL, but SQL aggregation is not exercised in v3.",
+    "Root VNode label queries return absent views for session output; author runtime reports absent/readFailed=false. Positive worker stored text-slot views and resolved carried text/class views are now captured and compared exactly. Text resolves to an inline data URI with carried labels, so asking its bare target for stored metadata returns absent by design.",
+    "Worker profiles include dispatch overhead outside exact event-to-visible interval and may include asynchronous tail; inclusive function buckets overlap.",
+    "Visible means nonzero layout boxes and visible CSS, not all messages simultaneously within viewport.",
+    "CFC share is whole profiled open, not a separately delimited single instantiation commit.",
+    "Per-observation uptime recorded; drift remains despite arm/repetition alternation. Only final v3 directories represent final paired evidence. Earlier v2 and diagnostic runs retained separately.",
+    "Attempted SQL INSERT...SELECT materialization of json_group_array into labeled threads was explicitly rejected identically by baseline/final labeled-database write guard; raw logs /tmp/cfc-round2-materialized-baseline-test.log and /tmp/cfc-round2-materialized-final-test.log. No guard bypass was attempted."
+  ],
+  "arms": [
+    {
+      "directory": "/tmp/cfc-round2-browser-baseline-v3",
+      "rows": [
+        {
+          "label": "n11-r1",
+          "n": 11,
+          "repetition": 1,
+          "visibleMs": 266,
+          "uptime": "10:33  up 1 day, 20:04, 15 users, load averages: 3.60 3.92 5.46",
+          "scheduler/run/action": 77.59999996423721,
+          "scheduler/run/commit": 97.40000000596046,
+          "cfcPreparedTx": 15,
+          "overlapWildcardQueries": 726,
+          "authoritativeCoverCalls": 2223,
+          "flowTemplateEntriesMinted": 99,
+          "flowTemplateContainers": 33,
+          "sampledMs": 459.421,
+          "prepareMs": 79.281,
+          "prepareShare": 0.1725672095964268,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "(anonymous)": 6.954,
+              "update": 4.463,
+              "joinLabels": 3.289,
+              "read": 3.207,
+              "prepareBoundaryCommit": 2.909,
+              "wasm-function[3]": 2.886,
+              "coalesceLabelEntries": 2.859,
+              "joinLabelValues": 2.813,
+              "feedPlainObject": 2.233,
+              "mapRecordChildren": 2.221,
+              "cloneLabel": 2.216,
+              "encodePointer": 1.934
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 18.575,
+              "canonicalizePreparedDigestInput": 8.934,
+              "canonicalizeWritePolicyInputs": 0.0,
+              "compareWritePolicyInput": 6.38,
+              "verifyInputRequirements": 8.024,
+              "coalesceLabelEntries": 7.532,
+              "joinLabels": 8.919,
+              "authoritativeCoverFor": 13.062,
+              "cover": 0.0,
+              "overlapping": 4.793
+            }
+          }
+        },
+        {
+          "label": "n11-r2",
+          "n": 11,
+          "repetition": 2,
+          "visibleMs": 190.59999999403954,
+          "uptime": "10:35  up 1 day, 20:07, 15 users, load averages: 9.54 6.88 6.47",
+          "scheduler/run/action": 60.50000008940697,
+          "scheduler/run/commit": 74.49999997019768,
+          "cfcPreparedTx": 15,
+          "overlapWildcardQueries": 726,
+          "authoritativeCoverCalls": 2223,
+          "flowTemplateEntriesMinted": 99,
+          "flowTemplateContainers": 33,
+          "sampledMs": 346.428,
+          "prepareMs": 61.467,
+          "prepareShare": 0.17743080813329176,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "isPrefix2": 4.788,
+              "(anonymous)": 3.644,
+              "wasm-function[3]": 3.184,
+              "canonicalizeLogicalPath": 2.832,
+              "joinLabelValues": 2.637,
+              "encodePointer": 2.539,
+              "update": 2.217,
+              "overlapping": 1.94,
+              "prepareBoundaryCommit": 1.919,
+              "read": 1.908,
+              "cloneLabel": 1.898,
+              "joinLabels": 1.654
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 13.546,
+              "canonicalizePreparedDigestInput": 6.895,
+              "canonicalizeWritePolicyInputs": 0.0,
+              "compareWritePolicyInput": 4.773,
+              "verifyInputRequirements": 6.707,
+              "coalesceLabelEntries": 5.776,
+              "joinLabels": 4.969,
+              "authoritativeCoverFor": 11.159,
+              "cover": 0.0,
+              "overlapping": 7.999
+            }
+          }
+        },
+        {
+          "label": "n11-r3",
+          "n": 11,
+          "repetition": 3,
+          "visibleMs": 234.09999999403954,
+          "uptime": "10:36  up 1 day, 20:07, 15 users, load averages: 8.15 6.74 6.43",
+          "scheduler/run/action": 73.00000002980232,
+          "scheduler/run/commit": 89.39999997615814,
+          "cfcPreparedTx": 15,
+          "overlapWildcardQueries": 726,
+          "authoritativeCoverCalls": 2223,
+          "flowTemplateEntriesMinted": 99,
+          "flowTemplateContainers": 33,
+          "sampledMs": 422.309,
+          "prepareMs": 74.75,
+          "prepareShare": 0.1770030948902344,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "(anonymous)": 4.867,
+              "wasm-function[3]": 4.452,
+              "encodePointer": 4.18,
+              "update": 3.814,
+              "joinLabelValues": 3.382,
+              "read": 3.34,
+              "isPrefix2": 3.186,
+              "coalesceLabelEntries": 3.182,
+              "joinLabels": 2.6,
+              "canonicalizeLogicalPath": 2.238,
+              "visit": 2.003,
+              "utf8SortedKeysOf": 1.915
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 18.742,
+              "canonicalizePreparedDigestInput": 9.192,
+              "canonicalizeWritePolicyInputs": 0.0,
+              "compareWritePolicyInput": 5.736,
+              "verifyInputRequirements": 8.099,
+              "coalesceLabelEntries": 9.135,
+              "joinLabels": 7.106,
+              "authoritativeCoverFor": 10.553,
+              "cover": 0.0,
+              "overlapping": 5.828
+            }
+          }
+        },
+        {
+          "label": "n25-r1",
+          "n": 25,
+          "repetition": 1,
+          "visibleMs": 575.2000000178814,
+          "uptime": "10:33  up 1 day, 20:04, 15 users, load averages: 3.95 3.99 5.47",
+          "scheduler/run/action": 133.9999998807907,
+          "scheduler/run/commit": 300.5000000298023,
+          "cfcPreparedTx": 29,
+          "overlapWildcardQueries": 3750,
+          "authoritativeCoverCalls": 11351,
+          "flowTemplateEntriesMinted": 225,
+          "flowTemplateContainers": 75,
+          "sampledMs": 712.872,
+          "prepareMs": 257.107,
+          "prepareShare": 0.36066362544748565,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "isPrefix2": 32.736,
+              "(anonymous)": 22.602,
+              "wasm-function[3]": 12.746,
+              "update": 12.135,
+              "joinLabelValues": 10.814,
+              "prepareBoundaryCommit": 9.003,
+              "coalesceLabelEntries": 8.803,
+              "encodePointer": 8.625,
+              "read": 7.974,
+              "utf8SortedKeysOf": 7.657,
+              "canonicalizeLogicalPath": 7.616,
+              "verifyInputRequirements": 7.386
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 58.695,
+              "canonicalizePreparedDigestInput": 33.876,
+              "canonicalizeWritePolicyInputs": 0.0,
+              "compareWritePolicyInput": 23.954,
+              "verifyInputRequirements": 34.258,
+              "coalesceLabelEntries": 27.318,
+              "joinLabels": 18.324,
+              "authoritativeCoverFor": 60.548,
+              "cover": 0.0,
+              "overlapping": 46.506
+            }
+          }
+        },
+        {
+          "label": "n25-r2",
+          "n": 25,
+          "repetition": 2,
+          "visibleMs": 745.3000000119209,
+          "uptime": "10:35  up 1 day, 20:06, 15 users, load averages: 10.66 6.95 6.49",
+          "scheduler/run/action": 185.89999997615814,
+          "scheduler/run/commit": 381.0999999642372,
+          "cfcPreparedTx": 29,
+          "overlapWildcardQueries": 3750,
+          "authoritativeCoverCalls": 11351,
+          "flowTemplateEntriesMinted": 225,
+          "flowTemplateContainers": 75,
+          "sampledMs": 956.741,
+          "prepareMs": 327.855,
+          "prepareShare": 0.3426789486391824,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "isPrefix2": 35.955,
+              "(anonymous)": 31.102,
+              "wasm-function[3]": 17.433,
+              "cloneLabel": 12.842,
+              "canonicalizeLogicalPath": 11.86,
+              "encodePointer": 11.796,
+              "joinLabelValues": 11.219,
+              "update": 10.257,
+              "read": 9.935,
+              "prepareBoundaryCommit": 9.933,
+              "overlapping": 9.61,
+              "coalesceLabelEntries": 8.614
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 67.115,
+              "canonicalizePreparedDigestInput": 37.576,
+              "canonicalizeWritePolicyInputs": 0.0,
+              "compareWritePolicyInput": 27.258,
+              "verifyInputRequirements": 43.253,
+              "coalesceLabelEntries": 35.841,
+              "joinLabels": 22.727,
+              "authoritativeCoverFor": 80.012,
+              "cover": 0.0,
+              "overlapping": 58.136
+            }
+          }
+        },
+        {
+          "label": "n25-r3",
+          "n": 25,
+          "repetition": 3,
+          "visibleMs": 1264.0999999940395,
+          "uptime": "10:36  up 1 day, 20:07, 15 users, load averages: 8.15 6.74 6.43",
+          "scheduler/run/action": 252.89999985694885,
+          "scheduler/run/commit": 607.1000000238419,
+          "cfcPreparedTx": 29,
+          "overlapWildcardQueries": 3750,
+          "authoritativeCoverCalls": 11351,
+          "flowTemplateEntriesMinted": 225,
+          "flowTemplateContainers": 75,
+          "sampledMs": 1431.991,
+          "prepareMs": 511.101,
+          "prepareShare": 0.35691634933459776,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "isPrefix2": 76.545,
+              "(anonymous)": 36.223,
+              "wasm-function[3]": 29.249,
+              "prepareBoundaryCommit": 17.517,
+              "joinLabelValues": 17.439,
+              "canonicalizeLogicalPath": 17.297,
+              "update": 16.786,
+              "read": 16.571,
+              "coalesceLabelEntries": 16.342,
+              "encodePointer": 15.716,
+              "cloneLabel": 15.327,
+              "visit": 11.344
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 113.339,
+              "canonicalizePreparedDigestInput": 60.786,
+              "canonicalizeWritePolicyInputs": 0.0,
+              "compareWritePolicyInput": 44.179,
+              "verifyInputRequirements": 71.005,
+              "coalesceLabelEntries": 51.038,
+              "joinLabels": 31.896,
+              "authoritativeCoverFor": 125.892,
+              "cover": 0.0,
+              "overlapping": 101.29
+            }
+          }
+        },
+        {
+          "label": "n50-r1",
+          "n": 50,
+          "repetition": 1,
+          "visibleMs": 1802.4000000059605,
+          "uptime": "10:33  up 1 day, 20:04, 15 users, load averages: 3.95 3.99 5.47",
+          "scheduler/run/action": 327.8999998867512,
+          "scheduler/run/commit": 1065.9999999701977,
+          "cfcPreparedTx": 54,
+          "overlapWildcardQueries": 15000,
+          "authoritativeCoverCalls": 45201,
+          "flowTemplateEntriesMinted": 450,
+          "flowTemplateContainers": 150,
+          "sampledMs": 1933.883,
+          "prepareMs": 958.228,
+          "prepareShare": 0.495494298258995,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "isPrefix2": 242.761,
+              "(anonymous)": 84.382,
+              "wasm-function[3]": 44.129,
+              "joinLabelValues": 43.838,
+              "canonicalizeLogicalPath": 34.013,
+              "prepareBoundaryCommit": 33.57,
+              "read": 31.121,
+              "coalesceLabelEntries": 30.966,
+              "cloneLabel": 29.838,
+              "update": 25.699,
+              "verifyInputRequirements": 25.443,
+              "encodePointer": 24.505
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 154.914,
+              "canonicalizePreparedDigestInput": 87.971,
+              "canonicalizeWritePolicyInputs": 0.0,
+              "compareWritePolicyInput": 64.733,
+              "verifyInputRequirements": 112.941,
+              "coalesceLabelEntries": 85.925,
+              "joinLabels": 68.614,
+              "authoritativeCoverFor": 362.181,
+              "cover": 0.0,
+              "overlapping": 312.19
+            }
+          }
+        },
+        {
+          "label": "n50-r2",
+          "n": 50,
+          "repetition": 2,
+          "visibleMs": 2137.0999999940395,
+          "uptime": "10:35  up 1 day, 20:06, 15 users, load averages: 10.66 6.95 6.49",
+          "scheduler/run/action": 425.4999998509884,
+          "scheduler/run/commit": 1267.300000011921,
+          "cfcPreparedTx": 54,
+          "overlapWildcardQueries": 15000,
+          "authoritativeCoverCalls": 45201,
+          "flowTemplateEntriesMinted": 450,
+          "flowTemplateContainers": 150,
+          "sampledMs": 2292.606,
+          "prepareMs": 1132.09,
+          "prepareShare": 0.4938005047531063,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "isPrefix2": 301.543,
+              "(anonymous)": 99.657,
+              "wasm-function[3]": 58.264,
+              "joinLabelValues": 47.501,
+              "prepareBoundaryCommit": 35.913,
+              "verifyInputRequirements": 34.668,
+              "canonicalizeLogicalPath": 34.324,
+              "encodePointer": 33.925,
+              "read": 31.102,
+              "update": 31.019,
+              "cloneLabel": 30.432,
+              "coalesceLabelEntries": 30.425
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 189.906,
+              "canonicalizePreparedDigestInput": 107.358,
+              "canonicalizeWritePolicyInputs": 0.0,
+              "compareWritePolicyInput": 79.804,
+              "verifyInputRequirements": 131.111,
+              "coalesceLabelEntries": 98.745,
+              "joinLabels": 71.573,
+              "authoritativeCoverFor": 443.09,
+              "cover": 0.0,
+              "overlapping": 389.949
+            }
+          }
+        },
+        {
+          "label": "n50-r3",
+          "n": 50,
+          "repetition": 3,
+          "visibleMs": 1849.5999999940395,
+          "uptime": "10:35  up 1 day, 20:07, 15 users, load averages: 9.09 6.83 6.46",
+          "scheduler/run/action": 360.4999999701977,
+          "scheduler/run/commit": 1089.1000001132488,
+          "cfcPreparedTx": 54,
+          "overlapWildcardQueries": 15000,
+          "authoritativeCoverCalls": 45201,
+          "flowTemplateEntriesMinted": 450,
+          "flowTemplateContainers": 150,
+          "sampledMs": 2027.448,
+          "prepareMs": 981.491,
+          "prepareShare": 0.48410168842801393,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "isPrefix2": 254.233,
+              "(anonymous)": 97.163,
+              "wasm-function[3]": 40.241,
+              "joinLabelValues": 39.07,
+              "prepareBoundaryCommit": 33.185,
+              "coalesceLabelEntries": 31.89,
+              "read": 31.161,
+              "cloneLabel": 29.636,
+              "update": 26.374,
+              "verifyInputRequirements": 24.682,
+              "canonicalizeLogicalPath": 23.824,
+              "encodePointer": 23.168
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 160.211,
+              "canonicalizePreparedDigestInput": 91.106,
+              "canonicalizeWritePolicyInputs": 0.0,
+              "compareWritePolicyInput": 68.528,
+              "verifyInputRequirements": 106.992,
+              "coalesceLabelEntries": 87.457,
+              "joinLabels": 65.925,
+              "authoritativeCoverFor": 383.509,
+              "cover": 0.0,
+              "overlapping": 336.998
+            }
+          }
+        },
+        {
+          "label": "n100-r1",
+          "n": 100,
+          "repetition": 1,
+          "visibleMs": 6458.5,
+          "uptime": "10:33  up 1 day, 20:04, 15 users, load averages: 4.36 4.07 5.49",
+          "scheduler/run/action": 1011.3999998569489,
+          "scheduler/run/commit": 5232.200000196695,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 60000,
+          "authoritativeCoverCalls": 180401,
+          "flowTemplateEntriesMinted": 900,
+          "flowTemplateContainers": 300,
+          "sampledMs": 6608.807,
+          "prepareMs": 4676.395,
+          "prepareShare": 0.7076004791787686,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "isPrefix2": 1910.632,
+              "(anonymous)": 483.193,
+              "joinLabelValues": 189.702,
+              "wasm-function[3]": 142.082,
+              "verifyInputRequirements": 123.273,
+              "cloneLabel": 117.022,
+              "coalesceLabelEntries": 115.433,
+              "canonicalizeLogicalPath": 114.872,
+              "update": 105.44,
+              "read": 104.91,
+              "prepareBoundaryCommit": 97.055,
+              "encodePointer": 87.843
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 528.625,
+              "canonicalizePreparedDigestInput": 309.909,
+              "canonicalizeWritePolicyInputs": 0.0,
+              "compareWritePolicyInput": 225.757,
+              "verifyInputRequirements": 440.451,
+              "coalesceLabelEntries": 331.606,
+              "joinLabels": 262.998,
+              "authoritativeCoverFor": 2594.053,
+              "cover": 0.0,
+              "overlapping": 2366.294
+            }
+          }
+        },
+        {
+          "label": "n100-r2",
+          "n": 100,
+          "repetition": 2,
+          "visibleMs": 7267.9000000059605,
+          "uptime": "10:35  up 1 day, 20:06, 15 users, load averages: 10.45 6.96 6.50",
+          "scheduler/run/action": 1182.4999998509884,
+          "scheduler/run/commit": 5856.500000119209,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 60000,
+          "authoritativeCoverCalls": 180401,
+          "flowTemplateEntriesMinted": 900,
+          "flowTemplateContainers": 300,
+          "sampledMs": 7474.741,
+          "prepareMs": 5269.361,
+          "prepareShare": 0.70495566334673,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "isPrefix2": 2125.514,
+              "(anonymous)": 534.827,
+              "wasm-function[3]": 195.786,
+              "joinLabelValues": 183.189,
+              "verifyInputRequirements": 138.474,
+              "canonicalizeLogicalPath": 133.623,
+              "update": 126.713,
+              "cloneLabel": 124.039,
+              "coalesceLabelEntries": 119.203,
+              "read": 112.366,
+              "prepareBoundaryCommit": 101.912,
+              "overlapping": 99.726
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 717.565,
+              "canonicalizePreparedDigestInput": 432.088,
+              "canonicalizeWritePolicyInputs": 0.0,
+              "compareWritePolicyInput": 321.017,
+              "verifyInputRequirements": 470.882,
+              "coalesceLabelEntries": 349.719,
+              "joinLabels": 258.805,
+              "authoritativeCoverFor": 2886.895,
+              "cover": 0.0,
+              "overlapping": 2655.514
+            }
+          }
+        },
+        {
+          "label": "n100-r3",
+          "n": 100,
+          "repetition": 3,
+          "visibleMs": 6755.4000000059605,
+          "uptime": "10:35  up 1 day, 20:07, 15 users, load averages: 9.00 6.85 6.47",
+          "scheduler/run/action": 913.0999999046326,
+          "scheduler/run/commit": 5600.69999986887,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 60000,
+          "authoritativeCoverCalls": 180401,
+          "flowTemplateEntriesMinted": 900,
+          "flowTemplateContainers": 300,
+          "sampledMs": 6889.715,
+          "prepareMs": 5008.25,
+          "prepareShare": 0.7269168608570892,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "isPrefix2": 2033.934,
+              "(anonymous)": 515.77,
+              "joinLabelValues": 180.197,
+              "wasm-function[3]": 164.721,
+              "verifyInputRequirements": 132.371,
+              "canonicalizeLogicalPath": 123.758,
+              "read": 119.622,
+              "coalesceLabelEntries": 118.068,
+              "update": 117.784,
+              "cloneLabel": 114.787,
+              "prepareBoundaryCommit": 108.689,
+              "encodePointer": 98.386
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 625.364,
+              "canonicalizePreparedDigestInput": 364.489,
+              "canonicalizeWritePolicyInputs": 0.0,
+              "compareWritePolicyInput": 270.389,
+              "verifyInputRequirements": 473.066,
+              "coalesceLabelEntries": 345.092,
+              "joinLabels": 258.475,
+              "authoritativeCoverFor": 2744.395,
+              "cover": 0.0,
+              "overlapping": 2526.737
+            }
+          }
+        }
+      ],
+      "medians": [
+        {
+          "n": 11,
+          "visibleMs": 234.09999999403954,
+          "scheduler/run/action": 73.00000002980232,
+          "scheduler/run/commit": 89.39999997615814,
+          "prepareMs": 74.75,
+          "prepareShare": 0.1770030948902344,
+          "cfcPreparedTx": 15,
+          "overlapWildcardQueries": 726,
+          "authoritativeCoverCalls": 2223
+        },
+        {
+          "n": 25,
+          "visibleMs": 745.3000000119209,
+          "scheduler/run/action": 185.89999997615814,
+          "scheduler/run/commit": 381.0999999642372,
+          "prepareMs": 327.855,
+          "prepareShare": 0.35691634933459776,
+          "cfcPreparedTx": 29,
+          "overlapWildcardQueries": 3750,
+          "authoritativeCoverCalls": 11351
+        },
+        {
+          "n": 50,
+          "visibleMs": 1849.5999999940395,
+          "scheduler/run/action": 360.4999999701977,
+          "scheduler/run/commit": 1089.1000001132488,
+          "prepareMs": 981.491,
+          "prepareShare": 0.4938005047531063,
+          "cfcPreparedTx": 54,
+          "overlapWildcardQueries": 15000,
+          "authoritativeCoverCalls": 45201
+        },
+        {
+          "n": 100,
+          "visibleMs": 6755.4000000059605,
+          "scheduler/run/action": 1011.3999998569489,
+          "scheduler/run/commit": 5600.69999986887,
+          "prepareMs": 5008.25,
+          "prepareShare": 0.7076004791787686,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 60000,
+          "authoritativeCoverCalls": 180401
+        }
+      ],
+      "logLogSlope": 1.5003449537857874
+    },
+    {
+      "directory": "/tmp/cfc-round2-browser-final-v3",
+      "rows": [
+        {
+          "label": "n11-r1",
+          "n": 11,
+          "repetition": 1,
+          "visibleMs": 137.30000001192093,
+          "uptime": "10:34  up 1 day, 20:06, 15 users, load averages: 10.94 6.59 6.35",
+          "scheduler/run/action": 48.39999997615814,
+          "scheduler/run/commit": 38.20000001788139,
+          "cfcPreparedTx": 15,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 66,
+          "flowTemplateContainers": 22,
+          "sampledMs": 322.177,
+          "prepareMs": 27.3,
+          "prepareShare": 0.08473603019458248,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "verifyInputRequirements": 1.937,
+              "encodePointer": 1.623,
+              "freeze": 1.566,
+              "prepareBoundaryCommit": 1.278,
+              "read": 1.274,
+              "wasm-function[3]": 1.265,
+              "update": 0.958,
+              "stringTupleKey": 0.956,
+              "valueWriteTargets": 0.952,
+              "#buildReactivityLog": 0.944,
+              "(anonymous)": 0.853,
+              "cloneHelper": 0.664
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 5.119,
+              "canonicalizePreparedDigestInput": 1.292,
+              "canonicalizeWritePolicyInputs": 0.638,
+              "compareWritePolicyInput": 0.638,
+              "verifyInputRequirements": 5.744,
+              "coalesceLabelEntries": 0.969,
+              "joinLabels": 0.311,
+              "authoritativeCoverFor": 0.0,
+              "cover": 0.0,
+              "overlapping": 0.301
+            }
+          }
+        },
+        {
+          "label": "n11-r2",
+          "n": 11,
+          "repetition": 2,
+          "visibleMs": 149.40000000596046,
+          "uptime": "10:35  up 1 day, 20:06, 15 users, load averages: 9.42 6.52 6.33",
+          "scheduler/run/action": 56.10000005364418,
+          "scheduler/run/commit": 43.099999994039536,
+          "cfcPreparedTx": 15,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 66,
+          "flowTemplateContainers": 22,
+          "sampledMs": 315.79,
+          "prepareMs": 30.031,
+          "prepareShare": 0.09509800816998638,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "(anonymous)": 3.183,
+              "read": 1.928,
+              "getOwnPropertyDescriptor": 1.894,
+              "stringTupleKey": 1.675,
+              "update": 1.587,
+              "verifyInputRequirements": 1.262,
+              "prepareBoundaryCommit": 1.185,
+              "wasm-function[3]": 0.959,
+              "logicalPathToPointer": 0.955,
+              "resolveStoredCfcMetadata": 0.657,
+              "#buildPreparedDigestInput": 0.649,
+              "getReactivityLog": 0.64
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 6.982,
+              "canonicalizePreparedDigestInput": 2.545,
+              "canonicalizeWritePolicyInputs": 0.95,
+              "compareWritePolicyInput": 0.633,
+              "verifyInputRequirements": 7.124,
+              "coalesceLabelEntries": 0.317,
+              "joinLabels": 0.308,
+              "authoritativeCoverFor": 0.0,
+              "cover": 0.0,
+              "overlapping": 0.314
+            }
+          }
+        },
+        {
+          "label": "n11-r3",
+          "n": 11,
+          "repetition": 3,
+          "visibleMs": 335.40000000596046,
+          "uptime": "10:36  up 1 day, 20:07, 15 users, load averages: 8.91 7.05 6.55",
+          "scheduler/run/action": 134.90000000596046,
+          "scheduler/run/commit": 87.6000000834465,
+          "cfcPreparedTx": 15,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 66,
+          "flowTemplateContainers": 22,
+          "sampledMs": 668.435,
+          "prepareMs": 63.114,
+          "prepareShare": 0.09442054949247122,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "verifyInputRequirements": 4.081,
+              "(anonymous)": 3.205,
+              "read": 2.862,
+              "update": 2.827,
+              "wasm-function[3]": 2.464,
+              "encodePointer": 2.347,
+              "getOwnPropertyDescriptor": 2.251,
+              "get": 2.008,
+              "prepareBoundaryCommit": 1.914,
+              "valueWriteTargets": 1.694,
+              "canonicalizeLogicalPath": 1.633,
+              "canonicalizePreparedDigestInput": 1.605
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 12.732,
+              "canonicalizePreparedDigestInput": 4.365,
+              "canonicalizeWritePolicyInputs": 1.754,
+              "compareWritePolicyInput": 1.754,
+              "verifyInputRequirements": 11.94,
+              "coalesceLabelEntries": 1.392,
+              "joinLabels": 0.351,
+              "authoritativeCoverFor": 0.32,
+              "cover": 0.0,
+              "overlapping": 0.68
+            }
+          }
+        },
+        {
+          "label": "n25-r1",
+          "n": 25,
+          "repetition": 1,
+          "visibleMs": 243.59999999403954,
+          "uptime": "10:34  up 1 day, 20:06, 15 users, load averages: 10.94 6.59 6.35",
+          "scheduler/run/action": 80.10000005364418,
+          "scheduler/run/commit": 80.700000166893,
+          "cfcPreparedTx": 29,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 150,
+          "flowTemplateContainers": 50,
+          "sampledMs": 398.029,
+          "prepareMs": 62.186,
+          "prepareShare": 0.15623484720962544,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "verifyInputRequirements": 8.342,
+              "(anonymous)": 6.914,
+              "read": 5.743,
+              "canonicalizeLogicalPath": 3.187,
+              "prepareBoundaryCommit": 2.889,
+              "freeze": 1.915,
+              "#buildReactivityLog": 1.612,
+              "wasm-function[3]": 1.597,
+              "logicalPathToPointer": 1.597,
+              "update": 1.589,
+              "feedPlainObject": 1.577,
+              "utf8SortedKeysOf": 1.281
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 10.453,
+              "canonicalizePreparedDigestInput": 3.77,
+              "canonicalizeWritePolicyInputs": 1.263,
+              "compareWritePolicyInput": 1.263,
+              "verifyInputRequirements": 22.669,
+              "coalesceLabelEntries": 1.267,
+              "joinLabels": 0.134,
+              "authoritativeCoverFor": 0.0,
+              "cover": 0.0,
+              "overlapping": 1.589
+            }
+          }
+        },
+        {
+          "label": "n25-r2",
+          "n": 25,
+          "repetition": 2,
+          "visibleMs": 326.39999997615814,
+          "uptime": "10:35  up 1 day, 20:06, 15 users, load averages: 9.55 6.49 6.32",
+          "scheduler/run/action": 110.00000011920929,
+          "scheduler/run/commit": 103.19999995827675,
+          "cfcPreparedTx": 29,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 150,
+          "flowTemplateContainers": 50,
+          "sampledMs": 540.346,
+          "prepareMs": 81.601,
+          "prepareShare": 0.15101620073064295,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "read": 9.663,
+              "(anonymous)": 8.449,
+              "verifyInputRequirements": 5.728,
+              "stringTupleKey": 5.437,
+              "canonicalizeLogicalPath": 4.184,
+              "encodePointer": 3.889,
+              "wasm-function[3]": 3.831,
+              "utf8SortedKeysOf": 2.231,
+              "update": 1.896,
+              "#buildPreparedDigestInput": 1.599,
+              "#buildReactivityLog": 1.596,
+              "mapRecordChildren": 1.592
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 14.333,
+              "canonicalizePreparedDigestInput": 5.093,
+              "canonicalizeWritePolicyInputs": 1.89,
+              "compareWritePolicyInput": 1.581,
+              "verifyInputRequirements": 27.504,
+              "coalesceLabelEntries": 4.591,
+              "joinLabels": 2.045,
+              "authoritativeCoverFor": 0.313,
+              "cover": 0.0,
+              "overlapping": 0.326
+            }
+          }
+        },
+        {
+          "label": "n25-r3",
+          "n": 25,
+          "repetition": 3,
+          "visibleMs": 517.8000000119209,
+          "uptime": "10:36  up 1 day, 20:07, 15 users, load averages: 8.91 7.05 6.55",
+          "scheduler/run/action": 186.4000001847744,
+          "scheduler/run/commit": 164.99999994039536,
+          "cfcPreparedTx": 29,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 150,
+          "flowTemplateContainers": 50,
+          "sampledMs": 805.694,
+          "prepareMs": 125.056,
+          "prepareShare": 0.15521525541955133,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "(anonymous)": 14.189,
+              "read": 11.706,
+              "verifyInputRequirements": 11.007,
+              "canonicalizeLogicalPath": 7.728,
+              "readConsumesEntry": 4.506,
+              "encodePointer": 4.503,
+              "stringTupleKey": 3.872,
+              "canonicalizePreparedDigestInput": 3.392,
+              "wasm-function[3]": 2.884,
+              "freeze": 2.857,
+              "update": 2.679,
+              "#buildReactivityLog": 2.619
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 22.181,
+              "canonicalizePreparedDigestInput": 9.52,
+              "canonicalizeWritePolicyInputs": 3.236,
+              "compareWritePolicyInput": 1.937,
+              "verifyInputRequirements": 42.097,
+              "coalesceLabelEntries": 4.495,
+              "joinLabels": 1.602,
+              "authoritativeCoverFor": 0.0,
+              "cover": 0.0,
+              "overlapping": 0.969
+            }
+          }
+        },
+        {
+          "label": "n50-r1",
+          "n": 50,
+          "repetition": 1,
+          "visibleMs": 440.2000000178814,
+          "uptime": "10:34  up 1 day, 20:06, 15 users, load averages: 10.94 6.59 6.35",
+          "scheduler/run/action": 139.60000005364418,
+          "scheduler/run/commit": 167.0999999344349,
+          "cfcPreparedTx": 54,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 300,
+          "flowTemplateContainers": 100,
+          "sampledMs": 569.509,
+          "prepareMs": 137.326,
+          "prepareShare": 0.24113051769155536,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "read": 22.253,
+              "verifyInputRequirements": 20.093,
+              "(anonymous)": 15.888,
+              "canonicalizeLogicalPath": 11.133,
+              "stringTupleKey": 6.714,
+              "encodePointer": 3.195,
+              "wasm-function[3]": 2.84,
+              "valueWriteTargets": 2.664,
+              "utf8SortedKeysOf": 2.234,
+              "ConsumedLabelIndex": 2.061,
+              "prepareBoundaryCommit": 1.76,
+              "freeze": 1.592
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 18.425,
+              "canonicalizePreparedDigestInput": 5.722,
+              "canonicalizeWritePolicyInputs": 2.86,
+              "compareWritePolicyInput": 2.224,
+              "verifyInputRequirements": 70.484,
+              "coalesceLabelEntries": 3.164,
+              "joinLabels": 0.75,
+              "authoritativeCoverFor": 0.311,
+              "cover": 0.0,
+              "overlapping": 1.291
+            }
+          }
+        },
+        {
+          "label": "n50-r2",
+          "n": 50,
+          "repetition": 2,
+          "visibleMs": 799.2999999821186,
+          "uptime": "10:35  up 1 day, 20:06, 15 users, load averages: 9.55 6.49 6.32",
+          "scheduler/run/action": 281.4999998807907,
+          "scheduler/run/commit": 319.3999999165535,
+          "cfcPreparedTx": 54,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 300,
+          "flowTemplateContainers": 100,
+          "sampledMs": 1092.384,
+          "prepareMs": 269.95,
+          "prepareShare": 0.2471200603450801,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "read": 42.549,
+              "verifyInputRequirements": 41.908,
+              "(anonymous)": 27.87,
+              "canonicalizeLogicalPath": 21.693,
+              "stringTupleKey": 16.115,
+              "wasm-function[3]": 11.191,
+              "encodePointer": 6.496,
+              "valueWriteTargets": 6.279,
+              "freeze": 4.812,
+              "#buildReactivityLog": 4.488,
+              "prepareBoundaryCommit": 4.176,
+              "update": 3.89
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 36.07,
+              "canonicalizePreparedDigestInput": 11.642,
+              "canonicalizeWritePolicyInputs": 5.513,
+              "compareWritePolicyInput": 5.192,
+              "verifyInputRequirements": 142.695,
+              "coalesceLabelEntries": 5.515,
+              "joinLabels": 2.901,
+              "authoritativeCoverFor": 0.315,
+              "cover": 0.0,
+              "overlapping": 1.945
+            }
+          }
+        },
+        {
+          "label": "n50-r3",
+          "n": 50,
+          "repetition": 3,
+          "visibleMs": 1241,
+          "uptime": "10:36  up 1 day, 20:07, 15 users, load averages: 9.34 7.07 6.55",
+          "scheduler/run/action": 462.80000001192093,
+          "scheduler/run/commit": 436.1999998688698,
+          "cfcPreparedTx": 54,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 300,
+          "flowTemplateContainers": 100,
+          "sampledMs": 1558.356,
+          "prepareMs": 368.608,
+          "prepareShare": 0.2365364525179099,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "verifyInputRequirements": 56.426,
+              "read": 51.108,
+              "(anonymous)": 40.219,
+              "canonicalizeLogicalPath": 32.391,
+              "stringTupleKey": 20.253,
+              "wasm-function[3]": 11.792,
+              "encodePointer": 8.071,
+              "update": 8.065,
+              "prepareBoundaryCommit": 7.354,
+              "freeze": 5.45,
+              "valueWriteTargets": 5.328,
+              "utf8SortedKeysOf": 5.243
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 50.948,
+              "canonicalizePreparedDigestInput": 16.833,
+              "canonicalizeWritePolicyInputs": 7.999,
+              "compareWritePolicyInput": 7.337,
+              "verifyInputRequirements": 189.408,
+              "coalesceLabelEntries": 9.149,
+              "joinLabels": 3.47,
+              "authoritativeCoverFor": 0.316,
+              "cover": 0.0,
+              "overlapping": 2.918
+            }
+          }
+        },
+        {
+          "label": "n100-r1",
+          "n": 100,
+          "repetition": 1,
+          "visibleMs": 962.5,
+          "uptime": "10:35  up 1 day, 20:06, 15 users, load averages: 10.54 6.58 6.35",
+          "scheduler/run/action": 250.200000166893,
+          "scheduler/run/commit": 465.59999990463257,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 600,
+          "flowTemplateContainers": 200,
+          "sampledMs": 1087.539,
+          "prepareMs": 402.389,
+          "prepareShare": 0.3699996046118806,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "read": 86.09,
+              "verifyInputRequirements": 78.708,
+              "(anonymous)": 48.679,
+              "canonicalizeLogicalPath": 43.874,
+              "stringTupleKey": 25.129,
+              "wasm-function[3]": 8.9,
+              "freeze": 6.369,
+              "encodePointer": 6.077,
+              "update": 5.757,
+              "ConsumedLabelIndex": 4.493,
+              "prepareBoundaryCommit": 4.491,
+              "isWalkableLabelMap": 4.183
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 37.71,
+              "canonicalizePreparedDigestInput": 12.024,
+              "canonicalizeWritePolicyInputs": 5.962,
+              "compareWritePolicyInput": 5.455,
+              "verifyInputRequirements": 271.989,
+              "coalesceLabelEntries": 5.124,
+              "joinLabels": 2.372,
+              "authoritativeCoverFor": 0.0,
+              "cover": 0.0,
+              "overlapping": 1.537
+            }
+          }
+        },
+        {
+          "label": "n100-r2",
+          "n": 100,
+          "repetition": 2,
+          "visibleMs": 1568.4000000059605,
+          "uptime": "10:35  up 1 day, 20:06, 15 users, load averages: 9.55 6.49 6.32",
+          "scheduler/run/action": 451.50000008940697,
+          "scheduler/run/commit": 737.3000001311302,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 600,
+          "flowTemplateContainers": 200,
+          "sampledMs": 1788.639,
+          "prepareMs": 644.481,
+          "prepareShare": 0.3603192147772692,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "verifyInputRequirements": 133.032,
+              "read": 126.6,
+              "canonicalizeLogicalPath": 73.788,
+              "(anonymous)": 67.7,
+              "stringTupleKey": 54.258,
+              "wasm-function[3]": 11.183,
+              "ConsumedLabelIndex": 9.737,
+              "freeze": 9.542,
+              "update": 8.655,
+              "prepareBoundaryCommit": 8.326,
+              "encodePointer": 6.108,
+              "resolveStoredCfcMetadata": 5.947
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 56.003,
+              "canonicalizePreparedDigestInput": 18.515,
+              "canonicalizeWritePolicyInputs": 8.854,
+              "compareWritePolicyInput": 7.388,
+              "verifyInputRequirements": 436.632,
+              "coalesceLabelEntries": 7.843,
+              "joinLabels": 2.258,
+              "authoritativeCoverFor": 0.333,
+              "cover": 0.0,
+              "overlapping": 1.275
+            }
+          }
+        },
+        {
+          "label": "n100-r3",
+          "n": 100,
+          "repetition": 3,
+          "visibleMs": 1610.800000011921,
+          "uptime": "10:36  up 1 day, 20:07, 15 users, load averages: 8.99 7.03 6.54",
+          "scheduler/run/action": 429.30000019073486,
+          "scheduler/run/commit": 808.9000000357628,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 600,
+          "flowTemplateContainers": 200,
+          "sampledMs": 1862.813,
+          "prepareMs": 704.599,
+          "prepareShare": 0.3782446225144446,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "verifyInputRequirements": 153.62,
+              "read": 137.146,
+              "(anonymous)": 81.219,
+              "canonicalizeLogicalPath": 74.153,
+              "stringTupleKey": 46.986,
+              "wasm-function[3]": 18.243,
+              "ConsumedLabelIndex": 10.795,
+              "valueWriteTargets": 8.718,
+              "update": 8.666,
+              "freeze": 8.448,
+              "prepareBoundaryCommit": 7.493,
+              "utf8SortedKeysOf": 6.448
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 63.323,
+              "canonicalizePreparedDigestInput": 20.7,
+              "canonicalizeWritePolicyInputs": 10.007,
+              "compareWritePolicyInput": 8.992,
+              "verifyInputRequirements": 476.425,
+              "coalesceLabelEntries": 9.523,
+              "joinLabels": 3.863,
+              "authoritativeCoverFor": 0.0,
+              "cover": 0.0,
+              "overlapping": 2.436
+            }
+          }
+        }
+      ],
+      "medians": [
+        {
+          "n": 11,
+          "visibleMs": 149.40000000596046,
+          "scheduler/run/action": 56.10000005364418,
+          "scheduler/run/commit": 43.099999994039536,
+          "prepareMs": 30.031,
+          "prepareShare": 0.09442054949247122,
+          "cfcPreparedTx": 15,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1
+        },
+        {
+          "n": 25,
+          "visibleMs": 326.39999997615814,
+          "scheduler/run/action": 110.00000011920929,
+          "scheduler/run/commit": 103.19999995827675,
+          "prepareMs": 81.601,
+          "prepareShare": 0.15521525541955133,
+          "cfcPreparedTx": 29,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1
+        },
+        {
+          "n": 50,
+          "visibleMs": 799.2999999821186,
+          "scheduler/run/action": 281.4999998807907,
+          "scheduler/run/commit": 319.3999999165535,
+          "prepareMs": 269.95,
+          "prepareShare": 0.24113051769155536,
+          "cfcPreparedTx": 54,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1
+        },
+        {
+          "n": 100,
+          "visibleMs": 1568.4000000059605,
+          "scheduler/run/action": 429.30000019073486,
+          "scheduler/run/commit": 737.3000001311302,
+          "prepareMs": 644.481,
+          "prepareShare": 0.3699996046118806,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1
+        }
+      ],
+      "logLogSlope": 1.0851907099782647
+    }
+  ],
+  "equivalence": {
+    "pairs": [
+      {
+        "label": "n100-r1",
+        "elements": 100,
+        "equal": true,
+        "baselineSha256": "f513933e6113fc9d5eaddf7ba888270f9add5a24efc6e64a1c573ee6c7731169",
+        "finalSha256": "f513933e6113fc9d5eaddf7ba888270f9add5a24efc6e64a1c573ee6c7731169",
+        "firstDifference": null
+      },
+      {
+        "label": "n100-r2",
+        "elements": 100,
+        "equal": true,
+        "baselineSha256": "f513933e6113fc9d5eaddf7ba888270f9add5a24efc6e64a1c573ee6c7731169",
+        "finalSha256": "f513933e6113fc9d5eaddf7ba888270f9add5a24efc6e64a1c573ee6c7731169",
+        "firstDifference": null
+      },
+      {
+        "label": "n100-r3",
+        "elements": 100,
+        "equal": true,
+        "baselineSha256": "f513933e6113fc9d5eaddf7ba888270f9add5a24efc6e64a1c573ee6c7731169",
+        "finalSha256": "f513933e6113fc9d5eaddf7ba888270f9add5a24efc6e64a1c573ee6c7731169",
+        "firstDifference": null
+      },
+      {
+        "label": "n11-r1",
+        "elements": 11,
+        "equal": true,
+        "baselineSha256": "d98246998c202914d5c8ff83006d5b3c73cd78f18a70286f1b4604c5193e35e5",
+        "finalSha256": "d98246998c202914d5c8ff83006d5b3c73cd78f18a70286f1b4604c5193e35e5",
+        "firstDifference": null
+      },
+      {
+        "label": "n11-r2",
+        "elements": 11,
+        "equal": true,
+        "baselineSha256": "d98246998c202914d5c8ff83006d5b3c73cd78f18a70286f1b4604c5193e35e5",
+        "finalSha256": "d98246998c202914d5c8ff83006d5b3c73cd78f18a70286f1b4604c5193e35e5",
+        "firstDifference": null
+      },
+      {
+        "label": "n11-r3",
+        "elements": 11,
+        "equal": true,
+        "baselineSha256": "d98246998c202914d5c8ff83006d5b3c73cd78f18a70286f1b4604c5193e35e5",
+        "finalSha256": "d98246998c202914d5c8ff83006d5b3c73cd78f18a70286f1b4604c5193e35e5",
+        "firstDifference": null
+      },
+      {
+        "label": "n25-r1",
+        "elements": 25,
+        "equal": true,
+        "baselineSha256": "f6759a4e0c557a7842642c9fb7d3fd303f1bf492cf5930bc78027e368626e8e7",
+        "finalSha256": "f6759a4e0c557a7842642c9fb7d3fd303f1bf492cf5930bc78027e368626e8e7",
+        "firstDifference": null
+      },
+      {
+        "label": "n25-r2",
+        "elements": 25,
+        "equal": true,
+        "baselineSha256": "f6759a4e0c557a7842642c9fb7d3fd303f1bf492cf5930bc78027e368626e8e7",
+        "finalSha256": "f6759a4e0c557a7842642c9fb7d3fd303f1bf492cf5930bc78027e368626e8e7",
+        "firstDifference": null
+      },
+      {
+        "label": "n25-r3",
+        "elements": 25,
+        "equal": true,
+        "baselineSha256": "f6759a4e0c557a7842642c9fb7d3fd303f1bf492cf5930bc78027e368626e8e7",
+        "finalSha256": "f6759a4e0c557a7842642c9fb7d3fd303f1bf492cf5930bc78027e368626e8e7",
+        "firstDifference": null
+      },
+      {
+        "label": "n50-r1",
+        "elements": 50,
+        "equal": true,
+        "baselineSha256": "b3e0daebb8404946fe6adefdcceccf36cd236729a24bc82f6640ae3f224f0e08",
+        "finalSha256": "b3e0daebb8404946fe6adefdcceccf36cd236729a24bc82f6640ae3f224f0e08",
+        "firstDifference": null
+      },
+      {
+        "label": "n50-r2",
+        "elements": 50,
+        "equal": true,
+        "baselineSha256": "b3e0daebb8404946fe6adefdcceccf36cd236729a24bc82f6640ae3f224f0e08",
+        "finalSha256": "b3e0daebb8404946fe6adefdcceccf36cd236729a24bc82f6640ae3f224f0e08",
+        "firstDifference": null
+      },
+      {
+        "label": "n50-r3",
+        "elements": 50,
+        "equal": true,
+        "baselineSha256": "b3e0daebb8404946fe6adefdcceccf36cd236729a24bc82f6640ae3f224f0e08",
+        "finalSha256": "b3e0daebb8404946fe6adefdcceccf36cd236729a24bc82f6640ae3f224f0e08",
+        "firstDifference": null
+      }
+    ],
+    "allEqual": true,
+    "pairCount": 12,
+    "normalization": "Only address id strings beginning of: are consistently renamed by first-seen identity, and space strings consistently renamed; this preserves alias topology. Strict refusal target normalized by test. Every other field, including integrity identity/codeHash/moduleIdentity, observation class, path/scope, schema, inline-data URI, text/class and full reason, is exact.",
+    "comparedKeys": [
+      "contents",
+      "sourceLabel",
+      "resolvedLabels",
+      "strictReason",
+      "elementLabels"
+    ],
+    "canonicalSamples": {
+      "sourceLabel": {
+        "view": {
+          "version": 1,
+          "entries": [
+            {
+              "path": [
+                "packed"
+              ],
+              "label": {
+                "confidentiality": [
+                  "cfc-prepare-messages"
+                ]
+              }
+            }
+          ]
+        },
+        "readFailed": false
+      },
+      "strictReason": "CFC enforcement rejected commit: relevant transaction was not prepared: writer-fit confidentiality misfit for <target> at / (canWrite, \u00a78.12.4): \"cfc-prepare-messages\"",
+      "firstTwoElements": [
+        {
+          "ref": {
+            "id": "<ref0>",
+            "space": "<space0>",
+            "scope": "session",
+            "path": [],
+            "cfcLabelView": {
+              "version": 1,
+              "entries": [
+                {
+                  "path": [
+                    "length"
+                  ],
+                  "label": {
+                    "confidentiality": [
+                      "cfc-prepare-messages"
+                    ]
+                  },
+                  "observes": "shape"
+                },
+                {
+                  "path": [
+                    "length"
+                  ],
+                  "label": {
+                    "confidentiality": [
+                      "cfc-prepare-messages"
+                    ]
+                  },
+                  "observes": "value"
+                }
+              ]
+            }
+          },
+          "resolvedRef": {
+            "id": "<ref0>",
+            "space": "<space0>",
+            "scope": "session",
+            "path": []
+          },
+          "value": {
+            "children": [
+              "Message 0"
+            ],
+            "name": "div",
+            "props": {
+              "className": "cfc-bubble me"
+            },
+            "type": "vnode"
+          },
+          "fields": [
+            {
+              "path": [
+                "children",
+                "0"
+              ],
+              "value": "Message 0",
+              "view": {
+                "version": 1,
+                "entries": [
+                  {
+                    "path": [],
+                    "label": {
+                      "confidentiality": [
+                        "cfc-prepare-messages"
+                      ]
+                    },
+                    "observes": "value"
+                  },
+                  {
+                    "path": [],
+                    "label": {
+                      "confidentiality": [
+                        "cfc-prepare-messages"
+                      ]
+                    },
+                    "observes": "followRef"
+                  }
+                ]
+              },
+              "resolvedRef": {
+                "id": "data:application/vnd.common-fabric.data,ZnZqMTp7Im1lIjp0cnVlLCJ0ZXh0IjoiTWVzc2FnZSAwIn0",
+                "space": "<space0>",
+                "scope": "session",
+                "path": [
+                  "text"
+                ],
+                "schema": {
+                  "type": "string"
+                },
+                "cfcLabelView": {
+                  "version": 1,
+                  "entries": [
+                    {
+                      "path": [],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ],
+                        "integrity": [
+                          {
+                            "identity": {
+                              "codeHash": "fid1:YoIpjOWuGWI0P5F14PX5hBUPgYkoo1zPQSWyLV-HEak",
+                              "kind": "verified",
+                              "moduleIdentity": "F5YLyK2bOKf-2Nd_668N0_7VlMDnyo8W394SBiUKgQc",
+                              "symbol": "parseThread"
+                            },
+                            "type": "https://commonfabric.org/cfc/atom/TransformedBy"
+                          }
+                        ]
+                      },
+                      "observes": "value"
+                    },
+                    {
+                      "path": [],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ],
+                        "integrity": [
+                          {
+                            "source": {
+                              "id": "<ref1>",
+                              "path": [
+                                "0"
+                              ],
+                              "space": "<space0>"
+                            },
+                            "target": {
+                              "id": "<ref2>",
+                              "path": [
+                                "element"
+                              ],
+                              "space": "<space0>"
+                            },
+                            "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                          }
+                        ]
+                      },
+                      "observes": "followRef"
+                    },
+                    {
+                      "path": [],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ]
+                      },
+                      "observes": "shape"
+                    },
+                    {
+                      "path": [
+                        "*"
+                      ],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ]
+                      },
+                      "observes": "followRef"
+                    },
+                    {
+                      "path": [
+                        "me"
+                      ],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ]
+                      },
+                      "observes": "followRef"
+                    },
+                    {
+                      "path": [
+                        "text"
+                      ],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ]
+                      },
+                      "observes": "followRef"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "path": [
+                "props",
+                "className"
+              ],
+              "value": "cfc-bubble me",
+              "resolvedRef": {
+                "id": "<ref3>",
+                "space": "<space0>",
+                "scope": "session",
+                "path": [],
+                "cfcLabelView": {
+                  "version": 1,
+                  "entries": [
+                    {
+                      "path": [],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ]
+                      },
+                      "observes": "value"
+                    },
+                    {
+                      "path": [],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ]
+                      },
+                      "observes": "shape"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ref": {
+            "id": "<ref4>",
+            "space": "<space0>",
+            "scope": "session",
+            "path": [],
+            "cfcLabelView": {
+              "version": 1,
+              "entries": [
+                {
+                  "path": [
+                    "length"
+                  ],
+                  "label": {
+                    "confidentiality": [
+                      "cfc-prepare-messages"
+                    ]
+                  },
+                  "observes": "shape"
+                },
+                {
+                  "path": [
+                    "length"
+                  ],
+                  "label": {
+                    "confidentiality": [
+                      "cfc-prepare-messages"
+                    ]
+                  },
+                  "observes": "value"
+                }
+              ]
+            }
+          },
+          "resolvedRef": {
+            "id": "<ref4>",
+            "space": "<space0>",
+            "scope": "session",
+            "path": []
+          },
+          "value": {
+            "children": [
+              "Message 1"
+            ],
+            "name": "div",
+            "props": {
+              "className": "cfc-bubble"
+            },
+            "type": "vnode"
+          },
+          "fields": [
+            {
+              "path": [
+                "children",
+                "0"
+              ],
+              "value": "Message 1",
+              "view": {
+                "version": 1,
+                "entries": [
+                  {
+                    "path": [],
+                    "label": {
+                      "confidentiality": [
+                        "cfc-prepare-messages"
+                      ]
+                    },
+                    "observes": "value"
+                  },
+                  {
+                    "path": [],
+                    "label": {
+                      "confidentiality": [
+                        "cfc-prepare-messages"
+                      ],
+                      "integrity": [
+                        {
+                          "identity": {
+                            "codeHash": "fid1:YoIpjOWuGWI0P5F14PX5hBUPgYkoo1zPQSWyLV-HEak",
+                            "kind": "verified",
+                            "moduleIdentity": "F5YLyK2bOKf-2Nd_668N0_7VlMDnyo8W394SBiUKgQc",
+                            "symbol": "parseThread"
+                          },
+                          "type": "https://commonfabric.org/cfc/atom/TransformedBy"
+                        }
+                      ]
+                    },
+                    "observes": "followRef"
+                  }
+                ]
+              },
+              "resolvedRef": {
+                "id": "data:application/vnd.common-fabric.data,ZnZqMTp7Im1lIjpmYWxzZSwidGV4dCI6Ik1lc3NhZ2UgMSJ9",
+                "space": "<space0>",
+                "scope": "session",
+                "path": [
+                  "text"
+                ],
+                "schema": {
+                  "type": "string"
+                },
+                "cfcLabelView": {
+                  "version": 1,
+                  "entries": [
+                    {
+                      "path": [],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ],
+                        "integrity": [
+                          {
+                            "identity": {
+                              "codeHash": "fid1:YoIpjOWuGWI0P5F14PX5hBUPgYkoo1zPQSWyLV-HEak",
+                              "kind": "verified",
+                              "moduleIdentity": "F5YLyK2bOKf-2Nd_668N0_7VlMDnyo8W394SBiUKgQc",
+                              "symbol": "parseThread"
+                            },
+                            "type": "https://commonfabric.org/cfc/atom/TransformedBy"
+                          }
+                        ]
+                      },
+                      "observes": "value"
+                    },
+                    {
+                      "path": [],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ],
+                        "integrity": [
+                          {
+                            "identity": {
+                              "codeHash": "fid1:YoIpjOWuGWI0P5F14PX5hBUPgYkoo1zPQSWyLV-HEak",
+                              "kind": "verified",
+                              "moduleIdentity": "F5YLyK2bOKf-2Nd_668N0_7VlMDnyo8W394SBiUKgQc",
+                              "symbol": "parseThread"
+                            },
+                            "type": "https://commonfabric.org/cfc/atom/TransformedBy"
+                          },
+                          {
+                            "source": {
+                              "id": "<ref1>",
+                              "path": [
+                                "1"
+                              ],
+                              "space": "<space0>"
+                            },
+                            "target": {
+                              "id": "<ref5>",
+                              "path": [
+                                "element"
+                              ],
+                              "space": "<space0>"
+                            },
+                            "type": "https://commonfabric.org/cfc/atom/LinkReference"
+                          }
+                        ]
+                      },
+                      "observes": "followRef"
+                    },
+                    {
+                      "path": [],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ]
+                      },
+                      "observes": "shape"
+                    },
+                    {
+                      "path": [
+                        "*"
+                      ],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ]
+                      },
+                      "observes": "followRef"
+                    },
+                    {
+                      "path": [
+                        "me"
+                      ],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ],
+                        "integrity": [
+                          {
+                            "identity": {
+                              "codeHash": "fid1:YoIpjOWuGWI0P5F14PX5hBUPgYkoo1zPQSWyLV-HEak",
+                              "kind": "verified",
+                              "moduleIdentity": "F5YLyK2bOKf-2Nd_668N0_7VlMDnyo8W394SBiUKgQc",
+                              "symbol": "parseThread"
+                            },
+                            "type": "https://commonfabric.org/cfc/atom/TransformedBy"
+                          }
+                        ]
+                      },
+                      "observes": "followRef"
+                    },
+                    {
+                      "path": [
+                        "text"
+                      ],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ],
+                        "integrity": [
+                          {
+                            "identity": {
+                              "codeHash": "fid1:YoIpjOWuGWI0P5F14PX5hBUPgYkoo1zPQSWyLV-HEak",
+                              "kind": "verified",
+                              "moduleIdentity": "F5YLyK2bOKf-2Nd_668N0_7VlMDnyo8W394SBiUKgQc",
+                              "symbol": "parseThread"
+                            },
+                            "type": "https://commonfabric.org/cfc/atom/TransformedBy"
+                          }
+                        ]
+                      },
+                      "observes": "followRef"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "path": [
+                "props",
+                "className"
+              ],
+              "value": "cfc-bubble",
+              "resolvedRef": {
+                "id": "<ref6>",
+                "space": "<space0>",
+                "scope": "session",
+                "path": [],
+                "cfcLabelView": {
+                  "version": 1,
+                  "entries": [
+                    {
+                      "path": [],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ]
+                      },
+                      "observes": "value"
+                    },
+                    {
+                      "path": [],
+                      "label": {
+                        "confidentiality": [
+                          "cfc-prepare-messages"
+                        ]
+                      },
+                      "observes": "shape"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "perElementHashes": {
+      "n100-r1": [
+        "29841932690e8d2ea5c3074eec8ce519562a09cf0ab79f64a278381b68d19f82",
+        "1088c2fb5cdce8aad37bd52ad87cc127cb0d133b5f267dcf9341687e9f0aeac4",
+        "c843fca15ec703e07373a7acb53224149e4737f807bfcec8819e9aac67763607",
+        "a7343f67d9df0088a13bf0e7d7406f548f99c074e8a837301d164955978c9388",
+        "e65c90286d3c42413555b78117d72571f37940d7194f1ec954c4c04846e70dbc",
+        "c28d20e0ee69d97621c4b306157d84e0a9119f94484eb255d245a126027d0e76",
+        "3dbbee046940d81f8a4ffa2d6a9fa099138c8b23956eb648132efb0b7bb1b575",
+        "f0fb10a2687e41585e7acccb1950cbf6034459fd7b3b734454f4a330eb1cf6be",
+        "7b1b2d5e00275692e83946070ed87964f0a376e617c95fc172a9f13258405b79",
+        "db5ac22e5b052507c25d83567e13d521c92ccba0a897574b4adcd0d03a0d6e31",
+        "292b1256e679492878f1ad74d50feae738e921f6228a9b7f6191d29468adc68d",
+        "d9fdd6509f3fa0c6498c416b80b31f3355f9d049e634c7e7174034ddd3614c7c",
+        "df726f882f4c511a21ea66ada46f27c20449a21907f06050b6a907f0e0680f6a",
+        "ddbbb5e17f636d8700d47153dab048e9a57edfca4f1a6d9e4beeb9d2cb1c7e3f",
+        "f7bbecc644405a111e8c12244e37179e7039e72b67d4b3d9463b53bdfaeaa711",
+        "3f0830f6bbd738e9eab3209eca7a959405d668eb51495557ded5cda2d5aa7746",
+        "0b552e152ffc4a2d4fedf845d15b56e1660f586a30f3289b879c591126475691",
+        "f9930155ab705b30e81e83192bd1945868f9831d3e52e9236eac4ef65c96ffcb",
+        "9e1b47a7e8d94363273b2cd99de14dd0c66df0e2852cf9fdb0d194dd3bb4981e",
+        "c00af43ccd0e5ac24d00fa9ce977d32967daf69bdcfd45b0ad0d6a2d116af7e9",
+        "53d05af53c98c50c800c6a5721be038c5bb35d5d1d0a3e957600963a21d6cc44",
+        "bd81de3da948c0aa202a31f9187adde44dcf88b31aa8b14b701d5b96c079d176",
+        "825b4bc485cd24a8543861b8f840fe55d651a959c4778a6ccb2be428c7c767be",
+        "2a0227c809e69c58f0da1df5c7a9d8b2d3e752c2af40819cc7b76c5bd92c40c4",
+        "2910560b4e88b42768f5b5da0fea607ba62b19ce227e7dfa806ef37ade3aa4a8",
+        "900e9a4e29be9babf238abbbd88368e6555fde2cdcde8ab321970b0ea439bfac",
+        "43dbbf336850563d3f8939fcfddb1b4ca83cecfc9cb5e2a4084d6319408616da",
+        "573aed5842eaea7d4901c53537fe5809b7cd3d6b7b588115c0739d4972fab75c",
+        "f0831746e95210d009e98e8852e82175e444b769e98dda779bc5657138c49f74",
+        "bd268195b29240df73df7cb67c3010a70b5fabe6ab69332c4ee54c63cd3128b1",
+        "415ca1a52f6b3b2a81fe4be03cef2095efe6ed7aee93e17512e73cd43ffafaea",
+        "7152909c990715cb31e9d01cba89333d04b06f63b9a8ff18ba05a7df272d5f83",
+        "8b1807fb66e0234f6351b1b04c09b3b2b008adaa60125f8676f3ffe27a018d5c",
+        "807cf7640136254dbc24dafd4d282b0970c6b1071681511c354429b45eb1c9e2",
+        "e554a54713aca9114af4e5d0e39888edb587b20d750063051c13736bf79d8635",
+        "06774b16b1421f6ae19dceb8f39ef102073a41104050249cad6b119e04dbe72a",
+        "1161410219dc00f02d0350cbb00874447914f0aedbdc2629ed1c00fe89816f78",
+        "bb22c3af020f9a6e72c026d2d4bc47b0d65660cb340768d206ce6036270abcbd",
+        "ea9bc05d68561cacc9109e9b7a24da75c488396a5fcf2ac2bd1581b01360cb8e",
+        "74d2292afea7f25781a53c4e47701fbb1474a83b37419ebb027e51daaa288b74",
+        "8eed018a091b3b0d5734134dbdc2d0e8cd1020d9ebffc095fd922995afb41107",
+        "2821c96aa1d661014880c58caaa447c30174d93dc0c53c93ed2ed843a3f45e19",
+        "69bc2173f26e0cbf4ce23c6e305b9eb78a5c3e54793285158f13deb63789caa7",
+        "410630c560c1a3709e883cb8e138be50e5678c5a598c0abad62173f229b87823",
+        "1f7ffd6f52d5ab900a958f423132b48493779547f3c772bc6671c64fa7027c34",
+        "7740bfda410194d00f57119fbd1167d6cbfc5277c13b85ecbdc8f78300e4ede8",
+        "e480eb5273ad20c6433eededfbca44d3139310fecf8941b484cbc07d3e42dee1",
+        "91dac983bc9c3186fc9905f4ee70a70477cf176ae6c11ec5f98b3ade53bc66ca",
+        "d3e422bac5e4bb6671514eab42d01ff778f1123267dd1796f970a5466b8685c0",
+        "94a34ce3163f843ec49cd90bc775bbbccb040b7ea09f8f86a71e5517530d59fd",
+        "1253abeb739e12e769152a5d196e7dc4cc89e474faa88c8dae62f6525d39a5d1",
+        "811a627ad38f936057b686bdd92ff881f133f08cc58f6ca1f792149a20e2ebfb",
+        "b28abaf61447a518ab338f53a9b2777e673bb4e762d7c45926f6ee8cd65690d3",
+        "7e380ffc3190bed5e43ed536035a5dfcec6b6dc43c7d52262895faaf198e1d6b",
+        "80398fbb4ebd87d60ae0eadbd7b4fd7e27463499661262843d955d8e40dd6578",
+        "0c9d3d23cf1f9cd8da3811cbff3d470808ff38cfefaf6b12d7ecdd9eba9c8c42",
+        "07ee1f99ddd5eca1d79edbdc97531c5ed4ec9fcac0103c55dc8dc135fde13682",
+        "765192d6c1a2233f94fd95147351bb4083bd986daece17c8ab6dc9e78984177e",
+        "1b4faa46fa2c91d90fbe897b0567083478368e831f4c42247cd01e9ce797578b",
+        "4c7e961fbbe5b45fb0909c57821debe63b17d8d238365f458a3410c9557a5c09",
+        "952a8a6c1d55cf8dd6b51eeb0b917795eed3480094037b9f8b4becd0c8d1018f",
+        "d3870f0c305eb762f452f8026ed45f5239266417b248fc915f8d1ede888cb9e4",
+        "abbd3e9306dc50c462a1545be521625965f346b5ecde56a9d93c1cb596995038",
+        "4f65ae918e3fad1b2b858957b1ed1c4a6c4d555752cd6357e04387b992457925",
+        "bc143bc4ffb8d33b83a71cc3f5b5a252b70deb18b6e10cab9ceb90227c9332ed",
+        "bf2137b00794c6ddee97d60fc140d92b366abbfdeb1faf90dce7d936a54cc3d8",
+        "4eadecb850be01e47d1081ea08711a8c9b2bb378b8aba9c7661e34a5e3f70409",
+        "b3eeee247481b7f78b2ee88ab6c244c918e1a1798e90960bc85131161c2efac9",
+        "19f67b27edeaa499453f6d8a283fb560ca8ab6b0ff22c5b1b05216878dbc7e74",
+        "c072089632b5fff48ad0bbcf1397e5b3d31296c624693e2f6f930e438e8b84a1",
+        "d829eea08c8821ea401d135dd111fea3c236bb5a4a460acd67784f937ce68513",
+        "57c97fbd49486425d8fc05eb3e673b823ad3d0750c66b80e14cb9263af5219ff",
+        "f78a53fe0baa7c223eb225805faddfa5912d70d333150ccddf1ffbcd67ff6037",
+        "e0948b92f22758ffa3ceac8302965771d87022d21a5cd31b0d39f5479f36b294",
+        "2767f83459b250681179dc6acc10e627e48577211403d0463d01e290ea41e4a6",
+        "288532339a2a496ac4174634b8dab0fbca6c2b9136de10090326dd5f340a983a",
+        "7b3b1a289c5d14f11b66766bd0b865194241d0014b07d10ba8603faf2751567d",
+        "8a54f1ba8eb12779c33abdd8f1a758853fd936f899d4864cc8e88e38d1765f08",
+        "b07d8fb451586a020134d2f6b688e29c64b4d8676e5b168c22bacaa4696612db",
+        "72705a06ca3b6267439b30a318bbad2dbb4fc829c013bab929abf9d7940951e4",
+        "583d5f2c3517be9a27a6cbd15e1777b902991b8ddf7dcdf6d3c9c94c3b242105",
+        "4f36470570270502895781a8c3d091be6d634303d3ccfb9084520bfa2c4c3cd8",
+        "0e3a22742f20a881a90401aa66a5587653c61bbe610e50a754c8862894e1d73e",
+        "dc220e1c7079f22400fb08e8b57bec6aa57c26531c4df28d501da5341dfc8168",
+        "b438e755b8c7855bf2088a5274172ec27d9a5ce206567cd94aa7c6de9c03bd59",
+        "c854bc2e7d3632e4324e25ac71f67623e885a87e2dfeeb050db48dd7f3a4b0ac",
+        "0b2b1793f4daece2850848e76709220efd4990cab244c086241b8f4336de00b0",
+        "66f03c2a8979e38cff2c0acd813fef56529d0cbd2347983e4ee063d4f40b6fc6",
+        "d2c864ad6dc5d309c0441c4338320dd3fe05f9a57df4afc81dedd00cffeff02f",
+        "20d31418becd317414067e5df622557dadabbea18b9870282f336c84af9d8d77",
+        "b21ed64d6e77c94631c38dc9311970454bf0126669eab851a4e751cae641e048",
+        "00e1b5df198a08f76efb1c19dd6e5fc8b170651bdb3454eebd122b0edd1bf8b2",
+        "e85eafb68f26fef781d9517bf54f7c724b01618199c1ab1045f588fa10c3b685",
+        "06b01b605fb2076e5738767b75a4b1e4afafa8d7025868b75f3b87bba20e3b42",
+        "3c98d433f3f699adb468d1c0efae337f42a3f4f046d7685c36b0dce4fd730743",
+        "531dd9826d50d369e8973f62e16460bed49edc3c6d32259128c43fbd45e6f256",
+        "48f0968af4fed29ac983587d51beb217b9af2de72499dc86e7074d855b787379",
+        "fc8eeed91af748e14eb6dfcb3e1b3d935dab3d9a9856fe91a8c4ed8f1c77375a",
+        "5140846e35ff9c3b959a07435e4bef3278d6d4b5db4661676772fe37b6659922",
+        "c0504f841b10c4c905ae2a62796404d2837b064d3e9b5b4e17567622544eaf2b"
+      ],
+      "n100-r2": [
+        "29841932690e8d2ea5c3074eec8ce519562a09cf0ab79f64a278381b68d19f82",
+        "1088c2fb5cdce8aad37bd52ad87cc127cb0d133b5f267dcf9341687e9f0aeac4",
+        "c843fca15ec703e07373a7acb53224149e4737f807bfcec8819e9aac67763607",
+        "a7343f67d9df0088a13bf0e7d7406f548f99c074e8a837301d164955978c9388",
+        "e65c90286d3c42413555b78117d72571f37940d7194f1ec954c4c04846e70dbc",
+        "c28d20e0ee69d97621c4b306157d84e0a9119f94484eb255d245a126027d0e76",
+        "3dbbee046940d81f8a4ffa2d6a9fa099138c8b23956eb648132efb0b7bb1b575",
+        "f0fb10a2687e41585e7acccb1950cbf6034459fd7b3b734454f4a330eb1cf6be",
+        "7b1b2d5e00275692e83946070ed87964f0a376e617c95fc172a9f13258405b79",
+        "db5ac22e5b052507c25d83567e13d521c92ccba0a897574b4adcd0d03a0d6e31",
+        "292b1256e679492878f1ad74d50feae738e921f6228a9b7f6191d29468adc68d",
+        "d9fdd6509f3fa0c6498c416b80b31f3355f9d049e634c7e7174034ddd3614c7c",
+        "df726f882f4c511a21ea66ada46f27c20449a21907f06050b6a907f0e0680f6a",
+        "ddbbb5e17f636d8700d47153dab048e9a57edfca4f1a6d9e4beeb9d2cb1c7e3f",
+        "f7bbecc644405a111e8c12244e37179e7039e72b67d4b3d9463b53bdfaeaa711",
+        "3f0830f6bbd738e9eab3209eca7a959405d668eb51495557ded5cda2d5aa7746",
+        "0b552e152ffc4a2d4fedf845d15b56e1660f586a30f3289b879c591126475691",
+        "f9930155ab705b30e81e83192bd1945868f9831d3e52e9236eac4ef65c96ffcb",
+        "9e1b47a7e8d94363273b2cd99de14dd0c66df0e2852cf9fdb0d194dd3bb4981e",
+        "c00af43ccd0e5ac24d00fa9ce977d32967daf69bdcfd45b0ad0d6a2d116af7e9",
+        "53d05af53c98c50c800c6a5721be038c5bb35d5d1d0a3e957600963a21d6cc44",
+        "bd81de3da948c0aa202a31f9187adde44dcf88b31aa8b14b701d5b96c079d176",
+        "825b4bc485cd24a8543861b8f840fe55d651a959c4778a6ccb2be428c7c767be",
+        "2a0227c809e69c58f0da1df5c7a9d8b2d3e752c2af40819cc7b76c5bd92c40c4",
+        "2910560b4e88b42768f5b5da0fea607ba62b19ce227e7dfa806ef37ade3aa4a8",
+        "900e9a4e29be9babf238abbbd88368e6555fde2cdcde8ab321970b0ea439bfac",
+        "43dbbf336850563d3f8939fcfddb1b4ca83cecfc9cb5e2a4084d6319408616da",
+        "573aed5842eaea7d4901c53537fe5809b7cd3d6b7b588115c0739d4972fab75c",
+        "f0831746e95210d009e98e8852e82175e444b769e98dda779bc5657138c49f74",
+        "bd268195b29240df73df7cb67c3010a70b5fabe6ab69332c4ee54c63cd3128b1",
+        "415ca1a52f6b3b2a81fe4be03cef2095efe6ed7aee93e17512e73cd43ffafaea",
+        "7152909c990715cb31e9d01cba89333d04b06f63b9a8ff18ba05a7df272d5f83",
+        "8b1807fb66e0234f6351b1b04c09b3b2b008adaa60125f8676f3ffe27a018d5c",
+        "807cf7640136254dbc24dafd4d282b0970c6b1071681511c354429b45eb1c9e2",
+        "e554a54713aca9114af4e5d0e39888edb587b20d750063051c13736bf79d8635",
+        "06774b16b1421f6ae19dceb8f39ef102073a41104050249cad6b119e04dbe72a",
+        "1161410219dc00f02d0350cbb00874447914f0aedbdc2629ed1c00fe89816f78",
+        "bb22c3af020f9a6e72c026d2d4bc47b0d65660cb340768d206ce6036270abcbd",
+        "ea9bc05d68561cacc9109e9b7a24da75c488396a5fcf2ac2bd1581b01360cb8e",
+        "74d2292afea7f25781a53c4e47701fbb1474a83b37419ebb027e51daaa288b74",
+        "8eed018a091b3b0d5734134dbdc2d0e8cd1020d9ebffc095fd922995afb41107",
+        "2821c96aa1d661014880c58caaa447c30174d93dc0c53c93ed2ed843a3f45e19",
+        "69bc2173f26e0cbf4ce23c6e305b9eb78a5c3e54793285158f13deb63789caa7",
+        "410630c560c1a3709e883cb8e138be50e5678c5a598c0abad62173f229b87823",
+        "1f7ffd6f52d5ab900a958f423132b48493779547f3c772bc6671c64fa7027c34",
+        "7740bfda410194d00f57119fbd1167d6cbfc5277c13b85ecbdc8f78300e4ede8",
+        "e480eb5273ad20c6433eededfbca44d3139310fecf8941b484cbc07d3e42dee1",
+        "91dac983bc9c3186fc9905f4ee70a70477cf176ae6c11ec5f98b3ade53bc66ca",
+        "d3e422bac5e4bb6671514eab42d01ff778f1123267dd1796f970a5466b8685c0",
+        "94a34ce3163f843ec49cd90bc775bbbccb040b7ea09f8f86a71e5517530d59fd",
+        "1253abeb739e12e769152a5d196e7dc4cc89e474faa88c8dae62f6525d39a5d1",
+        "811a627ad38f936057b686bdd92ff881f133f08cc58f6ca1f792149a20e2ebfb",
+        "b28abaf61447a518ab338f53a9b2777e673bb4e762d7c45926f6ee8cd65690d3",
+        "7e380ffc3190bed5e43ed536035a5dfcec6b6dc43c7d52262895faaf198e1d6b",
+        "80398fbb4ebd87d60ae0eadbd7b4fd7e27463499661262843d955d8e40dd6578",
+        "0c9d3d23cf1f9cd8da3811cbff3d470808ff38cfefaf6b12d7ecdd9eba9c8c42",
+        "07ee1f99ddd5eca1d79edbdc97531c5ed4ec9fcac0103c55dc8dc135fde13682",
+        "765192d6c1a2233f94fd95147351bb4083bd986daece17c8ab6dc9e78984177e",
+        "1b4faa46fa2c91d90fbe897b0567083478368e831f4c42247cd01e9ce797578b",
+        "4c7e961fbbe5b45fb0909c57821debe63b17d8d238365f458a3410c9557a5c09",
+        "952a8a6c1d55cf8dd6b51eeb0b917795eed3480094037b9f8b4becd0c8d1018f",
+        "d3870f0c305eb762f452f8026ed45f5239266417b248fc915f8d1ede888cb9e4",
+        "abbd3e9306dc50c462a1545be521625965f346b5ecde56a9d93c1cb596995038",
+        "4f65ae918e3fad1b2b858957b1ed1c4a6c4d555752cd6357e04387b992457925",
+        "bc143bc4ffb8d33b83a71cc3f5b5a252b70deb18b6e10cab9ceb90227c9332ed",
+        "bf2137b00794c6ddee97d60fc140d92b366abbfdeb1faf90dce7d936a54cc3d8",
+        "4eadecb850be01e47d1081ea08711a8c9b2bb378b8aba9c7661e34a5e3f70409",
+        "b3eeee247481b7f78b2ee88ab6c244c918e1a1798e90960bc85131161c2efac9",
+        "19f67b27edeaa499453f6d8a283fb560ca8ab6b0ff22c5b1b05216878dbc7e74",
+        "c072089632b5fff48ad0bbcf1397e5b3d31296c624693e2f6f930e438e8b84a1",
+        "d829eea08c8821ea401d135dd111fea3c236bb5a4a460acd67784f937ce68513",
+        "57c97fbd49486425d8fc05eb3e673b823ad3d0750c66b80e14cb9263af5219ff",
+        "f78a53fe0baa7c223eb225805faddfa5912d70d333150ccddf1ffbcd67ff6037",
+        "e0948b92f22758ffa3ceac8302965771d87022d21a5cd31b0d39f5479f36b294",
+        "2767f83459b250681179dc6acc10e627e48577211403d0463d01e290ea41e4a6",
+        "288532339a2a496ac4174634b8dab0fbca6c2b9136de10090326dd5f340a983a",
+        "7b3b1a289c5d14f11b66766bd0b865194241d0014b07d10ba8603faf2751567d",
+        "8a54f1ba8eb12779c33abdd8f1a758853fd936f899d4864cc8e88e38d1765f08",
+        "b07d8fb451586a020134d2f6b688e29c64b4d8676e5b168c22bacaa4696612db",
+        "72705a06ca3b6267439b30a318bbad2dbb4fc829c013bab929abf9d7940951e4",
+        "583d5f2c3517be9a27a6cbd15e1777b902991b8ddf7dcdf6d3c9c94c3b242105",
+        "4f36470570270502895781a8c3d091be6d634303d3ccfb9084520bfa2c4c3cd8",
+        "0e3a22742f20a881a90401aa66a5587653c61bbe610e50a754c8862894e1d73e",
+        "dc220e1c7079f22400fb08e8b57bec6aa57c26531c4df28d501da5341dfc8168",
+        "b438e755b8c7855bf2088a5274172ec27d9a5ce206567cd94aa7c6de9c03bd59",
+        "c854bc2e7d3632e4324e25ac71f67623e885a87e2dfeeb050db48dd7f3a4b0ac",
+        "0b2b1793f4daece2850848e76709220efd4990cab244c086241b8f4336de00b0",
+        "66f03c2a8979e38cff2c0acd813fef56529d0cbd2347983e4ee063d4f40b6fc6",
+        "d2c864ad6dc5d309c0441c4338320dd3fe05f9a57df4afc81dedd00cffeff02f",
+        "20d31418becd317414067e5df622557dadabbea18b9870282f336c84af9d8d77",
+        "b21ed64d6e77c94631c38dc9311970454bf0126669eab851a4e751cae641e048",
+        "00e1b5df198a08f76efb1c19dd6e5fc8b170651bdb3454eebd122b0edd1bf8b2",
+        "e85eafb68f26fef781d9517bf54f7c724b01618199c1ab1045f588fa10c3b685",
+        "06b01b605fb2076e5738767b75a4b1e4afafa8d7025868b75f3b87bba20e3b42",
+        "3c98d433f3f699adb468d1c0efae337f42a3f4f046d7685c36b0dce4fd730743",
+        "531dd9826d50d369e8973f62e16460bed49edc3c6d32259128c43fbd45e6f256",
+        "48f0968af4fed29ac983587d51beb217b9af2de72499dc86e7074d855b787379",
+        "fc8eeed91af748e14eb6dfcb3e1b3d935dab3d9a9856fe91a8c4ed8f1c77375a",
+        "5140846e35ff9c3b959a07435e4bef3278d6d4b5db4661676772fe37b6659922",
+        "c0504f841b10c4c905ae2a62796404d2837b064d3e9b5b4e17567622544eaf2b"
+      ],
+      "n100-r3": [
+        "29841932690e8d2ea5c3074eec8ce519562a09cf0ab79f64a278381b68d19f82",
+        "1088c2fb5cdce8aad37bd52ad87cc127cb0d133b5f267dcf9341687e9f0aeac4",
+        "c843fca15ec703e07373a7acb53224149e4737f807bfcec8819e9aac67763607",
+        "a7343f67d9df0088a13bf0e7d7406f548f99c074e8a837301d164955978c9388",
+        "e65c90286d3c42413555b78117d72571f37940d7194f1ec954c4c04846e70dbc",
+        "c28d20e0ee69d97621c4b306157d84e0a9119f94484eb255d245a126027d0e76",
+        "3dbbee046940d81f8a4ffa2d6a9fa099138c8b23956eb648132efb0b7bb1b575",
+        "f0fb10a2687e41585e7acccb1950cbf6034459fd7b3b734454f4a330eb1cf6be",
+        "7b1b2d5e00275692e83946070ed87964f0a376e617c95fc172a9f13258405b79",
+        "db5ac22e5b052507c25d83567e13d521c92ccba0a897574b4adcd0d03a0d6e31",
+        "292b1256e679492878f1ad74d50feae738e921f6228a9b7f6191d29468adc68d",
+        "d9fdd6509f3fa0c6498c416b80b31f3355f9d049e634c7e7174034ddd3614c7c",
+        "df726f882f4c511a21ea66ada46f27c20449a21907f06050b6a907f0e0680f6a",
+        "ddbbb5e17f636d8700d47153dab048e9a57edfca4f1a6d9e4beeb9d2cb1c7e3f",
+        "f7bbecc644405a111e8c12244e37179e7039e72b67d4b3d9463b53bdfaeaa711",
+        "3f0830f6bbd738e9eab3209eca7a959405d668eb51495557ded5cda2d5aa7746",
+        "0b552e152ffc4a2d4fedf845d15b56e1660f586a30f3289b879c591126475691",
+        "f9930155ab705b30e81e83192bd1945868f9831d3e52e9236eac4ef65c96ffcb",
+        "9e1b47a7e8d94363273b2cd99de14dd0c66df0e2852cf9fdb0d194dd3bb4981e",
+        "c00af43ccd0e5ac24d00fa9ce977d32967daf69bdcfd45b0ad0d6a2d116af7e9",
+        "53d05af53c98c50c800c6a5721be038c5bb35d5d1d0a3e957600963a21d6cc44",
+        "bd81de3da948c0aa202a31f9187adde44dcf88b31aa8b14b701d5b96c079d176",
+        "825b4bc485cd24a8543861b8f840fe55d651a959c4778a6ccb2be428c7c767be",
+        "2a0227c809e69c58f0da1df5c7a9d8b2d3e752c2af40819cc7b76c5bd92c40c4",
+        "2910560b4e88b42768f5b5da0fea607ba62b19ce227e7dfa806ef37ade3aa4a8",
+        "900e9a4e29be9babf238abbbd88368e6555fde2cdcde8ab321970b0ea439bfac",
+        "43dbbf336850563d3f8939fcfddb1b4ca83cecfc9cb5e2a4084d6319408616da",
+        "573aed5842eaea7d4901c53537fe5809b7cd3d6b7b588115c0739d4972fab75c",
+        "f0831746e95210d009e98e8852e82175e444b769e98dda779bc5657138c49f74",
+        "bd268195b29240df73df7cb67c3010a70b5fabe6ab69332c4ee54c63cd3128b1",
+        "415ca1a52f6b3b2a81fe4be03cef2095efe6ed7aee93e17512e73cd43ffafaea",
+        "7152909c990715cb31e9d01cba89333d04b06f63b9a8ff18ba05a7df272d5f83",
+        "8b1807fb66e0234f6351b1b04c09b3b2b008adaa60125f8676f3ffe27a018d5c",
+        "807cf7640136254dbc24dafd4d282b0970c6b1071681511c354429b45eb1c9e2",
+        "e554a54713aca9114af4e5d0e39888edb587b20d750063051c13736bf79d8635",
+        "06774b16b1421f6ae19dceb8f39ef102073a41104050249cad6b119e04dbe72a",
+        "1161410219dc00f02d0350cbb00874447914f0aedbdc2629ed1c00fe89816f78",
+        "bb22c3af020f9a6e72c026d2d4bc47b0d65660cb340768d206ce6036270abcbd",
+        "ea9bc05d68561cacc9109e9b7a24da75c488396a5fcf2ac2bd1581b01360cb8e",
+        "74d2292afea7f25781a53c4e47701fbb1474a83b37419ebb027e51daaa288b74",
+        "8eed018a091b3b0d5734134dbdc2d0e8cd1020d9ebffc095fd922995afb41107",
+        "2821c96aa1d661014880c58caaa447c30174d93dc0c53c93ed2ed843a3f45e19",
+        "69bc2173f26e0cbf4ce23c6e305b9eb78a5c3e54793285158f13deb63789caa7",
+        "410630c560c1a3709e883cb8e138be50e5678c5a598c0abad62173f229b87823",
+        "1f7ffd6f52d5ab900a958f423132b48493779547f3c772bc6671c64fa7027c34",
+        "7740bfda410194d00f57119fbd1167d6cbfc5277c13b85ecbdc8f78300e4ede8",
+        "e480eb5273ad20c6433eededfbca44d3139310fecf8941b484cbc07d3e42dee1",
+        "91dac983bc9c3186fc9905f4ee70a70477cf176ae6c11ec5f98b3ade53bc66ca",
+        "d3e422bac5e4bb6671514eab42d01ff778f1123267dd1796f970a5466b8685c0",
+        "94a34ce3163f843ec49cd90bc775bbbccb040b7ea09f8f86a71e5517530d59fd",
+        "1253abeb739e12e769152a5d196e7dc4cc89e474faa88c8dae62f6525d39a5d1",
+        "811a627ad38f936057b686bdd92ff881f133f08cc58f6ca1f792149a20e2ebfb",
+        "b28abaf61447a518ab338f53a9b2777e673bb4e762d7c45926f6ee8cd65690d3",
+        "7e380ffc3190bed5e43ed536035a5dfcec6b6dc43c7d52262895faaf198e1d6b",
+        "80398fbb4ebd87d60ae0eadbd7b4fd7e27463499661262843d955d8e40dd6578",
+        "0c9d3d23cf1f9cd8da3811cbff3d470808ff38cfefaf6b12d7ecdd9eba9c8c42",
+        "07ee1f99ddd5eca1d79edbdc97531c5ed4ec9fcac0103c55dc8dc135fde13682",
+        "765192d6c1a2233f94fd95147351bb4083bd986daece17c8ab6dc9e78984177e",
+        "1b4faa46fa2c91d90fbe897b0567083478368e831f4c42247cd01e9ce797578b",
+        "4c7e961fbbe5b45fb0909c57821debe63b17d8d238365f458a3410c9557a5c09",
+        "952a8a6c1d55cf8dd6b51eeb0b917795eed3480094037b9f8b4becd0c8d1018f",
+        "d3870f0c305eb762f452f8026ed45f5239266417b248fc915f8d1ede888cb9e4",
+        "abbd3e9306dc50c462a1545be521625965f346b5ecde56a9d93c1cb596995038",
+        "4f65ae918e3fad1b2b858957b1ed1c4a6c4d555752cd6357e04387b992457925",
+        "bc143bc4ffb8d33b83a71cc3f5b5a252b70deb18b6e10cab9ceb90227c9332ed",
+        "bf2137b00794c6ddee97d60fc140d92b366abbfdeb1faf90dce7d936a54cc3d8",
+        "4eadecb850be01e47d1081ea08711a8c9b2bb378b8aba9c7661e34a5e3f70409",
+        "b3eeee247481b7f78b2ee88ab6c244c918e1a1798e90960bc85131161c2efac9",
+        "19f67b27edeaa499453f6d8a283fb560ca8ab6b0ff22c5b1b05216878dbc7e74",
+        "c072089632b5fff48ad0bbcf1397e5b3d31296c624693e2f6f930e438e8b84a1",
+        "d829eea08c8821ea401d135dd111fea3c236bb5a4a460acd67784f937ce68513",
+        "57c97fbd49486425d8fc05eb3e673b823ad3d0750c66b80e14cb9263af5219ff",
+        "f78a53fe0baa7c223eb225805faddfa5912d70d333150ccddf1ffbcd67ff6037",
+        "e0948b92f22758ffa3ceac8302965771d87022d21a5cd31b0d39f5479f36b294",
+        "2767f83459b250681179dc6acc10e627e48577211403d0463d01e290ea41e4a6",
+        "288532339a2a496ac4174634b8dab0fbca6c2b9136de10090326dd5f340a983a",
+        "7b3b1a289c5d14f11b66766bd0b865194241d0014b07d10ba8603faf2751567d",
+        "8a54f1ba8eb12779c33abdd8f1a758853fd936f899d4864cc8e88e38d1765f08",
+        "b07d8fb451586a020134d2f6b688e29c64b4d8676e5b168c22bacaa4696612db",
+        "72705a06ca3b6267439b30a318bbad2dbb4fc829c013bab929abf9d7940951e4",
+        "583d5f2c3517be9a27a6cbd15e1777b902991b8ddf7dcdf6d3c9c94c3b242105",
+        "4f36470570270502895781a8c3d091be6d634303d3ccfb9084520bfa2c4c3cd8",
+        "0e3a22742f20a881a90401aa66a5587653c61bbe610e50a754c8862894e1d73e",
+        "dc220e1c7079f22400fb08e8b57bec6aa57c26531c4df28d501da5341dfc8168",
+        "b438e755b8c7855bf2088a5274172ec27d9a5ce206567cd94aa7c6de9c03bd59",
+        "c854bc2e7d3632e4324e25ac71f67623e885a87e2dfeeb050db48dd7f3a4b0ac",
+        "0b2b1793f4daece2850848e76709220efd4990cab244c086241b8f4336de00b0",
+        "66f03c2a8979e38cff2c0acd813fef56529d0cbd2347983e4ee063d4f40b6fc6",
+        "d2c864ad6dc5d309c0441c4338320dd3fe05f9a57df4afc81dedd00cffeff02f",
+        "20d31418becd317414067e5df622557dadabbea18b9870282f336c84af9d8d77",
+        "b21ed64d6e77c94631c38dc9311970454bf0126669eab851a4e751cae641e048",
+        "00e1b5df198a08f76efb1c19dd6e5fc8b170651bdb3454eebd122b0edd1bf8b2",
+        "e85eafb68f26fef781d9517bf54f7c724b01618199c1ab1045f588fa10c3b685",
+        "06b01b605fb2076e5738767b75a4b1e4afafa8d7025868b75f3b87bba20e3b42",
+        "3c98d433f3f699adb468d1c0efae337f42a3f4f046d7685c36b0dce4fd730743",
+        "531dd9826d50d369e8973f62e16460bed49edc3c6d32259128c43fbd45e6f256",
+        "48f0968af4fed29ac983587d51beb217b9af2de72499dc86e7074d855b787379",
+        "fc8eeed91af748e14eb6dfcb3e1b3d935dab3d9a9856fe91a8c4ed8f1c77375a",
+        "5140846e35ff9c3b959a07435e4bef3278d6d4b5db4661676772fe37b6659922",
+        "c0504f841b10c4c905ae2a62796404d2837b064d3e9b5b4e17567622544eaf2b"
+      ],
+      "n11-r1": [
+        "29841932690e8d2ea5c3074eec8ce519562a09cf0ab79f64a278381b68d19f82",
+        "1088c2fb5cdce8aad37bd52ad87cc127cb0d133b5f267dcf9341687e9f0aeac4",
+        "c843fca15ec703e07373a7acb53224149e4737f807bfcec8819e9aac67763607",
+        "a7343f67d9df0088a13bf0e7d7406f548f99c074e8a837301d164955978c9388",
+        "e65c90286d3c42413555b78117d72571f37940d7194f1ec954c4c04846e70dbc",
+        "c28d20e0ee69d97621c4b306157d84e0a9119f94484eb255d245a126027d0e76",
+        "3dbbee046940d81f8a4ffa2d6a9fa099138c8b23956eb648132efb0b7bb1b575",
+        "f0fb10a2687e41585e7acccb1950cbf6034459fd7b3b734454f4a330eb1cf6be",
+        "7b1b2d5e00275692e83946070ed87964f0a376e617c95fc172a9f13258405b79",
+        "db5ac22e5b052507c25d83567e13d521c92ccba0a897574b4adcd0d03a0d6e31",
+        "292b1256e679492878f1ad74d50feae738e921f6228a9b7f6191d29468adc68d"
+      ],
+      "n11-r2": [
+        "29841932690e8d2ea5c3074eec8ce519562a09cf0ab79f64a278381b68d19f82",
+        "1088c2fb5cdce8aad37bd52ad87cc127cb0d133b5f267dcf9341687e9f0aeac4",
+        "c843fca15ec703e07373a7acb53224149e4737f807bfcec8819e9aac67763607",
+        "a7343f67d9df0088a13bf0e7d7406f548f99c074e8a837301d164955978c9388",
+        "e65c90286d3c42413555b78117d72571f37940d7194f1ec954c4c04846e70dbc",
+        "c28d20e0ee69d97621c4b306157d84e0a9119f94484eb255d245a126027d0e76",
+        "3dbbee046940d81f8a4ffa2d6a9fa099138c8b23956eb648132efb0b7bb1b575",
+        "f0fb10a2687e41585e7acccb1950cbf6034459fd7b3b734454f4a330eb1cf6be",
+        "7b1b2d5e00275692e83946070ed87964f0a376e617c95fc172a9f13258405b79",
+        "db5ac22e5b052507c25d83567e13d521c92ccba0a897574b4adcd0d03a0d6e31",
+        "292b1256e679492878f1ad74d50feae738e921f6228a9b7f6191d29468adc68d"
+      ],
+      "n11-r3": [
+        "29841932690e8d2ea5c3074eec8ce519562a09cf0ab79f64a278381b68d19f82",
+        "1088c2fb5cdce8aad37bd52ad87cc127cb0d133b5f267dcf9341687e9f0aeac4",
+        "c843fca15ec703e07373a7acb53224149e4737f807bfcec8819e9aac67763607",
+        "a7343f67d9df0088a13bf0e7d7406f548f99c074e8a837301d164955978c9388",
+        "e65c90286d3c42413555b78117d72571f37940d7194f1ec954c4c04846e70dbc",
+        "c28d20e0ee69d97621c4b306157d84e0a9119f94484eb255d245a126027d0e76",
+        "3dbbee046940d81f8a4ffa2d6a9fa099138c8b23956eb648132efb0b7bb1b575",
+        "f0fb10a2687e41585e7acccb1950cbf6034459fd7b3b734454f4a330eb1cf6be",
+        "7b1b2d5e00275692e83946070ed87964f0a376e617c95fc172a9f13258405b79",
+        "db5ac22e5b052507c25d83567e13d521c92ccba0a897574b4adcd0d03a0d6e31",
+        "292b1256e679492878f1ad74d50feae738e921f6228a9b7f6191d29468adc68d"
+      ],
+      "n25-r1": [
+        "29841932690e8d2ea5c3074eec8ce519562a09cf0ab79f64a278381b68d19f82",
+        "1088c2fb5cdce8aad37bd52ad87cc127cb0d133b5f267dcf9341687e9f0aeac4",
+        "c843fca15ec703e07373a7acb53224149e4737f807bfcec8819e9aac67763607",
+        "a7343f67d9df0088a13bf0e7d7406f548f99c074e8a837301d164955978c9388",
+        "e65c90286d3c42413555b78117d72571f37940d7194f1ec954c4c04846e70dbc",
+        "c28d20e0ee69d97621c4b306157d84e0a9119f94484eb255d245a126027d0e76",
+        "3dbbee046940d81f8a4ffa2d6a9fa099138c8b23956eb648132efb0b7bb1b575",
+        "f0fb10a2687e41585e7acccb1950cbf6034459fd7b3b734454f4a330eb1cf6be",
+        "7b1b2d5e00275692e83946070ed87964f0a376e617c95fc172a9f13258405b79",
+        "db5ac22e5b052507c25d83567e13d521c92ccba0a897574b4adcd0d03a0d6e31",
+        "292b1256e679492878f1ad74d50feae738e921f6228a9b7f6191d29468adc68d",
+        "d9fdd6509f3fa0c6498c416b80b31f3355f9d049e634c7e7174034ddd3614c7c",
+        "df726f882f4c511a21ea66ada46f27c20449a21907f06050b6a907f0e0680f6a",
+        "ddbbb5e17f636d8700d47153dab048e9a57edfca4f1a6d9e4beeb9d2cb1c7e3f",
+        "f7bbecc644405a111e8c12244e37179e7039e72b67d4b3d9463b53bdfaeaa711",
+        "3f0830f6bbd738e9eab3209eca7a959405d668eb51495557ded5cda2d5aa7746",
+        "0b552e152ffc4a2d4fedf845d15b56e1660f586a30f3289b879c591126475691",
+        "f9930155ab705b30e81e83192bd1945868f9831d3e52e9236eac4ef65c96ffcb",
+        "9e1b47a7e8d94363273b2cd99de14dd0c66df0e2852cf9fdb0d194dd3bb4981e",
+        "c00af43ccd0e5ac24d00fa9ce977d32967daf69bdcfd45b0ad0d6a2d116af7e9",
+        "53d05af53c98c50c800c6a5721be038c5bb35d5d1d0a3e957600963a21d6cc44",
+        "bd81de3da948c0aa202a31f9187adde44dcf88b31aa8b14b701d5b96c079d176",
+        "825b4bc485cd24a8543861b8f840fe55d651a959c4778a6ccb2be428c7c767be",
+        "2a0227c809e69c58f0da1df5c7a9d8b2d3e752c2af40819cc7b76c5bd92c40c4",
+        "2910560b4e88b42768f5b5da0fea607ba62b19ce227e7dfa806ef37ade3aa4a8"
+      ],
+      "n25-r2": [
+        "29841932690e8d2ea5c3074eec8ce519562a09cf0ab79f64a278381b68d19f82",
+        "1088c2fb5cdce8aad37bd52ad87cc127cb0d133b5f267dcf9341687e9f0aeac4",
+        "c843fca15ec703e07373a7acb53224149e4737f807bfcec8819e9aac67763607",
+        "a7343f67d9df0088a13bf0e7d7406f548f99c074e8a837301d164955978c9388",
+        "e65c90286d3c42413555b78117d72571f37940d7194f1ec954c4c04846e70dbc",
+        "c28d20e0ee69d97621c4b306157d84e0a9119f94484eb255d245a126027d0e76",
+        "3dbbee046940d81f8a4ffa2d6a9fa099138c8b23956eb648132efb0b7bb1b575",
+        "f0fb10a2687e41585e7acccb1950cbf6034459fd7b3b734454f4a330eb1cf6be",
+        "7b1b2d5e00275692e83946070ed87964f0a376e617c95fc172a9f13258405b79",
+        "db5ac22e5b052507c25d83567e13d521c92ccba0a897574b4adcd0d03a0d6e31",
+        "292b1256e679492878f1ad74d50feae738e921f6228a9b7f6191d29468adc68d",
+        "d9fdd6509f3fa0c6498c416b80b31f3355f9d049e634c7e7174034ddd3614c7c",
+        "df726f882f4c511a21ea66ada46f27c20449a21907f06050b6a907f0e0680f6a",
+        "ddbbb5e17f636d8700d47153dab048e9a57edfca4f1a6d9e4beeb9d2cb1c7e3f",
+        "f7bbecc644405a111e8c12244e37179e7039e72b67d4b3d9463b53bdfaeaa711",
+        "3f0830f6bbd738e9eab3209eca7a959405d668eb51495557ded5cda2d5aa7746",
+        "0b552e152ffc4a2d4fedf845d15b56e1660f586a30f3289b879c591126475691",
+        "f9930155ab705b30e81e83192bd1945868f9831d3e52e9236eac4ef65c96ffcb",
+        "9e1b47a7e8d94363273b2cd99de14dd0c66df0e2852cf9fdb0d194dd3bb4981e",
+        "c00af43ccd0e5ac24d00fa9ce977d32967daf69bdcfd45b0ad0d6a2d116af7e9",
+        "53d05af53c98c50c800c6a5721be038c5bb35d5d1d0a3e957600963a21d6cc44",
+        "bd81de3da948c0aa202a31f9187adde44dcf88b31aa8b14b701d5b96c079d176",
+        "825b4bc485cd24a8543861b8f840fe55d651a959c4778a6ccb2be428c7c767be",
+        "2a0227c809e69c58f0da1df5c7a9d8b2d3e752c2af40819cc7b76c5bd92c40c4",
+        "2910560b4e88b42768f5b5da0fea607ba62b19ce227e7dfa806ef37ade3aa4a8"
+      ],
+      "n25-r3": [
+        "29841932690e8d2ea5c3074eec8ce519562a09cf0ab79f64a278381b68d19f82",
+        "1088c2fb5cdce8aad37bd52ad87cc127cb0d133b5f267dcf9341687e9f0aeac4",
+        "c843fca15ec703e07373a7acb53224149e4737f807bfcec8819e9aac67763607",
+        "a7343f67d9df0088a13bf0e7d7406f548f99c074e8a837301d164955978c9388",
+        "e65c90286d3c42413555b78117d72571f37940d7194f1ec954c4c04846e70dbc",
+        "c28d20e0ee69d97621c4b306157d84e0a9119f94484eb255d245a126027d0e76",
+        "3dbbee046940d81f8a4ffa2d6a9fa099138c8b23956eb648132efb0b7bb1b575",
+        "f0fb10a2687e41585e7acccb1950cbf6034459fd7b3b734454f4a330eb1cf6be",
+        "7b1b2d5e00275692e83946070ed87964f0a376e617c95fc172a9f13258405b79",
+        "db5ac22e5b052507c25d83567e13d521c92ccba0a897574b4adcd0d03a0d6e31",
+        "292b1256e679492878f1ad74d50feae738e921f6228a9b7f6191d29468adc68d",
+        "d9fdd6509f3fa0c6498c416b80b31f3355f9d049e634c7e7174034ddd3614c7c",
+        "df726f882f4c511a21ea66ada46f27c20449a21907f06050b6a907f0e0680f6a",
+        "ddbbb5e17f636d8700d47153dab048e9a57edfca4f1a6d9e4beeb9d2cb1c7e3f",
+        "f7bbecc644405a111e8c12244e37179e7039e72b67d4b3d9463b53bdfaeaa711",
+        "3f0830f6bbd738e9eab3209eca7a959405d668eb51495557ded5cda2d5aa7746",
+        "0b552e152ffc4a2d4fedf845d15b56e1660f586a30f3289b879c591126475691",
+        "f9930155ab705b30e81e83192bd1945868f9831d3e52e9236eac4ef65c96ffcb",
+        "9e1b47a7e8d94363273b2cd99de14dd0c66df0e2852cf9fdb0d194dd3bb4981e",
+        "c00af43ccd0e5ac24d00fa9ce977d32967daf69bdcfd45b0ad0d6a2d116af7e9",
+        "53d05af53c98c50c800c6a5721be038c5bb35d5d1d0a3e957600963a21d6cc44",
+        "bd81de3da948c0aa202a31f9187adde44dcf88b31aa8b14b701d5b96c079d176",
+        "825b4bc485cd24a8543861b8f840fe55d651a959c4778a6ccb2be428c7c767be",
+        "2a0227c809e69c58f0da1df5c7a9d8b2d3e752c2af40819cc7b76c5bd92c40c4",
+        "2910560b4e88b42768f5b5da0fea607ba62b19ce227e7dfa806ef37ade3aa4a8"
+      ],
+      "n50-r1": [
+        "29841932690e8d2ea5c3074eec8ce519562a09cf0ab79f64a278381b68d19f82",
+        "1088c2fb5cdce8aad37bd52ad87cc127cb0d133b5f267dcf9341687e9f0aeac4",
+        "c843fca15ec703e07373a7acb53224149e4737f807bfcec8819e9aac67763607",
+        "a7343f67d9df0088a13bf0e7d7406f548f99c074e8a837301d164955978c9388",
+        "e65c90286d3c42413555b78117d72571f37940d7194f1ec954c4c04846e70dbc",
+        "c28d20e0ee69d97621c4b306157d84e0a9119f94484eb255d245a126027d0e76",
+        "3dbbee046940d81f8a4ffa2d6a9fa099138c8b23956eb648132efb0b7bb1b575",
+        "f0fb10a2687e41585e7acccb1950cbf6034459fd7b3b734454f4a330eb1cf6be",
+        "7b1b2d5e00275692e83946070ed87964f0a376e617c95fc172a9f13258405b79",
+        "db5ac22e5b052507c25d83567e13d521c92ccba0a897574b4adcd0d03a0d6e31",
+        "292b1256e679492878f1ad74d50feae738e921f6228a9b7f6191d29468adc68d",
+        "d9fdd6509f3fa0c6498c416b80b31f3355f9d049e634c7e7174034ddd3614c7c",
+        "df726f882f4c511a21ea66ada46f27c20449a21907f06050b6a907f0e0680f6a",
+        "ddbbb5e17f636d8700d47153dab048e9a57edfca4f1a6d9e4beeb9d2cb1c7e3f",
+        "f7bbecc644405a111e8c12244e37179e7039e72b67d4b3d9463b53bdfaeaa711",
+        "3f0830f6bbd738e9eab3209eca7a959405d668eb51495557ded5cda2d5aa7746",
+        "0b552e152ffc4a2d4fedf845d15b56e1660f586a30f3289b879c591126475691",
+        "f9930155ab705b30e81e83192bd1945868f9831d3e52e9236eac4ef65c96ffcb",
+        "9e1b47a7e8d94363273b2cd99de14dd0c66df0e2852cf9fdb0d194dd3bb4981e",
+        "c00af43ccd0e5ac24d00fa9ce977d32967daf69bdcfd45b0ad0d6a2d116af7e9",
+        "53d05af53c98c50c800c6a5721be038c5bb35d5d1d0a3e957600963a21d6cc44",
+        "bd81de3da948c0aa202a31f9187adde44dcf88b31aa8b14b701d5b96c079d176",
+        "825b4bc485cd24a8543861b8f840fe55d651a959c4778a6ccb2be428c7c767be",
+        "2a0227c809e69c58f0da1df5c7a9d8b2d3e752c2af40819cc7b76c5bd92c40c4",
+        "2910560b4e88b42768f5b5da0fea607ba62b19ce227e7dfa806ef37ade3aa4a8",
+        "900e9a4e29be9babf238abbbd88368e6555fde2cdcde8ab321970b0ea439bfac",
+        "43dbbf336850563d3f8939fcfddb1b4ca83cecfc9cb5e2a4084d6319408616da",
+        "573aed5842eaea7d4901c53537fe5809b7cd3d6b7b588115c0739d4972fab75c",
+        "f0831746e95210d009e98e8852e82175e444b769e98dda779bc5657138c49f74",
+        "bd268195b29240df73df7cb67c3010a70b5fabe6ab69332c4ee54c63cd3128b1",
+        "415ca1a52f6b3b2a81fe4be03cef2095efe6ed7aee93e17512e73cd43ffafaea",
+        "7152909c990715cb31e9d01cba89333d04b06f63b9a8ff18ba05a7df272d5f83",
+        "8b1807fb66e0234f6351b1b04c09b3b2b008adaa60125f8676f3ffe27a018d5c",
+        "807cf7640136254dbc24dafd4d282b0970c6b1071681511c354429b45eb1c9e2",
+        "e554a54713aca9114af4e5d0e39888edb587b20d750063051c13736bf79d8635",
+        "06774b16b1421f6ae19dceb8f39ef102073a41104050249cad6b119e04dbe72a",
+        "1161410219dc00f02d0350cbb00874447914f0aedbdc2629ed1c00fe89816f78",
+        "bb22c3af020f9a6e72c026d2d4bc47b0d65660cb340768d206ce6036270abcbd",
+        "ea9bc05d68561cacc9109e9b7a24da75c488396a5fcf2ac2bd1581b01360cb8e",
+        "74d2292afea7f25781a53c4e47701fbb1474a83b37419ebb027e51daaa288b74",
+        "8eed018a091b3b0d5734134dbdc2d0e8cd1020d9ebffc095fd922995afb41107",
+        "2821c96aa1d661014880c58caaa447c30174d93dc0c53c93ed2ed843a3f45e19",
+        "69bc2173f26e0cbf4ce23c6e305b9eb78a5c3e54793285158f13deb63789caa7",
+        "410630c560c1a3709e883cb8e138be50e5678c5a598c0abad62173f229b87823",
+        "1f7ffd6f52d5ab900a958f423132b48493779547f3c772bc6671c64fa7027c34",
+        "7740bfda410194d00f57119fbd1167d6cbfc5277c13b85ecbdc8f78300e4ede8",
+        "e480eb5273ad20c6433eededfbca44d3139310fecf8941b484cbc07d3e42dee1",
+        "91dac983bc9c3186fc9905f4ee70a70477cf176ae6c11ec5f98b3ade53bc66ca",
+        "d3e422bac5e4bb6671514eab42d01ff778f1123267dd1796f970a5466b8685c0",
+        "94a34ce3163f843ec49cd90bc775bbbccb040b7ea09f8f86a71e5517530d59fd"
+      ],
+      "n50-r2": [
+        "29841932690e8d2ea5c3074eec8ce519562a09cf0ab79f64a278381b68d19f82",
+        "1088c2fb5cdce8aad37bd52ad87cc127cb0d133b5f267dcf9341687e9f0aeac4",
+        "c843fca15ec703e07373a7acb53224149e4737f807bfcec8819e9aac67763607",
+        "a7343f67d9df0088a13bf0e7d7406f548f99c074e8a837301d164955978c9388",
+        "e65c90286d3c42413555b78117d72571f37940d7194f1ec954c4c04846e70dbc",
+        "c28d20e0ee69d97621c4b306157d84e0a9119f94484eb255d245a126027d0e76",
+        "3dbbee046940d81f8a4ffa2d6a9fa099138c8b23956eb648132efb0b7bb1b575",
+        "f0fb10a2687e41585e7acccb1950cbf6034459fd7b3b734454f4a330eb1cf6be",
+        "7b1b2d5e00275692e83946070ed87964f0a376e617c95fc172a9f13258405b79",
+        "db5ac22e5b052507c25d83567e13d521c92ccba0a897574b4adcd0d03a0d6e31",
+        "292b1256e679492878f1ad74d50feae738e921f6228a9b7f6191d29468adc68d",
+        "d9fdd6509f3fa0c6498c416b80b31f3355f9d049e634c7e7174034ddd3614c7c",
+        "df726f882f4c511a21ea66ada46f27c20449a21907f06050b6a907f0e0680f6a",
+        "ddbbb5e17f636d8700d47153dab048e9a57edfca4f1a6d9e4beeb9d2cb1c7e3f",
+        "f7bbecc644405a111e8c12244e37179e7039e72b67d4b3d9463b53bdfaeaa711",
+        "3f0830f6bbd738e9eab3209eca7a959405d668eb51495557ded5cda2d5aa7746",
+        "0b552e152ffc4a2d4fedf845d15b56e1660f586a30f3289b879c591126475691",
+        "f9930155ab705b30e81e83192bd1945868f9831d3e52e9236eac4ef65c96ffcb",
+        "9e1b47a7e8d94363273b2cd99de14dd0c66df0e2852cf9fdb0d194dd3bb4981e",
+        "c00af43ccd0e5ac24d00fa9ce977d32967daf69bdcfd45b0ad0d6a2d116af7e9",
+        "53d05af53c98c50c800c6a5721be038c5bb35d5d1d0a3e957600963a21d6cc44",
+        "bd81de3da948c0aa202a31f9187adde44dcf88b31aa8b14b701d5b96c079d176",
+        "825b4bc485cd24a8543861b8f840fe55d651a959c4778a6ccb2be428c7c767be",
+        "2a0227c809e69c58f0da1df5c7a9d8b2d3e752c2af40819cc7b76c5bd92c40c4",
+        "2910560b4e88b42768f5b5da0fea607ba62b19ce227e7dfa806ef37ade3aa4a8",
+        "900e9a4e29be9babf238abbbd88368e6555fde2cdcde8ab321970b0ea439bfac",
+        "43dbbf336850563d3f8939fcfddb1b4ca83cecfc9cb5e2a4084d6319408616da",
+        "573aed5842eaea7d4901c53537fe5809b7cd3d6b7b588115c0739d4972fab75c",
+        "f0831746e95210d009e98e8852e82175e444b769e98dda779bc5657138c49f74",
+        "bd268195b29240df73df7cb67c3010a70b5fabe6ab69332c4ee54c63cd3128b1",
+        "415ca1a52f6b3b2a81fe4be03cef2095efe6ed7aee93e17512e73cd43ffafaea",
+        "7152909c990715cb31e9d01cba89333d04b06f63b9a8ff18ba05a7df272d5f83",
+        "8b1807fb66e0234f6351b1b04c09b3b2b008adaa60125f8676f3ffe27a018d5c",
+        "807cf7640136254dbc24dafd4d282b0970c6b1071681511c354429b45eb1c9e2",
+        "e554a54713aca9114af4e5d0e39888edb587b20d750063051c13736bf79d8635",
+        "06774b16b1421f6ae19dceb8f39ef102073a41104050249cad6b119e04dbe72a",
+        "1161410219dc00f02d0350cbb00874447914f0aedbdc2629ed1c00fe89816f78",
+        "bb22c3af020f9a6e72c026d2d4bc47b0d65660cb340768d206ce6036270abcbd",
+        "ea9bc05d68561cacc9109e9b7a24da75c488396a5fcf2ac2bd1581b01360cb8e",
+        "74d2292afea7f25781a53c4e47701fbb1474a83b37419ebb027e51daaa288b74",
+        "8eed018a091b3b0d5734134dbdc2d0e8cd1020d9ebffc095fd922995afb41107",
+        "2821c96aa1d661014880c58caaa447c30174d93dc0c53c93ed2ed843a3f45e19",
+        "69bc2173f26e0cbf4ce23c6e305b9eb78a5c3e54793285158f13deb63789caa7",
+        "410630c560c1a3709e883cb8e138be50e5678c5a598c0abad62173f229b87823",
+        "1f7ffd6f52d5ab900a958f423132b48493779547f3c772bc6671c64fa7027c34",
+        "7740bfda410194d00f57119fbd1167d6cbfc5277c13b85ecbdc8f78300e4ede8",
+        "e480eb5273ad20c6433eededfbca44d3139310fecf8941b484cbc07d3e42dee1",
+        "91dac983bc9c3186fc9905f4ee70a70477cf176ae6c11ec5f98b3ade53bc66ca",
+        "d3e422bac5e4bb6671514eab42d01ff778f1123267dd1796f970a5466b8685c0",
+        "94a34ce3163f843ec49cd90bc775bbbccb040b7ea09f8f86a71e5517530d59fd"
+      ],
+      "n50-r3": [
+        "29841932690e8d2ea5c3074eec8ce519562a09cf0ab79f64a278381b68d19f82",
+        "1088c2fb5cdce8aad37bd52ad87cc127cb0d133b5f267dcf9341687e9f0aeac4",
+        "c843fca15ec703e07373a7acb53224149e4737f807bfcec8819e9aac67763607",
+        "a7343f67d9df0088a13bf0e7d7406f548f99c074e8a837301d164955978c9388",
+        "e65c90286d3c42413555b78117d72571f37940d7194f1ec954c4c04846e70dbc",
+        "c28d20e0ee69d97621c4b306157d84e0a9119f94484eb255d245a126027d0e76",
+        "3dbbee046940d81f8a4ffa2d6a9fa099138c8b23956eb648132efb0b7bb1b575",
+        "f0fb10a2687e41585e7acccb1950cbf6034459fd7b3b734454f4a330eb1cf6be",
+        "7b1b2d5e00275692e83946070ed87964f0a376e617c95fc172a9f13258405b79",
+        "db5ac22e5b052507c25d83567e13d521c92ccba0a897574b4adcd0d03a0d6e31",
+        "292b1256e679492878f1ad74d50feae738e921f6228a9b7f6191d29468adc68d",
+        "d9fdd6509f3fa0c6498c416b80b31f3355f9d049e634c7e7174034ddd3614c7c",
+        "df726f882f4c511a21ea66ada46f27c20449a21907f06050b6a907f0e0680f6a",
+        "ddbbb5e17f636d8700d47153dab048e9a57edfca4f1a6d9e4beeb9d2cb1c7e3f",
+        "f7bbecc644405a111e8c12244e37179e7039e72b67d4b3d9463b53bdfaeaa711",
+        "3f0830f6bbd738e9eab3209eca7a959405d668eb51495557ded5cda2d5aa7746",
+        "0b552e152ffc4a2d4fedf845d15b56e1660f586a30f3289b879c591126475691",
+        "f9930155ab705b30e81e83192bd1945868f9831d3e52e9236eac4ef65c96ffcb",
+        "9e1b47a7e8d94363273b2cd99de14dd0c66df0e2852cf9fdb0d194dd3bb4981e",
+        "c00af43ccd0e5ac24d00fa9ce977d32967daf69bdcfd45b0ad0d6a2d116af7e9",
+        "53d05af53c98c50c800c6a5721be038c5bb35d5d1d0a3e957600963a21d6cc44",
+        "bd81de3da948c0aa202a31f9187adde44dcf88b31aa8b14b701d5b96c079d176",
+        "825b4bc485cd24a8543861b8f840fe55d651a959c4778a6ccb2be428c7c767be",
+        "2a0227c809e69c58f0da1df5c7a9d8b2d3e752c2af40819cc7b76c5bd92c40c4",
+        "2910560b4e88b42768f5b5da0fea607ba62b19ce227e7dfa806ef37ade3aa4a8",
+        "900e9a4e29be9babf238abbbd88368e6555fde2cdcde8ab321970b0ea439bfac",
+        "43dbbf336850563d3f8939fcfddb1b4ca83cecfc9cb5e2a4084d6319408616da",
+        "573aed5842eaea7d4901c53537fe5809b7cd3d6b7b588115c0739d4972fab75c",
+        "f0831746e95210d009e98e8852e82175e444b769e98dda779bc5657138c49f74",
+        "bd268195b29240df73df7cb67c3010a70b5fabe6ab69332c4ee54c63cd3128b1",
+        "415ca1a52f6b3b2a81fe4be03cef2095efe6ed7aee93e17512e73cd43ffafaea",
+        "7152909c990715cb31e9d01cba89333d04b06f63b9a8ff18ba05a7df272d5f83",
+        "8b1807fb66e0234f6351b1b04c09b3b2b008adaa60125f8676f3ffe27a018d5c",
+        "807cf7640136254dbc24dafd4d282b0970c6b1071681511c354429b45eb1c9e2",
+        "e554a54713aca9114af4e5d0e39888edb587b20d750063051c13736bf79d8635",
+        "06774b16b1421f6ae19dceb8f39ef102073a41104050249cad6b119e04dbe72a",
+        "1161410219dc00f02d0350cbb00874447914f0aedbdc2629ed1c00fe89816f78",
+        "bb22c3af020f9a6e72c026d2d4bc47b0d65660cb340768d206ce6036270abcbd",
+        "ea9bc05d68561cacc9109e9b7a24da75c488396a5fcf2ac2bd1581b01360cb8e",
+        "74d2292afea7f25781a53c4e47701fbb1474a83b37419ebb027e51daaa288b74",
+        "8eed018a091b3b0d5734134dbdc2d0e8cd1020d9ebffc095fd922995afb41107",
+        "2821c96aa1d661014880c58caaa447c30174d93dc0c53c93ed2ed843a3f45e19",
+        "69bc2173f26e0cbf4ce23c6e305b9eb78a5c3e54793285158f13deb63789caa7",
+        "410630c560c1a3709e883cb8e138be50e5678c5a598c0abad62173f229b87823",
+        "1f7ffd6f52d5ab900a958f423132b48493779547f3c772bc6671c64fa7027c34",
+        "7740bfda410194d00f57119fbd1167d6cbfc5277c13b85ecbdc8f78300e4ede8",
+        "e480eb5273ad20c6433eededfbca44d3139310fecf8941b484cbc07d3e42dee1",
+        "91dac983bc9c3186fc9905f4ee70a70477cf176ae6c11ec5f98b3ade53bc66ca",
+        "d3e422bac5e4bb6671514eab42d01ff778f1123267dd1796f970a5466b8685c0",
+        "94a34ce3163f843ec49cd90bc775bbbccb040b7ea09f8f86a71e5517530d59fd"
+      ]
+    }
+  },
+  "cardinality": {
+    "exactFit": "Baseline18*N*N+4*N+1 and final1 fit all12 repetitions per arm.",
+    "source": "packages/runner/src/cfc/prepare.ts:7287 loops linkWriteInputs; :7380 increments authoritativeCoverCalls; :7390 loops input.cfcLabelView.entries and skips gated-empty labels, then calls authoritativeCoverFor once and pushes one carried origin:link entry into persistedLabelEntries (:7398-7403).",
+    "meaning": "Baseline map argument inference treats undeclared array/index/params as used, forwarding the complete labeled list into every child. Projection-aware inference omits these unused arguments. This eliminates the quadratic carried-entry visits in this fixture; final covercalls1 and wildcardqueries0 per open.",
+    "scopeOfInference": "Observed formula is not a proof of all N or an unavoidable lower bound; optimized actual workload disproves the claimed necessity of quadratic visits.",
+    "baselineObservedCoverCalls": {
+      "11": 2223,
+      "25": 11351,
+      "50": 45201,
+      "100": 180401
+    },
+    "finalObservedCoverCalls": {
+      "11": 1,
+      "25": 1,
+      "50": 1,
+      "100": 1
+    }
+  },
+  "acceptance": {
+    "baselineSlope": 1.5003449537857874,
+    "finalSlope": 1.0851907099782647,
+    "requiredMaxSlope": 1.1,
+    "slopePassed": true,
+    "finalN100MedianCfcShare": 0.3699996046118806,
+    "cfcMinorityAtN100": true,
+    "all24RunsPassed": true,
+    "all12EquivalencePairsPassed": true
+  },
+  "mapArgumentUsageFollowup": {
+    "emittedSource": "/tmp/cfc-round2-browser-transformed.txt:218-254",
+    "executedInference": "/tmp/cfc-round2-browser-map-usage.ts",
+    "result": "/tmp/cfc-round2-browser-map-usage.json",
+    "argumentSchema": {
+      "type": "object",
+      "properties": {
+        "element": {
+          "$ref": "#/$defs/Bubble"
+        }
+      },
+      "required": [
+        "element"
+      ],
+      "$defs": {
+        "Bubble": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "me": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "text",
+            "me"
+          ]
+        }
+      }
+    },
+    "finalArgumentUsage": {
+      "usesElement": true,
+      "usesIndex": false,
+      "usesArray": false,
+      "usesParams": false
+    },
+    "fix": "Use existing schemaPathSelection; retain declared/open/legacy arguments. Fix helper base+branch combination with combineSchema, retaining explicit outer properties and structural schemas.",
+    "baselineArgumentUsage": {
+      "usesElement": true,
+      "usesIndex": true,
+      "usesArray": true,
+      "usesParams": true
+    },
+    "baselineSanitizedArgumentUsage": {
+      "usesElement": true,
+      "usesIndex": true,
+      "usesArray": true,
+      "usesParams": true
+    },
+    "baselineInvestigationFindings": [
+      "The emitted operation body reads only element.me and element.text. Its object argument schema declares only element and does not set additionalProperties:false.",
+      "inferListOpArgumentUsage calls ContextualFlowControl.getSchemaAtPath for index/array/params. Executing it against the exact emitted schema returns true for all four flags; each missing schema path resolves to {}.",
+      "ContextualFlowControl.schemaAtPath defaults defaultMissingProperty=true; with nonempty properties and a missing property it selects that default. getSchemaAtPath converts true to {}, which is not undefined.",
+      "map.ts:createRunInput includes array:listCell whenever usesArray is true, and passes that input for every created child. Thus the browser lowering has the same whole-array argument-carriage mechanism as the conservative builder case.",
+      "No new browser run or per-link transaction census was taken in this follow-up. The emitted-schema inference plus map source establish inclusion of the unused array; they do not allocate every term of the observed 18*N*N+4*N+1 cover-call formula to a particular link kind.",
+      "Pattern construction (builder/pattern.ts:597) sanitizes with sanitizeSchemaForLinks(argumentSchema, KeepAsCell.All); the diagnostic executed that exact sanitizer too. It leaves this emitted schema unchanged and sanitized argument-usage inference remains all true."
+    ],
+    "finalInferenceResult": "/tmp/cfc-round2-browser-map-usage-fixed.json"
+  }
+}

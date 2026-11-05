@@ -1,0 +1,33 @@
+{
+  "name": "@commonfabric/ts-transformers",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./src/mod.ts",
+    "./core/context": "./src/core/context.ts",
+    "./runtime-registry": "./src/core/commonfabric-runtime-registry.ts",
+    // Typescript-free transformer↔runtime contract values (boot-safe).
+    "./runtime-contract": "./src/core/runtime-contract.ts"
+  },
+  "imports": {
+    // Dependency guide: ../../docs/development/DEPENDENCIES.md
+    "typescript": "npm:typescript@6.0.3"
+  },
+  "tasks": {
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --parallel --allow-read --allow-write --allow-env test/**/*.test.ts",
+    "check": "deno check src/**/*.ts",
+    "fmt": "deno fmt src/ test/**/*.test.ts",
+    "lint": "deno lint src/ test/"
+  },
+  "lint": {
+    "exclude": [
+      "./test/fixtures/**/*.expected.js",
+      "./test/fixtures/**/*.expected.jsx",
+      "./test/fixtures/**/*.expected.ts",
+      "./test/fixtures/**/*.expected.tsx"
+    ],
+    "plugins": [
+      "./lint-plugins/no-node-get-text.ts"
+    ]
+  }
+}

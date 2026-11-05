@@ -1,0 +1,56 @@
+{
+  "base": "e5298815118c7983a4b632336d0d8ded0e2d4405",
+  "patchSha256": "248edfc03f42ecef4a83208b7d37231e0fc1ea7795757419f9d0dc9913a4ac36",
+  "files": {
+    "packages/runner/src/source-reconciler.ts": "97b893e63d1e5a0d629296783bb7351b263f329f3d70a1e360de4406a6316a8e",
+    "packages/runner/test/source-reconciler.test.ts": "a64e0a65a77a09f3439506f103354d91206b2af4a705959f582ffcb0215f72ff",
+    "docs/specs/piece-source-lifecycle.md": "4034e2d7f502de3d6d851e5f9419cd5d39b2250dc6c85927e5d912a3b517ea40",
+    "tools/server-execution-topics/sidecar-source-probe.ts": "cb4cd070f208a7423e7a71729478bd570cb7a55fa9e617c27b64eb616b53b137"
+  },
+  "kind": "source-work mechanism, no latency claim",
+  "runtime": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3\n",
+  "loadBefore": [
+    44.064453125,
+    39.734375,
+    30.4443359375
+  ],
+  "startedAt": "2026-09-10T22:28:21.155038+00:00",
+  "sourceGuards": [
+    {
+      "phase": "before-probe",
+      "base": "e5298815118c7983a4b632336d0d8ded0e2d4405",
+      "status": " M docs/specs/piece-source-lifecycle.md\n M packages/runner/src/source-reconciler.ts\n M packages/runner/test/source-reconciler.test.ts\n?? tools/server-execution-topics/sidecar-source-probe.ts\n",
+      "patchSha256": "248edfc03f42ecef4a83208b7d37231e0fc1ea7795757419f9d0dc9913a4ac36"
+    },
+    {
+      "phase": "after-probe",
+      "base": "e5298815118c7983a4b632336d0d8ded0e2d4405",
+      "status": " M docs/specs/piece-source-lifecycle.md\n M packages/runner/src/source-reconciler.ts\n M packages/runner/test/source-reconciler.test.ts\n?? tools/server-execution-topics/sidecar-source-probe.ts\n",
+      "patchSha256": "248edfc03f42ecef4a83208b7d37231e0fc1ea7795757419f9d0dc9913a4ac36"
+    }
+  ],
+  "command": [
+    "deno",
+    "run",
+    "-A",
+    "tools/server-execution-topics/sidecar-source-probe.ts"
+  ],
+  "cwd": "${CHECKOUT}",
+  "exitCode": 0,
+  "loadAfter": [
+    44.42041015625,
+    40.3251953125,
+    31.08349609375
+  ],
+  "endedAt": "2026-09-10T22:28:59.138225+00:00",
+  "posture": "fresh EmulatedStorageManager/Runtime per OFF and ON; actual experimental and servingPosture asserted; no server binary or browser in this mechanism probe",
+  "cache": "identity route prewarmed; fresh compile/storage session per arm; dependency cache retained",
+  "fixture": "real profile-create.tsx, four distinct slots: three in one destination and one foreign destination; each slot reopened; each closure read after persistence",
+  "pathRoots": {
+    "CHECKOUT": "candidate checkout"
+  },
+  "originalCapture": {
+    "path": "runs/sidecar-candidate-01/manifest.json",
+    "sha256": "09c090abb7215d127a6fb30fe1db6b31bb3e8f45ec56f46fc7f92442b60df80e"
+  }
+}

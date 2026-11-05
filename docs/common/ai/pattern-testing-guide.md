@@ -23,8 +23,8 @@ Write tests for:
 - regressions that are easy to reintroduce
 - edge cases with real branching logic
 
-For Pattern Factory Build, prefer tests that cover the product contract rather
-than only the happy path:
+When a pattern implements a spec or a product brief, prefer tests that cover
+that contract rather than only the happy path:
 
 - first-run/default and sparse states
 - primary add, remove, edit, toggle, or submit flows
@@ -45,11 +45,11 @@ deno task cf test <pattern>.test.tsx
 ```
 
 Imports resolve from the nearest ancestor directory whose `deno.json(c)`
-declares a package name (`packages/patterns` for this repository's patterns),
+declares a package name (`patterns` for this repository's patterns),
 so imports that span the package — shared helpers, `cfc/` modules — work
 without a flag. A failure naming an import that "escapes the program root"
 means the file imports from above that root; pass `--root` naming a common
-ancestor. CI runs these tests with `--root packages/patterns`.
+ancestor. CI runs these tests with `--root patterns`.
 
 If `cf test` fails, treat that as repair work. Preserve the failing command and
 relevant output, isolate the smallest failing action/assertion when useful, fix
@@ -231,6 +231,13 @@ key). A clean run is part of the contract — a passing test that logs errors
 hides real failures (this is how a production CFC commit-rejection shipped
 behind green tests).
 
+One runtime warning is worth knowing by name. `[logger:schema-view] …
+(key: unselected-key-read)` means a lift read a field its input schema does not
+select, and got `undefined` for a field the data holds. The schema is narrower
+than the code: written by hand that way, or shrunk past a read the analysis that
+derives it did not see. See
+[lazy cell materialization](../../features/lazy-cell-materialization.md#reading-a-key-the-schema-does-not-select).
+
 If a test intentionally provokes errors or warnings, opt out explicitly on the
 returned descriptor — each flag covers only its own level:
 
@@ -246,8 +253,14 @@ return {
 In multi-user tests the flags are per participant: one participant opting out
 does not mask another participant's errors. (The same applies to the
 pre-existing `allowRuntimeErrors` flag for scheduler-level errors; use
-`expectRuntimeErrors: true | <count>` when the errors are the point — it
-REQUIRES them, failing the run if none fire.)
+`expectRuntimeErrors: true | <count> | ["<message>", …]` when the errors are
+the point — it REQUIRES them: `true` fails the run if none fire, a `<count>` if
+a different number fire, and a list unless the fired errors pair off one for
+each listed message, each error containing its message, in any order. Leaving
+the flag out, or setting it to `false`, requires nothing; any other value fails
+the run, `0` and `[]` among them, since a test that raises no errors needs no
+flag. In a multi-user test each participant's expectation counts and tolerates
+its own errors only.)
 
 ## Multi-User Tests
 
@@ -301,6 +314,12 @@ Key points:
 - Each participant gets its own identity. Use
   `{ pattern: aliceTab2, user: "alice" }` for a second session of an
   existing user (PerUser state shared, PerSession state isolated).
+- The shared space has an access list, which is what `spaceAccess()` reads.
+  The first participant's user is OWNER; declare another user's level with
+  `{ pattern: viewer, access: "READ" }` (`"OWNER"`, `"WRITE"`, `"READ"`, or
+  `"none"` for not listed). An undeclared user is `"WRITE"`. The list is not
+  enforced: a `"READ"` or `"none"` participant still writes the space. See
+  [The test's space and its access list](../workflows/pattern-testing.md#the-tests-space-and-its-access-list).
 - A marker is a durable write in the shared space, so crossing
   `{ await: "name" }` means everything the announcing participant committed
   before `{ label: "name" }` has reached this runtime. An assertion is read
@@ -325,10 +344,10 @@ Key points:
   empty rack before joining); assert pre-join isolation via normalized
   primitives (`myName === ""`) instead.
 - The example to copy:
-  `packages/patterns/cfc-group-chat-demo/multi-user.test.tsx`; for the
+  `patterns/examples/cfc-group-chat-demo/multi-user.test.tsx`; for the
   output-snapshot and inline-read idioms see
-  `packages/patterns/scrabble/multi-user.test.tsx` and
-  `packages/patterns/lunch-poll/multi-user.test.tsx`. The scope model
+  `patterns/showcase/scrabble/multi-user.test.tsx` and
+  `patterns/apps/lunch-poll/multi-user.test.tsx`. The scope model
   background: `docs/common/patterns/multi-user-patterns.md` and
   `docs/development/debugging/gotchas/scoped-cell-pitfalls.md`.
 

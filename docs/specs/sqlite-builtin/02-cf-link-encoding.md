@@ -20,7 +20,7 @@ For a link column:
   direct bind to a `_cf_link` column receives the link-column string encoding.
 - **On read** the behavior depends on whether the query is **typed**:
   - A **typed `db.query<{ col_cf_link: Cell<T> }>`** surfaces the column as a
-    live `Cell`. (Mechanically: the runtime decodes the stored sigil **string**
+    live `Cell`, and so does one typed `Cell<T> | null`. (Mechanically: the runtime decodes the stored sigil **string**
     into a sigil **object**, and the consumer's `<Row>` `asCell` schema
     rehydrates that object into a `Cell<T>` on read.)
   - An **untyped `db.query`** returns the raw stored **sigil-link string** — the
@@ -60,8 +60,8 @@ runtime's sigil link — absolute so the row is portable and resolvable
 independent of any base document or space.
 
 The runtime already produces this shape. `Cell.getAsLink()` returns a `SigilLink`
-(see [`packages/runner/src/cell.ts`](../../../packages/runner/src/cell.ts) and
-[`packages/runner/src/link-utils.ts`](../../../packages/runner/src/link-utils.ts)
+(see [`runtime/runner/src/cell.ts`](../../../runtime/runner/src/cell.ts) and
+[`runtime/runner/src/link-utils.ts`](../../../runtime/runner/src/link-utils.ts)
 `createSigilLinkFromParsedLink`). For storage we serialize it with **no `base`**
 so `id`, `space`, and `scope` are always present:
 
@@ -93,7 +93,7 @@ Rationale for absolute links:
 Executed during `db.exec`, before the `sqlite` op is recorded onto the commit
 (Section [04](./04-server-execution-and-transactions.md)). The codec is
 `encodeCfLinkValue`
-([`packages/runner/src/builtins/sqlite/cf-link.ts`](../../../packages/runner/src/builtins/sqlite/cf-link.ts)):
+([`runtime/runner/src/builtins/sqlite/cf-link.ts`](../../../runtime/runner/src/builtins/sqlite/cf-link.ts)):
 
 1. Determine which parameters target link columns by mapping each parameter to
    its column (from the statement's named columns) and the `*_cf_link` suffix /
@@ -113,12 +113,15 @@ encoded string is stable regardless of where the row is later read.
 
 The server returns raw stored strings; decoding happens **on the client** in the
 query built-in after rows return
-([`packages/runner/src/builtins/sqlite-builtins.ts`](../../../packages/runner/src/builtins/sqlite-builtins.ts)),
+([`runtime/runner/src/builtins/sqlite-builtins.ts`](../../../runtime/runner/src/builtins/sqlite-builtins.ts)),
 and is **driven by the typed `db.query<Row>` schema**:
 
 1. From the transformer-injected `rowSchema`, identify which result columns are
-   marked `asCell` (a `Cell<T>` field in `Row`). An **untyped** query injects no
-   `rowSchema` → no columns are decoded.
+   marked `asCell` (a `Cell<T>` field in `Row`), either directly or in a branch
+   of an `anyOf`, `oneOf`, or `allOf`, following a `$ref` into the row schema's
+   `$defs`: a nullable `Cell<T> | null` field lowers to
+   `anyOf: [{ type: "null" }, { …, asCell }]`, and is a link column too. An
+   **untyped** query injects no `rowSchema` → no columns are decoded.
 2. For each `asCell` column, replace the stored sigil-link **string** with the
    parsed sigil-link **object** (`parseCfLinkToSigil`). `null`/`undefined` →
    `null`. A value that is not a decodable link is left as-is (the `asCell` read

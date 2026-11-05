@@ -98,14 +98,27 @@ instead of hiding it in module-scoped mutable variables.
   imperative, push complex logic into a helper and keep the bound state
   explicit.
 - Call `Date.now()` and `Math.random()` directly when a handler needs a
-  timestamp or random ID. Inside a handler these built-ins are allowed (the
+  timestamp or a random value. Inside a handler these built-ins are allowed (the
   clock is coarsened to one-second resolution); in a lift/computed or at
   pattern-body level they throw a `TimeCapabilityError`. For reactive time in a
   computed, read the interval `#now/N` wish (bare `#now` is a frozen
   first-load capture, not a clock).
+- Call `eventKey()`, not `Math.random()`, for an ID that has to name the event:
+  a key for acting on a request at most once, or the ID of a record the event
+  creates. A handler can run more than once for one event — a retry, or a
+  client's speculative run before the server's — and `Math.random()` returns
+  something different each time, while `eventKey()` returns the same key on
+  every run of the event and a different one for every other event. A stream
+  can re-admit an event id it has already handled, which gets the same key, so
+  create a record addressed by the key only if it is absent.
+  [The key of the event a handler handles](../../features/event-key.md) has the
+  details.
 - Timers are not part of the authored surface and do not compile, so drive
   timed work through the scheduler rather than reaching for `setTimeout()` or
   `setInterval()` in handler code.
+- Call `currentPrincipal()` for the DID of the user the handler acts for, never
+  a field of the event; [Handling Events](./action.md#who-the-action-acts-for)
+  says what it does and does not tell you.
 
 ## Input Delivery Is Rate-Shaped
 
@@ -152,6 +165,17 @@ export default pattern<{}, Output>(({ items }) => ({
 ```
 
 Other patterns can then link to this pattern and call `linkedPattern.addItem.send({ title: "New" })`.
+
+A stream belongs to the type that declares it, not to the data it is read
+from. Reading an object whose type has a `Stream<T>` field gives that field a
+stream whether or not anything bound a handler there, so `Object.keys()` of the
+value lists it and the field is never `undefined`. An event sent to a stream no
+handler is bound to is dropped, possibly after waiting for a handler to
+register. A runtime that delivers its own events, as one does without server
+execution, reports the drop as an `EventDroppedError` through the scheduler's
+error channel. Whether another piece offers a stream therefore can't be learned
+by reading the field: when that varies, have it offer a value that says so, and
+read the value.
 
 ## Event Data and Void Handlers
 

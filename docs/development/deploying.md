@@ -1,10 +1,9 @@
-# Deploying a commit
+# Deploying a release
 
-A commit reaches a server host by way of the bastion. The deploy jobs in CI
-open an SSH connection to the bastion and run one command there,
-`/opt/cf/deploy.sh`, passing the environment to deploy and the commit to deploy
-to it. That script does the rest: it deploys the binaries that CI already built
-and uploaded for that commit.
+Server deployments run through the bastion using binaries that CI has built
+and published. Rapids releases coordinate Labs, Loom, Weaver, gVisor, and infra
+at verified green `main` revisions. Estuary takes a manually selected Labs
+revision from `main`.
 
 Two browser shells reach users, and they are configured in different places.
 The toolshed binary carries one and serves it from its own origin, so it is
@@ -12,38 +11,129 @@ configured when that binary is built; "The shell inside the binary" below
 covers it. The other is a static site published to its own bucket, and "The
 staging shell" covers that one.
 
-Two jobs do this:
+The server deployment entrypoints are:
 
-| Job | Workflow | Environment passed | Trigger |
+| Job | Workflow | Bastion command | Trigger |
 | --- | --- | --- | --- |
-| `deploy-rapids` | `.github/workflows/deno.yml` | `rapids`, written out in the step | every push to `main` |
-| `deploy-estuary` | `.github/workflows/deploy-production.yml` | `DEPLOYMENT_ENVIRONMENT` variable | manual dispatch, naming the ref to deploy |
+| `deploy` | `.github/workflows/rapids-release.yml` | `/opt/cf/deploy-rapids.sh "$INFRA_SHA"` | infra dispatch on Labs `main`, naming the candidate's infra commit |
+| `deploy-estuary` | `.github/workflows/deploy-production.yml` | `/opt/cf/deploy.sh <environment> <Labs SHA>` | manual dispatch on `main`, naming a full SHA |
 
 The production job reads the environment name from a repository variable rather
 than naming it, because the variable is defined on the GitHub environment the
 job declares.
 
-The staging job waits on `attest-binaries`, because the script deploys binaries
-rather than building them. There is nothing for it to deploy until that job has
-uploaded the artifacts for the commit. The production job downloads those same
-artifacts itself, and fails with a message naming the commit if they are not
-there.
+The Rapids job declares GitHub's `toolshed` environment, which holds
+`BASTION_HOST` and `BASTION_SSH_PRIVATE_KEY`. It connects as `bastion`. The
+production job downloads the selected commit's artifacts itself and fails with
+a message naming that commit if they are absent.
 
-Staging used to deploy to toolshed as well, from a `deploy-toolshed` job in
-`.github/workflows/deno.yml`. Toolshed has been decommissioned and rapids
-replaces it, so that job is gone and `deploy-rapids` is the only staging
-deploy. The `deploy-rapids` job still declares GitHub's `toolshed` environment,
-which is where its bastion credentials live; renaming that environment is a
-repository-settings change, and the job has to be updated in the same change.
+## Estuary deployment and verification
+
+**Manual Production Deployment** (`deploy-production.yml`) runs from `main`
+and takes these inputs:
+
+- `ref`: the full lowercase Labs commit SHA to deploy or verify. The SHA must
+  be an ancestor of `main`, verified through GitHub before the protected job
+  can start.
+- `verify_only`: `false` (default) deploys through the existing bastion wrapper;
+  `true` checks the running backend without deploying or downloading artifacts.
+
+The protected job declares the `estuary` environment, so one of its required
+reviewers approves each run before it starts. Concurrent Estuary runs serialize
+without cancelling an in-progress run.
+
+After deployment, or immediately in verification-only mode, the workflow uses
+the existing bastion connection to read `/api/meta` from all 21 Estuary workers
+on ports 8001–8021 and from `https://estuary.saga-castor.ts.net/api/meta`. Every
+response must be HTTP 200 at the requested URL and report the selected SHA.
+The verification makes one request per endpoint and fails on an unavailable or
+mismatched endpoint.
+
+Successful verification uploads `receipt.json` in the GitHub artifact
+`estuary-deployment-<run_id>-<run_attempt>`. It records `repository`,
+`workflow_sha`, `run_id`, `run_attempt`, `verify_only`, `labs_sha`,
+`verified_at`, `expected_workers`, `workers`, and `https`.
+Each worker has `host`, `port`, and `git_sha`; `https` has `url` and `git_sha`.
+The receipt is uploaded only after the complete worker set and HTTPS result
+have been validated.
+
+## Coordinated Rapids releases
+
+Labs CI publishes binaries and attestations on green pushes to `main`.
+`.github/workflows/notify-rapids.yml` then dispatches two workflows with the
+paired `producer=commonfabric/labs` and `run_id` hints:
+
+- `commonfabric/infra`: `rapids.yml`, which reconciles the release candidate.
+- `commonfabric/loom`: `rapids-dependencies.yml`, which integrates verified
+  producer dependencies and resolves their revisions independently.
+
+Each notification uses a separate repository-scoped Actions-write token from
+`RAPIDS_APP_ID` and `RAPIDS_APP_PRIVATE_KEY`. Notifications follow successful
+main-push CI runs in this repository. They execute no checked-out code.
+
+The infra coordinator selects the latest green main revisions and verifies
+their immutable artifacts. It lands `releases/rapids-candidate.json` on infra
+`main` and keeps that candidate frozen through deployment and publication. See
+[infra's Rapids release documentation](https://github.com/commonfabric/infra/blob/main/releases/rapids.md)
+for selection and reconciliation rules.
+
+The coordinator dispatches `rapids-release.yml` on Labs `main` with the single
+required string input `infra_sha`. The run is named `Deploy Rapids <infra_sha>`.
+The `rapids-release-deploy` concurrency group serializes runs without canceling
+an in-progress deployment. The job has a 60-minute total limit covering setup,
+validation, deployment, and receipt upload. Within that budget, the remote
+command has a 45-minute limit. The receiver performs these steps in order:
+
+1. Require a 40-character lowercase hexadecimal SHA and ask GitHub whether it
+   is an ancestor of infra `main`, before checking out or executing infra code.
+2. Check out `commonfabric/infra` at that exact SHA, with full history and no
+   persisted credentials. Install `jsonschema[format]==4.23.0` for validation.
+   Exchange the job's GitHub OIDC identity for a short-lived, read-only Google
+   access token using `RAPIDS_ARTIFACT_WORKLOAD_IDENTITY_PROVIDER` and
+   `RAPIDS_ARTIFACT_SERVICE_ACCOUNT`. Infra manages those repository variables
+   and the main-workflow trust in `tofu/weaver-dev-builds`.
+3. Run `releases/rapids_deploy.py <infra_sha> --validate-only`. The infra
+   validator requires a clean exact checkout, main ancestry, a candidate equal
+   to the current main candidate, green infra checks, green producer pins, and
+   the exact Labs archive and attestation. The candidate file supplies artifact
+   selections. `RAPIDS_ARTIFACT_ACCESS_TOKEN` lets this step read the selected
+   Weaver completion manifest through the authenticated GCS API. The validator
+   verifies its pinned checksum against the downloaded bytes. The token is
+   scoped to manifest reads and is passed only to this validation step.
+4. Call `/opt/cf/deploy-rapids.sh "$INFRA_SHA"` on the bastion. The wrapper
+   locks deployments, verifies the infra checkout and producer main ancestry,
+   and invokes infra's `rapids_release.yml` playbook. Deployment is forward-only;
+   completion requires all 21 workers to report the expected SHAs.
+5. Pass the captured `RAPIDS_RECEIPT:<base64-json>` output to
+   `releases/rapids_deploy.py <infra_sha> --save-receipt <path>`. The validator
+   binds the receipt to the candidate, the Labs workflow SHA, run and attempt,
+   and the expected worker set and SHAs. The captured stream includes remote
+   stderr and the SSH action's success banner; the parser requires exactly one
+   receipt marker line.
+6. Upload only the verified receipt as
+   `rapids-deployment-<run_id>-<run_attempt>`, retained for 90 days. A failed
+   validation or deployment stops this sequence before proof is uploaded.
+
+The evidence token is read-only for contents and Actions in `infra`, `loom`,
+`labs`, `commonfabric-weaver`, and `gvisor`. The bastion receives that token,
+`INFRA_SHA`, and the Labs orchestrator's `GITHUB_SHA`, `GITHUB_REPOSITORY`,
+`GITHUB_RUN_ID`, and `GITHUB_RUN_ATTEMPT`.
+
+Every completed `Deploy Rapids release` run on main, including failures and
+cancellations, notifies infra with empty dispatch inputs. The coordinator
+checks the trusted main workflow, run and attempt, GitHub artifact digest,
+candidate hash, and every worker before proposing an update to the active
+`releases/rapids.json`. That active file advances only after all-worker success.
 
 ## One commit, one set of artifacts
 
-The `attest-binaries` job in `.github/workflows/deno.yml` builds the binaries,
-signs them, packs them into `labs-<commit>.tar.gz`, writes that tarball's
-SHA-256 into `labs-<commit>.hash.txt`, and copies both objects into the
-`commontools-build-artifacts` bucket. A deploy is given a commit rather than a
-build, so those two objects are the whole of what a commit means to a host. The
-host downloads them, checks the tarball against the checksum, and unpacks it.
+The `build-toolshed` and `build-cf` jobs in `.github/workflows/deno.yml` build
+the binaries. Once every lane of the full run has passed, the `attest-binaries`
+job signs them, packs them into `labs-<commit>.tar.gz`, writes that
+tarball's SHA-256 into `labs-<commit>.hash.txt`, and copies both objects into
+the `commontools-build-artifacts` bucket. A host downloads the pair, checks the
+tarball against the checksum, and unpacks it. The Rapids candidate additionally
+binds the exact archive and producer evidence verified by the coordinator.
 
 Building one commit twice does not produce the same tarball. The binaries are
 compiled again, and `tar` records the modification time of every file it packs.
@@ -62,10 +152,10 @@ the ways a second build starts without a second run, a re-run of the job among
 them. Removing either object from the bucket by hand lets the next build of
 that commit publish both of them again.
 
-## A host keeps what it has already downloaded
+## Production artifact caching
 
-The deploy playbook downloads the tarball and the checksum only when the
-release directory for the commit is missing a binary, and Ansible's `get_url`
+The production deploy playbook downloads the tarball and the checksum only when
+the release directory for the commit is missing a binary, and Ansible's `get_url`
 leaves a destination file that is already there as it is. So a release
 directory that failed verification stays as it is across later deploys of that
 commit. The download tasks report no change, the same mismatched pair is
@@ -73,82 +163,96 @@ checked again, and the deploy fails the same way. A re-run cannot recover on
 its own; someone has to remove the directory on the host.
 
 That playbook is `ansible/playbooks/toolshed_binary_deploy.yml` in the
-[infra repository](https://github.com/commontoolsinc/infra), behind the
+[infra repository](https://github.com/commonfabric/infra), behind the
 `/opt/cf/deploy.sh` wrapper described above. Making the download replace what
 it finds, rather than skip it, is a change in that repository.
 
-## The wrapper is owned by another repository
+## The toolshed's heap limit
 
-`/opt/cf/deploy.sh` is not in this repository. The
-[infra repository](https://github.com/commontoolsinc/infra) generates it, in
-`ansible/playbooks/bastion.yml`, and writes it to the bastion when that
-playbook runs. Nothing here reads it, imports it, or tests it against the real
-thing.
+The toolshed binary is built with `--v8-flags=--max-old-space-size=8192`
+(`tasks/build-binaries.ts`), and `scripts/start-local-dev.sh` and the package's
+`dev` and `production` tasks run with the same flag. V8 applies the limit to each
+isolate rather than to the process, so the main thread and the serving worker
+can each reach 8 GiB, and a host's memory has to cover both for every instance
+it runs.
 
-The script validates what it is given, and it takes exactly two arguments: an
+A worker that reaches the limit takes its process down. Events still queued
+survive that, and the restarted process handles them.
+
+## A deploy states when it happened
+
+A toolshed orders the releases of the system patterns it serves by
+`TOOLSHED_RELEASED_AT` ([configuration](CONFIGURATION.md#build-info)). Its
+patterns route sends that time beside every identity it advertises, and a piece
+that adopted one release is not moved to an earlier one. The value describes
+the deploy rather than the commit, so it is the time a deploy happens, and every
+deploy sets it again — a deploy of a commit already deployed included, since
+rolling a bad release back that way makes it the latest release there is.
+
+Every instance a deploy restarts has to read the same value, and to read it
+alongside the binary it starts. A host restarts its instances one after another,
+so for a while some serve the release being replaced and some the one replacing
+it; the time is what tells a piece which of the two to keep. A value kept with
+the release the instances run from gives that pairing by construction. A
+toolshed whose environment does not set the time advertises identities alone.
+A piece it serves then follows whichever identity it was offered last, unless
+the source the piece runs carries a time from another release, adopted or
+confirmed: an offer with no time is earlier than that one, and the piece keeps
+its source unless it has nothing it can start. Without times, a host partway through a deploy and a deliberate
+rollback offer a piece the same earlier identity, so a piece cannot be kept
+from moving back and forth between the two releases until every instance runs
+one of them.
+
+The time has to be the deploy's own. A time from the future would stamp every
+release a piece adopts from that deploy, and every correct release after it
+would read as earlier, so pieces would stay where they are until a deploy stated
+a later time still. A toolshed therefore refuses to start with a time more than
+five minutes ahead of its own clock, which allows for skew between the host that
+deploys and the hosts that run.
+
+## The wrappers are owned by infra
+
+The [infra repository](https://github.com/commonfabric/infra) generates
+`/opt/cf/deploy.sh` and `/opt/cf/deploy-rapids.sh` in
+`ansible/playbooks/bastion.yml` and installs them on the bastion. Their
+implementations and deployment validation tests belong there; Labs checks its
+call sites against their interfaces.
+
+The production wrapper takes exactly two arguments: an
 environment name it recognizes, and a 40-character commit SHA. Given anything
 else — an extra argument, an unknown environment, a revision that is not a
 full SHA — it prints its usage and exits with status 1, and the deploy job
 fails without deploying anything.
 
-This is the seam to be careful about. The staging deploy jobs run only on
-`main`, so a deploy step that no longer matches the script cannot fail on the
-pull request that introduces it. It fails on the first push to `main`
-afterwards, and then on every push after that until someone fixes it. The
-`Deploy steps call the bastion wrapper the way it accepts` case in
-[`tasks/ci-workflow.test.ts`](../../tasks/ci-workflow.test.ts) reads the
-`script:` line out of each deploy step and checks it against that contract, so
-a mismatch fails on the pull request instead.
+The Rapids wrapper takes one full infra SHA. Its GitHub environment variables
+identify the Labs orchestrator run, while its candidate identifies the producer
+commits to deploy. [`tasks/rapids-workflows.test.ts`](../../tasks/rapids-workflows.test.ts)
+checks this interface, the trust gates and receipt upload ordering. The
+production interface is checked in
+[`tasks/ci-workflow.test.ts`](../../tasks/ci-workflow.test.ts).
 
-Changing the argument list therefore takes a change in each repository, in
-order: land the infra change, apply the bastion playbook so the host has the
-new script, then change the call sites here.
+Changes to these interfaces land in order: land the infra implementation,
+apply the bastion playbook so the host has that implementation, then merge the
+Labs call sites. Installing the Rapids wrapper uses the `rapids-deploy-script`
+tag. The deployment transition also blocks the independent `deploy.sh rapids`
+entrypoint so queued CI runs cannot race the coordinated release.
 
 ## The shell inside the binary
 
 `toolshed` serves a browser shell from the `shell-frontend` directory beside
 it, so <https://estuary.saga-castor.ts.net/> and
 <https://rapids.saga-castor.ts.net/> each serve the shell that the binary they
-run was built with. `tasks/build-binaries.ts` builds `packages/shell` as part
+run was built with. `tasks/build-binaries.ts` builds `runtime/shell` as part
 of the toolshed build and moves the output there. Configuring this shell is
 therefore something the `build-toolshed` job does, and a deploy carries
 whatever that build baked in. It needs no API host: it is served from the same
 origin as the API it calls, which is what the shell falls back to.
 
-`SHELL_PRESENCE_URL`, a repository variable of this repository, optionally
-names the WebSocket service used for ephemeral collaborative-editor presence.
-Setting it is the whole of turning co-presence on for these two environments;
-it is configuration rather than code, so it is set once and every later build
-reads it. The job passes it to the build under the name the build reads,
-`PRESENCE_URL`, and esbuild bakes it into the bundle as a define. A value that
-is not a credential-free WebSocket URL is rejected by
-`packages/shell/src/lib/presence-url.ts` and fails the build rather than
-shipping, and the job confirms the URL reached the bundle before the binary is
-uploaded. An unset variable omits the define, and a shell with no presence
-endpoint is a working shell — unlike an absent API host, an absent presence
-endpoint is not a misconfiguration, so nothing fails.
-
-Because nothing fails either way, a green job does not by itself say which of
-the two shells a binary carries. The build log does: the step names the
-endpoint it passed to the build, or says the variable is unset and that
-co-presence will be off wherever the binary runs.
-
-Two consequences follow from the value being baked rather than read at start-up.
-Changing the variable reaches a deployment only through a rebuild and a
-redeploy, so a redeploy of an existing commit cannot change it. And one binary
-serves both environments, so both carry the same endpoint — though not at the
-same moment, because `deploy-rapids` ships every push to `main` on its own
-while `deploy-estuary` waits to be dispatched. A variable change therefore
-reaches rapids first and estuary when someone deploys it there.
-
-What a running deployment actually carries is visible from outside it: the URL
-is in the `/scripts/index.js` that deployment serves, or it is not.
-
 ## The staging shell
 
 The `deploy-shell-staging` job in `.github/workflows/deno.yml` publishes the
 shell on every push to `main`. It does not touch the bastion: it builds
-`packages/shell` and copies the result into the `staging-commontools-dev`
+`runtime/shell` and copies the result into the `staging-commontools-dev`
 bucket, which is served at <https://staging.commontools.dev/>. Each build also
 lands under `builds/<commit>/` so a page that is already open keeps the exact
 module graph it started with.
@@ -158,14 +262,9 @@ different origin than the API it calls. The `STAGING_SHELL_API_URL` variable
 carries that host, and the build substitutes it into the bundle. It is a
 variable rather than a secret: the value ends up in a bundle that anyone can
 read, so hiding it from review buys nothing and costs the ability to see what
-staging points at. The host it names is the one `deploy-rapids` keeps current.
-
-`STAGING_SHELL_PRESENCE_URL` optionally names the WebSocket service used for
-ephemeral collaborative-editor presence. When it is unset, the shell provides
-no default and co-presence stays disabled unless an editor supplies an explicit
-endpoint. Like the API URL, a configured presence URL is public build
-configuration, and the deployment job verifies it in both the built and
-published scripts.
+staging points at. The host it names is the server the coordinated Rapids
+release keeps current. This static shell follows Labs main separately; the
+same-origin shell inside the Rapids toolshed binary follows the candidate.
 
 Publishing is not the same as working, and this job cannot tell the difference
 by uploading alone — it makes no request to the API it just configured. So it

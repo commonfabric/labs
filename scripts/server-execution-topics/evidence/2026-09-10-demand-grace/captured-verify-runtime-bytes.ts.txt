@@ -1,0 +1,13 @@
+/** Emits runtime code with comments removed for a provenance comparison. */
+import ts from "npm:typescript@6.0.3";
+
+for (const file of Deno.args) {
+  const result = ts.transpileModule(await Deno.readTextFile(file), {
+    compilerOptions: {
+      target: ts.ScriptTarget.ESNext,
+      module: ts.ModuleKind.ESNext,
+      removeComments: true,
+    },
+  });
+  console.log(JSON.stringify({ file, emitted: result.outputText }));
+}

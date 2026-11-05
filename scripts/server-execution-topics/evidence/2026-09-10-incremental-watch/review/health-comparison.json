@@ -1,0 +1,218 @@
+[
+  {
+    "capture": "watch-integration-opposite-04",
+    "workloadHead": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+    "binarySha256": "3a2a461e5812fae862ee8072ae942e9e392aaa8b2501b4255d76ac084726bada",
+    "status": "passed",
+    "posture": {
+      "role": "opposite",
+      "enabled": true,
+      "label": "ON",
+      "experimentalValue": "true",
+      "recordVariant": "server-execution"
+    },
+    "flags": {
+      "EXPERIMENTAL_SERVER_EXECUTION": "true"
+    },
+    "counts": {
+      "wave-accumulator": {
+        "foreign-write-refused": {
+          "debug": 0,
+          "info": 0,
+          "warn": 40,
+          "error": 0,
+          "total": 40
+        },
+        "contribution-dropped": {
+          "debug": 0,
+          "info": 0,
+          "warn": 2,
+          "error": 0,
+          "total": 2
+        }
+      },
+      "scheduler": {
+        "scheduler-non-settling": {
+          "debug": 0,
+          "info": 0,
+          "warn": 2,
+          "error": 0,
+          "total": 2
+        },
+        "schedule-error": {
+          "debug": 0,
+          "info": 0,
+          "warn": 0,
+          "error": 2,
+          "total": 2
+        }
+      },
+      "storage.v2.multi-space-commit": {
+        "seal-space-commit-failed": {
+          "debug": 0,
+          "info": 0,
+          "warn": 0,
+          "error": 40,
+          "total": 40
+        }
+      },
+      "storage.v2.session-remount": {
+        "session-remount": {
+          "debug": 0,
+          "info": 0,
+          "warn": 3,
+          "error": 0,
+          "total": 3
+        }
+      },
+      "provider-registry": {
+        "Missing OAuth credentials (clientId/clientSecret), skipping provider": {
+          "debug": 0,
+          "info": 0,
+          "warn": 8,
+          "error": 0,
+          "total": 8
+        }
+      },
+      "space-server": {
+        "space-root-ensure-no-owner": {
+          "debug": 0,
+          "info": 0,
+          "warn": 10,
+          "error": 0,
+          "total": 10
+        },
+        "event-view-lag": {
+          "debug": 0,
+          "info": 0,
+          "warn": 12,
+          "error": 0,
+          "total": 12
+        }
+      }
+    },
+    "note": "Full exact statistics and server log retained externally; counts can depend on scheduling and load. Only warning/error counters are projected here; complete counters remain in the hashed raw statistics.",
+    "loadSummary": {
+      "first": {
+        "at": "2026-09-10T19:17:42.900Z",
+        "load": [
+          11.8212890625,
+          36.6865234375,
+          51.00341796875
+        ]
+      },
+      "last": {
+        "at": "2026-09-10T19:21:26.972Z",
+        "load": [
+          23.91796875,
+          27.9580078125,
+          43.6318359375
+        ]
+      },
+      "maxOneMinute": 29.63818359375,
+      "count": 217,
+      "allSamples": "The exact original run manifest is retained in external-captures.json metadata."
+    }
+  },
+  {
+    "capture": "watch-baseline-health-01",
+    "workloadHead": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+    "binarySha256": "f47c2d1047182faea07ef6e8335c6e8d8347266dd79363190b86517ae2906d34",
+    "status": "passed",
+    "posture": {
+      "role": "opposite",
+      "enabled": true,
+      "label": "ON",
+      "experimentalValue": "true",
+      "recordVariant": "server-execution"
+    },
+    "flags": {
+      "EXPERIMENTAL_SERVER_EXECUTION": "true"
+    },
+    "counts": {
+      "wave-accumulator": {
+        "foreign-write-refused": {
+          "debug": 0,
+          "info": 0,
+          "warn": 40,
+          "error": 0,
+          "total": 40
+        }
+      },
+      "scheduler": {
+        "scheduler-non-settling": {
+          "debug": 0,
+          "info": 0,
+          "warn": 2,
+          "error": 0,
+          "total": 2
+        }
+      },
+      "storage.v2.multi-space-commit": {
+        "seal-space-commit-failed": {
+          "debug": 0,
+          "info": 0,
+          "warn": 0,
+          "error": 40,
+          "total": 40
+        }
+      },
+      "storage.v2.session-remount": {
+        "session-remount": {
+          "debug": 0,
+          "info": 0,
+          "warn": 3,
+          "error": 0,
+          "total": 3
+        }
+      },
+      "provider-registry": {
+        "Missing OAuth credentials (clientId/clientSecret), skipping provider": {
+          "debug": 0,
+          "info": 0,
+          "warn": 8,
+          "error": 0,
+          "total": 8
+        }
+      },
+      "space-server": {
+        "space-root-ensure-no-owner": {
+          "debug": 0,
+          "info": 0,
+          "warn": 10,
+          "error": 0,
+          "total": 10
+        },
+        "event-view-lag": {
+          "debug": 0,
+          "info": 0,
+          "warn": 14,
+          "error": 0,
+          "total": 14
+        }
+      }
+    },
+    "note": "Full exact statistics and server log retained externally; counts can depend on scheduling and load. Only warning/error counters are projected here; complete counters remain in the hashed raw statistics.",
+    "loadSummary": {
+      "first": {
+        "at": "2026-09-10T19:46:42.396Z",
+        "load": [
+          21.0537109375,
+          18.8134765625,
+          24.01318359375
+        ]
+      },
+      "last": {
+        "at": "2026-09-10T19:49:17.313Z",
+        "load": [
+          19.580078125,
+          19.69775390625,
+          23.5322265625
+        ]
+      },
+      "maxOneMinute": 25.72607421875,
+      "count": 145,
+      "allSamples": "The exact original run manifest is retained in external-captures.json metadata."
+    }
+  }
+]

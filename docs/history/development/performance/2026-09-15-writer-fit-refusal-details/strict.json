@@ -1,0 +1,206 @@
+[
+  {
+    "arm": "before",
+    "n": 11,
+    "delta": {
+      "refusalDetailsRecorded": 12,
+      "consumedLabelWalks": 1,
+      "cfcPrepareRejects": 1,
+      "cfcPreparedTx": 0
+    },
+    "reason": "writer-fit confidentiality misfit for of:fid1:5m8hLUTkIhtcjcvAd-u65LVT6oLvBM5lV5B2tsn5Bqw at /length (canWrite, \u00a78.12.4): \"fixture-private\"",
+    "offendingAtoms": [
+      "\"fixture-private\""
+    ],
+    "attribution": "complete",
+    "inputCount": 44,
+    "firstInput": {
+      "read": {
+        "space": "did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh",
+        "id": "of:fid1:WFiRfecRn_dMHGpwjKj-f4F3polYkTVeUvY8q0pRBhw",
+        "scope": "space",
+        "path": [
+          "result"
+        ]
+      },
+      "labelPath": [
+        "result",
+        "0",
+        "title"
+      ],
+      "atoms": [
+        "\"fixture-private\""
+      ]
+    }
+  },
+  {
+    "arm": "before",
+    "n": 50,
+    "delta": {
+      "refusalDetailsRecorded": 51,
+      "consumedLabelWalks": 1,
+      "cfcPrepareRejects": 1,
+      "cfcPreparedTx": 0
+    },
+    "reason": "writer-fit confidentiality misfit for of:fid1:5m8hLUTkIhtcjcvAd-u65LVT6oLvBM5lV5B2tsn5Bqw at /length (canWrite, \u00a78.12.4): \"fixture-private\"",
+    "offendingAtoms": [
+      "\"fixture-private\""
+    ],
+    "attribution": "complete",
+    "inputCount": 200,
+    "firstInput": {
+      "read": {
+        "space": "did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh",
+        "id": "of:fid1:9ZSDU5uuhIINym4Rv6dnEpOw74pSBlWcTdpjXElxqNs",
+        "scope": "space",
+        "path": [
+          "result"
+        ]
+      },
+      "labelPath": [
+        "result",
+        "0",
+        "title"
+      ],
+      "atoms": [
+        "\"fixture-private\""
+      ]
+    }
+  },
+  {
+    "arm": "before",
+    "n": 150,
+    "delta": {
+      "refusalDetailsRecorded": 151,
+      "consumedLabelWalks": 1,
+      "cfcPrepareRejects": 1,
+      "cfcPreparedTx": 0
+    },
+    "reason": "writer-fit confidentiality misfit for of:fid1:5m8hLUTkIhtcjcvAd-u65LVT6oLvBM5lV5B2tsn5Bqw at /length (canWrite, \u00a78.12.4): \"fixture-private\"",
+    "offendingAtoms": [
+      "\"fixture-private\""
+    ],
+    "attribution": "complete",
+    "inputCount": 600,
+    "firstInput": {
+      "read": {
+        "space": "did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh",
+        "id": "of:fid1:QJBNn1utQv1nT7Yk69QDdjMU4rnrbzlNrQZLOHfiQ1w",
+        "scope": "space",
+        "path": [
+          "result"
+        ]
+      },
+      "labelPath": [
+        "result",
+        "0",
+        "title"
+      ],
+      "atoms": [
+        "\"fixture-private\""
+      ]
+    }
+  },
+  {
+    "arm": "after",
+    "n": 11,
+    "delta": {
+      "refusalDetailsRecorded": 12,
+      "consumedLabelWalks": 1,
+      "cfcPrepareRejects": 1,
+      "cfcPreparedTx": 0
+    },
+    "reason": "writer-fit confidentiality misfit for of:fid1:5m8hLUTkIhtcjcvAd-u65LVT6oLvBM5lV5B2tsn5Bqw at /length (canWrite, \u00a78.12.4): \"fixture-private\"",
+    "offendingAtoms": [
+      "\"fixture-private\""
+    ],
+    "attribution": "complete",
+    "inputCount": 44,
+    "firstInput": {
+      "read": {
+        "space": "did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh",
+        "id": "of:fid1:4cSfack4D70Uson7qb5X0_1-BwdellKCia-B83Ic8EY",
+        "scope": "space",
+        "path": [
+          "result"
+        ]
+      },
+      "labelPath": [
+        "result",
+        "0",
+        "title"
+      ],
+      "atoms": [
+        "\"fixture-private\""
+      ]
+    }
+  },
+  {
+    "arm": "after",
+    "n": 50,
+    "delta": {
+      "refusalDetailsRecorded": 51,
+      "consumedLabelWalks": 1,
+      "cfcPrepareRejects": 1,
+      "cfcPreparedTx": 0
+    },
+    "reason": "writer-fit confidentiality misfit for of:fid1:5m8hLUTkIhtcjcvAd-u65LVT6oLvBM5lV5B2tsn5Bqw at /length (canWrite, \u00a78.12.4): \"fixture-private\"",
+    "offendingAtoms": [
+      "\"fixture-private\""
+    ],
+    "attribution": "complete",
+    "inputCount": 200,
+    "firstInput": {
+      "read": {
+        "space": "did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh",
+        "id": "of:fid1:vWiGeqB7ypslkBTDKJ3iiKmfrUkYGHnxRAbOvfvPbXU",
+        "scope": "space",
+        "path": [
+          "result"
+        ]
+      },
+      "labelPath": [
+        "result",
+        "0",
+        "title"
+      ],
+      "atoms": [
+        "\"fixture-private\""
+      ]
+    }
+  },
+  {
+    "arm": "after",
+    "n": 150,
+    "delta": {
+      "refusalDetailsRecorded": 151,
+      "consumedLabelWalks": 1,
+      "cfcPrepareRejects": 1,
+      "cfcPreparedTx": 0
+    },
+    "reason": "writer-fit confidentiality misfit for of:fid1:5m8hLUTkIhtcjcvAd-u65LVT6oLvBM5lV5B2tsn5Bqw at /length (canWrite, \u00a78.12.4): \"fixture-private\"",
+    "offendingAtoms": [
+      "\"fixture-private\""
+    ],
+    "attribution": "complete",
+    "inputCount": 600,
+    "firstInput": {
+      "read": {
+        "space": "did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh",
+        "id": "of:fid1:2_g-WrkODlnMhPSPc60hePuOjBLL8eHyiHdniVMKkc4",
+        "scope": "space",
+        "path": [
+          "result"
+        ]
+      },
+      "labelPath": [
+        "result",
+        "0",
+        "title"
+      ],
+      "atoms": [
+        "\"fixture-private\""
+      ]
+    }
+  }
+]

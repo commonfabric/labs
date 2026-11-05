@@ -1,0 +1,11 @@
+--- a/packages/runner/src/executor/space-server.ts
++++ b/packages/runner/src/executor/space-server.ts
+@@ -3086,7 +3086,7 @@
+           let viewEntry = readViewEntry();
+           const provider = runtime.storageManager.open(space);
+           if (
+-            !matches(viewEntry) && !visibilityFlushed &&
++            false && !visibilityFlushed &&
+             provider.pullToServerHead !== undefined
+           ) {
+             visibilityFlushed = true;

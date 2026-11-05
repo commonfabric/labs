@@ -1,0 +1,2155 @@
+{
+  "metadata": {
+    "baseline": "53baf62fdaf9dae6824bc9c5a0da812a64b95d6c",
+    "runtime": "Deno 2.9.4 / V8 15.0.245.2-rusty",
+    "cpu": "Apple M3 Max",
+    "harness_files_sha256": {
+      "packages/cli/commands/test-command.ts": "1b5fbc5fa8f5fb452f0a05fe5fd7f3ccc8ca2208655104f9ff5a01fba53a9f84",
+      "packages/cli/lib/test-runner.ts": "75a16042d4d68114bc3a45e5760e32945ffc6d14453984f97de6420a8397b12d",
+      "packages/cli/lib/multi-user-test-runner.ts": "5784ff486c94756ff7cf7022950d8cedb42a201a498a338e149a9fc43cf09dc9",
+      "packages/cli/lib/multi-user-test-worker.ts": "b3971bc2d6c2804b9ee1c822482418b2f2001aa228aa198953174b95fef13480",
+      "packages/runner/src/cfc/canonical.ts": "b48fce7b2fa2ef598fc609dd3d5e40037f9e523befd3c4ab6ee12e6e8ee714be",
+      "packages/runner/src/cfc/prepare.ts": "b028cb4b949c1cdfe8c484010b278dcdb02e67aaae283fe46fa73d3d35ef0357",
+      "packages/runner/src/runtime-presets.ts": "5b6ea5b3781d5801d51726f0018588ea5ae96ecdad0ded1633e5e7cf9b5c71fc",
+      "packages/runner/src/storage/extended-storage-transaction.ts": "351363929a69a6f7b519ae2296f7a6f6aa748f508ea8d5d31e7018e28ca6caae",
+      "packages/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx": "f5b1b159ff6ccb98174931ef8a2553adb6de80cf8868aba42c6e849a0ea7edc0"
+    }
+  },
+  "paired_grid": [
+    {
+      "size": 50,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 0,
+      "before": {
+        "us": 0.06391175079345718,
+        "result": 2768,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.0756813735961915,
+        "result": 2768,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 1,
+      "after": {
+        "us": 0.07106781005859374,
+        "result": 2768,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.05606047058105473,
+        "result": 2768,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 2,
+      "before": {
+        "us": 0.2584476470947265,
+        "result": 2768,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.15715757751464873,
+        "result": 2768,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 3,
+      "after": {
+        "us": 0.10445022583007758,
+        "result": 2768,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.0906604156494144,
+        "result": 2768,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 4,
+      "before": {
+        "us": 0.05928325653076216,
+        "result": 2768,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.46272437286376966,
+        "result": 2768,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 5,
+      "after": {
+        "us": 0.08821170043945334,
+        "result": 2768,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.06548912811279312,
+        "result": 2768,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 6,
+      "before": {
+        "us": 0.6427408905029294,
+        "result": 2768,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.27228037261962934,
+        "result": 2768,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 0,
+      "before": {
+        "us": 0.12451299285888562,
+        "result": 3888,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.4354343414306634,
+        "result": 3888,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 1,
+      "after": {
+        "us": 0.16224670410156308,
+        "result": 3888,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.12253061676025315,
+        "result": 3888,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 2,
+      "before": {
+        "us": 0.3343369140624986,
+        "result": 3888,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.22984918212890643,
+        "result": 3888,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 3,
+      "after": {
+        "us": 0.1456727981567381,
+        "result": 3888,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.10824203491210938,
+        "result": 3888,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 4,
+      "before": {
+        "us": 0.23994064331054643,
+        "result": 3888,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.17920653533935738,
+        "result": 3888,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 5,
+      "after": {
+        "us": 0.13377825164795007,
+        "result": 3888,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.1800492553710939,
+        "result": 3888,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 6,
+      "before": {
+        "us": 0.11282602691650365,
+        "result": 3888,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.2522385940551767,
+        "result": 3888,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 0,
+      "before": {
+        "us": 0.28587841796873237,
+        "result": 2786,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.0763587951660167,
+        "result": 2786,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 1,
+      "after": {
+        "us": 0.0763689727783217,
+        "result": 2786,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.2861837158203151,
+        "result": 2786,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 2,
+      "before": {
+        "us": 0.286275268554681,
+        "result": 2786,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.07637023925781417,
+        "result": 2786,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 3,
+      "after": {
+        "us": 0.07611433410644429,
+        "result": 2786,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.2860769042968836,
+        "result": 2786,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 4,
+      "before": {
+        "us": 0.28653466796874083,
+        "result": 2786,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.07634098815917888,
+        "result": 2786,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 5,
+      "after": {
+        "us": 0.07615692901611314,
+        "result": 2786,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.2859700927734521,
+        "result": 2786,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 6,
+      "before": {
+        "us": 0.28616333007813743,
+        "result": 2786,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.07648245239257924,
+        "result": 2786,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 0,
+      "before": {
+        "us": 7.514887573242146,
+        "result": 3906,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.11693954467773687,
+        "result": 3906,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 1,
+      "after": {
+        "us": 0.21335379028320292,
+        "result": 3906,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 6.474055053710959,
+        "result": 3906,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 2,
+      "before": {
+        "us": 7.681030273437528,
+        "result": 3906,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.27490552520751876,
+        "result": 3906,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 3,
+      "after": {
+        "us": 0.1304410324096672,
+        "result": 3906,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 9.865147949218777,
+        "result": 3906,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 4,
+      "before": {
+        "us": 8.865890502929686,
+        "result": 3906,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.1257031784057637,
+        "result": 3906,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 5,
+      "after": {
+        "us": 0.29738044738769276,
+        "result": 3906,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 9.057200073242178,
+        "result": 3906,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 6,
+      "before": {
+        "us": 9.41599536132809,
+        "result": 3906,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.5068130493164069,
+        "result": 3906,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 0,
+      "before": {
+        "us": 0.24996447753905526,
+        "result": 2904,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.0791190490722661,
+        "result": 2904,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 1,
+      "after": {
+        "us": 0.0859133453369118,
+        "result": 2904,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.24937438964844905,
+        "result": 2904,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 2,
+      "before": {
+        "us": 0.2506561279296826,
+        "result": 2904,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.08121299743652291,
+        "result": 2904,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 3,
+      "after": {
+        "us": 0.08369287109375248,
+        "result": 2904,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 1.5516256103516035,
+        "result": 2904,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 4,
+      "before": {
+        "us": 0.2922617187499643,
+        "result": 2904,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.08331775665283009,
+        "result": 2904,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 5,
+      "after": {
+        "us": 0.14212862396240436,
+        "result": 2904,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.4211578369140434,
+        "result": 2904,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 6,
+      "before": {
+        "us": 0.29074096679687633,
+        "result": 2904,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.07908407592773295,
+        "result": 2904,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 0,
+      "before": {
+        "us": 11.580571533203132,
+        "result": 4024,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.23451200866698996,
+        "result": 4024,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 1,
+      "after": {
+        "us": 0.2777649536132784,
+        "result": 4024,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 7.4871165771485115,
+        "result": 4024,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 2,
+      "before": {
+        "us": 6.048558593749975,
+        "result": 4024,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.5902789382934565,
+        "result": 4024,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 3,
+      "after": {
+        "us": 0.14448007202148838,
+        "result": 4024,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 13.99236560058592,
+        "result": 4024,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 4,
+      "before": {
+        "us": 11.841272949218773,
+        "result": 4024,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.16824977111816464,
+        "result": 4024,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 5,
+      "after": {
+        "us": 0.14379373931884543,
+        "result": 4024,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 12.238276123046843,
+        "result": 4024,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 50,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 6,
+      "before": {
+        "us": 5.979064941406209,
+        "result": 4024,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.2539599761962885,
+        "result": 4024,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 0,
+      "before": {
+        "us": 0.08126258850097573,
+        "result": 2734,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.1065813674926766,
+        "result": 2734,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 1,
+      "after": {
+        "us": 0.11134687805176152,
+        "result": 2734,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.3243115768432614,
+        "result": 2734,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 2,
+      "before": {
+        "us": 0.12583351135254245,
+        "result": 2734,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.09553083038330024,
+        "result": 2734,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 3,
+      "after": {
+        "us": 0.10607369995117161,
+        "result": 2734,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.07897790527344045,
+        "result": 2734,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 4,
+      "before": {
+        "us": 0.09071190643310939,
+        "result": 2734,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.09519735717773703,
+        "result": 2734,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 5,
+      "after": {
+        "us": 0.19965712738036906,
+        "result": 2734,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.11719163513183861,
+        "result": 2734,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 6,
+      "before": {
+        "us": 0.08636410522461224,
+        "result": 2734,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.3562100677490243,
+        "result": 2734,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 0,
+      "before": {
+        "us": 0.13833936309814304,
+        "result": 3871,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.14890861511230452,
+        "result": 3871,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 1,
+      "after": {
+        "us": 0.1491715164184601,
+        "result": 3871,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.4849475250244123,
+        "result": 3871,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 2,
+      "before": {
+        "us": 0.22369194030762152,
+        "result": 3871,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.16497452545166658,
+        "result": 3871,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 3,
+      "after": {
+        "us": 0.4000898971557587,
+        "result": 3871,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.23732216644287152,
+        "result": 3871,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 4,
+      "before": {
+        "us": 0.28959783172607945,
+        "result": 3871,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.19442653656005782,
+        "result": 3871,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 5,
+      "after": {
+        "us": 0.24895826721191977,
+        "result": 3871,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.14683596038818358,
+        "result": 3871,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 6,
+      "before": {
+        "us": 0.1389029769897493,
+        "result": 3871,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.39159075164794943,
+        "result": 3871,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 0,
+      "before": {
+        "us": 1.4404855957030893,
+        "result": 2758,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.10824775695800898,
+        "result": 2758,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 1,
+      "after": {
+        "us": 0.09272193908691634,
+        "result": 2758,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 1.3444213867187527,
+        "result": 2758,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 2,
+      "before": {
+        "us": 1.1972453613281475,
+        "result": 2758,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.10288524627685702,
+        "result": 2758,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 3,
+      "after": {
+        "us": 0.2694622650146472,
+        "result": 2758,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 3.1519420166015166,
+        "result": 2758,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 4,
+      "before": {
+        "us": 1.5958048095703337,
+        "result": 2758,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.09549522399902866,
+        "result": 2758,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 5,
+      "after": {
+        "us": 0.10929076385498421,
+        "result": 2758,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 1.8624877929687145,
+        "result": 2758,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 6,
+      "before": {
+        "us": 1.2279764404297122,
+        "result": 2758,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.11866823577880853,
+        "result": 2758,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 0,
+      "before": {
+        "us": 35.34377026367186,
+        "result": 3895,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.16717211914062113,
+        "result": 3895,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 1,
+      "after": {
+        "us": 0.8271716384887634,
+        "result": 3895,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 45.99012756347642,
+        "result": 3895,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 2,
+      "before": {
+        "us": 59.91895031738292,
+        "result": 3895,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.3788404464721701,
+        "result": 3895,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 3,
+      "after": {
+        "us": 0.29297383880616534,
+        "result": 3895,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 50.6425119628906,
+        "result": 3895,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 4,
+      "before": {
+        "us": 52.481516479492285,
+        "result": 3895,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.6248766555786017,
+        "result": 3895,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 5,
+      "after": {
+        "us": 0.32379055023191994,
+        "result": 3895,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 53.38049829101554,
+        "result": 3895,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 6,
+      "before": {
+        "us": 53.59253430175781,
+        "result": 3895,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.31095123291015325,
+        "result": 3895,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 0,
+      "before": {
+        "us": 1.282150268554716,
+        "result": 2870,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.10933621215819533,
+        "result": 2870,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 1,
+      "after": {
+        "us": 0.1078885421752912,
+        "result": 2870,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 1.1460571289061416,
+        "result": 2870,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 2,
+      "before": {
+        "us": 1.304224609375071,
+        "result": 2870,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.5253016204834066,
+        "result": 2870,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 3,
+      "after": {
+        "us": 0.09624449157714932,
+        "result": 2870,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 1.1495971679686967,
+        "result": 2870,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 4,
+      "before": {
+        "us": 8.948348999023414,
+        "result": 2870,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.23422463989257458,
+        "result": 2870,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 5,
+      "after": {
+        "us": 0.09837977600098136,
+        "result": 2870,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 1.3068746337892012,
+        "result": 2870,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 6,
+      "before": {
+        "us": 1.140981079101433,
+        "result": 2870,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.09507052612305056,
+        "result": 2870,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 0,
+      "before": {
+        "us": 42.982249023437724,
+        "result": 4007,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.3671779632568317,
+        "result": 4007,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 1,
+      "after": {
+        "us": 0.22712484741210792,
+        "result": 4007,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 46.44844055175801,
+        "result": 4007,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 2,
+      "before": {
+        "us": 46.223663330078324,
+        "result": 4007,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.36633586883544345,
+        "result": 4007,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 3,
+      "after": {
+        "us": 0.3284502029418934,
+        "result": 4007,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 32.40279138183588,
+        "result": 4007,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 4,
+      "before": {
+        "us": 36.995168090820485,
+        "result": 4007,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.1929740905761701,
+        "result": 4007,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 5,
+      "after": {
+        "us": 0.19291941833493587,
+        "result": 4007,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 40.529866455078164,
+        "result": 4007,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 250,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 6,
+      "before": {
+        "us": 45.64981079101571,
+        "result": 4007,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.19277445220947098,
+        "result": 4007,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 0,
+      "before": {
+        "us": 0.14776961517334875,
+        "result": 2728,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.235223449707056,
+        "result": 2728,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 1,
+      "after": {
+        "us": 0.20880477142334875,
+        "result": 2728,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.19790299224853314,
+        "result": 2728,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 2,
+      "before": {
+        "us": 0.18270492553709716,
+        "result": 2728,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.1721645965576113,
+        "result": 2728,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 3,
+      "after": {
+        "us": 0.16870053100584426,
+        "result": 2728,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.1520264968871976,
+        "result": 2728,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 4,
+      "before": {
+        "us": 0.14835103607177547,
+        "result": 2728,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.22564188385010286,
+        "result": 2728,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 5,
+      "after": {
+        "us": 0.1671247482299687,
+        "result": 2728,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.27095317840575284,
+        "result": 2728,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0,
+      "kind": "prefix",
+      "pair": 6,
+      "before": {
+        "us": 0.21010176849364792,
+        "result": 2728,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.20333226776123037,
+        "result": 2728,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 0,
+      "before": {
+        "us": 0.2787024154663198,
+        "result": 3868,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.3011372909546006,
+        "result": 3868,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 1,
+      "after": {
+        "us": 0.3748496322631967,
+        "result": 3868,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.2699076309204129,
+        "result": 3868,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 2,
+      "before": {
+        "us": 0.2778460235595692,
+        "result": 3868,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.3497444839477559,
+        "result": 3868,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 3,
+      "after": {
+        "us": 0.5529994964599549,
+        "result": 3868,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.25916194915770463,
+        "result": 3868,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 4,
+      "before": {
+        "us": 0.34545548248290925,
+        "result": 3868,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.42956669616700527,
+        "result": 3868,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 5,
+      "after": {
+        "us": 0.39294179534912765,
+        "result": 3868,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 0.2618131637573129,
+        "result": 3868,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0,
+      "kind": "overlap",
+      "pair": 6,
+      "before": {
+        "us": 0.224595382690429,
+        "result": 3868,
+        "queryCount": 131072
+      },
+      "after": {
+        "us": 0.32351398468016823,
+        "result": 3868,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 0,
+      "before": {
+        "us": 17.50328063964801,
+        "result": 2751,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.37633545684814806,
+        "result": 2751,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 1,
+      "after": {
+        "us": 0.18078835296631013,
+        "result": 2751,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 9.559163452148578,
+        "result": 2751,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 2,
+      "before": {
+        "us": 10.265314697265548,
+        "result": 2751,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.1995563507080078,
+        "result": 2751,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 3,
+      "after": {
+        "us": 0.16327508544922154,
+        "result": 2751,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 10.596104858398459,
+        "result": 2751,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 4,
+      "before": {
+        "us": 9.391265869140852,
+        "result": 2751,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.20054785919187967,
+        "result": 2751,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 5,
+      "after": {
+        "us": 0.1919555664062489,
+        "result": 2751,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 13.242604614257747,
+        "result": 2751,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.05,
+      "kind": "prefix",
+      "pair": 6,
+      "before": {
+        "us": 10.094945190429527,
+        "result": 2751,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.15978305053712671,
+        "result": 2751,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 0,
+      "before": {
+        "us": 210.02560937499925,
+        "result": 3891,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.3394432067871378,
+        "result": 3891,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 1,
+      "after": {
+        "us": 0.43350156402588436,
+        "result": 3891,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 207.36611425781248,
+        "result": 3891,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 2,
+      "before": {
+        "us": 205.93755078124954,
+        "result": 3891,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.43025302886962047,
+        "result": 3891,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 3,
+      "after": {
+        "us": 0.386776924133303,
+        "result": 3891,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 220.892908813477,
+        "result": 3891,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 4,
+      "before": {
+        "us": 219.89701843261767,
+        "result": 3891,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.5167500228881461,
+        "result": 3891,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 5,
+      "after": {
+        "us": 0.3393656463623329,
+        "result": 3891,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 213.45895898437473,
+        "result": 3891,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.05,
+      "kind": "overlap",
+      "pair": 6,
+      "before": {
+        "us": 228.91195678710918,
+        "result": 3891,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.3694423065185304,
+        "result": 3891,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 0,
+      "before": {
+        "us": 7.892832397461191,
+        "result": 2865,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.26626364135740044,
+        "result": 2865,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 1,
+      "after": {
+        "us": 0.16998069000245808,
+        "result": 2865,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 8.3002929687499,
+        "result": 2865,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 2,
+      "before": {
+        "us": 7.899495361328057,
+        "result": 2865,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.18926875305175228,
+        "result": 2865,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 3,
+      "after": {
+        "us": 0.19862238311768587,
+        "result": 2865,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 7.587361572265472,
+        "result": 2865,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 4,
+      "before": {
+        "us": 7.848286865234755,
+        "result": 2865,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.18118064117433885,
+        "result": 2865,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 5,
+      "after": {
+        "us": 0.17462666320799958,
+        "result": 2865,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 7.707570434570599,
+        "result": 2865,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.3,
+      "kind": "prefix",
+      "pair": 6,
+      "before": {
+        "us": 9.013727783202974,
+        "result": 2865,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.1554628982544104,
+        "result": 2865,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 0,
+      "before": {
+        "us": 220.43791711425877,
+        "result": 4005,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.33653895568852565,
+        "result": 4005,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 1,
+      "after": {
+        "us": 0.3276656494141106,
+        "result": 4005,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 223.19070935058605,
+        "result": 4005,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 2,
+      "before": {
+        "us": 205.62523400878874,
+        "result": 4005,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.35705153656007127,
+        "result": 4005,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 3,
+      "after": {
+        "us": 0.3556992263793468,
+        "result": 4005,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 215.9633382568362,
+        "result": 4005,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 4,
+      "before": {
+        "us": 231.73888647461104,
+        "result": 4005,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.6298570632934375,
+        "result": 4005,
+        "queryCount": 131072
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 5,
+      "after": {
+        "us": 0.4677267074584268,
+        "result": 4005,
+        "queryCount": 131072
+      },
+      "before": {
+        "us": 229.47096252441492,
+        "result": 4005,
+        "queryCount": 8192
+      }
+    },
+    {
+      "size": 1000,
+      "fraction": 0.3,
+      "kind": "overlap",
+      "pair": 6,
+      "before": {
+        "us": 217.12168371582052,
+        "result": 4005,
+        "queryCount": 8192
+      },
+      "after": {
+        "us": 0.4290866851807129,
+        "result": 4005,
+        "queryCount": 131072
+      }
+    }
+  ],
+  "ladder": [
+    {
+      "pair": 0,
+      "arm": "before",
+      "profiled": false,
+      "render_ms": [
+        222.0,
+        1300.0,
+        9000.0
+      ],
+      "collector_ms": [
+        1.9,
+        5.2,
+        11.0
+      ],
+      "passed": true
+    },
+    {
+      "pair": 0,
+      "arm": "after",
+      "profiled": false,
+      "render_ms": [
+        234.0,
+        1200.0,
+        7500.0
+      ],
+      "collector_ms": [
+        1.8,
+        4.4,
+        15.0
+      ],
+      "passed": true
+    },
+    {
+      "pair": 1,
+      "arm": "before",
+      "profiled": false,
+      "render_ms": [
+        200.0,
+        1100.0,
+        8600.0
+      ],
+      "collector_ms": [
+        1.6,
+        5.2,
+        17.0
+      ],
+      "passed": true
+    },
+    {
+      "pair": 1,
+      "arm": "after",
+      "profiled": false,
+      "render_ms": [
+        218.0,
+        974.0,
+        7700.0
+      ],
+      "collector_ms": [
+        1.7,
+        3.7,
+        10.0
+      ],
+      "passed": true
+    },
+    {
+      "pair": 2,
+      "arm": "before",
+      "profiled": true,
+      "render_ms": [
+        281.0,
+        1300.0,
+        7800.0
+      ],
+      "collector_ms": [
+        4.1,
+        8.2,
+        10.0
+      ],
+      "passed": true
+    },
+    {
+      "pair": 2,
+      "arm": "after",
+      "profiled": true,
+      "render_ms": [
+        227.0,
+        931.0,
+        7000.0
+      ],
+      "collector_ms": [
+        1.6,
+        7.6,
+        13.0
+      ],
+      "passed": true
+    }
+  ],
+  "profiles": {
+    "before": {
+      "sampled_ms": 15186.655,
+      "isPrefix_self_ms": 1065.501,
+      "caller_ms": {
+        "authoritativeCoverFor": 1044.89,
+        "labelViewForLink": 0.46,
+        "labelForEntriesAtPath": 13.923,
+        "collectConsumedLabelImpl": 6.228
+      }
+    },
+    "after": {
+      "sampled_ms": 12477.921,
+      "isPrefix_self_ms": 967.906,
+      "caller_ms": {
+        "authoritativeCoverFor": 952.172,
+        "labelForEntriesAtPath": 14.811,
+        "labelViewForLink": 0.923
+      }
+    }
+  }
+}

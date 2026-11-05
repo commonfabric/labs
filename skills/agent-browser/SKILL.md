@@ -44,7 +44,8 @@ Every browser automation follows this pattern:
 1. Navigate: `agent-browser open <url>`
 2. Snapshot: `agent-browser snapshot -i`
 3. Interact: use refs to click, fill, select, or inspect
-4. Re-snapshot after navigation or DOM change
+4. Re-snapshot before the next interaction — refs are renumbered by every
+   snapshot
 
 ```bash
 agent-browser open https://example.com/form
@@ -127,7 +128,7 @@ agent-browser open https://app.example.com/dashboard
 
 ### Common Fabric identity checks (host/interactive runs only)
 
-This recipe needs `--session`, `upload`, and `console`, which the cf-harness
+This recipe needs `--session`, `upload`, and `eval`, which the cf-harness
 profile does not allow — run it only in host or interactive sessions.
 
 For Common Fabric tests that touch `PerUser`, `PerSession`, favorites, drafts,
@@ -140,13 +141,14 @@ agent-browser --session cf-shared snapshot -i
 # Click Login, then Import CLI Key.
 agent-browser --session cf-shared upload @<choose-file-ref> "$CF_IDENTITY"
 agent-browser --session cf-shared click @<import-key-ref>
-agent-browser --session cf-shared console
+agent-browser --session cf-shared wait --fn "globalThis.app.state().identity"
+agent-browser --session cf-shared eval "globalThis.app.state().identity?.did()"
 ```
 
-The browser console should include `[Identity] User DID: ...`; compare it with:
+The last command prints the DID the page is signed in as; compare it with:
 
 ```bash
-deno run -A packages/cli/mod.ts id did "$CF_IDENTITY"
+deno run -A runtime/cli/mod.ts id did "$CF_IDENTITY"
 ```
 
 Use distinct `--session` names when comparing identities. A different identity
@@ -201,12 +203,20 @@ commands unless your local install documents them explicitly.
 
 ## Ref Lifecycle
 
-Refs (`@e1`, `@e2`, and so on) are invalidated when the page changes. Always
-re-snapshot after:
+Refs (`@e1`, `@e2`, and so on) are invalidated by **the next snapshot**, whether
+or not the page changed. Read the ref immediately before the command that uses
+it, and do not carry one across another snapshot, a `wait`, or a screenshot.
+
+A page change is the obvious case, and these all require a fresh snapshot:
 
 - clicking links or buttons that navigate
 - form submissions
 - dynamic content loading such as dropdowns or modals
+
+The quieter case is a snapshot taken for any other reason — to check what the
+last one showed, or in a different snapshot mode, since the modes number
+independently. Reusing a ref across one does not error: it addresses a different
+element and the command appears to succeed.
 
 ```bash
 agent-browser click @e5

@@ -1,0 +1,60 @@
+Check packages/utils/test/staged-map.test.ts
+running 1 test from ./packages/utils/test/staged-map.test.ts
+StagedMap ...
+  instance members ...
+    changedKeys() ...
+      yields each changed key once after deletion or clearing and reinsertion ... FAILED (3ms)
+      reads only changed keys when the base is not cleared ... ok (0ms)
+    changedKeys() ... FAILED (due to 1 failed step) (6ms)
+    getOrInsertComputed() ...
+      rejects non-callable callbacks before checking membership ... ok (1ms)
+      uses staged membership and preserves callback mutations ... ok (0ms)
+    getOrInsertComputed() ... ok (4ms)
+    commit() ...
+      preserves Map membership and order across deletion, reinsertion, and clear ... ok (29ms)
+      isolates mutable values until publication ... ok (0ms)
+      does not enumerate untouched base entries ... ok (1ms)
+    commit() ... ok (40ms)
+    entries() ...
+      validates forEach callbacks even when empty and invokes callable values directly ... ok (1ms)
+      observes insertion and reinsertion during iteration ... ok (0ms)
+    entries() ... ok (2ms)
+  instance members ... FAILED (due to 1 failed step) (55ms)
+StagedMap ... FAILED (due to 1 failed step) (59ms)
+
+ ERRORS 
+
+StagedMap ... instance members ... changedKeys() ... yields each changed key once after deletion or clearing and reinsertion => https://jsr.io/@std/testing/1.0.19/_test_suite.ts:373:39
+error: AssertionError: Values are not equal.
+
+
+    [Diff] Actual / Expected
+
+
+    [
+-     "a",
+      "b",
+      "a",
+      "c",
+    ]
+
+  throw new AssertionError(message);
+        ^
+    at assertEquals (https://jsr.io/@std/expect/1.0.20/_assert_equals.ts:37:9)
+    at toEqual (https://jsr.io/@std/expect/1.0.20/_matchers.ts:69:5)
+    at applyMatcher (https://jsr.io/@std/expect/1.0.20/expect.ts:231:13)
+    at Proxy.<anonymous> (https://jsr.io/@std/expect/1.0.20/expect.ts:241:13)
+    at Object.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/utils/test/staged-map.test.ts:19:44)
+    at TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:437:16)
+    at TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:425:33)
+    at TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:425:33)
+    at TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:425:33)
+    at fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:386:37)
+
+ FAILURES 
+
+StagedMap ... instance members ... changedKeys() ... yields each changed key once after deletion or clearing and reinsertion => https://jsr.io/@std/testing/1.0.19/_test_suite.ts:373:39
+
+FAILED | 0 passed (11 steps) | 1 failed (3 steps) (64ms)
+
+error: Test failed

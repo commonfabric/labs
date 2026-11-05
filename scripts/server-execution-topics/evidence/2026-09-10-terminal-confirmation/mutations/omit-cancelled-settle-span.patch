@@ -1,0 +1,11 @@
+--- a/packages/runner/src/executor/space-server.ts
++++ b/packages/runner/src/executor/space-server.ts
+@@ -4668,7 +4668,7 @@
+           this.#purgeLt1Leftovers(runtime);
+           break;
+         }
+-        if (!this.#active || this.#runtime !== runtime) break;
++        if (!this.#active || this.#runtime !== runtime) return;
+         if (
+           this.#rearmedAwaitingSettle.size > 0 &&
+           runtime.storageManager.open(this.#options.space).replica

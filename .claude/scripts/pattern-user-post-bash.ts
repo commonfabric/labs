@@ -343,7 +343,9 @@ function removeHeredocBodies(command: string): string {
       }
       continue;
     }
-    pending.push(...heredocDelimiters(line, state));
+    for (const delimiter of heredocDelimiters(line, state)) {
+      pending.push(delimiter);
+    }
     output.push(line);
   }
   if (pending[0]?.expand && body.length > 0) {
@@ -536,7 +538,9 @@ export function parseShellCommandSegments(command: string): string[][] {
       const redirection = shellRedirection(command, index);
       const substitutions = commandSubstitutions(redirection.target, true);
       if (substitutions) {
-        segments.push(...parseShellCommandSegments(substitutions));
+        for (const segment of parseShellCommandSegments(substitutions)) {
+          segments.push(segment);
+        }
       }
       index = redirection.end;
       continue;
@@ -603,7 +607,7 @@ function pieceNewMain(commandWords: string[]): string | undefined {
   for (let index = 3; index < commandWords.length; index++) {
     const word = commandWords[index];
     if (word === "--") {
-      positional.push(...commandWords.slice(index + 1));
+      for (const word of commandWords.slice(index + 1)) positional.push(word);
       break;
     }
     if (word.startsWith("-")) {
@@ -620,24 +624,16 @@ function pieceNewMain(commandWords: string[]): string | undefined {
  * verb under it.
  *
  * A pair rather than a verb, because a verb alone does not name a command:
- * `set` acts on a cell and `set-home` on a space, so a hook matching a verb
- * under whichever noun precedes it advises on `cf space set` and `cf cell
- * new`, neither of which the CLI accepts. A pair joins this set when it gains
- * a branch below.
- *
- * The bare `set` and `piece set-home` are superseded spellings that still
- * answer, and the guidance is the same one their blessed spellings get. `get`
- * and `call` are spelled two ways too but carry no guidance, so listing them
- * would widen what the hook accepts without changing what it answers.
+ * `set` acts on a cell and `new` on a piece, so a hook matching a verb under
+ * whichever noun precedes it advises on `cf piece set` and `cf cell new`,
+ * neither of which the CLI accepts. A pair joins this set when it gains a
+ * branch below.
  */
 const GUIDED_COMMANDS = new Set([
   "piece new",
   "piece setsrc",
   "piece inspect",
-  "piece set-home",
-  "space set-home",
   "cell set",
-  "set",
 ]);
 
 /** The nouns those pairs sit under, which is what a `cf` is recognized by. */
@@ -698,9 +694,6 @@ function suggestionForCommandSegment(words: string[]): string {
   }
   if (verb === "setsrc") {
     return `${testSuggestion} Next, use 'cf piece step' to trigger re-evaluation, then 'cf piece inspect' to verify.`;
-  }
-  if (verb === "set-home" && !commandWords.includes("--reset")) {
-    return `${testSuggestion} Next, open the home space and verify the custom home pattern.`;
   }
   if (verb === "set") {
     return "State set. Run 'cf piece step' to trigger re-evaluation before reading computed values.";

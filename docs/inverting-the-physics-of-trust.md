@@ -2,6 +2,9 @@
 
 The runtime, and why it is shaped the way it is.
 
+The essay of the same name, for readers outside the team, is at
+[commonfabric.com/notes/inverting-the-physics-of-trust](https://commonfabric.com/notes/inverting-the-physics-of-trust/).
+
 ## The inverted rule
 
 Data is viral: free to replicate at perfect fidelity, and once given to
@@ -51,7 +54,7 @@ microkernel for networked software in the AI era.
 - a reactive, multiplayer-by-default storage layer with keypair identity
 - well over a hundred running patterns, including a live demonstration
   of prompt injection being structurally contained
-  (`packages/patterns/cfc-agent-prompt-injection-demo/`)
+  (`patterns/examples/cfc-agent-prompt-injection-demo/`)
 - the verifiable-execution spec the attestation mesh will follow, and
   signed build provenance for every binary built on main
 
@@ -71,9 +74,9 @@ close-ended, and a finite policy on a finite datum is exactly what a
 checker can prove. Putting policies on data allows open-ended
 possibilities without open-ended trust.
 
-Concretely: the fabric's Gmail importer is ordinary code a stranger
-could have written, and the OAuth token that can read all your mail is
-protected by a four-line policy attached to the token itself:
+Concretely: a mail importer is ordinary code a stranger could have
+written, and the OAuth token that can read all your mail is protected by
+a four-line policy attached to the token itself:
 
 - never logged
 - never transmitted outside the attested fabric, not even to your own
@@ -273,8 +276,7 @@ of trust is the whole unlock.
 
 The layers are at different stages, and each is useful without the ones
 above it. The runtime, the compiler, and the sandboxing work today. The
-flow checking runs, enforcing at explicit boundaries by default and
-hardening toward strict; the trusted base is still larger than the
+flow checking runs, strict by default; the trusted base is still larger than the
 microkernel it is meant to shrink to, and shrinking it is part of the
 work. Confidential hardware is provisioned and every release binary
 carries signed provenance; the attestation protocol that would let a
@@ -283,5 +285,5 @@ peer refuse an unproven runtime is specified in
 in place; robustness and performance are not yet, and they are the
 current work. That is the ordinary condition of a young kernel.
 
-`docs/tutorial/` walks the mechanisms; `packages/patterns/` is where to
+`docs/tutorial/` walks the mechanisms; `patterns/` is where to
 start.

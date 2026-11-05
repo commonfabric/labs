@@ -142,27 +142,32 @@ When an event arrives but no handler is registered:
 
 1. Start from the event cell's document root
 2. Follow `result` metadata to the owning result cell
-3. Read the result cell's `pattern` metadata
-4. Load the pattern, start the piece, and hydrate the reserved queue slot
+3. Read the result cell's `patternIdentity` metadata
+4. Load the pattern by that identity, start the piece, and hydrate the reserved
+   queue slot
 
 This enables pieces to start on-demand when events arrive.
 
 ### The Ownership Metadata Chain
 
 The current runtime treats the result cell as the root of a piece. The result
-cell stores metadata links to the pattern and argument cell. Its `internal`
-metadata is not a direct link; it is a manifest of derived internal cells:
+cell names its pattern in its `patternIdentity` metadata: a
+`{ identity, symbol }` reference, where `identity` is the content identity of
+the pattern's entry module and `symbol` the export that module defines it
+under. The reference is a value rather than a link, and the runtime loads the
+pattern by that identity. The result cell also stores a metadata link to its
+argument cell. Its `internal` metadata is not a direct link either; it is a
+manifest of derived internal cells:
 
 ```
-                 meta:pattern
-              ┌───────────────> pattern document
+              ┌─ meta:patternIdentity ─ { identity, symbol }
               │
-result cell ──┼─ meta:argument ─> argument cell
+result cell ──┼─ meta:argument ───────> argument cell
               │
-              └─ meta:internal ─> [
-                                    { partialCause, link: internal cell },
-                                    ...
-                                  ]
+              └─ meta:internal ───────> [
+                                          { partialCause, link: internal cell },
+                                          ...
+                                        ]
 ```
 
 Cells created as implementation details of the piece store metadata pointing
@@ -177,8 +182,8 @@ child result ─── meta:result ──┘
 
 The important property is the direction of discovery: from an arbitrary owned
 cell, follow `result` metadata until reaching the owning result cell; from that
-result cell, read `pattern` metadata to determine which pattern governs the
-piece.
+result cell, read `patternIdentity` metadata to determine which pattern governs
+the piece.
 
 This metadata is not a reactive dependency edge. Runtime code generally reads it
 with scheduling ignored, because it is ownership/control-plane information used

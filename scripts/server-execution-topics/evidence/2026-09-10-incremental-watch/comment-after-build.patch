@@ -1,0 +1,13 @@
+--- a/packages/memory/v2/server.ts
++++ b/packages/memory/v2/server.ts
+@@ -4632,8 +4632,8 @@
+     try {
+       const startedAt = performance.now();
+       const engine = aclEngine ?? await this.#openEngine(message.space);
+-      // Resume shares watch containers until catch-up replaces them. Only the
+-      // current registry object may publish into those containers.
++      // Resume can share watch containers with an older registry object. Only
++      // the current registry object may publish into those containers.
+       if (this.#sessions.get(message.space, message.sessionId) !== session) {
+         return respondTypedError<WatchAddResult>(
+           message.requestId,

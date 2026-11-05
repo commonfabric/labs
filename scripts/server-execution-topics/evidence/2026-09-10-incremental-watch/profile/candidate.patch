@@ -1,0 +1,2293 @@
+diff --git a/docs/specs/memory-v2/10-implementation-guidance.md b/docs/specs/memory-v2/10-implementation-guidance.md
+index e199b07750..76ce9ba315 100644
+--- a/docs/specs/memory-v2/10-implementation-guidance.md
++++ b/docs/specs/memory-v2/10-implementation-guidance.md
+@@ -127,6 +127,25 @@ request as idempotent only if the watch definition is identical. If the
+ definition differs, reject the request and require the client to use
+ `session.watch.set` to replace the full watch set.
+ 
++Watch additions stage changes to graph selectors, missed-target ownership,
++document caches, schema dependency counts, and operation cursors. Evaluation,
++operation snapshot attachment, and wire conversion finish before publication.
++Once the engine is acquired, staging through publication runs synchronously:
++temporary maps read through the exclusively held session state, copy mutable
++containers only for touched keys, and commit into the original maps on success.
++Discard failed stages; never retain a chain of staged maps in a live session.
++Shared evaluation-cache entries require independent clones.
++
++Ordinary additions index watch IDs and maintain only changed interests.
++Incremental refresh reconciles each changed scoped key against delivered
++entries, operation watches, and remaining misses on every branch. The last
++miss owner leaving must retire an interest unless another source still owns
++it. Watch replacement recomputes complete provenance; normalizing an accepted
++list with duplicate IDs also recomputes it because an operation owner can
++depart. Schema dependency counts bound refresh revalidation by distinct schema
++hashes, while every dependency still verifies against the space's own stored
++closure, including when its referrer has not changed.
++
+ ## 5. Transaction Contract
+ 
+ The runner-facing transaction contract does not change.
+diff --git a/packages/memory/test/v2-watch-incremental.test.ts b/packages/memory/test/v2-watch-incremental.test.ts
+new file mode 100644
+index 0000000000..e184561980
+--- /dev/null
++++ b/packages/memory/test/v2-watch-incremental.test.ts
+@@ -0,0 +1,619 @@
++import { expect } from "@std/expect";
++import { describe, it } from "@std/testing/bdd";
++
++import { ChangeSet } from "@codemirror/state";
++
++import {
++  type GraphWatchSpec,
++  toDirtyKey,
++  toValuePath,
++  type WatchSpec,
++} from "../v2.ts";
++import { connect, loopback } from "../v2/client.ts";
++import { createBranch } from "../v2/engine.ts";
++import {
++  CODEMIRROR_CHANGESET_CODEC,
++  operationBaselineHash,
++} from "../v2/operation-codec.ts";
++import { EngineObjectManager } from "../v2/query.ts";
++import { Server, SessionRegistry } from "../v2/server.ts";
++import { cacheKeyForEntity } from "../v2/server-sync.ts";
++import {
++  testSessionOpenAuthFactory,
++  testSessionOpenServerOptions,
++} from "./v2-auth-test-helpers.ts";
++
++const watch = (id: string): WatchSpec => ({
++  id,
++  kind: "graph",
++  query: { roots: [{ id, selector: { path: [], schema: false } }] },
++});
++
++const linkedWatch = (id: string): GraphWatchSpec => ({
++  id,
++  kind: "graph",
++  query: {
++    roots: [{
++      id,
++      selector: {
++        path: [],
++        schema: {
++          type: "object",
++          properties: {
++            child: { type: "object", properties: { name: { type: "string" } } },
++            second: {
++              type: "object",
++              properties: { name: { type: "string" } },
++            },
++          },
++        },
++      },
++    }],
++  },
++});
++
++const link = (space: string, id: string) => ({
++  "/": { "link@1": { space, id, path: [] } },
++});
++
++/** Creates an established real session and one additional stored root. */
++async function openFixture(size: number) {
++  const registry = new SessionRegistry();
++  const server = new Server({
++    ...testSessionOpenServerOptions,
++    store: new URL(`memory://incremental-watch-${crypto.randomUUID()}`),
++    sessions: registry,
++    subscriptionRefreshDelayMs: "manual",
++  });
++  const writerClient = await connect({ transport: loopback(server) });
++  const readerClient = await connect({ transport: loopback(server) });
++  const space = "did:key:z6Mk-incremental-watch";
++  const writer = await writerClient.mount(
++    space,
++    {},
++    testSessionOpenAuthFactory,
++  );
++  const reader = await readerClient.mount(
++    space,
++    {},
++    testSessionOpenAuthFactory,
++  );
++  const ids = Array.from({ length: size + 1 }, (_, i) => `of:incremental-${i}`);
++  await writer.transact({
++    localSeq: 1,
++    reads: { confirmed: [], pending: [] },
++    operations: ids.map((id) => ({
++      op: "set" as const,
++      id,
++      value: { value: { n: 0 } },
++    })),
++  });
++  await server.flushSessions();
++  await reader.watchSetSync(ids.slice(0, size).map(watch));
++  await reader.ack(1);
++  const state = registry.get(space, reader.sessionId)!;
++  expect(state.entities.size).toBe(size);
++  return {
++    server,
++    writer,
++    reader,
++    state,
++    ids,
++    space,
++    async close() {
++      await readerClient.close();
++      await writerClient.close();
++      await server.close();
++    },
++  };
++}
++
++/** Copies the observable delivery and graph state without retaining mutable sets. */
++function snapshot(state: Awaited<ReturnType<typeof openFixture>>["state"]) {
++  return {
++    entities: [...state.entities],
++    watches: [...state.watches],
++    watchIndex: [...state.watchIndex],
++    operationTrackedIds: [...state.operationTrackedIds],
++    operationWatches: [...state.operationWatches],
++    trackedIds: [...state.trackedIds],
++    cursors: [...state.operationCursors],
++    seenSeq: state.seenSeq,
++    lastSyncedSeq: state.lastSyncedSeq,
++    caughtUpLocalSeq: state.caughtUpLocalSeq,
++    pendingCaughtUpLocalSeq: state.pendingCaughtUpLocalSeq,
++    graphs: [...state.graphs].map(([branch, graph]) => ({
++      branch,
++      entities: [...graph.entities],
++      tracker: [...graph.tracker].map(([key, values]) => [key, [...values]]),
++      missed: [...graph.missed].map(([key, values]) => [key, [...values]]),
++      missedBy: [...graph.missedBy].map(([key, values]) => [key, [...values]]),
++      missesOf: [...graph.missesOf].map(([key, values]) => [key, [...values]]),
++      memo: [...graph.memo],
++      schemaRefs: [...graph.schemaRefs],
++      schemaRefCounts: [...graph.schemaRefCounts],
++      loaded: graph.manager.loadedAddresses(),
++    })),
++  };
++}
++
++describe("Server", () => {
++  describe("instance members", () => {
++    describe("watchAdd()", () => {
++      it("keeps a shared miss reactive until its last branch owner departs", async () => {
++        const fixture = await openFixture(0);
++        try {
++          await fixture.writer.transact({
++            localSeq: 2,
++            reads: { confirmed: [], pending: [] },
++            operations: [{
++              op: "set",
++              id: "of:a",
++              value: { value: { child: link(fixture.space, "of:x") } },
++            }],
++          });
++          const engine = await fixture.server.engineForSpace(fixture.space);
++          createBranch(engine, "feature");
++          await fixture.server.flushSessions();
++          const base = linkedWatch("of:a");
++          await fixture.reader.watchSetSync([base]);
++          await fixture.reader.watchAddSync([{
++            ...base,
++            id: "feature",
++            query: { ...base.query, branch: "feature" },
++          }]);
++          await fixture.writer.transact({
++            localSeq: 3,
++            reads: { confirmed: [], pending: [] },
++            operations: [{ op: "set", id: "of:a", value: { value: {} } }],
++          });
++          await fixture.server.flushSessions();
++          expect(fixture.state.graphs.get("")!.missed.size).toBe(0);
++          expect(fixture.state.graphs.get("feature")!.missed.size).toBe(1);
++          expect(fixture.state.trackedIds.has(toDirtyKey("of:x"))).toBe(true);
++          await fixture.reader.watchRemoveSync(["feature"]);
++          expect(fixture.state.trackedIds.has(toDirtyKey("of:x"))).toBe(false);
++        } finally {
++          await fixture.close();
++        }
++      });
++
++      for (const graphOwnsTarget of [false, true]) {
++        it(`reconciles normalized duplicate operation owners with graph ownership ${graphOwnsTarget}`, async () => {
++          const fixture = await openFixture(0);
++          try {
++            const operations: WatchSpec[] = ["of:a", "of:b"].map((id) => ({
++              id: "duplicate",
++              kind: "operation",
++              query: { id, path: toValuePath(["body"]) },
++            }));
++            await fixture.reader.watchSetSync([
++              ...operations,
++              ...(graphOwnsTarget ? [{ ...watch("of:a"), id: "graph-a" }] : []),
++            ]);
++            await fixture.reader.watchAddSync([{
++              id: "empty",
++              kind: "graph",
++              query: { roots: [] },
++            }]);
++            expect(fixture.state.operationTrackedIds.has(toDirtyKey("of:a")))
++              .toBe(false);
++            expect(fixture.state.trackedIds.has(toDirtyKey("of:a"))).toBe(
++              graphOwnsTarget,
++            );
++            expect(fixture.state.operationTrackedIds.has(toDirtyKey("of:b")))
++              .toBe(true);
++            await fixture.reader.watchRemoveSync(["graph-a"]);
++            expect(fixture.state.trackedIds.has(toDirtyKey("of:a"))).toBe(
++              false,
++            );
++          } finally {
++            await fixture.close();
++          }
++        });
++      }
++
++      it("abandons changed miss ownership and retries against a newly created target", async () => {
++        const fixture = await openFixture(0);
++        try {
++          await fixture.writer.transact({
++            localSeq: 2,
++            reads: { confirmed: [], pending: [] },
++            operations: [
++              {
++                op: "set",
++                id: "of:a",
++                value: { value: { child: link(fixture.space, "of:x") } },
++              },
++              {
++                op: "set",
++                id: "of:b",
++                value: {
++                  value: {
++                    child: link(fixture.space, "of:x"),
++                    second: link(fixture.space, "of:y"),
++                  },
++                },
++              },
++            ],
++          });
++          await fixture.server.flushSessions();
++          await fixture.reader.watchAddSync([linkedWatch("of:a")]);
++          await fixture.reader.ack(2);
++          const before = snapshot(fixture.state);
++          const invalid = {
++            id: "broken",
++            kind: "graph",
++            query: { branch: "broken", roots: [{ id: "broken" }] },
++          } as unknown as WatchSpec;
++          await expect(
++            fixture.reader.watchAddSync([linkedWatch("of:b"), invalid]),
++          ).rejects.toThrow();
++          expect(snapshot(fixture.state)).toEqual(before);
++          expect(fixture.state.trackedIds.has(toDirtyKey("of:y"))).toBe(false);
++          await fixture.writer.transact({
++            localSeq: 3,
++            reads: { confirmed: [], pending: [] },
++            operations: [{
++              op: "set",
++              id: "of:y",
++              value: { value: { name: "arrived before retry" } },
++            }],
++          });
++          await fixture.server.flushSessions();
++          const retried = await fixture.reader.watchAddSync([
++            linkedWatch("of:b"),
++          ]);
++          expect(retried.sync.upserts.map((entry) => entry.id)).toContain(
++            "of:y",
++          );
++          await fixture.writer.transact({
++            localSeq: 4,
++            reads: { confirmed: [], pending: [] },
++            operations: [{
++              op: "set",
++              id: "of:x",
++              value: { value: { name: "shared arrival" } },
++            }],
++          });
++          await fixture.server.flushSessions();
++          expect(
++            fixture.state.entities.get(cacheKeyForEntity("", "of:x", "space"))
++              ?.doc,
++          ).toEqual({ value: { name: "shared arrival" } });
++        } finally {
++          await fixture.close();
++        }
++      });
++
++      it("retains an operation owner's interest after the last graph miss retires", async () => {
++        const fixture = await openFixture(0);
++        try {
++          await fixture.writer.transact({
++            localSeq: 2,
++            reads: { confirmed: [], pending: [] },
++            operations: [{
++              op: "set",
++              id: "of:a",
++              value: { value: { child: link(fixture.space, "of:x") } },
++            }],
++          });
++          await fixture.server.flushSessions();
++          await fixture.reader.watchAddSync([linkedWatch("of:a"), {
++            id: "operations",
++            kind: "operation",
++            query: { id: "of:x", path: toValuePath(["body"]) },
++          }]);
++          await fixture.writer.transact({
++            localSeq: 3,
++            reads: { confirmed: [], pending: [] },
++            operations: [{ op: "set", id: "of:a", value: { value: {} } }],
++          });
++          await fixture.server.flushSessions();
++          expect(fixture.state.trackedIds.has(toDirtyKey("of:x"))).toBe(true);
++          expect(
++            [...fixture.state.graphs.values()].every((graph) =>
++              graph.missed.size === 0
++            ),
++          ).toBe(true);
++          await fixture.reader.watchRemoveSync(["operations"]);
++          expect(fixture.state.trackedIds.has(toDirtyKey("of:x"))).toBe(false);
++        } finally {
++          await fixture.close();
++        }
++      });
++
++      it("publishes a large valid batch without an argument-count limit", async () => {
++        const fixture = await openFixture(0);
++        try {
++          const watches: WatchSpec[] = Array.from(
++            { length: 130_000 },
++            (_, i) => ({
++              id: `empty-${i}`,
++              kind: "graph",
++              query: { roots: [] },
++            }),
++          );
++          const result = await fixture.reader.watchAddSync(watches);
++          expect(result.sync.upserts).toEqual([]);
++          expect(fixture.state.watches).toHaveLength(watches.length);
++          expect(fixture.state.watchIndex.size).toBe(watches.length);
++        } finally {
++          await fixture.close();
++        }
++      });
++
++      it("retains accepted duplicate-id roots when removing an unrelated watch", async () => {
++        const fixture = await openFixture(2);
++        try {
++          const installed = await fixture.reader.watchSetSync([
++            { ...watch(fixture.ids[0]), id: "duplicate" },
++            { ...watch(fixture.ids[1]), id: "duplicate" },
++          ]);
++          expect(installed.view.snapshot().entities.map((entry) => entry.id))
++            .toEqual(fixture.ids.slice(0, 2));
++          const removed = await fixture.reader.watchRemoveSync([
++            "not-installed",
++          ]);
++          expect(removed.sync.removes).toEqual([]);
++          expect(removed.view.snapshot().entities.map((entry) => entry.id))
++            .toEqual(fixture.ids.slice(0, 2));
++        } finally {
++          await fixture.close();
++        }
++      });
++
++      it("leaves established delivery and graph state unchanged when a later branch fails", async () => {
++        const fixture = await openFixture(64);
++        try {
++          const before = snapshot(fixture.state);
++          const invalid = {
++            id: "broken",
++            kind: "graph",
++            query: { branch: "branch:broken", roots: [{ id: "of:broken" }] },
++          } as unknown as WatchSpec;
++          await expect(fixture.reader.watchAddSync([
++            watch(fixture.ids[64]),
++            invalid,
++          ])).rejects.toThrow();
++          expect(snapshot(fixture.state)).toEqual(before);
++          const added = await fixture.reader.watchAddSync([
++            watch(fixture.ids[64]),
++          ]);
++          expect(added.sync.upserts.map((entry) => entry.id)).toEqual([
++            fixture.ids[64],
++          ]);
++          expect(fixture.state.entities.size).toBe(65);
++        } finally {
++          await fixture.close();
++        }
++      });
++
++      it("rolls back graph and cursor changes when a later operation snapshot fails", async () => {
++        const fixture = await openFixture(32);
++        try {
++          await fixture.writer.transact({
++            localSeq: 2,
++            reads: { confirmed: [], pending: [] },
++            operations: [{
++              op: "set",
++              id: "of:text",
++              value: { value: { body: "a" } },
++            }],
++          });
++          await fixture.writer.transact({
++            localSeq: 3,
++            reads: { confirmed: [], pending: [] },
++            operations: [{
++              op: "apply-op",
++              id: "of:text",
++              path: toValuePath(["body"]),
++              codec: CODEMIRROR_CHANGESET_CODEC,
++              submissionId: "writer:text",
++              base: null,
++              baselineHash: operationBaselineHash("a"),
++              payload: {
++                updates: [{
++                  clientId: "writer",
++                  changes: ChangeSet.of({ from: 1, insert: "b" }, 1).toJSON(),
++                }],
++              },
++            }],
++          });
++          await fixture.server.flushSessions();
++          await fixture.reader.ack(3);
++          const operation: WatchSpec = {
++            id: "valid-operation",
++            kind: "operation",
++            query: {
++              id: "of:text",
++              path: toValuePath(["body"]),
++              after: { epoch: 1, version: 0 },
++            },
++          };
++          const invalid: WatchSpec = {
++            ...operation,
++            id: "future-operation",
++            query: { ...operation.query, after: { epoch: 1, version: 99 } },
++          };
++          const before = snapshot(fixture.state);
++          await expect(
++            fixture.reader.watchAddSync([
++              watch(fixture.ids[32]),
++              operation,
++              invalid,
++            ]),
++          ).rejects.toThrow("cursor is in the future");
++          expect(snapshot(fixture.state)).toEqual(before);
++          const added = await fixture.reader.watchAddSync([
++            watch(fixture.ids[32]),
++            operation,
++          ]);
++          expect(added.sync.upserts.map((entry) => entry.id)).toEqual([
++            fixture.ids[32],
++          ]);
++          expect(added.sync.operationFields?.[0].field).toMatchObject({
++            cursor: { epoch: 1, version: 1 },
++            materialized: "ab",
++          });
++        } finally {
++          await fixture.close();
++        }
++      });
++
++      for (const size of [32, 256]) {
++        it(`refreshes without filtering the ${size} established graph watches for operation fields`, async () => {
++          const fixture = await openFixture(size);
++          const watches = fixture.state.watches;
++          const filter = watches.filter;
++          const some = watches.some;
++          let visited = 0;
++          watches.filter = ((...args: unknown[]) => {
++            visited += watches.length;
++            return Reflect.apply(filter, watches, args);
++          }) as typeof filter;
++          watches.some = (...args) => {
++            visited += watches.length;
++            return Reflect.apply(some, watches, args);
++          };
++          try {
++            await fixture.writer.transact({
++              localSeq: 2,
++              reads: { confirmed: [], pending: [] },
++              operations: [{
++                op: "set",
++                id: fixture.ids[0],
++                value: { value: { n: 1 } },
++              }],
++            });
++            await fixture.server.flushSessions();
++            await fixture.server.syncSessionForConnection(
++              fixture.space,
++              fixture.reader.sessionId,
++              new Set([toDirtyKey("of:unwatched")]),
++            );
++            expect(visited).toBe(0);
++          } finally {
++            watches.filter = filter;
++            watches.some = some;
++            await fixture.close();
++          }
++        });
++
++        it(`adds one root without enumerating the ${size} established delivered entries`, async () => {
++          const fixture = await openFixture(size);
++          const map = fixture.state.entities;
++          const iterator = map[Symbol.iterator];
++          const values = map.values;
++          let visited = 0;
++          map[Symbol.iterator] = function* () {
++            for (const entry of iterator.call(this)) {
++              visited++;
++              yield entry;
++            }
++            return undefined;
++          };
++          map.values = function* () {
++            for (const value of values.call(this)) {
++              visited++;
++              yield value;
++            }
++            return undefined;
++          };
++          try {
++            const added = await fixture.reader.watchAddSync([
++              watch(fixture.ids[size]),
++            ]);
++            expect(added.sync.upserts.map((entry) => entry.id)).toEqual([
++              fixture.ids[size],
++            ]);
++            expect(visited).toBe(0);
++          } finally {
++            map[Symbol.iterator] = iterator;
++            map.values = values;
++            await fixture.close();
++          }
++        });
++
++        it(`refreshes one root without enumerating the ${size} established delivered entries`, async () => {
++          const fixture = await openFixture(size);
++          const maps: Map<string, unknown>[] = [
++            fixture.state.entities,
++            ...[...fixture.state.graphs.values()].map((graph) =>
++              graph.entities
++            ),
++          ];
++          const restore: Array<() => void> = [];
++          let visited = 0;
++          for (const map of maps) {
++            const iterator = map[Symbol.iterator];
++            const values = map.values;
++            map[Symbol.iterator] = function* () {
++              for (const entry of iterator.call(this)) {
++                visited++;
++                yield entry;
++              }
++              return undefined;
++            };
++            map.values = function* () {
++              for (const value of values.call(this)) {
++                visited++;
++                yield value;
++              }
++              return undefined;
++            };
++            restore.push(() => {
++              map[Symbol.iterator] = iterator;
++              map.values = values;
++            });
++          }
++          try {
++            await fixture.writer.transact({
++              localSeq: 2,
++              reads: { confirmed: [], pending: [] },
++              operations: [{
++                op: "set",
++                id: fixture.ids[0],
++                value: { value: { n: 1 } },
++              }],
++            });
++            await fixture.server.flushSessions();
++            expect(
++              fixture.state.entities.get(
++                cacheKeyForEntity("", fixture.ids[0], "space"),
++              )
++                ?.doc,
++            ).toEqual({ value: { n: 1 } });
++            expect(visited).toBe(0);
++          } finally {
++            for (const undo of restore) undo();
++            await fixture.close();
++          }
++        });
++
++        it(`adds one root without scanning the ${size} established manager addresses`, async () => {
++          const fixture = await openFixture(size);
++          const loaded = EngineObjectManager.prototype.loadedAddresses;
++          let visited = 0;
++          EngineObjectManager.prototype.loadedAddresses = function () {
++            const addresses = loaded.call(this);
++            visited += addresses.length;
++            return addresses;
++          };
++          try {
++            const added = await fixture.reader.watchAddSync([
++              watch(fixture.ids[size]),
++            ]);
++            expect(added.sync.upserts.map((entry) => entry.id)).toEqual([
++              fixture.ids[size],
++            ]);
++            expect(visited).toBeLessThanOrEqual(4);
++          } finally {
++            EngineObjectManager.prototype.loadedAddresses = loaded;
++            await fixture.close();
++          }
++        });
++      }
++    });
++  });
++});
+diff --git a/packages/memory/v2/client.ts b/packages/memory/v2/client.ts
+index b09aa2342a..f7608dd737 100644
+--- a/packages/memory/v2/client.ts
++++ b/packages/memory/v2/client.ts
+@@ -769,6 +769,7 @@ export class SpaceSession {
+     pending: PromiseWithResolvers<AppliedCommit>;
+   }>();
+   #watchSpecs: WatchSpec[] = [];
++  #watchSpecPositions = new Map<string, number[]>();
+   #watchView: WatchView | null = null;
+   #precedingWatchSyncs: SessionSync[] = [];
+   #sessionId: string;
+@@ -1114,7 +1115,7 @@ export class SpaceSession {
+         }),
+       (result) => {
+         this.#noteResult(result.serverSeq);
+-        this.#watchSpecs = watches;
++        this.#replaceWatchSpecs(watches);
+         this.#noteOperationWatchCursors(result.sync);
+         if (this.#watchView === null) {
+           this.#watchView = WatchView.fromSync(result.sync);
+@@ -1159,11 +1160,20 @@ export class SpaceSession {
+       (result) => {
+         const applyStart = performance.now();
+         this.#noteResult(result.serverSeq);
+-        this.#watchSpecs = [
+-          ...new Map(
+-            [...this.#watchSpecs, ...watches].map((watch) => [watch.id, watch]),
+-          ).values(),
+-        ];
++        if (this.#watchSpecPositions.size !== this.#watchSpecs.length) {
++          this.#replaceWatchSpecs([
++            ...new Map(this.#watchSpecs.map((watch) => [watch.id, watch]))
++              .values(),
++          ]);
++        }
++        for (const watch of watches) {
++          const positions = this.#watchSpecPositions.get(watch.id);
++          if (positions !== undefined) this.#watchSpecs[positions[0]] = watch;
++          else {
++            this.#watchSpecPositions.set(watch.id, [this.#watchSpecs.length]);
++            this.#watchSpecs.push(watch);
++          }
++        }
+         this.#noteOperationWatchCursors(result.sync);
+         if (this.#watchView === null) {
+           this.#watchView = WatchView.fromSync(result.sync);
+@@ -1192,12 +1202,12 @@ export class SpaceSession {
+     const removed = new Set(watchIds);
+     return await this.#runWatchMutation(
+       () => {
++        // Cancellation is local intent even when the request fails: a later
++        // reconnect must not restore a watch its last subscriber removed.
+         const watches = this.#watchSpecs.filter((watch) =>
+           !removed.has(watch.id)
+         );
+-        // Cancellation is local intent even when the request fails: a later
+-        // reconnect must not restore a watch its last subscriber removed.
+-        this.#watchSpecs = watches;
++        this.#replaceWatchSpecs(watches);
+         return this.#client.request<WatchSetResult>({
+           type: "session.watch.set",
+           requestId: crypto.randomUUID(),
+@@ -1396,7 +1406,7 @@ export class SpaceSession {
+       pending.pending.reject(new Error("memory session closed"));
+     }
+     this.#outstandingCommits.clear();
+-    this.#watchSpecs = [];
++    this.#replaceWatchSpecs([]);
+     this.#watchView?.close();
+     this.#watchView = null;
+   }
+@@ -1428,7 +1438,7 @@ export class SpaceSession {
+     }
+     this.#rejectCaughtUpLocalSeqWaiters(error);
+     this.#outstandingCommits.clear();
+-    this.#watchSpecs = [];
++    this.#replaceWatchSpecs([]);
+     this.#watchView?.close();
+     this.#watchView = null;
+   }
+@@ -1600,19 +1610,28 @@ export class SpaceSession {
+         ] as const
+       ),
+     );
+-    this.#watchSpecs = this.#watchSpecs.map((watch) => {
+-      if (watch.kind !== "operation" || !delivered.has(watch.id)) {
+-        return watch;
++    for (const [id, cursor] of delivered) {
++      for (const position of this.#watchSpecPositions.get(id) ?? []) {
++        const watch = this.#watchSpecs[position];
++        if (watch.kind !== "operation") continue;
++        const query = { ...watch.query };
++        if (cursor === null) delete query.after;
++        else if (cursor !== undefined) query.after = cursor;
++        this.#watchSpecs[position] = { ...watch, query };
+       }
+-      const query = { ...watch.query };
+-      const cursor = delivered.get(watch.id);
+-      if (cursor === null) {
+-        delete query.after;
+-      } else if (cursor !== undefined) {
+-        query.after = cursor;
+-      }
+-      return { ...watch, query };
+-    });
++    }
++  }
++
++  /** Replaces reconnect intent and indexes every accepted list position. */
++  #replaceWatchSpecs(watches: readonly WatchSpec[]): void {
++    this.#watchSpecs = [...watches];
++    this.#watchSpecPositions = new Map();
++    for (let position = 0; position < watches.length; position++) {
++      const id = watches[position].id;
++      const positions = this.#watchSpecPositions.get(id);
++      if (positions === undefined) this.#watchSpecPositions.set(id, [position]);
++      else positions.push(position);
++    }
+   }
+ 
+   #noteCaughtUpLocalSeq(localSeq: number | undefined): void {
+diff --git a/packages/memory/v2/query.ts b/packages/memory/v2/query.ts
+index 67f817e5aa..cdb25a49a1 100644
+--- a/packages/memory/v2/query.ts
++++ b/packages/memory/v2/query.ts
+@@ -1,5 +1,6 @@
+ import type { FabricValue, JSONSchema } from "@commonfabric/api";
+ import { getLogger } from "@commonfabric/utils/logger";
++import { StagedMap } from "@commonfabric/utils/staged-map";
+ import {
+   internPathSelector,
+   internSchemaAsTaggedHashString,
+@@ -86,13 +87,16 @@ export type TrackedGraphState = {
+   manager: EngineObjectManager;
+ 
+   /** Per-version scans of this state's delivered documents for embedded
+-   * schema refs (`docKey -> { seq, refs }`): the record the closure's
+-   * re-validation over the established set is answered from on every
+-   * refresh. One entry per delivered version, the schema documents the
++   * schema refs (`docKey -> { seq, refs }`): changed versions update the
++   * dependency counts without scanning the established set. One entry per
++   * delivered version, the schema documents the
+    * closure itself delivered included; reused by document key and sequence;
+    * every scope, since the state is one identity's; the state's lifetime.
+    * The engine-wide cache of space-scoped scans only seeds it. */
+   schemaRefs: SchemaRefScans;
++
++  /** Number of delivered documents naming each schema hash. */
++  schemaRefCounts: Map<string, number>;
+ };
+ 
+ /** See TrackedGraphState.schemaRefs. */
+@@ -270,8 +274,11 @@ export class EngineObjectManager implements ObjectStorageManager {
+     seq: number;
+     document: NonNullable<Engine.EntityState["document"]>;
+   }>();
+-  #missing = new Set<string>();
++  #missing = new Map<string, true>();
+   #readCount = 0;
++  #onLoad?: (
++    address: ReturnType<EngineObjectManager["loadedAddresses"]>[number],
++  ) => void;
+ 
+   readonly #engine: Engine.Engine;
+   readonly #branch: string;
+@@ -346,14 +353,14 @@ export class EngineObjectManager implements ObjectStorageManager {
+       return null;
+     }
+     if (type !== "application/json") {
+-      this.#missing.add(key);
++      this.#missing.set(key, true);
+       return null;
+     }
+ 
+     const state = this.readState(address.id, scope, scopeKey);
+     this.#readCount++;
+     if (state === null || state.document === null) {
+-      this.#missing.add(key);
++      this.#missing.set(key, true);
+       return null;
+     }
+ 
+@@ -371,6 +378,7 @@ export class EngineObjectManager implements ObjectStorageManager {
+       seq: state.seq,
+       document: state.document,
+     });
++    this.#onLoad?.({ id: address.id, type, scope, scopeKey });
+     return attestation;
+   }
+ 
+@@ -429,10 +437,10 @@ export class EngineObjectManager implements ObjectStorageManager {
+   }
+ 
+   mergeFrom(other: EngineObjectManager): void {
+-    for (const key of other.#missing) {
++    for (const key of other.#missing.keys()) {
+       this.#attestations.delete(key);
+       this.#details.delete(key);
+-      this.#missing.add(key);
++      this.#missing.set(key, true);
+     }
+     for (const [key, value] of other.#attestations) {
+       this.#attestations.set(key, value);
+@@ -443,6 +451,52 @@ export class EngineObjectManager implements ObjectStorageManager {
+       this.#missing.delete(key);
+     }
+   }
++
++  /** Captures newly loaded addresses during synchronous `evaluate`. */
++  captureLoads(
++    evaluate: () => void,
++  ): ReturnType<EngineObjectManager["loadedAddresses"]> {
++    const addresses: ReturnType<EngineObjectManager["loadedAddresses"]> = [];
++    const previous = this.#onLoad;
++    this.#onLoad = (address) => {
++      addresses.push(address);
++      previous?.(address);
++    };
++    try {
++      evaluate();
++      return addresses;
++    } finally {
++      this.#onLoad = previous;
++    }
++  }
++
++  /** Stages cache changes under exclusive access; discard the stage on failure. */
++  stage(engine: Engine.Engine): {
++    value: EngineObjectManager;
++    commit: () => void;
++  } {
++    const value = new EngineObjectManager(
++      engine,
++      this.#branch,
++      this.principal,
++      this.sessionId,
++      this.#readSeq,
++    );
++    const attestations = new StagedMap(this.#attestations);
++    const details = new StagedMap(this.#details);
++    const missing = new StagedMap(this.#missing);
++    value.#attestations = attestations;
++    value.#details = details;
++    value.#missing = missing;
++    return {
++      value,
++      commit: () => {
++        attestations.commit();
++        details.commit();
++        missing.commit();
++      },
++    };
++  }
+ }
+ 
+ export type QueryGraphReuseContext = {
+@@ -877,6 +931,57 @@ export const cloneTrackedGraphState = (
+     memo: new Map(state.memo),
+     manager,
+     schemaRefs: new Map(state.schemaRefs),
++    schemaRefCounts: new Map(state.schemaRefCounts),
++  };
++};
++
++/**
++ * Stages one graph's mutations without copying untouched entries. The caller
++ * holds exclusive synchronous access through evaluation and publication, then
++ * discards the stage. Shared evaluation-cache entries use independent clones.
++ */
++export const stageTrackedGraphState = (
++  engine: Engine.Engine,
++  state: TrackedGraphState,
++): {
++  value: TrackedGraphState;
++  commit: () => void;
++  changedMisses: () => Iterable<string>;
++} => {
++  const tracker = state.tracker.stage();
++  const missed = state.missed.stage();
++  const missedBy = new StagedMap(state.missedBy, (values) => new Set(values));
++  const missesOf = new StagedMap(state.missesOf, (values) => new Set(values));
++  const entities = new StagedMap(state.entities);
++  const memo = new StagedMap(state.memo);
++  const manager = state.manager.stage(engine);
++  const schemaRefs = new StagedMap(state.schemaRefs);
++  const schemaRefCounts = new StagedMap(state.schemaRefCounts);
++  return {
++    value: {
++      branch: state.branch,
++      tracker: tracker.value,
++      missed: missed.value,
++      missedBy,
++      missesOf,
++      entities,
++      memo,
++      manager: manager.value,
++      schemaRefs,
++      schemaRefCounts,
++    },
++    commit: () => {
++      tracker.commit();
++      missed.commit();
++      missedBy.commit();
++      missesOf.commit();
++      entities.commit();
++      memo.commit();
++      manager.commit();
++      schemaRefs.commit();
++      schemaRefCounts.commit();
++    },
++    changedMisses: missed.changedKeys,
+   };
+ };
+ 
+@@ -991,6 +1096,7 @@ const scanSnapshotSchemaRefs = (
+   key: QueryDocKey,
+   snapshot: EntitySnapshot,
+   scans: SchemaRefScans,
++  counts: Map<string, number>,
+   stats: QueryTraversalStats,
+ ): ReadonlySet<string> => {
+   // The state's own record first: it covers every scope, and on a refresh
+@@ -1008,7 +1114,7 @@ const scanSnapshotSchemaRefs = (
+   if (cacheable) {
+     const cached = cache.get(key);
+     if (cached !== undefined && cached.seq === snapshot.seq) {
+-      scans.set(key, cached);
++      recordSchemaRefScan(engine, key, snapshot, cached.refs, scans, counts);
+       return cached.refs;
+     }
+   }
+@@ -1045,7 +1151,7 @@ const scanSnapshotSchemaRefs = (
+     }
+   }
+   const result = refs.size === 0 ? EMPTY_SCHEMA_REFS : refs;
+-  recordSchemaRefScan(engine, key, snapshot, result, scans);
++  recordSchemaRefScan(engine, key, snapshot, result, scans, counts);
+   return result;
+ };
+ 
+@@ -1060,7 +1166,15 @@ const recordSchemaRefScan = (
+   snapshot: EntitySnapshot,
+   refs: ReadonlySet<string>,
+   scans: SchemaRefScans,
++  counts: Map<string, number>,
+ ): void => {
++  const previous = scans.get(key);
++  for (const hash of previous?.refs ?? []) {
++    const remaining = counts.get(hash)! - 1;
++    if (remaining === 0) counts.delete(hash);
++    else counts.set(hash, remaining);
++  }
++  for (const hash of refs) counts.set(hash, (counts.get(hash) ?? 0) + 1);
+   const entry = { seq: snapshot.seq, refs };
+   scans.set(key, entry);
+   if ((snapshot.scope ?? DEFAULT_SCOPE) !== DEFAULT_SCOPE) return;
+@@ -1102,15 +1216,15 @@ export class SchemaClosureError extends Error {
+  *
+  * Two-phase: the walk verifies everything into staging and returns the
+  * tracker keys and snapshots to add — the caller commits them only after
+- * the whole closure verified, so the walk itself mutates nothing. A
++ * the whole closure verified. Scan records and dependency counts update during
++ * assembly; additive callers stage them with the graph. A
+  * refresh whose traversal already advanced its tracker before a failure
+  * is healed by the session's forced full re-evaluation instead (the
+- * server marks it on the skipped frame). `established` extends
+- * validation over previously
+- * delivered snapshots (a refresh): a corrupted dependency fails the
+- * refresh even when its referrer did not change, and the per-version scan
+- * and verification caches make an unchanged established set cost map
+- * lookups.
++ * server marks it on the skipped frame). `revalidateEstablished` also validates
++ * every indexed dependency from previously delivered snapshots: a corrupted
++ * dependency fails the refresh even when its referrer did not change. The
++ * dependency index bounds this pass by distinct schema hashes, while changed
++ * documents alone update their per-version scans.
+  *
+  * Verification is against THIS space's stored content — a verified copy in
+  * the realm registry never stands in for the space's own (the
+@@ -1124,8 +1238,9 @@ const assembleSchemaDocClosures = (
+   tracker: MapSetStringToPathSelectors,
+   delivered: ReadonlyMap<QueryDocKey, EntitySnapshot>,
+   scans: SchemaRefScans,
++  counts: Map<string, number>,
+   stats: QueryTraversalStats,
+-  established?: ReadonlyMap<QueryDocKey, EntitySnapshot>,
++  revalidateEstablished = false,
+ ): {
+   trackerAdds: QueryDocKey[];
+   additions: Map<QueryDocKey, EntitySnapshot>;
+@@ -1140,25 +1255,21 @@ const assembleSchemaDocClosures = (
+   };
+   for (const [key, snapshot] of delivered) {
+     for (
+-      const hash of scanSnapshotSchemaRefs(engine, key, snapshot, scans, stats)
++      const hash of scanSnapshotSchemaRefs(
++        engine,
++        key,
++        snapshot,
++        scans,
++        counts,
++        stats,
++      )
+     ) {
+       enqueue(hash);
+     }
+   }
+-  if (established !== undefined) {
+-    for (const [key, snapshot] of established) {
+-      if (delivered.has(key)) continue;
+-      for (
+-        const hash of scanSnapshotSchemaRefs(
+-          engine,
+-          key,
+-          snapshot,
+-          scans,
+-          stats,
+-        )
+-      ) {
+-        enqueue(hash);
+-      }
++  if (revalidateEstablished) {
++    for (const hash of counts.keys()) {
++      enqueue(hash);
+     }
+   }
+   let verified = verifiedSchemaDocCaches.get(engine);
+@@ -1206,7 +1317,7 @@ const assembleSchemaDocClosures = (
+     // which is all a scan of it finds: its own hash. Recording that here
+     // keeps the state's record at one entry per delivered version, so a
+     // later refresh answers the closure's documents without scanning them.
+-    recordSchemaRefScan(engine, key, snapshot, new Set([hash]), scans);
++    recordSchemaRefScan(engine, key, snapshot, new Set([hash]), scans, counts);
+     for (const dep of collectExternalSchemaRefHashes(registered)) {
+       enqueue(dep);
+     }
+@@ -1289,12 +1400,14 @@ const validateSelectorSchemaRefs = (
+  * GraphQueryWalkOptions.onMissedDoc for the contract). */
+ const missRecorderFor = (
+   state: Pick<TrackedGraphState, "missed" | "missedBy" | "missesOf">,
++  changed?: Set<string>,
+ ): (
+   missKey: string,
+   selector: SchemaPathSelector,
+   referrerKey: string | undefined,
+ ) => void =>
+ (missKey, selector, referrerKey) => {
++  if (!state.missed.has(missKey)) changed?.add(missKey);
+   state.missed.add(missKey, selector);
+   if (referrerKey === undefined) return;
+   let refs = state.missedBy.get(missKey);
+@@ -1316,7 +1429,9 @@ const missRecorderFor = (
+ const retireMiss = (
+   state: Pick<TrackedGraphState, "missed" | "missedBy" | "missesOf">,
+   missKey: string,
++  changed?: Set<string>,
+ ): void => {
++  if (state.missed.has(missKey)) changed?.add(missKey);
+   state.missed.delete(missKey);
+   const refs = state.missedBy.get(missKey);
+   if (refs !== undefined) {
+@@ -1336,6 +1451,7 @@ const retireMiss = (
+ const releaseReferrerMisses = (
+   state: Pick<TrackedGraphState, "missed" | "missedBy" | "missesOf">,
+   referrerKey: string,
++  changed?: Set<string>,
+ ): void => {
+   const misses = state.missesOf.get(referrerKey);
+   if (misses === undefined) return;
+@@ -1345,6 +1461,7 @@ const releaseReferrerMisses = (
+     if (refs === undefined) continue;
+     refs.delete(referrerKey);
+     if (refs.size === 0) {
++      changed?.add(missKey);
+       state.missedBy.delete(missKey);
+       state.missed.delete(missKey);
+     }
+@@ -1510,6 +1627,7 @@ export const trackGraph = (
+ 
+   const entities = entitiesFromTracker(space, schemaTracker, manager, branch);
+   const schemaRefs: SchemaRefScans = new Map();
++  const schemaRefCounts = new Map<string, number>();
+   const staged = assembleSchemaDocClosures(
+     space,
+     engine,
+@@ -1518,6 +1636,7 @@ export const trackGraph = (
+     schemaTracker,
+     entities,
+     schemaRefs,
++    schemaRefCounts,
+     stats,
+   );
+   for (const key of staged.trackerAdds) {
+@@ -1538,6 +1657,7 @@ export const trackGraph = (
+     memo: sharedMemo,
+     manager,
+     schemaRefs,
++    schemaRefCounts,
+   };
+   if (
+     cache !== undefined && cacheKeys !== undefined &&
+@@ -1576,45 +1696,36 @@ export const extendTrackedGraph = (
+   const manager = state.manager;
+   const stats = createQueryTraversalStats();
+   const readCountBefore = manager.readCount;
+-  const previouslyLoaded = new Set(
+-    manager.loadedAddresses().map((address) =>
+-      `${address.scopeKey}\0${address.id}`
+-    ),
+-  );
+   const touched = new Set<QueryDocKey>();
+ 
+-  validateSelectorSchemaRefs(space, manager, state.branch, query.roots);
+-
+-  for (const root of query.roots) {
+-    chargeRootVisit(root, manager, stats, () => {
+-      const selector = toDocumentSelector(root.selector);
+-      const rootScope = root.scope ?? DEFAULT_SCOPE;
+-      const rootKey = rootDocKey(space, root, identityOf(manager));
+-      touched.add(rootKey);
+-      evaluateTrackedDocument(
+-        space,
+-        manager,
+-        {
+-          id: root.id,
+-          scope: rootScope,
+-          ...(root.entityScopeKey === undefined
+-            ? {}
+-            : { scopeKey: root.entityScopeKey }),
+-        },
+-        selector,
+-        state.tracker,
+-        missRecorderFor(state),
+-        state.memo,
+-        stats,
+-      );
+-    });
+-  }
+-
+-  for (const address of manager.loadedAddresses()) {
+-    const key = `${address.scopeKey}\0${address.id}`;
+-    if (previouslyLoaded.has(key)) {
+-      continue;
++  const loaded = manager.captureLoads(() => {
++    validateSelectorSchemaRefs(space, manager, state.branch, query.roots);
++    for (const root of query.roots) {
++      chargeRootVisit(root, manager, stats, () => {
++        const selector = toDocumentSelector(root.selector);
++        const rootScope = root.scope ?? DEFAULT_SCOPE;
++        const rootKey = rootDocKey(space, root, identityOf(manager));
++        touched.add(rootKey);
++        evaluateTrackedDocument(
++          space,
++          manager,
++          {
++            id: root.id,
++            scope: rootScope,
++            ...(root.entityScopeKey === undefined
++              ? {}
++              : { scopeKey: root.entityScopeKey }),
++          },
++          selector,
++          state.tracker,
++          missRecorderFor(state),
++          state.memo,
++          stats,
++        );
++      });
+     }
++  });
++  for (const address of loaded) {
+     touched.add(`${space}/${address.scopeKey}/${address.id}`);
+   }
+ 
+@@ -1636,7 +1747,7 @@ export const extendTrackedGraph = (
+   }
+ 
+   // Assembly validates before anything commits to `state.entities`; the
+-  // caller stages the whole graph state (`cloneTrackedGraphState`), which
++  // caller stages the whole graph state (`stageTrackedGraphState`), which
+   // covers the tracker mutations the traversal above already made.
+   const staged = assembleSchemaDocClosures(
+     space,
+@@ -1646,6 +1757,7 @@ export const extendTrackedGraph = (
+     state.tracker,
+     updates,
+     state.schemaRefs,
++    state.schemaRefCounts,
+     stats,
+   );
+   for (const key of staged.trackerAdds) {
+@@ -1763,6 +1875,7 @@ export const refreshTrackedGraph = (
+ ): {
+   serverSeq: number;
+   updates: Map<QueryDocKey, EntitySnapshot>;
++  changedMisses: ReadonlySet<string>;
+   stats: QueryTraversalStats;
+ } | null => {
+   const affectedDocs = new Map<QueryDocKey, Set<SchemaPathSelector>>();
+@@ -1827,13 +1940,14 @@ export const refreshTrackedGraph = (
+     const stats = createQueryTraversalStats();
+     const readCountBefore = manager.readCount;
+ 
+-    const recorder = missRecorderFor(state);
++    const changedMisses = new Set<string>();
++    const recorder = missRecorderFor(state, changedMisses);
+     for (const key of affectedDocs.keys()) {
+       state.tracker.delete(key);
+       // The re-walk below re-records this referrer's still-live misses;
+       // attributions from its PREVIOUS walk no longer stand, so a link
+       // edited away retires its miss instead of leaving a stale wake.
+-      releaseReferrerMisses(state, key);
++      releaseReferrerMisses(state, key, changedMisses);
+     }
+ 
+     for (const [key, selectors] of affectedDocs) {
+@@ -1881,7 +1995,7 @@ export const refreshTrackedGraph = (
+       // retiring the miss on that would lose the link-derived selector's
+       // closure when the doc is finally born.
+       if (!stillAbsent.has(key)) {
+-        retireMiss(state, key);
++        retireMiss(state, key, changedMisses);
+       }
+     }
+ 
+@@ -1919,8 +2033,8 @@ export const refreshTrackedGraph = (
+       updates.set(key, snapshot);
+     }
+ 
+-    // `established` extends validation over the whole previously delivered
+-    // state, so a corrupted dependency fails the refresh even when its
++    // The dependency index extends validation over previously delivered
++    // schema references, so corruption fails the refresh even when its
+     // referrer did not change. A throw here can leave this graph's tracker
+     // partially advanced; the caller marks the session for a full
+     // re-evaluation, which re-diffs everything on the next successful pass
+@@ -1934,8 +2048,9 @@ export const refreshTrackedGraph = (
+       state.tracker,
+       updates,
+       state.schemaRefs,
++      state.schemaRefCounts,
+       stats,
+-      state.entities,
++      true,
+     );
+     phases.enter("merge");
+     for (const key of staged.trackerAdds) {
+@@ -1958,6 +2073,7 @@ export const refreshTrackedGraph = (
+     return {
+       serverSeq: Engine.serverSeq(engine),
+       updates,
++      changedMisses,
+       stats,
+     };
+   } finally {
+diff --git a/packages/memory/v2/server.ts b/packages/memory/v2/server.ts
+index 5314c17f19..c4cc6173c1 100644
+--- a/packages/memory/v2/server.ts
++++ b/packages/memory/v2/server.ts
+@@ -3,6 +3,7 @@ import * as Path from "@std/path";
+ 
+ import type { FabricValue } from "@commonfabric/api";
+ import { getLogger } from "@commonfabric/utils/logger";
++import { StagedMap } from "@commonfabric/utils/staged-map";
+ import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+ import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
+ 
+@@ -50,6 +51,7 @@ import {
+   type Operation,
+   type OperationFieldQueryRequest,
+   type OperationFieldQueryResult,
++  type OperationWatchSpec,
+   parseMemoryProtocolFlags,
+   resolveScopeKey,
+   type ResponseMessage,
+@@ -95,7 +97,6 @@ import { classifyCommitTelemetry } from "./commit-telemetry.ts";
+ import * as Engine from "./engine.ts";
+ import { respondToHello } from "./handshake.ts";
+ import {
+-  cloneTrackedGraphState,
+   createQueryEvaluationCache,
+   extendTrackedGraph,
+   fromDirtyKey,
+@@ -110,6 +111,7 @@ import {
+   type QueryTraversalStats,
+   refreshTrackedGraph,
+   type SlowestQueryRoot,
++  stageTrackedGraphState,
+   toDirtyKey,
+   type TrackedGraphState,
+   trackGraph,
+@@ -131,7 +133,6 @@ import {
+   groupedQueries,
+   holdingsToCacheEntries,
+   isEmptySync,
+-  mergeWatchesById,
+   sameSnapshot,
+   sameWatchSpec,
+   type SessionCacheEntry,
+@@ -4502,7 +4503,18 @@ export class Server {
+         message.watches,
+         nextOperationCursors,
+       );
+-      session.watches = message.watches;
++      session.watches = [...message.watches];
++      session.operationWatches = message.watches.filter((watch) =>
++        watch.kind === "operation"
++      );
++      session.watchIndex = new Map(
++        message.watches.map((watch) => [watch.id, watch]),
++      );
++      session.operationTrackedIds = addOperationWatchTrackedIds(
++        new Set(),
++        message.watches,
++        { principal: session.principal, sessionId: session.id },
++      );
+       session.operationCursors = nextOperationCursors;
+       session.graphs = graphs;
+       session.entities = entities;
+@@ -4620,12 +4632,11 @@ export class Server {
+     try {
+       const startedAt = performance.now();
+       const engine = aclEngine ?? await this.#openEngine(message.space);
+-      const nextOperationCursors = new Map(session.operationCursors);
+-      const existingById = new Map(
+-        session.watches.map((watch) => [watch.id, watch] as const),
+-      );
++      const nextOperationCursors = new StagedMap(session.operationCursors);
++      const existingById = new StagedMap(session.watchIndex);
++      const newWatches: WatchSpec[] = [];
+       for (const watch of message.watches) {
+-        const existing = existingById.get(watch.id);
++        const existing = session.watchIndex.get(watch.id);
+         if (existing !== undefined && !sameWatchSpec(existing, watch)) {
+           return respondTypedError<WatchAddResult>(
+             message.requestId,
+@@ -4635,12 +4646,12 @@ export class Server {
+             ),
+           );
+         }
++        if (existing === undefined) {
++          newWatches.push(watch);
++          existingById.set(watch.id, watch);
++        }
+       }
+ 
+-      const newWatches = message.watches.filter((watch) =>
+-        !existingById.has(watch.id)
+-      );
+-
+       if (newWatches.length === 0) {
+         const serverSeq = Engine.serverSeq(engine);
+         return {
+@@ -4659,8 +4670,27 @@ export class Server {
+         };
+       }
+ 
+-      const nextWatches = mergeWatchesById(session.watches, newWatches);
+-      const graphs = new Map(session.graphs);
++      const addedWatches = [...existingById.changedKeys()].map((id) =>
++        existingById.get(id)!
++      );
++      const normalizesDuplicates =
++        session.watchIndex.size !== session.watches.length;
++      const nextWatches = !normalizesDuplicates
++        ? session.watches
++        : [...session.watchIndex.values()];
++      const nextOperationWatches = normalizesDuplicates
++        ? nextWatches.filter((watch) => watch.kind === "operation")
++        : session.operationWatches;
++      const addedOperationWatches = addedWatches.filter((watch) =>
++        watch.kind === "operation"
++      );
++      const graphs = new StagedMap(session.graphs);
++      const graphCommits: Array<() => void> = [];
++      const addedInterests = addOperationWatchTrackedIds(
++        new Set(),
++        addedWatches,
++        { principal: session.principal, sessionId: session.id },
++      );
+       const identity = this.#sessionScopeIdentity(session);
+ 
+       const updates = new Map<string, SessionCacheEntry>();
+@@ -4693,6 +4723,7 @@ export class Server {
+           // leave an already-inserted entry over budget.
+           this.#enforceEvaluationCacheBudget();
+           graphs.set(branch, tracked.state);
++          this.#addMissedToTrackedIds(addedInterests, [tracked.state]);
+           for (const [docKey, entity] of tracked.state.entities) {
+             recordUpdate(docKey, entity);
+           }
+@@ -4703,18 +4734,22 @@ export class Server {
+           continue;
+         }
+ 
+-        const staged = cloneTrackedGraphState(engine, existing);
+-        graphs.set(branch, staged);
++        const staged = stageTrackedGraphState(engine, existing);
++        graphCommits.push(staged.commit);
+         const extended = extendTrackedGraph(
+           message.space,
+           engine,
+-          staged,
++          staged.value,
+           query,
+         );
+         foldRootAttribution(attribution, extended.stats);
+         for (const [docKey, entity] of extended.updates) {
+           recordUpdate(docKey, entity);
+         }
++        for (const key of staged.changedMisses()) {
++          const { id, scopeKey } = fromDocKey(key as QueryDocKey);
++          addedInterests.add(toDirtyKey(id, scopeKey));
++        }
+       }
+ 
+       // Build the complete result before mutating the session. Its entity
+@@ -4730,24 +4765,6 @@ export class Server {
+       }
+       const serverSeq = Engine.serverSeq(engine);
+       const fromSeq = session.lastSyncedSeq;
+-      const entities = new Map(session.entities);
+-      for (const [key, entry] of updates) {
+-        entities.set(key, entry);
+-      }
+-      // Rebuilt from provenance — entities, operation watches, and every
+-      // graph's misses — never unioned from the previous set: an interest
+-      // a refresh RETIRED (a link edited away, its miss released) must
+-      // leave the wake set with it, or every later commit to the orphaned
+-      // document keeps waking this session.
+-      const trackedIds = addOperationWatchTrackedIds(
+-        trackedIdsFromEntries(entities.values()),
+-        nextWatches,
+-        {
+-          principal: session.principal,
+-          sessionId: message.sessionId,
+-        },
+-      );
+-      this.#addMissedToTrackedIds(trackedIds, graphs.values());
+       const sync: SessionSync = {
+         type: "sync",
+         fromSeq,
+@@ -4758,20 +4775,13 @@ export class Server {
+         ),
+         removes: [],
+       };
+-      await this.#attachOperationFields(
+-        message.space,
+-        message.sessionId,
++      this.#attachOperationFieldsWithEngine(
++        engine,
++        session,
+         sync,
+-        newWatches,
++        newWatches.filter((watch) => watch.kind === "operation"),
+         nextOperationCursors,
+       );
+-      session.entities = entities;
+-      session.trackedIds = trackedIds;
+-      session.graphs = graphs;
+-      session.watches = nextWatches;
+-      session.lastSyncedSeq = serverSeq;
+-      session.operationCursors = nextOperationCursors;
+-      this.#notifyDemandChanged(message.space, "watch", session.principal);
+       const response: ResponseMessage<WatchAddResult> = {
+         type: "response",
+         requestId: message.requestId,
+@@ -4788,6 +4798,50 @@ export class Server {
+           },
+         },
+       };
++      // There is no await between graph staging and publication. Evaluation,
++      // operation cursors, and wire conversion can all fail before this point.
++      for (const commit of graphCommits) commit();
++      graphs.commit();
++      nextOperationCursors.commit();
++      existingById.commit();
++      for (const watch of addedWatches) nextWatches.push(watch);
++      session.watches = nextWatches;
++      for (const watch of addedOperationWatches) {
++        nextOperationWatches.push(watch);
++      }
++      session.operationWatches = nextOperationWatches;
++      if (normalizesDuplicates) session.operationTrackedIds = new Set();
++      addOperationWatchTrackedIds(
++        session.operationTrackedIds,
++        normalizesDuplicates ? nextWatches : addedWatches,
++        {
++          principal: session.principal,
++          sessionId: session.id,
++        },
++      );
++      for (const [key, entry] of updates) {
++        session.entities.set(key, entry);
++        addedInterests.add(toDirtyKey(entry.id, entry.scopeKey));
++      }
++      // Extension only adds ownership. Refresh retires changed misses against
++      // all remaining owners; watch replacement rebuilds the complete set.
++      for (const key of addedInterests) session.trackedIds.add(key);
++      // Accepted replacement lists can contain duplicate ids. Normalizing such
++      // a list on addition can remove an operation owner; this exceptional
++      // path rebuilds complete provenance, including any delivered holdings.
++      if (normalizesDuplicates) {
++        session.trackedIds = addOperationWatchTrackedIds(
++          trackedIdsFromEntries(session.entities.values()),
++          nextWatches,
++          { principal: session.principal, sessionId: session.id },
++        );
++        this.#addMissedToTrackedIds(
++          session.trackedIds,
++          session.graphs.values(),
++        );
++      }
++      session.lastSyncedSeq = serverSeq;
++      this.#notifyDemandChanged(message.space, "watch", session.principal);
+       recordSlowQueryDuration(
+         "session.watch.add",
+         message.space,
+@@ -5162,6 +5216,42 @@ export class Server {
+     }
+   }
+ 
++  /**
++   * Reconciles changed interests against delivered entries, operation watches,
++   * and remaining misses on every branch. A last-owner departure retires the
++   * key; overlapping owners keep it reactive. Full replacement handles removal
++   * of delivered entries and any client-declared holdings outside the graphs.
++   */
++  #reconcileTrackedInterests(
++    session: SessionState,
++    keys: Iterable<string>,
++  ): boolean {
++    let changed = false;
++    for (const key of keys) {
++      const { id, scopeKey } = fromDirtyKey(key);
++      let owned = session.operationTrackedIds.has(key);
++      if (!owned) {
++        const docKey: QueryDocKey = `${session.space}/${scopeKey}/${id}`;
++        for (const [branch, graph] of session.graphs) {
++          if (
++            session.entities.has(cacheKeyForEntity(branch, id, scopeKey)) ||
++            graph.missed.has(docKey)
++          ) {
++            owned = true;
++            break;
++          }
++        }
++      }
++      if (owned) {
++        if (!session.trackedIds.has(key)) {
++          session.trackedIds.add(key);
++          changed = true;
++        }
++      } else if (session.trackedIds.delete(key)) changed = true;
++    }
++    return changed;
++  }
++
+   syncSessionForConnection(
+     space: string,
+     sessionId: string,
+@@ -5234,9 +5324,8 @@ export class Server {
+           ): Promise<SessionEffectMessage | null> => {
+             const serverSeq = toSeq ??
+               Engine.serverSeq(await this.#openEngine(space));
+-            const mayCarryOperations = session.watches.some((watch) =>
+-              watch.kind === "operation"
+-            ) && serverSeq > fromSeq;
++            const mayCarryOperations = session.operationWatches.length > 0 &&
++              serverSeq > fromSeq;
+             if (!hasPendingCatchUp && !mayCarryOperations) {
+               return null;
+             }
+@@ -5326,8 +5415,8 @@ export class Server {
+             const startedAt = performance.now();
+             // Per-session refresh rows (`memory/refresh/session/{untouched,
+             // touched}`) and, for a touched session, the phase rows
+-            // (`memory/refresh/phase/{walk,diff,tracked,frame}` with the
+-            // tracked-set rebuild split further): `memory/flush/refresh`
++            // (`memory/refresh/phase/{walk,diff,tracked,frame}`):
++            // `memory/flush/refresh`
+             // is a whole pass over every session, so this is what says
+             // which sessions a commit cost and where in one session the
+             // time went. Every row closes in a `finally`: a refresh that
+@@ -5352,6 +5441,7 @@ export class Server {
+               const fromSeq = session.lastSyncedSeq;
+               const identity = this.#sessionScopeIdentity(session);
+               const updates = new Map<string, SessionCacheEntry>();
++              const changedInterests = new Set<string>();
+               const walkStartedAt = performance.now();
+ 
+               // Evaluation exceptions — schema-closure corruption included —
+@@ -5378,9 +5468,14 @@ export class Server {
+                   if (refreshed === null) {
+                     continue;
+                   }
++                  for (const key of refreshed.changedMisses) {
++                    const { id, scopeKey } = fromDocKey(key as QueryDocKey);
++                    changedInterests.add(toDirtyKey(id, scopeKey));
++                  }
+                   for (const [docKey, entity] of refreshed.updates) {
+                     const { scopeKey } = fromDocKey(docKey);
+                     const entry = toCacheEntry(entity, identity, scopeKey);
++                    changedInterests.add(toDirtyKey(entry.id, entry.scopeKey));
+                     updates.set(
+                       cacheKeyForEntity(entry.branch, entry.id, entry.scopeKey),
+                       entry,
+@@ -5396,7 +5491,7 @@ export class Server {
+                   "walk",
+                 );
+               }
+-              if (updates.size === 0) {
++              if (updates.size === 0 && changedInterests.size === 0) {
+                 return await emptyCatchUp();
+               }
+ 
+@@ -5471,80 +5566,13 @@ export class Server {
+               const commitEntities = () => {
+                 const trackedStartedAt = performance.now();
+                 try {
+-                  // (d′) — design §2.8 flag 2: a push pass that changes the
+-                  // session's tracked set is a demand change; notify so the
+-                  // demand pass sees it without waiting for the next input.
+-                  // The set is rebuilt rather than grown, so the change can
+-                  // be a same-size swap (a link retargeted from one absent
+-                  // document to another) or a shrink — compared by
+-                  // membership, exactly as the full-evaluation branch below
+-                  // does, and like there the O(tracked) scan runs only when
+-                  // a demand observer is attached (the serving posture; its
+-                  // NIT-6 note covers the `push-growth` reason on a shrink).
+-                  const wantsDemandNotify =
+-                    this.#serverExecutionObserver?.demandChanged !== undefined;
+-                  const previous = session.trackedIds;
+                   for (const [key, entry] of updates) {
+                     session.entities.set(key, entry);
+                   }
+-                  // Rebuilt from provenance rather than grown in place: the
+-                  // refresh above may have RETIRED interests (a link edited
+-                  // away releases its miss), and a retired interest must
+-                  // leave the wake set with it — while a re-walk's new absent
+-                  // dead-ends are wake-reactivity the next commit needs.
+-                  const entriesAt = performance.now();
+-                  const fromEntries = trackedIdsFromEntries(
+-                    session.entities.values(),
+-                  );
+-                  const watchesAt = performance.now();
+-                  timing.time(
+-                    entriesAt,
+-                    watchesAt,
+-                    "memory",
+-                    "refresh",
+-                    "tracked",
+-                    "entries",
+-                  );
+-                  session.trackedIds = addOperationWatchTrackedIds(
+-                    fromEntries,
+-                    session.watches,
+-                    {
+-                      principal: session.principal,
+-                      sessionId: session.id,
+-                    },
+-                  );
+-                  const missedAt = performance.now();
+-                  timing.time(
+-                    watchesAt,
+-                    missedAt,
+-                    "memory",
+-                    "refresh",
+-                    "tracked",
+-                    "watches",
+-                  );
+-                  this.#addMissedToTrackedIds(
+-                    session.trackedIds,
+-                    session.graphs.values(),
+-                  );
+-                  timing.time(
+-                    missedAt,
+-                    "memory",
+-                    "refresh",
+-                    "tracked",
+-                    "missed",
++                  const changed = this.#reconcileTrackedInterests(
++                    session,
++                    changedInterests,
+                   );
+-                  let changed = false;
+-                  if (wantsDemandNotify) {
+-                    changed = previous.size !== session.trackedIds.size;
+-                    if (!changed) {
+-                      for (const key of session.trackedIds) {
+-                        if (!previous.has(key)) {
+-                          changed = true;
+-                          break;
+-                        }
+-                      }
+-                    }
+-                  }
+                   if (changed) {
+                     this.#notifyDemandChanged(
+                       space,
+@@ -5774,20 +5802,38 @@ export class Server {
+   ): Promise<void> {
+     const session = this.#sessions.get(space, sessionId);
+     if (session === null) return;
+-    const operationWatches = (watches ?? session.watches).filter((watch) =>
+-      watch.kind === "operation"
+-    );
++    const operationWatches = watches === undefined
++      ? session.operationWatches.slice()
++      : watches.filter((watch) => watch.kind === "operation");
+     if (operationWatches.length === 0) return;
+-    operationActiveWatchCount.record(operationWatches.length);
+-    const cursors = operationCursors ?? session.operationCursors;
+     const engine = await this.#openEngine(space);
+-    sync.operationFields = operationWatches.map((watch) => {
++    this.#attachOperationFieldsWithEngine(
++      engine,
++      session,
++      sync,
++      operationWatches,
++      operationCursors,
++    );
++  }
++
++  /** Attaches operation snapshots synchronously within watch publication. */
++  #attachOperationFieldsWithEngine(
++    engine: Engine.Engine,
++    session: SessionState,
++    sync: SessionSync,
++    watches: readonly OperationWatchSpec[],
++    operationCursors: Map<string, OpCursor> = session.operationCursors,
++  ): void {
++    if (watches.length === 0) return;
++    operationActiveWatchCount.record(watches.length);
++    const cursors = operationCursors;
++    sync.operationFields = watches.map((watch) => {
+       const after = cursors.get(watch.id) ?? watch.query.after;
+       const field = Engine.queryOperationField(engine, {
+         ...watch.query,
+         ...(after === undefined ? {} : { after }),
+         principal: session.principal,
+-        sessionId,
++        sessionId: session.id,
+       });
+       if (field.reset === true) {
+         operationResetCount.add(1, { source: "watch", codec: field.codec! });
+diff --git a/packages/memory/v2/session-registry.ts b/packages/memory/v2/session-registry.ts
+index 8c084eba10..d3ec9dd286 100644
+--- a/packages/memory/v2/session-registry.ts
++++ b/packages/memory/v2/session-registry.ts
+@@ -1,5 +1,6 @@
+ import type {
+   OpCursor,
++  OperationWatchSpec,
+   SessionDescriptor,
+   SessionToken,
+   WatchSpec,
+@@ -15,6 +16,16 @@ export type SessionState = {
+   seenSeq: number;
+   lastSyncedSeq: number;
+   watches: WatchSpec[];
++
++  /** Watch declarations by id, updated with the array at publication. */
++  watchIndex: Map<string, WatchSpec>;
++
++  /** Scoped dirty keys owned by operation watches. Rebuilt on replacement. */
++  operationTrackedIds: Set<string>;
++
++  /** Operation declarations in accepted list order, for incremental refresh. */
++  operationWatches: OperationWatchSpec[];
++
+   operationCursors: Map<string, OpCursor>;
+   graphs: Map<string, TrackedGraphState>;
+   entities: Map<string, SessionCacheEntry>;
+@@ -146,6 +157,9 @@ export class SessionRegistry {
+       seenSeq,
+       lastSyncedSeq: existing?.lastSyncedSeq ?? seenSeq,
+       watches: existing?.watches ?? [],
++      watchIndex: existing?.watchIndex ?? new Map(),
++      operationTrackedIds: existing?.operationTrackedIds ?? new Set(),
++      operationWatches: existing?.operationWatches ?? [],
+       operationCursors: existing?.operationCursors ?? new Map(),
+       graphs: existing?.graphs ?? new Map(),
+       entities: existing?.entities ?? new Map(),
+diff --git a/packages/runner/src/traverse.ts b/packages/runner/src/traverse.ts
+index 813e76880c..e6736afbb2 100644
+--- a/packages/runner/src/traverse.ts
++++ b/packages/runner/src/traverse.ts
+@@ -37,6 +37,7 @@ import {
+ import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
+ import { LRUCache } from "@commonfabric/utils/cache";
+ import { deepEqual } from "@commonfabric/utils/deep-equal";
++import { StagedMap } from "@commonfabric/utils/staged-map";
+ 
+ import { getLogger } from "../../utils/src/logger.ts";
+ // TODO(@ubik2): Ideally this would import from "@commonfabric/utils/types",
+@@ -993,6 +994,25 @@ export class MapSet<K, V> {
+     throw new Error("MapSet structural copy requires matching hashing modes");
+   }
+ 
++  /** Stages per-key containers while retaining the canonical value identity. */
++  protected stageStateFrom(other: MapSet<K, V>): {
++    commit: () => void;
++    changedKeys: () => Iterable<K>;
++  } {
++    const staged = other.#hashMap !== undefined
++      ? new StagedMap(other.#hashMap, (values) => new Map(values))
++      : new StagedMap(other.#setMap!, (values) => new Set(values));
++    if (other.#hashMap !== undefined) {
++      this.#hashMap = staged as StagedMap<K, Map<string, V>>;
++    } else {
++      this.#setMap = staged as StagedMap<K, Set<V>>;
++    }
++    return {
++      commit: () => staged.commit(),
++      changedKeys: () => staged.changedKeys(),
++    };
++  }
++
+   /**
+    * iterable
+    */
+@@ -1089,8 +1109,8 @@ export class MapSetStringToPathSelectors extends MapSet<
+   /**
+    * A structural copy: per-key container copies of the base map and the
+    * permissive index. Cloning through `add()` would re-hash every selector
+-   * and re-derive the index; this keeps a full-state clone (`extend`
+-   * staging) at plain container-copy cost.
++   * and re-derive the index. Independent evaluation-cache states use these
++   * copies; temporary additive evaluation uses `stage()`.
+    */
+   clone(): MapSetStringToPathSelectors {
+     const cloned = new MapSetStringToPathSelectors(this.isHashing());
+@@ -1100,6 +1120,33 @@ export class MapSetStringToPathSelectors extends MapSet<
+     }
+     return cloned;
+   }
++
++  /**
++   * Stages selector changes for synchronous evaluation under exclusive access
++   * to this tracker. Discard on failure; commit only after all evaluation
++   * succeeds. Neither the stage nor its mutable containers may escape.
++   */
++  stage(): {
++    value: MapSetStringToPathSelectors;
++    commit: () => void;
++    changedKeys: () => Iterable<string>;
++  } {
++    const value = new MapSetStringToPathSelectors(this.isHashing());
++    const entries = value.stageStateFrom(this);
++    const index = new StagedMap(
++      this.#trueSchemaIndex,
++      (values) => new Set(values),
++    );
++    value.#trueSchemaIndex = index;
++    return {
++      value,
++      commit: () => {
++        entries.commit();
++        index.commit();
++      },
++      changedKeys: entries.changedKeys,
++    };
++  }
+ }
+ 
+ /**
+diff --git a/packages/runner/test/traverse-staging.test.ts b/packages/runner/test/traverse-staging.test.ts
+new file mode 100644
+index 0000000000..690828eaf9
+--- /dev/null
++++ b/packages/runner/test/traverse-staging.test.ts
+@@ -0,0 +1,41 @@
++import { expect } from "@std/expect";
++import { describe, it } from "@std/testing/bdd";
++
++import { internPathSelector } from "@commonfabric/data-model-schema";
++
++import { MapSetStringToPathSelectors } from "../src/traverse.ts";
++
++describe("MapSetStringToPathSelectors", () => {
++  describe("instance members", () => {
++    describe("stage()", () => {
++      for (const hashing of [false, true]) {
++        it(`isolates existing selectors and the permissive index with hashing ${hashing}`, () => {
++          const original = new MapSetStringToPathSelectors(hashing);
++          const broad = internPathSelector({ path: [], schema: true });
++          const narrow = internPathSelector({ path: ["child"], schema: false });
++          original.add("root", broad);
++          const abandoned = original.stage();
++          abandoned.value.deleteValue("root", broad);
++          abandoned.value.add("root", narrow);
++          expect([...original.values("root")]).toEqual([broad]);
++          expect([...original.trueSchemaSelectors("root")]).toEqual([broad]);
++          expect([...abandoned.value.trueSchemaSelectors("root")]).toEqual([]);
++
++          const published = original.stage();
++          published.value.add("root", narrow);
++          expect([...published.value.values("root")][0]).toBe(broad);
++          expect([...original.values("root")]).toEqual([broad]);
++          published.commit();
++          expect([...original.values("root")]).toEqual([broad, narrow]);
++          expect([...original.trueSchemaSelectors("root")]).toEqual([broad]);
++
++          const removal = original.stage();
++          removal.value.delete("root");
++          removal.commit();
++          expect(original.has("root")).toBe(false);
++          expect([...original.trueSchemaSelectors("root")]).toEqual([]);
++        });
++      }
++    });
++  });
++});
+diff --git a/packages/utils/deno.jsonc b/packages/utils/deno.jsonc
+index a8b2a7d890..cc6f291e4f 100644
+--- a/packages/utils/deno.jsonc
++++ b/packages/utils/deno.jsonc
+@@ -36,6 +36,7 @@
+     "./remove-directory": "./src/remove-directory.ts",
+     "./sandbox-contract": "./src/sandbox-contract.ts",
+     "./sleep": "./src/sleep.ts",
++    "./staged-map": "./src/staged-map.ts",
+     "./strip-undefined-props": "./src/strip-undefined-props.ts",
+     "./two-level-weak-cache": "./src/two-level-weak-cache.ts",
+     "./types": "./src/types.ts",
+diff --git a/packages/utils/src/staged-map.ts b/packages/utils/src/staged-map.ts
+new file mode 100644
+index 0000000000..e4309ebf4b
+--- /dev/null
++++ b/packages/utils/src/staged-map.ts
+@@ -0,0 +1,148 @@
++/**
++ * Temporary map changes over an exclusively held base. Reads and writes touch
++ * only the requested keys; `commit()` publishes them into the base. Discarding
++ * the stage publishes nothing. The caller must neither mutate the base nor
++ * retain the stage after committing it. Mutable values need a copying function
++ * so reading a value from the stage cannot expose a mutable base container.
++ */
++export class StagedMap<K, V> extends Map<K, V> {
++  #base: Map<K, V>;
++  #copy?: (value: V) => V;
++  #changes = new Map<K, V>();
++  #removed = new Set<K>();
++  #cleared = false;
++  #size: number;
++
++  /** Constructs an instance which stages changes without enumerating `base`. */
++  constructor(base: Map<K, V>, copy?: (value: V) => V) {
++    super();
++    this.#base = base;
++    this.#copy = copy;
++    this.#size = base.size;
++  }
++
++  /** @inheritDoc */
++  override get size(): number {
++    return this.#size;
++  }
++
++  /** @inheritDoc */
++  override has(key: K): boolean {
++    return this.#changes.has(key) ||
++      (!this.#cleared && !this.#removed.has(key) && this.#base.has(key));
++  }
++
++  /** @inheritDoc */
++  override get(key: K): V | undefined {
++    if (this.#changes.has(key)) return this.#changes.get(key);
++    if (this.#cleared || this.#removed.has(key) || !this.#base.has(key)) {
++      return undefined;
++    }
++    const value = this.#base.get(key)!;
++    if (this.#copy === undefined) return value;
++    const copied = this.#copy(value);
++    this.#changes.set(key, copied);
++    return copied;
++  }
++
++  /** @inheritDoc */
++  override set(key: K, value: V): this {
++    if (!this.has(key)) this.#size++;
++    this.#changes.set(key, value);
++    return this;
++  }
++
++  /** @inheritDoc */
++  override getOrInsert(key: K, value: V): V {
++    if (this.has(key)) return this.get(key)!;
++    this.set(key, value);
++    return value;
++  }
++
++  /** @inheritDoc */
++  override getOrInsertComputed(key: K, callback: (key: K) => V): V {
++    if (typeof callback !== "function") {
++      throw new TypeError("`getOrInsertComputed` requires a callable callback");
++    }
++    if (this.has(key)) return this.get(key)!;
++    const canonicalKey = Object.is(key, -0) ? 0 as K : key;
++    const value = callback(canonicalKey);
++    this.set(canonicalKey, value);
++    return value;
++  }
++
++  /** @inheritDoc */
++  override delete(key: K): boolean {
++    if (!this.has(key)) return false;
++    this.#size--;
++    this.#changes.delete(key);
++    if (!this.#cleared && this.#base.has(key)) this.#removed.add(key);
++    return true;
++  }
++
++  /** @inheritDoc */
++  override clear(): void {
++    this.#cleared = true;
++    this.#size = 0;
++    this.#changes.clear();
++    this.#removed.clear();
++  }
++
++  /** @inheritDoc */
++  override *entries(): MapIterator<[K, V]> {
++    for (const key of this.#base.keys()) {
++      if (this.#cleared) break;
++      if (!this.#removed.has(key)) yield [key, this.get(key)!];
++    }
++    for (const [key, value] of this.#changes) {
++      if (this.#cleared || this.#removed.has(key) || !this.#base.has(key)) {
++        yield [key, value];
++      }
++    }
++    return undefined;
++  }
++
++  /** @inheritDoc */
++  override [Symbol.iterator](): MapIterator<[K, V]> {
++    return this.entries();
++  }
++
++  /** @inheritDoc */
++  override *keys(): MapIterator<K> {
++    for (const [key] of this.entries()) yield key;
++    return undefined;
++  }
++
++  /** @inheritDoc */
++  override *values(): MapIterator<V> {
++    for (const [, value] of this.entries()) yield value;
++    return undefined;
++  }
++
++  /** @inheritDoc */
++  override forEach(
++    callbackfn: (value: V, key: K, map: Map<K, V>) => void,
++    thisArg?: unknown,
++  ): void {
++    if (typeof callbackfn !== "function") {
++      throw new TypeError("`forEach` requires a callable callback");
++    }
++    for (const [key, value] of this.entries()) {
++      Reflect.apply(callbackfn, thisArg, [value, key, this]);
++    }
++  }
++
++  /** Yields keys whose values or membership may differ from the base. */
++  *changedKeys(): IterableIterator<K> {
++    if (this.#cleared) yield* this.#base.keys();
++    else yield* this.#removed;
++    yield* this.#changes.keys();
++  }
++
++  /** Publishes the stage into the base, preserving map insertion order. */
++  commit(): void {
++    if (this.#cleared) this.#base.clear();
++    else for (const key of this.#removed) this.#base.delete(key);
++    for (const [key, value] of this.#changes) this.#base.set(key, value);
++  }
++}
+diff --git a/packages/utils/test/staged-map.test.ts b/packages/utils/test/staged-map.test.ts
+new file mode 100644
+index 0000000000..63b90eb280
+--- /dev/null
++++ b/packages/utils/test/staged-map.test.ts
+@@ -0,0 +1,151 @@
++import { expect } from "@std/expect";
++import { describe, it } from "@std/testing/bdd";
++
++import { StagedMap } from "../src/staged-map.ts";
++
++describe("StagedMap", () => {
++  describe("instance members", () => {
++    describe("getOrInsertComputed()", () => {
++      it("rejects non-callable callbacks before checking membership", () => {
++        const stage = new StagedMap(new Map([["present", 1]]));
++        for (const key of ["present", "absent"]) {
++          expect(() =>
++            Reflect.apply(stage.getOrInsertComputed, stage, [key, undefined])
++          ).toThrow(TypeError);
++        }
++      });
++      it("uses staged membership and preserves callback mutations", () => {
++        const base = new Map<string | number, number | undefined>([[
++          "existing",
++          undefined,
++        ]]);
++        const stage = new StagedMap(base);
++        expect(stage.getOrInsert("existing", 5)).toBeUndefined();
++        expect(stage.getOrInsertComputed("existing", () => {
++          throw new Error("Existing value must suppress the callback");
++        })).toBeUndefined();
++        expect(stage.getOrInsert("added", 7)).toBe(7);
++        expect(stage.getOrInsertComputed("computed", (key) => {
++          stage.set(key, 9);
++          stage.delete("added");
++          return 11;
++        })).toBe(11);
++        expect(stage.getOrInsertComputed(-0, (key) => {
++          expect(Object.is(key, 0)).toBe(true);
++          return 13;
++        })).toBe(13);
++        expect([...base]).toEqual([["existing", undefined]]);
++        stage.commit();
++        expect([...base]).toEqual([["existing", undefined], ["computed", 11], [
++          0,
++          13,
++        ]]);
++      });
++    });
++
++    describe("commit()", () => {
++      it("preserves Map membership and order across deletion, reinsertion, and clear", () => {
++        const operations = [
++          (map: Map<string, number | undefined>) => map.set("a", 4),
++          (map: Map<string, number | undefined>) => map.delete("a"),
++          (map: Map<string, number | undefined>) => map.set("c", undefined),
++          (map: Map<string, number | undefined>) => map.clear(),
++        ];
++        for (let sequence = 0; sequence < 256; sequence++) {
++          const base = new Map<string, number | undefined>([["a", 1], [
++            "b",
++            2,
++          ]]);
++          const expected = new Map(base);
++          const stage = new StagedMap(base);
++          for (let step = 0; step < 4; step++) {
++            const operation = operations[(sequence >> (2 * step)) & 3]!;
++            operation(stage);
++            operation(expected);
++            expect([...stage]).toEqual([...expected]);
++            expect(stage.size).toBe(expected.size);
++            for (const key of ["a", "b", "c"]) {
++              expect(stage.get(key)).toBe(expected.get(key));
++              expect(stage.has(key)).toBe(expected.has(key));
++            }
++            expect([...base]).toEqual([["a", 1], ["b", 2]]);
++          }
++          stage.commit();
++          expect([...base]).toEqual([...expected]);
++        }
++      });
++
++      it("isolates mutable values until publication", () => {
++        const original = new Set(["original"]);
++        const base = new Map([["a", original]]);
++        const abandoned = new StagedMap(base, (value) => new Set(value));
++        abandoned.get("a")!.add("abandoned");
++        const stage = new StagedMap(base, (value) => new Set(value));
++        stage.get("a")!.add("published");
++        expect([...original]).toEqual(["original"]);
++        stage.commit();
++        expect([...base.get("a")!]).toEqual(["original", "published"]);
++        expect([...original]).toEqual(["original"]);
++      });
++
++      it("does not enumerate untouched base entries", () => {
++        const base = new Map(Array.from({ length: 1000 }, (_, i) => [i, i]));
++        base[Symbol.iterator] =
++          base.entries =
++          base.keys =
++          base.values =
++            () => {
++              throw new Error("Unexpected base iteration");
++            };
++        const stage = new StagedMap(base);
++        stage.set(1001, 7);
++        stage.delete(2);
++        stage.set(3, 8);
++        expect(stage.size).toBe(1000);
++        stage.commit();
++        expect(base.size).toBe(1000);
++        expect(base.get(1001)).toBe(7);
++        expect(base.get(3)).toBe(8);
++        expect(base.has(2)).toBe(false);
++      });
++    });
++
++    describe("entries()", () => {
++      it("validates forEach callbacks even when empty and invokes callable values directly", () => {
++        const stage = new StagedMap(new Map<string, number>());
++        expect(() => Reflect.apply(stage.forEach, stage, [undefined])).toThrow(
++          TypeError,
++        );
++        stage.set("a", 1);
++        const visited: number[] = [];
++        const callback = (value: number) => visited.push(value);
++        Object.defineProperty(callback, "call", { value: undefined });
++        stage.forEach(callback);
++        expect(visited).toEqual([1]);
++      });
++      it("observes insertion and reinsertion during iteration", () => {
++        const base = new Map([["a", 1], ["b", 2]]);
++        const stage = new StagedMap(base);
++        const visited: string[] = [];
++        for (const [key] of stage) {
++          visited.push(key);
++          if (key === "a" && visited.length === 1) {
++            stage.delete("a");
++            stage.delete("b");
++            stage.set("c", 3);
++            stage.set("a", 4);
++          }
++        }
++        expect(visited).toEqual(["a", "c", "a"]);
++        expect([...stage.keys()]).toEqual(["c", "a"]);
++        expect([...stage.values()]).toEqual([3, 4]);
++        const receiver = new Map<string, number>();
++        stage.forEach(function (this: Map<string, number>, value, key, map) {
++          expect(map).toBe(stage);
++          this.set(key, value);
++        }, receiver);
++        expect([...receiver]).toEqual([...stage]);
++      });
++    });
++  });
++});

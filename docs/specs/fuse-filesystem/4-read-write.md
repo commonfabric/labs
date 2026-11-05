@@ -30,7 +30,7 @@ change that keeps the same inode and size — the change the macOS NFS backend
 cannot see through inode invalidation, which it ignores.
 
 **Inode assignment**: Inodes are assigned from a counter that only ever counts
-up (`FsTree.allocInode` in `packages/fuse/tree.ts`). A new inode is allocated
+up (`FsTree.allocInode` in `runtime/fuse/tree.ts`). A new inode is allocated
 the first time a path appears and is reused for as long as that path keeps
 existing with the same node kind. Rebuilding a piece property builds the
 replacement under a staging name and reconciles it onto the live subtree
@@ -171,8 +171,17 @@ When a piece uses the `[FS]` projection, writing to `index.md` or
 
 **`index.md`**: The file is parsed as YAML frontmatter + markdown body.
 - Each frontmatter key (except `entityId`, which is read-only) is written to
-  its corresponding cell via the `$FS.frontmatter.<key>` path.
-- The body is written to the `$FS.content` cell.
+  its corresponding cell via the `$FS.frontmatter.<key>` path. A value in
+  double quotes is read as the string inside them, with JSON escapes
+  applied, which is the form the projection writes every string in. A bare
+  number, boolean, or `null` is read as that value, and any other bare value
+  is read as text.
+- Keys present in the cell but absent from the file are cleared.
+- The body is written to the `$FS.content` cell as saved, line endings
+  included.
+- The frontmatter is found under LF, CRLF, or CR line endings, and a leading
+  byte-order mark is dropped, so a file saved any of those ways keeps its
+  frontmatter.
 - Invalid YAML frontmatter is silently skipped.
 
 **`index.json`**: Parsed as a JSON object.

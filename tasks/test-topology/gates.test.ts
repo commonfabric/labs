@@ -1,11 +1,20 @@
 import { expect } from "@std/expect";
+import { parse as parseJsonc } from "@std/jsonc";
+import { dirname, fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import { DOC_DEMOS } from "../check-verb-session-sync.ts";
-import { TRIPWIRES } from "../check-tripwires.ts";
+import { namedBenchmarkFiles } from "../check-bench-workflow.ts";
+import { matchesPatternFilter } from "../pattern-files.ts";
+import {
+  parseVintagePath,
+  vintageRecordName,
+  VINTAGES_DIR,
+} from "../pattern-vintage-layout.ts";
 import {
   type Gate,
   HISTORY_GATES,
   loadGateSuites,
+  REACHED_BY_ABSENT_PATHS,
   WORKING_TREE_GATES,
 } from "./gates.ts";
 import { entryNames, type Suite } from "./suite.ts";
@@ -21,11 +30,35 @@ const TREE_SHARE_DIVISOR = 8;
 /** The most gates one file may reach. */
 const GATES_PER_FILE = 4;
 
-const root = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
+const root = dirname(dirname(dirname(fromFileUrl(import.meta.url))));
 
 const suites = await loadGateSuites(root);
 const byId = (id: string): Suite => suites.find((s) => s.id === id)!;
 const context = { root: "/repo", outputDir: "/out", spoolDir: "/spool" };
+
+/**
+ * Every record name the vintage gate writes for the tree's own fixtures.
+ *
+ * The fixture set is read from git rather than from the walk the gate
+ * replays with, so what the topology claims is compared against the tree
+ * rather than against a second copy of that walk. What each fixture is
+ * called comes from the layout module, which is where the gate takes it
+ * from as well, so the two cannot disagree about the name; the record
+ * name's own spelling is held by `tasks/pattern-vintage-run.test.ts`.
+ */
+function vintageFixtures(): Map<string, string> {
+  const listed = new Deno.Command("git", {
+    args: ["-C", root, "ls-files", "-z", VINTAGES_DIR],
+  }).outputSync();
+  const fixtures = new Map<string, string>();
+  for (const file of new TextDecoder().decode(listed.stdout).split("\0")) {
+    const fixture = parseVintagePath(file);
+    if (fixture !== undefined) {
+      fixtures.set(vintageRecordName(fixture), fixture.path);
+    }
+  }
+  return fixtures;
+}
 
 describe("the repository's gate suites", () => {
   it("gives the base revision to the gates whose suite asks for history", async () => {
@@ -49,9 +82,39 @@ describe("the repository's gate suites", () => {
     }
     expect(reading.toSorted()).toEqual([
       "check-baselines-append-only",
+      "check-cause-assignments",
       "check-test-aliases",
     ]);
     expect(declared.toSorted()).toEqual(reading.toSorted());
+  });
+
+  it("gives a token to the gates whose suite asks the GitHub API", async () => {
+    // Read off what each gate's task is allowed to reach rather than off
+    // a list written here, so a gate that starts asking the service a
+    // question without its suite declaring the capability fails this.
+    // Without the token GitHub allows sixty requests an hour from an
+    // address, which a shared runner reaches on its own.
+    const { tasks } = parseJsonc(
+      await Deno.readTextFile(`${root}/deno.jsonc`),
+    ) as { tasks: Record<string, string> };
+    const asking: string[] = [];
+    const undeclared: string[] = [];
+    for (const suite of [byId("repo-gates"), byId("repo-history-gates")]) {
+      for (const gate of [...WORKING_TREE_GATES, ...HISTORY_GATES]) {
+        if (!suite.units.includes(gate.name)) continue;
+        const [verb, named] = gate.run;
+        const line = verb === "task" ? tasks[named!] ?? "" : "";
+        if (!line.includes("api.github.com")) continue;
+        asking.push(gate.name);
+        if (!suite.needs.includes("github-api")) undeclared.push(gate.name);
+      }
+    }
+    // Both sides are read off the tree, and the relation between them is
+    // what the declaration means. The list is here as well because it is
+    // what says the search found anything: a probe that matched nothing
+    // would leave the relation to hold over an empty set.
+    expect(asking.toSorted()).toEqual(["check-action-pins"]);
+    expect(undeclared).toEqual([]);
   });
 
   it("reaches the gates a change names, and no others", () => {
@@ -61,32 +124,35 @@ describe("the repository's gate suites", () => {
       [byId("repo-gates"), byId("repo-history-gates")]
         .flatMap((suite) => [...suite.unitsForChange!(new Set(changed))])
         .toSorted();
+    expect(reached("tasks/test-identity-aliases/tags.test.ts.jsonl")).toEqual([
+      "check-test-aliases",
+    ]);
     expect(reached("tasks/test-identity-aliases.jsonl")).toEqual([
       "check-test-aliases",
     ]);
+    // One gate reads the workflow: it holds every action the workflow uses
+    // to a pinned commit.
     expect(reached(".github/workflows/deno.yml")).toEqual([
       "check-action-pins",
     ]);
     // The baselines and the patterns beside them reach one gate each,
     // rather than both reaching both.
-    expect(reached("packages/patterns/baselines/system/home.tsx/a.json"))
+    expect(reached("patterns/baselines/system/home/home.tsx/a.json"))
       .toEqual(["check-baselines-append-only"]);
-    expect(reached("packages/patterns/system/home.tsx")).toEqual([
+    expect(reached("patterns/system/home/home.tsx")).toEqual([
       "check-pattern-tiers",
     ]);
     // A `**` segment stands for any run of directories, so every
     // package's integration tree reaches the gate reading them.
-    expect(reached("packages/cli/integration/verb-session-demo.sh")).toEqual([
+    expect(reached("runtime/cli/integration/verb-session-demo.sh")).toEqual([
       "check-no-waitfor",
       "check-verb-session-sync",
     ]);
-    expect(reached("packages/static/assets/types/dom.d.ts")).toEqual([
+    expect(reached("base/static/assets/types/dom.d.ts")).toEqual([
       "check-cfc-types",
       "check-commonfabric-types",
       "check-withheld-globals",
     ]);
-    expect(reached("packages/toolshed/routes/ingest-channels/route.ts"))
-      .toEqual(["check-tripwires"]);
     // The historical tree is taken back out of the two gates reading
     // `docs/`, since neither compiles nor reads a document in it.
     expect(reached("docs/history/INDEX.md")).toEqual([
@@ -94,21 +160,32 @@ describe("the repository's gate suites", () => {
     ]);
     expect(reached("mise.toml")).toEqual(["check-deno-pins"]);
     expect(reached("deno.lock")).toEqual(["check-single-copy-deps"]);
+    // The compiler a pattern's numbering is built by reaches the gate
+    // comparing it with the base revision's, and the patterns it builds do
+    // not: an edited pattern is never compared.
+    expect(
+      reached("base/ts-transformers/src/transformers/opaque-roots.ts"),
+    ).toEqual(["check-cause-assignments"]);
+    expect(reached("runtime/runner/src/builder/pattern.ts")).toEqual([
+      "check-cause-assignments",
+    ]);
+    expect(reached("runtime/runner/src/builtins/sqlite/query-node.ts"))
+      .toEqual(["check-cause-assignments"]);
     // An ordinary source file reaches no gate. What runs for it is what
     // the score chose, which is what keeps this feature a fraction of a
     // lane rather than the bulk of one.
-    expect(reached("packages/runner/src/cell.ts")).toEqual([]);
+    expect(reached("runtime/runner/src/cell.ts")).toEqual([]);
     expect(reached("elsewhere/thing.txt")).toEqual([]);
   });
 
   it("holds a gate to little of the tree, and a file to few gates", async () => {
-    // The two bounds that keep this feature a fraction of what a lane
-    // runs. A declaration wide enough to break either places its gate in
-    // every lane on the strength of what it says rather than of what it
-    // has caught, which is the decision the score exists to make. Every
-    // entry is held to naming something as well, so one whose directory
-    // the tree no longer has fails here rather than going quiet behind a
-    // sibling entry that still matches.
+    // The two bounds that keep this feature a fraction of what a lane runs. A
+    // declaration wide enough to break either places its gate in every lane on
+    // the strength of what it says rather than of its new real test failures,
+    // which is the decision the score exists to make. Every entry is held to
+    // naming something as well, so one whose directory the tree no longer has
+    // fails here rather than going quiet behind a sibling entry that still
+    // matches.
     const listed = await new Deno.Command("git", {
       args: ["-C", root, "ls-files", "-z"],
     }).output();
@@ -131,6 +208,7 @@ describe("the repository's gate suites", () => {
     for (const gate of gates) {
       for (const entry of gate.reachedBy) {
         const at = entry.replace(/^!/, "");
+        if (REACHED_BY_ABSENT_PATHS.has(entry)) continue;
         if (!files.some((path) => entryNames(at, path))) {
           over.push(`${gate.name} names ${entry}, which the tree has not`);
         }
@@ -160,11 +238,14 @@ describe("the repository's gate suites", () => {
       .map((gate) => gate.name)
       .toSorted();
     expect(everything).toEqual([
+      "check-address-examples",
       "check-conflict-markers",
       "check-control-characters",
+      "check-dependency-direction",
       "check-local-program",
       "check-package-cycles",
       "check-skill-facts",
+      "check-test-shuffle",
       "check-test-topology",
       "check-unused-deps",
       "deno-fmt",
@@ -191,6 +272,12 @@ describe("the repository's gate suites", () => {
         // An entry carrying a `**` segment names no one path, and the
         // bounds test is what holds it to reaching something.
         if (at.includes("**/")) continue;
+        // A path recorded as absent is declared missing, and is held to it.
+        if (REACHED_BY_ABSENT_PATHS.has(entry)) {
+          found.push(`${entry} ${await kindOf(at)}`);
+          declared.push(`${entry} missing`);
+          continue;
+        }
         found.push(`${entry} ${await kindOf(at)}`);
         declared.push(`${entry} ${at.endsWith("/") ? "directory" : "file"}`);
       }
@@ -217,9 +304,9 @@ describe("the repository's gate suites", () => {
         declared.push(`check-verb-session-sync runs for ${at}`);
       }
     }
-    for (const tripwire of TRIPWIRES) {
-      found.push(reachedBy("check-tripwires", tripwire.testFile));
-      declared.push(`check-tripwires runs for ${tripwire.testFile}`);
+    for (const file of namedBenchmarkFiles()) {
+      found.push(reachedBy("check-bench-workflow", file));
+      declared.push(`check-bench-workflow runs for ${file}`);
     }
     expect(found).toEqual(declared);
   });
@@ -281,7 +368,7 @@ describe("the repository's gate suites", () => {
       [{ unit: "check-cfc-types", skip: [] }],
       context,
     );
-    expect(invocation!.cwd).toBe("/repo/packages/static");
+    expect(invocation!.cwd).toBe("/repo/base/static");
   });
 
   it("locates a gate by the name its record carries", () => {
@@ -315,13 +402,60 @@ describe("the repository's gate suites", () => {
     expect(invocation!.command).not.toContain("--scope=cli");
   });
 
-  it("maps a changed path to the group that checks it", () => {
+  it("maps a changed path to the groups whose check opens it", () => {
     const typecheck = byId("typecheck");
-    expect(typecheck.unitsForChange!(new Set(["packages/memory/mod.ts"])))
-      .toEqual(["memory"]);
+    // Nothing imports a test, so its own group is the only one it reaches.
+    expect(
+      typecheck.unitsForChange!(
+        new Set(["runtime/memory/test/commit-telemetry.test.ts"]),
+      ),
+    ).toEqual(["memory"]);
+    // A module other packages import reaches their groups too, and no
+    // group it imports from.
+    const shared = typecheck.unitsForChange!(
+      new Set(["runtime/runner/src/cell.ts"]),
+    );
+    expect(shared).toContain("runner");
+    expect(shared).toContain("shell");
+    expect(shared).not.toContain("js-values");
     // A path no group checks makes nothing mandatory, rather than making
     // every group mandatory or throwing.
     expect(typecheck.unitsForChange!(new Set(["README.md"]))).toEqual([]);
+  });
+
+  it("returns a pattern's source as what its compatibility unit runs", () => {
+    const compat = byId("pattern-compat");
+    expect(compat.sourcesOf?.("system/fabrichat/room.tsx")).toEqual([
+      "patterns/system/fabrichat/room.tsx",
+    ]);
+    expect(compat.sourcesOf?.("no/such-pattern.tsx")).toEqual([]);
+  });
+
+  it("maps a changed path to the patterns whose contract it can change", () => {
+    const compat = byId("pattern-compat");
+    const reached = (at: string) => compat.unitsForChange!(new Set([at]));
+    // A pattern's own source, though its unit is a key and not that path.
+    expect(reached("patterns/system/fabrichat/room.tsx")).toContain(
+      "system/fabrichat/room.tsx",
+    );
+    // A module the pattern imports, which is not a pattern itself.
+    expect(reached("patterns/system/fabrichat/room-records.tsx")).toContain(
+      "system/fabrichat/room.tsx",
+    );
+    // One of its recorded contracts.
+    expect(
+      reached("patterns/baselines/system/fabrichat/room.tsx/x.json"),
+    ).toEqual(["system/fabrichat/room.tsx"]);
+    // The accepted breaks reach every pattern, since removing an entry
+    // changes the verdict of a pattern the list no longer names.
+    expect(reached("tasks/pattern-compat-accepted-breaks.ts")).toEqual(
+      [...compat.units].sort(),
+    );
+    // A runtime module every pattern builds on is left to a lane's choice
+    // rather than making every pattern mandatory, and a path the gate
+    // never reads reaches nothing.
+    expect(reached("runtime/runner/src/cell.ts")).toEqual([]);
+    expect(reached("README.md")).toEqual([]);
   });
 
   it("keeps the type check and the pattern check apart by name", () => {
@@ -332,70 +466,215 @@ describe("the repository's gate suites", () => {
         test: { k: "typecheck", s: "memory", n: "deno-check" },
       }),
     ).toEqual({ level: "unit", unit: "memory" });
+    const pattern = byId("cfcheck").units[0]!;
     expect(
       byId("cfcheck").locate({
-        test: { k: "typecheck", s: "repo", n: "cfcheck a/b.tsx" },
+        test: { k: "typecheck", s: "repo", n: `cfcheck ${pattern}` },
       }),
-    ).toEqual({ level: "unit", unit: "cfcheck" });
+    ).toEqual({ level: "unit", unit: pattern });
     expect(
       byId("typecheck").locate({
-        test: { k: "typecheck", s: "repo", n: "cfcheck a/b.tsx" },
+        test: { k: "typecheck", s: "repo", n: `cfcheck ${pattern}` },
+      }),
+    ).toBeUndefined();
+    // The pattern check declines a name of its own surface that is
+    // neither its suite's nor one of its patterns', rather than reading
+    // the tail of any name at all as a path.
+    expect(
+      byId("cfcheck").locate({
+        test: { k: "typecheck", s: "repo", n: "deno-check" },
+      }),
+    ).toBeUndefined();
+    expect(
+      byId("cfcheck").locate({
+        test: { k: "typecheck", s: "repo", n: "cfcheck no/such/pattern.tsx" },
       }),
     ).toBeUndefined();
   });
 
-  it("restricts the compatibility gate to the patterns it was given", async () => {
-    const compat = byId("pattern-compat");
-    const [invocation] = await compat.command(
-      [{ unit: compat.units[0]!, skip: [] }],
-      context,
-    );
-    expect(invocation!.command).toContain("--only");
+  it("restricts a pattern gate to the patterns it was given", async () => {
+    // One `--only` per pattern: the flag takes a single value, so a run
+    // handed a list after one flag would be rejected by the task for the
+    // second value it found.
+    for (const id of ["cfcheck", "pattern-compat"]) {
+      const suite = byId(id);
+      const [invocation] = await suite.command(
+        suite.units.slice(0, 2).map((unit) => ({ unit, skip: [] })),
+        context,
+      );
+      const command = invocation!.command;
+      expect(command.filter((word) => word === "--only")).toHaveLength(2);
+      for (const [index, word] of command.entries()) {
+        if (word !== "--only") continue;
+        expect(command[index + 1]).not.toBe("--only");
+      }
+    }
   });
 
-  it("asks the compatibility gate for everything without a filter", async () => {
-    // A filtered run does not ask the whole-tree questions — whether a
-    // retired pattern still has a baseline, whether an accepted break has
-    // gone orphaned — so a run given every pattern passes no filter.
-    const compat = byId("pattern-compat");
-    const [invocation] = await compat.command(
-      compat.units.map((unit) => ({ unit, skip: [] })),
-      context,
-    );
-    expect(invocation!.command).not.toContain("--only");
+  it("asks a pattern gate for everything without a filter", async () => {
+    // A run given every unit is the task's own unfiltered run, so what a
+    // person types and what a lane given everything runs are one command.
+    for (const id of ["cfcheck", "pattern-compat"]) {
+      const suite = byId(id);
+      const [invocation] = await suite.command(
+        suite.units.map((unit) => ({ unit, skip: [] })),
+        context,
+      );
+      expect(invocation!.command).not.toContain("--only");
+    }
   });
 
-  it("holds the compatibility gate's own record to the suite", () => {
-    const compat = byId("pattern-compat");
-    expect(
-      compat.locate({ test: { k: "gate", s: "repo", n: "pattern-compat" } }),
-    )
-      .toEqual({ level: "suite" });
-  });
-
-  it("gives the vintage replay every record it writes", () => {
-    const vintage = byId("pattern-vintage");
-    expect(
-      vintage.locate({
-        test: { k: "gate", s: "repo", n: "pattern-vintage key tier stamp" },
-      }),
-    ).toEqual({ level: "unit", unit: "pattern-vintage" });
-  });
-
-  it("runs the pattern type check and the vintage replay whole", async () => {
-    // Both write a record per item and neither takes a way of running
-    // part of itself, so the suite is one unit and the command is the
-    // task, wrapped so its exit code becomes that unit's record.
-    for (const id of ["cfcheck", "pattern-vintage"]) {
+  it("records a pattern gate's invocation under the suite's name", async () => {
+    // The wrapper is what turns the command's exit code into a record,
+    // so the identity is written on the command line rather than
+    // inferred. `run-recorded <kind> <scope> <name> -- <command>` puts
+    // that name three words along.
+    for (const id of ["cfcheck", "pattern-compat"]) {
       const suite = byId(id);
       const [invocation] = await suite.command(
         [{ unit: suite.units[0]!, skip: [] }],
         context,
       );
-      expect(invocation!.command).toContain("run-recorded");
-      expect(invocation!.command.at(-1)).toBe(suite.units[0]);
-      expect(await suite.command([], context)).toEqual([]);
+      const command = invocation!.command;
+      const wrapper = command.indexOf("run-recorded");
+      expect(wrapper).toBeGreaterThan(0);
+      expect(command[wrapper + 3]).toBe(id);
+      expect(command[wrapper + 4]).toBe("--");
     }
+  });
+
+  it("holds a pattern gate's own record to the suite", () => {
+    // The wrapper records the whole invocation under the suite's name,
+    // and that duration is the run's rather than any one pattern's.
+    expect(
+      byId("pattern-compat").locate({
+        test: { k: "gate", s: "repo", n: "pattern-compat" },
+      }),
+    ).toEqual({ level: "suite" });
+    expect(
+      byId("cfcheck").locate({
+        test: { k: "typecheck", s: "repo", n: "cfcheck" },
+      }),
+    ).toEqual({ level: "suite" });
+  });
+
+  it("selects one pattern per `--only` the task is given", () => {
+    // A lane is charged for the units it asked for, so a filter the task
+    // reads more widely than the topology meant would check patterns
+    // nobody paid for. The task matches a filter as a substring, and what
+    // makes that exact here is that a unit is a whole path.
+    const units = byId("cfcheck").units;
+    const widened = units.filter((unit) => {
+      const hit = units.filter((file) => matchesPatternFilter(file, unit));
+      return hit.length !== 1 || hit[0] !== unit;
+    });
+    expect(widened).toEqual([]);
+  });
+
+  it("hands each compatibility unit an `--only` selecting that unit alone", async () => {
+    // The same reasoning as the type check's, over the paths the
+    // compatibility gate's units stand for, which are not all files: a
+    // pattern whose file is gone is a unit too.
+    const suite = byId("pattern-compat");
+    const terms = await Promise.all(suite.units.map(async (unit) => {
+      const [invocation] = await suite.command([{ unit, skip: [] }], context);
+      const command = invocation!.command;
+      return command[command.indexOf("--only") + 1]!;
+    }));
+    const widened = terms.filter((term) =>
+      terms.filter((item) => matchesPatternFilter(item, term)).length !== 1
+    );
+    expect(widened).toEqual([]);
+  });
+
+  it("names the pattern type check's units the way git names a file", async () => {
+    // A unit that is a path needs no `unitsForChange`: the census makes
+    // it mandatory from the diff naming it, so every unit has to be a
+    // path git reports, in git's own spelling.
+    const cfcheck = byId("cfcheck");
+    expect(cfcheck.unitsForChange).toBeUndefined();
+    const listed = await new Deno.Command("git", {
+      args: ["-C", root, "ls-files", "-z", "connectors", "patterns"],
+    }).output();
+    const tracked = new Set(
+      new TextDecoder().decode(listed.stdout).split("\0"),
+    );
+    expect(cfcheck.units.filter((unit) => !tracked.has(unit))).toEqual([]);
+    expect(cfcheck.units.length).toBeGreaterThan(0);
+  });
+
+  it("gives every fixture the tree holds a unit of its own", () => {
+    // The gate writes one record per fixture under the committed vintage
+    // tree, named for the fixture's test key, tier and capture stamp. The
+    // fixture set is read from git rather than from the enumerator the
+    // gate replays with, so this compares the claim against the tree
+    // rather than against the same walk twice.
+    const vintage = byId("pattern-vintage");
+    const fixtures = vintageFixtures();
+    expect(fixtures.size).toBeGreaterThan(0);
+    for (const [name, unit] of fixtures) {
+      expect(
+        vintage.locate({ test: { k: "gate", s: "repo", n: name } }),
+      ).toEqual({ level: "unit", unit });
+    }
+    expect(vintage.units.toSorted()).toEqual([...fixtures.values()].toSorted());
+  });
+
+  it("gives the replay's own record to the suite rather than a unit", () => {
+    // The task's own record measures the whole replay. Counting it in a unit as
+    // well as the fixtures would count that work twice.
+    expect(
+      byId("pattern-vintage").locate({
+        test: { k: "gate", s: "repo", n: "pattern-vintage" },
+      }),
+    ).toEqual({ level: "suite" });
+  });
+
+  it("disowns a vintage record no fixture in the tree carries", () => {
+    // These name fixtures no tree holds: the gate's own tests build them
+    // in a temporary directory, and the record store carries executions
+    // under them. An identity a suite claims is one a published manifest
+    // carries and the publisher scores on every run, and `departed` in
+    // `tasks/test-selection/build.ts` drops an identity from the
+    // aggregate only while no suite claims it.
+    const vintage = byId("pattern-vintage");
+    const stamp = "2026-07-29T12-00-00.000Z";
+    for (const key of ["subject", "nested", "undeclared", "crossspace"]) {
+      expect(
+        vintage.locate({
+          test: {
+            k: "gate",
+            s: "repo",
+            n: `pattern-vintage vintage-gate-${key}.test.tsx pinned ${stamp}`,
+          },
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  it("replays the fixtures a lane chose, and no others", async () => {
+    // Each fixture's replay is independent of the others, so `--only` can
+    // restrict the run to the fixtures a lane chose.
+    const vintage = byId("pattern-vintage");
+    const [some] = await vintage.command(
+      [{ unit: vintage.units[0]!, skip: [] }],
+      context,
+    );
+    expect(some!.command).toContain("run-recorded");
+    expect(some!.command.slice(-2)).toEqual(["--only", vintage.units[0]!]);
+    expect(await vintage.command([], context)).toEqual([]);
+  });
+
+  it("passes no filter where a lane asked for every fixture", async () => {
+    // The task makes the checks that need every fixture replayed only when it
+    // runs with no filter.
+    const vintage = byId("pattern-vintage");
+    const [all] = await vintage.command(
+      vintage.units.map((unit) => ({ unit, skip: [] })),
+      context,
+    );
+    expect(all!.command).not.toContain("--only");
+    expect(all!.command.at(-1)).toBe("pattern-vintage");
   });
 
   it("declines a type-check record whose name is another gate's", () => {

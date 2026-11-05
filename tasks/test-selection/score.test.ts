@@ -3,9 +3,9 @@ import { expect } from "@std/expect";
 
 import {
   churn,
-  COST_SAMPLE_CAP,
+  COST_BUCKETS_PER_DOUBLING,
+  COST_RULE,
   costSeconds,
-  type DaySamples,
   daysBetween,
   emptyContext,
   emptyState,
@@ -14,9 +14,12 @@ import {
   foldObservations,
   type IdentityState,
   mergeSamples,
+  moveHistory,
   type Observation,
   parseContext,
+  percentile90,
   readCostsForward,
+  renameInContext,
   sampledPercentile90,
   sampleDuration,
   samplesOf,
@@ -28,13 +31,18 @@ import {
   value,
 } from "./score.ts";
 import {
-  CATCH_BREADTH_WINDOW_DAYS,
+  COST_WINDOW_DAYS,
   FLAKE_COMMIT_REACH,
   FLAKE_EXCLUSION_RATE,
+  MASS_FAILURE_MIN_IDENTITIES,
+  NEW_REAL_TEST_FAILURE_BREADTH_WINDOW_DAYS,
   SAME_COMMIT_REACH_DAYS,
   VALUE_FLOOR,
 } from "./policy.ts";
-import { testIdentityKey } from "@commonfabric/test-support/records";
+import {
+  type TestIdentity,
+  testIdentityKey,
+} from "@commonfabric/test-support/records";
 
 const TEST = { k: "unit", s: "memory", n: "space > writes a fact" };
 const KEY = testIdentityKey(TEST);
@@ -47,7 +55,6 @@ function saw(
   return {
     test: TEST,
     outcome,
-    durationMs: 100,
     day: "2026-08-20",
     startedAt: "2026-08-20T00:00:00.000Z",
     commit: "c1",
@@ -57,8 +64,20 @@ function saw(
   };
 }
 
+/**
+ * States for `tests`, as the default branch's earlier records would have
+ * left them: only those records add an identity, so a record from
+ * anywhere else is folded only into an identity one of these holds.
+ */
+function holding(
+  tests: readonly TestIdentity[] = [TEST],
+): Map<string, IdentityState> {
+  return new Map(tests.map((test) => [testIdentityKey(test), emptyState()]));
+}
+
+/** The state `observations` fold `TEST` into, starting from `holding()`. */
 function stateFrom(observations: readonly Observation[]) {
-  const state = foldObservations(observations).get(KEY);
+  const state = foldObservations(observations, { prior: holding() }).get(KEY);
   expect(state).toBeDefined();
   return state!;
 }
@@ -69,16 +88,53 @@ describe("score", () => {
       const context = emptyContext();
       context.mainAtCommit.set("k c1", { day: "2026-08-20", outcome: "fail" });
       context.credited.set("k c1 branch", "2026-08-20");
+      context.crowds.set("c1 branch", {
+        day: "2026-08-20",
+        identities: new Set(["k", "j"]),
+      });
       const back = parseContext(serializeContext(context));
       expect(back.mainAtCommit.get("k c1")?.outcome).toBe("fail");
       expect(back.credited.get("k c1 branch")).toBe("2026-08-20");
+      expect(back.crowds.get("c1 branch")).toEqual({
+        day: "2026-08-20",
+        identities: new Set(["k", "j"]),
+      });
+    });
+
+    it("reads what each run broke as nothing when none was stored", () => {
+      const back = parseContext({
+        outcomesAtCommit: [],
+        mainAtCommit: [],
+        credited: [],
+        failures: [],
+      });
+      expect(back.crowds.size).toBe(0);
+    });
+
+    it("drops a run it cannot age, and an identity it cannot name", () => {
+      // A run whose day cannot be read is never aged, and would go on
+      // counting toward a crowd for good.
+      const back = parseContext({
+        outcomesAtCommit: [],
+        mainAtCommit: [],
+        credited: [],
+        failures: [],
+        crowds: [
+          ["c1 a", { day: "nope", identities: ["k"] }],
+          ["c1 b", { day: "2026-08-20", identities: ["k", 3] }],
+          ["c1 c", { day: "2026-08-20", identities: "k" }],
+        ],
+      });
+      expect([...back.crowds.keys()]).toEqual(["c1 b"]);
+      expect(back.crowds.get("c1 b")?.identities).toEqual(new Set(["k"]));
     });
 
     it("drops what it cannot read rather than believing it", () => {
       // An unknown outcome would read as one more thing the identity did
       // at that commit, and two of them is the test disagreeing with
-      // itself, which suppresses a real catch. A credited entry with no
-      // readable day can never be aged out, so it suppresses one forever.
+      // itself, which suppresses a new real test failure. A credited
+      // entry with no readable day can never be aged out, so it
+      // suppresses one forever.
       const back = parseContext({
         outcomesAtCommit: [
           ["c1", { day: "2026-08-20", identities: [["k", ["wat"]]] }],
@@ -203,6 +259,35 @@ describe("score", () => {
       expect(back.failures.get("k a")?.length).toBe(1);
     });
 
+    it("keeps a failure the default branch explained as explained", () => {
+      const context = emptyContext();
+      context.failures.set("k", [
+        { day: "2026-08-20", source: "a", brokenOnMain: true },
+        { day: "2026-08-20", source: "b" },
+      ]);
+      const back = parseContext(serializeContext(context));
+      expect(back.failures.get("k")).toEqual([
+        { day: "2026-08-20", source: "a", brokenOnMain: true },
+        { day: "2026-08-20", source: "b" },
+      ]);
+    });
+
+    it("reads a mark it does not recognize as no mark", () => {
+      // A failure read as explained when it was not would take a source
+      // away from the environmental rule, so only `true` is believed.
+      const back = parseContext({
+        outcomesAtCommit: [],
+        mainAtCommit: [],
+        credited: [],
+        failures: [["k", [
+          { day: "2026-08-20", source: "a", brokenOnMain: "yes" },
+        ]]],
+      });
+      expect(back.failures.get("k")).toEqual([
+        { day: "2026-08-20", source: "a" },
+      ]);
+    });
+
     it("drops a whole entry when nothing in it survives", () => {
       const back = parseContext({
         outcomesAtCommit: [],
@@ -218,9 +303,18 @@ describe("score", () => {
       context.mainAtCommit.set("k old", { day: "2026-01-01", outcome: "fail" });
       context.mainAtCommit.set("k new", { day: "2026-08-20", outcome: "fail" });
       context.credited.set("k old branch", "2026-01-01");
+      context.crowds.set("c0 branch", {
+        day: "2026-01-01",
+        identities: new Set(["k"]),
+      });
+      context.crowds.set("c1 branch", {
+        day: "2026-08-20",
+        identities: new Set(["k"]),
+      });
       trimContext(context, "2026-08-20");
       expect([...context.mainAtCommit.keys()]).toEqual(["k new"]);
       expect(context.credited.size).toBe(0);
+      expect([...context.crowds.keys()]).toEqual(["c1 branch"]);
     });
 
     it("drops a failure list once every failure in it is stale", () => {
@@ -262,7 +356,7 @@ describe("score", () => {
     });
   });
 
-  describe("what counts as a catch", () => {
+  describe("what counts as a new real test failure", () => {
     it("counts a failure on a branch where main was green", () => {
       const state = stateFrom([
         saw("pass", { day: "2026-08-19", commit: "c0" }),
@@ -316,7 +410,7 @@ describe("score", () => {
       expect(state.prCatches).toBe(0);
     });
 
-    it("counts one catch however often a broken commit is re-run", () => {
+    it("counts one new real test failure however often a broken commit is re-run", () => {
       const state = stateFrom([
         saw("fail", { commit: "c1", place: "pr", source: "branch" }),
         saw("fail", { commit: "c1", place: "pr", source: "branch" }),
@@ -325,7 +419,7 @@ describe("score", () => {
       expect(state.prCatches).toBe(1);
     });
 
-    it("weighs a catch on a workstation double", () => {
+    it("weighs a new real test failure on a workstation double", () => {
       const state = stateFrom([
         saw("fail", { commit: "c1", place: "local", source: "ianh" }),
       ]);
@@ -344,7 +438,7 @@ describe("score", () => {
       expect(state.pendingMain.length).toBe(2);
     });
 
-    it("counts a catch once a later run passes", () => {
+    it("counts a new real test failure once a later run passes", () => {
       const state = stateFrom([
         saw("fail", { day: "2026-08-19", commit: "c0" }),
         saw("pass", { commit: "c1" }),
@@ -353,7 +447,7 @@ describe("score", () => {
       expect(state.pendingMain).toEqual([]);
     });
 
-    it("counts one catch for a run of failures one change ended", () => {
+    it("counts one new real test failure for a run of failures one change ended", () => {
       // A test red across several commits on the default branch has one
       // thing wrong with it, and the change that makes it green fixed
       // that one thing.
@@ -366,8 +460,8 @@ describe("score", () => {
       expect(state.mainCatches).toBe(1);
       expect(state.lastCatch).toBe("2026-08-17");
       expect(state.pendingMain).toEqual([]);
-      // One catch and nothing else: the run resolved, so none of the
-      // failures in it is also flake evidence.
+      // One new real test failure and nothing else: the run resolved, so
+      // none of the failures in it is also flake evidence.
       expect(flakeRate(state, "2026-08-20")).toBe(0);
     });
 
@@ -388,6 +482,293 @@ describe("score", () => {
         FLAKE_EXCLUSION_RATE,
       );
     });
+    it("reads a full run's rerun of its own failure as a flake", () => {
+      // A lane of the full run that saw a test fail runs it again, and
+      // ships the rerun in the run's own records: the same commit, the
+      // same start, the same seed. Commits that alternate between failing
+      // and passing are otherwise a run of new real test failures.
+      const history = (rerun: boolean) =>
+        ["c1", "c2", "c3", "c4"].flatMap((commit, at) => {
+          const run = {
+            commit,
+            seed: 7,
+            startedAt: `2026-08-20T0${at}:00:00.000Z`,
+          };
+          return at % 2 === 1
+            ? [saw("pass", run)]
+            : [saw("fail", run), ...rerun ? [saw("pass", run)] : []];
+        });
+      expect(stateFrom(history(false)).mainCatches).toBe(2);
+      const state = stateFrom(history(true));
+      expect(state.mainCatches).toBe(0);
+      expect(state.pendingMain).toEqual([]);
+      expect(state.flakesByDay["2026-08-20"]).toBe(2);
+      expect(flakeRate(state, "2026-08-20")).toBeGreaterThan(
+        FLAKE_EXCLUSION_RATE,
+      );
+    });
+  });
+
+  describe("a rerun of a commit inside a stretch of failures", () => {
+    it("reads a green rerun in the same batch as a flake too", () => {
+      const state = stateFrom([
+        saw("fail", { commit: "c0", day: "2026-08-19" }),
+        saw("fail", { commit: "c1" }),
+        saw("pass", {
+          commit: "c1",
+          day: "2026-08-21",
+          startedAt: "2026-08-21T00:00:00.000Z",
+        }),
+      ]);
+      expect(state.mainCatches).toBe(0);
+      expect(state.flakesByDay).toEqual({ "2026-08-20": 1 });
+      expect(state.pendingMain).toEqual([]);
+    });
+
+    it("reads a green rerun of a later failing commit as a flake", () => {
+      // The rerun passed where the commit failed before, so the stretch
+      // ends in the test disagreeing with itself rather than in a fix.
+      const prior = new Map<string, IdentityState>();
+      const context = emptyContext();
+      foldObservations([
+        saw("fail", { commit: "c0", day: "2026-08-19" }),
+        saw("fail", { commit: "c1" }),
+      ], { prior, context });
+      foldObservations([
+        saw("pass", {
+          commit: "c1",
+          day: "2026-08-21",
+          startedAt: "2026-08-21T00:00:00.000Z",
+        }),
+      ], { prior, context });
+      const state = prior.get(KEY)!;
+      expect(state.mainCatches).toBe(0);
+      expect(state.flakesByDay).toEqual({ "2026-08-20": 1 });
+      expect(state.pendingMain).toEqual([]);
+    });
+  });
+
+  describe("the order a run's tests were shuffled into", () => {
+    it("reads a pass and a failure at one commit in two orders as no flake", () => {
+      // An order-dependent test passes in one order and fails in another.
+      // That is a bug in the test, not chance, and a flake rate high
+      // enough would withhold it from pull requests rather than get it
+      // fixed.
+      const state = stateFrom([
+        saw("pass", { seed: 20260921, place: "pr", source: "branch" }),
+        saw("fail", { seed: 20260922, place: "pr", source: "branch" }),
+      ]);
+      expect(state.flakesByDay["2026-08-20"] ?? 0).toBe(0);
+      expect(flakeRate(state, "2026-08-20")).toBe(0);
+    });
+
+    it("still reads a pass and a failure in one order as a flake", () => {
+      const state = stateFrom([
+        saw("pass", { seed: 20260922, place: "pr", source: "branch" }),
+        saw("fail", { seed: 20260922, place: "pr", source: "branch" }),
+      ]);
+      expect(state.flakesByDay["2026-08-20"]).toBe(1);
+    });
+
+    it("keeps a seeded run apart from one in declaration order", () => {
+      // A run with no seed ran its tests in the order they were declared,
+      // which is an order of its own.
+      const state = stateFrom([
+        saw("pass", { place: "pr", source: "branch" }),
+        saw("fail", { seed: 20260922, place: "pr", source: "branch" }),
+      ]);
+      expect(state.flakesByDay["2026-08-20"] ?? 0).toBe(0);
+    });
+
+    it("credits no new real test failure to a failure on main that a new order ended", () => {
+      // The order moved on and the test stopped failing, which says
+      // nothing about whether any change fixed it, so the failure goes on
+      // waiting for a run in its own order.
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-19", commit: "c0", seed: 20260819 }),
+        saw("pass", { commit: "c1", seed: 20260820 }),
+      ]);
+      expect(state.mainCatches).toBe(0);
+      expect(state.pendingMain.map((pending) => pending.seed)).toEqual([
+        20260819,
+      ]);
+      expect(flakeRate(state, "2026-08-20")).toBe(0);
+    });
+
+    it("judges a failure in the pass's order beside one in another", () => {
+      // The failure in another order does not take the same-order failure
+      // after it down with it, and the stretch the pass ends takes it too.
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-19", commit: "c0", seed: 20260819 }),
+        saw("fail", { day: "2026-08-20", commit: "c1", seed: 20260820 }),
+        saw("pass", { commit: "c2", seed: 20260820 }),
+      ]);
+      expect(state.mainCatches).toBe(1);
+      expect(state.lastCatch).toBe("2026-08-20");
+      expect(state.pendingMain).toEqual([]);
+    });
+
+    it("credits one new real test failure to a breakage failing in two orders", () => {
+      // The run under the next day's seed saw the breakage the day's push
+      // did. The fix that ends it in the day's order ends it in both, so
+      // the next day's first push, passing in the other order, credits
+      // nothing more.
+      const state = stateFrom([
+        saw("fail", { commit: "c1", seed: 20260820 }),
+        saw("fail", {
+          commit: "c1",
+          seed: 20260821,
+          startedAt: "2026-08-20T11:00:00.000Z",
+        }),
+        saw("pass", {
+          commit: "c2",
+          seed: 20260820,
+          startedAt: "2026-08-20T12:00:00.000Z",
+        }),
+        saw("pass", {
+          commit: "c3",
+          seed: 20260821,
+          day: "2026-08-21",
+          startedAt: "2026-08-21T08:00:00.000Z",
+        }),
+      ]);
+      expect(state.mainCatches).toBe(1);
+      expect(state.lastCatch).toBe("2026-08-20");
+      expect(state.pendingMain).toEqual([]);
+    });
+
+    it("reads main as failing in its own order after a pass in another", () => {
+      // An order-dependent test can fail in the day's order and pass in
+      // the next day's. A pull request failing it in the day's order
+      // learned nothing `main` did not already show.
+      const state = stateFrom([
+        saw("fail", { commit: "c1", seed: 20260820 }),
+        saw("pass", {
+          commit: "c1",
+          seed: 20260821,
+          startedAt: "2026-08-20T11:00:00.000Z",
+        }),
+        saw("fail", {
+          commit: "c2",
+          seed: 20260820,
+          place: "pr",
+          source: "branch",
+          startedAt: "2026-08-20T12:00:00.000Z",
+        }),
+      ]);
+      expect(state.prCatches).toBe(0);
+    });
+
+    it("leaves a pull request's new real test failure alone after a failure in another order", () => {
+      const state = stateFrom([
+        saw("pass", { commit: "c1", seed: 20260820 }),
+        saw("fail", {
+          commit: "c1",
+          seed: 20260821,
+          startedAt: "2026-08-20T11:00:00.000Z",
+        }),
+        saw("fail", {
+          commit: "c2",
+          seed: 20260820,
+          place: "pr",
+          source: "branch",
+          startedAt: "2026-08-20T12:00:00.000Z",
+        }),
+      ]);
+      expect(state.prCatches).toBe(1);
+    });
+
+    it("leaves other orders waiting when a pass finds only aged failures", () => {
+      // The pass's own order holds only a failure older than any window
+      // a state keeps, so it judges nothing, and the failure in the other
+      // order is still there for a pass in its own.
+      const state = stateFrom([
+        saw("fail", {
+          commit: "c0",
+          seed: 20260101,
+          day: "2026-01-01",
+          startedAt: "2026-01-01T00:00:00.000Z",
+        }),
+        saw("fail", { commit: "c1", seed: 20260821 }),
+        saw("pass", {
+          commit: "c2",
+          seed: 20260101,
+          startedAt: "2026-08-20T11:00:00.000Z",
+        }),
+        saw("pass", {
+          commit: "c3",
+          seed: 20260821,
+          startedAt: "2026-08-20T12:00:00.000Z",
+        }),
+      ]);
+      expect(state.mainCatches).toBe(1);
+      expect(state.lastCatch).toBe("2026-08-20");
+      expect(state.pendingMain).toEqual([]);
+    });
+
+    it("judges a failure in its own order after a pass in another", () => {
+      // The run of `main` under the next day's seed lands between the
+      // day's pushes. Its pass leaves the day's failures waiting, so a
+      // rerun of the failing push still reads as the flake it is, and a
+      // later push in that order still credits a new real test failure.
+      const prior = new Map<string, IdentityState>();
+      const context = emptyContext();
+      const fold = (observation: Observation) =>
+        foldObservations([observation], { prior, context });
+      fold(saw("fail", { commit: "c1", seed: 20260820 }));
+      fold(saw("pass", {
+        commit: "c1",
+        seed: 20260821,
+        startedAt: "2026-08-20T11:00:00.000Z",
+      }));
+      fold(saw("pass", {
+        commit: "c1",
+        seed: 20260820,
+        startedAt: "2026-08-20T12:00:00.000Z",
+      }));
+      const rerun = prior.get(KEY)!;
+      expect(rerun.flakesByDay["2026-08-20"]).toBe(1);
+      expect(rerun.mainCatches).toBe(0);
+      expect(rerun.pendingMain).toEqual([]);
+
+      const later = stateFrom([
+        saw("fail", { commit: "c1", seed: 20260820 }),
+        saw("pass", {
+          commit: "c1",
+          seed: 20260821,
+          startedAt: "2026-08-20T11:00:00.000Z",
+        }),
+        saw("pass", {
+          commit: "c2",
+          seed: 20260820,
+          startedAt: "2026-08-20T12:00:00.000Z",
+        }),
+      ]);
+      expect(later.mainCatches).toBe(1);
+      expect(later.pendingMain).toEqual([]);
+    });
+
+    it("still credits a new real test failure to a failure a later commit in one order ended", () => {
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-20", commit: "c0", seed: 20260820 }),
+        saw("pass", { commit: "c1", seed: 20260820 }),
+      ]);
+      expect(state.mainCatches).toBe(1);
+    });
+
+    it("reads a rerun of one commit in another order as neither flake nor new real test failure", () => {
+      const state = stateFrom([
+        saw("fail", { commit: "c1", seed: 20260820 }),
+        saw("pass", {
+          commit: "c1",
+          seed: 20260821,
+          day: "2026-08-21",
+          startedAt: "2026-08-21T00:00:00.000Z",
+        }),
+      ]);
+      expect(state.mainCatches).toBe(0);
+      expect(state.flakesByDay["2026-08-20"] ?? 0).toBe(0);
+    });
   });
 
   describe("variants", () => {
@@ -401,7 +782,7 @@ describe("score", () => {
           place: "pr",
           source: "branch",
         }),
-      ]);
+      ], { prior: holding([TEST, marked]) });
       const markedKey = JSON.stringify([
         marked.k,
         marked.s,
@@ -413,6 +794,130 @@ describe("score", () => {
     });
   });
 
+  describe("which records add an identity", () => {
+    for (const place of ["pr", "local"] as const) {
+      it(`adds none for a record from ${place}`, () => {
+        const failed = saw("fail", { place, source: "branch" });
+        expect(foldObservations([failed]).has(KEY)).toBe(false);
+        expect(stateFrom([failed]).failuresByDay["2026-08-20"]).toBe(1);
+      });
+    }
+
+    it("adds one for a record from the default branch", () => {
+      const folded = foldObservations([saw("pass")]);
+      expect(folded.get(KEY)?.runsByDay).toEqual({ "2026-08-20": 1 });
+    });
+
+    /** A failure on a branch of its own, at a commit of its own. */
+    function branchFailure(source: string, hour: number): Observation {
+      return saw("fail", {
+        place: "pr",
+        source,
+        commit: `c-${source}`,
+        startedAt: `2026-08-20T${String(hour).padStart(2, "0")}:00:00.000Z`,
+      });
+    }
+
+    it("reads no failure from before the default branch recorded the test as the environment", () => {
+      // Four branches failing the test before it lands would make a fifth
+      // failure after it lands the environment's, were they counted.
+      const folded = foldObservations([
+        ...["a", "b", "c", "d"].map((source, at) => branchFailure(source, at)),
+        saw("pass", { startedAt: "2026-08-20T05:00:00.000Z" }),
+        branchFailure("e", 6),
+      ]);
+      expect(folded.get(KEY)?.prCatches).toBe(1);
+      // The same four after it landed are the environment.
+      const landed = foldObservations([
+        saw("pass"),
+        ...["a", "b", "c", "d"].map((source, at) =>
+          branchFailure(source, at + 1)
+        ),
+        branchFailure("e", 6),
+      ]);
+      expect(landed.get(KEY)?.prCatches).toBe(0);
+    });
+
+    it("reads no pass from before the default branch recorded the test as a flake", () => {
+      // A branch passing and then failing at one commit disagreed with
+      // itself, but its pass came before the test was recorded.
+      const at = (hour: number) => `2026-08-20T0${hour}:00:00.000Z`;
+      const branch = { place: "pr" as const, source: "branch", commit: "c9" };
+      const folded = foldObservations([
+        saw("pass", { ...branch, startedAt: at(0) }),
+        saw("pass", { startedAt: at(1) }),
+        saw("fail", { ...branch, startedAt: at(2) }),
+      ]);
+      expect(folded.get(KEY)?.flakesByDay).toEqual({});
+      expect(folded.get(KEY)?.prCatches).toBe(1);
+      const landed = foldObservations([
+        saw("pass", { startedAt: at(0) }),
+        saw("pass", { ...branch, startedAt: at(1) }),
+        saw("fail", { ...branch, startedAt: at(2) }),
+      ]);
+      expect(landed.get(KEY)?.flakesByDay).toEqual({ "2026-08-20": 1 });
+    });
+
+    it("keeps no older commit's outcomes for a failure from before the test was recorded", () => {
+      // A commit that slides out of reach keeps the outcomes of a test
+      // that has failed, so a rerun there in a later batch can still
+      // disagree with them. The branch's failure before the default branch
+      // recorded the test is not one of its failures, so the pass at `p` is
+      // let go, and the rerun failing there is a failure, not a flake.
+      const at = (minute: number) =>
+        `2026-08-20T10:${String(minute).padStart(2, "0")}:00.000Z`;
+      const branch = { place: "pr" as const, source: "branch" };
+      const flakesAfter = (first: readonly Observation[]) => {
+        const context = emptyContext();
+        const prior = foldObservations([
+          ...first,
+          saw("pass", { ...branch, commit: "p", startedAt: at(2) }),
+          ...Array.from(
+            { length: FLAKE_COMMIT_REACH + 1 },
+            (_, index) =>
+              saw("pass", { commit: `m${index}`, startedAt: at(index + 3) }),
+          ),
+        ], { context });
+        return foldObservations([
+          saw("fail", { ...branch, commit: "p", startedAt: at(50) }),
+        ], { context, prior }).get(KEY)?.flakesByDay;
+      };
+      expect(flakesAfter([
+        saw("fail", { ...branch, commit: "c0", startedAt: at(0) }),
+        saw("pass", { commit: "m", startedAt: at(1) }),
+      ])).toEqual({});
+      // Recorded first, the same failure is one of the test's, and the
+      // pass is kept.
+      expect(flakesAfter([
+        saw("pass", { commit: "m", startedAt: at(0) }),
+        saw("fail", { ...branch, commit: "c0", startedAt: at(1) }),
+      ])).toEqual({ "2026-08-20": 1 });
+    });
+
+    it("folds a record from elsewhere once the default branch has recorded the test", () => {
+      // In time order: the branch's run before the default branch's first
+      // record of the test adds nothing, and its run after it is folded.
+      const branch = { place: "pr" as const, source: "branch" };
+      const folded = foldObservations([
+        saw("fail", {
+          ...branch,
+          day: "2026-08-19",
+          startedAt: "2026-08-19T00:00:00.000Z",
+        }),
+        saw("pass"),
+        saw("fail", {
+          ...branch,
+          day: "2026-08-21",
+          startedAt: "2026-08-21T00:00:00.000Z",
+        }),
+      ]);
+      expect(folded.get(KEY)?.runsByDay).toEqual({
+        "2026-08-20": 1,
+        "2026-08-21": 1,
+      });
+    });
+  });
+
   describe("the value formula", () => {
     it("scores a test that never failed anywhere at exactly the floor", () => {
       const state = stateFrom([saw("pass")]);
@@ -421,9 +926,10 @@ describe("score", () => {
       );
     });
 
-    it("scores failures that were not catches at the floor plus churn", () => {
+    it("scores failures that were not new real test failures at the floor plus churn", () => {
       // Every failure here disagrees with a pass at the same commit, so
-      // none is a catch, and what is left is the churn term alone.
+      // none is a new real test failure, and what is left is the churn
+      // term alone.
       const state = stateFrom([
         saw("pass", { commit: "c1", place: "pr", source: "branch" }),
         saw("fail", { commit: "c1", place: "pr", source: "branch" }),
@@ -454,7 +960,7 @@ describe("score", () => {
       );
     });
 
-    it("saturates, so a fifth catch cannot crowd everything out", () => {
+    it("saturates, so a fifth new real test failure cannot crowd everything out", () => {
       const at = (catches: number) =>
         value(
           {
@@ -470,7 +976,7 @@ describe("score", () => {
       expect(at(100)).toBeLessThan(1);
     });
 
-    it("decays a catch slowly and never below the freshness floor", () => {
+    it("decays a new real test failure slowly and never below the freshness floor", () => {
       const at = (lastCatch: string) =>
         value(
           { catches: 4, lastCatch, sources: 0, churn: 0 },
@@ -515,11 +1021,11 @@ describe("score", () => {
       // the combination would fold a running value into itself.
       const state = emptyState();
       sealDay(state, "2026-08-20", samplesOf([100, 100, 900]));
-      const first = state.costByDay["2026-08-20"]!.count;
       sealDay(state, "2026-08-20", samplesOf([200]));
-      const both = state.costByDay["2026-08-20"]!;
-      expect(both.count).toBe(first + 1);
-      expect(both.slowest).toEqual([100, 100, 200, 900]);
+      expect(state.costByDay["2026-08-20"]).toEqual({
+        ...samplesOf([100, 100, 200, 900]),
+        rule: COST_RULE,
+      });
     });
 
     it("reads a day the same whatever runs it arrived over", () => {
@@ -545,16 +1051,32 @@ describe("score", () => {
       // The batch a slow execution arrives in can hold nothing else, and
       // a percentile of that batch would be that execution.
       const state = emptyState();
-      sealDay(state, "2026-08-20", samplesOf(Array(45).fill(50)));
+      sealDay(state, "2026-08-20", samplesOf(Array(45).fill(64)));
       sealDay(state, "2026-08-20", samplesOf([300_000]));
-      expect(costSeconds(state, "2026-08-20")).toBe(0.05);
+      expect(costSeconds(state, "2026-08-20")).toBe(0.064);
     });
 
-    it("reports the worst day inside the window, in seconds", () => {
+    it("reads the window's executions as one population, in seconds", () => {
+      // The one slow execution is the slowest tenth of the ten, which a
+      // ninetieth percentile reads past, whichever day it fell on.
       const state = emptyState();
-      sealDay(state, "2026-08-20", samplesOf([100, 200, 4000]));
-      sealDay(state, "2026-08-19", samplesOf([100, 100, 100]));
-      expect(costSeconds(state, "2026-08-20")).toBe(4);
+      sealDay(state, "2026-08-19", samplesOf(Array(9).fill(1024)));
+      sealDay(state, "2026-08-20", samplesOf([8192]));
+      expect(costSeconds(state, "2026-08-20")).toBe(1.024);
+    });
+
+    it("weighs a slow day by how many executions it holds", () => {
+      // A slow day decides the cost once it holds more than a tenth of
+      // the window's executions, and not before.
+      const fast = Array(100).fill(1024);
+      const few = emptyState();
+      sealDay(few, "2026-08-14", samplesOf(Array(11).fill(8192)));
+      sealDay(few, "2026-08-20", samplesOf(fast));
+      expect(costSeconds(few, "2026-08-20")).toBe(1.024);
+      const many = emptyState();
+      sealDay(many, "2026-08-14", samplesOf(Array(12).fill(8192)));
+      sealDay(many, "2026-08-20", samplesOf(fast));
+      expect(costSeconds(many, "2026-08-20")).toBe(8.192);
     });
 
     it("forgets a day past the window", () => {
@@ -574,6 +1096,21 @@ describe("score", () => {
       expect(Object.keys(state.runsByDay)).toEqual(["2026-08-20"]);
       expect(Object.keys(state.costByDay)).toEqual([]);
     });
+
+    it("drops a failure on the default branch nothing has judged", () => {
+      // A failure waits here for a later run to pass the test, and a
+      // test the branch does not go red for is one no such run has to
+      // arrive for. Nothing would bound this otherwise.
+      const state = emptyState();
+      state.pendingMain = [
+        { day: "2026-01-01", commit: "old", source: "main" },
+        { day: "2026-08-19", commit: "new", source: "main" },
+      ];
+      trimWindows(state, "2026-08-20");
+      expect(state.pendingMain.map((pending) => pending.commit)).toEqual([
+        "new",
+      ]);
+    });
   });
 
   describe("days", () => {
@@ -586,10 +1123,11 @@ describe("score", () => {
 });
 
 /**
- * The ninetieth percentile of a list, by nearest rank, over the whole list
- * rather than a bounded sample of it.
+ * The ninetieth percentile of a list, by nearest rank, worked out here
+ * rather than through the module under test so that the two are two
+ * answers to compare.
  */
-function percentile90(values: readonly number[]): number {
+function exactPercentile90(values: readonly number[]): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.max(0, Math.ceil(0.9 * sorted.length) - 1)]!;
@@ -600,93 +1138,114 @@ function dayBefore(day: string, ago: number): string {
   return new Date(stamp).toISOString().slice(0, 10);
 }
 
-describe("a day's bounded sample of its slowest runs", () => {
-  const empty = (): DaySamples => ({ count: 0, slowest: [] });
+/**
+ * A population of durations with repeats and no order to it, spread over
+ * several doublings so that the buckets it lands in are far apart.
+ */
+function scattered(length: number): number[] {
+  return Array.from({ length }, (_, i) => ((i * 37) % 211 + 1) ** 2);
+}
 
-  it("keeps what it is given while there is room, in order", () => {
-    const samples = empty();
-    for (const ms of [30, 10, 20]) sampleDuration(samples, ms);
-    expect(samples.slowest).toEqual([10, 20, 30]);
-    expect(samples.count).toBe(3);
+describe("a day's sample of its runs", () => {
+  it("counts every run it is given", () => {
+    const samples = samplesOf([30, 10, 20, 20]);
+    expect(samples.counts.reduce((sum, each) => sum + each, 0)).toBe(4);
   });
 
-  it("counts every run, keeping only the slowest of them", () => {
-    const samples = empty();
-    for (let i = 1; i <= COST_SAMPLE_CAP + 50; i++) sampleDuration(samples, i);
-    expect(samples.count).toBe(COST_SAMPLE_CAP + 50);
-    expect(samples.slowest.length).toBe(COST_SAMPLE_CAP);
-    expect(samples.slowest[0]).toBe(51);
-    expect(samples.slowest.at(-1)).toBe(COST_SAMPLE_CAP + 50);
-  });
-
-  it("drops a run slower than nothing it kept, once it is full", () => {
-    const samples = empty();
-    for (let i = 100; i < 100 + COST_SAMPLE_CAP; i++) {
-      sampleDuration(samples, i);
+  it("reads a duration on a bucket's bound as that duration", () => {
+    for (const ms of [1, 2, 1024, 4096, 2 ** 20]) {
+      expect(sampledPercentile90(samplesOf([ms]))).toBe(ms);
     }
-    const kept = [...samples.slowest];
-    sampleDuration(samples, 1);
-    expect(samples.slowest).toEqual(kept);
-    // Counted all the same: the count is what the percentile's rank is
-    // taken from, so dropping it would move the percentile up.
-    expect(samples.count).toBe(COST_SAMPLE_CAP + 1);
   });
 
-  it("takes a run that displaces the fastest it kept", () => {
-    const samples = empty();
-    for (let i = 100; i < 100 + COST_SAMPLE_CAP; i++) {
-      sampleDuration(samples, i);
+  it("reads a duration no lower than itself, and under a bucket above", () => {
+    // The bound a cost is read at covers every duration the bucket
+    // counts, and is within one bucket's width of each of them.
+    const width = 2 ** (1 / COST_BUCKETS_PER_DOUBLING);
+    for (let ms = 1; ms < 100_000; ms = Math.ceil(ms * 1.07) + 0.5) {
+      const read = sampledPercentile90(samplesOf([ms]));
+      expect(read).toBeGreaterThanOrEqual(ms);
+      expect(read).toBeLessThan(ms * width);
     }
-    sampleDuration(samples, 150);
-    expect(samples.slowest.length).toBe(COST_SAMPLE_CAP);
-    expect(samples.slowest[0]).toBe(101);
-    expect(samples.slowest).toContain(150);
+  });
+
+  it("reads a run of a millisecond or less as a millisecond", () => {
+    expect(sampledPercentile90(samplesOf([0, 0.5, 1]))).toBe(1);
+  });
+
+  it("reads the percentile at or above the exact one, within a bucket", () => {
+    const width = 2 ** (1 / COST_BUCKETS_PER_DOUBLING);
+    for (const length of [1, 9, 10, 11, 64, 65, 1000]) {
+      const durations = scattered(length);
+      const exact = exactPercentile90(durations);
+      const read = sampledPercentile90(samplesOf(durations));
+      expect(read).toBeGreaterThanOrEqual(exact);
+      expect(read).toBeLessThan(exact * width);
+    }
   });
 
   it("has no percentile for a day nothing ran on", () => {
-    expect(sampledPercentile90(empty())).toBe(0);
+    expect(sampledPercentile90(samplesOf([]))).toBe(0);
+  });
+});
+
+describe("the ninetieth percentile of a list", () => {
+  it("answers by nearest rank", () => {
+    // Each size is checked against the nearest rank worked out
+    // separately, since an off-by-one here moves every charge the lane
+    // model reads.
+    for (let size = 1; size <= 40; size++) {
+      const values = Array.from({ length: size }, (_, i) => (i + 1) * 10);
+      expect(percentile90(values)).toBe(exactPercentile90(values));
+    }
   });
 
-  it("agrees with the exact percentile while everything is kept", () => {
-    const durations = Array.from({ length: 20 }, (_, i) => (i + 1) * 10);
-    const samples = empty();
-    for (const ms of durations) sampleDuration(samples, ms);
-    expect(sampledPercentile90(samples)).toBe(percentile90(durations));
-  });
-
-  it("over-estimates rather than under-estimates past what it kept", () => {
-    // The rank falls outside the sample, so the answer is the smallest
-    // kept run. A budget survives an over-estimate; it does not survive
-    // the other one.
-    const samples = empty();
-    for (let i = 1; i <= 1000; i++) sampleDuration(samples, i);
-    expect(sampledPercentile90(samples)).toBeGreaterThanOrEqual(900);
+  it("has no percentile for a list of nothing", () => {
+    expect(percentile90([])).toBe(0);
   });
 });
 
 describe("mergeSamples()", () => {
-  it("keeps the slowest of the union and the count of both", () => {
+  it("counts the runs of both", () => {
     const a = samplesOf([10, 40]);
     const b = samplesOf([20, 30]);
-    expect(mergeSamples(a, b)).toEqual({ slowest: [10, 20, 30, 40], count: 4 });
+    expect(mergeSamples(a, b)).toEqual(samplesOf([10, 20, 30, 40]));
   });
 
-  it("keeps what accumulating the whole would have kept", () => {
-    const whole = Array.from({ length: 3 * COST_SAMPLE_CAP }, (_, i) => i + 1);
-    const at = COST_SAMPLE_CAP + 7;
-    const merged = mergeSamples(
-      samplesOf(whole.slice(0, at)),
-      samplesOf(whole.slice(at)),
-    );
+  it("counts what accumulating the whole would have, at every cut", () => {
+    // The property a fold reading a day in parts rests on, shown over a
+    // population rather than asserted: what the merge counts cannot
+    // depend on where the day was divided.
+    const whole = scattered(256);
+    const direct = samplesOf(whole);
+    for (let at = 0; at <= whole.length; at++) {
+      expect(
+        mergeSamples(samplesOf(whole.slice(0, at)), samplesOf(whole.slice(at))),
+      ).toEqual(direct);
+    }
+  });
+
+  it("counts the same over any number of parts", () => {
+    // A fold merges each batch into what it holds, so the parts arrive
+    // one at a time and every merge but the first is against a merge.
+    const whole = scattered(256);
+    const cuts = [0, 1, 13, 64, 65, whole.length];
+    let merged = samplesOf([]);
+    for (let part = 1; part < cuts.length; part++) {
+      merged = mergeSamples(
+        merged,
+        samplesOf(whole.slice(cuts[part - 1], cuts[part])),
+      );
+    }
     expect(merged).toEqual(samplesOf(whole));
   });
 
   it("leaves both sides as they were", () => {
     const a = samplesOf([10, 40]);
-    const b = samplesOf([20]);
+    const b = samplesOf([2]);
     mergeSamples(a, b);
-    expect(a).toEqual({ slowest: [10, 40], count: 2 });
-    expect(b).toEqual({ slowest: [20], count: 1 });
+    expect(a).toEqual(samplesOf([10, 40]));
+    expect(b).toEqual(samplesOf([2]));
   });
 });
 
@@ -695,8 +1254,17 @@ describe("sealDay()", () => {
     const state = emptyState();
     sealDay(state, "2026-08-20", samplesOf([]));
     expect(state.costByDay["2026-08-20"]).toBeUndefined();
-    sealDay(state, "2026-08-20", { count: 0, slowest: [] });
-    expect(state.costByDay["2026-08-20"]).toBeUndefined();
+  });
+
+  it("leaves the other days these rules sealed where they are", () => {
+    // Sealing clears what another set of rules left, and every day this
+    // set sealed is not that.
+    const state = emptyState();
+    sealDay(state, "2026-08-19", samplesOf([1024]));
+    sealDay(state, "2026-08-20", samplesOf([16]));
+    expect(Object.keys(state.costByDay).sort())
+      .toEqual(["2026-08-19", "2026-08-20"]);
+    expect(costSeconds(state, "2026-08-20")).toBe(1.024);
   });
 
   it("keeps the sample it was handed out of the state it wrote", () => {
@@ -705,59 +1273,130 @@ describe("sealDay()", () => {
     sealDay(state, "2026-08-20", batch);
     sampleDuration(batch, 900);
     expect(state.costByDay["2026-08-20"]).toEqual({
-      slowest: [10, 20],
-      count: 2,
+      ...samplesOf([10, 20]),
+      rule: COST_RULE,
     });
   });
 });
 
 describe("readCostsForward()", () => {
-  /** The shape a state written before the samples were kept carries. */
-  const held = (p90: number, count: number): IdentityState => {
+  /** A state holding one day in a shape an earlier set of rules stored. */
+  const held = (stored: unknown): IdentityState => {
     const state = emptyState();
-    (state.costByDay as Record<string, unknown>)["2026-08-20"] = { p90, count };
+    (state.costByDay as Record<string, unknown>)["2026-08-20"] = stored;
     return state;
   };
 
   it("gives back the cost a day carrying a percentile was giving", () => {
-    const state = held(4000, 45);
-    readCostsForward(state);
-    expect(costSeconds(state, "2026-08-20")).toBe(4);
+    for (const count of [1, 45, 10_000]) {
+      const state = held({ p90: 4096, count });
+      readCostsForward(state);
+      expect(costSeconds(state, "2026-08-20")).toBe(4.096);
+    }
   });
 
-  it("gives it back for a day of more executions than are kept", () => {
-    const state = held(4000, 10 * COST_SAMPLE_CAP);
+  it("counts the runs a day kept only the slowest of at the least kept", () => {
+    // Every run that was not kept was no slower than the least that
+    // was, so counting it there reads the day at or above what it was.
+    // The rank is taken over every run: the three kept alone would read
+    // at the slowest of them.
+    const state = held({ slowest: [2048, 4096, 4096], count: 20 });
     readCostsForward(state);
-    expect(state.costByDay["2026-08-20"]!.slowest.length)
-      .toBe(COST_SAMPLE_CAP);
-    expect(costSeconds(state, "2026-08-20")).toBe(4);
+    expect(state.costByDay["2026-08-20"]).toEqual(
+      samplesOf([...Array(18).fill(2048), 4096, 4096]),
+    );
+    expect(costSeconds(state, "2026-08-20")).toBe(2.048);
   });
 
-  it("weighs such a day by its executions when the rest of it lands", () => {
-    // A day arrives over as many runs as it takes, so a day read forward
-    // is still open. One execution standing for the whole of it would be
-    // outweighed by the next part to arrive, and a day of slow runs
-    // would come to report a fast one.
-    const state = held(30_000, 45);
+  it("reads a day kept whole as the runs it kept, under its own rules", () => {
+    const state = held({ slowest: [16, 1024, 1024], count: 3, rule: 7 });
     readCostsForward(state);
-    sealDay(state, "2026-08-20", samplesOf([10, 20]));
-    expect(costSeconds(state, "2026-08-20")).toBe(30);
+    expect(state.costByDay["2026-08-20"]).toEqual({
+      ...samplesOf([16, 1024, 1024]),
+      rule: 7,
+    });
+  });
+
+  it("keeps a day these rules stored as its slowest runs beside new ones", () => {
+    // How a day was stored is not which executions it holds, so a day
+    // these rules sealed before they counted by bucket stays in the
+    // window, and its slow runs weigh against the new day's fast ones.
+    const state = emptyState();
+    (state.costByDay as Record<string, unknown>)["2026-08-19"] = {
+      slowest: Array(12).fill(8192),
+      count: 12,
+      rule: COST_RULE,
+    };
+    readCostsForward(state);
+    sealDay(state, "2026-08-20", samplesOf(Array(100).fill(1024)));
+    expect(Object.keys(state.costByDay).sort())
+      .toEqual(["2026-08-19", "2026-08-20"]);
+    expect(costSeconds(state, "2026-08-20")).toBe(8.192);
+  });
+
+  it("gives way to the day these rules seal, on the same day", () => {
+    // The figures it carries are ones an earlier set of rules produced,
+    // so the part of the day that lands under these replaces them rather
+    // than joining them.
+    for (
+      const stored of [{ p90: 32_768, count: 45 }, {
+        slowest: [32_768],
+        count: 45,
+      }]
+    ) {
+      const state = held(stored);
+      readCostsForward(state);
+      sealDay(state, "2026-08-20", samplesOf([16, 32]));
+      expect(costSeconds(state, "2026-08-20")).toBe(0.032);
+    }
   });
 
   it("reads a day whose stored figures are not numbers as empty", () => {
     // The read of one such day ends that day rather than the state it
     // sits in, which the aggregate reports rather than throwing over.
     for (
-      const stored of [{ p90: 4000 }, { p90: 4000, count: 2.5 }, {
-        p90: 4000,
-        count: -1,
-      }, { p90: "slow", count: 45 }]
+      const stored of [
+        { p90: 4000 },
+        { p90: 4000, count: 2.5 },
+        { p90: 4000, count: -1 },
+        { p90: "slow", count: 45 },
+        { slowest: [], count: 3 },
+        { slowest: "fast", count: 3 },
+        { slowest: [10, "slow"], count: 3 },
+        { slowest: [10, 20], count: 1 },
+        { counts: [1] },
+        { lowest: 1.5, counts: [1] },
+        { lowest: -1, counts: [1] },
+        { lowest: 0, counts: "1" },
+        { lowest: 0, counts: [1, -1] },
+        { lowest: 0, counts: [0.5] },
+      ]
     ) {
-      const state = emptyState();
-      (state.costByDay as Record<string, unknown>)["2026-08-20"] = stored;
+      const state = held(stored);
       readCostsForward(state);
-      expect(state.costByDay["2026-08-20"]).toEqual({ slowest: [], count: 0 });
+      expect(state.costByDay["2026-08-20"]).toEqual(samplesOf([]));
       expect(costSeconds(state, "2026-08-20")).toBe(0);
+    }
+  });
+
+  it("reads a day that is not a record of figures as an empty one", () => {
+    // A state is read back through this before anything has looked at
+    // what it holds, and the reader of a stored aggregate reports one it
+    // cannot read rather than ending over it. A day holding a string
+    // would end it here.
+    for (const stored of ["slowest", 7, null, true]) {
+      const state = held(stored);
+      readCostsForward(state);
+      expect(state.costByDay["2026-08-20"]).toEqual(samplesOf([]));
+    }
+  });
+
+  it("reads days that are not a record at all as none", () => {
+    for (const stored of ["days", 7, [], null]) {
+      const state = emptyState();
+      (state as { costByDay: unknown }).costByDay = stored;
+      readCostsForward(state);
+      expect(state.costByDay).toEqual({});
     }
   });
 
@@ -776,6 +1415,75 @@ describe("readCostsForward()", () => {
     const kept = state.costByDay["2026-08-20"];
     readCostsForward(state);
     expect(state.costByDay["2026-08-20"]).toBe(kept);
+  });
+});
+
+describe("a day another set of cost rules sealed", () => {
+  /** A state holding one day of executions, sealed by no known set. */
+  const sealedBefore = (day: string, ms: number): IdentityState => {
+    const state = emptyState();
+    state.costByDay[day] = samplesOf(Array.from({ length: 20 }, () => ms));
+    return state;
+  };
+
+  it("answers while these rules have sealed nothing", () => {
+    // A test that has not passed since the rules changed has only what
+    // the earlier ones measured, and that is a better answer than none.
+    const state = sealedBefore("2026-08-20", 262_144);
+    expect(costSeconds(state, "2026-08-20")).toBe(262.144);
+  });
+
+  it("stops answering once these rules have sealed anything", () => {
+    // Read beside the day these rules sealed, the earlier day's twenty
+    // executions would be most of the window and would decide the cost,
+    // so this says the day is out of the reckoning rather than merely
+    // outweighed.
+    const state = sealedBefore("2026-08-20", 262_144);
+    sealDay(state, "2026-08-20", samplesOf([16_384, 16_384]));
+    expect(costSeconds(state, "2026-08-20")).toBe(16.384);
+  });
+
+  it("stops answering on a day of its own, not only on the same day", () => {
+    // A record of an older day can reach the store late, so the day
+    // these rules seal need not be the newest the state holds. Left
+    // behind, the earlier rules' figure would come back the moment the
+    // sealed day aged out from under it.
+    const state = sealedBefore("2026-08-19", 262_144);
+    state.costByDay["2026-08-20"] = samplesOf([262_144, 262_144]);
+    sealDay(state, "2026-08-19", samplesOf([1024, 1024]));
+    expect(costSeconds(state, "2026-08-20")).toBe(1.024);
+    trimWindows(state, "2026-08-27");
+    expect(costSeconds(state, "2026-08-27")).toBe(0);
+  });
+
+  it("gives way to a day these rules sealed under any other stamp", () => {
+    // Nothing orders the stamps; a day answers as one of these days or
+    // it does not.
+    for (const rule of [undefined, COST_RULE - 1, COST_RULE + 1]) {
+      const state = sealedBefore("2026-08-20", 262_144);
+      state.costByDay["2026-08-20"]!.rule = rule;
+      sealDay(state, "2026-08-20", samplesOf([1024]));
+      expect(costSeconds(state, "2026-08-20")).toBe(1.024);
+    }
+    const held = sealedBefore("2026-08-20", 262_144);
+    held.costByDay["2026-08-20"]!.rule = COST_RULE;
+    sealDay(held, "2026-08-20", samplesOf([1024]));
+    expect(costSeconds(held, "2026-08-20")).toBe(262.144);
+  });
+
+  it("ages out of the window as a day these rules sealed does", () => {
+    const inside = sealedBefore(
+      dayBefore("2026-08-20", COST_WINDOW_DAYS),
+      262_144,
+    );
+    trimWindows(inside, "2026-08-20");
+    expect(costSeconds(inside, "2026-08-20")).toBe(262.144);
+    const past = sealedBefore(
+      dayBefore("2026-08-20", COST_WINDOW_DAYS + 1),
+      262_144,
+    );
+    trimWindows(past, "2026-08-20");
+    expect(costSeconds(past, "2026-08-20")).toBe(0);
   });
 });
 
@@ -916,7 +1624,8 @@ describe("a main failure resolved in a later batch", () => {
   it("is a flake when the same commit later passes", () => {
     // The two runs of one commit can arrive in separate batches, so the
     // same-commit check inside a batch does not see this pair. Dropping
-    // the pending failure would lose the flake as well as the catch.
+    // the pending failure would lose the flake as well as the new real
+    // test failure.
     const context = emptyContext();
     const first = foldObservations([saw("fail", { commit: "c1" })], {
       context,
@@ -927,12 +1636,13 @@ describe("a main failure resolved in a later batch", () => {
     });
     const state = second.get(KEY)!;
     expect(state.flakesByDay["2026-08-20"]).toBe(1);
-    // A flake at one commit is not a catch: nothing was fixed between the
-    // failure and the pass, because there is nothing between them.
+    // A flake at one commit is not a new real test failure: nothing was
+    // fixed between the failure and the pass, because there is nothing
+    // between them.
     expect(state.mainCatches).toBe(0);
   });
 
-  it("is a catch when a later commit passes", () => {
+  it("is a new real test failure when a later commit passes", () => {
     const context = emptyContext();
     const first = foldObservations([saw("fail", { commit: "c1" })], {
       context,
@@ -945,17 +1655,39 @@ describe("a main failure resolved in a later batch", () => {
     expect(state.flakesByDay["2026-08-20"]).toBeUndefined();
     expect(state.mainCatches).toBe(1);
   });
+
+  it("is nothing at all when the failure is older than the window", () => {
+    // A failure nothing has judged for the longest window a state keeps
+    // is one the default branch has carried for that long, and the
+    // change that passes now did not fix it. A fold resolves every
+    // observation it reads before it ages anything, so the age is
+    // checked here as well as in `trimWindows`.
+    const context = emptyContext();
+    const first = foldObservations([
+      saw("fail", { commit: "c1", day: "2026-01-01" }),
+    ], { context });
+    const second = foldObservations([
+      saw("pass", { commit: "c2", day: "2026-08-20" }),
+    ], { context, prior: first });
+    const state = second.get(KEY)!;
+    expect(state.mainCatches).toBe(0);
+    expect(state.flakesByDay["2026-01-01"]).toBeUndefined();
+    // And the wait is over either way, so nothing keeps accumulating.
+    expect(state.pendingMain).toEqual([]);
+  });
 });
 
 describe("a failure seen from many places at once", () => {
   it("is environmental, and credits nobody, when the sources are near", () => {
     // Five sources failing within the breadth window is the environment
-    // breaking, not the test catching five separate changes.
+    // breaking, not the test having five separate new real test
+    // failures.
     const sources = ["main", "a", "b", "c", "d"];
     const folded = foldObservations(
       sources.map((source) =>
         saw("fail", { source, place: "pr", commit: `c-${source}` })
       ),
+      { prior: holding() },
     );
     const state = folded.get(KEY)!;
     expect(state.prCatches).toBe(0);
@@ -967,6 +1699,7 @@ describe("a failure seen from many places at once", () => {
       sources.map((source) =>
         saw("fail", { source, place: "pr", commit: `c-${source}` })
       ),
+      { prior: holding() },
     );
     expect(folded.get(KEY)!.prCatches).toBe(sources.length);
   });
@@ -989,12 +1722,467 @@ describe("a failure seen from many places at once", () => {
       day: "2026-08-01",
       startedAt: "2026-08-01T00:00:00.000Z",
     });
-    const folded = foldObservations([far, ...near]);
+    const folded = foldObservations([far, ...near], { prior: holding() });
     const state = folded.get(KEY)!;
     expect(state.failuresByDay["2026-08-01"]).toBe(1);
     expect(state.failuresByDay["2026-08-20"]).toBe(3);
-    // Four sources in all, but never four at once, so each is a catch.
+    // Four sources in all, but never four at once, so each is a new real
+    // test failure.
     expect(state.prCatches).toBe(4);
+  });
+});
+
+describe("a failure the default branch was already failing", () => {
+  /**
+   * The default branch passing at `c0` and later at `c2`, failing at
+   * `c1` between them, and a pull request failing at a commit of its own
+   * from each of `explained` while it was failing and from each of
+   * `independent` before it broke.
+   */
+  function breakage(
+    explained: readonly string[],
+    independent: readonly string[],
+  ): Observation[] {
+    let minute = 0;
+    const at = () => `2026-08-20T00:${String(minute++).padStart(2, "0")}:00Z`;
+    const onBranch = (source: string) =>
+      saw("fail", {
+        source,
+        place: "pr",
+        commit: `c-${source}`,
+        startedAt: at(),
+      });
+    return [
+      saw("pass", { commit: "c0", startedAt: at() }),
+      ...independent.map(onBranch),
+      saw("fail", { commit: "c1", startedAt: at() }),
+      ...explained.map(onBranch),
+      saw("pass", { commit: "c2", startedAt: at() }),
+    ];
+  }
+
+  it("does not count the pull requests that carried it as sources", () => {
+    // A pull request's run tests its merge into the default branch, so
+    // while that branch is red every pull request running the test fails
+    // it. Counted, those five sources would read the default branch's
+    // own escape as the environment breaking.
+    const state = foldObservations(breakage(["a", "b"], ["c", "d"])).get(
+      KEY,
+    )!;
+    expect(state.mainCatches).toBe(1);
+    expect(state.prCatches).toBe(2);
+    expect(state.failuresByDay["2026-08-20"]).toBe(5);
+  });
+
+  it("still reads a failure on enough other branches as environmental", () => {
+    // The default branch and four branches it does not explain are five
+    // sources, which is the environment however many pull requests the
+    // default branch's breakage also reached.
+    const state = foldObservations(
+      breakage(["a", "b"], ["c", "d", "e", "f"]),
+    ).get(KEY)!;
+    expect(state.mainCatches).toBe(0);
+    expect(state.prCatches).toBe(0);
+  });
+
+  it("credits once an outage the default branch saw first", () => {
+    // Nothing tells a failure the default branch's code caused from one
+    // its environment did while that branch is the one failing, so the
+    // branches it reaches meanwhile say nothing either way, and the
+    // breakage is the default branch's one new real test failure.
+    const state = foldObservations(
+      breakage(["a", "b", "c", "d", "e", "f"], []),
+    ).get(KEY)!;
+    expect(state.mainCatches).toBe(1);
+    expect(state.prCatches).toBe(0);
+  });
+
+  it("keeps what it marked for the batches after it", () => {
+    // Batch two's three branches failing on their own, with the default
+    // branch, are four sources. Read without the marks batch one left,
+    // the two branches that carried the default branch's breakage would
+    // make them six.
+    const context = emptyContext();
+    const first = foldObservations(breakage(["a", "b"], []), { context });
+    const carried = parseContext(serializeContext(context));
+    const second = foldObservations(
+      ["c", "d", "e"].map((source) =>
+        saw("fail", {
+          source,
+          place: "pr",
+          commit: `c-${source}`,
+          startedAt: "2026-08-20T01:00:00Z",
+        })
+      ),
+      { context: carried, prior: first },
+    );
+    const state = second.get(KEY)!;
+    expect(state.mainCatches).toBe(1);
+    expect(state.prCatches).toBe(3);
+  });
+
+  it("goes on counting the default branch's own failures", () => {
+    // The default branch failed from the 16th to the 19th, so its failure
+    // on the 19th is inside the window of the four branches failing on
+    // the 20th, and makes five sources.
+    const day = (date: string, minute = 0) => ({
+      day: date,
+      startedAt: `${date}T00:${String(minute).padStart(2, "0")}:00Z`,
+    });
+    const state = foldObservations([
+      saw("pass", { commit: "c0", ...day("2026-08-16") }),
+      saw("fail", { commit: "c1", ...day("2026-08-16", 1) }),
+      saw("fail", { commit: "c2", ...day("2026-08-19") }),
+      saw("pass", { commit: "c3", ...day("2026-08-19", 1) }),
+      ...["c", "d", "e", "f"].map((source) =>
+        saw("fail", {
+          source,
+          place: "pr",
+          commit: `c-${source}`,
+          ...day("2026-08-20"),
+        })
+      ),
+    ]).get(KEY)!;
+    expect(state.prCatches).toBe(0);
+  });
+});
+
+describe("a run that newly breaks a crowd of tests", () => {
+  /** As many distinct identities as asked for. */
+  function crowdOf(count: number, name = "case"): TestIdentity[] {
+    return Array.from(
+      { length: count },
+      (_, i) => ({ k: "unit", s: "memory", n: `${name} ${i}` }),
+    );
+  }
+
+  /** Every one of `tests` failing in one run on a pull request. */
+  function failing(
+    tests: readonly TestIdentity[],
+    fields: Partial<Observation> = {},
+  ): Observation[] {
+    return tests.map((test) =>
+      saw("fail", { test, place: "pr", source: "branch", ...fields })
+    );
+  }
+
+  /** Each test's new real test failures, wherever they happened. */
+  function newRealTestFailuresOf(
+    folded: Map<string, IdentityState>,
+    tests: readonly TestIdentity[],
+  ): number[] {
+    return tests.map((test) => {
+      const state = folded.get(testIdentityKey(test));
+      return (state?.localCatches ?? 0) + (state?.prCatches ?? 0) +
+        (state?.mainCatches ?? 0);
+    });
+  }
+
+  it("credits none of them, and still counts each failure", () => {
+    // Whichever of them a change runs sees the breakage, so it says
+    // nothing about any one of them.
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+    const folded = foldObservations(failing(crowd), { prior: holding(crowd) });
+    expect(newRealTestFailuresOf(folded, crowd)).toEqual(crowd.map(() => 0));
+    for (const test of crowd) {
+      const state = folded.get(testIdentityKey(test))!;
+      expect(state.failuresByDay["2026-08-20"]).toBe(1);
+      expect(state.sources).toEqual([]);
+      expect(state.lastCatch).toBeUndefined();
+    }
+  });
+
+  it("credits each of them when the crowd is one short", () => {
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES - 1);
+    expect(
+      newRealTestFailuresOf(
+        foldObservations(failing(crowd), { prior: holding(crowd) }),
+        crowd,
+      ),
+    )
+      .toEqual(
+        crowd.map(() => 1),
+      );
+  });
+
+  it("counts an identity the run failed twice once", () => {
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES - 1);
+    const folded = foldObservations([
+      ...failing(crowd),
+      ...failing(crowd.slice(0, 1)),
+    ], { prior: holding(crowd) });
+    expect(newRealTestFailuresOf(folded, crowd)).toEqual(crowd.map(() => 1));
+  });
+
+  it("does not count what the default branch was already failing", () => {
+    // The default branch went red for a crowd before this run, and what
+    // this run newly broke is the one test beside them.
+    const red = crowdOf(MASS_FAILURE_MIN_IDENTITIES, "red");
+    const fresh = crowdOf(1, "fresh");
+    const folded = foldObservations([
+      ...red.map((test) => saw("fail", { test, commit: "m1" })),
+      ...failing([...red, ...fresh], { commit: "c2" }),
+    ], { prior: holding(fresh) });
+    expect(newRealTestFailuresOf(folded, fresh)).toEqual([1]);
+    expect(newRealTestFailuresOf(folded, red)).toEqual(red.map(() => 0));
+  });
+
+  it("does not count a test that disagreed with itself there", () => {
+    const flaky = crowdOf(MASS_FAILURE_MIN_IDENTITIES, "flaky");
+    const fresh = crowdOf(1, "fresh");
+    const folded = foldObservations([
+      ...flaky.map((test) =>
+        saw("pass", { test, place: "pr", source: "branch" })
+      ),
+      ...failing([...flaky, ...fresh]),
+    ], { prior: holding([...flaky, ...fresh]) });
+    expect(newRealTestFailuresOf(folded, fresh)).toEqual([1]);
+  });
+
+  it("counts what each source saw apart", () => {
+    // A workstation names the commit its uncommitted changes sit on, so
+    // two sources at one commit ran two different trees.
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+    const half = crowd.length / 2;
+    const folded = foldObservations([
+      ...failing(crowd.slice(0, half)),
+      ...failing(crowd.slice(half), { place: "local", source: "someone" }),
+    ], { prior: holding(crowd) });
+    expect(newRealTestFailuresOf(folded, crowd)).toEqual(crowd.map(() => 1));
+  });
+
+  it("counts each run on one workstation at one commit apart", () => {
+    // Each ran whatever uncommitted changes sat on top of the commit then.
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES - 1);
+    const later = crowdOf(1, "later");
+    const local = { place: "local" as const, source: "someone" };
+    const folded = foldObservations([
+      ...failing(crowd, { ...local, startedAt: "2026-08-20T01:00:00.000Z" }),
+      ...failing(later, { ...local, startedAt: "2026-08-20T09:00:00.000Z" }),
+    ], { prior: holding([...crowd, ...later]) });
+    expect(newRealTestFailuresOf(folded, [...crowd, ...later])).toEqual(
+      [...crowd, ...later].map(() => 1),
+    );
+  });
+
+  it("does not count a failure the environment explains", () => {
+    // Failing on enough sources at once reads as the environment, which
+    // is no new real test failure whatever its run did.
+    const shared = crowdOf(MASS_FAILURE_MIN_IDENTITIES, "shared");
+    const fresh = crowdOf(1, "fresh");
+    const elsewhere = ["a", "b", "c", "d"].flatMap((source) =>
+      failing(shared, { source, commit: `c-${source}` })
+    );
+    const folded = foldObservations([
+      ...elsewhere,
+      ...failing([...shared, ...fresh]),
+    ], { prior: holding([...shared, ...fresh]) });
+    expect(newRealTestFailuresOf(folded, fresh)).toEqual([1]);
+  });
+
+  it("counts what one source saw at each commit apart", () => {
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+    const half = crowd.length / 2;
+    const folded = foldObservations([
+      ...failing(crowd.slice(0, half), { commit: "c1" }),
+      ...failing(crowd.slice(half), { commit: "c2" }),
+    ], { prior: holding(crowd) });
+    expect(newRealTestFailuresOf(folded, crowd)).toEqual(crowd.map(() => 1));
+  });
+
+  it("counts a test the default branch has not recorded toward the crowd", () => {
+    // The run broke a crowd of tests, one of them a test only its branch
+    // holds. That one is kept by no state, and is still part of the
+    // breakage every test in the crowd sees.
+    const held = crowdOf(MASS_FAILURE_MIN_IDENTITIES - 1);
+    const added = crowdOf(1, "added");
+    const folded = foldObservations(failing([...held, ...added]), {
+      prior: holding(held),
+    });
+    expect(newRealTestFailuresOf(folded, held)).toEqual(held.map(() => 0));
+    expect(folded.has(testIdentityKey(added[0]!))).toBe(false);
+  });
+
+  it("reaches the part of a run that arrives in a later batch", () => {
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES + 1);
+    const context = emptyContext();
+    const first = foldObservations(failing(crowd.slice(0, -1)), {
+      context,
+      prior: holding(crowd),
+    });
+    const last = crowd.slice(-1);
+    const second = foldObservations(failing(last), {
+      context: parseContext(serializeContext(context)),
+      prior: first,
+    });
+    expect(newRealTestFailuresOf(second, last)).toEqual([0]);
+  });
+
+  describe("on the default branch", () => {
+    it("credits none of them when a later commit fixes them", () => {
+      const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+      const folded = foldObservations([
+        ...crowd.map((test) => saw("fail", { test, commit: "c1" })),
+        ...crowd.map((test) => saw("pass", { test, commit: "c2" })),
+      ]);
+      expect(newRealTestFailuresOf(folded, crowd)).toEqual(crowd.map(() => 0));
+      expect(folded.get(testIdentityKey(crowd[0]!))!.pendingMain).toEqual([]);
+    });
+
+    it("credits each of them when the crowd is one short", () => {
+      const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES - 1);
+      const folded = foldObservations([
+        ...crowd.map((test) => saw("fail", { test, commit: "c1" })),
+        ...crowd.map((test) => saw("pass", { test, commit: "c2" })),
+      ]);
+      expect(newRealTestFailuresOf(folded, crowd)).toEqual(crowd.map(() => 1));
+    });
+
+    it("keeps the breakage a crowd while the branch goes on failing", () => {
+      // A pass judges only the failures in its own order, and the order
+      // moves on with the day, so the first failure it reads can be one
+      // that continued the breakage rather than the one that began it.
+      const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+      const folded = foldObservations([
+        ...crowd.map((test) => saw("fail", { test, commit: "c1", seed: 1 })),
+        ...crowd.map((test) => saw("fail", { test, commit: "c2", seed: 2 })),
+        ...crowd.map((test) => saw("pass", { test, commit: "c3", seed: 2 })),
+      ]);
+      expect(newRealTestFailuresOf(folded, crowd)).toEqual(crowd.map(() => 0));
+    });
+
+    it("credits none of them when a later run fixes them", () => {
+      // The waiting failures travel in the stored aggregate, and the run
+      // that judges them can be a later publisher run altogether.
+      const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+      const first = foldObservations(
+        crowd.map((test) => saw("fail", { test, commit: "c1" })),
+      );
+      const stored: Map<string, IdentityState> = new Map(
+        Object.entries(JSON.parse(JSON.stringify(Object.fromEntries(first)))),
+      );
+      const second = foldObservations(
+        crowd.map((test) => saw("pass", { test, commit: "c2" })),
+        { prior: stored },
+      );
+      expect(newRealTestFailuresOf(second, crowd)).toEqual(crowd.map(() => 0));
+    });
+
+    it("judges a breakage after a pass in another order by its own run", () => {
+      // A pass in another order leaves what was waiting where it is, and
+      // what it left is not part of the breakage that follows.
+      const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+      const alone = crowd[0]!;
+      const folded = foldObservations([
+        saw("fail", { test: alone, commit: "c0", seed: 1 }),
+        ...crowd.map((test) => saw("pass", { test, commit: "c1", seed: 2 })),
+        ...crowd.map((test) => saw("fail", { test, commit: "c2", seed: 2 })),
+        ...crowd.map((test) => saw("pass", { test, commit: "c3", seed: 2 })),
+      ]);
+      expect(newRealTestFailuresOf(folded, crowd)).toEqual(crowd.map(() => 0));
+
+      const lone = foldObservations([
+        ...crowd.map((test) => saw("fail", { test, commit: "c0", seed: 1 })),
+        ...crowd.map((test) => saw("pass", { test, commit: "c1", seed: 2 })),
+        saw("fail", { test: alone, commit: "c2", seed: 2 }),
+        saw("pass", { test: alone, commit: "c3", seed: 2 }),
+      ]);
+      expect(newRealTestFailuresOf(lone, [alone])).toEqual([1]);
+    });
+
+    it("judges a breakage by its own order after a crowd in another", () => {
+      // The next day's order broke a crowd, and the day's order then
+      // broke one test alone, which is that test's new real test failure.
+      const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+      const alone = crowd[0]!;
+      const at = (hour: number) =>
+        `2026-08-20T${String(hour).padStart(2, "0")}:00:00.000Z`;
+      const folded = foldObservations([
+        ...crowd.map((test) =>
+          saw("pass", { test, commit: "c0", seed: 1, startedAt: at(1) })
+        ),
+        ...crowd.map((test) =>
+          saw("fail", { test, commit: "c0", seed: 2, startedAt: at(2) })
+        ),
+        saw("fail", { test: alone, commit: "c1", seed: 1, startedAt: at(3) }),
+        saw("pass", { test: alone, commit: "c2", seed: 1, startedAt: at(4) }),
+      ]);
+      expect(newRealTestFailuresOf(folded, [alone])).toEqual([1]);
+    });
+
+    it("counts a crowd its order newly broke past a failure in another", () => {
+      // One test was failing alone in the next day's order. The day's
+      // order then broke it with a crowd, which credits none of them.
+      const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+      const alone = crowd[0]!;
+      const at = (hour: number) =>
+        `2026-08-20T${String(hour).padStart(2, "0")}:00:00.000Z`;
+      const folded = foldObservations([
+        ...crowd.map((test) =>
+          saw("pass", { test, commit: "c0", seed: 1, startedAt: at(0) })
+        ),
+        saw("fail", { test: alone, commit: "c1", seed: 2, startedAt: at(1) }),
+        ...crowd.map((test) =>
+          saw("fail", { test, commit: "c2", seed: 1, startedAt: at(2) })
+        ),
+        ...crowd.map((test) =>
+          saw("pass", { test, commit: "c3", seed: 1, startedAt: at(3) })
+        ),
+      ]);
+      expect(newRealTestFailuresOf(folded, crowd)).toEqual(crowd.map(() => 0));
+    });
+
+    it("keeps a crowd a crowd when the next day's order first sees it", () => {
+      // The day's order broke a crowd, and its fix landed the next day,
+      // after the next day's order had seen the same breakage.
+      const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+      const at = (day: number, hour: number) =>
+        `2026-08-${day}T${String(hour).padStart(2, "0")}:00:00.000Z`;
+      const folded = foldObservations([
+        ...crowd.map((test) =>
+          saw("fail", { test, commit: "c1", seed: 1, startedAt: at(20, 1) })
+        ),
+        ...crowd.map((test) =>
+          saw("fail", { test, commit: "c1", seed: 2, startedAt: at(20, 11) })
+        ),
+        ...crowd.map((test) =>
+          saw("fail", {
+            test,
+            commit: "c2",
+            seed: 2,
+            day: "2026-08-21",
+            startedAt: at(21, 1),
+          })
+        ),
+        ...crowd.map((test) =>
+          saw("pass", {
+            test,
+            commit: "c3",
+            seed: 2,
+            day: "2026-08-21",
+            startedAt: at(21, 2),
+          })
+        ),
+      ]);
+      expect(newRealTestFailuresOf(folded, crowd)).toEqual(crowd.map(() => 0));
+    });
+
+    it("does not count what it was already failing", () => {
+      // Red for a crowd already, and newly broken for one more test.
+      const red = crowdOf(MASS_FAILURE_MIN_IDENTITIES, "red");
+      const fresh = crowdOf(1, "fresh");
+      const folded = foldObservations([
+        ...red.map((test) => saw("fail", { test, commit: "c1" })),
+        ...[...red, ...fresh].map((test) =>
+          saw("fail", { test, commit: "c2" })
+        ),
+        ...[...red, ...fresh].map((test) =>
+          saw("pass", { test, commit: "c3" })
+        ),
+      ]);
+      expect(newRealTestFailuresOf(folded, fresh)).toEqual([1]);
+      expect(newRealTestFailuresOf(folded, red)).toEqual(red.map(() => 0));
+    });
   });
 });
 
@@ -1110,7 +2298,9 @@ describe("the two windows the context ages on", () => {
     trimContext(context, past);
     expect(context.outcomesAtCommit.size).toBe(0);
     expect(context.failures.size).toBe(
-      CATCH_BREADTH_WINDOW_DAYS > SAME_COMMIT_REACH_DAYS ? 1 : 0,
+      NEW_REAL_TEST_FAILURE_BREADTH_WINDOW_DAYS > SAME_COMMIT_REACH_DAYS
+        ? 1
+        : 0,
     );
   });
 });
@@ -1172,8 +2362,8 @@ describe("a rerun that lands after the window would have let go", () => {
     // Aging happens once per batch and after it, so an entry past the
     // span survives until the next batch arrives. A pass and a failure
     // at one commit is disagreement however far apart they land, and
-    // there is no change between them for a catch to be about, so the
-    // later answer is the better one and is left as it is.
+    // there is no change between them for a new real test failure to be
+    // about, so the later answer is the better one and is left as it is.
     const context = emptyContext();
     const first = foldObservations([saw("pass", { commit: "c0" })], {
       context,
@@ -1188,5 +2378,245 @@ describe("a rerun that lands after the window would have let go", () => {
     const state = late.get(KEY)!;
     expect(state.flakesByDay["2026-08-30"]).toBe(1);
     expect(state.mainCatches).toBe(0);
+  });
+});
+
+describe("the day a new real test failure is dated to", () => {
+  it("counts each new real test failure on its own day, beside the totals", () => {
+    const state = stateFrom([
+      saw("pass", { day: "2026-08-19", commit: "c0" }),
+      saw("fail", { commit: "c1", place: "pr", source: "fix-writes" }),
+      saw("fail", { commit: "c2", place: "pr", source: "tidy-up" }),
+    ]);
+    expect(state.newRealTestFailureDays).toEqual({
+      "2026-08-20": {
+        local: 0,
+        pr: 2,
+        main: 0,
+        sources: ["fix-writes", "tidy-up"],
+      },
+    });
+    expect(state.prCatches).toBe(2);
+  });
+
+  it("dates a new real test failure on main to the first failure the fix ended", () => {
+    // One breakage, one new real test failure, dated to where the
+    // breakage entered, which is the day a later reader divides the
+    // history by.
+    const state = stateFrom([
+      saw("fail", { day: "2026-08-18", commit: "c0" }),
+      saw("fail", { day: "2026-08-19", commit: "c1" }),
+      saw("pass", { commit: "c2" }),
+    ]);
+    expect(Object.keys(state.newRealTestFailureDays)).toEqual(["2026-08-18"]);
+    expect(state.newRealTestFailureDays["2026-08-18"]!.main).toBe(1);
+  });
+});
+
+describe("moveHistory()", () => {
+  /** A state holding something on each of two days. */
+  function twoDays(): IdentityState {
+    return {
+      ...emptyState(),
+      newRealTestFailureDays: {
+        "2026-08-10": { local: 1, pr: 0, main: 0, sources: ["ianh"] },
+        "2026-08-14": { local: 0, pr: 1, main: 0, sources: ["fix"] },
+      },
+      runsByDay: { "2026-08-10": 4, "2026-08-14": 5 },
+      failuresByDay: { "2026-08-10": 1 },
+      flakesByDay: { "2026-08-14": 1 },
+      costByDay: {
+        "2026-08-10": { ...samplesOf([40]), rule: COST_RULE },
+        "2026-08-14": { ...samplesOf([50]), rule: COST_RULE },
+      },
+      pendingMain: [{ day: "2026-08-14", commit: "c9", source: "main" }],
+      lastMainByOrder: [{ seed: 20260814, outcome: "fail" }],
+    };
+  }
+
+  it("moves the days it is asked to and leaves the rest", () => {
+    const from = twoDays();
+    const into = emptyState();
+    moveHistory(from, into, (day) => day < "2026-08-12");
+    expect(Object.keys(into.newRealTestFailureDays)).toEqual(["2026-08-10"]);
+    expect(into.runsByDay).toEqual({ "2026-08-10": 4 });
+    expect(into.failuresByDay).toEqual({ "2026-08-10": 1 });
+    expect(into.localCatches).toBe(1);
+    expect(into.lastCatch).toBe("2026-08-10");
+    expect(Object.keys(from.newRealTestFailureDays)).toEqual(["2026-08-14"]);
+    expect(from.runsByDay).toEqual({ "2026-08-14": 5 });
+    expect(from.pendingMain).toHaveLength(1);
+    expect(from.localCatches).toBe(0);
+    expect(from.prCatches).toBe(1);
+    // Some of the history is still here, and so is what main last said.
+    expect(from.lastMainByOrder).toEqual([{ seed: 20260814, outcome: "fail" }]);
+    expect(into.lastMainByOrder).toBeUndefined();
+  });
+
+  it("adds a moved day to what the other state holds for it", () => {
+    const into: IdentityState = {
+      ...emptyState(),
+      newRealTestFailureDays: {
+        "2026-08-10": { local: 0, pr: 2, main: 0, sources: ["fix"] },
+      },
+      runsByDay: { "2026-08-10": 6 },
+      costByDay: { "2026-08-10": { ...samplesOf([60]), rule: COST_RULE } },
+    };
+    moveHistory(twoDays(), into, () => true);
+    expect(into.newRealTestFailureDays["2026-08-10"]).toEqual({
+      local: 1,
+      pr: 2,
+      main: 0,
+      sources: ["fix", "ianh"],
+    });
+    expect(into.runsByDay["2026-08-10"]).toBe(10);
+    expect(into.costByDay["2026-08-10"]).toEqual({
+      ...mergeSamples(samplesOf([60]), samplesOf([40])),
+      rule: COST_RULE,
+    });
+    expect(into.localCatches + into.prCatches).toBe(4);
+    expect(into.sources).toEqual(["fix", "ianh"]);
+  });
+
+  it("keeps the day it holds where the moved one was sealed by other rules", () => {
+    const into: IdentityState = {
+      ...emptyState(),
+      costByDay: { "2026-08-10": { ...samplesOf([60]), rule: COST_RULE } },
+    };
+    const from = twoDays();
+    from.costByDay["2026-08-10"] = { ...samplesOf([40]), rule: COST_RULE + 1 };
+    moveHistory(from, into, () => true);
+    expect(into.costByDay["2026-08-10"]).toEqual({
+      ...samplesOf([60]),
+      rule: COST_RULE,
+    });
+    expect(from.costByDay).toEqual({});
+  });
+
+  it("hands over what main last said once nothing is left behind", () => {
+    const from = twoDays();
+    const into = emptyState();
+    moveHistory(from, into, () => true);
+    expect(into.lastMainByOrder).toEqual([{ seed: 20260814, outcome: "fail" }]);
+    expect(from.lastMainByOrder).toBeUndefined();
+    expect(into.pendingMain).toEqual([
+      { day: "2026-08-14", commit: "c9", source: "main" },
+    ]);
+  });
+});
+
+describe("renameInContext()", () => {
+  const RENAMED = { k: "unit", s: "memory", n: "space > records a write" };
+  const TO = testIdentityKey(RENAMED);
+
+  /** What a fold remembers after a branch's failure at one commit. */
+  function remembering() {
+    const context = emptyContext();
+    foldObservations([
+      saw("fail", { day: "2026-08-10", place: "pr", source: "branch" }),
+    ], { context, prior: holding() });
+    return context;
+  }
+
+  /** The branch's failure seen again, under the new name. */
+  function againAs(context: ReturnType<typeof emptyContext>) {
+    return foldObservations([
+      saw("fail", {
+        test: RENAMED,
+        day: "2026-08-10",
+        place: "pr",
+        source: "branch",
+      }),
+    ], { context, prior: holding([RENAMED]) }).get(TO)!;
+  }
+
+  it("carries what a fold remembers of a test to its new name", () => {
+    // A record of a day before an alias's date resolves to the new
+    // name, so a rerun of a commit the old name was credited at must
+    // find that credit there.
+    const renamed = remembering();
+    renameInContext(renamed, (key) => key === KEY ? TO : key);
+    expect(againAs(renamed).prCatches).toBe(0);
+    expect(againAs(remembering()).prCatches).toBe(1);
+  });
+
+  it("adds a renamed test's failures to those its new name holds", () => {
+    const context = emptyContext();
+    context.failures.set(KEY, [{ day: "2026-08-10", source: "a" }]);
+    context.failures.set(TO, [{ day: "2026-08-11", source: "b" }]);
+    renameInContext(context, (key) => key === KEY ? TO : key);
+    expect([...context.failures.keys()]).toEqual([TO]);
+    expect(context.failures.get(TO)!.map((one) => one.source).sort())
+      .toEqual(["a", "b"]);
+  });
+
+  it("merges a renamed test's entries with those its new name holds", () => {
+    const context = emptyContext();
+    context.outcomesAtCommit.set("c1#7", {
+      day: "2026-08-10",
+      identities: new Map([[KEY, new Set(["fail"])], [TO, new Set(["pass"])]]),
+    });
+    // A failure at a point is the commit being broken there, whichever
+    // name saw it, and a pass beside it does not clear that.
+    context.mainAtCommit.set(`${KEY} c1#7`, {
+      day: "2026-08-10",
+      outcome: "fail",
+    });
+    context.mainAtCommit.set(`${TO} c1#7`, {
+      day: "2026-08-11",
+      outcome: "pass",
+    });
+    context.mainAtCommit.set(`${KEY} c2#7`, {
+      day: "2026-08-10",
+      outcome: "pass",
+    });
+    context.mainAtCommit.set(`${TO} c2#7`, {
+      day: "2026-08-11",
+      outcome: "fail",
+    });
+    context.credited.set(`${KEY} c1 a`, "2026-08-10");
+    context.credited.set(`${TO} c1 a`, "2026-08-12");
+    renameInContext(context, (key) => key === KEY ? TO : key);
+    expect([...context.outcomesAtCommit.get("c1#7")!.identities]).toEqual([
+      [TO, new Set(["pass", "fail"])],
+    ]);
+    expect(context.mainAtCommit.get(`${TO} c1#7`)?.outcome).toBe("fail");
+    expect(context.mainAtCommit.get(`${TO} c2#7`)?.outcome).toBe("fail");
+    expect(context.mainAtCommit.size).toBe(2);
+    // The earlier credit is the one a single fold would have kept.
+    expect([...context.credited]).toEqual([[`${TO} c1 a`, "2026-08-10"]]);
+  });
+
+  it("renames by the day the context holds each entry against", () => {
+    const context = emptyContext();
+    context.failures.set(KEY, [
+      { day: "2026-08-10", source: "a" },
+      { day: "2026-08-16", source: "b" },
+    ]);
+    context.credited.set(`${KEY} c1 a`, "2026-08-10");
+    context.credited.set(`${KEY} c2 b`, "2026-08-16");
+    context.mainAtCommit.set(`${KEY} c1#7`, {
+      day: "2026-08-10",
+      outcome: "fail",
+    });
+    context.crowds.set("c1 a", {
+      day: "2026-08-10",
+      identities: new Set([KEY]),
+    });
+    renameInContext(
+      context,
+      (key, day) => key === KEY && day < "2026-08-15" ? TO : key,
+    );
+    expect(context.failures.get(TO)).toEqual([
+      { day: "2026-08-10", source: "a" },
+    ]);
+    expect(context.failures.get(KEY)).toEqual([
+      { day: "2026-08-16", source: "b" },
+    ]);
+    expect([...context.credited.keys()].sort()).toEqual(
+      [`${KEY} c2 b`, `${TO} c1 a`].sort(),
+    );
+    expect([...context.mainAtCommit.keys()]).toEqual([`${TO} c1#7`]);
+    expect([...context.crowds.get("c1 a")!.identities]).toEqual([TO]);
   });
 });

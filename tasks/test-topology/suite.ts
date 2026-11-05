@@ -10,13 +10,13 @@
 
 import * as path from "@std/path";
 import {
-  preloadArgument,
+  recordingArguments,
   serializeSkipList,
   SKIP_LIST_VARIABLE,
   type SkipList,
-  spoolWriteArgument,
   type TestIdentity,
 } from "@commonfabric/test-support/records";
+import { shuffleFlag, shuffleSeed } from "@commonfabric/test-support/shuffle";
 import type { CapabilityId } from "../ci-capabilities.ts";
 
 /** A kind and scope a suite's records may carry. */
@@ -73,6 +73,14 @@ export interface UnitRequest {
    * them, which is what a unit selected whole asks for.
    */
   skip: readonly string[];
+
+  /**
+   * Seconds one run of the unit is expected to take, as the manifest the
+   * lane planned from prices the identities it runs. Absent where nothing
+   * priced it. A runner that runs units side by side starts the costliest
+   * first by it.
+   */
+  cost?: number;
 }
 
 /** One JUnit report an invocation writes, and how to read it. */
@@ -106,11 +114,24 @@ export interface CommandContext {
   outputDir: string;
 
   /**
-   * Where coverage profiles go, one directory per workspace member.
+   * Where coverage profiles go. A suite whose runner is `deno test` over
+   * files writes one directory under it per workspace member, named by
+   * {@link coverageMemberDirectory}, so that what one member's tests
+   * reached is converted on its own; a suite that builds its own command
+   * line writes one directory named for itself.
    * Absent where this batch is not being measured, which is every batch
-   * outside the per-package coverage gate and the full run.
+   * outside the coverage gate and the full run.
    */
   coverageDir?: string;
+
+  /**
+   * The workspace members to measure, where only some of them are. A
+   * member outside the set runs unmeasured, because coverage costs time
+   * and nothing reads a profile no measured set is scored from. Absent
+   * means every member this batch runs, which is what the full run asks
+   * for.
+   */
+  measuredMembers?: ReadonlySet<string>;
 
   /**
    * Where a producer that writes a coverage report of its own puts it.
@@ -160,6 +181,23 @@ export interface Suite {
   unavailable: readonly Unavailable[];
 
   /**
+   * The units whose runner runs every identity in them, whatever a lane asks
+   * for. Examples are a workspace member whose test task takes no file list, a
+   * browser half, a section of a script that brings one environment up for
+   * several phases, and a gate that is a single identity.
+   *
+   * A lane writes no skip list for one of these, because its runner reads none.
+   * Every other unit is a file that `deno test` is pointed at, and the
+   * registration preload reads the skip list under that file's
+   * repository-relative path.
+   *
+   * `tasks/test-topology.test.ts` checks this list in both directions. A unit
+   * left out of it has to be such a file. A unit named in it has to be one its
+   * suite writes no skip list for.
+   */
+  whole: readonly Unit[];
+
+  /**
    * Tree paths this suite accounts for beyond its units. A suite whose
    * units are files needs none; a suite whose units are dispatch arms
    * names the scripts those arms run, so the drift guard can tell that
@@ -177,21 +215,63 @@ export interface Suite {
    * running.
    *
    * It is absent too where what a unit covers is a large part of the
-   * repository, since a declaration for such a unit comes to most
-   * changes and places it in most lanes by declaration rather than by
-   * what it has caught. Such a unit reaches a lane on what it is worth,
-   * or because nothing has a record of it.
+   * repository, since a declaration for such a unit comes to most changes and
+   * places it in most lanes by declaration rather than by its new real test
+   * failures. Such a unit reaches a lane on what it is worth, or because
+   * nothing has a record of it. The type check is the exception: a change
+   * reaches every type-check group importing what it touches, however many that
+   * is, since no `deno test` checks types.
    */
   unitsForChange?(changed: ReadonlySet<string>): readonly Unit[];
+
+  /**
+   * The repository files a unit runs, for a unit that is not itself one
+   * file: the test files of a unit that holds a directory's tests, the files
+   * a shell suite's step can source, call or deploy, or the source a named
+   * unit judges. A change reaches the unit through what
+   * reaches them. Absent, or empty for a unit, a unit is the file it is
+   * named for where it is named for one, and stands for no file otherwise.
+   */
+  sourcesOf?(unit: Unit): readonly string[];
+
+  /**
+   * What this suite's coverage is gated on: one entry per workspace
+   * member whose lines a subset of these units is scored over. Absent
+   * where nothing here is measured, which is every suite whose runner
+   * writes no coverage profile.
+   */
+  measured?: readonly MeasuredSet[];
+
+  /**
+   * What each unit judges, for a suite whose units are verdicts over other
+   * suites' units rather than anything a lane runs. Choosing such a unit
+   * runs every unit it judges, whole, and something outside the lanes
+   * reaches the verdict from what they produced and records it under the
+   * unit's identity. Absent for every suite a lane runs.
+   */
+  judges?: ReadonlyMap<Unit, Judged>;
 
   /** Whether a record belongs to one of this suite's units, or to it. */
   locate(record: LocatableRecord): Location | undefined;
 
-  /** The commands that run exactly these units, and their reports. */
+  /**
+   * The commands that run exactly these units, and their reports. Each
+   * unit goes to one command, so that what a command recorded is the
+   * whole of what was recorded of the units it ran.
+   */
   command(
     units: readonly UnitRequest[],
     context: CommandContext,
   ): Promise<Invocation[]>;
+}
+
+/** The units of another suite one verdict is reached over, and its name. */
+export interface Judged {
+  suite: string;
+  units: readonly Unit[];
+
+  /** The identity the verdict is recorded under. */
+  identity: TestIdentity;
 }
 
 /**
@@ -216,6 +296,78 @@ export interface Suite {
  * budget forever.
  */
 export type ReachedBy = readonly string[];
+
+/**
+ * One suite's units over one workspace member's lines, measured together
+ * and gated together.
+ *
+ * The pair is the unit of the coverage gate because it is the one
+ * measurement selection cannot skew: run every unit here and what those
+ * tests reached in that member is complete, whatever was chosen anywhere
+ * else in the run. Two sets over one member are two numbers and are never
+ * added together, since a line one suite covers says nothing about
+ * whether the other does.
+ */
+export interface MeasuredSet {
+  /** The workspace member whose lines are counted, repository-relative. */
+  member: string;
+
+  /**
+   * The paths a change reaches this set by. Reaching it lets a plan choose
+   * the set's coverage gate, which runs every unit below. It is the same
+   * declaration vocabulary that reaches a unit no diff can name, so one
+   * mechanism answers "what did this change touch" wherever the question
+   * comes up.
+   */
+  reachedBy: ReachedBy;
+
+  /** Every unit that measures it. */
+  units: readonly Unit[];
+}
+
+/**
+ * The directory one member's coverage profiles go in, under whatever
+ * directory a batch was given. Derived rather than declared, so that the
+ * suite writing the profiles and the conversion reading them cannot
+ * disagree about where they are.
+ *
+ * A member already holding the separator is refused rather than encoded,
+ * because two members would then share one directory and their coverage
+ * would be added together silently. No member in the tree has such a
+ * name, and the refusal is what keeps that from becoming a measurement
+ * nobody can explain.
+ */
+export function coverageMemberDirectory(member: string): string {
+  const path = member.replace(/^\.\//, "");
+  if (path.includes("__")) {
+    throw new Error(
+      `the workspace member ${path} cannot be measured: its name holds ` +
+        `the separator that stands for a slash in a coverage directory, ` +
+        `so it would share a directory with another member`,
+    );
+  }
+  return path.replaceAll("/", "__");
+}
+
+/**
+ * Where an invocation over `member` writes its coverage profiles, or
+ * nothing where it writes none. A batch with no coverage directory
+ * measures nothing, and one measuring only some members measures none of
+ * the others.
+ *
+ * The directory rather than a yes or no, so that a caller cannot ask
+ * whether it is measuring and then build the path from a directory the
+ * answer said nothing about.
+ */
+export function measuringInto(
+  context: Pick<CommandContext, "coverageDir" | "measuredMembers">,
+  member: string,
+): string | undefined {
+  if (context.coverageDir === undefined) return undefined;
+  const normalized = member.replace(/^\.\//, "");
+  if (context.measuredMembers?.has(normalized) === false) return undefined;
+  return path.join(context.coverageDir, coverageMemberDirectory(normalized));
+}
 
 /**
  * Whether one entry names a path. `**\/` stands for any run of
@@ -324,12 +476,12 @@ export interface ConfiguredSkip {
 export function unavailableFrom(
   skips: readonly ConfiguredSkip[],
   packageDir: string,
-): { whole: Set<Unit>; unavailable: Unavailable[] } {
-  const whole = new Set<Unit>();
+): { excluded: Set<Unit>; unavailable: Unavailable[] } {
+  const excluded = new Set<Unit>();
   const unavailable: Unavailable[] = [];
   for (const skip of skips) {
     const unit = `${packageDir}/${skip.file}`;
-    if (skip.step === undefined) whole.add(unit);
+    if (skip.step === undefined) excluded.add(unit);
     unavailable.push({
       unit,
       ...(skip.step === undefined ? {} : { leafName: skip.step }),
@@ -337,32 +489,71 @@ export function unavailableFrom(
       reason: skip.reason,
     });
   }
-  return { whole, unavailable };
+  return { excluded, unavailable };
+}
+
+/** A batch's skip list, as the invocation running the batch takes it. */
+export interface BatchSkipList {
+  /** The file holding the list, where the batch skips anything. */
+  path?: string;
+
+  /** The variable naming that file, where there is one. */
+  env: Record<string, string>;
 }
 
 /**
- * What an invocation takes to record: the preload, and the write
- * permission it needs to leave its name map in the batch's spool. The
- * permission is left out where the flags already grant one, since
- * appending a path list to a blanket grant either ends the run or cuts
- * the grant down to that list; `spoolWriteArgument` says which.
+ * Writes a batch's skip list into the batch's own directory as
+ * `<slug>.skip.json`, where it names anything. One naming nothing is not
+ * written, since the absence of the file is what tells the invocation to
+ * run everything.
  */
-export function recordingArguments(
-  flags: readonly string[],
+export async function writeBatchSkipList(
   context: CommandContext,
-): string[] {
-  const write = spoolWriteArgument(flags, context.spoolDir);
-  return write === undefined ? [preloadArgument()] : [preloadArgument(), write];
+  slug: string,
+  skips: SkipList,
+): Promise<BatchSkipList> {
+  if (Object.keys(skips).length === 0) return { env: {} };
+  const skipList = path.join(context.outputDir, `${slug}.skip.json`);
+  await Deno.mkdir(context.outputDir, { recursive: true });
+  await Deno.writeTextFile(skipList, serializeSkipList(skips));
+  return { path: skipList, env: { [SKIP_LIST_VARIABLE]: skipList } };
 }
 
-/** Writes a batch's skip list where its invocations will read it. */
-export async function writeSkipList(
-  skipListPath: string,
-  skips: SkipList,
-): Promise<void> {
-  if (Object.keys(skips).length === 0) return;
-  await Deno.mkdir(path.dirname(skipListPath), { recursive: true });
-  await Deno.writeTextFile(skipListPath, serializeSkipList(skips));
+/**
+ * The command that runs `deno test` over `files` under `flags`, recording
+ * and shuffling as every suite's `deno test` does, and writing its report to
+ * `junitPath`. The preload is permitted to read `skipList`, where the
+ * batch has one.
+ *
+ * It never type-checks. The `typecheck` suite checks every file a test
+ * loads, so a test process checking its module graph again repeats that
+ * work in every process a lane starts. Whatever `flags` say about checking
+ * is replaced by one `--no-check`.
+ */
+export function denoTestCommand(
+  flags: readonly string[],
+  context: CommandContext,
+  junitPath: string,
+  files: readonly string[],
+  skipList?: string,
+): string[] {
+  const unchecked = [
+    "--no-check",
+    ...flags.filter((flag) => !/^--(no-)?check(=|$)/.test(flag)),
+  ];
+  return [
+    Deno.execPath(),
+    "test",
+    ...unchecked,
+    shuffleFlag(shuffleSeed()),
+    ...recordingArguments(unchecked, {
+      spool: context.spoolDir,
+      root: context.root,
+      skipList,
+    }),
+    `--junit-path=${junitPath}`,
+    ...files,
+  ];
 }
 
 /** The skip list a set of unit requests comes to. */
@@ -422,6 +613,9 @@ export interface FileSuiteOptions {
    * batch is measured.
    */
   patternCoverage?: boolean;
+
+  /** What this suite's coverage is gated on, where anything is. */
+  measured?: readonly MeasuredSet[];
 }
 
 /**
@@ -440,7 +634,7 @@ export function fileSuite(options: FileSuiteOptions): Suite {
       units.push(file);
       partOf.set(file, part);
     }
-    unavailable.push(...part.unavailable ?? []);
+    for (const entry of part.unavailable ?? []) unavailable.push(entry);
   }
   const surfaces = {
     recordSurfaces,
@@ -453,6 +647,10 @@ export function fileSuite(options: FileSuiteOptions): Suite {
     needs: options.needs,
     units,
     unavailable,
+    // Every unit here is a file the command names. The preload reads the skip
+    // list under the same path.
+    whole: [],
+    ...(options.measured === undefined ? {} : { measured: options.measured }),
 
     locate(record) {
       if (!claimsIdentity(surfaces, record.test)) return undefined;
@@ -491,18 +689,10 @@ export function fileSuite(options: FileSuiteOptions): Suite {
           if (!group.some((request) => request.unit === unit)) continue;
           skips[unit] = [...new Set([...skips[unit] ?? [], ...leaves])];
         }
-        const env: Record<string, string> = { ...part.env };
-        if (Object.keys(skips).length > 0) {
-          const skipListPath = path.join(
-            context.outputDir,
-            `${slug}.skip.json`,
-          );
-          await writeSkipList(skipListPath, skips);
-          env[SKIP_LIST_VARIABLE] = skipListPath;
-        }
-        if (context.coverageDir !== undefined) {
-          env.DENO_COVERAGE_DIR = path.join(context.coverageDir, slug);
-        }
+        const skipList = await writeBatchSkipList(context, slug, skips);
+        const env: Record<string, string> = { ...part.env, ...skipList.env };
+        const measuring = measuringInto(context, part.packageDir);
+        if (measuring !== undefined) env.DENO_COVERAGE_DIR = measuring;
         if (
           options.patternCoverage === true &&
           context.patternCoverageDir !== undefined
@@ -510,16 +700,15 @@ export function fileSuite(options: FileSuiteOptions): Suite {
           env.CF_PATTERN_COVERAGE_DIR = context.patternCoverageDir;
         }
         invocations.push({
-          command: [
-            Deno.execPath(),
-            "test",
-            ...part.flags,
-            ...recordingArguments(part.flags, context),
-            `--junit-path=${junitPath}`,
-            ...group.map((request) =>
+          command: denoTestCommand(
+            part.flags,
+            context,
+            junitPath,
+            group.map((request) =>
               path.relative(cwd, path.resolve(context.root, request.unit))
             ),
-          ],
+            skipList.path,
+          ),
           cwd,
           env,
           junit: [{ path: junitPath, ...part.junit }],

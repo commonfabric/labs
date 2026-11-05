@@ -10,12 +10,110 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
-- [Collection indexes and keyed lookup](collection-index-contract.md) defines
-  proposed B1/B2 semantics and acceptance tests before implementation.
+- [CFC spec correspondence process](cfc-spec-correspondence-process.md)
+  gives agents the procedure for changing Contextual Flow Control here: read
+  the specification first, classify the change as host arrangement, conforming
+  implementation or semantic gap, and route a semantic gap through a specs
+  pull request before code; and stages what enforces it, from the instruction
+  surfaces that name the specs repository, through a hash-pinned spec snapshot
+  and correspondence manifest checked in CI and a §18.6.4 conformance
+  statement, to a kernel of same-named pure functions the pseudocode is the
+  source of.
+- [Anchors on collaborative fields](collaborative-field-anchors.md) carries
+  what is left to build on Memory's anchors, ranges of a collaborative field
+  mapped through every integrated operation: the runner's `addAnchor()`,
+  `removeAnchor()` and `anchorsOf()`, the editor drawing highlights at the
+  field's anchors as a view, and the shared-note comments on top.
+- [Unify Weaver Ask and CF harness](weaver-ask-console.md) sequences typed
+  callbacks, a cohesive handles module, one session UI for both command aliases,
+  and hands-on demo validation across labs, Weaver, and Loom.
+- [The served vote's remaining cost: the main thread's fan-out](served-vote-fan-out.md)
+  carries the served-vote investigation on from where its records leave it:
+  the memory server's per-session walk and encode on the main thread, the
+  four measurements that decide which change to make, the recipes for taking
+  them, and how the overlapped commit is validated.
+- [What a create leaves on a serving worker's heap](serving-worker-heap.md)
+  carries the work on what a piece a handler starts keeps alive on a serving
+  worker: what has been released, what is left, and the process for finding the
+  next holder from heap snapshots.
+- [The serving loop off the request thread](serving-loop-worker.md) moves the
+  server-execution host into a Web Worker of the toolshed process: the worker
+  reads the store on its own SQLite connections, sends wave commits and
+  everything else it needs from the memory server over a `MessagePort`, and
+  the request thread stops waiting behind waves.
+- [Memory router security requirements](memory-router-security-requirements.md)
+  defines the authentication, authorization, isolation, and public-ingress
+  gates for multiplexed Memory WebSockets routed to toolsheds.
+- [Independent reference labels](cfc-independent-reference-labels.md) moves a
+  link write to the specified contract (§8.2, §8.12.8): the slot persists the
+  creating attempt's own label and nothing copied from the target, a label
+  envelope beside a mergeable append describes the committed list, and a
+  specs ruling retires the `LinkReference` atom, after which the runtime
+  stopped minting and reading it. Legacy entries stay as conservative
+  restrictions; no migration runs.
+- [Release gates without an integrity union](cfc-release-gate-integrity.md)
+  keeps one consumed value's evidence from releasing another value's clause:
+  the write, sink and display gates run value-intrinsic rules at each location
+  an access consumed and the other rules over the join (§5.3, §4.6.3). What
+  remains is a specs ruling on the join within one location and the display's
+  fit of a cell's stored label.
+- [Input requirements on an endorsed computation's arguments](cfc-argument-input-requirements.md)
+  refuses a stand-in fed to code a rule endorses, by checking the integrity
+  each argument declares against the reads made through it. The declaration is
+  taken from the code's own module, not the graph's data, so a rule that guards
+  on the identity rests on it. It needs a narrow specs ruling first, and it
+  parks a per-item threshold drawn from a policy key.
+- [A piece's creator owns the fields an update adds](piece-creator-owns-update-added-fields.md)
+  records, once and by the runtime alone, the principal a piece was created
+  for, and binds a placeholder-owner field that a source update installs to
+  that record instead of to its first writer. It carries the ruling text for
+  the specs pull request, scopes the attribution mark to the new piece's own
+  documents as the rapids fix, and says how pieces created before the record
+  gain one.
 
-- [Pattern computation cost: implementation sequence](pattern-computation-cost-implementation.md)
-  executes the design in PR #7155 with checkable measurement, collection
-  operator, multi-replica correctness, and authoring-guidance stages.
+- [Shuffled test order: what is left to build](test-order-shuffle.md) carries
+  the piece the shuffle does not yet have: a shuffle inside this repository's
+  own `describe()` and `it()`, which every test file already resolves to,
+  reordering the cases inside a file that `deno test --shuffle` leaves in
+  place. Its first stage, a scheduled run under the next day's seed a day
+  ahead, is built.
+- [Security and privacy roadmap](security-privacy-roadmap.md) gives an overview
+  of current trust boundaries and the path from runtime security to operator
+  exclusion, with remaining work and technical references in an appendix.
+- [Discovering Loom resources with wish](loom-resource-discovery.md) proposes
+  publishing existing database and companion-cell references once per Loom
+  environment, with a staged person-inbox migration and compiled integration
+  acceptance gates.
+- [Revising a piece's source from an agent session](piece-revision-from-a-session.md)
+  covers the two `pattern-author` tools that revise a piece someone already
+  has — a handle-addressed read of its current source, and a direct edit
+  through the runtime's own compatibility check and setup transaction — what
+  they lean on rather than rebuild, and the two questions left open: whether
+  revising is really `run_pattern` with a target, and what to do about an
+  agent retyping a whole pattern for a one-character mistake.
+- [View-scoped client replication](view-scoped-client-replication.md) tracks
+  rollout, recovery, and adversarial verification of active-view delivery and
+  guarded speculative computation. It separates execution demand from delivery
+  and stages document selection before optional field projections.
+- [cf-harness task research and composition](cf-harness-inbox-reliability.md)
+  adds a `research` service that reads documentation and indexed source,
+  prepares a usable implementation kit for every task, and supports tested email
+  components that authors can compose.
+- [Interaction cost in the unified inbox](person-inbox-interaction-cost.md)
+  records the runtime work behind a thread open that cost 1482 ms paced and
+  10.7-19.5 s against five people's data: the per-read prefix scan over a
+  document's dereference-trace sources, the schemaless result pull a child
+  instantiation registers, and the authoring rule that a display cap bounds the
+  render and not the transaction. It carries what was disproved with what
+  landed, and the one item still open — a session that settles at ~800 ms after
+  roughly twenty clicks, which is waiting rather than compute.
+- [Topics computation cost and live upgrade](topics-computation-cost.md)
+  sequences shared backlink lookup, incremental mention maintenance, topic
+  summaries, measurement gates, and rehearsed upgrades of populated boards.
+- [One way to render Markdown](markdown-rendering.md) brings the three modules
+  that render `marked` tokens — the `<cf-markdown>` component, the harness
+  console, and the `cf` pager — onto one character reference decoder and one URL
+  policy, and asks whether the two Lit renderers should share their token walk.
 - [Cast-free patterns](cast-free-patterns.md) sequences shared type and API
   repairs, migration of authored patterns and their tests, and enforcement
   through lint and new-source admission.
@@ -44,9 +142,6 @@ a record: archive it to `docs/history/plans/` following the procedure in
   on which authority and which caveat tiers admit content to a model.
 - [CFC TypeScript authoring](cfc_typescript_authoring.md) sequences the
   TypeScript and JSX authoring surface for CFC metadata.
-- [`cf-code-editor` co-presence](cf-code-editor-copresence.md) adds an
-  ephemeral Cloudflare WebSocket plane for live participant names, carets, and
-  selections while Memory remains the sole authority for document contents.
 - [First-class serializable factories](first-class-serializable-factories.md)
   sequences the implementation of durable pattern, module, and handler
   factories.
@@ -64,28 +159,39 @@ a record: archive it to `docs/history/plans/` following the procedure in
   [`../features/vouched-ingest-channel-mint.md`](../features/vouched-ingest-channel-mint.md).
 - [Integration-test video demos](integration-test-video-demos.md) tracks
   optional CI adoption and further fixture hardening.
-- [Lazy cell materialization](lazy-cell-materialization.md) sequences a
-  schema-observing lazy view over a cell, a transaction mode that hands one back
-  from every read, and the runner disposition for a reader that touches data the
-  schema no longer describes.
-- [Making pattern computation cost declarable and visible](pattern-computation-cost.md)
-  pairs two repairs to the same gap: the collection algebra has incremental
-  `map`, `filter`, and `flatMap` but no `groupBy`, keyed lookup, join, or
-  incremental `reduce`, so a group-by is written as nested scans over a
-  reactive array; and a scheduler node records how often an action ran but not
-  how much it read, so the cost is invisible until somebody profiles. Carries
-  the access counter, the missing operators, the replication failures that
-  currently push authors off the incremental path, and the authoring guidance
-  that steers them into the expensive construct.
-- [Choosing which tests a pull request runs](pull-request-test-selection.md)
-  replaces the sixty-seven pull-request jobs with five, each running a subset
-  chosen from what the record store knows about which tests have caught real
-  regressions, and packed to finish inside five minutes. It carries the
-  repository-side topology that lets a new test surface be registered once
-  and picked up by both the full run and the selection, the scoring, flake
-  and packing rules, and the two things a subset breaks and this replaces:
-  coverage becomes a trend rather than a gate, and a regression that only
-  `main` catches is reported back to the change that introduced it.
+- [Stream markers out of stored data](stream-markers-out-of-stored-data.md)
+  moves stream-ness out of the stored `{ "$stream": true }` value and into the
+  link schema and the module wrapper, and triggers the cold-start repairs on a
+  structural mismatch instead of the missing marker. It names putting the
+  owner into a stream's address as the follow-up it is written toward.
+- [Cutting the resume pre-sync's cost](resume-presync-cost.md) removes what
+  the pre-sync repeats or does not need: a child start re-planning the
+  subtree its parent named, every plan's inputs cell re-inlining its
+  schemas, a cross-space pass that materializes every plan to find a link,
+  a planning loop that never yields to read the answers it asked for, and a
+  node bound once for the pre-sync and again for its instantiation.
+- [Pre-syncing from node plans](presync-from-node-plans.md) makes one
+  derivation per pattern node serve both instantiation and the pre-sync, so a
+  resume and a fresh start name exactly what each lift, handler, builtin, and
+  nested pattern reads under their declared read schemas, then holds each
+  node's first run on the loads it named instead of on a space-wide timer.
+- [A scheduler breaker for remote-echo write loops](scheduler-remote-echo-breaker.md)
+  bounds the loop in which a derivation writes a document, a remote change to
+  that same document re-triggers it, and it writes again without end because
+  another session is doing the same from the other side. Detection keyed per
+  `(action, document)` on the self-referential, foreign-triggered, value-changing
+  write; capped exponential backoff on the re-run; a counted loud line, a
+  scheduler stat, and trips and clears reported over the memory session to the
+  health route beside the commit rates; and a two-session harness that trips
+  the loop on purpose. The
+  backoff Topic 911 waits for, and the first of Topic 913's three guardrails.
+  Always on, in every runtime.
+- [Durable history of new real test failures and a bounded
+  aggregate](durable-new-real-test-failure-history.md) keeps every new real
+  test failure the test-selection publisher has credited a test with through
+  a bootstrap, a rename, and an outage, and stops the publisher's aggregate
+  growing with the age of the store. It is built, and waits for the checks
+  its first run after landing answers.
 - [Memory `apply-op`](memory-apply-op.md) sequences the editor-neutral
   collaborative-field substrate, the first CodeMirror codec and editor
   integration, and the checkpoints and review gates required before a future
@@ -104,19 +210,16 @@ a record: archive it to `docs/history/plans/` following the procedure in
   intent listener, the ruled double-dispatch implementation, the
   acceptance and the owner ruling set); it archives beside the stage-C
   closeout when that build lands.
-- [Scheduled work in the server](scheduled-work-in-the-server.md) proposes the
-  simpler form D12 said bgUpdater would come back as: a pattern declares the
-  cadence it wants to wake on, and the space's own serving runtime honors it,
-  so background work stops needing a separate process anyone has to run and
-  keep online. Waking a piece on a timer with nobody watching is the one thing
-  the background piece service does that the executor does not, and the ruling
-  accepts that capability lapsing in the meantime — nothing depends on it, so
-  nothing is broken while it is gone. Three separable parts: the replacement,
-  the already-ruled deletion, which waits for nothing here and has a worked v1
-  inventory to read, and compute accounting, which neither of the others
-  depends on. The replacement rests on a further ruling, because a
-  scheduled wake would be the second issuer of warm demand where the spec pins
-  the count at one.
+- [Scheduled work in the server](scheduled-work-in-the-server.md) proposes a
+  simpler form for bgUpdater, which the owner ruled will come back later: a
+  pattern declares the cadence it wants to wake on, and the space's own
+  serving runtime honors it, so background work needs no separate process
+  anyone has to run and keep online. Nothing wakes a piece on a timer with nobody watching, and the ruling
+  accepts that capability being absent in the meantime — nothing depends on
+  it. Two separable parts: the capability, and compute accounting, which the
+  capability does not depend on to function. The capability rests on a further
+  ruling, because a scheduled wake would be the second issuer of warm demand
+  where the spec pins the count at one.
 - [Revision-keyed schema memo](revision-keyed-schema-memo.md) designs a
   cross-evaluation, per-document memo of schema-walk computation on the
   memory server, keyed by each document's revision so validity needs no
@@ -128,12 +231,21 @@ a record: archive it to `docs/history/plans/` following the procedure in
   sequences how long an invocation record is kept and what the runtime knows
   about who caused it — the `AgentActor` mint, trusted ingress, and metadata
   confidentiality. Gated on a CFC review that has not happened.
+- [Random space identities](random-space-identities.md) gives every newly
+  created space a fresh random identity whose authority ends after ACL genesis,
+  while every space that already exists keeps its DID and the name that reaches
+  it. It implements the
+  [random space identity specification](../specs/random-space-identities.md),
+  uses existing DID routes, and is complete without a public name registry.
+  The code is implemented; its deployment sequence, a specification change and
+  an infrastructure change in other repositories, and the tripwire's deletion
+  remain.
 - [CFC runner implementation](runner_cfc_implementation.md) defines the
   commit-boundary enforcement workstreams and rollout.
 - [Finishing the piece source lifecycle](piece-source-lifecycle-completion.md)
   compares the lifecycle spec against the repository and orders the remainder
-  as five pull requests in two tracks — what a revision records, and where a
-  space lives.
+  as four pull requests in two tracks — what a revision records, and how a
+  learned route persists.
 - [Bulk piece operations](piece-bulk-operations.md) designs retargeting,
   repairing, and rolling back many pieces as one reviewable, resumable
   operation over a shared plan — with batching as an execution strategy
@@ -142,6 +254,17 @@ a record: archive it to `docs/history/plans/` following the procedure in
   board and topic grow their verbs without breaking the pieces already holding
   data: the shape the board demands of a stored topic, the one rehearsed break
   that narrowing it needs, and the items waiting on platform work.
+- [`compact-space`](compact-space.md) designs the operator tool that shrinks
+  one space's revision history after a write storm: materialize a `set` at
+  every selected head under one `system` compaction commit, keep every head's
+  address but the ACL document's, which records the compaction, drop the
+  rows behind it, hollow every commit payload outside a retained window
+  except the genesis receipt's and those an `op_*` row references, while
+  keeping every commit's identity,
+  and write the result out with `VACUUM INTO`. Options for what compaction
+  means and what each breaks, the flags, the safety and rollback recipe for
+  Estuary, and the server change that goes first because it keeps a future
+  storm from degrading the space it hits.
 - [`cf space clone` rehearsal](space-clone-rehearsal.md) records the design for
   rehearsal-grade copies of populated spaces. The tooling has shipped (`cf
   space`, `cf inspect churn`); the operating procedure lives in
@@ -155,8 +278,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
   [shaped reads and verb results](shaped-reads-and-verb-results.md) — the shared
   read layer, how a shape says "an address here, a value there", and what
   calling a verb adds — and at
-  [CLI surface shape](cli-surface-shape.md) for the command surface and an
-  additive path to it. Start here rather than at either part.
+  [CLI surface shape](../history/plans/cli-surface-shape.md) for the command surface, an executed
+  plan now archived. Start here rather than at either part.
 - [References as arguments](references-as-arguments.md) proposes lifting
   address resolution out of the LLM dialog builtin, which already does it, and
   into the boundary every external caller crosses. An LLM and the CLI can
@@ -200,3 +323,26 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the verb flags and result shapes that offer none, the source `--space` needs
   before any of it is reachable by name, and the gate that keeps completion
   from falling behind the command tree again.
+- [Turning instance names on](instance-names-on.md) sequences what comes
+  before the `instanceNames` flag turns on: a one-way mark on each space,
+  recorded at the first commit from a naming runtime and only where the
+  deployment names instances, after which the memory server admits no
+  positional runtime to it, which is built; then the flag's env mapping, the
+  flip, and the flag's removal.
+- [Handler-callable egress](handler-callable-egress.md) records the capability
+  a pattern does not have: a network request a handler can issue and await,
+  which the runtime records and gates the way it records and gates a node
+  factory's request. It carries the shape of program that has no home without
+  one, the two routes a design could take and what each gives up, and the
+  provider-side stack left standing in the meantime.
+
+## Concepts not planned for deployment
+
+These documents retain implementation detail for designs that may be evaluated
+again. They are not scheduled work and are not dependencies of current plans.
+
+- [Space name registry](space-name-registry.md) describes a possible
+  implementation of the DNS namespaces, ASP redirects, registered targets, and
+  displayed-name selection in the dormant
+  [Common Fabric URL](../specs/fabric-urls.md) concept. It remains independent of
+  space identity creation.

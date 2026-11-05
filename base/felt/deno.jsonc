@@ -1,0 +1,19 @@
+{
+  "name": "@commonfabric/felt",
+  "tasks": {
+    "cli": "deno run ./cli.ts",
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check -A"
+  },
+  "exports": {
+    ".": "./mod.ts",
+    "./cli": "./cli.ts"
+  },
+  "imports": {
+    // Dependency guide: ../../docs/development/DEPENDENCIES.md
+    // esbuild and its Deno plugin roll as one set; see "esbuild" there.
+    "esbuild": "npm:esbuild@^0.25.12",
+    "@deno/esbuild-plugin": "jsr:@deno/esbuild-plugin@^1.2.1",
+    "@std/fmt/colors": "jsr:@std/fmt@^1.0.10/colors"
+  }
+}

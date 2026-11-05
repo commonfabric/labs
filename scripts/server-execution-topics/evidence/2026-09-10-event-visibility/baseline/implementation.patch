@@ -1,0 +1,72 @@
+diff --git a/packages/runner/src/executor/space-server.ts b/packages/runner/src/executor/space-server.ts
+index 4dec567a57..3d5966dcd1 100644
+--- a/packages/runner/src/executor/space-server.ts
++++ b/packages/runner/src/executor/space-server.ts
+@@ -2453,9 +2453,11 @@ export class SpaceServer implements TransactionSealDestination {
+    * the events.md §5 DROP and clears the park criterion). */
+   #armDeferredRescan(): void {
+     if (this.#deferredRescanTimer !== undefined) return;
++    this.#options.stats.events.deferredRescansArmed += 1;
+     this.#deferredRescanTimer = setTimeout(() => {
+       this.#deferredRescanTimer = undefined;
+       if (!this.#active) return;
++      this.#options.stats.events.deferredRescansFired += 1;
+       this.#eventScanOwed = true;
+       this.#feedArrived?.resolve();
+     }, EVENT_DEFERRAL_REARM_MS);
+diff --git a/packages/runner/src/executor/stats.ts b/packages/runner/src/executor/stats.ts
+index 0c418d518a..d44784fee1 100644
+--- a/packages/runner/src/executor/stats.ts
++++ b/packages/runner/src/executor/stats.ts
+@@ -369,6 +369,21 @@ export type ServingLoopStats = {
+      * register's owed follow-up on the OW45 row. */
+     preQueueDeferralStuck: number;
+ 
++    /** Ordered publication/response barriers attempted for lagging event views. */
++    visibilityBarriers: number;
++
++    /** Event identities visible at the recomputed index after a barrier. */
++    visibilityRecoveries: number;
++
++    /** Drain passes stopped by an event view still missing its stored identity. */
++    visibilityDeferrals: number;
++
++    /** Deferral backstops scheduled across all transient drain outcomes. */
++    deferredRescansArmed: number;
++
++    /** Deferral backstops that fired during an active serving tenure. */
++    deferredRescansFired: number;
++
+     /** Stage C build W3, (α1) — events.md §4's RULED one-entry-one-
+      * completed-run sentence: LT1 same-space in-process copies (`served
+      * !== undefined && served.streamEntry === undefined`) the flush
+@@ -593,6 +608,11 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
+     skippedIdempotent: 0,
+     drainInFlightSkips: 0,
+     preQueueDeferralStuck: 0,
++    visibilityBarriers: 0,
++    visibilityRecoveries: 0,
++    visibilityDeferrals: 0,
++    deferredRescansArmed: 0,
++    deferredRescansFired: 0,
+     lt1LeftoversPurged: 0,
+     lt1LateSealsRefused: 0,
+     orphanDeliveriesRefused: 0,
+diff --git a/packages/runner/src/storage/interface.ts b/packages/runner/src/storage/interface.ts
+index 1b556046b3..33a6ebfcb5 100644
+--- a/packages/runner/src/storage/interface.ts
++++ b/packages/runner/src/storage/interface.ts
+@@ -688,6 +688,13 @@ export interface IStorageProvider {
+   /** Establish the authenticated space session without reading entity values. */
+   ensureSession?(): Promise<void>;
+ 
++  /**
++   * Wait for an ordered response after this space's published input frames.
++   * Frame application completes before the response; pending local writes may
++   * still shadow those inputs. This does not wait for commit durability.
++   */
++  pullToServerHead?(): Promise<void>;
++
+   /** List live space-scoped entity identifiers without loading their values. */
+   listEntityIds?(): Promise<string[] | undefined>;
+ 

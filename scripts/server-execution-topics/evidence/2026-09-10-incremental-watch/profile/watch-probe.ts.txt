@@ -1,0 +1,233 @@
+/**
+ * Counts collection traversal during real memory watch mutations in an isolated
+ * process. Prototype probes count yielded entries and calls, including copies
+ * whose input is a collection iterator. They add overhead, so this script
+ * reports work counts and never latency. Run with `deno run -A` from the root.
+ */
+
+import { expect } from "@std/expect";
+
+import { getServerExecutionConfig, setServerExecutionConfig, toDirtyKey, type WatchSpec } from "../../packages/memory/v2.ts";
+import { connect, loopback } from "../../packages/memory/v2/client.ts";
+import { EngineObjectManager } from "../../packages/memory/v2/query.ts";
+import { Server, SessionRegistry } from "../../packages/memory/v2/server.ts";
+import {
+  testSessionOpenAuthFactory,
+  testSessionOpenServerOptions,
+} from "../../packages/memory/test/v2-auth-test-helpers.ts";
+
+/** Call and entry counts for one observed collection traversal site. */
+interface Count {
+  calls: number;
+  entries: number;
+}
+
+/** Runs one fresh-store size and returns add, refresh, and removal counts. */
+async function measure(size: number) {
+  const enabled = Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION") === "true";
+  setServerExecutionConfig(enabled);
+  expect(getServerExecutionConfig()).toBe(enabled);
+  console.error(JSON.stringify({ phase: "posture", size, serverExecution: getServerExecutionConfig(), client: "memory v2 loopback; no execution runtime", shell: null }));
+  const registry = new SessionRegistry();
+  const server = new Server({
+    ...testSessionOpenServerOptions,
+    store: new URL(`memory://watch-campaign-${crypto.randomUUID()}`),
+    sessions: registry,
+    subscriptionRefreshDelayMs: "manual",
+  });
+  const clients = [];
+  let active: Record<string, Count> | undefined;
+  const restores: (() => void)[] = [];
+  try {
+    const client = await connect({ transport: loopback(server) });
+    clients.push(client);
+    const space = "did:key:z6Mk-watch-maintenance-probe";
+    const writer = await client.mount(space, {}, testSessionOpenAuthFactory);
+    const readerClient = await connect({ transport: loopback(server) });
+    clients.push(readerClient);
+    const reader = await readerClient.mount(
+      space,
+      {},
+      testSessionOpenAuthFactory,
+    );
+    const ids = Array.from({ length: size + 1 }, (_, i) => `of:probe-${i}`);
+    await writer.transact({
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: ids.map((id) => ({
+        op: "set" as const,
+        id,
+        value: { value: { n: 0 } },
+      })),
+    });
+    await server.flushSessions();
+    const watch = (id: string): WatchSpec => ({
+      id,
+      kind: "graph",
+      query: { roots: [{ id, selector: { path: [], schema: false } }] },
+    });
+    const watches = ids.slice(0, size).map(watch);
+    await reader.watchSetSync(watches);
+    const session = registry.get(space, reader.sessionId)!;
+    expect(session.entities.size).toBe(size);
+
+    // The caller location separates a cache copy from tracker iteration and
+    // tracked-ID rebuilding. Values are never captured by the probe.
+    const countFor = (kind: string): Count | undefined => {
+      if (active === undefined) return undefined;
+      const site = new Error().stack?.split("\n").find((line) =>
+        line.includes("/packages/memory/") ||
+        line.includes("/packages/runner/")
+      )?.trim().replace(Deno.cwd(), "<root>") ?? "other";
+      return active[`${kind}: ${site}`] ??= { calls: 0, entries: 0 };
+    };
+    for (const key of [Symbol.iterator, "entries", "values", "keys"] as const) {
+      const original = Map.prototype[key];
+      Map.prototype[key] = function* (this: Map<unknown, unknown>) {
+        const count = countFor(`Map.${String(key)}`);
+        if (count) {
+          count.calls++;
+        }
+        for (const item of original.call(this)) {
+          if (count) {
+            count.entries++;
+          }
+          yield item;
+        }
+      } as typeof original;
+      restores.push(() =>
+        Map.prototype[key] = original
+      );
+    }
+    for (const key of [Symbol.iterator, "values", "keys"] as const) {
+      const original = Set.prototype[key];
+      Set.prototype[key] = function* (this: Set<unknown>) {
+        const count = countFor(`Set.${String(key)}`);
+        if (count) count.calls++;
+        for (const item of original.call(this)) {
+          if (count) count.entries++;
+          yield item;
+        }
+      } as typeof original;
+      restores.push(() => Set.prototype[key] = original);
+    }
+    for (const key of ["map", "filter", "forEach", "some", "every"] as const) {
+      const original = Array.prototype[key];
+      Array.prototype[key] = function (this: unknown[], ...args: unknown[]) {
+        const count = countFor(`Array.${key}`);
+        if (count) {
+          count.calls++;
+          const callback = args[0];
+          if (typeof callback === "function") {
+            args[0] = function (this: unknown, ...values: unknown[]) {
+              count.entries++;
+              return Reflect.apply(callback, this, values);
+            };
+          }
+        }
+        return Reflect.apply(original, this, args);
+      } as typeof original;
+      restores.push(() => Array.prototype[key] = original);
+    }
+    const slice = Array.prototype.slice;
+    Array.prototype.slice = function (...args) {
+      const result = Reflect.apply(slice, this, args);
+      const count = countFor("Array.slice");
+      if (count) { count.calls++; count.entries += result.length; }
+      return result;
+    };
+    restores.push(() => Array.prototype.slice = slice);
+    const arrayIterator = Array.prototype[Symbol.iterator];
+    Array.prototype[Symbol.iterator] = function* () {
+      const count = countFor("Array.iterator");
+      if (count) count.calls++;
+      for (const value of arrayIterator.call(this)) {
+        if (count) count.entries++;
+        yield value;
+      }
+      return undefined;
+    };
+    restores.push(() => Array.prototype[Symbol.iterator] = arrayIterator);
+    const loaded = EngineObjectManager.prototype.loadedAddresses;
+    EngineObjectManager.prototype.loadedAddresses = function () {
+      const result = loaded.call(this);
+      const count = countFor("loadedAddresses");
+      if (count) {
+        count.calls++;
+        count.entries += result.length;
+      }
+      return result;
+    };
+    restores.push(() => EngineObjectManager.prototype.loadedAddresses = loaded);
+
+    const phases: {
+      name: string;
+      before: { entities: number; trackedIds: number; watches: number };
+      after: { entities: number; trackedIds: number; watches: number };
+      counts: Record<string, Count>;
+    }[] = [];
+    const record = async (name: string, run: () => Promise<unknown>) => {
+      const before = {
+        entities: session.entities.size,
+        trackedIds: session.trackedIds.size,
+        watches: session.watches.length,
+      };
+      const counts: Record<string, Count> = {};
+      active = counts;
+      try {
+        await run();
+      } finally {
+        active = undefined;
+      }
+      phases.push({
+        name,
+        before,
+        after: {
+          entities: session.entities.size,
+          trackedIds: session.trackedIds.size,
+          watches: session.watches.length,
+        },
+        counts,
+      });
+    };
+
+    await record("add-covered", () =>
+      reader.watchAddSync([{ ...watch(ids[0]), id: "covered-again" }]));
+    expect(session.entities.size).toBe(size);
+    await record("add-one", () =>
+      reader.watchAddSync([watch(ids[size])]));
+    expect(session.entities.size).toBe(size + 1);
+    expect(session.watches.length).toBe(size + 2);
+    expect(session.trackedIds.has(toDirtyKey(ids[size], "space"))).toBe(true);
+    await writer.transact({
+      localSeq: 2,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set",
+        id: ids[0],
+        value: { value: { n: 1 } },
+      }],
+    });
+    await record("refresh-one", () => server.flushSessions());
+    await record("remove-one", () => reader.watchSetSync(watches));
+    expect(session.entities.size).toBe(size);
+    expect(session.watches.length).toBe(size);
+    expect(session.trackedIds.has(toDirtyKey(ids[size], "space"))).toBe(false);
+    return { size, phases };
+  } finally {
+    active = undefined;
+    for (const restore of restores.reverse()) restore();
+    for (const client of clients.reverse()) await client.close();
+    await server.close();
+  }
+}
+
+const sizes = Deno.args.length === 0
+  ? [100, 1000, 10000]
+  : Deno.args.map(Number);
+for (const size of sizes) {
+  if (!Number.isSafeInteger(size) || size < 1) {
+    throw new Error("Every size must be a positive integer.");
+  }
+  console.log(JSON.stringify(await measure(size)));
+}

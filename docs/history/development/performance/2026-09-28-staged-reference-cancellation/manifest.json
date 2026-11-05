@@ -1,0 +1,586 @@
+{
+  "baseline": "e42b9625643ea76029052a23bc63c4693a8e72ff",
+  "sourceHashes": {
+    "base": "109816ca0a760cf19994cdcd4aa26d67f78b777111b745ec16dc07b61cfe2046",
+    "fixed": "ffeb75a46a332bbfd2369436749670a7210143efe708ffd75d30dddfc55c0bd2"
+  },
+  "runs": [
+    {
+      "pair": 0,
+      "arm": "base",
+      "case": "cooperative",
+      "options": {
+        "COOPERATIVE": "1",
+        "DEPTHS": "10,12",
+        "WIDTHS": "2",
+        "REPEATS": "2"
+      },
+      "started": 1790621381.4151208,
+      "seconds": 20.061596155166626,
+      "load": [
+        172.8291015625,
+        159.0966796875,
+        103.29638671875
+      ]
+    },
+    {
+      "pair": 0,
+      "arm": "base",
+      "case": "synchronous",
+      "options": {
+        "COOPERATIVE": "0",
+        "DEPTHS": "12",
+        "WIDTHS": "1,2",
+        "REPEATS": "6"
+      },
+      "started": 1790621401.479436,
+      "seconds": 34.727243185043335,
+      "load": [
+        135.9375,
+        151.3779296875,
+        102.72998046875
+      ]
+    },
+    {
+      "pair": 0,
+      "arm": "base",
+      "case": "abort",
+      "options": {
+        "COOPERATIVE": "1",
+        "ABORT_AFTER": "25",
+        "DEPTHS": "12,14",
+        "WIDTHS": "2",
+        "REPEATS": "1",
+        "ORDERS": "top-down"
+      },
+      "started": 1790621436.207519,
+      "seconds": 6.055510997772217,
+      "load": [
+        130.4970703125,
+        149.99365234375,
+        102.5263671875
+      ]
+    },
+    {
+      "pair": 0,
+      "arm": "fixed",
+      "case": "cooperative",
+      "options": {
+        "COOPERATIVE": "1",
+        "DEPTHS": "10,12",
+        "WIDTHS": "2",
+        "REPEATS": "2"
+      },
+      "started": 1790621442.264503,
+      "seconds": 16.3182590007782,
+      "load": [
+        125.71044921875,
+        147.91845703125,
+        102.611328125
+      ]
+    },
+    {
+      "pair": 0,
+      "arm": "fixed",
+      "case": "synchronous",
+      "options": {
+        "COOPERATIVE": "0",
+        "DEPTHS": "12",
+        "WIDTHS": "1,2",
+        "REPEATS": "6"
+      },
+      "started": 1790621458.583442,
+      "seconds": 39.00990414619446,
+      "load": [
+        143.71533203125,
+        150.01806640625,
+        105.47314453125
+      ]
+    },
+    {
+      "pair": 0,
+      "arm": "fixed",
+      "case": "abort",
+      "options": {
+        "COOPERATIVE": "1",
+        "ABORT_AFTER": "25",
+        "DEPTHS": "12,14",
+        "WIDTHS": "2",
+        "REPEATS": "1",
+        "ORDERS": "top-down"
+      },
+      "started": 1790621497.593986,
+      "seconds": 1.4636800289154053,
+      "load": [
+        143.71533203125,
+        150.01806640625,
+        105.47314453125
+      ]
+    },
+    {
+      "pair": 1,
+      "arm": "fixed",
+      "case": "cooperative",
+      "options": {
+        "COOPERATIVE": "1",
+        "DEPTHS": "10,12",
+        "WIDTHS": "2",
+        "REPEATS": "2"
+      },
+      "started": 1790621499.05865,
+      "seconds": 16.167176008224487,
+      "load": [
+        136.67041015625,
+        148.21923828125,
+        105.61328125
+      ]
+    },
+    {
+      "pair": 1,
+      "arm": "fixed",
+      "case": "synchronous",
+      "options": {
+        "COOPERATIVE": "0",
+        "DEPTHS": "12",
+        "WIDTHS": "1,2",
+        "REPEATS": "6"
+      },
+      "started": 1790621515.226654,
+      "seconds": 38.29863381385803,
+      "load": [
+        110.76123046875,
+        140.49267578125,
+        104.76123046875
+      ]
+    },
+    {
+      "pair": 1,
+      "arm": "fixed",
+      "case": "abort",
+      "options": {
+        "COOPERATIVE": "1",
+        "ABORT_AFTER": "25",
+        "DEPTHS": "12,14",
+        "WIDTHS": "2",
+        "REPEATS": "1",
+        "ORDERS": "top-down"
+      },
+      "started": 1790621553.526017,
+      "seconds": 1.6558442115783691,
+      "load": [
+        110.76123046875,
+        140.49267578125,
+        104.76123046875
+      ]
+    },
+    {
+      "pair": 1,
+      "arm": "base",
+      "case": "cooperative",
+      "options": {
+        "COOPERATIVE": "1",
+        "DEPTHS": "10,12",
+        "WIDTHS": "2",
+        "REPEATS": "2"
+      },
+      "started": 1790621555.183182,
+      "seconds": 13.805256128311157,
+      "load": [
+        101.64599609375,
+        137.03515625,
+        104.15234375
+      ]
+    },
+    {
+      "pair": 1,
+      "arm": "base",
+      "case": "synchronous",
+      "options": {
+        "COOPERATIVE": "0",
+        "DEPTHS": "12",
+        "WIDTHS": "1,2",
+        "REPEATS": "6"
+      },
+      "started": 1790621568.989193,
+      "seconds": 36.637837171554565,
+      "load": [
+        94.14453125,
+        131.03076171875,
+        103.2763671875
+      ]
+    },
+    {
+      "pair": 1,
+      "arm": "base",
+      "case": "abort",
+      "options": {
+        "COOPERATIVE": "1",
+        "ABORT_AFTER": "25",
+        "DEPTHS": "12,14",
+        "WIDTHS": "2",
+        "REPEATS": "1",
+        "ORDERS": "top-down"
+      },
+      "started": 1790621605.627994,
+      "seconds": 2.6632158756256104,
+      "load": [
+        99.578125,
+        131.54443359375,
+        103.6201171875
+      ]
+    },
+    {
+      "pair": 2,
+      "arm": "base",
+      "case": "cooperative",
+      "options": {
+        "COOPERATIVE": "1",
+        "DEPTHS": "10,12",
+        "WIDTHS": "2",
+        "REPEATS": "2"
+      },
+      "started": 1790621608.292168,
+      "seconds": 9.956576108932495,
+      "load": [
+        94.1689453125,
+        129.33544921875,
+        103.16259765625
+      ]
+    },
+    {
+      "pair": 2,
+      "arm": "base",
+      "case": "synchronous",
+      "options": {
+        "COOPERATIVE": "0",
+        "DEPTHS": "12",
+        "WIDTHS": "1,2",
+        "REPEATS": "6"
+      },
+      "started": 1790621618.249422,
+      "seconds": 47.36169195175171,
+      "load": [
+        121.908203125,
+        132.08642578125,
+        105.537109375
+      ]
+    },
+    {
+      "pair": 2,
+      "arm": "base",
+      "case": "abort",
+      "options": {
+        "COOPERATIVE": "1",
+        "ABORT_AFTER": "25",
+        "DEPTHS": "12,14",
+        "WIDTHS": "2",
+        "REPEATS": "1",
+        "ORDERS": "top-down"
+      },
+      "started": 1790621665.6118212,
+      "seconds": 2.271998882293701,
+      "load": [
+        120.39404296875,
+        131.603515625,
+        105.52197265625
+      ]
+    },
+    {
+      "pair": 2,
+      "arm": "fixed",
+      "case": "cooperative",
+      "options": {
+        "COOPERATIVE": "1",
+        "DEPTHS": "10,12",
+        "WIDTHS": "2",
+        "REPEATS": "2"
+      },
+      "started": 1790621667.886057,
+      "seconds": 9.348790168762207,
+      "load": [
+        114.17333984375,
+        129.94287109375,
+        105.2392578125
+      ]
+    },
+    {
+      "pair": 2,
+      "arm": "fixed",
+      "case": "synchronous",
+      "options": {
+        "COOPERATIVE": "0",
+        "DEPTHS": "12",
+        "WIDTHS": "1,2",
+        "REPEATS": "6"
+      },
+      "started": 1790621677.235539,
+      "seconds": 21.72876000404358,
+      "load": [
+        91.263671875,
+        123.681640625,
+        103.56591796875
+      ]
+    },
+    {
+      "pair": 2,
+      "arm": "fixed",
+      "case": "abort",
+      "options": {
+        "COOPERATIVE": "1",
+        "ABORT_AFTER": "25",
+        "DEPTHS": "12,14",
+        "WIDTHS": "2",
+        "REPEATS": "1",
+        "ORDERS": "top-down"
+      },
+      "started": 1790621698.9656801,
+      "seconds": 1.0296478271484375,
+      "load": [
+        91.263671875,
+        123.681640625,
+        103.56591796875
+      ]
+    },
+    {
+      "pair": 3,
+      "arm": "fixed",
+      "case": "cooperative",
+      "options": {
+        "COOPERATIVE": "1",
+        "DEPTHS": "10,12",
+        "WIDTHS": "2",
+        "REPEATS": "2"
+      },
+      "started": 1790621699.997134,
+      "seconds": 8.840588092803955,
+      "load": [
+        81.08203125,
+        120.43212890625,
+        102.6474609375
+      ]
+    },
+    {
+      "pair": 3,
+      "arm": "fixed",
+      "case": "synchronous",
+      "options": {
+        "COOPERATIVE": "0",
+        "DEPTHS": "12",
+        "WIDTHS": "1,2",
+        "REPEATS": "6"
+      },
+      "started": 1790621708.838472,
+      "seconds": 25.48654317855835,
+      "load": [
+        70.33447265625,
+        114.6142578125,
+        101.05615234375
+      ]
+    },
+    {
+      "pair": 3,
+      "arm": "fixed",
+      "case": "abort",
+      "options": {
+        "COOPERATIVE": "1",
+        "ABORT_AFTER": "25",
+        "DEPTHS": "12,14",
+        "WIDTHS": "2",
+        "REPEATS": "1",
+        "ORDERS": "top-down"
+      },
+      "started": 1790621734.326283,
+      "seconds": 1.352538824081421,
+      "load": [
+        70.33447265625,
+        114.6142578125,
+        101.05615234375
+      ]
+    },
+    {
+      "pair": 3,
+      "arm": "base",
+      "case": "cooperative",
+      "options": {
+        "COOPERATIVE": "1",
+        "DEPTHS": "10,12",
+        "WIDTHS": "2",
+        "REPEATS": "2"
+      },
+      "started": 1790621735.680853,
+      "seconds": 10.80331015586853,
+      "load": [
+        75.00439453125,
+        113.4609375,
+        100.88037109375
+      ]
+    },
+    {
+      "pair": 3,
+      "arm": "base",
+      "case": "synchronous",
+      "options": {
+        "COOPERATIVE": "0",
+        "DEPTHS": "12",
+        "WIDTHS": "1,2",
+        "REPEATS": "6"
+      },
+      "started": 1790621746.485261,
+      "seconds": 34.44576811790466,
+      "load": [
+        113.10009765625,
+        117.94677734375,
+        102.9755859375
+      ]
+    },
+    {
+      "pair": 3,
+      "arm": "base",
+      "case": "abort",
+      "options": {
+        "COOPERATIVE": "1",
+        "ABORT_AFTER": "25",
+        "DEPTHS": "12,14",
+        "WIDTHS": "2",
+        "REPEATS": "1",
+        "ORDERS": "top-down"
+      },
+      "started": 1790621780.940793,
+      "seconds": 5.517143964767456,
+      "load": [
+        119.337890625,
+        119.1591796875,
+        103.4912109375
+      ]
+    },
+    {
+      "pair": 4,
+      "arm": "base",
+      "case": "cooperative",
+      "options": {
+        "COOPERATIVE": "1",
+        "DEPTHS": "10,12",
+        "WIDTHS": "2",
+        "REPEATS": "2"
+      },
+      "started": 1790621786.4609668,
+      "seconds": 14.012570142745972,
+      "load": [
+        125.73974609375,
+        120.49658203125,
+        104.146484375
+      ]
+    },
+    {
+      "pair": 4,
+      "arm": "base",
+      "case": "synchronous",
+      "options": {
+        "COOPERATIVE": "0",
+        "DEPTHS": "12",
+        "WIDTHS": "1,2",
+        "REPEATS": "6"
+      },
+      "started": 1790621800.475008,
+      "seconds": 44.961397886276245,
+      "load": [
+        121.755859375,
+        119.94775390625,
+        104.7734375
+      ]
+    },
+    {
+      "pair": 4,
+      "arm": "base",
+      "case": "abort",
+      "options": {
+        "COOPERATIVE": "1",
+        "ABORT_AFTER": "25",
+        "DEPTHS": "12,14",
+        "WIDTHS": "2",
+        "REPEATS": "1",
+        "ORDERS": "top-down"
+      },
+      "started": 1790621845.4373481,
+      "seconds": 5.363519906997681,
+      "load": [
+        127.94140625,
+        121.259765625,
+        105.3251953125
+      ]
+    },
+    {
+      "pair": 4,
+      "arm": "fixed",
+      "case": "cooperative",
+      "options": {
+        "COOPERATIVE": "1",
+        "DEPTHS": "10,12",
+        "WIDTHS": "2",
+        "REPEATS": "2"
+      },
+      "started": 1790621850.806278,
+      "seconds": 15.824061155319214,
+      "load": [
+        138.857421875,
+        124.2265625,
+        106.76123046875
+      ]
+    },
+    {
+      "pair": 4,
+      "arm": "fixed",
+      "case": "synchronous",
+      "options": {
+        "COOPERATIVE": "0",
+        "DEPTHS": "12",
+        "WIDTHS": "1,2",
+        "REPEATS": "6"
+      },
+      "started": 1790621866.64274,
+      "seconds": 30.424838066101074,
+      "load": [
+        149.27197265625,
+        128.69775390625,
+        109.01904296875
+      ]
+    },
+    {
+      "pair": 4,
+      "arm": "fixed",
+      "case": "abort",
+      "options": {
+        "COOPERATIVE": "1",
+        "ABORT_AFTER": "25",
+        "DEPTHS": "12,14",
+        "WIDTHS": "2",
+        "REPEATS": "1",
+        "ORDERS": "top-down"
+      },
+      "started": 1790621897.070792,
+      "seconds": 1.4692800045013428,
+      "load": [
+        149.27197265625,
+        128.69775390625,
+        109.01904296875
+      ]
+    }
+  ],
+  "environment": {
+    "deno": "2.9.4",
+    "v8": "15.0.245.2-rusty",
+    "typescript": "6.0.3",
+    "os": "macOS 26.6.2",
+    "architecture": "arm64",
+    "timingUnit": "milliseconds",
+    "baselineSource": "packages/runner/src/cfc/prepare.ts",
+    "fixedSource": "working-tree version recorded by sourceHashes.fixed",
+    "processPairs": 5,
+    "order": "base/fixed on even pairs, fixed/base on odd pairs",
+    "synchronousDiscardedSamplesPerProcessAndCase": [
+      0,
+      1
+    ],
+    "load": "1, 5 and 15 minute system load averages at process start"
+  }
+}

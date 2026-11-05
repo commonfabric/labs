@@ -1,0 +1,1426 @@
+{
+  "version": 2,
+  "mode": "correctness",
+  "role": "opposite",
+  "expectedPosture": {
+    "role": "opposite",
+    "enabled": true,
+    "label": "ON",
+    "experimentalValue": "true",
+    "recordVariant": "server-execution"
+  },
+  "workloadHead": "0c7a1bd950c88fadb10d109f89c5a306442fed9d",
+  "sourcePaths": [
+    "tools/server-execution-topics/run-arm.ts",
+    "tools/server-execution-topics/seed-check.ts",
+    "packages/patterns/integration/topic-board-fixture.ts"
+  ],
+  "artifactRoot": ".",
+  "store": "store",
+  "provenance": {
+    "checkout": "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs",
+    "captureDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/terminal-review-integration-on",
+    "commands": [
+      {
+        "command": "git",
+        "args": [
+          "rev-parse",
+          "HEAD"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs"
+      },
+      {
+        "command": "git",
+        "args": [
+          "diff",
+          "HEAD",
+          "--binary"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs"
+      },
+      {
+        "command": "/usr/sbin/sysctl",
+        "args": [
+          "-n",
+          "machdep.cpu.brand_string"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs"
+      },
+      {
+        "command": "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs/.ci-cache/binaries/toolshed-baked-opposite",
+        "args": [
+          "--port=61043",
+          "--background",
+          "--log-file=/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/terminal-review-integration-on/toolshed-61043.log"
+        ],
+        "cwd": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/terminal-review-integration-on/store"
+      },
+      {
+        "command": "shasum",
+        "args": [
+          "-a",
+          "256",
+          "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs/.ci-cache/binaries/toolshed-baked-opposite"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs"
+      },
+      {
+        "command": "/opt/homebrew/bin/deno",
+        "args": [
+          "test",
+          "--no-check",
+          "-A",
+          "packages/patterns/integration/topic-board-fixture.test.ts",
+          "packages/patterns/integration/topic-board-child-contract.test.ts",
+          "packages/patterns/integration/topic-create-onscreen.test.ts",
+          "packages/patterns/integration/sx2-events.test.ts",
+          "packages/patterns/integration/lunch-poll-vote.test.ts",
+          "packages/patterns/integration/cfc-group-chat-chained-event-gate-multi-runtime.test.ts"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs"
+      }
+    ],
+    "workloadEnvironment": {
+      "API_URL": "http://localhost:61043",
+      "MEMORY_URL": "http://localhost:61043",
+      "TOOLSHED_URL": "http://localhost:61043",
+      "TOOLSHED_PORT": "61043",
+      "EXPERIMENTAL_SERVER_EXECUTION": "true",
+      "FRONTEND_URL": "http://localhost:61043",
+      "SPACE_NAME": "topics-campaign-01cf0774-0d1a-4ca6-8394-020337877723",
+      "HEADLESS": "1",
+      "CF_LOG_LEVEL": "silent",
+      "CF_CAMPAIGN_RUN_DIR": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/terminal-review-integration-on"
+    }
+  },
+  "cache": "fresh store and server; existing Deno dependency cache",
+  "machine": {
+    "cpu": "Apple M3 Max",
+    "arch": "aarch64",
+    "os": "darwin",
+    "logicalCpus": 16,
+    "totalmem": 137438953472
+  },
+  "runtime": {
+    "deno": "2.9.4",
+    "v8": "15.0.245.2-rusty",
+    "typescript": "6.0.3"
+  },
+  "flags": {
+    "EXPERIMENTAL_SERVER_EXECUTION": "true"
+  },
+  "samples": [
+    {
+      "at": "2026-09-10T17:49:46.505Z",
+      "load": [
+        11.67578125,
+        9.9169921875,
+        7.37109375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:49:56.133Z",
+      "load": [
+        10.71630859375,
+        9.7705078125,
+        7.3486328125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:49:57.136Z",
+      "load": [
+        10.71630859375,
+        9.7705078125,
+        7.3486328125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:49:58.137Z",
+      "load": [
+        10.71630859375,
+        9.7705078125,
+        7.3486328125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:49:59.138Z",
+      "load": [
+        10.65869140625,
+        9.77392578125,
+        7.36376953125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:00.139Z",
+      "load": [
+        10.65869140625,
+        9.77392578125,
+        7.36376953125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:01.140Z",
+      "load": [
+        10.65869140625,
+        9.77392578125,
+        7.36376953125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:02.141Z",
+      "load": [
+        10.65869140625,
+        9.77392578125,
+        7.36376953125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:03.142Z",
+      "load": [
+        10.65869140625,
+        9.77392578125,
+        7.36376953125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:04.143Z",
+      "load": [
+        10.92578125,
+        9.84375,
+        7.40234375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:05.144Z",
+      "load": [
+        10.92578125,
+        9.84375,
+        7.40234375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:06.145Z",
+      "load": [
+        10.92578125,
+        9.84375,
+        7.40234375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:07.147Z",
+      "load": [
+        10.92578125,
+        9.84375,
+        7.40234375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:08.148Z",
+      "load": [
+        10.92578125,
+        9.84375,
+        7.40234375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:09.148Z",
+      "load": [
+        10.931640625,
+        9.86279296875,
+        7.42333984375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:10.149Z",
+      "load": [
+        10.931640625,
+        9.86279296875,
+        7.42333984375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:11.150Z",
+      "load": [
+        10.931640625,
+        9.86279296875,
+        7.42333984375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:12.151Z",
+      "load": [
+        10.931640625,
+        9.86279296875,
+        7.42333984375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:13.151Z",
+      "load": [
+        10.931640625,
+        9.86279296875,
+        7.42333984375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:14.152Z",
+      "load": [
+        10.61669921875,
+        9.81494140625,
+        7.42041015625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:15.154Z",
+      "load": [
+        10.61669921875,
+        9.81494140625,
+        7.42041015625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:16.155Z",
+      "load": [
+        10.61669921875,
+        9.81494140625,
+        7.42041015625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:17.156Z",
+      "load": [
+        10.61669921875,
+        9.81494140625,
+        7.42041015625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:18.175Z",
+      "load": [
+        10.61669921875,
+        9.81494140625,
+        7.42041015625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:19.176Z",
+      "load": [
+        10.80712890625,
+        9.86767578125,
+        7.45263671875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:20.179Z",
+      "load": [
+        10.80712890625,
+        9.86767578125,
+        7.45263671875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:21.180Z",
+      "load": [
+        10.80712890625,
+        9.86767578125,
+        7.45263671875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:22.181Z",
+      "load": [
+        10.80712890625,
+        9.86767578125,
+        7.45263671875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:23.189Z",
+      "load": [
+        10.80712890625,
+        9.86767578125,
+        7.45263671875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:24.190Z",
+      "load": [
+        11.783203125,
+        10.08544921875,
+        7.54345703125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:25.191Z",
+      "load": [
+        11.783203125,
+        10.08544921875,
+        7.54345703125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:26.192Z",
+      "load": [
+        11.783203125,
+        10.08544921875,
+        7.54345703125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:27.195Z",
+      "load": [
+        11.783203125,
+        10.08544921875,
+        7.54345703125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:28.197Z",
+      "load": [
+        11.783203125,
+        10.08544921875,
+        7.54345703125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:29.199Z",
+      "load": [
+        11.64013671875,
+        10.083984375,
+        7.5576171875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:30.200Z",
+      "load": [
+        11.64013671875,
+        10.083984375,
+        7.5576171875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:31.201Z",
+      "load": [
+        11.64013671875,
+        10.083984375,
+        7.5576171875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:32.202Z",
+      "load": [
+        11.64013671875,
+        10.083984375,
+        7.5576171875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:33.203Z",
+      "load": [
+        11.64013671875,
+        10.083984375,
+        7.5576171875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:34.203Z",
+      "load": [
+        11.3486328125,
+        10.04931640625,
+        7.56005859375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:35.204Z",
+      "load": [
+        11.3486328125,
+        10.04931640625,
+        7.56005859375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:36.206Z",
+      "load": [
+        11.3486328125,
+        10.04931640625,
+        7.56005859375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:37.207Z",
+      "load": [
+        11.3486328125,
+        10.04931640625,
+        7.56005859375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:38.208Z",
+      "load": [
+        11.3486328125,
+        10.04931640625,
+        7.56005859375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:39.209Z",
+      "load": [
+        11.240234375,
+        10.04833984375,
+        7.57421875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:40.210Z",
+      "load": [
+        11.240234375,
+        10.04833984375,
+        7.57421875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:41.211Z",
+      "load": [
+        11.240234375,
+        10.04833984375,
+        7.57421875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:42.213Z",
+      "load": [
+        11.240234375,
+        10.04833984375,
+        7.57421875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:43.215Z",
+      "load": [
+        11.240234375,
+        10.04833984375,
+        7.57421875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:44.216Z",
+      "load": [
+        14.34375,
+        10.71142578125,
+        7.82275390625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:45.217Z",
+      "load": [
+        14.34375,
+        10.71142578125,
+        7.82275390625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:46.218Z",
+      "load": [
+        14.34375,
+        10.71142578125,
+        7.82275390625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:47.219Z",
+      "load": [
+        14.34375,
+        10.71142578125,
+        7.82275390625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:48.221Z",
+      "load": [
+        14.34375,
+        10.71142578125,
+        7.82275390625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:49.222Z",
+      "load": [
+        13.75537109375,
+        10.6494140625,
+        7.81787109375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:50.223Z",
+      "load": [
+        13.75537109375,
+        10.6494140625,
+        7.81787109375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:51.224Z",
+      "load": [
+        13.75537109375,
+        10.6494140625,
+        7.81787109375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:52.225Z",
+      "load": [
+        13.75537109375,
+        10.6494140625,
+        7.81787109375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:53.226Z",
+      "load": [
+        13.75537109375,
+        10.6494140625,
+        7.81787109375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:54.227Z",
+      "load": [
+        13.69482421875,
+        10.68798828125,
+        7.84814453125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:55.228Z",
+      "load": [
+        13.69482421875,
+        10.68798828125,
+        7.84814453125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:56.230Z",
+      "load": [
+        13.69482421875,
+        10.68798828125,
+        7.84814453125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:57.231Z",
+      "load": [
+        13.69482421875,
+        10.68798828125,
+        7.84814453125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:58.232Z",
+      "load": [
+        13.69482421875,
+        10.68798828125,
+        7.84814453125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:50:59.233Z",
+      "load": [
+        12.91845703125,
+        10.57666015625,
+        7.8251953125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:00.234Z",
+      "load": [
+        12.91845703125,
+        10.57666015625,
+        7.8251953125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:01.235Z",
+      "load": [
+        12.91845703125,
+        10.57666015625,
+        7.8251953125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:02.235Z",
+      "load": [
+        12.91845703125,
+        10.57666015625,
+        7.8251953125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:03.236Z",
+      "load": [
+        12.91845703125,
+        10.57666015625,
+        7.8251953125
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:04.237Z",
+      "load": [
+        12.6845703125,
+        10.56689453125,
+        7.837890625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:05.238Z",
+      "load": [
+        12.6845703125,
+        10.56689453125,
+        7.837890625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:06.239Z",
+      "load": [
+        12.6845703125,
+        10.56689453125,
+        7.837890625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:07.240Z",
+      "load": [
+        12.6845703125,
+        10.56689453125,
+        7.837890625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:08.241Z",
+      "load": [
+        12.6845703125,
+        10.56689453125,
+        7.837890625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:09.242Z",
+      "load": [
+        12.14892578125,
+        10.49072265625,
+        7.82666015625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:10.243Z",
+      "load": [
+        12.14892578125,
+        10.49072265625,
+        7.82666015625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:11.244Z",
+      "load": [
+        12.14892578125,
+        10.49072265625,
+        7.82666015625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:12.246Z",
+      "load": [
+        12.14892578125,
+        10.49072265625,
+        7.82666015625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:13.247Z",
+      "load": [
+        12.14892578125,
+        10.49072265625,
+        7.82666015625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:14.248Z",
+      "load": [
+        11.65625,
+        10.416015625,
+        7.81591796875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:15.249Z",
+      "load": [
+        11.65625,
+        10.416015625,
+        7.81591796875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:16.250Z",
+      "load": [
+        11.65625,
+        10.416015625,
+        7.81591796875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:17.251Z",
+      "load": [
+        11.65625,
+        10.416015625,
+        7.81591796875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:18.253Z",
+      "load": [
+        11.65625,
+        10.416015625,
+        7.81591796875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:19.254Z",
+      "load": [
+        11.443359375,
+        10.39208984375,
+        7.82275390625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:20.255Z",
+      "load": [
+        11.443359375,
+        10.39208984375,
+        7.82275390625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:21.256Z",
+      "load": [
+        11.443359375,
+        10.39208984375,
+        7.82275390625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:22.257Z",
+      "load": [
+        11.443359375,
+        10.39208984375,
+        7.82275390625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:23.258Z",
+      "load": [
+        11.443359375,
+        10.39208984375,
+        7.82275390625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:24.259Z",
+      "load": [
+        11.32763671875,
+        10.38525390625,
+        7.83544921875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:25.260Z",
+      "load": [
+        11.32763671875,
+        10.38525390625,
+        7.83544921875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:26.261Z",
+      "load": [
+        11.32763671875,
+        10.38525390625,
+        7.83544921875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:27.261Z",
+      "load": [
+        11.32763671875,
+        10.38525390625,
+        7.83544921875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:28.262Z",
+      "load": [
+        11.32763671875,
+        10.38525390625,
+        7.83544921875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:29.263Z",
+      "load": [
+        10.66064453125,
+        10.26220703125,
+        7.806640625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:30.265Z",
+      "load": [
+        10.66064453125,
+        10.26220703125,
+        7.806640625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:31.266Z",
+      "load": [
+        10.66064453125,
+        10.26220703125,
+        7.806640625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:32.267Z",
+      "load": [
+        10.66064453125,
+        10.26220703125,
+        7.806640625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:33.268Z",
+      "load": [
+        10.66064453125,
+        10.26220703125,
+        7.806640625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:34.269Z",
+      "load": [
+        10.287109375,
+        10.19140625,
+        7.7958984375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:35.270Z",
+      "load": [
+        10.287109375,
+        10.19140625,
+        7.7958984375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:36.271Z",
+      "load": [
+        10.287109375,
+        10.19140625,
+        7.7958984375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:37.272Z",
+      "load": [
+        10.287109375,
+        10.19140625,
+        7.7958984375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:38.273Z",
+      "load": [
+        10.287109375,
+        10.19140625,
+        7.7958984375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:39.274Z",
+      "load": [
+        10.18359375,
+        10.17138671875,
+        7.802734375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:40.275Z",
+      "load": [
+        10.18359375,
+        10.17138671875,
+        7.802734375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:41.275Z",
+      "load": [
+        10.18359375,
+        10.17138671875,
+        7.802734375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:42.276Z",
+      "load": [
+        10.18359375,
+        10.17138671875,
+        7.802734375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:43.278Z",
+      "load": [
+        10.18359375,
+        10.17138671875,
+        7.802734375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:44.278Z",
+      "load": [
+        9.92822265625,
+        10.11865234375,
+        7.7978515625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:45.281Z",
+      "load": [
+        9.92822265625,
+        10.11865234375,
+        7.7978515625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:46.283Z",
+      "load": [
+        9.92822265625,
+        10.11865234375,
+        7.7978515625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:47.284Z",
+      "load": [
+        9.92822265625,
+        10.11865234375,
+        7.7978515625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:48.285Z",
+      "load": [
+        9.92822265625,
+        10.11865234375,
+        7.7978515625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:49.286Z",
+      "load": [
+        9.453125,
+        10.0166015625,
+        7.775390625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:50.287Z",
+      "load": [
+        9.453125,
+        10.0166015625,
+        7.775390625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:51.288Z",
+      "load": [
+        9.453125,
+        10.0166015625,
+        7.775390625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:52.289Z",
+      "load": [
+        9.453125,
+        10.0166015625,
+        7.775390625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:53.292Z",
+      "load": [
+        9.453125,
+        10.0166015625,
+        7.775390625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:54.293Z",
+      "load": [
+        9.97705078125,
+        10.11572265625,
+        7.8232421875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:55.294Z",
+      "load": [
+        9.97705078125,
+        10.11572265625,
+        7.8232421875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:56.295Z",
+      "load": [
+        9.97705078125,
+        10.11572265625,
+        7.8232421875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:57.296Z",
+      "load": [
+        9.97705078125,
+        10.11572265625,
+        7.8232421875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:58.297Z",
+      "load": [
+        9.97705078125,
+        10.11572265625,
+        7.8232421875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:51:59.298Z",
+      "load": [
+        9.818359375,
+        10.08056640625,
+        7.82421875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:00.299Z",
+      "load": [
+        9.818359375,
+        10.08056640625,
+        7.82421875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:01.300Z",
+      "load": [
+        9.818359375,
+        10.08056640625,
+        7.82421875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:02.301Z",
+      "load": [
+        9.818359375,
+        10.08056640625,
+        7.82421875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:03.302Z",
+      "load": [
+        9.818359375,
+        10.08056640625,
+        7.82421875
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:04.303Z",
+      "load": [
+        9.51220703125,
+        10.0126953125,
+        7.8134765625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:05.305Z",
+      "load": [
+        9.51220703125,
+        10.0126953125,
+        7.8134765625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:06.305Z",
+      "load": [
+        9.51220703125,
+        10.0126953125,
+        7.8134765625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:07.306Z",
+      "load": [
+        9.51220703125,
+        10.0126953125,
+        7.8134765625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:08.307Z",
+      "load": [
+        9.51220703125,
+        10.0126953125,
+        7.8134765625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:09.308Z",
+      "load": [
+        9.87109375,
+        10.07861328125,
+        7.849609375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:10.309Z",
+      "load": [
+        9.87109375,
+        10.07861328125,
+        7.849609375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:11.310Z",
+      "load": [
+        9.87109375,
+        10.07861328125,
+        7.849609375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:12.311Z",
+      "load": [
+        9.87109375,
+        10.07861328125,
+        7.849609375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:13.312Z",
+      "load": [
+        9.87109375,
+        10.07861328125,
+        7.849609375
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:14.313Z",
+      "load": [
+        9.56103515625,
+        10.0107421875,
+        7.83837890625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:15.314Z",
+      "load": [
+        9.56103515625,
+        10.0107421875,
+        7.83837890625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:16.315Z",
+      "load": [
+        9.56103515625,
+        10.0107421875,
+        7.83837890625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:17.316Z",
+      "load": [
+        9.56103515625,
+        10.0107421875,
+        7.83837890625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:18.317Z",
+      "load": [
+        9.56103515625,
+        10.0107421875,
+        7.83837890625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:19.318Z",
+      "load": [
+        9.515625,
+        9.99365234375,
+        7.8447265625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:20.318Z",
+      "load": [
+        9.515625,
+        9.99365234375,
+        7.8447265625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:21.320Z",
+      "load": [
+        9.515625,
+        9.99365234375,
+        7.8447265625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:22.320Z",
+      "load": [
+        9.515625,
+        9.99365234375,
+        7.8447265625
+      ]
+    },
+    {
+      "at": "2026-09-10T17:52:23.164Z",
+      "load": [
+        9.515625,
+        9.99365234375,
+        7.8447265625
+      ]
+    }
+  ],
+  "status": "passed",
+  "meta": {
+    "did": "did:key:z6MksHnZGdHxNoCqcC3kPvBSo2goCzLSWheQ8LrVpAtQwgwW",
+    "gitSha": "0c7a1bd950c88fadb10d109f89c5a306442fed9d",
+    "shellServerExecutionDefine": "true",
+    "experimental": {
+      "commitPreconditions": true,
+      "computedCellIds": true,
+      "contentAddressedSchemas": true,
+      "lazyMaterialization": true,
+      "modernCellRep": false,
+      "plainResultReceipts": true,
+      "readerSchemaPrecedence": true,
+      "serverExecution": true
+    },
+    "cfc": {
+      "provenance": "resolved",
+      "enforcementMode": {
+        "rung": "enforce-explicit",
+        "diagnosticOnly": false,
+        "decidesOn": "a recorded reason, which rejects the commit"
+      },
+      "flowLabels": {
+        "rung": "off",
+        "diagnosticOnly": true,
+        "decidesOn": "nothing; no derived label component comes into existence"
+      },
+      "writeFloor": {
+        "rung": "off",
+        "diagnosticOnly": true,
+        "decidesOn": "nothing; the write-side integrity floor is not checked"
+      },
+      "triggerReadGating": false,
+      "decomposedEnvelopes": false,
+      "policyEvaluation": {
+        "rung": "off",
+        "diagnosticOnly": true,
+        "decidesOn": "nothing; gated labels reach the gates un-rewritten"
+      },
+      "labelMetadataProtection": {
+        "rung": "off",
+        "diagnosticOnly": true,
+        "decidesOn": "nothing; label metadata writes are not gated"
+      },
+      "declaredMonotonicity": {
+        "rung": "off",
+        "diagnosticOnly": true,
+        "decidesOn": "nothing; a declared-monotonicity violation is not checked"
+      },
+      "policyDigest": null,
+      "sinks": [
+        {
+          "sink": "fetchBinary",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "fetchText",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "fetchJson",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "fetchJsonUnchecked",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "fetchProgram",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "streamData",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "llm",
+          "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+        },
+        {
+          "sink": "llmDialog",
+          "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+        },
+        {
+          "sink": "generateText",
+          "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+        },
+        {
+          "sink": "generateObject",
+          "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+        }
+      ],
+      "deviations": [
+        {
+          "what": "sink `llm` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+          "owner": "CFC runtime (Epic B, sink governance)",
+          "retirement": "a boundary-scoped admission mechanism exists — a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+        },
+        {
+          "what": "sink `llmDialog` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+          "owner": "CFC runtime (Epic B, sink governance)",
+          "retirement": "a boundary-scoped admission mechanism exists — a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+        },
+        {
+          "what": "sink `generateText` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+          "owner": "CFC runtime (Epic B, sink governance)",
+          "retirement": "a boundary-scoped admission mechanism exists — a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+        },
+        {
+          "what": "sink `generateObject` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+          "owner": "CFC runtime (Epic B, sink governance)",
+          "retirement": "a boundary-scoped admission mechanism exists — a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+        }
+      ]
+    }
+  },
+  "serverBuildHead": "0c7a1bd950c88fadb10d109f89c5a306442fed9d",
+  "binarySha256": "60f8f64eb14fd9bfd666b9757cbc420e9b86b14326b0490c80e54fc2cb522d66",
+  "exitCode": 0,
+  "latencyEligible": false
+}

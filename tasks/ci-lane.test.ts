@@ -1,49 +1,138 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { exists } from "@std/fs";
+import { afterEach, describe, it } from "@std/testing/bdd";
+import { dirname, fromFileUrl } from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { shuffleNotice } from "@commonfabric/test-support/shuffle";
 import {
+  NAME_MAP_PREFIX,
+  NAME_MAP_SUFFIX,
   type TestIdentity,
   testIdentityKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
-import type { CapabilityId } from "./ci-capabilities.ts";
-import { capabilitiesBySuite, loadTopology } from "./test-topology.ts";
+import { maxOf } from "@commonfabric/collections/math";
+import {
+  type Capability,
+  CAPABILITY_LOG_TAIL_LINES,
+  type CapabilityId,
+  COMPILE_CACHE_FILE,
+} from "./ci-capabilities.ts";
+import {
+  capabilitiesBySuite,
+  loadTopology,
+  wholeUnits,
+} from "./test-topology.ts";
 
 import {
+  accountFor,
+  addLaneResults,
+  ANNOTATED_FAILURES,
+  annotateLaneFailures,
+  batchCoverage,
   batchesOf,
+  batchRepeats,
   changedFiles,
+  COMPILE_CACHE_STATE_FILE,
+  convertCoverage,
+  COVERAGE_FAILURE_MARKER,
+  COVERAGE_PROFILE_SUFFIX,
+  COVERAGE_REPORT_DIR,
+  COVERAGE_REPORT_FILE,
+  describeAccounting,
+  describeCapabilityLogs,
   describeConflicts,
+  describeCoverage,
   describePlan,
   describeWithheld,
-  fullLanes,
+  errorAnnotation,
+  type Execution,
+  gainedSince,
+  landedFiles,
+  type LaneDeps,
+  type LaneOptions,
+  lanePlan,
+  laneRerun,
+  LaneStop,
   main,
   manifestMoment,
+  markMeasuredFailures,
+  measuredSetOfReport,
+  type Missed,
   parseLaneArgs,
+  PATTERN_COVERAGE_DIR,
+  planOver,
+  reportLane,
+  requestedRun,
+  rerunFailures,
   runBatch,
   runInvocation,
   runLane,
+  runLanes,
   spoolRecords,
+  unitsForRun,
 } from "./ci-lane.ts";
-import { census } from "./test-selection/census.ts";
-import type { Suite } from "./test-topology/suite.ts";
+import {
+  batchMeasurement,
+  batchMeasurementName,
+  excusedMeasurement,
+  hooksMeasurementName,
+  type LaneMeasurementKind,
+  laneMeasurementName,
+  MEASURED_BATCH_SUFFIX,
+  RERUN_MEASUREMENT_NAME,
+} from "./lane-measurement.ts";
+import {
+  census,
+  pricedForRun,
+  type PricedManifest,
+  standIn,
+} from "./test-selection/census.ts";
+import type { CoverageGateSelection } from "./test-selection/coverage.ts";
+import { coverageGateSuite } from "./test-topology/coverage-gates.ts";
+import {
+  type CommandContext,
+  denoTestCommand,
+  type Suite,
+  type UnitRequest,
+} from "./test-topology/suite.ts";
 import {
   plan,
   type Selection,
   type SelectionReason,
 } from "./test-selection/plan.ts";
-import type { Manifest, ManifestEntry } from "./test-selection/manifest.ts";
 import {
+  type Manifest,
+  MANIFEST_SCHEMA_VERSION,
+  type ManifestEntry,
+} from "./test-selection/manifest.ts";
+import {
+  DISCRETIONARY_SECONDS,
   FULL_LANE_BOUND_SECONDS,
   FULL_LANE_BUDGET_SECONDS,
+  LANE_BOUND_SECONDS,
   LANE_BUDGET_SECONDS,
+  LANE_PROLOGUE_SECONDS,
+  LANES_MAX,
+  RERUN_BUDGET_SECONDS,
+  RERUN_EXECUTIONS,
   UNMEASURED_COST_SECONDS,
 } from "./test-selection/policy.ts";
+import { repositoryCommittedAt } from "./test-selection/testing.ts";
+import { duration } from "./test-selection/duration.ts";
 
 /**
  * The repository, found from this file rather than from the process's
  * own directory: a package's tests run with that package as the working
  * directory, and the paths the topology reads are the repository's.
  */
-const REPOSITORY = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const REPOSITORY = dirname(dirname(fromFileUrl(import.meta.url)));
+
+/** How many lanes `runLanes` counts for a run. */
+async function lanesOf(options: LaneOptions, deps: LaneDeps): Promise<number> {
+  return (await runLanes(options, deps)).of;
+}
+
 /** A suite holding exactly what a case describes. */
 function suite(partial: Partial<Suite> & { id: string }): Suite {
   return {
@@ -51,6 +140,7 @@ function suite(partial: Partial<Suite> & { id: string }): Suite {
     needs: ["deno"],
     units: [],
     unavailable: [],
+    whole: [],
     locate: () => undefined,
     command: () => Promise.resolve([]),
     ...partial,
@@ -60,22 +150,17 @@ function suite(partial: Partial<Suite> & { id: string }): Suite {
 /** A manifest carrying exactly these entries. */
 function manifestOf(entries: readonly Partial<ManifestEntry>[]): Manifest {
   return {
-    schema: 1,
+    schema: MANIFEST_SCHEMA_VERSION,
     generatedAt: "2026-09-01T00:00:00.000Z",
     seed: "seed",
     commit: "c".repeat(40),
     runs: 1,
     dials: {},
-    calibration: {
-      setupCost: {},
-      suites: {},
-      unitOverhead: {},
-      prologue: 40,
-    },
+    calibration: { setupCost: {}, suites: {}, prologue: 40 },
     entries: entries.map((entry) => ({
       test: { k: "unit", s: "bakery", n: "glaze > sets" },
       suite: "workspace-unit",
-      unit: "packages/bakery/glaze.test.ts",
+      unit: "runtime/bakery/glaze.test.ts",
       cost: 1,
       score: 0.5,
       inputs: { catches: 0, sources: 0, churn: 0 },
@@ -92,7 +177,81 @@ function manifestOf(entries: readonly Partial<ManifestEntry>[]): Manifest {
   };
 }
 
+/**
+ * `manifest` as a run over `suites` prices it, where the run measures
+ * every suite if it is the full run and none otherwise.
+ */
+function pricedFor(
+  suites: readonly Suite[],
+  manifest: Manifest,
+  full = false,
+): PricedManifest {
+  return pricedForRun(
+    {
+      manifest,
+      mandatory: new Map(),
+      unmeasured: 0,
+      gates: [],
+    },
+    suites,
+    () => full,
+  ).manifest;
+}
+
+/**
+ * Sets the named variables, or unsets those given as `undefined`, and
+ * returns a function that puts all of them back.
+ */
+function setEnv(env: Record<string, string | undefined>): () => void {
+  const set = (values: Record<string, string | undefined>) => {
+    for (const [name, value] of Object.entries(values)) {
+      if (value === undefined) Deno.env.delete(name);
+      else Deno.env.set(name, value);
+    }
+  };
+  const previous = Object.fromEntries(
+    Object.keys(env).map((name) => [name, Deno.env.get(name)]),
+  );
+  set(env);
+  return () => set(previous);
+}
+
+/**
+ * Makes a lane run by a test behave as it does outside a
+ * continuous-integration job, and returns a function that undoes that.
+ * Inside a job, a lane that fails keeps its work directory under the
+ * job's temporary directory, which here is that of the job running the
+ * tests.
+ */
+function outsideJob(): () => void {
+  return setEnv({ RUNNER_TEMP: undefined });
+}
+
 describe("reading the lane's command line", () => {
+  it("names the seed it settled on even when it refuses the command line", async () => {
+    // The lane settles one seed for every command it builds, and says
+    // which before it reads anything, so a log that stops early still
+    // names the order its tests would have run in.
+    const result = await runDenoCommandWithTemporaryLock({
+      root: REPOSITORY,
+      args: (lock) => [
+        "run",
+        `--lock=${lock}`,
+        "-A",
+        fromFileUrl(new URL("./ci-lane.ts", import.meta.url)),
+        "--bogus",
+      ],
+      env: { CF_TEST_SHUFFLE_SEED: "7" },
+    });
+    expect(result.code).toBe(2);
+    const stderr = new TextDecoder().decode(result.stderr);
+    expect(stderr).toContain(shuffleNotice(7));
+    expect(stderr).toContain("usage: ci-lane.ts");
+    expect(stderr.indexOf(shuffleNotice(7))).toBeLessThan(
+      stderr.indexOf("usage: ci-lane.ts"),
+    );
+  });
+
   it("takes the lane, its share, and the moment to resolve at", () => {
     const options = parseLaneArgs([
       "--lane",
@@ -115,43 +274,135 @@ describe("reading the lane's command line", () => {
     expect(parseLaneArgs(["--lane", "0", "--of", "5"])).toBeUndefined();
   });
 
-  it("refuses to count lanes for a run that is not the full one", () => {
-    // Only `main` works its lane count out; a pull request's is a dial.
-    expect(parseLaneArgs(["--lane-count"])).toBeUndefined();
+  it("counts the lanes of a pull request's run as well as a full one", () => {
+    expect(parseLaneArgs(["--lane-count"])?.laneCount).toBe(true);
     expect(parseLaneArgs(["--full", "--lane-count"])?.laneCount).toBe(true);
+  });
+
+  it("leaves the lane count to the plan where none is named", () => {
+    expect(parseLaneArgs(["--lane", "7"])?.of).toBeUndefined();
+    expect(parseLaneArgs(["--lane", "7", "--of", "9"])?.of).toBe(9);
+  });
+
+  it("takes a non-negative scale for a run that is not the full one", () => {
+    expect(parseLaneArgs(["--scale", "2.5"])?.scale).toBe(2.5);
+    expect(parseLaneArgs(["--scale", "0"])?.scale).toBe(0);
+    expect(parseLaneArgs([])?.scale).toBeUndefined();
+    for (const scale of ["-1", "", "two", "Infinity"]) {
+      expect(parseLaneArgs(["--scale", scale])).toBeUndefined();
+    }
+    // A full run chooses nothing by score, so nothing would honor it.
+    expect(parseLaneArgs(["--full", "--scale", "2"])).toBeUndefined();
+  });
+
+  it("takes labels only for a count, and only where they decide the run", () => {
+    expect(
+      parseLaneArgs(["--lane-count", "--label", "ci: 2x", "--label", "bug"])
+        ?.labels,
+    ).toEqual(["ci: 2x", "bug"]);
+    // A lane is handed what the labels decided, never the labels.
+    expect(parseLaneArgs(["--label", "ci: 2x"])).toBeUndefined();
+    // The labels say what `--full` and `--scale` would.
+    expect(parseLaneArgs(["--lane-count", "--full", "--label", "bug"]))
+      .toBeUndefined();
+    expect(
+      parseLaneArgs(["--lane-count", "--scale", "2", "--label", "bug"]),
+    ).toBeUndefined();
   });
 
   it("refuses a flag it does not know", () => {
     expect(parseLaneArgs(["--shard", "1/5"])).toBeUndefined();
   });
+
+  it("takes a plan described already only for a lane that runs", () => {
+    expect(parseLaneArgs(["--described"])?.described).toBe(true);
+    expect(parseLaneArgs(["--dry-run"])?.described).toBeUndefined();
+    // A dry run does nothing but describe.
+    expect(parseLaneArgs(["--described", "--dry-run"])).toBeUndefined();
+  });
+});
+
+describe("what a pull request's labels ask of its run", () => {
+  it("asks for the default where no label says otherwise", () => {
+    expect(requestedRun([])).toEqual({ ok: true, full: false, scale: 1 });
+    expect(requestedRun(["bug", "dependencies"]))
+      .toEqual({ ok: true, full: false, scale: 1 });
+  });
+
+  it("asks for everything under `ci: full`", () => {
+    expect(requestedRun(["bug", "ci: full"]))
+      .toEqual({ ok: true, full: true, scale: 1 });
+  });
+
+  it("multiplies the tests chosen by score by any non-negative decimal", () => {
+    for (
+      const [label, scale] of [
+        ["ci: 2.2x", 2.2],
+        ["ci: 10x", 10],
+        ["ci: 0.1x", 0.1],
+        ["ci: .5x", 0.5],
+        ["ci: 0x", 0],
+        ["ci: 1x", 1],
+      ] as const
+    ) {
+      expect(requestedRun([label])).toEqual({ ok: true, full: false, scale });
+    }
+  });
+
+  it("refuses a label in its namespace it cannot read", () => {
+    for (
+      const label of [
+        "ci: 2",
+        "ci: x",
+        "ci: -1x",
+        "ci: 2X",
+        "ci:2x",
+        "CI: 2x",
+        "ci: 1.x",
+        "ci: 1e3x",
+        "ci: fast",
+      ]
+    ) {
+      expect(requestedRun([label])).toEqual({
+        ok: false,
+        problem: expect.stringContaining(`\`${label}\``),
+      });
+    }
+  });
+
+  it("refuses two labels saying how much to run, even where they agree", () => {
+    for (
+      const labels of [
+        ["ci: 2x", "ci: full"],
+        ["ci: 2x", "ci: 3x"],
+        ["ci: 2x", "ci: 2.0x"],
+        ["ci: 2x", "ci: two"],
+      ]
+    ) {
+      for (const label of labels) {
+        expect(requestedRun(labels)).toEqual({
+          ok: false,
+          problem: expect.stringContaining(`\`${label}\``),
+        });
+      }
+    }
+  });
 });
 
 describe("the moment a lane resolves its manifest at", () => {
   const lane = { lane: 1, of: 5, full: false, dryRun: false, laneCount: false };
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    for (const root of roots.splice(0)) {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
 
   /** A repository whose one commit was made at a moment a case chose. */
   async function repository(committed: string): Promise<string> {
-    const root = await Deno.makeTempDir({ prefix: "ci-lane-commit-" });
-    const git = (...args: string[]) =>
-      new Deno.Command("git", {
-        args,
-        cwd: root,
-        env: {
-          ...Deno.env.toObject(),
-          GIT_AUTHOR_DATE: committed,
-          GIT_COMMITTER_DATE: committed,
-          GIT_AUTHOR_NAME: "A",
-          GIT_AUTHOR_EMAIL: "a@example.com",
-          GIT_COMMITTER_NAME: "A",
-          GIT_COMMITTER_EMAIL: "a@example.com",
-        },
-        stdout: "null",
-        stderr: "null",
-      }).output();
-    await git("init", "-q");
-    await Deno.writeTextFile(`${root}/a.txt`, "a");
-    await git("add", "a.txt");
-    await git("commit", "-q", "-m", "one");
+    const root = await repositoryCommittedAt(committed);
+    roots.push(root);
     return root;
   }
 
@@ -159,7 +410,7 @@ describe("the moment a lane resolves its manifest at", () => {
     // Git writes the committer's own offset and manifest names carry
     // UTC, so the two are only comparable once this one is normalized.
     const root = await repository("2026-09-01T10:41:59-07:00");
-    expect((await manifestMoment({ ...lane, root })).at).toBe(
+    expect(manifestMoment({ ...lane, root })).toBe(
       "2026-09-01T17:41:59.000Z",
     );
   });
@@ -169,56 +420,174 @@ describe("the moment a lane resolves its manifest at", () => {
     // comes from the run, so a re-run resolves what the first attempt
     // resolved.
     const root = await repository("2026-09-01T10:41:59-07:00");
-    const first = await manifestMoment({ ...lane, root });
-    const again = await manifestMoment({ ...lane, root });
-    expect(again.at).toBe(first.at);
-    expect(first.note).toBeUndefined();
+    const first = manifestMoment({ ...lane, root });
+    const again = manifestMoment({ ...lane, root });
+    expect(again).toBe(first);
   });
 
   it("lets a caller ask about a moment that is not this tree's", async () => {
     const root = await repository("2026-09-01T10:41:59-07:00");
-    const moment = await manifestMoment({
+    const moment = manifestMoment({
       ...lane,
       root,
       at: "2026-08-01T00:00:00.000Z",
     });
-    expect(moment.at).toBe("2026-08-01T00:00:00.000Z");
+    expect(moment).toBe("2026-08-01T00:00:00.000Z");
   });
 
-  it("falls back to the newest manifest outside a repository, and says so", async () => {
+  it("throws where there is no commit to read the date of", async () => {
+    // Reading the date can fail in one lane of a run and not in the
+    // next, and no other moment is one the lanes would all share.
+
     const root = await Deno.makeTempDir({ prefix: "ci-lane-nogit-" });
-    const moment = await manifestMoment({ ...lane, root });
-    expect(moment.note).toContain("cannot read the commit's date");
-    expect(Number.isNaN(new Date(moment.at).getTime())).toBe(false);
+    roots.push(root);
+    expect(() => manifestMoment({ ...lane, root })).toThrow(
+      `cannot read the date of the commit checked out at \`${root}\``,
+    );
+  });
+
+  describe("as the lanes resolve it", () => {
+    /** A topology of one unit, and a store noting each moment asked of it. */
+    function recorded() {
+      const asked: string[] = [];
+      return {
+        asked,
+        deps: {
+          topology: () =>
+            Promise.resolve([
+              suite({ id: "workspace-unit", units: ["a.test.ts"] }),
+            ]),
+          manifest: ({ at }: { at: string }) => {
+            asked.push(at);
+            return Promise.resolve({
+              manifest: manifestOf([{ unit: "a.test.ts" }]),
+              objectName: "manifest-fixture.json.gz",
+            });
+          },
+        },
+      };
+    }
+    const count = { ...lane, of: 1, full: true, laneCount: true };
+
+    it("asks the store for the manifest of the commit's moment", async () => {
+      const root = await repository("2026-09-01T10:41:59-07:00");
+      const { asked, deps } = recorded();
+      expect(await lanesOf({ ...count, root }, deps)).toBe(1);
+      expect(asked).toEqual(["2026-09-01T17:41:59.000Z"]);
+    });
+
+    it("rejects a lane count without asking the store where there is no commit", async () => {
+      const root = await Deno.makeTempDir({ prefix: "ci-lane-nogit-" });
+      roots.push(root);
+      const { asked, deps } = recorded();
+      await expect(lanesOf({ ...count, root }, deps)).rejects.toThrow(
+        "cannot read the date of the commit",
+      );
+      expect(asked).toEqual([]);
+    });
+
+    it("rejects a lane without asking the store where there is no commit", async () => {
+      const root = await Deno.makeTempDir({ prefix: "ci-lane-nogit-" });
+      roots.push(root);
+      const { asked, deps } = recorded();
+      await expect(runLane({ ...lane, dryRun: true, root }, deps)).rejects
+        .toThrow("cannot read the date of the commit");
+      expect(asked).toEqual([]);
+    });
   });
 });
 
 describe("turning a lane's selections into batches", () => {
   const bakery = suite({
     id: "workspace-unit",
-    units: ["packages/bakery/glaze.test.ts"],
+    units: ["runtime/bakery/glaze.test.ts"],
   });
 
   it("skips the identities inside a chosen unit that were not chosen", () => {
+    // What the unit is expected to cost is what the chosen identities
+    // cost, since the skipped ones do not run.
     const manifest = manifestOf([
-      {},
-      { test: { k: "unit", s: "bakery", n: "glaze > browns" } },
+      { cost: 3 },
+      { test: { k: "unit", s: "bakery", n: "glaze > browns" }, cost: 5 },
     ]);
-    const batches = batchesOf([bakery], manifest, [{
+    const batches = batchesOf([bakery], pricedFor([bakery], manifest), [{
       entry: manifest.entries[0]!,
       reason: "value",
       repeats: 1,
     }]);
     expect(batches.length).toBe(1);
     expect(batches[0]!.units).toEqual([{
-      unit: "packages/bakery/glaze.test.ts",
+      unit: "runtime/bakery/glaze.test.ts",
       skip: ["glaze > browns"],
+      cost: 3,
     }]);
+  });
+
+  it("keeps the describes around a chosen test off the skip list", () => {
+    // A describe that failed as a whole is recorded under its title. The
+    // preload ignores the outermost describe by that title, which would
+    // ignore every test inside it, the chosen ones included.
+    const manifest = manifestOf([
+      { test: { k: "unit", s: "bakery", n: "glaze" }, cost: 1 },
+      { test: { k: "unit", s: "bakery", n: "glaze > sets" }, cost: 2 },
+      { test: { k: "unit", s: "bakery", n: "glaze > browns" }, cost: 4 },
+      { test: { k: "unit", s: "bakery", n: "glazed" }, cost: 8 },
+      { test: { k: "unit", s: "bakery", n: "icing" }, cost: 16 },
+      { test: { k: "unit", s: "bakery", n: "icing > sets" }, cost: 32 },
+      { test: { k: "unit", s: "bakery", n: "icing > browns" }, cost: 64 },
+    ]);
+    const unitFor = (...chosen: string[]) =>
+      batchesOf(
+        [bakery],
+        pricedFor([bakery], manifest),
+        chosen.map((n) => ({
+          entry: manifest.entries.find((entry) => entry.test.n === n)!,
+          reason: "changed" as const,
+          repeats: 1,
+        })),
+      )[0]!.units[0]!;
+    // A name sharing only its first characters encloses nothing, and a
+    // chosen describe runs its hooks without the tests inside it. The
+    // describe around a chosen test runs its hooks too, so the unit costs
+    // them as well.
+    expect(unitFor("glaze > sets", "icing")).toEqual({
+      unit: "runtime/bakery/glaze.test.ts",
+      skip: ["glaze > browns", "glazed", "icing > sets", "icing > browns"],
+      cost: 1 + 2 + 16,
+    });
+  });
+
+  it("skips nothing inside a unit its suite declares whole", () => {
+    // The runner of such a unit reads no skip list. The batch therefore carries
+    // none, and the lane's report of what it ran lists every test in the unit.
+    // The unit is expected to cost what every test in it costs.
+
+    const member = suite({
+      id: "workspace-unit",
+      units: ["runtime/bakery"],
+      whole: ["runtime/bakery"],
+    });
+    const manifest = manifestOf([
+      { unit: "runtime/bakery", cost: 2 },
+      {
+        test: { k: "unit", s: "bakery", n: "glaze > browns" },
+        unit: "runtime/bakery",
+        cost: 7,
+      },
+    ]);
+    const batches = batchesOf([member], pricedFor([member], manifest), [{
+      entry: manifest.entries[0]!,
+      reason: "value",
+      repeats: 1,
+    }]);
+    expect(batches[0]!.units).toEqual([
+      { unit: "runtime/bakery", skip: [], cost: 9 },
+    ]);
   });
 
   it("skips nothing when every identity of a unit was chosen", () => {
     const manifest = manifestOf([{}]);
-    const batches = batchesOf([bakery], manifest, [{
+    const batches = batchesOf([bakery], pricedFor([bakery], manifest), [{
       entry: manifest.entries[0]!,
       reason: "value",
       repeats: 1,
@@ -228,12 +597,12 @@ describe("turning a lane's selections into batches", () => {
 
   it("takes the most runs any identity in the batch asked for", () => {
     const manifest = manifestOf([{}]);
-    const batches = batchesOf([bakery], manifest, [{
+    const batches = batchesOf([bakery], pricedFor([bakery], manifest), [{
       entry: manifest.entries[0]!,
       reason: "value",
       repeats: 3,
     }]);
-    expect(batches[0]!.repeats).toBe(3);
+    expect(batchRepeats(batches[0]!)).toBe(3);
   });
 
   it("holds the most runs when a later identity asks for fewer", () => {
@@ -243,33 +612,79 @@ describe("turning a lane's selections into batches", () => {
       {},
       { test: { k: "unit", s: "bakery", n: "glaze > browns" } },
     ]);
-    const batches = batchesOf([bakery], manifest, [
+    const batches = batchesOf([bakery], pricedFor([bakery], manifest), [
       { entry: manifest.entries[0]!, reason: "value", repeats: 3 },
       { entry: manifest.entries[1]!, reason: "value", repeats: 1 },
     ]);
-    expect(batches[0]!.repeats).toBe(3);
+    expect(batchRepeats(batches[0]!)).toBe(3);
   });
 
-  it("holds the most runs across the units of one batch", () => {
-    // A batch runs its units together under one count, so a unit asking
-    // for fewer cannot cut short the one that asked for more.
+  it("runs each unit of a batch as many times as that unit asked for", () => {
+    // A unit that asked for fewer runs stops when it has had them: one
+    // flaky unit is not a reason to run the rest of the batch again.
     const twoUnits = suite({
       id: "workspace-unit",
-      units: ["packages/bakery/glaze.test.ts", "packages/bakery/ice.test.ts"],
+      units: ["runtime/bakery/glaze.test.ts", "runtime/bakery/ice.test.ts"],
     });
     const manifest = manifestOf([
       {},
       {
         test: { k: "unit", s: "bakery", n: "ice > sets" },
-        unit: "packages/bakery/ice.test.ts",
+        unit: "runtime/bakery/ice.test.ts",
       },
     ]);
-    const batches = batchesOf([twoUnits], manifest, [
+    const batches = batchesOf([twoUnits], pricedFor([twoUnits], manifest), [
       { entry: manifest.entries[0]!, reason: "value", repeats: 4 },
       { entry: manifest.entries[1]!, reason: "value", repeats: 2 },
     ]);
     expect(batches.length).toBe(1);
-    expect(batches[0]!.repeats).toBe(4);
+    expect(batchRepeats(batches[0]!)).toBe(4);
+    const round = (run: number) =>
+      unitsForRun(batches[0]!, run).map((request) => request.unit);
+    expect(round(1)).toEqual([
+      "runtime/bakery/glaze.test.ts",
+      "runtime/bakery/ice.test.ts",
+    ]);
+    expect(round(2)).toEqual([
+      "runtime/bakery/glaze.test.ts",
+      "runtime/bakery/ice.test.ts",
+    ]);
+    expect(round(3)).toEqual(["runtime/bakery/glaze.test.ts"]);
+    expect(round(4)).toEqual(["runtime/bakery/glaze.test.ts"]);
+  });
+
+  it("runs a unit nothing asked to repeat exactly once", () => {
+    const manifest = manifestOf([{}]);
+    const batches = batchesOf([bakery], pricedFor([bakery], manifest), [{
+      entry: manifest.entries[0]!,
+      reason: "coverage-gate",
+      repeats: 1,
+    }]);
+    expect(batchRepeats(batches[0]!)).toBe(1);
+    expect(unitsForRun(batches[0]!, 2)).toEqual([]);
+  });
+
+  it("skips nothing in a later pass of a unit its suite declares whole", () => {
+    // Its runner reads no skip list and runs every test in it on every
+    // pass, so what its first pass registered changes nothing after it.
+
+    const member = suite({
+      id: "workspace-unit",
+      units: ["runtime/bakery"],
+      whole: ["runtime/bakery"],
+    });
+    const manifest = manifestOf([{ unit: "runtime/bakery" }]);
+    const batches = batchesOf([member], pricedFor([member], manifest), [{
+      entry: manifest.entries[0]!,
+      reason: "value",
+      repeats: 2,
+    }]);
+    const first = new Map([
+      ["runtime/bakery", new Set(["glaze > sets", "glaze > cools"])],
+    ]);
+    expect(unitsForRun(batches[0]!, 2, first)).toEqual([
+      { unit: "runtime/bakery", skip: [], cost: 1 },
+    ]);
   });
 });
 
@@ -280,16 +695,17 @@ function unitsPerLane(
   lanes: number,
   policy?: "everything",
 ): string[][] {
-  const seen = census(suites, manifest, new Set());
+  const seen = census(suites, manifest, new Set(), new Set());
   const laid = plan({
     manifest: seen.manifest,
     mandatory: seen.mandatory,
     capabilities: capabilitiesBySuite(suites),
+    wholeUnits: wholeUnits(suites),
     lanes,
     ...(policy === undefined ? {} : { policy }),
   });
   return laid.lanes.map((lane) =>
-    batchesOf(suites, seen.manifest, lane.selections)
+    batchesOf(suites, pricedFor(suites, seen.manifest), lane.selections)
       .flatMap((batch) => batch.units.map((unit) => unit.unit))
       .toSorted()
   );
@@ -310,13 +726,13 @@ describe("the order a runner is handed its work in", () => {
 
   /** The units of one batch, in the order `batchesOf` returns them. */
   function handed(selections: readonly Selection[]): string[] {
-    const seen = census(bakery, undefined, new Set());
-    return batchesOf(bakery, seen.manifest, selections)
+    const seen = census(bakery, undefined, new Set(), new Set());
+    return batchesOf(bakery, pricedFor(bakery, seen.manifest), selections)
       .flatMap((batch) => batch.units.map((unit) => unit.unit));
   }
 
   it("hands the units over in the order the suite enumerates them", () => {
-    const seen = census(bakery, undefined, new Set());
+    const seen = census(bakery, undefined, new Set(), new Set());
     const entries = seen.manifest.entries.filter((entry) =>
       entry.suite === "workspace-unit"
     );
@@ -333,16 +749,178 @@ describe("the order a runner is handed its work in", () => {
   });
 
   it("puts the batches themselves in one order whatever chose them", () => {
-    const seen = census(bakery, undefined, new Set());
+    const seen = census(bakery, undefined, new Set(), new Set());
     const selections = seen.manifest.entries.map((entry) => ({
       entry,
       reason: "value" as const,
       repeats: 1,
     }));
     const suiteIds = (chosen: readonly Selection[]) =>
-      batchesOf(bakery, seen.manifest, chosen).map((batch) => batch.suite.id);
-    expect(suiteIds(selections)).toEqual(["repo-gates", "workspace-unit"]);
+      batchesOf(bakery, pricedFor(bakery, seen.manifest), chosen).map((batch) =>
+        batch.suite.id
+      );
+    expect(suiteIds(selections).toSorted()).toEqual([
+      "repo-gates",
+      "workspace-unit",
+    ]);
     expect(suiteIds([...selections].reverse())).toEqual(suiteIds(selections));
+  });
+});
+
+describe("the order a lane runs its batches in", () => {
+  // A lane that the step timeout or a cancellation stops part way
+  // through leaves its later batches unrun and unmeasured, so the order
+  // decides which suites the cost model can learn. Each case turns on one
+  // ordering key, and its second assertion shows that key is what decides
+  // it.
+
+  /**
+   * What each of one suite's identities costs, what the suite is
+   * corrected by, and how many times each identity repeats.
+   */
+  interface Share {
+    costs?: readonly number[];
+    correction?: number;
+    repeats?: number;
+  }
+
+  /**
+   * The suites a lane would run, in the order it would run them, of
+   * `alpha` and `zebra` (one identity costing a second each unless
+   * `shares` says otherwise), with the `fitted` ones measured without
+   * coverage and the `covered` ones with it, and the selections listed
+   * in reverse where `reversed` says. The lane belongs to a pull request
+   * measuring nothing, or to the full run, which measures everything.
+   */
+  function order(
+    fitted: readonly string[],
+    shares: Readonly<Record<string, Share>> = {},
+    reversed = false,
+    { full = false, covered = [] }: {
+      full?: boolean;
+      covered?: readonly string[];
+    } = {},
+  ): string[] {
+    const made = manifestOf(
+      ["zebra", "alpha"].flatMap((id) =>
+        (shares[id]?.costs ?? [1]).map((cost, n) => ({
+          test: { k: "unit", s: id, n: `test ${n}` },
+          suite: id,
+          unit: `${id}.ts`,
+          cost,
+        }))
+      ),
+    );
+    const fit = (id: string) => ({
+      overhead: 5,
+      correction: shares[id]?.correction ?? 1,
+      unitOverhead: 0,
+    });
+    made.calibration.suites = Object.fromEntries(
+      fitted.map((id) => [id, fit(id)]),
+    );
+    made.calibration.suitesWithCoverage = Object.fromEntries(
+      covered.map((id) => [id, fit(id)]),
+    );
+    const topology = ["zebra", "alpha"].map((id) =>
+      suite({
+        id,
+        units: [`${id}.ts`],
+        locate: () => ({ level: "unit" as const, unit: `${id}.ts` }),
+      })
+    );
+    const selections = made.entries.map((entry) => ({
+      entry,
+      reason: "value" as const,
+      repeats: shares[entry.suite]?.repeats ?? 1,
+    }));
+    return batchesOf(
+      topology,
+      pricedFor(topology, made, full),
+      reversed ? selections.toReversed() : selections,
+    ).map((batch) => batch.suite.id);
+  }
+
+  it("runs a suite nothing has measured before one something has", () => {
+    // The measured suite is the larger, so only this key puts it second.
+    expect(order(["alpha"], { alpha: { costs: [90] } }))
+      .toEqual(["zebra", "alpha"]);
+    expect(order(["alpha", "zebra"], { alpha: { costs: [90] } }))
+      .toEqual(["alpha", "zebra"]);
+  });
+
+  it("runs a suite the full run has not measured with coverage on first", () => {
+    // Both suites have been measured without coverage, which says
+    // nothing about what they cost with it on, and only `alpha` has been
+    // run that way.
+    const both = ["alpha", "zebra"];
+    const shares = { alpha: { costs: [90] } };
+    expect(order(both, shares, false, { full: true, covered: ["alpha"] }))
+      .toEqual(["zebra", "alpha"]);
+    expect(order(both, shares, false, { full: true, covered: both }))
+      .toEqual(["alpha", "zebra"]);
+    expect(order(both, shares, false, { full: true }))
+      .toEqual(["alpha", "zebra"]);
+  });
+
+  it("runs the largest share of the lane first within a group", () => {
+    expect(order([], { zebra: { costs: [90] } })).toEqual(["zebra", "alpha"]);
+    expect(order([], { alpha: { costs: [90] } })).toEqual(["alpha", "zebra"]);
+  });
+
+  it("counts every selected identity of a suite in its share", () => {
+    // Two thirty-second tests of `zebra` are more of the lane than one
+    // fifty-second test of `alpha`.
+    expect(order([], {
+      alpha: { costs: [50] },
+      zebra: { costs: [30, 30] },
+    })).toEqual(["zebra", "alpha"]);
+    expect(order([], {
+      alpha: { costs: [50] },
+      zebra: { costs: [30] },
+    })).toEqual(["alpha", "zebra"]);
+  });
+
+  it("counts a suite's correction in its share", () => {
+    // Thirty seconds of `zebra` measured, running at twice that, is more
+    // of the lane than fifty seconds of `alpha`.
+    expect(order(["alpha", "zebra"], {
+      alpha: { costs: [50] },
+      zebra: { costs: [30], correction: 2 },
+    })).toEqual(["zebra", "alpha"]);
+    expect(order(["alpha", "zebra"], {
+      alpha: { costs: [50] },
+      zebra: { costs: [30] },
+    })).toEqual(["alpha", "zebra"]);
+  });
+
+  it("counts a selection's repeats in its share", () => {
+    // Thirty seconds run three times is more of the lane than sixty run
+    // once.
+    expect(order([], {
+      alpha: { costs: [60] },
+      zebra: { costs: [30], repeats: 3 },
+    })).toEqual(["zebra", "alpha"]);
+    expect(order([], {
+      alpha: { costs: [60] },
+      zebra: { costs: [30] },
+    })).toEqual(["alpha", "zebra"]);
+  });
+
+  it("orders suites whose shares differ by rounding alone the same way whatever order the plan listed", () => {
+    // Added up in the order listed, a tenth, a fifth and three tenths come
+    // to exactly six tenths one way round and a rounding step more the
+    // other, which is a tie with `alpha` one way and not the other.
+    const shares = {
+      alpha: { costs: [0.6] },
+      zebra: { costs: [0.1, 0.2, 0.3] },
+    };
+    expect(order([], shares)).toEqual(order([], shares, true));
+  });
+
+  it("settles a tie by the suite's identifier whatever order the plan listed", () => {
+    expect(order([])).toEqual(["alpha", "zebra"]);
+    expect(order([], {}, true)).toEqual(["alpha", "zebra"]);
   });
 });
 
@@ -402,7 +980,7 @@ describe("running everything", () => {
   });
 });
 
-describe("how many lanes the full run asks for", () => {
+describe("how many lanes a run asks for", () => {
   const options = {
     lane: 1,
     of: 1,
@@ -430,12 +1008,148 @@ describe("how many lanes the full run asks for", () => {
   }
 
   it("asks for one lane for work that fits in one", async () => {
-    expect(await fullLanes(options, corpus(10, 1))).toBe(1);
+    expect(await lanesOf(options, corpus(10, 1))).toBe(1);
+  });
+
+  describe("for a pull request", () => {
+    // Nothing the change touched, so nothing is mandatory and the lanes
+    // hold what the scale asks for and no more.
+    const change = { ...options, full: false, base: "HEAD" };
+
+    it("asks for as many lanes as its tests chosen by score need", async () => {
+      const deps = corpus(LANE_BUDGET_SECONDS * 20, 1);
+      const lanes = (scale: number) => lanesOf({ ...change, scale }, deps);
+      const unscaled = Math.ceil(DISCRETIONARY_SECONDS / LANE_BUDGET_SECONDS);
+      expect(await lanesOf(change, deps)).toBe(unscaled);
+      expect(await lanes(1)).toBe(unscaled);
+      expect(await lanes(2)).toBe(
+        Math.ceil(2 * DISCRETIONARY_SECONDS / LANE_BUDGET_SECONDS),
+      );
+      // A lane however little there is to run.
+      expect(await lanes(0)).toBe(1);
+    });
+
+    it("says what its tests chosen by score lose where the cap binds", async () => {
+      const deps = corpus(LANE_BUDGET_SECONDS * (LANES_MAX + 10), 1);
+      const error = console.error;
+      const said: string[] = [];
+      console.error = (line: string) => said.push(line);
+      let lanes: number;
+      try {
+        lanes = await lanesOf({ ...change, scale: 100 }, deps);
+      } finally {
+        console.error = error;
+      }
+      expect(lanes).toBe(LANES_MAX);
+      const told = said.join("\n");
+      expect(told).toContain(`needs more than ${LANES_MAX} lanes`);
+      expect(told).toContain("its tests chosen by score get");
+      expect(told).not.toContain("a lane may run past its budget");
+    });
+
+    it("hands the lanes its base and its scale", async () => {
+      expect(await runLanes({ ...change, scale: 2.5 }, corpus(10, 1)))
+        .toEqual({ of: 1, args: ["--base", "HEAD", "--scale", "2.5"] });
+      expect(await runLanes(change, corpus(10, 1)))
+        .toEqual({ of: 1, args: ["--base", "HEAD", "--scale", "1"] });
+    });
+
+    /** What `main` printed and returned, and whether it read the store. */
+    async function counted(...labels: string[]) {
+      const out: string[] = [];
+      const err: string[] = [];
+      const log = console.log;
+      const error = console.error;
+      console.log = (line: string) => out.push(line);
+      console.error = (line: string) => err.push(line);
+      let asked = false;
+      const deps = corpus(LANE_BUDGET_SECONDS * 20, 1);
+      try {
+        const status = await main(
+          [
+            "--lane-count",
+            "--base",
+            "HEAD",
+            ...labels.flatMap((label) => ["--label", label]),
+          ],
+          REPOSITORY,
+          {
+            ...deps,
+            manifest: () => {
+              asked = true;
+              return deps.manifest();
+            },
+          },
+        );
+        return { status, out, err: err.join("\n"), asked };
+      } finally {
+        console.log = log;
+        console.error = error;
+      }
+    }
+
+    it("runs what its labels ask for", async () => {
+      const doubled = await counted("ci: 2x", "bug");
+      expect(doubled.status).toBe(0);
+      expect(doubled.out.map((line) => JSON.parse(line))).toEqual([{
+        of: Math.ceil(2 * DISCRETIONARY_SECONDS / LANE_BUDGET_SECONDS),
+        args: ["--base", "HEAD", "--scale", "2"],
+      }]);
+      const full = await counted("ci: full");
+      expect(full.status).toBe(0);
+      // The base goes on, for the job that judges which gates the change
+      // reaches.
+      expect(JSON.parse(full.out[0]!).args).toEqual([
+        "--base",
+        "HEAD",
+        "--full",
+      ]);
+    });
+
+    it("stops before reading anything at a label it cannot read", async () => {
+      for (const labels of [["ci: two"], ["ci: 2x", "ci: full"]]) {
+        const refused = await counted(...labels);
+        expect(refused.status).toBe(1);
+        expect(refused.out).toEqual([]);
+        expect(refused.err).toMatch(/^::error::/);
+        expect(refused.err).toContain(`\`${labels[0]}\``);
+        expect(refused.asked).toBe(false);
+      }
+    });
   });
 
   it("asks for enough lanes that none of them runs long", async () => {
     const deps = corpus(FULL_LANE_BUDGET_SECONDS * 4, 1);
-    expect(await fullLanes(options, deps)).toBe(4);
+    expect(await lanesOf(options, deps)).toBe(4);
+  });
+
+  /** What `lanesOf` answers, and what it said on the error stream. */
+  async function saying(deps: LaneDeps) {
+    const error = console.error;
+    const said: string[] = [];
+    console.error = (line: string) => said.push(line);
+    try {
+      return { lanes: await lanesOf(options, deps), said: said.join("\n") };
+    } finally {
+      console.error = error;
+    }
+  }
+
+  it("says when the cap holds back a measured run", async () => {
+    // Two tests to a lane, and two lanes more than the cap allows.
+    const capped = await saying(
+      corpus((LANES_MAX + 2) * 2, FULL_LANE_BUDGET_SECONDS * 0.45),
+    );
+    expect(capped.lanes).toBe(LANES_MAX);
+    expect(capped.said).toContain(
+      `needs more than ${LANES_MAX} lanes and takes ${LANES_MAX}`,
+    );
+    // And says nothing of the cap where the run fits under it.
+    const fits = await saying(
+      corpus(LANES_MAX * 2, FULL_LANE_BUDGET_SECONDS * 0.45),
+    );
+    expect(fits.lanes).toBe(LANES_MAX);
+    expect(fits.said).not.toContain("needs more than");
   });
 
   /**
@@ -475,9 +1189,10 @@ describe("how many lanes the full run asks for", () => {
     manifest.calibration = {
       setupCost: { deno: 15, browser: 60, toolshed: 45 },
       suites: Object.fromEntries(
-        suites.map((s) => [s.id, { overhead: 12, correction: 1.3 }]),
+        suites.map((
+          s,
+        ) => [s.id, { overhead: 12, correction: 1.3, unitOverhead: 0 }]),
       ),
-      unitOverhead: {},
       prologue: 40,
     };
     return {
@@ -494,16 +1209,18 @@ describe("how many lanes the full run asks for", () => {
     // placed exactly once is the property that matters: what the full
     // run does not run, nothing runs.
     const deps = awkward();
-    const lanes = await fullLanes(options, deps);
+    const lanes = await lanesOf(options, deps);
     const seen = census(
       deps.suites,
       (await deps.manifest()).manifest,
+      new Set(),
       new Set(),
     );
     const laid = plan({
       manifest: seen.manifest,
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(deps.suites),
+      wholeUnits: wholeUnits(deps.suites),
       policy: "everything",
       lanes,
     });
@@ -526,15 +1243,17 @@ describe("how many lanes the full run asks for", () => {
     // The same property down the fallback path, where the count comes
     // from the shape of the topology rather than from a cost model.
     const deps = awkward();
-    const lanes = await fullLanes(options, {
+    const lanes = await lanesOf(options, {
       topology: deps.topology,
-      manifest: () => Promise.resolve({ absent: "the store is gone" }),
+      manifest: () =>
+        Promise.resolve({ absent: "the store holds no manifest" }),
     });
-    const seen = census(deps.suites, undefined, new Set());
+    const seen = census(deps.suites, undefined, new Set(), new Set());
     const laid = plan({
       manifest: seen.manifest,
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(deps.suites),
+      wholeUnits: wholeUnits(deps.suites),
       policy: "everything",
       lanes,
     });
@@ -559,7 +1278,7 @@ describe("how many lanes the full run asks for", () => {
     console.error = (line: string) => errors.push(line);
     let lanes: number;
     try {
-      lanes = await fullLanes(options, {
+      lanes = await lanesOf(options, {
         topology: () => Promise.resolve(suites),
         manifest: () =>
           Promise.resolve({
@@ -590,20 +1309,38 @@ describe("how many lanes the full run asks for", () => {
         ),
       })
     );
-    const lanes = await fullLanes(options, {
+    const lanes = await lanesOf(options, {
       topology: () => Promise.resolve(suites),
-      manifest: () => Promise.resolve({ absent: "the store is gone" }),
+      manifest: () =>
+        Promise.resolve({ absent: "the store holds no manifest" }),
     });
     expect(lanes).toBeGreaterThan(suites.length);
     expect(lanes).toBe(Math.ceil((perLane + 40) * 2 / perLane));
   });
 
+  it("takes no more lanes than LANES_MAX however many it needs", async () => {
+    // A lane per suite is the floor with nothing measured, and a tree with
+    // more suites than the cap would otherwise ask for a runner apiece.
+    const suites = Array.from(
+      { length: LANES_MAX + 10 },
+      (_, i) => suite({ id: `suite-${i}`, units: [`s${i}/one.test.ts`] }),
+    );
+    const { lanes, said } = await saying({
+      topology: () => Promise.resolve(suites),
+      manifest: () => Promise.resolve({ absent: "the store is gone" }),
+    });
+    expect(lanes).toBe(LANES_MAX);
+    expect(said).toContain(
+      `needs more than ${LANES_MAX} lanes and takes ${LANES_MAX}`,
+    );
+  });
+
   it("charges a stand-in what the census charged it, not the dial", async () => {
     // A suite whose measured units have all been renamed away carries
-    // its old median onto every stand-in, so the units cost far more
-    // than the bare unmeasured figure. A count that assumed the figure
-    // would be out by that whole multiple, and each lane would run past
-    // the bound its job is killed at.
+    // what the units it lost cost onto every stand-in, so the units cost
+    // far more than the bare unmeasured figure. A count that assumed the
+    // figure would be out by that whole multiple, and each lane would
+    // run past the bound it is packed to finish inside.
     const units = Array.from({ length: 300 }, (_, i) => `new/u-${i}.test.ts`);
     const suites = [suite({ id: "pattern-integration", units })];
     const renamed = manifestOf(
@@ -614,18 +1351,19 @@ describe("how many lanes the full run asks for", () => {
         cost: 40,
       })),
     );
-    const lanes = await fullLanes(options, {
+    const lanes = await lanesOf(options, {
       topology: () => Promise.resolve(suites),
       manifest: () =>
         Promise.resolve({ manifest: renamed, objectName: "m.json.gz" }),
     });
-    const seen = census(suites, renamed, new Set());
+    const seen = census(suites, renamed, new Set(), new Set());
     expect(seen.unmeasured).toBe(seen.manifest.entries.length);
     expect(seen.manifest.entries[0]!.cost).toBe(40);
     const laid = plan({
       manifest: seen.manifest,
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(suites),
+      wholeUnits: wholeUnits(suites),
       policy: "everything",
       lanes,
     });
@@ -635,7 +1373,7 @@ describe("how many lanes the full run asks for", () => {
   it("takes the topology's shape when there is no manifest", async () => {
     // Nothing has a measured cost, so a projection from costs would be
     // arithmetic over an invented figure, and being wrong downward means
-    // every lane runs past the bound its job is killed at.
+    // every lane runs past the bound it is packed to finish inside.
     const suites = [
       suite({ id: "workspace-unit", units: ["a.test.ts", "b.test.ts"] }),
       suite({ id: "repo-gates", units: ["deno-fmt"] }),
@@ -650,9 +1388,10 @@ describe("how many lanes the full run asks for", () => {
     console.error = (line: string) => errors.push(line);
     let lanes: number;
     try {
-      lanes = await fullLanes(options, {
+      lanes = await lanesOf(options, {
         topology: () => Promise.resolve(suites),
-        manifest: () => Promise.resolve({ absent: "the store is gone" }),
+        manifest: () =>
+          Promise.resolve({ absent: "the store holds no manifest" }),
       });
     } finally {
       console.error = error;
@@ -663,7 +1402,7 @@ describe("how many lanes the full run asks for", () => {
     expect(errors.join("\n")).toContain("measured");
   });
 
-  it("answers with an integer on its own, and exits zero", async () => {
+  it("answers with the count and the lanes' arguments, and exits zero", async () => {
     const lines: string[] = [];
     const log = console.log;
     console.log = (line: string) => lines.push(line);
@@ -678,7 +1417,135 @@ describe("how many lanes the full run asks for", () => {
       console.log = log;
     }
     expect(status).toBe(0);
-    expect(lines).toEqual(["1"]);
+    expect(lines).toEqual([JSON.stringify({ of: 1, args: ["--full"] })]);
+  });
+
+  it("says what each lane it asks for is projected to take, off the answer", async () => {
+    // The integer is read by the job ahead of the full run, so the table
+    // goes to the error stream and the summary. Its figures are the ones
+    // the lanes will project for themselves, so the plan here is packed
+    // the way a lane packs it, at the count the answer gives.
+    const deps = awkward();
+    const summary = await Deno.makeTempFile({ prefix: "summary-" });
+    const previous = Deno.env.get("GITHUB_STEP_SUMMARY");
+    Deno.env.set("GITHUB_STEP_SUMMARY", summary);
+    const out: string[] = [];
+    const err: string[] = [];
+    const log = console.log;
+    const error = console.error;
+    console.log = (line: string) => out.push(line);
+    console.error = (line: string) => err.push(line);
+    let status: number;
+    try {
+      status = await main(["--full", "--lane-count"], REPOSITORY, deps);
+    } finally {
+      console.log = log;
+      console.error = error;
+      if (previous === undefined) Deno.env.delete("GITHUB_STEP_SUMMARY");
+      else Deno.env.set("GITHUB_STEP_SUMMARY", previous);
+    }
+    const held = await Deno.readTextFile(summary);
+    await Deno.remove(summary);
+    expect(status).toBe(0);
+    expect(out).toHaveLength(1);
+    const lanes = JSON.parse(out[0]!).of;
+    expect(Number.isInteger(lanes)).toBe(true);
+
+    const seen = pricedForRun(
+      census(
+        deps.suites,
+        (await deps.manifest()).manifest,
+        new Set(),
+        new Set(),
+      ),
+      deps.suites,
+      () => true,
+    );
+    const laid = plan({
+      manifest: seen.manifest,
+      mandatory: seen.mandatory,
+      capabilities: capabilitiesBySuite(deps.suites),
+      wholeUnits: wholeUnits(deps.suites),
+      policy: "everything",
+      lanes,
+    });
+    const prologue = seen.manifest.calibration.prologue;
+    // Without a prologue the two columns would agree, and a table that
+    // left it out would pass.
+    expect(prologue).toBeGreaterThan(0);
+    expect(laid.lanes).toHaveLength(lanes);
+    const expected = laid.lanes.map((lane) => [
+      String(lane.lane),
+      String(lane.selections.length),
+      duration(lane.projectedSeconds),
+      duration(lane.projectedSeconds + prologue),
+    ]);
+
+    const drawn = err.join("\n").split("\n")
+      .filter((line) => line.startsWith("│"))
+      .map((line) => line.split("│").slice(1, -1).map((cell) => cell.trim()));
+    expect(drawn).toEqual([
+      ["Lane", "Tests", "Projected work", "Projected job"],
+      ...expected,
+    ]);
+    const longest = maxOf(laid.lanes.map((l) => l.projectedSeconds));
+    const told = err.join("\n");
+    expect(told).toContain(`## The run's ${lanes} lane(s)`);
+    expect(told).toContain(
+      `The longest is projected to take ${duration(longest + prologue)}`,
+    );
+    // The summary renders Markdown, so it holds the table undrawn.
+    expect(held).toContain(`## The run's ${lanes} lane(s)`);
+    for (const row of expected) {
+      expect(held).toContain(`| ${row.join(" | ")} |`);
+    }
+  });
+
+  it("charges each lane the policy's prologue where there is no manifest", async () => {
+    // Nothing was calibrated, so the calibration's prologue is zero; the
+    // lanes' budget was still derived from the policy's, which is what a
+    // job pays around its lane.
+    const deps = awkward();
+    const err: string[] = [];
+    const error = console.error;
+    console.error = (text: string) => err.push(text);
+    let lanes: number;
+    try {
+      lanes = await lanesOf(options, {
+        topology: deps.topology,
+        manifest: () =>
+          Promise.resolve({ absent: "the store holds no manifest" }),
+      });
+    } finally {
+      console.error = error;
+    }
+    const seen = pricedForRun(
+      census(deps.suites, undefined, new Set(), new Set()),
+      deps.suites,
+      () => true,
+    );
+    expect(seen.manifest.calibration.prologue).toBe(0);
+    const laid = plan({
+      manifest: seen.manifest,
+      mandatory: seen.mandatory,
+      capabilities: capabilitiesBySuite(deps.suites),
+      wholeUnits: wholeUnits(deps.suites),
+      policy: "everything",
+      lanes,
+    });
+    const told = err.join("\n");
+    expect(told).toContain(
+      `takes about ${duration(LANE_PROLOGUE_SECONDS)} more`,
+    );
+    for (const lane of laid.lanes) {
+      expect(told).toMatch(
+        new RegExp(
+          `│ ${lane.lane} +│ ${lane.selections.length} +│ ` +
+            `${duration(lane.projectedSeconds)} +│ ` +
+            `${duration(lane.projectedSeconds + LANE_PROLOGUE_SECONDS)} +│`,
+        ),
+      );
+    }
   });
 });
 
@@ -686,9 +1553,9 @@ describe("what the two runs agree about", () => {
   const bakery = [
     suite({
       id: "workspace-unit",
-      units: ["packages/bakery/glaze.test.ts", "packages/bakery/proof.test.ts"],
+      units: ["runtime/bakery/glaze.test.ts", "runtime/bakery/proof.test.ts"],
       unavailable: [{
-        unit: "packages/bakery/gone.test.ts",
+        unit: "runtime/bakery/gone.test.ts",
         reason: "not in this configuration",
       }],
     }),
@@ -700,14 +1567,14 @@ describe("what the two runs agree about", () => {
    * changed looks like.
    */
   const stale = manifestOf([
-    { unit: "packages/bakery/glaze.test.ts" },
+    { unit: "runtime/bakery/glaze.test.ts" },
     {
       test: { k: "unit", s: "bakery", n: "gone > entirely" },
-      unit: "packages/bakery/gone.test.ts",
+      unit: "runtime/bakery/gone.test.ts",
     },
     {
       test: { k: "unit", s: "bakery", n: "deleted > long ago" },
-      unit: "packages/bakery/deleted.test.ts",
+      unit: "runtime/bakery/deleted.test.ts",
     },
   ]);
 
@@ -715,8 +1582,8 @@ describe("what the two runs agree about", () => {
     const full = unitsPerLane(bakery, stale, 1, "everything")[0];
     const budgeted = unitsPerLane(bakery, stale, 1)[0];
     expect(full).toEqual([
-      "packages/bakery/glaze.test.ts",
-      "packages/bakery/proof.test.ts",
+      "runtime/bakery/glaze.test.ts",
+      "runtime/bakery/proof.test.ts",
     ]);
     expect(budgeted).toEqual(full);
   });
@@ -732,11 +1599,12 @@ describe("what the two runs agree about", () => {
         units: Array.from({ length: 12 }, (_, i) => `unit-${i}.test.ts`),
       }),
     ];
-    const seen = census(suites, undefined, new Set());
+    const seen = census(suites, undefined, new Set(), new Set());
     const shared = {
       manifest: seen.manifest,
       mandatory: new Map<string, SelectionReason>(),
       capabilities: capabilitiesBySuite(suites),
+      wholeUnits: wholeUnits(suites),
       lanes: 3,
       budgetSeconds: 1_000_000,
     };
@@ -784,6 +1652,79 @@ describe("running a lane's work", () => {
     expect(bad.ok).toBe(false);
   });
 
+  it("hands a measured batch the directory and members to measure", async () => {
+    // The suite decides where under that directory each member's
+    // profiles land, so what the lane passes is the directory and which
+    // members are being scored.
+    const workDir = await Deno.makeTempDir({ prefix: "lane-batch-" });
+    let given: CommandContext | undefined;
+    const recording: Suite = {
+      id: "workspace-unit",
+      recordSurfaces: [{ kind: "unit", scope: "bakery" }],
+      needs: [],
+      units: ["runtime/bakery/glaze.test.ts"],
+      unavailable: [],
+      whole: [],
+      locate: () => undefined,
+      command: (_units, context) => {
+        given = context;
+        return Promise.resolve([]);
+      },
+    };
+    await runBatch(
+      {
+        suite: recording,
+        units: [{ unit: "runtime/bakery/glaze.test.ts", skip: [] }],
+        runs: new Map([["runtime/bakery/glaze.test.ts", 1]]),
+        projected: 0,
+      },
+      lane,
+      workDir,
+      undefined,
+      {},
+      { dir: "/cov/workspace-unit", members: new Set(["runtime/bakery"]) },
+    );
+    expect(given?.coverageDir).toBe("/cov/workspace-unit");
+    expect([...(given?.measuredMembers ?? [])]).toEqual(["runtime/bakery"]);
+    expect(given?.patternCoverageDir).toBeUndefined();
+    await Deno.remove(workDir, { recursive: true });
+  });
+
+  it("measures every member a full run's batch holds", async () => {
+    const workDir = await Deno.makeTempDir({ prefix: "lane-batch-" });
+    let given: CommandContext | undefined;
+    const recording: Suite = {
+      id: "workspace-unit",
+      recordSurfaces: [{ kind: "unit", scope: "bakery" }],
+      needs: [],
+      units: ["runtime/bakery/glaze.test.ts"],
+      unavailable: [],
+      whole: [],
+      locate: () => undefined,
+      command: (_units, context) => {
+        given = context;
+        return Promise.resolve([]);
+      },
+    };
+    await runBatch(
+      {
+        suite: recording,
+        units: [{ unit: "runtime/bakery/glaze.test.ts", skip: [] }],
+        runs: new Map([["runtime/bakery/glaze.test.ts", 1]]),
+        projected: 0,
+      },
+      { ...lane, full: true },
+      workDir,
+      undefined,
+      {},
+      { dir: "/cov/workspace-unit", patternDir: "/cov/pattern/workspace-unit" },
+    );
+    expect(given?.coverageDir).toBe("/cov/workspace-unit");
+    expect(given?.measuredMembers).toBeUndefined();
+    expect(given?.patternCoverageDir).toBe("/cov/pattern/workspace-unit");
+    await Deno.remove(workDir, { recursive: true });
+  });
+
   it("runs a batch once per repeat, and every one must pass", async () => {
     // A repeat is not a retry: three runs of a test is strictly stricter
     // than one, so a batch that fails once has failed.
@@ -791,8 +1732,9 @@ describe("running a lane's work", () => {
     const passing = await runBatch(
       {
         suite: runnable([Deno.execPath(), "eval", "0"]),
-        units: [],
-        repeats: 3,
+        units: [{ unit: "a-unit", skip: [] }],
+        runs: new Map([["a-unit", 3]]),
+        projected: 0,
       },
       lane,
       workDir,
@@ -804,8 +1746,9 @@ describe("running a lane's work", () => {
     const failing = await runBatch(
       {
         suite: runnable([Deno.execPath(), "eval", "Deno.exit(1)"], "red"),
-        units: [],
-        repeats: 2,
+        units: [{ unit: "a-unit", skip: [] }],
+        runs: new Map([["a-unit", 2]]),
+        projected: 0,
       },
       lane,
       workDir,
@@ -813,6 +1756,60 @@ describe("running a lane's work", () => {
       {},
     );
     expect(failing.ok).toBe(false);
+    await Deno.remove(workDir, { recursive: true });
+  });
+
+  it("skips in every pass after the first each name the first pass registered and the manifest does not hold", async () => {
+    // The packer charges a repeated unit's passes for the identities the
+    // manifest holds in it, and has no cost for a test it has not seen. So
+    // such a test runs once, in the first pass, as a test that has never
+    // disagreed with itself does. A `describe` around a test the manifest
+    // holds is not new, and stays as the first pass had it.
+
+    const workDir = await Deno.makeTempDir({ prefix: "lane-repeats-" });
+    const file = "runtime/bakery/glaze.test.ts";
+    const registered = Object.fromEntries(
+      [
+        "glaze",
+        "glaze > sets",
+        "glaze > browns",
+        "glaze > cools",
+        "proof",
+        "proof > rises",
+      ].map((name) => [name, file]),
+    );
+    const handed: (readonly string[])[] = [];
+    const bakery = suite({
+      id: "workspace-unit",
+      units: [file],
+      command: (units, context) => {
+        for (const unit of units) handed.push(unit.skip);
+        return Promise.resolve([{
+          command: [
+            Deno.execPath(),
+            "eval",
+            `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+             Deno.writeTextFileSync(
+               \`\${dir}/names-\${crypto.randomUUID()}.json\`,
+               ${JSON.stringify(JSON.stringify({ names: registered }))},
+             );`,
+          ],
+          cwd: context.root,
+        }]);
+      },
+    });
+    const manifest = manifestOf([
+      {},
+      { test: { k: "unit", s: "bakery", n: "glaze > browns" } },
+    ]);
+    const [batch] = batchesOf([bakery], pricedFor([bakery], manifest), [{
+      entry: manifest.entries[0]!,
+      reason: "value",
+      repeats: 3,
+    }]);
+    await runBatch(batch!, lane, workDir, undefined, {});
+    const later = ["glaze > browns", "glaze > cools", "proof", "proof > rises"];
+    expect(handed).toEqual([["glaze > browns"], later, later]);
     await Deno.remove(workDir, { recursive: true });
   });
 
@@ -836,8 +1833,9 @@ describe("running a lane's work", () => {
             ${JSON.stringify(written + "\n")},
           )`,
         ]),
-        units: [],
-        repeats: 1,
+        units: [{ unit: "a-unit", skip: [] }],
+        runs: new Map([["a-unit", 1]]),
+        projected: 0,
       },
       lane,
       workDir,
@@ -845,6 +1843,152 @@ describe("running a lane's work", () => {
       {},
     );
     expect(result.records.map((record) => record.test.n)).toEqual(["probe"]);
+    await Deno.remove(workDir, { recursive: true });
+  });
+
+  it("passes a signal on to the command it is waiting for", async () => {
+    const stop = new LaneStop();
+    const hanging = () =>
+      new Deno.Command(Deno.execPath(), {
+        args: ["eval", "setInterval(() => {}, 1000)"],
+      }).spawn();
+    const waited = stop.wait(hanging());
+    stop.receive("SIGTERM");
+    const first = await waited;
+    expect(first.status.signal).toBe("SIGTERM");
+    expect(first.interrupted).toBe(true);
+    expect(stop.signal).toBe("SIGTERM");
+    // A command started once the lane was told to stop is sent the
+    // signal the lane was sent, and a later signal changes nothing.
+    stop.receive("SIGINT");
+    expect((await stop.wait(hanging())).status.signal).toBe("SIGTERM");
+    expect(stop.signal).toBe("SIGTERM");
+    // A command that has exited already has nothing left to stop, and
+    // was not interrupted.
+    const exited = new Deno.Command(Deno.execPath(), { args: ["eval", "0"] })
+      .spawn();
+    await exited.status;
+    expect(await stop.wait(exited)).toEqual({
+      status: { success: true, code: 0, signal: null },
+      interrupted: false,
+    });
+  });
+
+  it("fails a batch told to stop before it starts, having run nothing", async () => {
+    // What a batch measured is read as its cost only where it passed, and
+    // a batch that stopped part way measured only part of itself.
+    const workDir = await Deno.makeTempDir({ prefix: "lane-batch-" });
+    const stop = new LaneStop();
+    stop.receive("SIGINT");
+    const result = await runBatch(
+      {
+        suite: runnable([
+          Deno.execPath(),
+          "eval",
+          `Deno.writeTextFileSync(${JSON.stringify(`${workDir}/ran`)}, "")`,
+        ]),
+        units: [{ unit: "a-unit", skip: [] }],
+        runs: new Map([["a-unit", 1]]),
+        projected: 0,
+      },
+      lane,
+      workDir,
+      undefined,
+      {},
+      undefined,
+      stop,
+    );
+    expect(result.ok).toBe(false);
+    expect(await exists(`${workDir}/ran`)).toBe(false);
+    await Deno.remove(workDir, { recursive: true });
+  });
+
+  it("keeps what a stopped execution recorded, and starts nothing after it", async () => {
+    // A lane that reaches its step's bound is sent SIGINT. The test
+    // runner it passes that on to writes its report before it exits, so
+    // what it finished is kept, and the test it was in the middle of
+    // neither passed nor failed.
+    const workDir = await Deno.makeTempDir({ prefix: "lane-stop-" });
+    // The hanging test connects here once it is under way.
+    const started = Deno.listen({
+      transport: "unix",
+      path: `${workDir}/started`,
+    });
+    const after = `${workDir}/after`;
+    const fixture = `${workDir}/hang.test.ts`;
+    await Deno.writeTextFile(
+      fixture,
+      `Deno.test("probe", async (t) => {
+        await t.step("passes", () => {});
+        await t.step("hangs", async () => {
+          await Deno.connect({
+            transport: "unix",
+            path: ${JSON.stringify(`${workDir}/started`)},
+          });
+          await new Promise(() => setInterval(() => {}, 1000));
+        });
+      });`,
+    );
+    const stop = new LaneStop();
+    const result = runBatch(
+      {
+        suite: suite({
+          id: "probe",
+          recordSurfaces: [{ kind: "unit", scope: "probe" }],
+          units: ["hang.test.ts"],
+          locate: () => ({ level: "unit", unit: "hang.test.ts" }),
+          command: (_units, context) =>
+            Promise.resolve([{
+              command: [
+                Deno.execPath(),
+                "test",
+                "--no-config",
+                "--no-lock",
+                "--no-check",
+                "--allow-all",
+                `--junit-path=${context.outputDir}/report.xml`,
+                fixture,
+              ],
+              cwd: workDir,
+              junit: [{
+                path: `${context.outputDir}/report.xml`,
+                kind: "unit",
+                scope: "probe",
+              }],
+            }, {
+              command: [
+                Deno.execPath(),
+                "eval",
+                `Deno.writeTextFileSync(${JSON.stringify(after)}, "")`,
+              ],
+              cwd: workDir,
+            }]),
+        }),
+        units: [{ unit: "hang.test.ts", skip: [] }],
+        runs: new Map([["hang.test.ts", 2]]),
+        projected: 0,
+      },
+      lane,
+      workDir,
+      undefined,
+      {},
+      undefined,
+      stop,
+    );
+    const connection = await started.accept();
+    stop.receive("SIGINT");
+    const { ok, records } = await result;
+    expect(ok).toBe(false);
+    expect(
+      records.map((record) => [record.test.n, record.outcome]).sort(),
+    ).toEqual([
+      ["probe > hangs", "skip"],
+      ["probe > passes", "pass"],
+      ["probe", "skip"],
+    ]);
+    expect(await exists(after)).toBe(false);
+    connection.close();
+    started.close();
     await Deno.remove(workDir, { recursive: true });
   });
 
@@ -857,16 +2001,20 @@ describe("running a lane's work", () => {
         lane,
         [{
           suite: runnable(["true"], "workspace-unit"),
-          units: [],
-          repeats: 2,
+          units: [{ unit: "a-unit", skip: [] }],
+          runs: new Map([["a-unit", 2]]),
+          projected: 0,
         }],
         ["deno", "toolshed"],
         { objectName: "manifest-x.json.gz" },
-        ["binaries: build-binary toolshed costs 900s"],
-        { selections: [], projectedSeconds: 0 },
+        [{
+          test: { k: "unit", s: "toolshed", n: "build-binary toolshed" },
+          suite: "binaries",
+          cost: 900,
+        }],
+        [],
+        { manifest: manifestOf([]), selections: [], projectedSeconds: 0 },
         LANE_BUDGET_SECONDS,
-        0,
-        0,
       );
     } finally {
       console.log = log;
@@ -879,13 +2027,86 @@ describe("running a lane's work", () => {
     expect(printed).toContain("build-binary toolshed");
   });
 
+  it("names a suite no lane can hold instead of each test in it", () => {
+    // Thousands of identities of one suite are all past the bound by the
+    // suite's fixed charge and by nothing about themselves. The summary
+    // names the costliest few, so left in they are all it has room for,
+    // and every one of them names a test that is not the problem while
+    // the suite that is goes unnamed.
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      describePlan(
+        lane,
+        [],
+        [],
+        { objectName: "manifest-x.json.gz" },
+        [{
+          test: { k: "unit", s: "bakery", n: "glaze > sets" },
+          suite: "workspace-unit",
+          cost: 706,
+        }, {
+          test: { k: "unit", s: "toolshed", n: "build-binary toolshed" },
+          suite: "binaries",
+          cost: 900,
+        }],
+        [{
+          suite: "workspace-unit",
+          fixed: 705,
+          identities: 21889,
+          heldNowhere: 21889,
+        }],
+        { manifest: manifestOf([]), selections: [], projectedSeconds: 0 },
+        LANE_BUDGET_SECONDS,
+      );
+    } finally {
+      console.log = log;
+    }
+    const printed = lines.join("\n");
+    expect(printed).toContain("workspace-unit costs 11m45s before it runs");
+    expect(printed).toContain("21889 tests");
+    expect(printed).not.toContain("glaze > sets");
+    // A suite a lane can hold still names the test that cannot fit in it.
+    expect(printed).toContain("build-binary toolshed");
+  });
+
+  it("says a suite is taking a lane per test where it is", () => {
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      describePlan(
+        lane,
+        [],
+        [],
+        { objectName: "manifest-x.json.gz" },
+        [],
+        [{
+          suite: "workspace-unit",
+          fixed: 250,
+          identities: 12,
+          heldNowhere: 0,
+        }],
+        { manifest: manifestOf([]), selections: [], projectedSeconds: 0 },
+        LANE_BUDGET_SECONDS,
+      );
+    } finally {
+      console.log = log;
+    }
+    expect(lines.join("\n"))
+      .toContain(
+        "each of the 12 tests it can still run takes a lane to itself",
+      );
+  });
+
   it("says what each batch costs and why each test is in it", () => {
     // "Why did my test not run" is the question a selected run provokes,
     // and a summary naming only the suites cannot begin to answer it.
     const entry: ManifestEntry = {
       test: { k: "unit", s: "bakery", n: "glaze > sets" },
       suite: "workspace-unit",
-      unit: "packages/bakery/glaze.test.ts",
+      unit: "runtime/bakery/glaze.test.ts",
       cost: 1.5,
       score: 0.5,
       inputs: { catches: 0, sources: 0, churn: 0 },
@@ -900,27 +2121,188 @@ describe("running a lane's work", () => {
         lane,
         [{
           suite: runnable(["true"], "workspace-unit"),
-          units: [{ unit: "packages/bakery/glaze.test.ts", skip: [] }],
-          repeats: 2,
+          units: [{ unit: "runtime/bakery/glaze.test.ts", skip: [] }],
+          runs: new Map([["runtime/bakery/glaze.test.ts", 2]]),
+          projected: 0,
         }],
         ["deno"],
         { objectName: "manifest-x.json.gz" },
         [],
+        [],
         {
+          manifest: manifestOf([]),
           selections: [{ entry, reason: "value", repeats: 2 }],
           projectedSeconds: 96,
         },
         LANE_BUDGET_SECONDS,
-        0,
-        1,
       );
     } finally {
       console.log = log;
     }
     const printed = lines.join("\n");
-    expect(printed).toContain("Projected: 96s");
-    expect(printed).toContain("3.0s");
+    expect(printed).toContain("Projected: 1m36s");
+    expect(printed).toContain("│ 3s ");
     expect(printed).toContain("value 1");
+    // Every cost in this lane was measured, so the projection stands on
+    // nothing but measurements and the line says only what it comes to.
+    expect(printed).not.toContain("nothing has measured");
+  });
+
+  it("counts a test in its batch's own time once for each run of its unit", () => {
+    // The unit runs twice because one of its tests asks for two runs, and
+    // every test in it runs each time: 1.5 and 2.5 seconds, twice over.
+    const [repeated, once] = manifestOf([
+      { test: { k: "unit", s: "bakery", n: "glaze > sets" }, cost: 1.5 },
+      { test: { k: "unit", s: "bakery", n: "glaze > cracks" }, cost: 2.5 },
+    ]).entries;
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      describePlan(
+        lane,
+        [{
+          suite: runnable(["true"], "workspace-unit"),
+          units: [{ unit: "runtime/bakery/glaze.test.ts", skip: [] }],
+          runs: new Map([["runtime/bakery/glaze.test.ts", 2]]),
+          projected: 0,
+        }],
+        ["deno"],
+        { objectName: "manifest-x.json.gz" },
+        [],
+        [],
+        {
+          manifest: manifestOf([]),
+          selections: [
+            { entry: repeated!, reason: "value", repeats: 2 },
+            { entry: once!, reason: "value", repeats: 1 },
+          ],
+          projectedSeconds: 96,
+        },
+        LANE_BUDGET_SECONDS,
+      );
+    } finally {
+      console.log = log;
+    }
+    expect(lines.join("\n")).toContain("│ 8s ");
+  });
+
+  /**
+   * What `describePlan` prints for a lane holding these selections
+   * against a suite whose correction is `correction`, projected at 96
+   * seconds.
+   */
+  function projectionLine(
+    selections: readonly Selection[],
+    correction: number,
+  ): string {
+    const manifest = manifestOf([]);
+    manifest.calibration.suites["workspace-unit"] = {
+      overhead: 0,
+      correction,
+      unitOverhead: 0,
+    };
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      describePlan(
+        lane,
+        [],
+        ["deno"],
+        { objectName: "manifest-x.json.gz" },
+        [],
+        [],
+        { manifest, selections, projectedSeconds: 96 },
+        LANE_BUDGET_SECONDS,
+      );
+    } finally {
+      console.log = log;
+    }
+    return lines.join("\n").split("\n")
+      .find((line) => line.startsWith("Projected:")) ?? "";
+  }
+
+  /** A measured entry of the workspace unit suite, costing `cost`. */
+  function measured(unit: string, cost: number): ManifestEntry {
+    return {
+      test: { k: "unit", s: "bakery", n: `${unit} > sets` },
+      suite: "workspace-unit",
+      unit: `runtime/bakery/${unit}.test.ts`,
+      cost,
+      score: 0.5,
+      inputs: { catches: 0, sources: 0, churn: 0 },
+      flakeRate: 0,
+      repeats: 1,
+    };
+  }
+
+  /** A stand-in of that suite, charged what a suite of `costs` gives it. */
+  function unmeasured(unit: string, costs: readonly number[]): ManifestEntry {
+    return standIn(
+      runnable(["true"], "workspace-unit"),
+      `runtime/bakery/${unit}.test.ts`,
+      costs,
+    );
+  }
+
+  it("says how much of the projection stands on unmeasured units", () => {
+    // Two stand-ins beside a measured entry: one at 30 seconds run
+    // twice, one at 25 run once, which is 85 of the 96 seconds
+    // projected. The measured entry's own 4 are not in that figure.
+    expect(
+      projectionLine([
+        { entry: measured("glaze", 4), reason: "value", repeats: 1 },
+        { entry: unmeasured("proof", [30]), reason: "unknown", repeats: 2 },
+        { entry: unmeasured("knead", [25]), reason: "unknown", repeats: 1 },
+      ], 1),
+    ).toBe(
+      "Projected: 1m36s of 3m50s, 1m25s of it charged to 2 units " +
+        "nothing has measured",
+    );
+  });
+
+  it("reads stand-ins' seconds through their suite's correction", () => {
+    // A suite whose batches run their files in parallel has a correction
+    // below one, and the packer charged the five stand-ins at that.
+    // Reading their bare cost instead would report 200 seconds of a
+    // 96-second projection that holds 50.
+    expect(projectionLine(
+      ["proof", "knead", "shape", "rise", "bake"].map((unit) => ({
+        entry: unmeasured(unit, [40]),
+        reason: "unknown" as const,
+        repeats: 1,
+      })),
+      0.25,
+    )).toBe(
+      "Projected: 1m36s of 3m50s, 50s of it charged to 5 units " +
+        "nothing has measured",
+    );
+  });
+
+  it("charges a stand-in only what it adds past the measured tests beside it", () => {
+    // The measured unit takes 100 seconds on its own, which is more than
+    // the suite's loads come to, so the stand-in beside it runs within
+    // that time and the lane is charged nothing more for it.
+    expect(projectionLine([
+      { entry: measured("glaze", 100), reason: "value", repeats: 1 },
+      { entry: unmeasured("proof", [40]), reason: "unknown", repeats: 1 },
+    ], 0.25)).toBe(
+      "Projected: 1m36s of 3m50s, 0s of it charged to 1 unit " +
+        "nothing has measured",
+    );
+  });
+
+  it("reads a lone stand-in's seconds as no less than its own time", () => {
+    // The correction shares a batch's tests out among its units, and a
+    // batch holding one unit, run twice, takes that unit's whole time
+    // twice over.
+    expect(projectionLine([
+      { entry: unmeasured("proof", [40]), reason: "unknown", repeats: 2 },
+    ], 0.25)).toBe(
+      "Projected: 1m36s of 3m50s, 1m20s of it charged to 1 unit " +
+        "nothing has measured",
+    );
   });
 
   it("says it is running unselected when there is no manifest", () => {
@@ -932,17 +2314,16 @@ describe("running a lane's work", () => {
         lane,
         [],
         [],
-        { absent: "the store is unreachable" },
+        { absent: "the store holds no manifest" },
         [],
-        { selections: [], projectedSeconds: 0 },
+        [],
+        { manifest: manifestOf([]), selections: [], projectedSeconds: 0 },
         LANE_BUDGET_SECONDS,
-        0,
-        0,
       );
     } finally {
       console.log = log;
     }
-    expect(lines.join("\n")).toContain("the store is unreachable");
+    expect(lines.join("\n")).toContain("the store holds no manifest");
   });
 
   it("names what the manifest withheld, and what came back", () => {
@@ -967,7 +2348,54 @@ describe("running a lane's work", () => {
     // The change reaches one of them, which is very likely a fix, so it
     // runs in spite of being withheld.
     expect(printed).toContain("yes, the change reaches it");
-    expect(printed).toContain("| no |");
+    expect(printed).toMatch(/│ no +│/);
+  });
+
+  it("prints the end of a capability's log, saying what it dropped", async () => {
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    const written = Array.from(
+      { length: CAPABILITY_LOG_TAIL_LINES + 30 },
+      (_unused, index) => `line ${index}`,
+    );
+    try {
+      await describeCapabilityLogs(
+        [{ capability: "toolshed", path: "/tmp/toolshed-1.log" }],
+        () => Promise.resolve(`${written.join("\n")}\n`),
+      );
+    } finally {
+      console.log = log;
+    }
+    const printed = lines.join("\n");
+    expect(printed).toContain("--- toolshed log ---");
+    expect(printed).toContain(
+      `last ${CAPABILITY_LOG_TAIL_LINES} of ${written.length} ` +
+        "line(s); 30 earlier dropped",
+    );
+    // The end is what a run that went wrong wrote last, so it is the end
+    // that is kept.
+    expect(printed).toContain(`line ${written.length - 1}`);
+    expect(printed).not.toContain("line 29\n");
+  });
+
+  it("reports a log it could not read rather than throwing", async () => {
+    // The lane is already failing when this runs, and a report that threw
+    // would replace the failure it was printed beside.
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      await describeCapabilityLogs(
+        [{ capability: "toolshed", path: "/tmp/never-written.log" }],
+        () => Promise.reject(new Error("no such file")),
+      );
+    } finally {
+      console.log = log;
+    }
+    expect(lines.join("\n")).toContain("--- toolshed log ---");
+    expect(lines.join("\n")).toContain("(unreadable:");
+    expect(lines.join("\n")).toContain("no such file");
   });
 
   it("names the records no suite describes", () => {
@@ -1018,6 +2446,44 @@ describe("running a lane's work", () => {
 });
 
 describe("planning a lane without running it", () => {
+  /** What lane 2 of the full run prints, as `options` asks. */
+  async function printed(options: Partial<LaneOptions>): Promise<string> {
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      await runLane({
+        lane: 2,
+        of: 5,
+        full: true,
+        dryRun: true,
+        laneCount: false,
+        root: REPOSITORY,
+        ...options,
+      }, {
+        manifest: ({ at }) =>
+          Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
+      });
+    } finally {
+      console.log = log;
+    }
+    return lines.join("\n");
+  }
+
+  it("names a plan described already in one line, with its projection", async () => {
+    const described = await printed({ described: true });
+    const projected = /Projected: (\S+) of ([^\s,]+)/.exec(await printed({}));
+    expect(projected).not.toBeNull();
+    expect(described).toContain("ci-lane: running lane 2 of 5 as described: ");
+    expect(described).toContain("workspace-unit");
+    expect(described).toContain(
+      `projected at ${projected![1]} of ${projected![2]}, unselected: `,
+    );
+    expect(described).not.toContain("Lane 2 of 5");
+    expect(described).not.toContain("| Suite |");
+    expect(described.split("\n")).toHaveLength(1);
+  });
+
   it("plans the full run against the working tree", async () => {
     // What this reaches is the topology and the packing. Selection is
     // off, but the manifest is read either way for what things cost, so
@@ -1036,7 +2502,7 @@ describe("planning a lane without running it", () => {
         laneCount: false,
         root: REPOSITORY,
       }, {
-        manifest: (at) =>
+        manifest: ({ at }) =>
           Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
       });
     } finally {
@@ -1049,7 +2515,7 @@ describe("planning a lane without running it", () => {
     // measured against the full run's own budget rather than a pull
     // request's.
     expect(printed).toContain("workspace-unit");
-    expect(printed).toContain(`of ${FULL_LANE_BUDGET_SECONDS}s`);
+    expect(printed).toContain(`of ${duration(FULL_LANE_BUDGET_SECONDS)}`);
     expect(FULL_LANE_BUDGET_SECONDS).toBeLessThan(FULL_LANE_BOUND_SECONDS);
   });
 });
@@ -1124,13 +2590,15 @@ describe("planning a lane the manifest chose", () => {
     // rather than by anything coordinating them.
     const counted = (printed: string): number =>
       printed.split("\n")
-        .map((line) => /^\| \S+ \| (\d+) \| /.exec(line))
+        .map((line) => /^│ \S+ +│ (\d+) +│ /.exec(line))
         .reduce((total, row) => total + (row === null ? 0 : Number(row[1])), 0);
     let placed = 0;
     for (const lane of [1, 2, 3, 4, 5]) {
       placed += counted(await planned([], lane));
     }
-    const suites = await loadTopology(root);
+    // A gate is a verdict rather than lane work, so no lane places one.
+    const suites = (await loadTopology(root))
+      .filter((suite) => suite.judges === undefined);
     const available = suites.reduce(
       (total, suite) =>
         total + suite.units.length -
@@ -1148,17 +2616,55 @@ describe("planning a lane the manifest chose", () => {
     try {
       await runLane(
         { lane: 1, of: 5, full: false, dryRun: true, laneCount: false, root },
-        { manifest: () => Promise.resolve({ absent: "the store is gone" }) },
+        {
+          manifest: () =>
+            Promise.resolve({ absent: "the store holds no manifest" }),
+        },
       );
     } finally {
       console.log = log;
     }
     // A lane with no manifest runs the mandatory set plus a
     // deterministic slice rather than failing, so pull requests keep
-    // flowing while the store is unreachable.
+    // flowing while the store holds nothing to read. Every lane of a run
+    // gets that answer from the store alike, so they pack alike.
     const printed = lines.join("\n");
-    expect(printed).toContain("the store is gone");
+    expect(printed).toContain("the store holds no manifest");
     expect(printed).toContain("workspace-unit");
+  });
+
+  /** A store no listing or read could reach. */
+  const unreachable: LaneDeps = {
+    manifest: () =>
+      Promise.resolve({
+        absent: "listing failed: connection reset",
+        unreachable: true,
+      }),
+  };
+
+  it("refuses to pack when the store could not be read", async () => {
+    // A store one lane could not reach is one the lane beside it may have
+    // read, and a lane packing without the manifest its siblings packed
+    // from lays out a different plan: a test each plan puts in the
+    // other's lanes runs in neither.
+    const refused = runLane(
+      { lane: 1, of: 5, full: false, dryRun: true, laneCount: false, root },
+      unreachable,
+    );
+    await expect(refused).rejects.toThrow(
+      "the manifest store could not be read",
+    );
+    await expect(refused).rejects.toThrow("connection reset");
+  });
+
+  it("refuses to count a full run's lanes when the store could not be read", async () => {
+    // The full run's count is planned from the same reading, so it
+    // refuses too rather than counting lanes for a plan no lane follows.
+    const refused = main(["--full", "--lane-count"], root, unreachable);
+    await expect(refused).rejects.toThrow(
+      "the manifest store could not be read",
+    );
+    await expect(refused).rejects.toThrow("connection reset");
   });
 });
 
@@ -1172,12 +2678,32 @@ describe("the lane's own housekeeping", () => {
     console.error = () => {};
     try {
       // A command line this cannot read is a usage error rather than a
-      // lane that ran nothing and reported success.
-      expect(await main(["--shard", "1/5"], REPOSITORY)).toBe(2);
+      // lane that ran nothing and reported success, and nothing asks
+      // where the manifest is on the way there.
+      let asked = 0;
+      expect(
+        await main(["--shard", "1/5"], REPOSITORY, {
+          manifest: () => {
+            asked += 1;
+            return Promise.resolve({ manifest: manifestOf([{}]) });
+          },
+        }),
+      ).toBe(2);
+      expect(asked).toBe(0);
       expect(
         await main(
-          ["--lane", "9999", "--of", "10000", "--full", "--dry-run"],
+          ["--lane", "1", "--of", "1", "--full", "--dry-run"],
           REPOSITORY,
+          {
+            topology: () =>
+              Promise.resolve([
+                suite({
+                  id: "workspace-unit",
+                  units: ["runtime/bakery/glaze.test.ts"],
+                }),
+              ]),
+            manifest: () => Promise.resolve({ manifest: manifestOf([{}]) }),
+          },
         ),
       ).toBe(0);
     } finally {
@@ -1193,7 +2719,8 @@ describe("the lane's own housekeeping", () => {
     expect(parseLaneArgs(["--base"])).toBeUndefined();
   });
 
-  it("takes the files a change touched from the diff", async () => {
+  /** An empty repository, and a way to run git in it. */
+  async function scratchRepository() {
     const repo = await Deno.makeTempDir({ prefix: "lane-diff-" });
     const git = (...args: string[]) =>
       new Deno.Command("git", {
@@ -1210,6 +2737,11 @@ describe("the lane's own housekeeping", () => {
         stderr: "null",
       }).output();
     await git("init", "-q");
+    return { repo, git };
+  }
+
+  it("takes the files a change touched from the diff", async () => {
+    const { repo, git } = await scratchRepository();
     await Deno.writeTextFile(`${repo}/kept.ts`, "a");
     await git("add", ".");
     await git("commit", "-q", "-m", "first");
@@ -1229,6 +2761,72 @@ describe("the lane's own housekeeping", () => {
     await Deno.remove(repo, { recursive: true });
   });
 
+  it("takes the files the default branch gained since the manifest's commit", async () => {
+    // A pull request is tested as its merge into the default branch, so
+    // the tree holds what the default branch gained since the branch was
+    // cut as well as what the change added. Of those, only what the
+    // default branch gained after the manifest's commit is a file the
+    // manifest is too old to know.
+
+    const { repo, git } = await scratchRepository();
+    await Deno.writeTextFile(`${repo}/kept.ts`, "a");
+    await Deno.writeTextFile(`${repo}/gone.test.ts`, "d");
+    await git("add", ".");
+    await git("commit", "-q", "-m", "first");
+    await git("tag", "published");
+    await git("branch", "base");
+    await Deno.writeTextFile(`${repo}/added.test.ts`, "b");
+    await git("add", ".");
+    await git("commit", "-q", "-m", "the change");
+    await git("checkout", "-q", "base");
+    await Deno.writeTextFile(`${repo}/landed.test.ts`, "c");
+    await Deno.remove(`${repo}/gone.test.ts`);
+    await git("add", "-A", ".");
+    await git("commit", "-q", "-m", "on the default branch");
+    await git("checkout", "-q", "-");
+    await git("merge", "-q", "--no-edit", "base");
+    const commitOf = async (ref: string) =>
+      new TextDecoder().decode(
+        (await new Deno.Command("git", {
+          args: ["rev-parse", ref],
+          cwd: repo,
+          stdout: "piped",
+        }).output()).stdout,
+      ).trim();
+    const published = await commitOf("published");
+    expect([...await landedFiles(repo, "base", published)]).toEqual([
+      "landed.test.ts",
+    ]);
+    expect([...await landedFiles(repo, "base", published.toUpperCase())])
+      .toEqual(["landed.test.ts"]);
+    // A change branched off before the manifest's commit gained nothing
+    // from after it, and a file the default branch deleted since is not
+    // one it gained.
+    expect([...await landedFiles(repo, "published", await commitOf("base"))])
+      .toEqual([]);
+    // With no base there is no change, and with no manifest's commit
+    // nothing is known to have landed since it.
+    expect([...await landedFiles(repo, undefined, published)]).toEqual([]);
+    expect([...await landedFiles(repo, "base", undefined)]).toEqual([]);
+    expect([...await landedFiles(repo, "base", "unknown")]).toEqual([]);
+    expect([...await landedFiles(repo, "base", "f".repeat(40))]).toEqual([]);
+    // A manifest is untrusted, so what it names as its commit reaches git
+    // only as an object id, and never as anything git reads as an option.
+    expect([...await landedFiles(repo, "base", "--output=written")])
+      .toEqual([]);
+    expect([...await landedFiles(repo, "base", "published")]).toEqual([]);
+    expect(await exists(`${repo}/written`)).toBe(false);
+    // A lane that read fewer files than its siblings would pack a plan
+    // they are not following, so a git that failed is not read as one
+    // that found no such commit.
+    await expect(
+      gainedSince(() => Promise.reject(new Error("git died")), published, "x"),
+    ).rejects.toThrow("git died");
+    await expect(landedFiles(repo, "no-such-ref", published)).rejects
+      .toThrow(`cannot list the files no-such-ref gained after ${published}`);
+    await Deno.remove(repo, { recursive: true });
+  });
+
   it("writes the plan into the job summary as well as the log", async () => {
     const summary = await Deno.makeTempFile({ prefix: "summary-" });
     const previous = Deno.env.get("GITHUB_STEP_SUMMARY");
@@ -1242,10 +2840,9 @@ describe("the lane's own housekeeping", () => {
         [],
         { objectName: "manifest-x.json.gz" },
         [],
-        { selections: [], projectedSeconds: 0 },
+        [],
+        { manifest: manifestOf([]), selections: [], projectedSeconds: 0 },
         LANE_BUDGET_SECONDS,
-        0,
-        0,
       );
     } finally {
       console.log = log;
@@ -1254,6 +2851,194 @@ describe("the lane's own housekeeping", () => {
     }
     expect(await Deno.readTextFile(summary)).toContain("manifest-x.json.gz");
     await Deno.remove(summary);
+  });
+
+  it("names the costliest of what no lane can run, and counts the rest", async () => {
+    // A cost model charging a whole suite more than a lane can hold puts
+    // every test in that suite on this list. A bullet each is more than
+    // a job summary holds, and GitHub drops a summary past its bound
+    // whole rather than shortening it.
+    const summary = await Deno.makeTempFile({ prefix: "summary-" });
+    const previous = Deno.env.get("GITHUB_STEP_SUMMARY");
+    Deno.env.set("GITHUB_STEP_SUMMARY", summary);
+    const log = console.log;
+    console.log = () => {};
+    // Cheapest first, so an order the summary keeps as given would show.
+    const tooSlow = Array.from({ length: 25 }, (_, at) => ({
+      test: { k: "unit" as const, s: "memory", n: `test ${at}` },
+      suite: "workspace-unit",
+      cost: 900 + at,
+    }));
+    try {
+      describePlan(
+        { lane: 1, of: 5, full: false, dryRun: true, laneCount: false, root },
+        [],
+        [],
+        { objectName: "manifest-x.json.gz" },
+        tooSlow,
+        [],
+        { manifest: manifestOf([]), selections: [], projectedSeconds: 0 },
+        LANE_BUDGET_SECONDS,
+      );
+    } finally {
+      console.log = log;
+      if (previous === undefined) Deno.env.delete("GITHUB_STEP_SUMMARY");
+      else Deno.env.set("GITHUB_STEP_SUMMARY", previous);
+    }
+    const held = await Deno.readTextFile(summary);
+    const named = held.split("\n").filter((line) => line.startsWith("- work"));
+    expect(named).toHaveLength(10);
+    expect(named[0]).toContain("test 24");
+    expect(named[0]).toContain("15m24s");
+    expect(named.at(-1)).toContain("test 15");
+    expect(held).toContain("- and 15 more");
+    await Deno.remove(summary);
+  });
+
+  it("fails a lane whose coverage would not convert", async () => {
+    // A conversion that lost a tracked file leaves a report every line
+    // of which reads as uncovered, so a gate scored from it would fail
+    // somebody for a report that was never complete.
+    const root = await Deno.makeTempDir({ prefix: "lane-convert-" });
+    const temp = await Deno.makeTempDir({ prefix: "lane-tmp-" });
+    const restore = setEnv({ TMPDIR: temp, RUNNER_TEMP: undefined });
+    const dir =
+      `${root}/coverage${COVERAGE_PROFILE_SUFFIX}/workspace-unit/runtime__bakery`;
+    await Deno.mkdir(dir, { recursive: true });
+    await Deno.writeTextFile(`${dir}/broken.json`, "this is not a profile");
+    const bare: Suite = {
+      id: "workspace-unit",
+      recordSurfaces: [{ kind: "unit", scope: "bakery" }],
+      needs: [],
+      units: [],
+      unavailable: [],
+      whole: [],
+      locate: () => undefined,
+      command: () => Promise.resolve([]),
+    };
+    const log = console.log;
+    console.log = () => {};
+    let ok: boolean;
+    try {
+      ok = await runLane({
+        lane: 1,
+        of: 1,
+        full: true,
+        dryRun: false,
+        laneCount: false,
+        root,
+        at: "2026-09-01T00:00:00Z",
+      }, {
+        topology: () => Promise.resolve([bare]),
+        manifest: ({ at }) =>
+          Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
+        // The lane ends red, and what it records about itself would
+        // otherwise land in the spool of the run testing it, as a failure
+        // of that run.
+        spool: () => undefined,
+      });
+    } finally {
+      console.log = log;
+      restore();
+    }
+    expect(ok).toBe(false);
+    await Deno.remove(temp, { recursive: true });
+    await Deno.remove(root, { recursive: true });
+  });
+
+  it("gives its work directory back when a capability will not open", async () => {
+    // The directory belongs to the lane from the moment it exists, so a
+    // capability that refuses is not a reason to leave one behind.
+    const root = await Deno.makeTempDir({ prefix: "lane-caps-" });
+    const temp = await Deno.makeTempDir({ prefix: "lane-tmp-" });
+    const restore = setEnv({ TMPDIR: temp, RUNNER_TEMP: undefined });
+    const wanting: Suite = {
+      id: "wanting",
+      recordSurfaces: [{ kind: "unit", scope: "wanting" }],
+      needs: ["nothing-opens-this" as CapabilityId],
+      units: ["runtime/bakery/glaze.test.ts"],
+      unavailable: [],
+      whole: [],
+      locate: () => undefined,
+      command: () => Promise.resolve([]),
+    };
+    const log = console.log;
+    console.log = () => {};
+    try {
+      await expect(runLane({
+        lane: 1,
+        of: 1,
+        full: true,
+        dryRun: false,
+        laneCount: false,
+        root,
+        at: "2026-09-01T00:00:00Z",
+      }, {
+        topology: () => Promise.resolve([wanting]),
+        manifest: ({ at }) =>
+          Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
+      })).rejects.toThrow("no such capability: nothing-opens-this");
+    } finally {
+      console.log = log;
+      restore();
+    }
+    expect([...Deno.readDirSync(temp)]).toEqual([]);
+    await Deno.remove(temp, { recursive: true });
+    await Deno.remove(root, { recursive: true });
+  });
+
+  it("fails a lane whose capability fails to close", async () => {
+    // A server that did not stop cleanly may have left its work undone,
+    // and its log is the one place that says so.
+    const root = await Deno.makeTempDir({ prefix: "lane-close-" });
+    const suites = [suite({
+      id: "workspace-unit",
+      needs: ["cf"],
+      units: ["packages/bakery/glaze.test.ts"],
+      locate: () => ({
+        level: "unit" as const,
+        unit: "packages/bakery/glaze.test.ts",
+      }),
+      command: (_units, context) => {
+        const record = JSON.stringify({
+          line: "record",
+          test: { k: "unit", s: "bakery", n: "glaze > sets" },
+          outcome: "pass",
+          durationMs: 1,
+        });
+        return Promise.resolve([{
+          command: [
+            Deno.execPath(),
+            "eval",
+            `Deno.writeTextFileSync(
+              Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+              ${JSON.stringify(record + "\n")},
+            )`,
+          ],
+          cwd: context.root,
+        }]);
+      },
+    })];
+    const closing = (close: () => Promise<void>) =>
+      new Map<CapabilityId, Capability>([["cf", {
+        id: "cf",
+        description: "a capability that closes as told",
+        open: () => Promise.resolve({ env: {}, close }),
+      }]]);
+    try {
+      expect(await onlyLane(root, suites, {}, closing(() => Promise.resolve())))
+        .toBe(true);
+      expect(
+        await onlyLane(
+          root,
+          suites,
+          {},
+          closing(() => Promise.reject(new Error("still running"))),
+        ),
+      ).toBe(false);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
   });
 
   it("runs a lane that was given no share of the work", async () => {
@@ -1268,38 +3053,44 @@ describe("the lane's own housekeeping", () => {
     // does not end up inside the directory this then checks and clears.
     const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
     const temp = await Deno.makeTempDir({ prefix: "lane-tmp-" });
-    const previous = Deno.env.get("TMPDIR");
-    Deno.env.set("TMPDIR", temp);
     // The spool is what makes the lane reach the point where it would
     // record what its setup cost. It opened nothing, so there is
     // nothing to record.
-    const previousSpool = Deno.env.get("CF_TEST_RECORDS_DIR");
-    Deno.env.set("CF_TEST_RECORDS_DIR", spool);
+    const restore = setEnv({
+      TMPDIR: temp,
+      RUNNER_TEMP: undefined,
+      CF_TEST_RECORDS_DIR: spool,
+    });
     const log = console.log;
     console.log = () => {};
     let ok: boolean;
     try {
       ok = await runLane({
-        lane: 9999,
-        of: 10000,
+        lane: 2,
+        of: 2,
         full: true,
         dryRun: false,
         laneCount: false,
         root,
+        coverageDir: `${spool}/coverage`,
       }, {
-        // What this pins is the path with nothing in it, so the store's
-        // manifest is held out: with one, even a lane this far down the
-        // count draws a few unmeasured tests, and the lane then opens
-        // their capabilities and runs them.
-        manifest: (at) =>
+        // One unit fills the first lane, leaving this lane empty.
+        topology: () =>
+          Promise.resolve([
+            suite({
+              id: "workspace-unit",
+              units: ["runtime/bakery/glaze.test.ts"],
+              command: () => {
+                throw new Error("an empty lane must run no batch");
+              },
+            }),
+          ]),
+        manifest: ({ at }) =>
           Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
       });
     } finally {
       console.log = log;
-      if (previous === undefined) Deno.env.delete("TMPDIR");
-      else Deno.env.set("TMPDIR", previous);
-      if (previousSpool === undefined) Deno.env.delete("CF_TEST_RECORDS_DIR");
-      else Deno.env.set("CF_TEST_RECORDS_DIR", previousSpool);
+      restore();
     }
     expect(ok).toBe(true);
     // Named rather than counted: the private root keeps other test
@@ -1319,6 +3110,339 @@ describe("the lane's own housekeeping", () => {
     expect(spooled).not.toContain("ci-lane setup");
     await Deno.remove(temp, { recursive: true });
     await Deno.remove(spool, { recursive: true });
+  });
+
+  /**
+   * Runs the only lane of a full run over `suites` in `root`, quietly,
+   * and says whether it passed. It runs as it would outside a job unless
+   * `env` sets `RUNNER_TEMP`, with the other variables `env` names set
+   * around it (or unset, for `undefined`).
+   */
+  async function onlyLane(
+    root: string,
+    suites: Suite[],
+    env: Record<string, string | undefined> = {},
+    capabilities?: ReadonlyMap<CapabilityId, Capability>,
+  ): Promise<boolean> {
+    const restore = setEnv({ RUNNER_TEMP: undefined, ...env });
+    const log = console.log;
+    console.log = () => {};
+    try {
+      return await runLane(
+        {
+          lane: 1,
+          of: 1,
+          full: true,
+          dryRun: false,
+          laneCount: false,
+          root,
+          at: "2026-09-01T00:00:00Z",
+        },
+        {
+          topology: () => Promise.resolve(suites),
+          manifest: ({ at }) =>
+            Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
+          spool: () => undefined,
+          ...(capabilities === undefined ? {} : { capabilities }),
+        },
+      );
+    } finally {
+      console.log = log;
+      restore();
+    }
+  }
+
+  it("records whether it found the compile byte cache restored", async () => {
+    // The record goes where the coverage artifact carries it, and is
+    // read before the lane's first batch could write the file itself.
+    const root = await Deno.makeTempDir({ prefix: "lane-cache-" });
+    const compiling = [suite({
+      id: "pattern-unit",
+      needs: ["compile-cache"],
+      units: ["patterns/examples/counter.test.tsx"],
+      command: (_units, context) =>
+        Deno.writeTextFile(`${context.root}/${COMPILE_CACHE_FILE}`, "{}")
+          .then(() => []),
+    })];
+    const record = `${root}/coverage/lcov/${COMPILE_CACHE_STATE_FILE}`;
+    try {
+      await onlyLane(root, compiling);
+      expect(await Deno.readTextFile(record)).toBe("cold\n");
+      await onlyLane(root, compiling);
+      expect(await Deno.readTextFile(record)).toBe("warm\n");
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("records no cache state where it opened no compile byte cache", async () => {
+    const root = await Deno.makeTempDir({ prefix: "lane-cache-" });
+    try {
+      await onlyLane(root, [suite({
+        id: "workspace-unit",
+        units: ["runtime/bakery/glaze.test.ts"],
+      })]);
+      expect(await exists(`${root}/coverage/lcov/${COMPILE_CACHE_STATE_FILE}`))
+        .toBe(false);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("keeps a failed lane's work directory only where a job will upload it", async () => {
+    // Outside a job nothing collects it, and the end of each capability's
+    // log has been printed by then; inside one, a workflow step can
+    // upload what is under the job's temporary directory.
+
+    const root = await Deno.makeTempDir({ prefix: "lane-kept-" });
+    const temp = await Deno.makeTempDir({ prefix: "lane-tmp-" });
+    const failing = [suite({
+      id: "workspace-unit",
+      units: ["runtime/bakery/glaze.test.ts"],
+      command: (_units, context) =>
+        Promise.resolve([{
+          command: [Deno.execPath(), "eval", "Deno.exit(1)"],
+          cwd: context.root,
+        }]),
+    })];
+    const refusing = [suite({
+      id: "workspace-unit",
+      needs: ["nothing-opens-this" as CapabilityId],
+      units: ["runtime/bakery/glaze.test.ts"],
+    })];
+    const throwing = [suite({
+      id: "workspace-unit",
+      units: ["runtime/bakery/glaze.test.ts"],
+      command: () =>
+        Promise.reject(new Error("the command could not be built")),
+    })];
+    // A batch that records a pass, and leaves a coverage profile no
+    // conversion can read where `broken`.
+    const passing = (broken: boolean) => [suite({
+      id: "workspace-unit",
+      units: ["runtime/bakery/glaze.test.ts"],
+      locate: () => ({
+        level: "unit" as const,
+        unit: "runtime/bakery/glaze.test.ts",
+      }),
+      command: async (_units, context) => {
+        const profiles = `${context.root}/coverage-raw/workspace-unit/bakery`;
+        await Deno.remove(profiles, { recursive: true }).catch(() => {});
+        if (broken) {
+          await Deno.mkdir(profiles, { recursive: true });
+          await Deno.writeTextFile(`${profiles}/broken.json`, "{");
+        }
+        const record = JSON.stringify({
+          line: "record",
+          test: { k: "unit", s: "bakery", n: "glaze > sets" },
+          outcome: "pass",
+          durationMs: 1,
+        });
+        return [{
+          command: [
+            Deno.execPath(),
+            "eval",
+            `Deno.writeTextFileSync(
+              Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+              ${JSON.stringify(record + "\n")},
+            )`,
+          ],
+          cwd: context.root,
+        }];
+      },
+    })];
+    const lanes = async () =>
+      (await Array.fromAsync(Deno.readDir(temp)))
+        .map((entry) => entry.name)
+        .filter((name) => name.startsWith("ci-lane-"));
+    try {
+      expect(await onlyLane(root, [], { RUNNER_TEMP: temp })).toBe(true);
+      expect(await lanes()).toEqual([]);
+      expect(
+        await onlyLane(root, failing, { TMPDIR: temp }),
+      ).toBe(false);
+      expect(await lanes()).toEqual([]);
+      // An empty value is no directory at all. Taken as one, it would put
+      // the directory under the current one, so that is `temp` here too.
+      const cwd = Deno.cwd();
+      Deno.chdir(temp);
+      try {
+        expect(
+          await onlyLane(root, failing, { TMPDIR: temp, RUNNER_TEMP: "" }),
+        ).toBe(false);
+      } finally {
+        Deno.chdir(cwd);
+      }
+      expect(await lanes()).toEqual([]);
+      expect(await onlyLane(root, failing, { RUNNER_TEMP: temp })).toBe(false);
+      expect(await lanes()).toHaveLength(1);
+      // A lane that ended by throwing failed as well, whether a capability
+      // would not open or a batch could not be run.
+      await expect(onlyLane(root, refusing, { RUNNER_TEMP: temp })).rejects
+        .toThrow("no such capability: nothing-opens-this");
+      expect(await lanes()).toHaveLength(2);
+      await expect(onlyLane(root, throwing, { RUNNER_TEMP: temp })).rejects
+        .toThrow("the command could not be built");
+      expect(await lanes()).toHaveLength(3);
+      // Converting coverage comes after every batch, and can still fail a
+      // lane whose batches all passed.
+      expect(await onlyLane(root, passing(false), { RUNNER_TEMP: temp }))
+        .toBe(true);
+      expect(await lanes()).toHaveLength(3);
+      expect(await onlyLane(root, passing(true), { RUNNER_TEMP: temp }))
+        .toBe(false);
+      expect(await lanes()).toHaveLength(4);
+    } finally {
+      await Deno.remove(temp, { recursive: true });
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  /**
+   * Runs the only lane of a pull request's run over `suites` in a root
+   * holding a workspace of `runtime/bakery`, and returns whether it
+   * passed and the block it ended with.
+   */
+  async function closingSummary(
+    suites: Suite[],
+  ): Promise<{ ok: boolean; summary: string[] }> {
+    const root = await Deno.makeTempDir({ prefix: "lane-summary-" });
+    await Deno.writeTextFile(
+      `${root}/deno.jsonc`,
+      JSON.stringify({ workspace: ["./runtime/bakery"] }),
+    );
+    const lines: string[] = [];
+    const log = console.log;
+    // As it runs outside a job, whatever job runs this test.
+    const restore = setEnv({
+      RUNNER_TEMP: undefined,
+      GITHUB_ACTIONS: undefined,
+      GITHUB_STEP_SUMMARY: undefined,
+    });
+    console.log = (line: string) => lines.push(line);
+    try {
+      const ok = await runLane(
+        {
+          lane: 1,
+          of: 1,
+          full: false,
+          dryRun: false,
+          laneCount: false,
+          root,
+          at: "2026-09-01T00:00:00Z",
+        },
+        {
+          topology: () => Promise.resolve(suites),
+          manifest: ({ at }) =>
+            Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
+          spool: () => undefined,
+        },
+      );
+      return {
+        ok,
+        summary: lines.slice(
+          lines.findIndex((line) => line.includes("test summary")) + 1,
+        ),
+      };
+    } finally {
+      console.log = log;
+      restore();
+      await Deno.remove(root, { recursive: true });
+    }
+  }
+
+  const unit = "runtime/bakery/glaze.test.ts";
+
+  it("ends with each failing test, its error, and how to run it again", async () => {
+    const report = `<testsuites><testsuite name="./glaze.test.ts">
+  <testcase name="glaze" classname="./glaze.test.ts"/>
+  <testcase name="glaze &gt; sets" classname="./glaze.test.ts">
+    <failure message="Uncaught Error: still runny">stack</failure>
+  </testcase>
+</testsuite></testsuites>`;
+    const { ok, summary } = await closingSummary([suite({
+      id: "workspace-unit",
+      units: [unit],
+      locate: () => ({ level: "unit" as const, unit }),
+      command: (_units, context) => {
+        const at = `${context.outputDir}/report.xml`;
+        return Promise.resolve([{
+          command: [
+            Deno.execPath(),
+            "eval",
+            `Deno.writeTextFileSync(${JSON.stringify(at)}, ` +
+            `${JSON.stringify(report)}); Deno.exit(1)`,
+          ],
+          cwd: context.root,
+          junit: [{
+            kind: "unit",
+            scope: "bakery",
+            path: at,
+            filePrefix: "runtime/bakery",
+          }],
+        }]);
+      },
+    })]);
+
+    expect(ok).toBe(false);
+    expect(summary[0]).toMatch(/^FAILED: 1 failed, 0 passed, 0 skipped \(/);
+    expect(summary.slice(1)).toEqual([
+      "",
+      "FAIL unit/bakery: glaze > sets",
+      "  file:  runtime/bakery/glaze.test.ts",
+      "  rerun: cd runtime/bakery && deno task test --filter glaze",
+      "  | Error: still runny",
+      "",
+      "Logs: the output above",
+    ]);
+  });
+
+  it("ends by saying why it failed where no test failed", async () => {
+    const { ok, summary } = await closingSummary([suite({
+      id: "workspace-unit",
+      units: [unit],
+      locate: () => ({ level: "unit" as const, unit }),
+      command: async (_units, context) => {
+        // A pass, and a coverage profile no conversion can read.
+        const profiles = `${context.root}/coverage-raw/workspace-unit/bakery`;
+        await Deno.mkdir(profiles, { recursive: true });
+        await Deno.writeTextFile(`${profiles}/broken.json`, "{");
+        const record = JSON.stringify({
+          line: "record",
+          test: { k: "unit", s: "bakery", n: "glaze > sets" },
+          outcome: "pass",
+          durationMs: 1,
+        });
+        return [{
+          command: [
+            Deno.execPath(),
+            "eval",
+            `Deno.writeTextFileSync(
+              Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+              ${JSON.stringify(record + "\n")},
+            )`,
+          ],
+          cwd: context.root,
+        }];
+      },
+    })]);
+
+    expect(ok).toBe(false);
+    expect(summary[0]).toMatch(/^FAILED: 0 failed, 1 passed, 0 skipped \(/);
+    expect(summary.slice(1)).toEqual([
+      "",
+      "Converting a coverage profile lost a tracked file.",
+      "",
+      "Logs: the output above",
+    ]);
+  });
+
+  it("ends a passing lane with one line", async () => {
+    const { ok, summary } = await closingSummary([]);
+
+    expect(ok).toBe(true);
+    expect(summary).toHaveLength(1);
+    expect(summary[0]).toMatch(/^PASSED: 0 failed, 0 passed, 0 skipped \(/);
   });
 });
 
@@ -1362,12 +3486,12 @@ describe("what a lane records about itself", () => {
             path: report,
             kind: "unit",
             scope: "bakery",
-            filePrefix: "packages/bakery",
+            filePrefix: "runtime/bakery",
           }],
         }]),
     });
     const result = await runBatch(
-      { suite: suiteUnderTest, units: [], repeats: 1 },
+      { suite: suiteUnderTest, units: [], runs: new Map(), projected: 0 },
       lane,
       workDir,
       spool,
@@ -1376,7 +3500,7 @@ describe("what a lane records about itself", () => {
     expect(result.ok).toBe(true);
     // The report's case reaches the lane's records with its file joined on.
     expect(result.records.map((record) => record.test.n)).toEqual(["bakes"]);
-    expect(result.records[0]!.file).toBe("packages/bakery/test/bake.test.ts");
+    expect(result.records[0]!.file).toBe("runtime/bakery/test/bake.test.ts");
 
     const spooled: string[] = [];
     for await (const entry of Deno.readDir(spool)) {
@@ -1389,6 +3513,351 @@ describe("what a lane records about itself", () => {
     expect(written).toContain('"s":"ci"');
     await Deno.remove(workDir, { recursive: true });
     await Deno.remove(spool, { recursive: true });
+  });
+
+  it("records a test holding others where the manifest knows it in that unit", async () => {
+    // Its own outcome is a pass when nothing but what it holds failed. Only
+    // an identity the manifest holds in the unit that ran is kept, since a
+    // name the store has never seen would make every describe an identity,
+    // and one it knows from another unit is another test.
+    const recorded = async (bakeIn?: string) => {
+      const workDir = await Deno.makeTempDir({ prefix: "lane-known-" });
+      const report = `${workDir}/report.xml`;
+      const suiteUnderTest = suite({
+        id: "workspace-unit",
+        units: ["one", "two"],
+        locate: (record: { test: { s: string } }) =>
+          record.test.s === "bakery"
+            ? { level: "unit" as const, unit: "one" }
+            : undefined,
+        command: (_units, context) =>
+          Promise.resolve([{
+            command: [
+              Deno.execPath(),
+              "eval",
+              `Deno.writeTextFileSync(${JSON.stringify(report)}, ${
+                JSON.stringify(
+                  '<?xml version="1.0"?><testsuites><testsuite name="s" ' +
+                    'tests="2" failures="0"><testcase name="bake" ' +
+                    'classname="test/bake.test.ts" time="0.75"/>' +
+                    '<testcase name="bake &gt; rises" ' +
+                    'classname="test/bake.test.ts" time="0.25"/>' +
+                    "</testsuite></testsuites>",
+                )
+              })`,
+            ],
+            cwd: context.root,
+            junit: [{ path: report, kind: "unit", scope: "bakery" }],
+          }]),
+      });
+      const manifest = manifestOf([
+        { test: { k: "unit", s: "bakery", n: "bake > rises" }, unit: "one" },
+        ...(bakeIn === undefined
+          ? []
+          : [{ test: { k: "unit", s: "bakery", n: "bake" }, unit: bakeIn }]),
+      ]);
+      const [batch] = batchesOf(
+        [suiteUnderTest],
+        pricedFor([suiteUnderTest], manifest),
+        [{ entry: manifest.entries[0]!, reason: "value", repeats: 1 }],
+      );
+      try {
+        const result = await runBatch(batch!, lane, workDir, undefined, {});
+        return result.records.map((record) =>
+          `${record.test.n}: ${record.outcome} in ${record.durationMs}ms`
+        ).sort();
+      } finally {
+        await Deno.remove(workDir, { recursive: true });
+      }
+    };
+    expect(await recorded("one")).toEqual([
+      "bake > rises: pass in 250ms",
+      "bake: pass in 500ms",
+    ]);
+    expect(await recorded("two")).toEqual(["bake > rises: pass in 250ms"]);
+    expect(await recorded()).toEqual(["bake > rises: pass in 250ms"]);
+  });
+
+  it("reads back the suite and the coverage a batch measurement names", () => {
+    // One place composes the name and one place takes it apart, so a
+    // reader that took it apart itself could not part company with the
+    // writer.
+    expect(batchMeasurement(batchMeasurementName("workspace-unit", false)))
+      .toEqual({ suite: "workspace-unit", measured: false, kind: "spent" });
+    expect(batchMeasurement(batchMeasurementName("workspace-unit", true)))
+      .toEqual({ suite: "workspace-unit", measured: true, kind: "spent" });
+    expect(batchMeasurement("ci-lane setup deno")).toBeUndefined();
+    expect(batchMeasurement("ci-lane batch ")).toBeUndefined();
+  });
+
+  it("names what a measured batch cost apart from an unmeasured one", async () => {
+    // Instrumenting a run costs it time, and how much is a property of
+    // the suite rather than a constant, so the name records which kind of
+    // run the measurement came from.
+    const spooledNames = async (coverage?: { dir: string }) => {
+      const workDir = await Deno.makeTempDir({ prefix: "lane-measured-" });
+      const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
+      try {
+        await runBatch(
+          {
+            suite: suite({ id: "workspace-unit", units: ["one"] }),
+            units: [],
+            runs: new Map(),
+            projected: 0,
+          },
+          lane,
+          workDir,
+          spool,
+          {},
+          coverage,
+        );
+        const written: string[] = [];
+        for await (const entry of Deno.readDir(spool)) {
+          if (entry.isFile) {
+            written.push(await Deno.readTextFile(`${spool}/${entry.name}`));
+          }
+        }
+        return written.join("");
+      } finally {
+        await Deno.remove(workDir, { recursive: true });
+        await Deno.remove(spool, { recursive: true });
+      }
+    };
+    expect(await spooledNames()).toContain('ci-lane batch workspace-unit"');
+    expect(await spooledNames({ dir: "/coverage" })).toContain(
+      `ci-lane batch workspace-unit${MEASURED_BATCH_SUFFIX}`,
+    );
+  });
+
+  it("writes what a batch spent beside what the tests of its units took", async () => {
+    // The publisher fits a suite's cost beyond its tests from the pair,
+    // and reads a batch only where both halves are there. The tests' own
+    // time is summed as the batch runs rather than read back afterwards,
+    // because a reader of the report cannot tell which of its records
+    // came from which batch.
+    const workDir = await Deno.makeTempDir({ prefix: "lane-ran-" });
+    const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
+    // Only the first is a test of a unit, which is what a manifest holds
+    // and the packer charges by. The second is the record a wrapper
+    // writes for the whole invocation, which the suite places in no unit
+    // and which holds the first's time again. The third is off the
+    // suite's declared surfaces, so it belongs to no suite at all.
+    const records = [
+      { k: "unit", s: "workspace", n: "takes 250ms", durationMs: 250 },
+      { k: "unit", s: "workspace", n: "workspace", durationMs: 600 },
+      { k: "unit", s: "elsewhere", n: "takes 1750ms", durationMs: 1750 },
+    ].map(({ durationMs, ...test }) =>
+      JSON.stringify({ line: "record", test, outcome: "pass", durationMs })
+    ).join("\n");
+    try {
+      await runBatch(
+        {
+          suite: suite({
+            id: "workspace-unit",
+            units: ["one"],
+            recordSurfaces: [{ kind: "unit", scope: "workspace" }],
+            locate: (record) =>
+              record.test.s !== "workspace"
+                ? undefined
+                : record.test.n === "workspace"
+                ? { level: "suite" }
+                : { level: "unit", unit: "one" },
+            command: (_units, context) =>
+              Promise.resolve([{
+                command: [
+                  Deno.execPath(),
+                  "eval",
+                  `Deno.writeTextFileSync(
+                    Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+                    ${JSON.stringify(records + "\n")},
+                  )`,
+                ],
+                cwd: context.root,
+              }]),
+          }),
+          units: [{ unit: "one", skip: [] }],
+          runs: new Map([["one", 1]]),
+          projected: 0,
+        },
+        lane,
+        workDir,
+        spool,
+        {},
+      );
+      const written: string[] = [];
+      for await (const entry of Deno.readDir(spool)) {
+        if (entry.isFile) {
+          written.push(await Deno.readTextFile(`${spool}/${entry.name}`));
+        }
+      }
+      const spooled = written.join("");
+      expect(spooled).toContain('ci-lane batch workspace-unit"');
+      expect(spooled).toContain('ci-lane ran batch workspace-unit"');
+      // The unit's test's own time and nothing else. The figure travels
+      // as a duration, so it arrives in milliseconds.
+      expect(spooled).toContain(
+        '"n":"ci-lane ran batch workspace-unit"},"outcome":"pass"' +
+          ',"durationMs":250',
+      );
+    } finally {
+      await Deno.remove(workDir, { recursive: true });
+      await Deno.remove(spool, { recursive: true });
+    }
+  });
+
+  it("counts what each unit's hooks took with its tests, and writes it for the unit", async () => {
+    // The describe took five seconds and its one test a second and a half,
+    // so its hooks took the other three and a half. The packer charges
+    // them with the unit's tests, so the batch's tests-took figure holds
+    // them, and the publisher reads them by unit from a record of their own.
+    const workDir = await Deno.makeTempDir({ prefix: "lane-hooks-" });
+    const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
+    const report = `<testsuites>
+  <testsuite name="./oven.test.ts">
+    <testcase name="oven" classname="./oven.test.ts" time="5.000"/>
+  </testsuite>
+  <testsuite name="ext:cli/40_test.js">
+    <testcase name="oven &gt; bakes" classname="ext:cli/40_test.js" time="1.500"/>
+  </testsuite>
+</testsuites>`;
+    try {
+      await runBatch(
+        {
+          suite: suite({
+            id: "pattern-integration",
+            units: ["runtime/bakery/oven.test.ts"],
+            recordSurfaces: [{ kind: "integration", scope: "bakery" }],
+            locate: (record) =>
+              record.file === undefined
+                ? undefined
+                : { level: "unit", unit: record.file },
+            command: (_units, context) =>
+              Promise.resolve([{
+                command: [
+                  Deno.execPath(),
+                  "eval",
+                  `Deno.writeTextFileSync(
+                    ${JSON.stringify(`${context.outputDir}/report.xml`)},
+                    ${JSON.stringify(report)},
+                  )`,
+                ],
+                cwd: context.root,
+                junit: [{
+                  path: `${context.outputDir}/report.xml`,
+                  kind: "integration",
+                  scope: "bakery",
+                  filePrefix: "runtime/bakery",
+                }],
+              }]),
+          }),
+          units: [{ unit: "runtime/bakery/oven.test.ts", skip: [] }],
+          runs: new Map([["runtime/bakery/oven.test.ts", 1]]),
+          projected: 0,
+        },
+        lane,
+        workDir,
+        spool,
+        {},
+      );
+      const written: string[] = [];
+      for await (const entry of Deno.readDir(spool)) {
+        if (entry.isFile) {
+          written.push(await Deno.readTextFile(`${spool}/${entry.name}`));
+        }
+      }
+      const spooled = written.join("").trim().split("\n").map((line) =>
+        JSON.parse(line)
+      );
+      const took = (name: string) =>
+        spooled.find((record) => record.test?.n === name)?.durationMs;
+      expect(took("ci-lane ran batch pattern-integration")).toBe(5000);
+      expect(
+        took(
+          hooksMeasurementName(
+            "pattern-integration",
+            false,
+            "runtime/bakery/oven.test.ts",
+          ),
+        ),
+      ).toBe(3500);
+      // What the hooks took is not a test, so no record names the describe.
+      expect(took("oven")).toBeUndefined();
+    } finally {
+      await Deno.remove(workDir, { recursive: true });
+      await Deno.remove(spool, { recursive: true });
+    }
+  });
+
+  it("writes the units its passes opened and the passes it made", async () => {
+    // `slow` runs once and `quick` three times, so the first pass opens
+    // both units and the other two open `quick`, and the tests take six
+    // seconds over every run.
+    const workDir = await Deno.makeTempDir({ prefix: "lane-passes-" });
+    const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
+    const took: Record<string, number> = { slow: 3000, quick: 1000 };
+    try {
+      await runBatch(
+        {
+          suite: suite({
+            id: "pattern-unit",
+            units: ["slow", "quick"],
+            recordSurfaces: [{ kind: "pattern", scope: "patterns" }],
+            locate: (record) => ({ level: "unit", unit: record.test.n }),
+            command: (units, context) => {
+              const records = units.map(({ unit }) =>
+                JSON.stringify({
+                  line: "record",
+                  test: { k: "pattern", s: "patterns", n: unit },
+                  outcome: "pass",
+                  durationMs: took[unit],
+                })
+              ).join("\n");
+              return Promise.resolve([{
+                command: [
+                  Deno.execPath(),
+                  "eval",
+                  `Deno.writeTextFileSync(
+                    Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+                    ${JSON.stringify(records + "\n")},
+                  )`,
+                ],
+                cwd: context.root,
+              }]);
+            },
+          }),
+          units: [{ unit: "slow", skip: [] }, { unit: "quick", skip: [] }],
+          runs: new Map([["slow", 1], ["quick", 3]]),
+          projected: 0,
+        },
+        lane,
+        workDir,
+        spool,
+        {},
+      );
+      const written: string[] = [];
+      for await (const entry of Deno.readDir(spool)) {
+        if (entry.isFile) {
+          written.push(await Deno.readTextFile(`${spool}/${entry.name}`));
+        }
+      }
+      const spooled = written.join("");
+      expect(spooled).not.toContain("ci-lane longest batch");
+      expect(spooled).toContain(
+        '"n":"ci-lane units batch pattern-unit"},"outcome":"pass"' +
+          ',"durationMs":4',
+      );
+      expect(spooled).toContain(
+        '"n":"ci-lane passes batch pattern-unit"},"outcome":"pass"' +
+          ',"durationMs":3',
+      );
+      expect(spooled).toContain(
+        '"n":"ci-lane ran batch pattern-unit"},"outcome":"pass"' +
+          ',"durationMs":6000',
+      );
+    } finally {
+      await Deno.remove(workDir, { recursive: true });
+      await Deno.remove(spool, { recursive: true });
+    }
   });
 
   /**
@@ -1430,8 +3899,9 @@ describe("what a lane records about itself", () => {
               }]),
             ...declared,
           }),
-          units: [],
-          repeats: 1,
+          units: [{ unit: "a-unit", skip: [] }],
+          runs: new Map([["a-unit", 1]]),
+          projected: 0,
         },
         lane,
         workDir,
@@ -1468,6 +3938,138 @@ describe("what a lane records about itself", () => {
     expect(result.records[0]!.test.v).toBeUndefined();
     expect(result.conflicts.length).toBe(1);
     expect(result.ok).toBe(true);
+  });
+
+  it("ships no record of a test its own skip list named, and still hears the unit", async () => {
+    // A unit the lane opened for one test registers the rest of it as
+    // ignored. Those tests are another lane's share, so only the skip a
+    // test registers itself reaches the store.
+    const workDir = await Deno.makeTempDir({ prefix: "lane-skips-" });
+    const record = (n: string, outcome: string) =>
+      JSON.stringify({
+        line: "record",
+        test: { k: "unit", s: "bakery", n },
+        outcome,
+        durationMs: 1,
+      }) + "\n";
+    const unitOf: Record<string, string> = {
+      bakes: "a-unit",
+      glazes: "a-unit",
+      frosts: "a-unit",
+      sugars: "b-unit",
+    };
+    // "frosts" is on b-unit's list and is a skip in a-unit, so only a
+    // list keyed by unit as well as by name keeps it.
+    try {
+      const batch = {
+        suite: suite({
+          id: "workspace-unit",
+          units: ["a-unit", "b-unit"],
+          locate: (located) => ({
+            level: "unit",
+            unit: unitOf[located.test.n]!,
+          }),
+          command: (_units, context) =>
+            Promise.resolve([{
+              command: [
+                Deno.execPath(),
+                "eval",
+                `Deno.writeTextFileSync(
+                  Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+                  ${
+                  JSON.stringify(
+                    record("bakes", "pass") + record("glazes", "skip") +
+                      record("frosts", "skip") + record("sugars", "skip"),
+                  )
+                },
+                )`,
+              ],
+              cwd: context.root,
+            }]),
+        }),
+        units: [
+          { unit: "a-unit", skip: ["glazes"] },
+          { unit: "b-unit", skip: ["sugars", "frosts"] },
+        ],
+        runs: new Map([["a-unit", 1], ["b-unit", 1]]),
+        projected: 0,
+      };
+      const result = await runBatch(batch, lane, workDir, undefined, {});
+      expect(result.records.map((kept) => kept.test.n)).toEqual([
+        "bakes",
+        "frosts",
+      ]);
+      // What the lane skipped stays in the pass's records, for accounting.
+      expect(result.executions[0]!.records.map((kept) => kept.test.n))
+        .toEqual(["bakes", "glazes", "frosts", "sugars"]);
+      expect(accountFor(batch, [], result.executions, new Set()).silent)
+        .toEqual([]);
+    } finally {
+      await Deno.remove(workDir, { recursive: true });
+    }
+  });
+
+  it("counts no time for a test its own skip list named in what the batch's tests took", async () => {
+    // A skip the lane registered is another lane's share, so its time is
+    // not a test this batch ran. A skip a test registers itself is.
+    const workDir = await Deno.makeTempDir({ prefix: "lane-skip-ran-" });
+    const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
+    const record = (n: string, outcome: string, durationMs: number) =>
+      JSON.stringify({
+        line: "record",
+        test: { k: "unit", s: "bakery", n },
+        outcome,
+        durationMs,
+      }) + "\n";
+    try {
+      await runBatch(
+        {
+          suite: suite({
+            id: "workspace-unit",
+            units: ["a-unit"],
+            locate: () => ({ level: "unit", unit: "a-unit" }),
+            command: (_units, context) =>
+              Promise.resolve([{
+                command: [
+                  Deno.execPath(),
+                  "eval",
+                  `Deno.writeTextFileSync(
+                    Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+                    ${
+                    JSON.stringify(
+                      record("bakes", "pass", 250) +
+                        record("glazes", "skip", 4000) +
+                        record("frosts", "skip", 30),
+                    )
+                  },
+                  )`,
+                ],
+                cwd: context.root,
+              }]),
+          }),
+          units: [{ unit: "a-unit", skip: ["glazes"] }],
+          runs: new Map([["a-unit", 1]]),
+          projected: 0,
+        },
+        lane,
+        workDir,
+        spool,
+        {},
+      );
+      const written: string[] = [];
+      for await (const entry of Deno.readDir(spool)) {
+        if (entry.isFile) {
+          written.push(await Deno.readTextFile(`${spool}/${entry.name}`));
+        }
+      }
+      expect(written.join("")).toContain(
+        '"n":"ci-lane ran batch workspace-unit"},"outcome":"pass"' +
+          ',"durationMs":280',
+      );
+    } finally {
+      await Deno.remove(workDir, { recursive: true });
+      await Deno.remove(spool, { recursive: true });
+    }
   });
 
   it("reports a producer's own variant in a default batch", async () => {
@@ -1524,23 +4126,23 @@ describe("what a lane records about itself", () => {
     } finally {
       console.log = log;
     }
-    expect(lines.join("\n")).toContain("past the");
+    expect(lines.join("\n")).toContain("past its");
   });
 });
 
 describe("the last corners of a lane's bookkeeping", () => {
   it("puts two identities of one unit in one batch, and skips neither", () => {
     const manifest = manifestOf([
-      {},
-      { test: { k: "unit", s: "bakery", n: "glaze > browns" } },
+      { cost: 3 },
+      { test: { k: "unit", s: "bakery", n: "glaze > browns" }, cost: 5 },
     ]);
     const bakery = suite({
       id: "workspace-unit",
-      units: ["packages/bakery/glaze.test.ts"],
+      units: ["runtime/bakery/glaze.test.ts"],
     });
     const batches = batchesOf(
       [bakery],
-      manifest,
+      pricedFor([bakery], manifest),
       manifest.entries.map((entry) => ({
         entry,
         reason: "value" as const,
@@ -1549,8 +4151,9 @@ describe("the last corners of a lane's bookkeeping", () => {
     );
     expect(batches.length).toBe(1);
     expect(batches[0]!.units).toEqual([{
-      unit: "packages/bakery/glaze.test.ts",
+      unit: "runtime/bakery/glaze.test.ts",
       skip: [],
+      cost: 8,
     }]);
   });
 
@@ -1559,7 +4162,7 @@ describe("the last corners of a lane's bookkeeping", () => {
     // manifest written before the suite was renamed or removed.
     const manifest = manifestOf([{ suite: "a-suite-that-left" }]);
     expect(
-      batchesOf([], manifest, [{
+      batchesOf([], pricedFor([], manifest), [{
         entry: manifest.entries[0]!,
         reason: "value",
         repeats: 1,
@@ -1603,14 +4206,784 @@ describe("writing the lane's records into its spool", () => {
   });
 });
 
+describe("reading a batch's records against what it was asked to run", () => {
+  const UNIT = "runtime/bakery/glaze.test.ts";
+
+  /**
+   * A batch of one unit run `runs` times, over a suite that locates by
+   * scope.
+   */
+  function batch(runs = 1) {
+    return {
+      suite: suite({
+        id: "workspace-unit",
+        units: [UNIT],
+        locate: (record: { test: { k: string; s: string } }) =>
+          record.test.s === "bakery"
+            ? { level: "unit" as const, unit: UNIT }
+            : undefined,
+      }),
+      units: [{ unit: UNIT, skip: [] }],
+      runs: new Map([[UNIT, runs]]),
+      projected: 0,
+    };
+  }
+
+  /** One record, as a runner writes it. */
+  function record(n: string, outcome: "pass" | "fail"): TestRecord {
+    return {
+      line: "record",
+      test: { k: "unit", s: "bakery", n },
+      outcome,
+      durationMs: 1,
+    };
+  }
+
+  /** One pass over that unit, recording `records`, registering `registered`. */
+  function once(
+    records: TestRecord[],
+    registered = new Map<string, Set<string>>(),
+  ): Execution[] {
+    return [{ units: [UNIT], records, registered }];
+  }
+
+  /** The names of what the passes missed. */
+  const names = (missed: readonly Missed[]) => missed.map(({ name }) => name);
+
+  /** The selections that ask for one identity of that unit. */
+  function asked(n: string) {
+    return [{
+      entry: {
+        test: { k: "unit", s: "bakery", n },
+        suite: "workspace-unit",
+        unit: UNIT,
+        cost: 1,
+        score: 0.5,
+        inputs: { catches: 0, sources: 0, churn: 0 },
+        flakeRate: 0,
+        repeats: 1,
+      },
+      reason: "value" as const,
+      repeats: 1,
+    }];
+  }
+
+  it("says a unit that recorded something ran", () => {
+    const found = accountFor(
+      batch(),
+      asked("glaze > sets"),
+      once([record("glaze > sets", "pass")]),
+      new Set(),
+    );
+    expect(found).toEqual({
+      gating: [],
+      excused: [],
+      unaccounted: [],
+      absent: [],
+      silent: [],
+      failedUnits: [],
+    });
+  });
+
+  it("keeps a failure the run fails for apart from one it excuses", () => {
+    const excused = testIdentityKey({ k: "unit", s: "bakery", n: "flaky" });
+    const found = accountFor(
+      batch(),
+      asked("flaky"),
+      once([record("flaky", "fail"), record("glaze > sets", "fail")]),
+      new Set([excused]),
+    );
+    expect(found.excused).toEqual([excused]);
+    expect(found.gating).toEqual([
+      testIdentityKey({ k: "unit", s: "bakery", n: "glaze > sets" }),
+    ]);
+  });
+
+  it("counts one identity once, however many times it failed", () => {
+    // A repeated identity fails once per execution, and the lane has one
+    // thing to say about it.
+    const found = accountFor(
+      batch(),
+      asked("glaze > sets"),
+      once([record("glaze > sets", "fail"), record("glaze > sets", "fail")]),
+      new Set(),
+    );
+    expect(found.gating.length).toBe(1);
+  });
+
+  it("names the unit a failure was seen in, excused or not", () => {
+    // A measured set holding that unit measured its member through a
+    // failing test, so its number is short by whatever that test would
+    // have reached.
+    const excused = testIdentityKey({ k: "unit", s: "bakery", n: "flaky" });
+    const found = accountFor(
+      batch(),
+      asked("flaky"),
+      once([record("flaky", "fail")]),
+      new Set([excused]),
+    );
+    expect(found.failedUnits).toEqual([UNIT]);
+  });
+
+  it("names an identity no record accounts for", () => {
+    // A manifest is hours old by construction, so an identity it names
+    // and the tree has since renamed records under the new name. That
+    // costs an excusal rather than the run.
+    const found = accountFor(
+      batch(),
+      asked("glaze > sets"),
+      once([record("glaze > sets under its new name", "pass")]),
+      new Set(),
+    );
+    expect(names(found.unaccounted)).toEqual([
+      testIdentityKey({ k: "unit", s: "bakery", n: "glaze > sets" }),
+    ]);
+  });
+
+  it("accounts for a describe by a record of a test inside it", () => {
+    // Ingestion drops the case a describe reports for itself wherever a
+    // test inside it reports, skipped or not, so a describe that passed
+    // leaves no record under its own title.
+    const key = (n: string) => testIdentityKey({ k: "unit", s: "bakery", n });
+    const found = accountFor(
+      batch(),
+      [
+        ...asked("glaze"),
+        ...asked("glaze > icing"),
+        ...asked("glazed"),
+        ...asked("glaze > icing > sets > firmly"),
+      ],
+      once([record("glaze > icing > sets", "pass")]),
+      new Set(),
+    );
+    // A name sharing only its first characters encloses nothing, and a
+    // test inside the one recorded is not accounted for by it.
+    expect(names(found.unaccounted)).toEqual(
+      [key("glaze > icing > sets > firmly"), key("glazed")].sort(),
+    );
+  });
+
+  it("reads only the selections its own suite was given", () => {
+    // A lane hands every batch the whole lane's selections. Another
+    // suite's identity is not this batch's to account for, and counting
+    // it would withdraw the excusal of every batch in a mixed lane.
+    const elsewhere = asked("pantry > stocks");
+    elsewhere[0]!.entry.suite = "runner-unit";
+    const found = accountFor(
+      batch(),
+      [...asked("glaze > sets"), ...elsewhere],
+      once([record("glaze > sets", "pass")]),
+      new Set(),
+    );
+    expect(names(found.unaccounted)).toEqual([]);
+  });
+
+  it("says what an excusal turned on, either way round", () => {
+    // A reader of a green run needs to know a failure went by, and a
+    // reader of a red one needs to know which rule turned it red.
+    const said = (excusing: boolean): string => {
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (line: string) => lines.push(line);
+      try {
+        describeAccounting(
+          "workspace-unit",
+          {
+            gating: [],
+            excused: ["unit\tbakery\tflaky"],
+            unaccounted: [],
+            absent: [],
+            silent: [{ name: UNIT, passes: [1], of: 1 }],
+            failedUnits: [],
+          },
+          excusing,
+        );
+      } finally {
+        console.log = log;
+      }
+      return lines.join("\n");
+    };
+    expect(said(true)).toContain("do not fail this run");
+    expect(said(false)).toContain("did not account for everything");
+    expect(said(true)).toContain(`- ${UNIT}`);
+    expect(said(true)).toContain("recorded nothing");
+  });
+
+  it("names every list its verdict turns on", () => {
+    // The excusal turns on the unaccounted list, and a summary saying a
+    // batch left something unaccounted for without saying what is a
+    // message nobody can act on. The same goes for what the lane failed
+    // for: the runner's own output is buried in a log, and the summary
+    // is where a reader looks.
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      describeAccounting(
+        "workspace-unit",
+        {
+          gating: ["unit\tbakery\tglaze > burns"],
+          excused: ["unit\tbakery\tflaky"],
+          unaccounted: [{
+            name: "unit\tbakery\tglaze > sets",
+            passes: [1],
+            of: 1,
+          }],
+          absent: ["unit\tbakery\tglaze > cools"],
+          silent: [{ name: UNIT, passes: [1], of: 1 }],
+          failedUnits: [UNIT],
+        },
+        false,
+      );
+    } finally {
+      console.log = log;
+    }
+    const text = lines.join("\n");
+    for (
+      const named of [
+        "unit\tbakery\tglaze > burns",
+        "unit\tbakery\tflaky",
+        "unit\tbakery\tglaze > sets",
+        "unit\tbakery\tglaze > cools",
+        UNIT,
+      ]
+    ) {
+      expect([named, text.includes(`- ${named}`)]).toEqual([named, true]);
+    }
+  });
+
+  it("says which passes missed what only some of them missed", () => {
+    // A rename leaves an identity missing from every pass, and a pass
+    // that stopped part way leaves it missing from that pass alone. The
+    // reader needs to know which of the two it is.
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      describeAccounting(
+        "workspace-unit",
+        {
+          gating: [],
+          excused: [],
+          unaccounted: [
+            { name: "unit\tbakery\trenamed", passes: [1, 2, 3], of: 3 },
+            { name: "unit\tbakery\tstopped", passes: [2], of: 3 },
+          ],
+          absent: [],
+          silent: [{ name: UNIT, passes: [1, 3], of: 3 }],
+          failedUnits: [],
+        },
+        false,
+      );
+    } finally {
+      console.log = log;
+    }
+    const text = lines.join("\n");
+    expect(text).toContain("- unit\tbakery\trenamed\n");
+    expect(text).toContain("- unit\tbakery\tstopped (pass 2 of 3)");
+    expect(text).toContain(`- ${UNIT} (passes 1 and 3 of 3)`);
+  });
+
+  it("says nothing about a batch that did everything asked of it", () => {
+    // A lane that found nothing to say adds nothing to the summary. The
+    // batch's own measurement is what says it ran.
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      describeAccounting(
+        "workspace-unit",
+        {
+          gating: [],
+          excused: [],
+          unaccounted: [],
+          absent: [],
+          silent: [],
+          failedUnits: [UNIT],
+        },
+        true,
+      );
+    } finally {
+      console.log = log;
+    }
+    expect(lines).toEqual([]);
+  });
+
+  it("accounts for a stand-in by its unit having recorded", () => {
+    // No record will ever carry a stand-in's name: a real record is
+    // named for a test and a stand-in is named for a file.
+    const standIn = asked(`unrecorded ${UNIT}`);
+    const found = accountFor(
+      batch(),
+      standIn,
+      once([record("glaze > sets", "pass")]),
+      new Set(),
+    );
+    expect(names(found.unaccounted)).toEqual([]);
+  });
+
+  describe("over several passes", () => {
+    /** A pass that recorded `records` and said nothing it registered. */
+    const pass = (...records: TestRecord[]) => ({
+      units: [UNIT],
+      records,
+      registered: new Map<string, Set<string>>(),
+    });
+
+    it("names an identity one pass missed that another recorded", () => {
+      // The second pass stopped part way, so it did not run what it was
+      // asked to however much the first pass recorded.
+      const found = accountFor(
+        batch(3),
+        [...asked("glaze > sets"), ...asked("glaze > cools")],
+        [
+          pass(record("glaze > sets", "fail"), record("glaze > cools", "pass")),
+          pass(record("glaze > sets", "fail")),
+          pass(record("glaze > sets", "fail"), record("glaze > cools", "pass")),
+        ],
+        new Set(),
+      );
+      expect(found.unaccounted).toEqual([{
+        name: testIdentityKey({ k: "unit", s: "bakery", n: "glaze > cools" }),
+        passes: [2],
+        of: 3,
+      }]);
+    });
+
+    it("counts the passes that ran, where the lane stopped before the rest", () => {
+      // A lane told to stop starts no further pass, so the one pass that
+      // ran is every pass that could have recorded the identity.
+      const found = accountFor(
+        batch(3),
+        [...asked("glaze > sets"), ...asked("glaze > cools")],
+        [pass(record("glaze > sets", "fail"))],
+        new Set(),
+      );
+      expect(found.unaccounted).toEqual([{
+        name: testIdentityKey({ k: "unit", s: "bakery", n: "glaze > cools" }),
+        passes: [1],
+        of: 1,
+      }]);
+    });
+
+    it("names a unit one pass recorded nothing for", () => {
+      const found = accountFor(
+        batch(2),
+        asked("glaze > sets"),
+        [pass(record("glaze > sets", "pass")), pass()],
+        new Set(),
+      );
+      expect(found.silent).toEqual([{ name: UNIT, passes: [2], of: 2 }]);
+    });
+
+    it("asks a pass only for the units it was asked to run", () => {
+      // The unit runs once, so the batch's second pass is another unit's.
+      const found = accountFor(
+        batch(),
+        asked("glaze > sets"),
+        [
+          pass(record("glaze > sets", "pass")),
+          {
+            units: [],
+            records: [],
+            registered: new Map<string, Set<string>>(),
+          },
+        ],
+        new Set(),
+      );
+      expect(found.unaccounted).toEqual([]);
+      expect(found.silent).toEqual([]);
+    });
+
+    it("names the units a failure was seen in over every pass", () => {
+      // Coverage is measured through every pass, so a failure in any of
+      // them leaves the unit's number short.
+      const found = accountFor(
+        batch(2),
+        asked("glaze > sets"),
+        [
+          pass(record("glaze > sets", "pass")),
+          pass(record("glaze > sets", "fail")),
+        ],
+        new Set(),
+      );
+      expect(found.failedUnits).toEqual([UNIT]);
+      expect(found.gating).toEqual([
+        testIdentityKey({ k: "unit", s: "bakery", n: "glaze > sets" }),
+      ]);
+    });
+
+    it("judges each pass by what that pass registered", () => {
+      // The first pass's processes said the tree holds no `glaze > cools`.
+      // The second pass left no name map, as a process that stopped before
+      // its module loaded leaves none, so it cannot say the same.
+      const found = accountFor(
+        batch(2),
+        [...asked("glaze > sets"), ...asked("glaze > cools")],
+        [
+          {
+            units: [UNIT],
+            records: [record("glaze > sets", "fail")],
+            registered: new Map([[UNIT, new Set(["glaze > sets"])]]),
+          },
+          pass(record("glaze > sets", "fail")),
+        ],
+        new Set(),
+      );
+      expect([found.unaccounted, found.absent]).toEqual([
+        [{
+          name: testIdentityKey({ k: "unit", s: "bakery", n: "glaze > cools" }),
+          passes: [2],
+          of: 2,
+        }],
+        [],
+      ]);
+    });
+  });
+
+  describe("an identity no record accounts for, read against what its unit registered", () => {
+    const key = (n: string) => testIdentityKey({ k: "unit", s: "bakery", n });
+
+    /** What the batch found for `name`, given its unit's registrations. */
+    function reading(name: string, registered: readonly string[] | undefined) {
+      return accountFor(
+        batch(),
+        asked(name),
+        once(
+          [record("glaze > sets", "pass")],
+          registered === undefined
+            ? new Map()
+            : new Map([[UNIT, new Set(registered)]]),
+        ),
+        new Set(),
+      );
+    }
+
+    it("sets it apart as absent where its unit registered no test by that name", () => {
+      // The manifest carries a test the tree does not hold, renamed since
+      // or only ever run on a branch. No run of this tree records it.
+      const found = reading("glaze > cools", ["glaze", "glaze > sets"]);
+      expect([names(found.unaccounted), found.absent]).toEqual([
+        [],
+        [key("glaze > cools")],
+      ]);
+    });
+
+    it("keeps it unaccounted for where its unit registered it", () => {
+      // The tree holds the test and nothing recorded it, which is what an
+      // invocation that stopped part way through leaves.
+      const found = reading("glaze > cools", [
+        "glaze",
+        "glaze > sets",
+        "glaze > cools",
+      ]);
+      expect([names(found.unaccounted), found.absent]).toEqual([
+        [key("glaze > cools")],
+        [],
+      ]);
+    });
+
+    it("keeps it unaccounted for where its unit registered nothing", () => {
+      // A process that stopped before its module loaded wrote no
+      // registrations, and a suite without the preload writes none at all.
+      const found = reading("glaze > cools", undefined);
+      expect([names(found.unaccounted), found.absent]).toEqual([
+        [key("glaze > cools")],
+        [],
+      ]);
+    });
+
+    it("keeps a describe unaccounted for where its unit registered a test inside it", () => {
+      // Registrations hold each leaf's whole chain and not the describes
+      // along it, so a nested describe is known by the leaves inside it.
+      const found = reading("glaze > icing", [
+        "glaze",
+        "glaze > sets",
+        "glaze > icing > sets",
+      ]);
+      expect([names(found.unaccounted), found.absent]).toEqual([
+        [key("glaze > icing")],
+        [],
+      ]);
+    });
+
+    it("keeps a leaf unaccounted for where its unit registered its describe and no leaf at all", () => {
+      // A process whose bdd re-export recorded no leaves registered each
+      // outermost describe and nothing beneath it, which says nothing
+      // about any leaf.
+      const found = reading("glaze > cools", ["glaze"]);
+      expect([names(found.unaccounted), found.absent]).toEqual([
+        [key("glaze > cools")],
+        [],
+      ]);
+    });
+
+    it("sets a leaf apart as absent where its unit never registered its outermost describe", () => {
+      const found = reading("glaze > cools", ["proof", "proof > rises"]);
+      expect([names(found.unaccounted), found.absent]).toEqual([
+        [],
+        [key("glaze > cools")],
+      ]);
+    });
+
+    it("keeps a step unaccounted for beneath a test its unit registered", async () => {
+      // A test names its steps as its body runs, and the registration
+      // preload sees only the test. Here the first step is withheld as
+      // flaky and fails, the test returns before the second, and the
+      // second is still in the tree. A real `deno test` under the real
+      // preload is what decides what the name map holds, so the run is
+      // one; a sibling the tree does not hold is asked for beside it.
+      const dir = await Deno.makeTempDir({ prefix: "lane-registrations-" });
+      const file = "glaze.test.ts";
+      try {
+        // The `.git` marker is what the preload climbs to for the root its
+        // file names are relative to. The file runs under this tree's own
+        // config, since Deno keys its emit cache on the config it resolves:
+        // compiled under any other, the preload's modules would replace
+        // the emit the lane's coverage report reads them back from. The
+        // lockfile is a copy, so the run writes nothing into this tree.
+        await Deno.mkdir(`${dir}/.git`);
+        await Deno.copyFile(`${REPOSITORY}/deno.lock`, `${dir}/deno.lock`);
+        await Deno.writeTextFile(
+          `${dir}/${file}`,
+          `import { describe, it } from "@std/testing/bdd";
+describe("glaze", () => {
+  it("sets", async (t) => {
+    const completed = await t.step("first", () => {
+      throw new Error("flaky first step");
+    });
+    if (!completed) return;
+    await t.step("second", () => {});
+  });
+});
+`,
+        );
+        const real = {
+          suite: suite({
+            id: "workspace-unit",
+            units: [file],
+            locate: (record) =>
+              record.test.s === "bakery" && record.file === file
+                ? { level: "unit" as const, unit: file }
+                : undefined,
+            command: (_units, context) => {
+              const junit = `${context.outputDir}/report.xml`;
+              return Promise.resolve([{
+                // The run fails on purpose, and what it prints would read
+                // in this suite's log as a failure of its own.
+                command: [
+                  "sh",
+                  "-c",
+                  '"$@" >/dev/null 2>&1',
+                  "sh",
+                  ...denoTestCommand(
+                    [
+                      "--allow-read",
+                      "--allow-write",
+                      "--allow-env",
+                      `--config=${REPOSITORY}/deno.jsonc`,
+                      `--lock=${dir}/deno.lock`,
+                    ],
+                    context,
+                    junit,
+                    [file],
+                  ),
+                ],
+                cwd: dir,
+                // A lane running this file hands it a skip list of its
+                // own, which this run must not read, and a coverage
+                // directory, whose measured set this run is no part of.
+                env: {
+                  CF_TEST_SKIP_LIST: "",
+                  DENO_COVERAGE_DIR: `${dir}/coverage`,
+                },
+                junit: [{ path: junit, kind: "unit", scope: "bakery" }],
+              }]);
+            },
+          }),
+          units: [{ unit: file, skip: [] }],
+          runs: new Map([[file, 1]]),
+          projected: 0,
+        };
+        const log = console.log;
+        console.log = () => {};
+        let result;
+        try {
+          result = await runBatch(
+            real,
+            { root: dir } as LaneOptions,
+            dir,
+            undefined,
+            {},
+          );
+        } finally {
+          console.log = log;
+        }
+        const asking = (n: string) =>
+          asked(n).map((selection) => ({
+            ...selection,
+            entry: { ...selection.entry, unit: file },
+          }));
+        const found = accountFor(
+          real,
+          [
+            ...asking("glaze > sets > first"),
+            ...asking("glaze > sets > second"),
+            ...asking("glaze > cools"),
+          ],
+          result.executions,
+          new Set([key("glaze > sets > first")]),
+        );
+        expect(found).toEqual({
+          gating: [],
+          excused: [key("glaze > sets > first")],
+          unaccounted: [{
+            name: key("glaze > sets > second"),
+            passes: [1],
+            of: 1,
+          }],
+          absent: [key("glaze > cools")],
+          silent: [],
+          failedUnits: [file],
+        });
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+  });
+});
+
+describe("what a batch reads of what a whole run registered", () => {
+  const UNIT = "runtime/bakery#browser-test";
+
+  /**
+   * Runs a batch of one unit that holds every file of a package's browser
+   * tests, whose process leaves the mark `run` describes.
+   */
+  async function registeredBy(run: Record<string, unknown>) {
+    const dir = await Deno.makeTempDir({ prefix: "lane-whole-run-" });
+    const mark = JSON.stringify(run);
+    const batch = {
+      suite: suite({
+        id: "workspace-unit",
+        units: [UNIT],
+        locate: (record) =>
+          record.test.k === "browser" && record.test.s === "bakery"
+            ? { level: "unit" as const, unit: UNIT }
+            : undefined,
+        command: (_units, context) =>
+          Promise.resolve([{
+            command: [
+              Deno.execPath(),
+              "eval",
+              `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+               Deno.mkdirSync(dir, { recursive: true });
+               Deno.writeTextFileSync(\`\${dir}/whole-run-fixture.json\`, ${
+                JSON.stringify(mark)
+              });`,
+            ],
+            cwd: context.root,
+          }]),
+      }),
+      units: [{ unit: UNIT, skip: [] }],
+      runs: new Map([[UNIT, 1]]),
+      projected: 0,
+    };
+    const log = console.log;
+    console.log = () => {};
+    try {
+      return (await runBatch(
+        batch,
+        { root: REPOSITORY } as LaneOptions,
+        dir,
+        undefined,
+        {},
+      )).executions[0]!.registered;
+    } finally {
+      console.log = log;
+      await Deno.remove(dir, { recursive: true });
+    }
+  }
+
+  it("gives the unit its records belong to every name the mark holds", async () => {
+    // One process runs every file of the unit, so its mark says what the
+    // whole unit registered.
+    expect(
+      await registeredBy({
+        kind: "browser",
+        scope: "bakery",
+        tests: {
+          "runtime/bakery/a.browser.test.ts": ["renders"],
+          "runtime/bakery/b.browser.test.ts": ["clicks"],
+        },
+      }),
+    ).toEqual(new Map([[UNIT, new Set(["renders", "clicks"])]]));
+  });
+
+  it("gives the unit an empty set where its files registered nothing", async () => {
+    // A run that registered no test at all still says its unit holds none,
+    // so every name the manifest lists for it reads as one the tree does
+    // not hold.
+    expect(
+      await registeredBy({
+        kind: "browser",
+        scope: "bakery",
+        tests: { "runtime/bakery/a.browser.test.ts": [] },
+      }),
+    ).toEqual(new Map([[UNIT, new Set()]]));
+  });
+
+  it("gives no unit a mark whose records would belong to none", async () => {
+    expect(
+      await registeredBy({
+        kind: "browser",
+        scope: "pantry",
+        tests: { "runtime/pantry/a.browser.test.ts": ["renders"] },
+      }),
+    ).toEqual(new Map());
+  });
+});
+
 describe("what a lane does with the batches it was given", () => {
+  const UNIT = "runtime/bakery/test/glaze.test.ts";
+
+  /**
+   * A command that records the unit having run, and then does whatever
+   * the case asked for. Every real suite records what it ran, and a lane
+   * reads the records to decide what its batches came to, so a fixture
+   * that recorded nothing would be testing the lane against a runner
+   * shaped like nothing in the tree.
+   */
+  function recording(then: string, outcome = "pass"): string[] {
+    return [
+      Deno.execPath(),
+      "eval",
+      `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+       Deno.mkdirSync(dir, { recursive: true });
+       Deno.writeTextFileSync(
+         \`\${dir}/fragment-fixture-\${crypto.randomUUID()}.ndjson\`,
+         JSON.stringify({
+           line: "record",
+           test: { k: "unit", s: "bakery", n: "glaze > sets" },
+           outcome: ${JSON.stringify(outcome)},
+           durationMs: 1,
+         }) + "\\n",
+       );
+       ${then}`,
+    ];
+  }
+
   /** A topology of one suite running the command a case names. */
   function topology(command: readonly string[]) {
     return () =>
       Promise.resolve([
         suite({
           id: "workspace-unit",
-          units: ["packages/bakery/test/glaze.test.ts"],
+          units: [UNIT],
+          locate: (record) =>
+            record.test.k === "unit" && record.test.s === "bakery"
+              ? { level: "unit" as const, unit: UNIT }
+              : undefined,
           command: (_units, context) =>
             Promise.resolve([{ command: [...command], cwd: context.root }]),
         }),
@@ -1618,41 +4991,62 @@ describe("what a lane does with the batches it was given", () => {
   }
 
   /** A manifest selecting that suite's one unit. */
-  function selecting() {
+  function selecting(manifest: Manifest = manifestOf([{ unit: UNIT }])) {
     return () =>
       Promise.resolve({
-        manifest: manifestOf([{}]),
+        manifest,
         objectName: "manifest-fixture.json.gz",
       });
   }
 
+  /** The manifest above, holding that one identity back as flaky. */
+  function withholding(): Manifest {
+    const manifest = manifestOf([{ unit: UNIT, flakeRate: 0.9 }]);
+    manifest.withheld = [{
+      test: manifest.entries[0]!.test,
+      suite: "workspace-unit",
+      reason: "flaky",
+    }];
+    return manifest;
+  }
+
   /**
-   * Runs a lane over that suite, and answers with its verdict beside the
+   * Runs a lane over that suite, and returns its verdict beside the
    * measurements it wrote. The spool is the lane's own, so what it
    * records about itself stays here rather than reaching the spool of
-   * the run testing it.
+   * the run testing it. Its coverage directory is private too: the lane
+   * converts every profile it finds there, including an enclosing CI
+   * run's profiles if it shares that run's directory.
    */
   async function run(
     command: readonly string[],
-  ): Promise<{ ok: boolean; measured: TestRecord[] }> {
+    over: { full?: boolean; manifest?: Manifest; stop?: LaneStop } = {},
+  ): Promise<{ ok: boolean; measured: TestRecord[]; annotations: string[] }> {
     const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
+    const { stop } = over;
+    const restore = outsideJob();
     const log = console.log;
-    console.log = () => {};
+    const annotations: string[] = [];
+    console.log = (line: string) => {
+      if (line.startsWith("::error")) annotations.push(line);
+    };
     try {
       const ok = await runLane(
         {
           lane: 1,
           of: 1,
-          full: false,
+          full: over.full ?? false,
           dryRun: false,
           laneCount: false,
           root: REPOSITORY,
           at: "2026-09-01T00:00:00Z",
+          coverageDir: `${spool}/coverage`,
         },
         {
-          manifest: selecting(),
+          manifest: selecting(over.manifest),
           topology: topology(command),
           spool: () => spool,
+          ...(stop === undefined ? {} : { stop: () => stop }),
         },
       );
       const written = (await Promise.all(
@@ -1663,27 +5057,242 @@ describe("what a lane does with the batches it was given", () => {
       const measured = written.split("\n")
         .filter((line) => line.length > 0)
         .map((line) => JSON.parse(line) as TestRecord);
-      return { ok, measured };
+      return { ok, measured, annotations };
     } finally {
       console.log = log;
+      restore();
       await Deno.remove(spool, { recursive: true });
     }
   }
 
-  /** The outcome the lane recorded for its one batch. */
+  /**
+   * The outcome the lane recorded for its one batch, whether or not that
+   * batch ran with coverage on.
+   */
   function batchOutcome(measured: readonly TestRecord[]): string | undefined {
     return measured.find((record) =>
-      record.test.n === "ci-lane batch workspace-unit"
+      batchMeasurement(record.test.n)?.suite === "workspace-unit"
     )?.outcome;
   }
 
+  /** The identities the lane recorded excusing. */
+  function excusedIn(measured: readonly TestRecord[]): string[] {
+    return measured.flatMap((record) => {
+      const key = excusedMeasurement(record.test.n);
+      return key === undefined ? [] : [key];
+    });
+  }
+
+  /** The one identity the manifests here hold, as a canonical key. */
+  const glaze = testIdentityKey({ k: "unit", s: "bakery", n: "glaze > sets" });
+
   it("passes when every batch passed", async () => {
-    const { ok, measured } = await run([Deno.execPath(), "eval", "0"]);
+    const { ok, measured } = await run(recording(""));
     expect(ok).toBe(true);
     // The measurement says what the lane says. A batch recorded green
     // while the lane reports red, or the other way about, is one commit
     // carrying both outcomes for the identity.
     expect(batchOutcome(measured)).toBe("pass");
+  });
+
+  it("leaves excused failures out of the live annotations", async () => {
+    const restore = setEnv({
+      GITHUB_ACTIONS: "true",
+      GITHUB_STEP_SUMMARY: undefined,
+    });
+    try {
+      const { ok, annotations } = await run(recording("", "fail"), {
+        full: true,
+        manifest: withholding(),
+      });
+      expect(ok).toBe(true);
+      expect(annotations).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  for (const missingManifest of [false, true]) {
+    const title = missingManifest
+      ? "keeps later batches running when rerun-command lookup cannot read the workspace manifest"
+      : "annotates a gating failure before starting the next batch and keeps running the lane";
+    it(title, async () => {
+      const spool = await Deno.makeTempDir({ prefix: "lane-early-failure-" });
+      const lines: string[] = [];
+      const entries = ["first", "second"].map((name, index) => ({
+        test: { k: "unit" as const, s: "bakery", n: `${name} > runs` },
+        suite: name,
+        unit: `packages/bakery/${name}.test.ts`,
+        cost: 2 - index,
+      }));
+      let secondRan = false;
+      const reporting = (index: number) => {
+        const entry = entries[index]!;
+        return suite({
+          id: entry.suite,
+          units: [entry.unit],
+          locate: (record) =>
+            record.test.n === entry.test.n
+              ? { level: "unit", unit: entry.unit }
+              : undefined,
+          command: (_units, context) => {
+            if (index === 1) {
+              expect(lines.filter((line) => line.startsWith("::error")))
+                .toHaveLength(1);
+              expect(lines.some((line) => line.startsWith("FAILED:")))
+                .toBe(false);
+              secondRan = true;
+            }
+            return Promise.resolve([{
+              command: [
+                Deno.execPath(),
+                "eval",
+                `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+               Deno.mkdirSync(dir, { recursive: true });
+               Deno.writeTextFileSync(
+                 dir + "/fragment-fixture.ndjson",
+                 JSON.stringify(${
+                  JSON.stringify({
+                    line: "record",
+                    test: entry.test,
+                    outcome: index === 0 ? "fail" : "pass",
+                    durationMs: 1,
+                  })
+                }) + "\\n",
+               );`,
+              ],
+              cwd: context.root,
+            }]);
+          },
+        });
+      };
+      const restore = setEnv({
+        RUNNER_TEMP: undefined,
+        GITHUB_ACTIONS: "true",
+        GITHUB_STEP_SUMMARY: undefined,
+      });
+      const warnings: unknown[][] = [];
+      const warn = console.warn;
+      console.warn = (...args: unknown[]) => warnings.push(args);
+      const log = console.log;
+      console.log = (line: string) => lines.push(line);
+      try {
+        const ok = await runLane({
+          lane: 1,
+          of: 1,
+          full: true,
+          dryRun: false,
+          laneCount: false,
+          root: missingManifest ? spool : REPOSITORY,
+          at: "2026-09-01T00:00:00Z",
+          coverageDir: `${spool}/coverage`,
+        }, {
+          manifest: () =>
+            Promise.resolve({
+              manifest: manifestOf(entries),
+              objectName: "manifest-fixture.json.gz",
+            }),
+          topology: () => Promise.resolve([reporting(0), reporting(1)]),
+          spool: () => spool,
+        });
+        expect(ok).toBe(false);
+        expect(secondRan).toBe(true);
+        expect(warnings).toHaveLength(missingManifest ? 1 : 0);
+        expect(lines.filter((line) => line.startsWith("::error")))
+          .toHaveLength(1);
+        expect(lines.some((line) => line.startsWith("FAILED:"))).toBe(true);
+      } finally {
+        console.log = log;
+        console.warn = warn;
+        restore();
+        await Deno.remove(spool, { recursive: true });
+      }
+    });
+  }
+
+  it("fails a lane told to stop, runs nothing more, and says what it spent", async () => {
+    const stop = new LaneStop();
+    stop.receive("SIGINT");
+    const { ok, measured } = await run(recording(""), { stop });
+    expect(ok).toBe(false);
+    expect(batchOutcome(measured)).toBeUndefined();
+    // A stopped lane has failed, and what it measured about itself says
+    // so.
+    expect(
+      measured.find((record) => record.test.n === laneMeasurementName("spent"))
+        ?.outcome,
+    ).toBe("fail");
+  });
+
+  describe("what a lane records about itself as a whole", () => {
+    /**
+     * The manifest the lane selects by, charging the suite twelve
+     * seconds to hold, three to open the unit, and the identity's own
+     * second: sixteen in all, and nothing to open `deno`.
+     */
+    function charging(): Manifest {
+      const manifest = manifestOf([{ unit: UNIT }]);
+      manifest.calibration.suites["workspace-unit"] = {
+        overhead: 12,
+        correction: 1,
+        unitOverhead: 3,
+      };
+      return manifest;
+    }
+
+    /** The figure one of the lane's own measurements holds. */
+    function figure(
+      measured: readonly TestRecord[],
+      kind: LaneMeasurementKind,
+    ): TestRecord | undefined {
+      return measured.find((record) =>
+        record.test.n === laneMeasurementName(kind)
+      );
+    }
+
+    it("records what its batch was charged beside what it spent", async () => {
+      const { measured } = await run(recording(""), { manifest: charging() });
+      const named = (kind: "spent" | "projected") =>
+        measured.find((record) =>
+          record.test.n === batchMeasurementName("workspace-unit", false, kind)
+        );
+      expect(named("projected")?.durationMs).toBe(16_000);
+      expect(named("projected")?.outcome).toBe("pass");
+      expect(named("spent")?.outcome).toBe("pass");
+    });
+
+    it("records its work, its projection and its bound", async () => {
+      const { measured } = await run(recording(""), { manifest: charging() });
+      // The lane holds one batch and opens nothing with a cost, so its
+      // projection is the batch's charge.
+      expect(figure(measured, "projected")?.durationMs).toBe(16_000);
+      expect(figure(measured, "bound")?.durationMs).toBe(
+        (LANE_BOUND_SECONDS - LANE_PROLOGUE_SECONDS) * 1000,
+      );
+      const spent = figure(measured, "spent");
+      expect(spent?.outcome).toBe("pass");
+      expect(spent!.durationMs).toBeGreaterThan(0);
+    });
+
+    it("records a lane of the full run against the full run's bound", async () => {
+      const { measured } = await run(recording(""), {
+        full: true,
+        manifest: charging(),
+      });
+      expect(figure(measured, "bound")?.durationMs).toBe(
+        (FULL_LANE_BOUND_SECONDS - LANE_PROLOGUE_SECONDS) * 1000,
+      );
+    });
+
+    it("records a lane whose batch failed as having failed", async () => {
+      // A batch that failed stopped at its first failure, so the lane's
+      // time reads short, and a reader of the figures passes over it.
+      const { ok, measured } = await run(recording("", "fail"), {
+        manifest: charging(),
+      });
+      expect(ok).toBe(false);
+      expect(figure(measured, "spent")?.outcome).toBe("fail");
+    });
   });
 
   it("gives each batch the environment its own suite asked for", async () => {
@@ -1696,7 +5305,7 @@ describe("what a lane does with the batches it was given", () => {
       suite({
         id,
         needs,
-        units: [`packages/bakery/${id}.test.ts`],
+        units: [`runtime/bakery/${id}.test.ts`],
         command: (_units, context) =>
           Promise.resolve([{
             command: [
@@ -1709,6 +5318,7 @@ describe("what a lane does with the batches it was given", () => {
             cwd: context.root,
           }]),
       });
+    const restore = outsideJob();
     const log = console.log;
     console.log = () => {};
     try {
@@ -1721,6 +5331,7 @@ describe("what a lane does with the batches it was given", () => {
           laneCount: false,
           root: REPOSITORY,
           at: "2026-09-01T00:00:00Z",
+          coverageDir: `${dir}/coverage`,
         },
         {
           manifest: () =>
@@ -1729,12 +5340,12 @@ describe("what a lane does with the batches it was given", () => {
                 {
                   test: { k: "unit", s: "bakery", n: "asked > runs" },
                   suite: "asked",
-                  unit: "packages/bakery/asked.test.ts",
+                  unit: "runtime/bakery/asked.test.ts",
                 },
                 {
                   test: { k: "unit", s: "bakery", n: "did-not > runs" },
                   suite: "did-not",
-                  unit: "packages/bakery/did-not.test.ts",
+                  unit: "runtime/bakery/did-not.test.ts",
                 },
               ]),
               objectName: "manifest-fixture.json.gz",
@@ -1753,49 +5364,1597 @@ describe("what a lane does with the batches it was given", () => {
       expect(await Deno.readTextFile(`${dir}/did-not`)).toBe("");
     } finally {
       console.log = log;
+      restore();
       await Deno.remove(dir, { recursive: true }).catch(() => {});
     }
   });
 
-  it("fails when a batch failed, having run it", async () => {
-    // A lane reports what it measured: the batch ran and went red, so
-    // the lane is red, and nothing about that is a crash or a timeout.
-    const { ok, measured } = await run([
-      Deno.execPath(),
-      "eval",
-      "Deno.exit(1)",
-    ]);
-    expect(ok).toBe(false);
-    expect(batchOutcome(measured)).toBe("fail");
-  });
-
-  it("says it could not date the tree it is testing", async () => {
-    // Outside a repository there is no commit to resolve the manifest
-    // at, so the lane takes the newest manifest there is and prints
-    // that it did rather than appearing to have chosen one.
-    const outside = await Deno.makeTempDir({ prefix: "lane-nogit-" });
-    const lines: string[] = [];
+  it("fails on the way out when running a batch throws", async () => {
+    // A lane whose loop threw has failed, whatever the batches before it
+    // said, and it is the one that most needs what its capabilities
+    // wrote: the teardown reads their logs out of the work directory
+    // before removing it, and a lane still holding `ok` true would have
+    // removed them unread.
+    const restore = outsideJob();
     const log = console.log;
-    console.log = (line: string) => lines.push(line);
+    console.log = () => {};
+    let thrown: unknown;
     try {
       await runLane(
         {
           lane: 1,
           of: 1,
           full: false,
-          dryRun: true,
+          dryRun: false,
           laneCount: false,
-          root: outside,
+          root: REPOSITORY,
+          at: "2026-09-01T00:00:00Z",
         },
         {
-          manifest: () => Promise.resolve({ absent: "nothing published" }),
-          topology: () => Promise.resolve([]),
+          manifest: selecting(),
+          topology: () =>
+            Promise.resolve([
+              suite({
+                id: "workspace-unit",
+                units: [UNIT],
+                locate: () => ({ level: "unit" as const, unit: UNIT }),
+                command: () =>
+                  Promise.reject(new Error("the command could not be built")),
+              }),
+            ]),
+          spool: () => undefined,
         },
+      );
+    } catch (error) {
+      thrown = error;
+    } finally {
+      console.log = log;
+      restore();
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain(
+      "the command could not be built",
+    );
+  });
+
+  it("fails when a batch failed, having run it", async () => {
+    // A lane reports what it measured: the batch ran and went red, so
+    // the lane is red, and nothing about that is a crash or a timeout.
+    const { ok, measured } = await run(recording("Deno.exit(1);"));
+    expect(ok).toBe(false);
+    expect(batchOutcome(measured)).toBe("fail");
+  });
+
+  it("stays green for a failure too flaky to judge a change by", async () => {
+    // The default branch runs a test a pull request holds back, because
+    // what this run learns about it is the whole of what says whether
+    // the exclusion should reverse. Going red for it would redden the
+    // branch for something no change caused.
+    const { ok, measured } = await run(
+      recording("Deno.exit(1);", "fail"),
+      { full: true, manifest: withholding() },
+    );
+    expect(ok).toBe(true);
+    // And the batch still recorded what it saw.
+    expect(batchOutcome(measured)).toBe("fail");
+    // And that it excused the failure, which is what a report of the run
+    // reads to say the run was not failed by it.
+    expect(excusedIn(measured)).toEqual([glaze]);
+  });
+
+  it("fails for that same failure on a pull request", async () => {
+    // A pull request has no excused set at all: a test this flaky is
+    // held back rather than run, so a failure reaching a lane here is
+    // one nothing excuses.
+    const { ok, measured } = await run(
+      recording("Deno.exit(1);", "fail"),
+      { manifest: manifestOf([{ unit: UNIT }]) },
+    );
+    expect(ok).toBe(false);
+    expect(excusedIn(measured)).toEqual([]);
+  });
+
+  it("fails when one execution of a repeated unit died having run nothing", async () => {
+    // An excusal is a statement about one invocation. A repeat that
+    // recorded the flaky failure sits in the same list of records as a
+    // repeat that died before recording anything, and a reader taking
+    // the batch's records as one list cannot tell that from a batch
+    // where every execution ran. Repeats are what a flaky identity is
+    // given, so this is the shape rather than an exotic one.
+    const counter = await Deno.makeTempFile({ prefix: "lane-execution-" });
+    const manifest = withholding();
+    manifest.entries[0]!.repeats = 2;
+    try {
+      const { ok } = await run([
+        Deno.execPath(),
+        "eval",
+        `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+         const at = ${JSON.stringify(counter)};
+         const before = Number(Deno.readTextFileSync(at) || "0");
+         Deno.writeTextFileSync(at, String(before + 1));
+         if (before === 0) {
+           Deno.mkdirSync(dir, { recursive: true });
+           Deno.writeTextFileSync(
+             \`\${dir}/fragment-\${crypto.randomUUID()}.ndjson\`,
+             JSON.stringify({
+               line: "record",
+               test: { k: "unit", s: "bakery", n: "glaze > sets" },
+               outcome: "fail",
+               durationMs: 1,
+             }) + "\\n",
+           );
+         }
+         Deno.exit(1);`,
+      ], { full: true, manifest });
+      expect(ok).toBe(false);
+      // Both executions ran, so this is not the batch being cut short,
+      // and then every rerun of the failure the first one recorded.
+      expect(Deno.readTextFileSync(counter)).toBe(
+        String(2 + RERUN_EXECUTIONS),
+      );
+    } finally {
+      await Deno.remove(counter);
+    }
+  });
+
+  it("fails when a later execution ran nothing and said so with a zero", async () => {
+    // The exit status cannot answer this one: the second execution
+    // reports success having run none of its unit, and the first
+    // execution's record of that unit sits in the same list. Only a
+    // reader that keeps the executions apart sees that one of them ran
+    // nothing, and a repeated unit is exactly what a flaky identity is
+    // given.
+    const counter = await Deno.makeTempFile({ prefix: "lane-quiet-" });
+    const manifest = withholding();
+    manifest.entries[0]!.repeats = 2;
+    try {
+      const { ok } = await run([
+        Deno.execPath(),
+        "eval",
+        `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+         const at = ${JSON.stringify(counter)};
+         const before = Number(Deno.readTextFileSync(at) || "0");
+         Deno.writeTextFileSync(at, String(before + 1));
+         if (before === 0) {
+           Deno.mkdirSync(dir, { recursive: true });
+           Deno.writeTextFileSync(
+             \`\${dir}/fragment-\${crypto.randomUUID()}.ndjson\`,
+             JSON.stringify({
+               line: "record",
+               test: { k: "unit", s: "bakery", n: "glaze > sets" },
+               outcome: "pass",
+               durationMs: 1,
+             }) + "\\n",
+           );
+         }`,
+      ], { full: true, manifest });
+      expect(ok).toBe(false);
+      expect(Deno.readTextFileSync(counter)).toBe("2");
+    } finally {
+      await Deno.remove(counter);
+    }
+  });
+
+  it("fails when a later execution stopped part way through its unit", async () => {
+    // The second execution records the flaky failure and stops before
+    // its unit's other test. The first execution recorded that test, so
+    // the batch's records taken as one list account for everything,
+    // while the second execution did not run what it was asked to.
+    const counter = await Deno.makeTempFile({ prefix: "lane-stopped-" });
+    const manifest = withholding();
+    manifest.entries.push({
+      ...manifest.entries[0]!,
+      test: { k: "unit", s: "bakery", n: "glaze > cools" },
+    });
+    manifest.withheld.push({
+      test: manifest.entries[1]!.test,
+      suite: "workspace-unit",
+      reason: "flaky",
+    });
+    for (const entry of manifest.entries) entry.repeats = 2;
+    try {
+      const { ok, measured } = await run([
+        Deno.execPath(),
+        "eval",
+        `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+         const at = ${JSON.stringify(counter)};
+         const before = Number(Deno.readTextFileSync(at) || "0");
+         Deno.writeTextFileSync(at, String(before + 1));
+         const write = (n, outcome) => {
+           Deno.mkdirSync(dir, { recursive: true });
+           Deno.writeTextFileSync(
+             \`\${dir}/fragment-\${crypto.randomUUID()}.ndjson\`,
+             JSON.stringify({
+               line: "record",
+               test: { k: "unit", s: "bakery", n },
+               outcome,
+               durationMs: 1,
+             }) + "\\n",
+           );
+         };
+         write("glaze > sets", "fail");
+         if (before === 0) write("glaze > cools", "pass");
+         Deno.exit(1);`,
+      ], { full: true, manifest });
+      expect(ok).toBe(false);
+      expect(excusedIn(measured)).toEqual([]);
+      // Both executions ran, and then every rerun of the failure.
+      expect(Deno.readTextFileSync(counter)).toBe(
+        String(2 + RERUN_EXECUTIONS),
+      );
+    } finally {
+      await Deno.remove(counter);
+    }
+  });
+
+  it("fails for an excused failure beside an identity nothing accounts for", async () => {
+    // An invocation that recorded a withheld failure and then stopped
+    // has run almost nothing while satisfying any weaker test, so the
+    // excusal is withdrawn.
+    const manifest = withholding();
+    manifest.entries.push({
+      ...manifest.entries[0]!,
+      test: { k: "unit", s: "bakery", n: "glaze > cools" },
+      flakeRate: 0,
+    });
+    const { ok, measured } = await run(
+      recording("Deno.exit(1);", "fail"),
+      { full: true, manifest },
+    );
+    expect(ok).toBe(false);
+    // So nothing says the run did not fail for it.
+    expect(excusedIn(measured)).toEqual([]);
+  });
+
+  describe("an excused failure beside an identity its unit's registrations speak to", () => {
+    /**
+     * The manifest that withholds the one identity as flaky, and asks for
+     * another in the same unit that nothing records.
+     */
+    function askingForCools(): Manifest {
+      const manifest = withholding();
+      manifest.entries.push({
+        ...manifest.entries[0]!,
+        test: { k: "unit", s: "bakery", n: "glaze > cools" },
+        flakeRate: 0,
+      });
+      return manifest;
+    }
+
+    /**
+     * Writes the name map a test process of the unit leaves once its
+     * module has loaded, holding `names`, and then exits as a failing run
+     * does.
+     */
+    function registering(names: readonly string[]): string {
+      const map = { names: Object.fromEntries(names.map((n) => [n, UNIT])) };
+      return `Deno.writeTextFileSync(
+         \`\${dir}/${NAME_MAP_PREFIX}\${crypto.randomUUID()}${NAME_MAP_SUFFIX}\`,
+         ${JSON.stringify(JSON.stringify(map))},
+       );
+       Deno.exit(1);`;
+    }
+
+    it("stays green where the unit registered no test by that name", async () => {
+      // The manifest carries a test the tree does not hold, renamed since
+      // or only ever run on a branch, and no run of this tree records it.
+      const { ok, measured } = await run(
+        recording(registering(["glaze", "glaze > sets"]), "fail"),
+        { full: true, manifest: askingForCools() },
+      );
+      expect(ok).toBe(true);
+      expect(excusedIn(measured)).toEqual([glaze]);
+    });
+
+    it("fails where the unit registered that test and nothing recorded it", async () => {
+      // The tree holds the test, so the invocation that recorded the
+      // withheld failure stopped before it.
+      const { ok, measured } = await run(
+        recording(
+          registering(["glaze", "glaze > sets", "glaze > cools"]),
+          "fail",
+        ),
+        { full: true, manifest: askingForCools() },
+      );
+      expect(ok).toBe(false);
+      expect(excusedIn(measured)).toEqual([]);
+    });
+  });
+
+  it("fails when a unit it was asked to run recorded nothing", async () => {
+    // A unit runs its tests or it does not. Nothing recorded is a runner
+    // that ran none of it, and an exit status of zero says otherwise.
+    const { ok } = await run([Deno.execPath(), "eval", "0"]);
+    expect(ok).toBe(false);
+  });
+
+  describe("running again what failed every time", () => {
+    /**
+     * A command that records the one identity failing the first `fails`
+     * times it runs and passing after that, exiting as its record says,
+     * and counts its runs in `counter`.
+     */
+    function failingFirst(counter: string, fails: number): string[] {
+      return [
+        Deno.execPath(),
+        "eval",
+        `const at = ${JSON.stringify(counter)};
+         const before = Number(Deno.readTextFileSync(at) || "0");
+         Deno.writeTextFileSync(at, String(before + 1));
+         const outcome = before < ${fails} ? "fail" : "pass";
+         const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+         Deno.mkdirSync(dir, { recursive: true });
+         Deno.writeTextFileSync(
+           \`\${dir}/fragment-\${crypto.randomUUID()}.ndjson\`,
+           JSON.stringify({
+             line: "record",
+             test: { k: "unit", s: "bakery", n: "glaze > sets" },
+             outcome,
+             durationMs: 1,
+           }) + "\\n",
+         );
+         if (outcome === "fail") Deno.exit(1);`,
+      ];
+    }
+
+    /**
+     * Runs a lane over `failingFirst`, and returns its verdict, how many
+     * times the command ran, and the outcomes the lane recorded for the
+     * one identity, sorted.
+     */
+    async function lane(
+      fails: number,
+      over: { full?: boolean; manifest?: Manifest } = {},
+    ): Promise<{
+      ok: boolean;
+      runs: number;
+      outcomes: string[];
+      measured: TestRecord[];
+    }> {
+      const counter = await Deno.makeTempFile({ prefix: "lane-rerun-" });
+      try {
+        const { ok, measured } = await run(
+          failingFirst(counter, fails),
+          { full: true, ...over },
+        );
+        return {
+          ok,
+          runs: Number(await Deno.readTextFile(counter)),
+          outcomes: measured
+            .filter((record) => testIdentityKey(record.test) === glaze)
+            .map((record) => record.outcome).sort(),
+          measured,
+        };
+      } finally {
+        await Deno.remove(counter);
+      }
+    }
+
+    /** The seconds the lane recorded spending on reruns, if it did. */
+    function rerunFigure(measured: readonly TestRecord[]): number | undefined {
+      return measured.find((record) => record.test.n === RERUN_MEASUREMENT_NAME)
+        ?.durationMs;
+    }
+
+    it("runs a failure again until it passes, and ships every outcome", async () => {
+      // The pass beside the failure at one commit is what the publisher
+      // reads as the test disagreeing with itself, which a test run once
+      // per commit can never do.
+      const { runs, outcomes, measured } = await lane(1);
+      expect(runs).toBe(2);
+      expect(outcomes).toEqual(["fail", "pass"]);
+      expect(rerunFigure(measured)).toBeGreaterThan(0);
+    });
+
+    it("fails the lane for a failure that passed when run again", async () => {
+      // What the lane fails for is settled from its batches, so a rerun
+      // that passes gathers evidence without turning the run green.
+      const { ok } = await lane(1);
+      expect(ok).toBe(false);
+    });
+
+    it("runs a failure that never passes as many times as it may", async () => {
+      const { ok, runs, outcomes } = await lane(Infinity);
+      expect(ok).toBe(false);
+      expect(runs).toBe(1 + RERUN_EXECUTIONS);
+      expect(outcomes).toEqual(
+        new Array(1 + RERUN_EXECUTIONS).fill("fail"),
+      );
+    });
+
+    it("keeps an excused failure excused whatever its reruns record", async () => {
+      const { ok, runs, measured } = await lane(Infinity, {
+        manifest: withholding(),
+      });
+      expect(ok).toBe(true);
+      expect(runs).toBe(1 + RERUN_EXECUTIONS);
+      expect(excusedIn(measured)).toEqual([glaze]);
+    });
+
+    it("runs nothing again for a test that already passed beside its failure", async () => {
+      // A repeated unit that passed and failed has disagreed with itself
+      // at this commit already.
+      const manifest = withholding();
+      manifest.entries[0]!.repeats = 2;
+      const { runs, outcomes } = await lane(1, { manifest });
+      expect(runs).toBe(2);
+      expect(outcomes).toEqual(["fail", "pass"]);
+    });
+
+    it("runs nothing again in a lane outside the full run", async () => {
+      const { runs, outcomes, measured } = await lane(1, { full: false });
+      expect(runs).toBe(1);
+      expect(outcomes).toEqual(["fail"]);
+      expect(rerunFigure(measured)).toBeUndefined();
+    });
+
+    it("runs nothing again whose charge is past the budget", async () => {
+      const { runs, outcomes } = await lane(1, {
+        manifest: manifestOf([{ unit: UNIT, cost: RERUN_BUDGET_SECONDS + 1 }]),
+      });
+      expect(runs).toBe(1);
+      expect(outcomes).toEqual(["fail"]);
+    });
+
+    it("gives every failing unit a rerun where the budget holds each but not both", async () => {
+      // Each unit fits the budget on its own and the two do not fit
+      // together, so a round that ran the first has to leave the second
+      // for a later round rather than dropping it.
+      const SECOND = "runtime/bakery/test/cools.test.ts";
+      const names: Record<string, string> = {
+        [UNIT]: "glaze > sets",
+        [SECOND]: "glaze > cools",
+      };
+      const spool = await Deno.makeTempDir({ prefix: "lane-two-units-" });
+      const restore = outsideJob();
+      const log = console.log;
+      console.log = () => {};
+      try {
+        const two = suite({
+          id: "workspace-unit",
+          units: [UNIT, SECOND],
+          locate: (record) => {
+            const unit = Object.keys(names).find((unit) =>
+              names[unit] === record.test.n
+            );
+            return unit === undefined
+              ? undefined
+              : { level: "unit" as const, unit };
+          },
+          command: (units, context) =>
+            Promise.resolve([{
+              command: [
+                Deno.execPath(),
+                "eval",
+                `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+                 Deno.mkdirSync(dir, { recursive: true });
+                 for (const n of ${
+                  JSON.stringify(units.map(({ unit }) => names[unit]))
+                }) {
+                   Deno.writeTextFileSync(
+                     \`\${dir}/fragment-\${crypto.randomUUID()}.ndjson\`,
+                     JSON.stringify({
+                       line: "record",
+                       test: { k: "unit", s: "bakery", n },
+                       outcome: "fail",
+                       durationMs: 1,
+                     }) + "\\n",
+                   );
+                 }
+                 Deno.exit(1);`,
+              ],
+              cwd: context.root,
+            }]),
+        });
+        const cost = RERUN_BUDGET_SECONDS * 0.6;
+        await runLane(
+          {
+            lane: 1,
+            of: 1,
+            full: true,
+            dryRun: false,
+            laneCount: false,
+            root: REPOSITORY,
+            at: "2026-09-01T00:00:00Z",
+            coverageDir: `${spool}/coverage`,
+          },
+          {
+            manifest: selecting(manifestOf([
+              { unit: UNIT, cost },
+              {
+                unit: SECOND,
+                cost,
+                test: { k: "unit", s: "bakery", n: "glaze > cools" },
+              },
+            ])),
+            topology: () => Promise.resolve([two]),
+            spool: () => spool,
+          },
+        );
+        const written = (await Promise.all(
+          (await Array.fromAsync(Deno.readDir(spool)))
+            .filter((entry) => entry.isFile)
+            .map((entry) => Deno.readTextFile(`${spool}/${entry.name}`)),
+        )).join("").split("\n").filter((line) => line.length > 0)
+          .map((line) => JSON.parse(line) as TestRecord);
+        const runsOf = (n: string) =>
+          written.filter((record) => record.test.n === n).length;
+        expect(runsOf("glaze > sets")).toBe(1 + RERUN_EXECUTIONS);
+        expect(runsOf("glaze > cools")).toBe(1 + RERUN_EXECUTIONS);
+      } finally {
+        console.log = log;
+        restore();
+        await Deno.remove(spool, { recursive: true });
+      }
+    });
+
+    it("runs nothing again once the lane is told to stop", async () => {
+      const manifest = manifestOf([{ unit: UNIT }]);
+      const workDir = await Deno.makeTempDir({ prefix: "lane-stopped-rerun-" });
+      const ran = `${workDir}/ran`;
+      const marking = suite({
+        id: "workspace-unit",
+        units: [UNIT],
+        locate: () => ({ level: "unit" as const, unit: UNIT }),
+        command: (_units, context) =>
+          Promise.resolve([{
+            command: [
+              Deno.execPath(),
+              "eval",
+              `Deno.writeTextFileSync(${JSON.stringify(ran)}, "")`,
+            ],
+            cwd: context.root,
+          }]),
+      });
+      const stop = new LaneStop();
+      stop.receive("SIGINT");
+      try {
+        const reruns = await rerunFailures(
+          [{
+            batch: {
+              suite: marking,
+              units: [{ unit: UNIT, skip: [], cost: 1 }],
+              runs: new Map([[UNIT, 1]]),
+              projected: 1,
+            },
+            env: {},
+            failing: new Map([[UNIT, new Set([glaze])]]),
+          }],
+          manifest,
+          [{ entry: manifest.entries[0]!, reason: "full", repeats: 1 }],
+          {
+            lane: 1,
+            of: 1,
+            full: true,
+            dryRun: false,
+            laneCount: false,
+            root: REPOSITORY,
+          },
+          workDir,
+          undefined,
+          stop,
+        );
+        expect(reruns.unrun).toEqual([glaze]);
+        expect(await exists(ran)).toBe(false);
+      } finally {
+        await Deno.remove(workDir, { recursive: true });
+      }
+    });
+
+    it("tells a rerun that recorded nothing from one that failed", async () => {
+      // A rerun that crashed before recording anything says nothing about
+      // the test, so it is not reported as the test failing again.
+      const manifest = manifestOf([{ unit: UNIT }]);
+      const quiet = suite({
+        id: "workspace-unit",
+        units: [UNIT],
+        locate: () => ({ level: "unit" as const, unit: UNIT }),
+        command: (_units, context) =>
+          Promise.resolve([{
+            command: [Deno.execPath(), "eval", "Deno.exit(1);"],
+            cwd: context.root,
+          }]),
+      });
+      const workDir = await Deno.makeTempDir({ prefix: "lane-quiet-rerun-" });
+      const log = console.log;
+      console.log = () => {};
+      try {
+        const reruns = await rerunFailures(
+          [{
+            batch: {
+              suite: quiet,
+              units: [{ unit: UNIT, skip: [], cost: 1 }],
+              runs: new Map([[UNIT, 1]]),
+              projected: 1,
+            },
+            env: {},
+            failing: new Map([[UNIT, new Set([glaze])]]),
+          }],
+          manifest,
+          [{ entry: manifest.entries[0]!, reason: "full", repeats: 1 }],
+          {
+            lane: 1,
+            of: 1,
+            full: true,
+            dryRun: false,
+            laneCount: false,
+            root: REPOSITORY,
+          },
+          workDir,
+          undefined,
+        );
+        expect(reruns.unrecorded).toEqual([glaze]);
+        expect(reruns.failed).toEqual([]);
+        expect(reruns.passed).toEqual([]);
+        expect(reruns.unrun).toEqual([]);
+      } finally {
+        console.log = log;
+        await Deno.remove(workDir, { recursive: true });
+      }
+    });
+
+    it("runs a unit its suite runs whole again, as its batch ran it", async () => {
+      // The suite hands over no skip list for such a unit, so the rerun
+      // runs every test in it, as its batch did.
+      const asked: UnitRequest[][] = [];
+      const counter = await Deno.makeTempFile({ prefix: "lane-whole-" });
+      const restore = outsideJob();
+      const log = console.log;
+      console.log = () => {};
+      try {
+        const whole = suite({
+          id: "workspace-unit",
+          units: [UNIT],
+          whole: [UNIT],
+          locate: () => ({ level: "unit" as const, unit: UNIT }),
+          command: (units, context) => {
+            asked.push(units.map((unit) => ({ ...unit })));
+            return Promise.resolve([{
+              command: failingFirst(counter, 1),
+              cwd: context.root,
+            }]);
+          },
+        });
+        const manifest = manifestOf([
+          { unit: UNIT },
+          { unit: UNIT, test: { k: "unit", s: "bakery", n: "glaze > cools" } },
+        ]);
+        await runLane(
+          {
+            lane: 1,
+            of: 1,
+            full: true,
+            dryRun: false,
+            laneCount: false,
+            root: REPOSITORY,
+            at: "2026-09-01T00:00:00Z",
+            coverageDir: `${counter}-coverage`,
+          },
+          {
+            manifest: selecting(manifest),
+            topology: () => Promise.resolve([whole]),
+            spool: () => undefined,
+          },
+        );
+        expect(asked.length).toBe(2);
+        expect(asked[1]).toEqual(asked[0]);
+        expect(asked[1]![0]!.skip).toEqual([]);
+      } finally {
+        console.log = log;
+        restore();
+        await Deno.remove(counter);
+        await Deno.remove(`${counter}-coverage`, { recursive: true })
+          .catch(() => {});
+      }
+    });
+  });
+});
+
+describe("what a lane measures", () => {
+  const options = {
+    lane: 1,
+    of: 5,
+    full: false,
+    dryRun: false,
+    laneCount: false,
+    root: "/repo",
+  };
+
+  /** What a plan choosing the gate over `member`'s set measures. */
+  const gated = (member: string): CoverageGateSelection => {
+    const ref = {
+      suite: "workspace-unit",
+      set: {
+        member,
+        reachedBy: [`${member}/`],
+        units: [`${member}/one.test.ts`],
+      },
+    };
+    return { sets: [ref], reached: [ref] };
+  };
+
+  it("measures the members of the sets whose gates the plan chose", () => {
+    const coverage = batchCoverage(
+      options,
+      "workspace-unit",
+      gated("runtime/bakery"),
+    );
+    expect(coverage?.dir)
+      .toBe(`/repo/coverage${COVERAGE_PROFILE_SUFFIX}/workspace-unit`);
+    expect([...coverage!.members!]).toEqual(["runtime/bakery"]);
+  });
+
+  it("measures nothing in a suite whose gates the plan did not choose", () => {
+    expect(batchCoverage(options, "runner-unit", gated("runtime/bakery")))
+      .toBeUndefined();
+  });
+
+  it("measures every member of every suite in a full run", () => {
+    const coverage = batchCoverage(
+      { ...options, full: true },
+      "runner-unit",
+      gated("runtime/bakery"),
+    );
+    expect(coverage?.members).toBeUndefined();
+    expect(coverage?.dir)
+      .toBe(`/repo/coverage${COVERAGE_PROFILE_SUFFIX}/runner-unit`);
+    // The authored-pattern instrumentation writes its reports where the
+    // lane's upload carries them to the repository-wide figure.
+    expect(coverage?.patternDir)
+      .toBe(`/repo/coverage/${PATTERN_COVERAGE_DIR}/runner-unit`);
+  });
+
+  it("collects no authored-pattern coverage for a pull request", () => {
+    // Only the full run publishes the figure it would feed.
+    const coverage = batchCoverage(
+      options,
+      "workspace-unit",
+      gated("runtime/bakery"),
+    );
+    expect(coverage?.patternDir).toBeUndefined();
+  });
+
+  it("puts coverage where the command line said", () => {
+    const coverage = batchCoverage(
+      { ...options, full: true, coverageDir: "elsewhere" },
+      "runner-unit",
+      gated("runtime/bakery"),
+    );
+    expect(coverage?.dir)
+      .toBe(`/repo/elsewhere${COVERAGE_PROFILE_SUFFIX}/runner-unit`);
+  });
+
+  describe("what it charges a suite it measures", () => {
+    const WITHOUT = { overhead: 5, correction: 1, unitOverhead: 0 };
+    const WITH = { overhead: 20, correction: 2, unitOverhead: 0 };
+    const units = [
+      suite({
+        id: "workspace-unit",
+        units: ["runtime/bakery/one.test.ts"],
+        measured: [{
+          member: "runtime/bakery",
+          reachedBy: ["runtime/bakery/"],
+          units: ["runtime/bakery/one.test.ts"],
+        }],
+      }),
+      suite({ id: "runner-unit", units: ["runtime/oven/one.test.ts"] }),
+    ];
+    const suites = [...units, coverageGateSuite(units)];
+    const gate = { k: "gate", s: "bakery", n: "coverage-gate workspace-unit" };
+    const manifest = manifestOf([
+      {
+        test: gate,
+        suite: "coverage-gate",
+        unit: "workspace-unit/runtime/bakery",
+        cost: 0,
+        score: 0.9,
+      },
+      {
+        test: { k: "unit", s: "bakery", n: "one" },
+        unit: "runtime/bakery/one.test.ts",
+        cost: 10,
+      },
+      {
+        test: { k: "unit", s: "oven", n: "one" },
+        suite: "runner-unit",
+        unit: "runtime/oven/one.test.ts",
+        cost: 10,
+      },
+    ]);
+    manifest.calibration.suites = {
+      "workspace-unit": WITHOUT,
+      "runner-unit": WITHOUT,
+    };
+    manifest.calibration.suitesWithCoverage = {
+      "workspace-unit": WITH,
+      "runner-unit": WITH,
+    };
+    const deps = { manifest: () => Promise.resolve({ manifest }) };
+    const planning = {
+      ...options,
+      of: 1,
+      dryRun: true,
+      at: "2026-09-01T00:00:00.000Z",
+    };
+
+    it("charges every suite of a full run what it costs with coverage on", async () => {
+      const { seen, laid } = await lanePlan(
+        { ...planning, full: true },
+        suites,
+        deps,
+      );
+      expect(seen.manifest.calibration.suites["workspace-unit"]).toEqual(WITH);
+      expect(seen.manifest.calibration.suites["runner-unit"]).toEqual(WITH);
+      // Each suite's overhead and twice its one test's ten seconds.
+      expect(laid.lanes[0]!.projectedSeconds).toBe(80);
+    });
+
+    /**
+     * A repository whose second commit touches `runtime/bakery`, and the
+     * plan a pull request of it packs from `manifest`.
+     */
+    async function reaching(manifest: Manifest) {
+      const repo = await Deno.makeTempDir({ prefix: "lane-charged-" });
+      const git = (...args: string[]) =>
+        new Deno.Command("git", {
+          args,
+          cwd: repo,
+          env: {
+            ...Deno.env.toObject(),
+            GIT_AUTHOR_NAME: "A",
+            GIT_AUTHOR_EMAIL: "a@example.com",
+            GIT_COMMITTER_NAME: "A",
+            GIT_COMMITTER_EMAIL: "a@example.com",
+          },
+          stdout: "null",
+          stderr: "null",
+        }).output();
+      try {
+        await git("init", "-q");
+        await Deno.writeTextFile(`${repo}/kept.ts`, "a");
+        await git("add", ".");
+        await git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "one");
+        await git("branch", "base");
+        await Deno.mkdir(`${repo}/runtime/bakery`, { recursive: true });
+        await Deno.writeTextFile(`${repo}/runtime/bakery/glaze.ts`, "b");
+        await git("add", ".");
+        await git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "two");
+        return await lanePlan(
+          { ...planning, root: repo, base: "base" },
+          suites,
+          { manifest: () => Promise.resolve({ manifest }) },
+        );
+      } finally {
+        await Deno.remove(repo, { recursive: true });
+      }
+    }
+
+    it("charges a suite whose gate the plan chose with coverage on, and the rest without", async () => {
+      const { seen, laid, coverage } = await reaching(manifest);
+      expect(laid.gates.map((chosen) => chosen.entry.test)).toEqual([gate]);
+      expect(coverage.sets.map((ref) => ref.set.member))
+        .toEqual(["runtime/bakery"]);
+      expect(seen.manifest.calibration.suites["workspace-unit"])
+        .toEqual(WITH);
+      expect(seen.manifest.calibration.suites["runner-unit"])
+        .toEqual(WITHOUT);
+    });
+
+    it("charges a suite whose gate the plan passed over what it costs without", async () => {
+      // Packed with the suite priced as measured, the plan chooses none of
+      // its gates, so it is packed again with the suite priced the way the
+      // lanes will then run it.
+
+      const { seen, laid, coverage } = await reaching({
+        ...manifest,
+        withheld: [{ test: gate, suite: "coverage-gate", reason: "flaky" }],
+      });
+      expect(laid.gates).toEqual([]);
+      expect(coverage.sets).toEqual([]);
+      expect(coverage.reached.map((ref) => ref.set.member))
+        .toEqual(["runtime/bakery"]);
+      expect(seen.manifest.calibration.suites["workspace-unit"])
+        .toEqual(WITHOUT);
+    });
+
+    it("charges a pull request that measures nothing what it costs without", async () => {
+      const { seen, laid } = await lanePlan(planning, suites, deps);
+      expect(seen.manifest.calibration.suites["workspace-unit"])
+        .toEqual(WITHOUT);
+      // Each suite's overhead and its one test's ten seconds.
+      expect(laid.lanes[0]!.projectedSeconds).toBe(30);
+    });
+  });
+});
+
+describe("planOver()", () => {
+  const suites = [
+    suite({ id: "workspace-unit", units: ["runtime/bakery/glaze.test.ts"] }),
+  ];
+
+  /** A manifest holding its one identity back as too flaky. */
+  function withholding(): Manifest {
+    const manifest = manifestOf([{ flakeRate: 0.9 }]);
+    manifest.withheld = [{
+      test: manifest.entries[0]!.test,
+      suite: "workspace-unit",
+      reason: "flaky",
+    }];
+    return manifest;
+  }
+
+  const over = (full: boolean, lanes: number) =>
+    planOver({
+      suites,
+      manifest: withholding(),
+      changed: new Set(),
+      landed: new Set(),
+      full,
+      lanes,
+    });
+
+  it("packs into as many lanes as it is given", () => {
+    expect(over(false, 3).laid.lanes.length).toBe(3);
+    expect(over(false, 1).laid.lanes.length).toBe(1);
+  });
+
+  it("forces in a unit nothing has measured only where the change brought it", () => {
+    // Nothing has measured `proof.test.ts`, and the change's own edit to
+    // `glaze.test.ts` takes the whole budget. A unit the change brought
+    // runs whatever it costs. One that was on the default branch before
+    // the change runs where there is room for it, and here there is none.
+
+    const glaze = "runtime/bakery/glaze.test.ts";
+    const proof = "runtime/bakery/proof.test.ts";
+    const reasons = (landed: ReadonlySet<string>) =>
+      planOver({
+        suites: [suite({ id: "workspace-unit", units: [glaze, proof] })],
+        manifest: manifestOf([{ cost: 10_000 }]),
+        changed: new Set([glaze]),
+        landed,
+        full: false,
+        lanes: 1,
+      }).laid.lanes.flatMap((lane) =>
+        lane.selections
+          .filter((selection) => selection.entry.unit === proof)
+          .map((selection) => selection.reason)
+      );
+    expect(reasons(new Set())).toEqual(["unknown"]);
+    expect(reasons(new Set([glaze, proof]))).toEqual([]);
+  });
+
+  it("holds a flaky test back from a pull request, which excuses nothing", () => {
+    const { laid } = over(false, 5);
+    expect(laid.withheld.map((held) => held.test.n)).toEqual(["glaze > sets"]);
+    expect(laid.nonGating).toEqual([]);
+  });
+
+  it("runs a flaky test in the full run without failing for it", () => {
+    const { laid } = over(true, 5);
+    expect(laid.withheld).toEqual([]);
+    expect(laid.nonGating.map((held) => held.test.n)).toEqual([
+      "glaze > sets",
+    ]);
+  });
+});
+
+describe("converting what a lane collected", () => {
+  /** A lane's coverage directory holding one profile per named set. */
+  async function collected(sets: readonly string[]): Promise<string> {
+    const root = await Deno.makeTempDir({ prefix: "lane-coverage-" });
+    for (const set of sets) {
+      const dir = `${root}/coverage${COVERAGE_PROFILE_SUFFIX}/${set}`;
+      await Deno.mkdir(dir, { recursive: true });
+      // An empty profile directory converts to an empty report, which is
+      // enough to prove the walk found it and named it.
+      await Deno.writeTextFile(`${dir}/empty.json`, "");
+    }
+    return root;
+  }
+
+  it("writes one report per profile directory, named for the set", async () => {
+    const root = await collected([
+      "workspace-unit/runtime__bakery",
+      "runner-unit/runtime__runner",
+    ]);
+    const converted = await convertCoverage({ ...options(root) });
+    expect(converted.ok).toBe(true);
+    expect(converted.reports).toEqual([
+      "runner-unit/runtime__runner",
+      "workspace-unit/runtime__bakery",
+    ]);
+    const at = `${root}/coverage/${COVERAGE_REPORT_DIR}/workspace-unit/` +
+      `runtime__bakery/${COVERAGE_REPORT_FILE}`;
+    expect((await Deno.stat(at)).isFile).toBe(true);
+  });
+
+  it("converts a directory no measured set names", async () => {
+    // The repository-wide figure the full run publishes is the merge of
+    // every report, so a directory the gate will not score is still
+    // converted.
+    const root = await collected(["cli-core/runtime__cli"]);
+    const converted = await convertCoverage({ ...options(root) });
+    expect(converted.reports).toEqual(["cli-core/runtime__cli"]);
+  });
+
+  it("takes the directory its coverage goes under from the command line", () => {
+    const options = parseLaneArgs(["--coverage-dir", "/somewhere/coverage"]);
+    expect(options?.coverageDir).toBe("/somewhere/coverage");
+  });
+
+  it("refuses a profile directory it cannot walk", async () => {
+    // An absent directory is a lane that measured nothing, which is
+    // ordinary. Anything else is a failure worth ending on.
+    const root = await Deno.makeTempDir({ prefix: "lane-coverage-" });
+    const at = `${root}/coverage${COVERAGE_PROFILE_SUFFIX}`;
+    await Deno.writeTextFile(at, "");
+    await expect(convertCoverage({ ...options(root) })).rejects.toThrow();
+  });
+
+  it("fails the lane when a conversion loses what it was given", async () => {
+    // Every line of a file the report lost reads as uncovered
+    // downstream, so a gate scored from it would fail somebody for a
+    // report that was never complete.
+    const root = await Deno.makeTempDir({ prefix: "lane-coverage-" });
+    const dir =
+      `${root}/coverage${COVERAGE_PROFILE_SUFFIX}/workspace-unit/runtime__bakery`;
+    await Deno.mkdir(dir, { recursive: true });
+    await Deno.writeTextFile(`${dir}/broken.json`, "this is not a profile");
+    const converted = await convertCoverage({ ...options(root) });
+    expect(converted.ok).toBe(false);
+    expect(converted.reports).toEqual(["workspace-unit/runtime__bakery"]);
+  });
+
+  it("writes nothing where the lane measured nothing", async () => {
+    const root = await Deno.makeTempDir({ prefix: "lane-coverage-" });
+    const converted = await convertCoverage({ ...options(root) });
+    expect(converted).toEqual({ ok: true, reports: [] });
+  });
+
+  function options(root: string) {
+    return {
+      lane: 1,
+      of: 5,
+      full: false,
+      dryRun: false,
+      laneCount: false,
+      root,
+    };
+  }
+
+  /** A suite declaring one measured set over the units named. */
+  function measuring(id: string, member: string, units: string[]): Suite {
+    return suite({ id, units, measured: [{ member, units, reachedBy: [] }] });
+  }
+
+  it("belongs to no set where the path is outside the report layout", () => {
+    // Every reader of a downloaded artifact walks files the lanes never
+    // wrote, so saying which set a path is under has to have an answer
+    // for "none of them".
+    expect(measuredSetOfReport("lane-1/notes.txt")).toBeUndefined();
+    expect(measuredSetOfReport(`lane-1/${COVERAGE_REPORT_DIR}/a/b/c/d.lcov`))
+      .toBeUndefined();
+    expect(measuredSetOfReport(`x/${COVERAGE_REPORT_DIR}/suite/member/r.lcov`))
+      .toBe("suite/member");
+  });
+
+  it("marks a set whose unit the lane saw fail", async () => {
+    // A run that excused a flaky failure stays green, so nothing
+    // downstream would otherwise know the number is short by whatever
+    // the failing test would have reached.
+    const root = await Deno.makeTempDir({ prefix: "lane-coverage-" });
+    try {
+      const marked = await markMeasuredFailures(
+        options(root),
+        [
+          measuring("workspace-unit", "runtime/bakery", [
+            "runtime/bakery/glaze.test.ts",
+          ]),
+          measuring("runner-unit", "runtime/runner", [
+            "runtime/runner/park.test.ts",
+          ]),
+        ],
+        new Set(["workspace-unit\truntime/bakery/glaze.test.ts"]),
+      );
+      expect(marked).toEqual(["workspace-unit/runtime/bakery"]);
+      const at = `${root}/coverage/${COVERAGE_REPORT_DIR}/workspace-unit/` +
+        `runtime__bakery/${COVERAGE_FAILURE_MARKER}`;
+      expect(await Deno.readTextFile(at)).toBe(
+        "runtime/bakery/glaze.test.ts\n",
+      );
+      // And nothing beside the set whose unit passed.
+      await expect(
+        Deno.stat(
+          `${root}/coverage/${COVERAGE_REPORT_DIR}/runner-unit/` +
+            `runtime__runner/${COVERAGE_FAILURE_MARKER}`,
+        ),
+      ).rejects.toThrow();
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("marks a set the same lane wrote no report for", async () => {
+    // A lane that ran a set's unit and saw it fail may have collected no
+    // profile at all, and another lane's report for that set must still
+    // not become the baseline. So the marker goes in the set's own
+    // directory whether or not a report is there.
+    const root = await Deno.makeTempDir({ prefix: "lane-coverage-" });
+    try {
+      await markMeasuredFailures(
+        options(root),
+        [measuring("workspace-unit", "runtime/bakery", ["one.test.ts"])],
+        new Set(["workspace-unit\tone.test.ts"]),
+      );
+      const dir =
+        `${root}/coverage/${COVERAGE_REPORT_DIR}/workspace-unit/runtime__bakery`;
+      expect(
+        (await Array.fromAsync(Deno.readDir(dir))).map((entry) => entry.name),
+      ).toEqual([COVERAGE_FAILURE_MARKER]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("writes nothing where no unit failed", async () => {
+    const root = await Deno.makeTempDir({ prefix: "lane-coverage-" });
+    try {
+      expect(
+        await markMeasuredFailures(
+          options(root),
+          [measuring("workspace-unit", "runtime/bakery", ["one.test.ts"])],
+          new Set(),
+        ),
+      ).toEqual([]);
+      await expect(Deno.stat(`${root}/coverage`)).rejects.toThrow();
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+});
+
+describe("what a lane says about coverage", () => {
+  it("says nothing where the change reaches no set and nothing measured", () => {
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      describeCoverage({ sets: [], reached: [] }, []);
+    } finally {
+      console.log = log;
+    }
+    expect(lines).toEqual([]);
+  });
+
+  it("names the sets whose gates the plan chose, and the reports it wrote", () => {
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      describeCoverage({
+        sets: [{
+          suite: "workspace-unit",
+          set: {
+            member: "runtime/bakery",
+            reachedBy: ["runtime/bakery/"],
+            units: ["runtime/bakery/one.test.ts"],
+          },
+        }],
+        reached: [],
+      }, ["workspace-unit/runtime__bakery"]);
+    } finally {
+      console.log = log;
+    }
+    const text = lines.join("\n");
+    // The set is named once among those chosen and once as the set its
+    // report belongs to, and its directory is not spelled out.
+    expect(
+      text.split("\n").filter((line) =>
+        line === "- workspace-unit/runtime/bakery"
+      ),
+    ).toHaveLength(2);
+    expect(text).toContain("Reports this lane wrote");
+    expect(text).not.toContain("runtime__bakery");
+  });
+
+  it("names a set whose number this run did not stand behind", () => {
+    // A run that excused a flaky failure stays green, so a reader of a
+    // green run would otherwise have nothing saying the set's number is
+    // short by whatever the failing test would have reached.
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      describeCoverage({ sets: [], reached: [] }, [], [
+        "workspace-unit/runtime/bakery",
+      ]);
+    } finally {
+      console.log = log;
+    }
+    const text = lines.join("\n");
+    expect(text).toContain("no baseline is published");
+    expect(text).toContain("- workspace-unit/runtime/bakery");
+  });
+
+  it("names a report by its set where the change reached that set", () => {
+    // A report belonging to a set is named as the set, so one summary
+    // does not spell one thing two ways.
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    const ref = {
+      suite: "workspace-unit",
+      set: {
+        member: "runtime/bakery",
+        reachedBy: ["runtime/bakery/"],
+        units: ["runtime/bakery/one.test.ts"],
+      },
+    };
+    try {
+      describeCoverage(
+        { sets: [ref], reached: [ref] },
+        ["workspace-unit/runtime__bakery", "workspace-unit/runtime__cellar"],
       );
     } finally {
       console.log = log;
-      await Deno.remove(outside, { recursive: true });
     }
-    expect(lines.join("\n")).toContain("cannot read the commit's date");
+    const text = lines.join("\n");
+    expect(text).toContain("- workspace-unit/runtime/bakery");
+    // A directory no set is scored from keeps the name the suite wrote.
+    expect(text).toContain("- workspace-unit/runtime__cellar");
+    expect(text).not.toContain("- workspace-unit/runtime__bakery");
+  });
+
+  it("names the sets whose gates the plan chose apart from those it did not", () => {
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    const ref = (member: string) => ({
+      suite: "workspace-unit",
+      set: {
+        member,
+        reachedBy: [`${member}/`],
+        units: [`${member}/one.test.ts`],
+      },
+    });
+    try {
+      describeCoverage({
+        sets: [ref("runtime/cellar")],
+        reached: [ref("runtime/bakery"), ref("runtime/cellar")],
+      }, []);
+    } finally {
+      console.log = log;
+    }
+    const text = lines.join("\n");
+    const chosen = text.indexOf("whose gates the plan chose");
+    const passedOver = text.indexOf("did not choose");
+    expect(chosen).toBeGreaterThanOrEqual(0);
+    expect(passedOver).toBeGreaterThan(chosen);
+    expect(text.slice(chosen, passedOver)).toContain(
+      "workspace-unit/runtime/cellar",
+    );
+    expect(text.slice(chosen, passedOver)).not.toContain("runtime/bakery");
+    expect(text.slice(passedOver)).toContain("workspace-unit/runtime/bakery");
+    expect(text.slice(passedOver)).not.toContain("runtime/cellar");
+  });
+});
+
+describe("what a lane hands the children it spawns", () => {
+  /**
+   * A suite of one unit, whose command writes what the child saw each
+   * GitHub token variable as into a file named for the suite.
+   */
+  function reporting(id: string, needs: CapabilityId[], at: string): Suite {
+    return suite({
+      id,
+      needs,
+      units: [id],
+      command: () =>
+        Promise.resolve([{
+          command: [
+            Deno.execPath(),
+            "eval",
+            `Deno.writeTextFileSync(${JSON.stringify(`${at}/${id}`)}, ` +
+            `JSON.stringify([Deno.env.get("GITHUB_TOKEN") ?? "", ` +
+            `Deno.env.get("GH_TOKEN") ?? ""]))`,
+          ],
+          cwd: REPOSITORY,
+        }]),
+    });
+  }
+
+  /** What the child of `id` reported seeing, one entry per variable. */
+  async function saw(at: string, id: string): Promise<string[]> {
+    return JSON.parse(await Deno.readTextFile(`${at}/${id}`)) as string[];
+  }
+
+  /** A manifest selecting the one unit of each of those suites. */
+  function selecting(ids: readonly string[]): Manifest {
+    return manifestOf(ids.map((id) => ({
+      test: { k: "unit", s: "bakery", n: `glaze > ${id}` },
+      suite: id,
+      unit: id,
+    })));
+  }
+
+  it("gives the token to a declaring suite's child and to no other", async () => {
+    // Read off the children rather than off what the lane exported to
+    // them: `runInvocation` merges this process's own environment
+    // underneath every command it spawns, so a token the lane was still
+    // holding would reach both of these whatever either declared.
+    const at = await Deno.makeTempDir({ prefix: "lane-token-" });
+    const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
+    // Handed under the name the `gh` command line reads, with the other
+    // cleared: the capability exports both, so this covers either name a
+    // lane may be handed one under. Both are named here rather than left
+    // to the ambient environment, since a token a developer exported is
+    // exactly what this reads.
+    const names = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
+    const restore = setEnv({
+      GITHUB_TOKEN: undefined,
+      GH_TOKEN: "a-token",
+      RUNNER_TEMP: undefined,
+    });
+    const log = console.log;
+    console.log = () => {};
+    let heldAfter: (string | undefined)[] = [];
+    let reported: Record<string, string[]> = {};
+    try {
+      await runLane({
+        lane: 1,
+        of: 1,
+        full: false,
+        dryRun: false,
+        laneCount: false,
+        root: REPOSITORY,
+        at: "2026-09-01T00:00:00Z",
+        coverageDir: `${at}/coverage`,
+      }, {
+        manifest: () =>
+          Promise.resolve({
+            manifest: selecting(["repo-gates", "workspace-unit"]),
+            objectName: "manifest-fixture.json.gz",
+          }),
+        topology: () =>
+          Promise.resolve([
+            reporting("repo-gates", ["deno", "github-api"], at),
+            reporting("workspace-unit", ["deno"], at),
+          ]),
+        spool: () => spool,
+      });
+      heldAfter = names.map((name) => Deno.env.get(name));
+      // Read here rather than beside the assertions, so that the
+      // directories holding it can go in the `finally` and a failing
+      // assertion leaves nothing behind.
+      reported = {
+        "repo-gates": await saw(at, "repo-gates"),
+        "workspace-unit": await saw(at, "workspace-unit"),
+      };
+    } finally {
+      console.log = log;
+      restore();
+      await Deno.remove(at, { recursive: true });
+      await Deno.remove(spool, { recursive: true });
+    }
+    expect(reported["repo-gates"]).toEqual(["a-token", "a-token"]);
+    expect(reported["workspace-unit"]).toEqual(["", ""]);
+    // The lane itself holds nothing for a child to inherit, which is
+    // what leaves the declaration as the only way one gets a token.
+    expect(heldAfter).toEqual([undefined, undefined]);
+  });
+});
+
+describe("the summary a lane ends with", () => {
+  /** A record of a test of `kind` in `scope`. */
+  const record = (
+    kind: string,
+    scope: string,
+    name: string,
+    outcome: TestRecord["outcome"],
+    file?: string,
+  ): TestRecord => ({
+    line: "record",
+    test: { k: kind, s: scope, n: name },
+    outcome,
+    durationMs: 1,
+    ...(file === undefined ? {} : { file }),
+  });
+  const members = new Map([["runner", "runtime/runner"]]);
+
+  it("gives a rerun command for each kind of test a developer can run", () => {
+    expect(laneRerun(record("unit", "runner", "a > b", "fail"), members))
+      .toBe("cd runtime/runner && deno task test --filter a");
+    expect(laneRerun(
+      record(
+        "integration",
+        "shell",
+        "x",
+        "fail",
+        "runtime/shell/integration/login.test.ts",
+      ),
+      members,
+    )).toBe("deno task integration shell login");
+    expect(laneRerun(
+      record(
+        "pattern",
+        "patterns",
+        "patterns/showcase/dice/dice.test.tsx",
+        "fail",
+      ),
+      members,
+    )).toBe(
+      "deno task integration pattern-tests patterns/showcase/dice/dice.test.tsx",
+    );
+  });
+
+  it("gives no rerun command for a test with no local command", () => {
+    expect(laneRerun(record("unit", "nowhere", "a", "fail"), members))
+      .toBeUndefined();
+    expect(laneRerun(record("gate", "repo", "fmt", "fail"), members))
+      .toBeUndefined();
+    expect(laneRerun(record("integration", "cf-harness", "a", "fail"), members))
+      .toBeUndefined();
+  });
+
+  it("keeps a failure the lane fails for over any other outcome of its test", () => {
+    const tests = new Map();
+    const failed = record("unit", "runner", "flaps", "fail");
+    const failing = new Set([JSON.stringify(["unit", "runner", "flaps"])]);
+    addLaneResults(
+      tests,
+      [record("unit", "runner", "flaps", "pass"), failed],
+      new Map([[failed, "Uncaught Error: no"]]),
+      failing,
+    );
+    addLaneResults(
+      tests,
+      [record("unit", "runner", "flaps", "pass")],
+      new Map(),
+      failing,
+    );
+
+    expect([...tests.values()]).toEqual([{
+      record: failed,
+      message: "Uncaught Error: no",
+    }]);
+  });
+
+  it("takes a failure's message from whichever of its records carries one", () => {
+    // A producer's spool can record a failure the JUnit report records
+    // again, and only the report's record carries the message.
+    const tests = new Map();
+    const spooled = record("unit", "runner", "breaks", "fail");
+    const reported = record("unit", "runner", "breaks", "fail");
+    addLaneResults(
+      tests,
+      [spooled, reported],
+      new Map([[reported, "Uncaught Error: broke"]]),
+      new Set([JSON.stringify(["unit", "runner", "breaks"])]),
+    );
+
+    expect([...tests.values()]).toEqual([{
+      record: spooled,
+      message: "Uncaught Error: broke",
+    }]);
+  });
+
+  it("leaves out a failure the lane excused", () => {
+    const tests = new Map();
+    addLaneResults(
+      tests,
+      [record("unit", "runner", "flaky", "fail")],
+      new Map(),
+      new Set(),
+    );
+
+    expect([...tests.values()]).toEqual([]);
+  });
+
+  it("annotates a failing test with its file, name, rerun command and error", () => {
+    expect(errorAnnotation({
+      record: record(
+        "unit",
+        "runner",
+        "a, b: c",
+        "fail",
+        "runtime/runner/t.ts",
+      ),
+      message: "Uncaught Error: 100%\nbroken",
+      rerun: "cd runtime/runner && deno task test --filter 'a, b: c'",
+    })).toBe(
+      "::error file=runtime/runner/t.ts,title=unit/runner%3A a%2C b%3A c::" +
+        "rerun: cd runtime/runner && deno task test --filter 'a, b: c'" +
+        "%0AError: 100%25%0Abroken",
+    );
+  });
+
+  it("annotates each failing identity once across batches and the closing summary, within one lane limit", () => {
+    const lines: string[] = [];
+    const annotated = new Set<string>();
+    const first = { record: record("unit", "runner", "first", "fail") };
+    const second = { record: record("unit", "runner", "second", "fail") };
+    const passing = { record: record("unit", "runner", "passed", "pass") };
+    const actions = (name: string) =>
+      name === "GITHUB_ACTIONS" ? "true" : undefined;
+    const log = console.log;
+    const restore = setEnv({ GITHUB_STEP_SUMMARY: undefined });
+    console.log = (line: string) => lines.push(line);
+    try {
+      annotateLaneFailures([passing, first, first], annotated, actions);
+      expect(lines).toEqual([errorAnnotation(first)]);
+      annotateLaneFailures([first, second], annotated, actions);
+      expect(lines).toEqual([errorAnnotation(first), errorAnnotation(second)]);
+      const rest = Array.from({ length: ANNOTATED_FAILURES }, (_, index) => ({
+        record: record("unit", "runner", `rest-${index}`, "fail"),
+      }));
+      annotateLaneFailures(rest, annotated, actions);
+      reportLane(
+        {
+          tests: [first, second, ...rest],
+          commands: [],
+          seconds: 1,
+        },
+        actions,
+        annotated,
+      );
+      expect(lines.filter((line) => line.startsWith("::error")))
+        .toHaveLength(ANNOTATED_FAILURES);
+      expect(annotated.size).toBe(ANNOTATED_FAILURES);
+    } finally {
+      console.log = log;
+      restore();
+    }
+  });
+
+  it("prints the summary last, annotating only inside GitHub Actions", () => {
+    const failing = Array.from(
+      { length: ANNOTATED_FAILURES + 2 },
+      (_unused, index) => ({
+        record: record("unit", "runner", `t${index}`, "fail"),
+      }),
+    );
+    const printedUnder = (env: Record<string, string>): string[] => {
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (line: string) => lines.push(line);
+      try {
+        reportLane(
+          { tests: failing, commands: [], seconds: 1 },
+          (name) => env[name],
+        );
+      } finally {
+        console.log = log;
+      }
+      return lines;
+    };
+
+    const stepSummary = Deno.makeTempFileSync({ prefix: "lane-step-" });
+    // The step summary of whatever job runs this test is not written to.
+    const outsideJob = setEnv({ GITHUB_STEP_SUMMARY: undefined });
+    let local: string[];
+    let actions: string[];
+    try {
+      local = printedUnder({});
+      actions = printedUnder({ GITHUB_ACTIONS: "true" });
+    } finally {
+      outsideJob();
+    }
+    expect(local.some((line) => line.startsWith("::error"))).toBe(false);
+    expect(local).toContain("FAIL unit/runner: t0");
+    expect(actions.filter((line) => line.startsWith("::error")).length)
+      .toBe(ANNOTATED_FAILURES);
+    // The step summary holds the block, fenced so that it renders as the
+    // log shows it.
+    const restore = setEnv({ GITHUB_STEP_SUMMARY: stepSummary });
+    try {
+      printedUnder({});
+    } finally {
+      restore();
+    }
+    const written = Deno.readTextFileSync(stepSummary);
+    Deno.removeSync(stepSummary);
+    expect(written).toMatch(/^```text\nFAILED: 12 failed/);
+    expect(written).toContain("FAIL unit/runner: t0\n");
+    expect(written.endsWith("```\n")).toBe(true);
   });
 });

@@ -68,10 +68,9 @@ behave differently:
   present. Once the home space exposes a space list, those spaces appear too.
   Until then, `ls` at root may show only `home/`.
 
-- **`lookup /<name>`** succeeds for **any valid space name**. The filesystem
-  resolves it on demand via `createSession({ spaceName })`, which
-  deterministically derives a DID from the name. You don't need the name to
-  appear in `ls` to access it.
+- **`lookup /<name>`** succeeds for a name whose space exists. The filesystem
+  resolves the name on demand through `legacySpaceDid(name)`, and a name whose
+  space has no history reports `ENOENT` and creates nothing.
 
 - **`lookup /did:key:...`** works for direct DID access.
 
@@ -86,18 +85,22 @@ identity.
 
 ### Space Name Resolution
 
-Space names are resolved by `createSession({ spaceName })`, which
-deterministically derives a DID:
+A name resolves through `legacySpaceDid(name)`, which derives a DID from the
+public `"common user"` passphrase and the name: the derivation every space
+created before space identities were random was given. It survives as a
+resolver with no authority: it yields a DID and never a key, and creating a
+space does not call it. DIDs (`did:key:...`, `did:ucan:...`) are used as-is
+without derivation. Resolving a name creates nothing. A name whose space has no
+history opens nothing rather than bringing one into being; a space is created
+by `cf space create` or the Home pattern, which take no name and yield a random
+DID.
 
-```
-Identity.fromPassphrase("common user").derive(spaceName) -> DID
-```
-
-This means any string is a valid space name — it will always resolve to a
-DID. The filesystem does not validate whether a space "exists" (has data);
-an empty space simply has no pieces.
-
-DIDs (`did:key:...`, `did:ucan:...`) are used as-is without derivation.
+The `.spaces.json` index below lists what a mount knows about; it is not
+consulted to resolve a name, because the derivation answers without it. Under
+the dormant [Common Fabric URL](../fabric-urls.md) concept, a discovered mapping
+could be added to that index without changing the space DID. No such resolver is
+planned for deployment. FUSE lookup does not perform an implicit network
+registration or claim.
 
 ### Space Index
 
@@ -111,8 +114,10 @@ mapping:
 }
 ```
 
-This file is updated as new spaces are discovered (accessed by name, or
-listed by the home space once that capability exists).
+The current implementation updates this file as spaces are discovered by name
+or listed by Home. After the random-identity cutover, it is updated from Home or
+an explicit DID-to-name addition. The dormant Common Fabric URL concept could
+provide another source if it is reconsidered.
 
 ## Piece Directory
 
@@ -172,15 +177,15 @@ home/pieces/my-note/
 ```markdown
 ---
 entityId: of:ba4jcbvpq3k5soo...
-title: My Note Title
+title: "My Note Title"
 ---
 
 The note body content goes here.
 ```
 
-Primitive frontmatter fields appear in YAML. Complex values (arrays of
-entities, nested objects) become sibling directories alongside `index.md`,
-using the same directory-tree rules as the default layout.
+Primitive frontmatter fields appear in YAML, strings quoted. Complex values
+(arrays of entities, nested objects) become sibling directories alongside
+`index.md`, using the same directory-tree rules as the default layout.
 
 **JSON projection** (`type: "application/json"` or plain object):
 
@@ -263,8 +268,8 @@ pieces/.index.json    # {"todo-app": "of:ba4jcbvpq3k5soo...", ...}
   "symbol": "default",
   "source": {
     "ref": "cf:pattern:<content-hash>",
-    "repository": "https://github.com/commontoolsinc/labs",
-    "entry": "/packages/patterns/todo-app.tsx"
+    "repository": "https://github.com/commonfabric/labs",
+    "entry": "/patterns/todo-app.tsx"
   }
 }
 ```

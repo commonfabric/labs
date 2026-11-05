@@ -1,0 +1,151 @@
+{
+  // The state of a `FabricPrimitive` is laid out within the same limits a
+  // converted value is. No shipped primitive's realm encoding nests or holds
+  // an array, so a class defined here stands in where one is needed.
+  "/options": { maxDepth: 2, maxArrayLength: 3, maxBufferLength: 4 },
+
+  "bytes past the limit": new FabricBytes(new Uint8Array([1, 2, 3, 4, 5])),
+
+  "bytes at the limit": new FabricBytes(new Uint8Array([1, 2, 3, 4])),
+
+  "array past the limit": (() => {
+    class Listed extends FabricPrimitive {
+      static get [REALM_CODEC]() {
+        return {
+          tagForValue: () => "Listed@1",
+          encode: () => ({ list: [1, 2, 3, 4, 5] }),
+        };
+      }
+    }
+    return new Listed();
+  })(),
+
+  "array state past the limit": (() => {
+    class ListState extends FabricPrimitive {
+      static get [REALM_CODEC]() {
+        return {
+          tagForValue: () => "ListState@1",
+          encode: () => [1, 2, 3, 4, 5],
+        };
+      }
+    }
+    return new ListState();
+  })(),
+
+  "holes and an array past the limit": (() => {
+    class HoleyListed extends FabricPrimitive {
+      static get [REALM_CODEC]() {
+        return {
+          tagForValue: () => "HoleyListed@1",
+          encode: () => [, , 3, 4, 5],
+        };
+      }
+    }
+    return new HoleyListed();
+  })(),
+
+  "nesting past the limit": (() => {
+    class Deep extends FabricPrimitive {
+      static get [REALM_CODEC]() {
+        return {
+          tagForValue: () => "Deep@1",
+          encode: () => ({
+            a: { b: { c: 1 } },
+            list: [[1], 2],
+            leaf: 3,
+          }),
+        };
+      }
+    }
+    return new Deep();
+  })(),
+}
+
+--
+
+bytes past the limit:
+/Bytes(buf[01020304 ...length:5])
+/Bytes(buf [01020304 ... length: 5])
+/Bytes(buf [01020304 05])
+
+bytes at the limit:
+/Bytes(buf[01020304])
+/Bytes(buf [01020304])
+/Bytes(buf [01020304])
+
+array past the limit:
+/Listed(list:[1,2,3,...length:5])
+/Listed(
+  list: [
+    1,
+    2,
+    3,
+    ... length: 5
+  ]
+)
+/Listed(
+  list: [
+    1,
+    2,
+    3,
+    4,
+    5
+  ]
+)
+
+array state past the limit:
+/ListState([1,2,3,...length:5])
+/ListState([
+  1,
+  2,
+  3,
+  ... length: 5
+])
+/ListState([
+  1,
+  2,
+  3,
+  4,
+  5
+])
+
+holes and an array past the limit:
+/HoleyListed([void*2,3,...length:5])
+/HoleyListed([
+  void * 2,
+  3,
+  ... length: 5
+])
+/HoleyListed([
+  void * 2,
+  3,
+  4,
+  5
+])
+
+nesting past the limit:
+/Deep(a:{b:...},list:[...,2],leaf:3)
+/Deep(
+  a: {
+    b: ...
+  },
+  list: [
+    ...,
+    2
+  ],
+  leaf: 3
+)
+/Deep(
+  a: {
+    b: {
+      c: 1
+    }
+  },
+  list: [
+    [
+      1
+    ],
+    2
+  ],
+  leaf: 3
+)

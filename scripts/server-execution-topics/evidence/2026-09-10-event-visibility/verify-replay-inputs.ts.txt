@@ -1,0 +1,96 @@
+const [directory, output] = Deno.args;
+if (!directory || !output) throw new Error("Expected EVIDENCE_DIR and OUTPUT.");
+const root = await Deno.realPath(directory);
+const variants = ["recorded-source/seed-check.ts.txt", "seed-check.ts.txt"];
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const rows = [];
+for (const file of variants) {
+  const bytes = await Deno.readFile(`${root}/${file}`);
+  const source = new TextDecoder().decode(bytes);
+  const hash = Array.from(
+    new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+    (b) => b.toString(16).padStart(2, "0"),
+  ).join("");
+  const enforceValidation = file === "seed-check.ts.txt";
+  const countStart = source.indexOf("const topicCount =");
+  if (enforceValidation && countStart < 0) {
+    throw new Error("Replay source is missing its topic-count declaration.");
+  }
+  const countCode = countStart < 0
+    ? 'return Number(Deno.env.get("CF_TOPIC_BOARD_TOPICS") ?? 5);'
+    : source.slice(countStart, source.indexOf("const identity =", countStart)) +
+      "return topicCount;";
+  for (
+    const configured of [undefined, "0", "-1", "1.5", "NaN", "", "1", "2", "5"]
+  ) {
+    let result, error;
+    try {
+      result = await new AsyncFunction("Deno", countCode)({
+        env: { get: () => configured },
+      });
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+    rows.push({ file, hash, case: "topicCount", configured, result, error });
+    const expectedCount = Number(configured ?? 5);
+    const valid = Number.isInteger(expectedCount) && expectedCount > 0;
+    if (
+      enforceValidation &&
+      (valid !== (error === undefined) || (valid && result !== expectedCount))
+    ) {
+      throw new Error(`Wrong validation for ${configured}`);
+    }
+  }
+  const afterFixture = source.indexOf("JSON.stringify(fixture));") +
+    "JSON.stringify(fixture));".length;
+  const statsCode = source.slice(
+    afterFixture,
+    source.indexOf("const reader =", afterFixture),
+  );
+  for (const status of [200, 503]) {
+    const writes: unknown[] = [];
+    let error;
+    try {
+      await new AsyncFunction(
+        "Deno",
+        "fetch",
+        "apiUrl",
+        "runDir",
+        "join",
+        statsCode,
+      )(
+        { writeTextFile: (...args: unknown[]) => writes.push(args) },
+        () =>
+          Promise.resolve({
+            ok: status === 200,
+            status,
+            text: () => Promise.resolve(JSON.stringify({ status })),
+          }),
+        "http://synthetic.invalid",
+        "capture",
+        (...parts: string[]) => parts.join("/"),
+      );
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+    rows.push({ file, hash, case: "stats", status, writes, error });
+    if (
+      enforceValidation &&
+      (status === 503
+        ? error === undefined || writes.length !== 0
+        : error !== undefined || writes.length !== 1)
+    ) throw new Error(`Wrong statistics validation for ${status}`);
+  }
+}
+await Deno.writeTextFile(
+  output,
+  JSON.stringify(
+    {
+      mode: "source-fragment input controls, no network or pattern workload",
+      rows,
+    },
+    null,
+    2,
+  ) + "\n",
+);
+console.log("Replay input controls passed.");

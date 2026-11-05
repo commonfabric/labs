@@ -8,10 +8,22 @@ This document specifies the product operation and its entry points. The
 [piece source lifecycle](piece-source-lifecycle.md) remains the design of
 record for retaining source, recording revisions, checking compatibility, and
 detaching a directly edited piece. The
-[`cf-harness` implementation profile](../../packages/cf-harness/docs/IMPLEMENTATION_PROFILE.md)
+[`cf-harness` implementation profile](../../runtime/cf-harness/docs/IMPLEMENTATION_PROFILE.md)
 describes the agent runtime used by the operation.
 
 ## Status
+
+Design, and likely to be superseded before it is built. The
+[archived agent requests design](../history/plans/agent-requests-and-work-queue.md)
+records a
+general way for a pattern, acting for its user, to hand work to a `cf-harness`
+run and track it through a per-user queue; revising a piece from a request is
+one such run under the harness's existing `pattern-author` profile, and the
+harness is now capable of the authoring that this document specified a service
+for. The live [agent capability](../common/capabilities/agent.md) describes the
+implemented request surface. Whoever picks this up should treat the entry points, the
+session state machine, and the publication gate below as requirements to carry
+into that design rather than as a second service to build.
 
 Design. Labs contains the agent harness, authoring guidance, source lifecycle,
 and source replacement machinery needed by this design. It does not yet expose
@@ -24,7 +36,7 @@ authored-program manifest still required by the piece source lifecycle.
 
 ## Last updated
 
-2026-08-13
+2026-09-20
 
 ## Goal
 
@@ -402,7 +414,7 @@ a requirement here, where it must not be mistaken for one, and what it adds to
 the retention and identifier obligations above.
 
 - **The fabric session is an available isolated runtime target.** The harness
-  fabric session (`packages/cf-harness/src/fabric-session.ts`) constructs an
+  fabric session (`runtime/cf-harness/src/fabric-session.ts`) constructs an
   authorization-verified `PiecesController` on the host side, so no fabric
   credential exists inside the sandbox. The isolated-runtime-target
   requirement in the authoring session stands as written; this component
@@ -426,7 +438,7 @@ the retention and identifier obligations above.
 
 - **Handles redact at the model boundary; the progress surface is separate.**
   Session handles (`cfh:` tokens,
-  `packages/cf-harness/src/handle-table.ts`) replace fabric identifiers at the
+  `runtime/cf-harness/src/handle-table.ts`) replace fabric identifiers at the
   model boundary. This specification's exclusion of identifiers from progress
   events is a separate, person-facing projection and remains required. The
   identifier scrubber for compile diagnostics — bare tagged hashes, DIDs,
@@ -442,25 +454,23 @@ the retention and identifier obligations above.
   durable address-to-token map of every fabric address a run touched.
 
 - **Address intake.** The CLI's LLM-friendly reference normalization
-  (`packages/cli/lib/llm-friendly-ref.ts`) provides the client-side shape for
+  (`runtime/cli/lib/llm-friendly-ref.ts`) provides the client-side shape for
   this specification's piece-address syntax. The authenticated server remains
   the resolution authority.
 
 ## Relationship to nearby systems
 
-Pattern Factory is useful prior art and can remain an experimental client of
-the harness. Its phase ordering, separate repair passes, and finalization pass
-are not part of this product contract. The required boundary is simpler: an
-autonomous session produces a candidate, deterministic gates verify it, and a
-trusted service publishes it.
+Multi-phase orchestration, with its phase ordering, separate repair passes, and
+finalization pass, is not part of this product contract. The required boundary
+is simpler: an autonomous session produces a candidate, deterministic gates
+verify it, and a trusted service publishes it.
 
 Server-primary pattern execution is complementary. It determines where
 deployed patterns run. Hosted pattern authoring determines where a coding
 agent works before deployment. One does not depend on the other.
 
-The background piece service and the runtime `wish()` builtin do not author
-pattern source. `wish()` discovers existing pieces. Neither is reused as the
-authoring scheduler.
+The runtime `wish()` builtin does not author pattern source. It discovers
+existing pieces. It is not reused as the authoring scheduler.
 
 ## Acceptance criteria
 

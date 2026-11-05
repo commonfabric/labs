@@ -58,7 +58,7 @@ written — a handling that failed, or a deployment not writing them — there i
 nothing to collide with, and the replay executes and commits again. What v1 has
 no spelling for is the wait half: `cf`'s `--wait <seconds>` patience bound, and
 its `--no-wait`, which exits at the commit acknowledgment carrying the receipt's
-address (`resolveWaitControl`, `packages/cli/commands/piece.ts`). Both belong at
+address (`resolveWaitControl`, `runtime/cli/commands/piece.ts`). Both belong at
 shuttle's `call` when a slow verb makes them worth typing, and collecting a
 detached outcome is then an ordinary `get` of that address: no second read path,
 and the handler does not run again.
@@ -105,6 +105,27 @@ keep the first build small. The designs are settled — recorded here so
 they are re-scheduled later, never re-litigated — and the main document's
 decisions point here where they defer.
 
+- **A live view of a piece.** A frame carrying what a piece is — its
+  arguments, a summary of its result, its callables with their doc
+  annotations, and its pattern identity — and keeping it current as the
+  piece computes. Those four are what `describe` writes and what
+  [`views.md`](views.md) names, and a view that carried fewer would be a
+  reading of its own rather than that one made live. What `describe`
+  writes is that reading already, so what is deferred here is the
+  liveness: a piece is many cells, and watching one frame's worth of them
+  is the seam question issue
+  [#6534](https://github.com/commonfabric/labs/issues/6534) carries for
+  the list view. Open: whether a frame over a whole piece subscribes per
+  cell or over the document, and what it shows for a cell that has not
+  settled.
+- **Narrowing inside a view.** A key that shows only the part of what is
+  on screen that matches, beside the `/` that finds. It waits on a
+  narrowing shaped to the data: `--filter` takes arrays today, and a
+  rendering of a value is a tree, so the question is which shapes are
+  worth narrowing and what a narrowed tree reads back as. Whatever answers
+  it answers for every surface that reads, not for a view alone — a view
+  that narrowed its own drawing would hand back something that is no
+  longer the value's rendering ([`views.md`](views.md)).
 - **The pinned strip.** A reserved region above the prompt renders armed
   watches' current values live while scrollback flows past. Event lines
   carry the arm-then-act loop in v1; the strip returns when watch density
@@ -129,7 +150,7 @@ decisions point here where they defer.
   switch — which also honors the one-connection-per-process limit the
   seam work records.
 - **The `fuse/` facet.** The FUSE layout mirrored at the space root, for
-  mutual legibility between the two tools. Shuttle reuses `packages/fuse`
+  mutual legibility between the two tools. Shuttle reuses `runtime/fuse`
   naming and hydration work regardless; the facet is the presentation
   half, and it waits.
 - **Fabric-to-fabric redirection.** `get topics/3 > drafts/copy` as a
@@ -173,7 +194,8 @@ decisions point here where they defer.
   which is what its escaping exists to keep (`place.ts`). This form makes no
   such promise, so it is where a spelling for them belongs, and the storage
   codec already has one to borrow: `Undefined@1` beside the `BigInt@1` that
-  `get` writes as `$bigint` today (`packages/data-model/src/codec-json/`).
+  `get` writes as `$bigint` today
+  (`base/data-model/src/codec-json/`).
 - **Vim keybindings, as a `where` dimension.** Modal editing at the prompt,
   an option and never a default. What it costs is a second binding table
   over motions the line editor already drives, plus the mode the table
@@ -222,15 +244,11 @@ decisions point here where they defer.
    is not the persisted cross-process ambience the non-goals rule out,
    and the line between the two is drawn here on purpose: resume hands
    one shuttle its own past, never another tool the session's present.
-   `ls <target>` reads a child without standing on it, the way `get`
-   already does — `arity` has the `optional` arm and the listing takes a
-   place, so what wants deciding is whether listing a child renumbers the
-   handles, since decision 17 says a listing does and that would retire a
-   `%n` the person was about to use. And a colored prompt, to tell a
-   command from its output in scrollback: the escapes are zero-width, so
-   every width computation on a painted string goes through
-   `visibleWidth`, or the cursor arithmetic that reads terminal columns
-   rather than code points lands in the wrong one at a wrap.
+   And a colored prompt, to tell a command from its output in
+   scrollback: the escapes are zero-width, so every width computation
+   on a painted string goes through `visibleWidth`, or the cursor
+   arithmetic that reads terminal columns rather than code points lands
+   in the wrong one at a wrap.
 7. **Completion that walks a path.** Completion is place-relative: it
    offers what stands where shuttle stands, so a path typed into a target
    — `get %1/zones/0/n` — completes nothing, which is exactly when a

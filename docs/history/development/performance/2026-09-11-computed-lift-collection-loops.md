@@ -20,7 +20,7 @@ From the repository root, run:
 deno run --unsafe-proto -A packages/runner/test/collection-loop-read-counts.ts
 ```
 
-The [report command](../../../../packages/runner/test/collection-loop-read-counts.ts)
+The [report command](../../../../runtime/runner/test/collection-loop-read-counts.ts)
 compiles three authored patterns through the runtime compiler. Each sums the
 `amount` field using the same left-to-right JavaScript reduction. The computed
 captures the input collection; the two module-level lifts receive it explicitly.

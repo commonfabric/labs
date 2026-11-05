@@ -1,0 +1,264 @@
+import type { Runtime } from "@commonfabric/runner";
+import { servedRequestHandler } from "@commonfabric/runner/executor/served-requests";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { exposeGarbageCollector } from "@commonfabric/runner/collected-memory";
+import { normalizeInviteHost } from "@commonfabric/memory/space-invites";
+import app from "@/app.ts";
+import {
+  backgroundLogFile,
+  classifyLaunch,
+  logUncaughtErrors,
+  redirectConsoleToFile,
+  runBackgroundParent,
+  writeListeningMarker,
+} from "@/background.ts";
+import env from "@/env.ts";
+import { toolshedClientBuild } from "@/lib/build-info.ts";
+import { announceCloneIfServed } from "@/lib/clone-banner.ts";
+import { identity } from "@/lib/identity.ts";
+import {
+  admitInternalApiOrigin,
+  selfDirectedFetch,
+  startupGate,
+  verifyInternalApiOrigin,
+} from "@/lib/internal-api-origin.ts";
+import { createToolshedRuntime } from "@/runtime-options.ts";
+import {
+  memory,
+  memoryEngineStoreUrl,
+  memoryServer,
+} from "@/routes/storage/memory.ts";
+import {
+  startServerExecutionHost,
+  stopServerExecutionHost,
+} from "@/lib/server-execution.ts";
+import { shutdownOpenTelemetry } from "@/lib/otel.ts";
+import { lifecycleRequestHandler } from "@/lib/pattern-lifecycle-handler.ts";
+import { runShutdown } from "@/lib/shutdown.ts";
+
+// Create a global runtime instance for the server
+let runtime: Runtime;
+
+// Initialize runtime with storage and signer
+// FIXME(ja): should we do this even on memory-only toolsheds?
+const initializeRuntime = () => {
+  try {
+    console.log(`Initializing runtime with signer ${identity.did()}...`);
+
+    // Options assembly (the MEMORY_URL/API_URL split, EXPERIMENTAL_* wiring)
+    // lives in runtime-options.ts, where it is unit-tested (CT-1814).
+    runtime = createToolshedRuntime(
+      env,
+      StorageManager.open({
+        memoryHost: new URL(env.MEMORY_URL),
+        as: identity,
+        clientBuild: toolshedClientBuild(),
+      }),
+    );
+    console.log("Runtime initialized successfully");
+    console.log("Configured to remote storage:", env.MEMORY_URL);
+  } catch (error) {
+    console.error("Failed to initialize runtime:", error);
+    throw error;
+  }
+};
+
+// Export runtime for use in other parts of the application
+export { runtime };
+
+/**
+ * This process's runtimes: the webhook runtime and, under the flag, the
+ * serving loop's host. Both address their own pattern-source, compile and
+ * API requests to API_URL; with API_INTERNAL_URL set, both send them there
+ * instead (lib/internal-api-origin.ts), so neither exists until that origin
+ * is known to be this server's own listener.
+ */
+function startRuntimes() {
+  initializeRuntime();
+  // Server-execution v2 (stage F): under EXPERIMENTAL_SERVER_EXECUTION
+  // this process hosts the serving loop; OFF (the default) this is a
+  // no-op and toolshed is byte-identical to today.
+  const fetch = selfDirectedFetch(env);
+  const loop = startServerExecutionHost({
+    server: memoryServer,
+    identity,
+    apiUrl: new URL(env.API_URL),
+    store: memoryEngineStoreUrl,
+    memoryUrl: new URL(env.MEMORY_URL),
+    ...(fetch !== undefined ? { fetch } : {}),
+  });
+  // The verbs run on the loop, so a memory session takes them while it runs,
+  // and so does a crossing another process sends this one as the owner of
+  // its target space. The memory package imports no runner code, which is
+  // why the handler is installed here.
+  if (loop !== undefined) {
+    memoryServer.setPatternLifecycleHandler(lifecycleRequestHandler);
+    memoryServer.setServedRequestHandler(
+      servedRequestHandler({ server: memoryServer }),
+    );
+  }
+}
+
+export type AppType = typeof app;
+
+// Graceful shutdown with timeout
+const ac = new AbortController();
+let isShuttingDown = false;
+const SHUTDOWN_TIMEOUT = 10000; // 10 seconds
+
+const handleShutdown = async () => {
+  // The signal listeners stay installed while shutdown runs, so a second
+  // signal arrives here. With no listener, its default action would end the
+  // process before the memory system has closed.
+  if (isShuttingDown) {
+    console.log("Shutdown already in progress...");
+    return;
+  }
+
+  isShuttingDown = true;
+  console.log("Shutdown signal received, closing server...");
+  // Non-zero when any part of the shutdown failed, so that whoever started
+  // the server learns that from its exit status.
+  const code = await runShutdown(async () => {
+    ac.abort();
+
+    console.log("Closing memory system...");
+    memoryServer.setPatternLifecycleHandler(undefined);
+    memoryServer.setServedRequestHandler(undefined);
+    await stopServerExecutionHost();
+    await memory.close();
+    console.log("Memory system closed successfully");
+
+    // Flush buffered spans so the last batch isn't dropped on exit. No-op
+    // when telemetry is disabled; bounded by SHUTDOWN_TIMEOUT.
+    await shutdownOpenTelemetry();
+  }, SHUTDOWN_TIMEOUT);
+
+  console.log(code === 0 ? "Shutdown complete" : "Shutdown failed");
+  Deno.exit(code);
+};
+
+// Start server with the abort controller
+function startServer(onListening?: () => void) {
+  console.log(`Server is starting on port http://${env.HOST}:${env.PORT}`);
+  // A rehearsal clone keeps the source space's DID, so nothing else in this
+  // log distinguishes it from production. Announce it before anything else.
+  announceCloneIfServed({ memoryDir: env.MEMORY_DIR, dbPath: env.DB_PATH });
+  // Before any worker starts, so that the flag never changes while another
+  // thread runs.
+  if (env.EXPOSE_GC) {
+    exposeGarbageCollector();
+    console.log(
+      "EXPOSE_GC=true: /api/health/collected-memory collects garbage on request",
+    );
+  }
+  // The signed routes check every first-party proof against this origin rather
+  // than the host the client dialed, so a wrong API_URL refuses every
+  // correctly signed client. Say it before anyone signs anything, normalized
+  // the way those routes normalize it.
+  console.log(
+    "Configured first-party authority:",
+    normalizeInviteHost(env.API_URL),
+  );
+  // Where this process's own runtimes send their self-addressed requests.
+  // Unset, that is API_URL and the runtimes start before the listener, as
+  // they always have. Set, it must be this server's own listener, verified
+  // once the listener is up and before any runtime exists to fetch from it;
+  // the gate answers 503 to everything but the probe until then.
+  const internalApiOrigin = env.API_INTERNAL_URL;
+  const probeToken = crypto.randomUUID();
+  const gate = internalApiOrigin === undefined
+    ? undefined
+    : startupGate(app.fetch, probeToken);
+  if (gate === undefined) {
+    startRuntimes();
+  } else {
+    console.log("Configured internal API origin:", internalApiOrigin);
+  }
+
+  const serverOptions = {
+    hostname: env.HOST,
+    port: env.PORT,
+    signal: ac.signal,
+    onError: (error: unknown) => {
+      console.error("Server error:", error);
+      return new Response("Internal Server Error", { status: 500 });
+    },
+    onListen: ({ port, hostname }: { port: number; hostname: string }) => {
+      const ready = () => {
+        console.log(`Server running on http://${hostname}:${port}`);
+        onListening?.();
+      };
+      if (gate === undefined || internalApiOrigin === undefined) {
+        ready();
+        return;
+      }
+      admitInternalApiOrigin({
+        origin: internalApiOrigin,
+        verify: () =>
+          verifyInternalApiOrigin({
+            origin: internalApiOrigin,
+            token: probeToken,
+            probeArrived: gate.probeArrived,
+          }),
+        startRuntimes,
+        admit: gate.admit,
+        onListening: ready,
+        shuttingDown: () => isShuttingDown || ac.signal.aborted,
+        exit: Deno.exit,
+        log: console.log,
+        error: console.error,
+      }).catch((error) => {
+        // Nothing above is expected to throw; a throw here would otherwise
+        // leave the gate closed and a background launch's parent waiting.
+        console.error("Internal API origin check failed:", error);
+        Deno.exit(1);
+      });
+    },
+  };
+
+  try {
+    Deno.serve(serverOptions, gate?.fetch ?? app.fetch);
+  } catch (err) {
+    if (err instanceof Deno.errors.AddrInUse) {
+      console.error(`Port ${env.PORT} is already in use`);
+      // Distinct exit code so callers can tell a port collision from other
+      // startup failures and retry on a different port.
+      Deno.exit(3);
+    }
+    console.error("Failed to start server:", err);
+    Deno.exit(1);
+  }
+}
+
+Deno.addSignalListener("SIGINT", handleShutdown);
+Deno.addSignalListener("SIGTERM", handleShutdown);
+
+if (import.meta.main) {
+  const backgroundLog = backgroundLogFile();
+  if (backgroundLog) {
+    // This process is the server half of a background launch. Its request
+    // logger already targets the log file (pino-logger.ts reads the same
+    // environment variable); route console output there too, so stdout carries
+    // only the readiness marker, and record uncaught errors that would
+    // otherwise reach a discarded stderr.
+    redirectConsoleToFile(backgroundLog);
+    logUncaughtErrors();
+    startServer(writeListeningMarker);
+  } else {
+    const launch = classifyLaunch(Deno.args);
+    if (launch.background) {
+      // Spawn the server as a background child and wait for it to bind; this
+      // call exits the process once the child is listening (or has failed to
+      // start).
+      await runBackgroundParent({
+        execPath: Deno.execPath(),
+        mainModule: import.meta.url,
+        serverArgs: launch.serverArgs,
+        logFile: launch.logFile,
+      });
+    } else {
+      startServer();
+    }
+  }
+}

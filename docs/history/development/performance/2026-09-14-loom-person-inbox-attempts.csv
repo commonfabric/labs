@@ -1,0 +1,129 @@
+campaign,arm,pane,sample,at,readiness,outcome,opened_ms,visible_bubbles,source_epoch,expected_epoch,mount_ms,selection_and_settle_ms,idle_wait_ms,uptime_before,uptime_after,concurrent_runner_before,concurrent_runner_after
+upstream,pin,cf-person-inbox,1,2026-09-15T00:13:40.037Z,visible source counts,failed or interrupted; see investigation narrative,,,,,,,,"17:13  up  2:44, 13 users, load averages: 6.74 13.82 22.93","17:14  up  2:45, 13 users, load averages: 13.19 14.41 22.66",,
+upstream,pin,cf-person-inbox,1,2026-09-15T00:14:43.332Z,visible source counts,failed or interrupted; see investigation narrative,,,,,,,,"17:14  up  2:46, 13 users, load averages: 16.08 14.98 22.72","17:15  up  2:46, 13 users, load averages: 22.71 16.95 22.92",,
+upstream,pin,cf-person-inbox,1,2026-09-15T00:15:39.125Z,visible source counts,completed,206.2,50,A,,5367.7,19.4,,"17:15  up  2:46, 13 users, load averages: 22.71 16.95 22.92","17:15  up  2:47, 13 users, load averages: 23.77 17.27 23.00",,
+upstream,pin,cf-person-inbox-lift,1,2026-09-15T00:15:55.311Z,visible source counts,completed,3252.1,50,A,,15902.6,11.9,,"17:15  up  2:47, 13 users, load averages: 24.29 17.60 23.05","17:16  up  2:47, 13 users, load averages: 28.85 19.06 23.45",,
+upstream,main,cf-person-inbox,1,2026-09-15T00:16:37.611Z,visible source counts,completed,160.3,50,A,,6889.7,19.2,,"17:16  up  2:47, 13 users, load averages: 31.78 20.36 23.81","17:16  up  2:48, 13 users, load averages: 31.40 20.65 23.87",,
+upstream,main,cf-person-inbox-lift,1,2026-09-15T00:16:45.328Z,visible source counts,completed,4416.9,50,A,,10914.6,35.2,,"17:16  up  2:48, 13 users, load averages: 31.40 20.65 23.87","17:17  up  2:48, 13 users, load averages: 30.89 21.06 23.96",,
+upstream,pin,cf-person-inbox-lift,2,2026-09-15T00:17:01.435Z,visible source counts,completed,4407.7,50,A,,16928.4,19.0,,"17:17  up  2:48, 13 users, load averages: 30.89 21.06 23.96","17:17  up  2:48, 13 users, load averages: 24.29 20.18 23.58",,
+upstream,pin,cf-person-inbox,2,2026-09-15T00:17:23.345Z,visible source counts,completed,185.4,50,A,,3847.1,17.6,,"17:17  up  2:48, 13 users, load averages: 24.29 20.18 23.58","17:17  up  2:48, 13 users, load averages: 23.15 20.01 23.50",,
+upstream,main,cf-person-inbox-lift,2,2026-09-15T00:17:28.040Z,visible source counts,completed,2545.3,50,A,,6364.8,16.3,,"17:17  up  2:48, 13 users, load averages: 23.15 20.01 23.50","17:17  up  2:48, 13 users, load averages: 23.04 20.08 23.48",,
+upstream,main,cf-person-inbox,2,2026-09-15T00:17:37.503Z,visible source counts,completed,128.3,50,A,,3850.3,17.7,,"17:17  up  2:48, 13 users, load averages: 23.04 20.08 23.48","17:17  up  2:49, 13 users, load averages: 23.67 20.26 23.52",,
+upstream,pin,cf-person-inbox,3,2026-09-15T00:17:42.002Z,visible source counts,completed,162.6,50,A,,3348.8,12.7,,"17:17  up  2:49, 13 users, load averages: 23.67 20.26 23.52","17:17  up  2:49, 13 users, load averages: 23.78 20.34 23.53",,
+upstream,pin,cf-person-inbox-lift,3,2026-09-15T00:17:45.971Z,visible source counts,completed,4588.5,50,A,,18405.3,14.4,,"17:17  up  2:49, 13 users, load averages: 23.78 20.34 23.53","17:18  up  2:49, 13 users, load averages: 25.23 20.97 23.67",,
+upstream,main,cf-person-inbox,3,2026-09-15T00:18:09.496Z,visible source counts,completed,107.7,50,A,,3346.8,12.6,,"17:18  up  2:49, 13 users, load averages: 25.23 20.97 23.67","17:18  up  2:49, 13 users, load averages: 25.23 20.97 23.67",,
+upstream,main,cf-person-inbox-lift,3,2026-09-15T00:18:13.481Z,visible source counts,completed,2211.3,50,A,,5353.8,14.3,,"17:18  up  2:49, 13 users, load averages: 25.23 20.97 23.67","17:18  up  2:49, 13 users, load averages: 25.57 21.18 23.71",,
+upstream,main,cf-person-inbox-lift,4,2026-09-15T00:18:33.261Z,visible source counts,completed,2435.9,50,A,,6369.0,22.7,,"17:18  up  2:49, 13 users, load averages: 26.55 21.54 23.81","17:18  up  2:50, 13 users, load averages: 27.45 21.90 23.91",,
+upstream,main,cf-person-inbox,4,2026-09-15T00:18:42.554Z,visible source counts,completed,108.1,50,A,,3337.5,12.6,,"17:18  up  2:50, 13 users, load averages: 27.45 21.90 23.91","17:18  up  2:50, 13 users, load averages: 27.89 22.08 23.96",,
+upstream,pin,cf-person-inbox-lift,4,2026-09-15T00:18:46.463Z,visible source counts,completed,4303.1,50,A,,16399.6,18.8,,"17:18  up  2:50, 13 users, load averages: 27.89 22.08 23.96","17:19  up  2:50, 13 users, load averages: 31.60 23.28 24.35",,
+upstream,pin,cf-person-inbox,4,2026-09-15T00:19:07.767Z,visible source counts,completed,145.9,50,A,,3830.2,13.2,,"17:19  up  2:50, 13 users, load averages: 31.60 23.28 24.35","17:19  up  2:50, 13 users, load averages: 33.71 23.86 24.54",,
+upstream,main,cf-person-inbox,5,2026-09-15T00:19:12.216Z,visible source counts,completed,121.3,50,A,,3840.9,14.6,,"17:19  up  2:50, 13 users, load averages: 33.71 23.86 24.54","17:19  up  2:50, 13 users, load averages: 33.57 23.99 24.59",,
+upstream,main,cf-person-inbox-lift,5,2026-09-15T00:19:16.628Z,visible source counts,completed,3038.8,50,A,,12388.5,14.7,,"17:19  up  2:50, 13 users, load averages: 33.57 23.99 24.59","17:19  up  2:50, 13 users, load averages: 33.05 24.35 24.70",,
+upstream,pin,cf-person-inbox,5,2026-09-15T00:19:32.550Z,visible source counts,completed,141.6,50,A,,3844.2,13.6,,"17:19  up  2:50, 13 users, load averages: 33.05 24.35 24.70","17:19  up  2:50, 13 users, load averages: 32.81 24.44 24.73",,
+upstream,pin,cf-person-inbox-lift,5,2026-09-15T00:19:37.043Z,visible source counts,completed,4058,50,A,,15397.3,21.3,,"17:19  up  2:50, 13 users, load averages: 32.81 24.44 24.73","17:19  up  2:51, 13 users, load averages: 30.48 24.47 24.74",,
+upstream,pin,cf-person-inbox-lift,profile,2026-09-15T00:20:00.409Z,visible source counts,completed-profile,3728.2,50,A,,15375.3,16.3,,"17:20  up  2:51, 13 users, load averages: 28.68 24.20 24.64","17:20  up  2:51, 13 users, load averages: 22.52 23.08 24.23",,
+upstream,main,cf-person-inbox-lift,profile,2026-09-15T00:20:32.776Z,visible source counts,completed-profile,2241.8,50,A,,5851.1,20.0,,"17:20  up  2:51, 13 users, load averages: 20.22 22.57 24.03","17:20  up  2:51, 13 users, load averages: 19.73 22.37 23.95",,
+improvements,base,narrow,smoke,2026-09-15T00:38:25.803Z,visible source counts,completed,3379.4,50,A,,9454.9,10408.6,,"17:38  up  3:09, 13 users, load averages: 18.73 29.36 31.98","17:38  up  3:10, 13 users, load averages: 20.66 28.88 31.73",,
+improvements,base,forward,smoke,2026-09-15T00:39:01.780Z,visible source counts,completed,1708.4,50,A,,12170.3,3846.9,,"17:39  up  3:10, 13 users, load averages: 21.18 28.72 31.64","17:39  up  3:10, 13 users, load averages: 18.39 27.60 31.17",,
+improvements,base,cf-person-inbox-lift,1,2026-09-15T00:39:24.783Z,visible source counts,completed,2840.5,50,A,,10009.1,18.6,,"17:39  up  3:10, 13 users, load averages: 18.04 27.38 31.07","17:39  up  3:10, 13 users, load averages: 19.02 27.27 30.99",,
+improvements,base,narrow,1,2026-09-15T00:39:38.306Z,visible source counts,completed,1533.2,50,A,,7375.8,17.9,,"17:39  up  3:10, 13 users, load averages: 19.02 27.27 30.99","17:39  up  3:11, 13 users, load averages: 18.44 26.86 30.80",,
+improvements,base,forward,1,2026-09-15T00:39:47.768Z,visible source counts,completed,1561.8,50,A,,7924.9,27.0,,"17:39  up  3:11, 13 users, load averages: 18.44 26.86 30.80","17:39  up  3:11, 13 users, load averages: 18.27 26.54 30.64",,
+improvements,base,cf-person-inbox,1,2026-09-15T00:39:57.942Z,visible source counts,failed or interrupted; see investigation narrative,,,,,7373.9,30.3,,"17:39  up  3:11, 13 users, load averages: 18.27 26.54 30.64","17:41  up  3:12, 13 users, load averages: 11.66 22.83 28.91",,
+improvements,base,cf-person-inbox,diagnostic,2026-09-15T00:41:08.691Z,visible source counts,completed,119.9,50,A,,3341.2,15.7,,"17:41  up  3:12, 13 users, load averages: 11.66 22.83 28.91","17:41  up  3:12, 13 users, load averages: 12.25 22.76 28.85",,
+improvements,base,header,profile,2026-09-15T00:45:23.618Z,visible source counts,completed-profile,2208.8,50,A,,13474.0,4373.6,,"17:45  up  3:16, 14 users, load averages: 24.90 26.16 28.90","17:45  up  3:17, 14 users, load averages: 22.23 25.44 28.56",,
+improvements,base,cf-person-inbox-lift,factor-1,2026-09-15T00:50:51.566Z,visible source counts,completed,2198.6,50,A,,5408.6,13.2,,"17:50  up  3:22, 14 users, load averages: 19.56 20.90 25.54","17:50  up  3:22, 14 users, load averages: 20.96 21.16 25.61","PID ELAPSED  %CPU
+91059   09:17 112.2","PID ELAPSED  %CPU
+91059   09:25 104.6"
+improvements,base,header,factor-1,2026-09-15T00:50:59.951Z,visible source counts,completed,1146.5,50,A,,5854.0,11.9,,"17:50  up  3:22, 14 users, load averages: 20.96 21.16 25.61","17:51  up  3:22, 14 users, load averages: 27.02 22.43 26.01","PID ELAPSED  %CPU
+91059   09:25 106.2","PID ELAPSED  %CPU
+91059   09:33  87.1"
+improvements,base,cf-person-inbox,factor-1,2026-09-15T00:51:07.475Z,visible source counts,completed,106.8,50,A,,3423.5,12.6,,"17:51  up  3:22, 14 users, load averages: 27.02 22.43 26.01","17:51  up  3:22, 14 users, load averages: 33.58 23.87 26.49","PID ELAPSED  %CPU
+91059   09:33  75.7","PID ELAPSED  %CPU
+91059   09:37  94.6"
+improvements,runtime,cf-person-inbox-lift,factor-1,2026-09-15T00:51:11.545Z,visible source counts,completed,1679.5,50,A,,5847.2,13.4,,"17:51  up  3:22, 14 users, load averages: 33.58 23.87 26.49","17:51  up  3:22, 14 users, load averages: 36.82 24.70 26.77","PID ELAPSED  %CPU
+91059   09:37 108.1","PID ELAPSED  %CPU
+91059   09:45 124.5"
+improvements,runtime,header,factor-1,2026-09-15T00:51:19.532Z,visible source counts,completed,949,50,A,,5342.9,14.3,,"17:51  up  3:22, 14 users, load averages: 36.82 24.70 26.77","17:51  up  3:22, 14 users, load averages: 41.31 26.06 27.23","PID ELAPSED  %CPU
+91059   09:45 122.4","PID ELAPSED  %CPU
+91059   09:52  91.4"
+improvements,runtime,cf-person-inbox,factor-1,2026-09-15T00:51:26.383Z,visible source counts,completed,154.9,50,A,,5870.0,18.3,,"17:51  up  3:22, 14 users, load averages: 41.31 26.06 27.23","17:51  up  3:22, 14 users, load averages: 43.93 26.86 27.50","PID ELAPSED  %CPU
+91059   09:52 116.4","PID ELAPSED  %CPU
+91059   09:58  99.6"
+improvements,runtime,cf-person-inbox,factor-2,2026-09-15T00:51:33.135Z,visible source counts,completed,262,50,A,,5888.1,20.4,,"17:51  up  3:22, 14 users, load averages: 43.93 26.86 27.50","17:51  up  3:22, 14 users, load averages: 45.54 27.47 27.72","PID ELAPSED  %CPU
+91059   09:59 137.1","PID ELAPSED  %CPU
+91059   10:05 167.6"
+improvements,runtime,header,factor-2,2026-09-15T00:51:39.981Z,visible source counts,completed,1911.5,50,A,,9951.1,23.4,,"17:51  up  3:22, 14 users, load averages: 44.61 27.58 27.75","17:51  up  3:23, 14 users, load averages: 45.75 28.38 28.04","PID ELAPSED  %CPU
+91059   10:05 165.6","PID ELAPSED  %CPU
+91059   10:18  66.7"
+improvements,runtime,cf-person-inbox-lift,factor-2,2026-09-15T00:51:52.583Z,visible source counts,completed,3653.2,50,A,,9408.1,18.1,,"17:51  up  3:23, 14 users, load averages: 45.75 28.38 28.04","17:52  up  3:23, 14 users, load averages: 42.92 28.61 28.12","PID ELAPSED  %CPU
+91059   10:18  59.0","PID ELAPSED  %CPU
+91059   10:31 104.3"
+improvements,base,cf-person-inbox,factor-2,2026-09-15T00:52:06.370Z,visible source counts,completed,169,50,A,,5965.6,18.7,,"17:52  up  3:23, 14 users, load averages: 42.92 28.61 28.12","17:52  up  3:23, 14 users, load averages: 40.77 28.40 28.05","PID ELAPSED  %CPU
+91059   10:32 107.4","PID ELAPSED  %CPU
+91059   10:39 100.8"
+improvements,base,header,factor-2,2026-09-15T00:52:13.284Z,visible source counts,completed,2111.8,50,A,,9378.1,34.4,,"17:52  up  3:23, 14 users, load averages: 40.77 28.40 28.05","17:52  up  3:23, 14 users, load averages: 34.67 27.65 27.79","PID ELAPSED  %CPU
+91059   10:39  94.8","PID ELAPSED  %CPU
+91059   10:51 113.4"
+improvements,base,cf-person-inbox-lift,factor-2,2026-09-15T00:52:25.602Z,visible source counts,completed,3657.7,50,A,,8953.3,35.3,,"17:52  up  3:23, 14 users, load averages: 34.67 27.65 27.79","17:52  up  3:23, 14 users, load averages: 35.62 28.10 27.95","PID ELAPSED  %CPU
+91059   10:51 169.7","PID ELAPSED  %CPU
+91059   11:04 139.5"
+improvements,base,header,factor-3,2026-09-15T00:52:39.067Z,visible source counts,completed,2182.4,50,A,,9917.3,24.8,,"17:52  up  3:23, 14 users, load averages: 35.62 28.10 27.95","17:52  up  3:24, 14 users, load averages: 30.82 27.41 27.70","PID ELAPSED  %CPU
+91059   11:05 117.5","PID ELAPSED  %CPU
+91059   11:17 111.5"
+improvements,base,cf-person-inbox-lift,factor-3,2026-09-15T00:52:51.869Z,visible source counts,completed,5388.6,50,A,,9403.2,35.5,,"17:52  up  3:24, 14 users, load averages: 30.82 27.41 27.70","17:53  up  3:24, 14 users, load averages: 29.33 27.27 27.65","PID ELAPSED  %CPU
+91059   11:17 114.5","PID ELAPSED  %CPU
+91059   11:33 129.2"
+improvements,base,cf-person-inbox,factor-3,2026-09-15T00:53:07.548Z,visible source counts,completed,145.9,50,A,,5901.0,18.9,,"17:53  up  3:24, 14 users, load averages: 29.33 27.27 27.65","17:53  up  3:24, 14 users, load averages: 28.66 27.16 27.61","PID ELAPSED  %CPU
+91059   11:33 140.0","PID ELAPSED  %CPU
+91059   11:40 111.1"
+improvements,runtime,header,factor-3,2026-09-15T00:53:14.434Z,visible source counts,completed,1754.5,50,A,,11446.4,23.2,,"17:53  up  3:24, 14 users, load averages: 28.66 27.16 27.61","17:53  up  3:24, 14 users, load averages: 26.00 26.66 27.42","PID ELAPSED  %CPU
+91059   11:40 113.6","PID ELAPSED  %CPU
+91059   11:54 130.9"
+improvements,runtime,cf-person-inbox-lift,factor-3,2026-09-15T00:53:28.464Z,visible source counts,completed,2537.8,50,A,,7884.4,19.0,,"17:53  up  3:24, 14 users, load averages: 26.00 26.66 27.42","17:53  up  3:24, 14 users, load averages: 27.08 26.84 27.48","PID ELAPSED  %CPU
+91059   11:54 119.6","PID ELAPSED  %CPU
+91059   12:05  95.7"
+improvements,runtime,cf-person-inbox,factor-3,2026-09-15T00:53:39.605Z,visible source counts,completed,198.2,50,A,,4858.6,23.3,,"17:53  up  3:24, 14 users, load averages: 27.08 26.84 27.48","17:53  up  3:25, 14 users, load averages: 26.24 26.67 27.40","PID ELAPSED  %CPU
+91059   12:05 100.3","PID ELAPSED  %CPU
+91059   12:11 125.6"
+improvements,base,prepared,smoke,2026-09-15T00:55:48.521Z,visible source counts,aborted before three store links,,,,,16471.3,,,"17:55  up  3:27, 14 users, load averages: 31.76 27.34 27.48","17:56  up  3:27, 14 users, load averages: 26.45 26.60 27.21","PID ELAPSED  %CPU
+91059   14:14  99.4","PID ELAPSED  %CPU
+91059   14:52  82.8"
+improvements,base,prepared,linked-smoke,2026-09-15T00:57:00.044Z,visible source counts,completed,1631.2,50,A,,13066.0,8507.6,,"17:57  up  3:28, 14 users, load averages: 38.24 29.04 28.04","17:57  up  3:28, 14 users, load averages: 36.95 29.93 28.42","PID ELAPSED  %CPU
+91059   15:26  69.1","PID ELAPSED  %CPU
+91059   15:51  74.6"
+improvements,base,generic,linked-smoke,2026-09-15T00:58:26.779Z,visible source counts,completed,3471.3,50,A,,23598.5,6969.0,,"17:58  up  3:29, 14 users, load averages: 26.62 28.06 27.81","17:59  up  3:30, 14 users, load averages: 59.66 34.98 30.28","PID ELAPSED  %CPU
+91059   16:52 110.5","PID ELAPSED  %CPU
+91059   17:27  68.0"
+improvements,base,cf-person-inbox-lift,selector-1,2026-09-15T01:00:11.341Z,visible source counts,completed,4809.3,50,A,,11438.6,32.6,,"18:00  up  3:31, 14 users, load averages: 45.89 36.89 31.43","18:00  up  3:31, 14 users, load averages: 39.59 35.94 31.19","PID ELAPSED  %CPU
+91059   18:37 110.4","PID ELAPSED  %CPU
+91059   18:54 131.6"
+improvements,base,header,selector-1,2026-09-15T01:00:28.626Z,visible source counts,completed,1821.8,50,A,,8409.2,18.2,,"18:00  up  3:31, 14 users, load averages: 39.59 35.94 31.19","18:00  up  3:31, 14 users, load averages: 37.62 35.65 31.14","PID ELAPSED  %CPU
+91059   18:54 239.4","PID ELAPSED  %CPU
+91059   19:05  97.5"
+improvements,base,prepared,selector-1,2026-09-15T01:00:39.612Z,visible source counts,completed,1170.8,50,A,,10519.8,59.7,,"18:00  up  3:31, 14 users, load averages: 37.62 35.65 31.14","18:00  up  3:32, 14 users, load averages: 60.10 40.59 32.97","PID ELAPSED  %CPU
+91059   19:05 120.5","PID ELAPSED  %CPU
+91059   19:17  66.8"
+improvements,base,generic,selector-1,2026-09-15T01:00:52.595Z,visible source counts,completed,1932.1,50,A,,23048.6,44.7,,"18:00  up  3:32, 14 users, load averages: 60.10 40.59 32.97","18:01  up  3:32, 14 users, load averages: 107.98 53.35 37.82","PID ELAPSED  %CPU
+91059   19:18  80.5","PID ELAPSED  %CPU
+91059   19:46  83.3"
+improvements,runtime,generic,selector-1,2026-09-15T01:01:21.427Z,visible source counts,completed,1465.3,50,A,,10929.8,18.6,,"18:01  up  3:32, 14 users, load averages: 107.98 53.35 37.82","18:01  up  3:32, 14 users, load averages: 111.26 55.93 38.92","PID ELAPSED  %CPU
+91059   19:47  96.7","PID ELAPSED  %CPU
+91059   20:00 173.9"
+improvements,runtime,cf-person-inbox,selector-1,2026-09-15T01:01:34.856Z,visible source counts,completed,103.9,50,A,,12376.7,14.2,,"18:01  up  3:32, 14 users, load averages: 111.26 55.93 38.92","18:01  up  3:33, 14 users, load averages: 89.60 53.84 38.47","PID ELAPSED  %CPU
+91059   20:00 179.7",full runner process exited
+improvements,base,cf-person-inbox,selector-1,2026-09-15T01:01:47.905Z,visible source counts,completed,120.4,50,A,,3826.4,13.4,,"18:01  up  3:33, 14 users, load averages: 89.60 53.84 38.47","18:01  up  3:33, 14 users, load averages: 87.71 54.04 38.63",full runner process exited,full runner process exited
+improvements,base,cf-person-inbox,selector-2,2026-09-15T01:01:52.369Z,visible source counts,completed,116,50,A,,3829.5,13.8,,"18:01  up  3:33, 14 users, load averages: 87.71 54.04 38.63","18:01  up  3:33, 14 users, load averages: 81.64 53.34 38.48",full runner process exited,full runner process exited
+improvements,runtime,cf-person-inbox,selector-2,2026-09-15T01:01:56.843Z,visible source counts,completed,110.9,50,A,,4388.5,13.4,,"18:01  up  3:33, 14 users, load averages: 81.64 53.34 38.48","18:02  up  3:33, 14 users, load averages: 75.91 52.62 38.31",full runner process exited,full runner process exited
+improvements,runtime,generic,selector-2,2026-09-15T01:02:01.885Z,visible source counts,completed,1003.4,50,A,,6391.2,13.3,,"18:02  up  3:33, 14 users, load averages: 75.91 52.62 38.31","18:02  up  3:33, 14 users, load averages: 71.03 52.00 38.17",full runner process exited,full runner process exited
+improvements,base,generic,selector-2,2026-09-15T01:02:09.859Z,visible source counts,completed,1876.2,50,A,,8411.8,17.3,,"18:02  up  3:33, 14 users, load averages: 71.03 52.00 38.17","18:02  up  3:33, 14 users, load averages: 57.04 49.84 37.64",full runner process exited,full runner process exited
+improvements,base,prepared,selector-2,2026-09-15T01:02:20.669Z,visible source counts,completed,757.7,50,A,,7376.5,13.1,,"18:02  up  3:33, 14 users, load averages: 57.04 49.84 37.64","18:02  up  3:33, 14 users, load averages: 53.51 49.23 37.50",full runner process exited,full runner process exited
+improvements,base,header,selector-2,2026-09-15T01:02:29.342Z,visible source counts,dropped handler interaction; interrupted,,,,,7909.1,35.0,,"18:02  up  3:33, 14 users, load averages: 53.51 49.23 37.50","18:04  up  3:36, 14 users, load averages: 17.08 36.03 33.90",full runner process exited,full runner process exited
+improvements,base,header,settled-smoke,2026-09-15T01:09:25.963Z,visible source counts then runtime idle,content guard rejected; source epoch changed,2720.7,50,B,,38883.3,18.9,2.8,"18:09  up  3:40, 14 users, load averages: 94.42 52.23 40.25","18:10  up  3:41, 14 users, load averages: 81.70 54.60 41.69",full runner process exited,full runner process exited
+improvements,base,cf-person-inbox,settled-control-epoch2,2026-09-15T01:13:23.677Z,visible source counts then runtime idle,completed,352.5,50,B,B,11956.6,24.0,1.4,"18:13  up  3:44, 14 users, load averages: 83.60 76.80 54.08","18:13  up  3:44, 14 users, load averages: 68.39 73.78 53.39",full runner process exited,full runner process exited
+improvements,base,prepared-cell,settled-smoke,2026-09-15T01:14:32.685Z,visible source counts then runtime idle,completed,1421.5,50,B,B,18625.0,9385.4,1.0,"18:14  up  3:45, 14 users, load averages: 66.42 71.32 53.69","18:15  up  3:46, 14 users, load averages: 92.57 77.11 56.40",full runner process exited,full runner process exited
+improvements,base,cf-person-inbox-lift,settled-1,2026-09-15T01:15:57.236Z,visible source counts then runtime idle,completed,5687,50,B,B,10500.4,358.7,311.1,"18:15  up  3:47, 14 users, load averages: 59.62 71.33 55.60","18:16  up  3:47, 14 users, load averages: 50.33 68.70 54.93",full runner process exited,full runner process exited
+improvements,runtime,cf-person-inbox-lift,settled-1,2026-09-15T01:16:15.477Z,visible source counts then runtime idle,completed,4793.1,50,B,B,11448.6,160.7,129.9,"18:16  up  3:47, 14 users, load averages: 48.70 68.06 54.79","18:16  up  3:47, 14 users, load averages: 42.85 65.80 54.21",full runner process exited,full runner process exited
+improvements,runtime,header,settled-1,2026-09-15T01:16:33.224Z,visible source counts then runtime idle,completed,2724.6,50,B,B,18034.8,405.2,355.0,"18:16  up  3:47, 14 users, load averages: 42.85 65.80 54.21","18:16  up  3:48, 14 users, load averages: 39.28 63.56 53.68",full runner process exited,full runner process exited
+improvements,base,header,settled-1,2026-09-15T01:16:55.667Z,visible source counts then runtime idle,completed,2558.8,50,B,B,13524.1,24.9,1.4,"18:16  up  3:48, 14 users, load averages: 38.94 63.09 53.57","18:17  up  3:48, 14 users, load averages: 41.55 62.49 53.53",full runner process exited,full runner process exited
+improvements,base,prepared-cell,settled-1,2026-09-15T01:17:12.889Z,visible source counts then runtime idle,completed,1787.5,50,B,B,12503.2,63.3,8.1,"18:17  up  3:48, 14 users, load averages: 41.55 62.49 53.53","18:17  up  3:48, 14 users, load averages: 40.07 61.08 53.18",full runner process exited,full runner process exited
+improvements,runtime,prepared-cell,settled-1,2026-09-15T01:17:28.716Z,visible source counts,host mount aborted; no interaction,,,,B,,,,"18:17  up  3:48, 14 users, load averages: 40.07 61.08 53.18","18:20  up  3:51, 14 users, load averages: 85.47 89.19 67.69",full runner process exited,full runner process exited

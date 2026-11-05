@@ -3,7 +3,7 @@ import { expect } from "@std/expect";
 import { Command } from "@cliffy/command";
 import { dirname, fromFileUrl, join } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
-import { declaredSlots } from "../packages/cli/lib/completion/line.ts";
+import { declaredSlots } from "../runtime/cli/lib/completion/line.ts";
 import {
   describeFailures,
   main,

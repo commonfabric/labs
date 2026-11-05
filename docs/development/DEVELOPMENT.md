@@ -36,9 +36,11 @@ about one aspect of the runtime, are indexed in
   spellings. Naming the bare package name is worse than that. The entry point
   reaches every module the package exports, so naming it from inside completes
   a cycle, and the order in which the package's modules initialize starts to
-  depend on the order the entry point lists its exports. The
+  depend on the order the entry point lists its exports. An alias that reaches
+  the entry point's file, `@` or `@/index.ts` in a package that defines them,
+  is that same import under another name. The
   `cf-package/no-self-import` lint rule (`tasks/lint-self-import.ts`,
-  registered in the root `deno.jsonc`) reports both forms, so a plain
+  registered in the root `deno.jsonc`) reports all of these, so a plain
   `deno lint` catches them. It exempts a package's own tests, which name their
   package on purpose: the surface a consumer sees is the thing they are there
   to check.
@@ -47,7 +49,7 @@ about one aspect of the runtime, are indexed in
   `@commonfabric/api/interface` (external API), but not both.
 - Collate a package's imports. Every specifier naming the same top-level
   package, or the same namespace-and-package pair, sits in one contiguous run:
-  `@commonfabric/utils/base64url` next to `@commonfabric/utils/types`,
+  `@commonfabric/bytes/base64url` next to `@commonfabric/bytes/buffers`,
   `@std/testing/bdd` next to `@std/testing/time`. A package that appears in two
   places in the list reads as two dependencies, and the second appearance hides
   from anyone scanning for what the file rests on.
@@ -84,7 +86,12 @@ about one aspect of the runtime, are indexed in
   - One statement of each kind, kept adjacent:
     `import type { Foo } from "x";` above `import { bar } from "x";`.
 
-  A file uses whichever reads better; neither is preferred. What neither shape
+  A file uses whichever reads better; neither is preferred. A statement whose
+  every name is a type is written `import type`, which the
+  `cf-import-list/types-are-import-type` lint rule holds everywhere but
+  `patterns/` and `fixtures/` directories: Deno reads what a value statement names before it starts a
+  program, even where TypeScript erases the statement
+  ([`imports.md`](imports.md#what-starting-a-program-reads)). What neither shape
   allows is a second statement of the same kind — two value imports from one
   module, or two `import type`s from it. Those represent one dependency as
   though it were two, and the second is easy to miss when the first is being
@@ -95,7 +102,7 @@ about one aspect of the runtime, are indexed in
   the pair — a namespace imported only so its `typeof` names the whole module,
   against a list of names the file uses throughout — the two statements stay,
   with a `deno-lint-ignore` saying which case it is.
-  `packages/runner/src/builder/types.ts` is the one file in that position
+  `runtime/runner/src/builder/types.ts` is the one file in that position
   today. A bare `import "x";` counts toward the total.
 
   The `cf-import-list/one-statement-per-kind` lint rule
@@ -361,7 +368,10 @@ different answer:
   touches a `#` member of a receiver that is not a real instance, so the test
   wants rewriting to build one.
 - **A helper that uses no instance state.** Make it `static #` behind the
-  static getter, or a module-level function the test imports.
+  static getter, or a module-level function the test imports. A test in
+  another package imports such a function through the package's
+  `./for-testing-only` entry, which § Offering test-only code to other packages
+  describes.
 
 ### Comments
 
@@ -432,14 +442,44 @@ come up.
   what the verb selects for. And `meet` is the lattice operation the Contextual
   Flow Control code is built on, a technical term with test files named after it,
   where a stray prose use costs a search.
+- **`social space`**, not `shared space`, for a space with more than one member
+  or participant, as [the glossary](../common/concepts/glossary.md#social-space)
+  defines it. `share` already names other things here — the share inbox where a
+  principal receives offers, share links, a user's shared profiles — and none of
+  them is about how many people a space has. As with spelling, an identifier
+  named for shared spaces, `sharedSpaceCatalog` among them, keeps its name:
+  changing it is a rename, not a word-choice fix.
 
 ## Code Design & Principles
+
+### General principles
+
+- Prefer general solutions to special cases, and less code to more. A refactor
+  aims to reduce the total amount of code, not counting new documentation and
+  tests.
+- Design formats and protocols without version numbers. Build a format or
+  protocol so that a reader handles data from older and newer writers alike,
+  rather than marking each change with a version.
+- A function given input that violates its contract throws. It does not
+  discard the input.
+- When code you are changing has a limitation, fix it rather than documenting
+  it as a known limitation.
+- Do not rely on a prompt to keep an operation safe. People approve prompts
+  without reading them, and an attacker can make a dangerous operation look
+  safe. Enforce the boundary in code. A confirmation is still right where the
+  person's decision is the input, such as consent to release their own data in
+  CFC declassification, or where it guards against a mistake, such as deleting
+  a document.
 
 ### Error Handling
 
 - Write descriptive error messages, marked up as
   [`code-comment-style.md`](code-comment-style.md#error-and-log-messages)
   describes.
+- Put a value into a message with the `debugStr` template tag, which quotes
+  the value's rendering and cuts it to length;
+  [`code-comment-style.md`](code-comment-style.md#putting-a-value-into-a-message)
+  says how.
 - Propagate errors using async/await.
 - Document possible errors in JSDoc.
 
@@ -447,6 +487,12 @@ come up.
 
 - Export types explicitly using `export type { ... }`.
 - Prefer strong typing with interfaces or types instead of `any`.
+- Do not use a type assertion (`as T`, `as unknown as T`, or a detour through
+  `any`) to make types line up; change the APIs so that they line up. A test
+  stand-in may be asserted where it is passed in, as "Making a private member
+  reachable from a test" describes. A value that arrives untyped at a
+  serialization boundary is validated, as "Validating a value that arrived
+  through a decode" describes, not asserted.
 - Update package-level README.md files.
 
 ### Async only when you await
@@ -506,10 +552,34 @@ For import-map placement and dependency boundaries, follow
   only e.g. types are needed.
   - If needed, environment specific exports can be provided e.g.
     `@workspace/module/browser` | `@workspace/module/deno`.
-- Consider leaf nodes in the graph: A `utils` module should not be heavy with
-  dependencies, external or otherwise.
+- Consider leaf nodes in the graph: a package that many others import, such as
+  `js-values`, should not be heavy with dependencies, external or otherwise.
 - Clean separation of public and private facing interfaces: only export what's
   needed.
+
+### Offering test-only code to other packages
+
+What a package offers only to other packages' tests — examples of its values, a
+fake, an internal step or count its public surface cannot reach dependably —
+goes behind an export-map entry named `./for-testing-only`, pointing at
+`src/for-testing-only.ts` or at a `src/for-testing-only/` directory's
+`index.ts`. `base/data-model` is the worked example. This is
+the package-level counterpart of a class's `accessForTestingOnly` getter
+(§ Classes).
+
+- No barrel re-exports it and no other entry reaches it, so the package's
+  ordinary use loads none of it.
+- Each value it exports carries a `ForTestingOnly` suffix, or
+  `_FOR_TESTING_ONLY` for an upper-case constant, so the name says what it is
+  wherever it is used. A type keeps its own name.
+- An internal stays out of every barrel and is re-exported here under a
+  suffixed name, whose doc comment says why a test of the public surface cannot
+  reach it.
+- Only tests and benchmarks import it, as `tasks/test-files.ts` defines them.
+  No gate checks this; review does.
+
+Such code belongs beside what it depends on. In `base/test-support` it
+would make that package import the package it serves.
 
 ### Avoid Ambiguous Types
 
@@ -560,6 +630,54 @@ function processData(data: Data) {
   data.process();
 }
 ```
+
+### Ask the object-shape question through the shared predicates
+
+`typeof value === "object"` is true of `null` and true of an array, so the test
+for "may I read this by property name?" is never one comparison. Where those
+conjuncts open a longer structural check, write the shape question as a call to
+the predicate named for it and let the rest of the check follow.
+
+> **❌ Avoid**
+
+```ts
+export function isEvent(value: unknown): boolean {
+  return typeof value === "object" && value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { type?: unknown }).type === "string";
+}
+```
+
+> **✅ Prefer**
+
+```ts
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+
+export function isEvent(value: unknown): boolean {
+  return isObjectNotArray(value) && typeof value.type === "string";
+}
+```
+
+The predicates live in `@commonfabric/js-values/types`, and each name settles the
+array question in its own final word. `isObjectOrArray()` admits any non-`null`
+value whose `typeof` is `"object"`, arrays included. `isObjectNotArray()` asks
+the same question with arrays removed. `isPlainObject()` additionally requires
+the prototype to be `Object.prototype` or `null`, so a class instance does not
+pass. Choose by what the check needs rather than by what the surrounding code is
+named after, because the three differ on which values reach the branch that
+follows. The module header describes the rest of the family, what each one
+narrows to, and why the narrowed types are read-only.
+
+Two situations keep the conjuncts written out. Pattern source may import only
+the specifiers `isAllowedAuthoredImportSpecifier` admits, which do not include
+this module, so a pattern spells the test out. And a check whose value the
+surrounding code goes on to assert as an interface type will not compile through
+the call, because `Record<string, unknown>` does not overlap an interface: read
+the fields off the narrowed record instead of asserting, or leave the test
+inline.
+
+A walk that can reach a stored value needs more than the shape question, and
+which predicate it needs is the next section.
 
 ### Walking or comparing a value
 
@@ -621,7 +739,13 @@ using them is not optional in code that can reach a stored value:
   `FabricValue` without being known to be one — a schema `const` against a
   stored value, a schema default against a materialized one, a write against
   the value it replaces, a request against the snapshot a policy was checked
-  over. It is a structural walk that decides every `FabricSpecialObject` it
+  over. Its operands are values, never query-result views, at any depth. A
+  caller whose operands may hold views compares them with the runner's
+  `fabricAwareEqualThroughViews()`, which walks the views and hands the value
+  model only the special objects they read, or compares stored values (a
+  cell's `getRaw()`). `snapshotQueryResult()` is no substitute: it
+  copies a `FabricInstance` read through a view as an empty record. It is a
+  structural walk that decides every `FabricSpecialObject` it
   reaches by content rather than by properties: two of one class go to
   `valueEqual()`, and a pair whose classes differ, or with a special object on
   one side only, is unequal without either one's contents being read. Neither half serves alone: `valueEqual()` throws
@@ -631,9 +755,14 @@ using them is not optional in code that can reach a stored value:
   call — it decides a container by a content hash cached on identity, where the
   walk pays for every level each time — but it is not a drop-in even there. It
   decides a container by hashing it whole, so it throws on a value holding a
-  cycle and on one holding a class whose codec is a stub, both of which this
-  walk returns for. `valueEqual({ v: aFabricMap }, { v: 5 })` throws where
-  `fabricAwareEqual()` returns `false`.
+  class whose codec is a stub, which this walk returns for.
+  `valueEqual({ v: aFabricMap }, { v: 5 })` throws where `fabricAwareEqual()`
+  returns `false`.
+- `valueEqualByWalk(a, b)` returns what `valueEqual()` returns on acyclic
+  values, and is the comparison for a value against a copy-on-write revision
+  of itself: it walks the two in step and settles a subtree they share by
+  identity, where `valueEqual()` hashes the whole of any operand whose hash it
+  has not cached.
 
 Around a dozen walks in `runner` and `piece` take one of the two
 non-refusing answers, and what each says is decided by what it owes its
@@ -659,6 +788,11 @@ caller. Five shapes cover the tree today:
 - **Treat it as the atomic value it is.** Three sites in `data-updating.ts`
   hand it to the branch that emits it whole: two exclude it from array
   anchoring, and one resets the slot before the per-key writes that follow.
+  `mergeSchemaDefaults()` in `runner-utils.ts` hands a present instance back
+  in place of merging into it, and asks `isFabricInstanceOrView()` rather
+  than `instanceof`, so an instance seen through a cell read -- whose
+  prototype the view erases -- gets the same answer instead of being rebuilt
+  as a record with defaults filled into it.
 - **Compare it by content.** `storage/v2-transaction.ts`'s
   `shallowStructureChanged()` hands both operands to `valueEqual()` rather than
   comparing key sets, which for two special objects would compare two empty
@@ -689,6 +823,29 @@ are reachable only through its codec — refuses it outright rather than walking
 it. Those refusals are discovery instruments; see "Flag-gated tripwires" in
 [EXPERIMENTAL_OPTIONS.md](EXPERIMENTAL_OPTIONS.md), which states the obligation
 each new one carries.
+
+### Validating a value that arrived through a decode
+
+A validator that reads named fields off a value asks first whether the value
+is a record. Which question it asks is settled by what built the value.
+
+`JSON.parse()` builds objects rooted at `Object.prototype` and nothing else,
+so over its output `isObjectNotArray()` and `isPlainObject()` agree on every
+value, and a validator fed only from it may ask either.
+
+A richer codec has a wider range. The fabric JSON codec builds class
+instances, and each of those passes the non-array test while carrying no own
+properties. A validator that admits one and then reads named fields off it
+reads `undefined` from every one. Where the fields it consults are optional,
+nothing is left to reject the value by, and it is accepted without a single
+field having been read off it.
+
+So a validator reading a value that arrived through a codec decode asks
+`isPlainObject()`, or `isFabricPlainObject()` where the declared type is
+already a `FabricValue`. The memory wire parser is the worked example: every
+position where a message names fields asks that question, and the positions
+it covers are listed under "Record positions in an envelope" in
+[the memory protocol chapter](../specs/memory-v2/04-protocol.md).
 
 ### Avoid representing invalid state
 
@@ -831,16 +988,12 @@ async function main() {
 }
 ```
 
-Sometimes a low-level try/catch is appropriate, of course:
-
-- `getData()` could have its own try/catch to e.g. retry on failure, throwing
-  after 3 failed attempts.
-- Exposing a `isFeatureSupported(): boolean` function that based on if some
-  other function throws, determines if "feature" is supported. If we can handle
-  both scenarios and translate the error into a boolean (e.g. are all of the
-  ED25519 features we need supported natively for this platform? if not use a
-  polyfill), then this is not a fatal error, and we explicitly do not want to
-  throw and handle it elsewhere.
+A low-level try/catch is appropriate where the error is an answer rather than a
+failure. An `isFeatureSupported(): boolean` function, for example, can call
+something that throws when a feature is missing and translate the error into
+`false` (are all of the ED25519 features we need supported natively on this
+platform? if not, use a polyfill). Neither outcome is fatal, so the error is
+not thrown on to be handled elsewhere.
 
 ### Avoid Singletons
 
@@ -889,6 +1042,32 @@ export const set = (cache: Cache, key: string, value: string) =>
   cache.set(key, value);
 ```
 
+### Spreading a collection into a call
+
+A spread in a call's arguments, as in `records.push(...more)` or
+`Math.max(...times)`, passes each element of the collection as a separate
+argument. V8 limits how many arguments one call can take, and past roughly a
+hundred thousand the call throws `RangeError: Maximum call stack size
+exceeded`. A collection whose size the code does not fix can reach that. Append
+it in a loop, `for (const record of more) records.push(record);`, and take its
+largest or smallest value with `maxOf` or `minOf` from
+`@commonfabric/collections/math`, which walk the collection and otherwise return what
+`Math.max` and `Math.min` would. An array cell is the exception to the loop:
+each `push()` on a cell rebuilds the cell's local copy of the array and records
+an append of its own, so pass the list to `pushAll()` instead, which does that
+once for the whole list.
+
+Replace a range with `spliceAll` from `@commonfabric/collections/splice`, which gives
+what `splice` would.
+
+The `cf-spread/no-spread-arguments` lint rule (`tasks/lint-spread-arguments.ts`,
+registered in the root `deno.jsonc`) reports every spread into `push`,
+`unshift`, `splice`, `Math.max`, `Math.min`, `String.fromCharCode`, and
+`String.fromCodePoint`, whatever the collection's size, since it cannot tell a
+collection whose size the code fixes from one that grows with data. A spread
+that has to stay, such as one in a test that shows the overflow, sits under a
+`deno-lint-ignore` comment that says why.
+
 ## Build & Test
 
 ### Running Tests
@@ -898,12 +1077,23 @@ export const set = (cache: Cache, key: string, value: string) =>
 > changes.
 
 - For CI wall-time optimization, follow
-  [CI Performance Policy](CI_PERFORMANCE.md). Do not keep splitting jobs once
-  the required test jobs are already in the same rough timing band.
+  [CI Performance Policy](CI_PERFORMANCE.md). CI packs every test into lanes by
+  measured cost, so there are no jobs to split or rebalance by hand; a lane that
+  runs long calls for a split test or a moved dial.
 - Check typings with `deno task check`.
 - Run linter with `deno lint`.
-- Run all tests using `deno task test` (NOT `deno test`)
-- To run a single test file use `deno test path/to/test.ts`.
+- Run all tests using `deno task test` (NOT `deno test`). It is not a
+  substitute for `deno task check`: every package's tests run under
+  `--no-check`.
+- To run one test, `cd` into its package and run
+  `deno task test --filter "test name"`.
+  [Running one test by name](TESTING.md#running-one-test-by-name) describes
+  which name the pattern has to match. A bare
+  `deno test --no-check path/to/test.ts` drops the `--preload` and
+  permissions that the package's `deno-test` task passes. In
+  `runtime/runner`, for example, the preload installs the global fake
+  `clock`, and without it a test that calls `clock.settle()` fails with
+  `ReferenceError: clock is not defined`.
 - To test a specific package, `cd` into the package directory and run
   `deno task test`.
 
@@ -912,7 +1102,7 @@ export const set = (cache: Cache, key: string, value: string) =>
 Every workspace package must be registered and configured correctly, or the test
 suite will break.
 
-1. **Register the package.** Add its path (e.g., `./packages/my-package`) to the
+1. **Register the package.** Add its path (e.g., `./runtime/my-package`) to the
    `"workspace"` array in the root `deno.jsonc`.
 
 2. **Include a test task.** The package's `deno.jsonc` **must** have a `"tasks"`
@@ -925,22 +1115,27 @@ suite will break.
    `"test"` entry, naming the member; that check is what keeps a missing entry
    to a message rather than a CI timeout.
 
-   Use `"deno test"` for packages with tests, or `"echo 'No tests defined.'"` as
-   a stub for packages that don't have tests yet. A `"test"` task defined by its
-   `"dependencies"` alone counts too: what the check asks is whether the name
-   resolves in the package's own directory.
+   For a package with tests, `"test"` runs `tasks/run-member-tests.ts`, naming
+   the package's `"deno-test"` task, which runs the tests themselves — a
+   `deno test` for most packages, or a runner of the package's own; see
+   [TESTING.md](TESTING.md) for why. The `--allow-env` names the two variables
+   the test-records preload reads, as `docs/development/test-records.md`
+   explains. A package without tests yet uses `"echo 'No tests defined.'"`.
 
 3. **Minimal `deno.jsonc` example:**
 
-   ```json
+   ```jsonc
    {
      "name": "@commonfabric/my-package",
      "exports": { ".": "./mod.ts" },
-     "tasks": { "test": "deno test" }
+     "tasks": {
+       "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+       "deno-test": "deno test --no-check --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST"
+     }
    }
    ```
 
-See `packages/utils` and `packages/leb128` for real examples.
+See `base/text` and `base/async` for real examples.
 If the new package needs registry dependencies, follow
 [Adding dependencies](DEPENDENCIES.md#adding-dependencies).
 
@@ -970,13 +1165,13 @@ deno task integration patterns counter
 - Runs integration tests with `API_URL` pointing to the local server
 - **Automatically stops servers after tests complete**
 
-**Available packages:** `runner`, `runtime-client`, `shell`,
-`background-piece-service`, `patterns`, `cli`, `generated-patterns`
+**Available packages:** `runner`, `runtime-client`, `shell`, `patterns`, `cli`,
+`generated-patterns`
 
 **Log files:** After servers start, check these if something goes wrong:
 
-- `packages/shell/local-dev-shell.log`
-- `packages/toolshed/local-dev-toolshed.log`
+- `runtime/shell/local-dev-shell.log`
+- `runtime/toolshed/local-dev-toolshed.log`
 
 **Advanced usage with --port-offset:**
 

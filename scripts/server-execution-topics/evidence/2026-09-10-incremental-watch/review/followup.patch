@@ -1,0 +1,150 @@
+diff --git a/packages/memory/test/v2-watch-incremental.test.ts b/packages/memory/test/v2-watch-incremental.test.ts
+index 337743733a..a0f91a2c2e 100644
+--- a/packages/memory/test/v2-watch-incremental.test.ts
++++ b/packages/memory/test/v2-watch-incremental.test.ts
+@@ -422,6 +422,51 @@ describe("Server", () => {
+         }
+       });
+ 
++      it("retains the last duplicate addition when graph and operation watches share an ID", async () => {
++        const fixture = await openFixture(2);
++        try {
++          const added = await fixture.reader.watchAddSync([
++            {
++              id: "duplicate",
++              kind: "operation",
++              query: { id: fixture.ids[0], path: toValuePath([]) },
++            },
++            { ...watch(fixture.ids[1]), id: "duplicate" },
++          ]);
++          expect(added.sync.operationFields?.[0].watchId).toBe("duplicate");
++          await fixture.reader.watchRemoveSync([fixture.ids[0]]);
++          expect(fixture.state.watches).toEqual([
++            watch(fixture.ids[1]),
++            { ...watch(fixture.ids[1]), id: "duplicate" },
++          ]);
++          expect(fixture.state.operationWatches).toEqual([]);
++          expect(fixture.state.trackedIds.has(toDirtyKey(fixture.ids[0])))
++            .toBe(false);
++          expect(fixture.state.trackedIds.has(toDirtyKey(fixture.ids[1])))
++            .toBe(true);
++        } finally {
++          await fixture.close();
++        }
++      });
++
++      it("keeps unsupported content types absent without hiding the stored JSON document", async () => {
++        const fixture = await openFixture(1);
++        try {
++          const manager = [...fixture.state.graphs.values()][0].manager;
++          const address = { id: fixture.ids[0], type: "text/plain" };
++          expect(manager.load(address)).toBeNull();
++          expect(manager.load(address)).toBeNull();
++          expect(manager.load({ id: fixture.ids[0] })).not.toBeNull();
++          expect(
++            manager.loadedAddresses().every((entry) =>
++              entry.type === "application/json"
++            ),
++          ).toBe(true);
++        } finally {
++          await fixture.close();
++        }
++      });
++
+       it("retains accepted duplicate-id roots when removing an unrelated watch", async () => {
+         const fixture = await openFixture(2);
+         try {
+diff --git a/packages/memory/v2/server-sync.ts b/packages/memory/v2/server-sync.ts
+index d945a9e569..3c5b32b2a4 100644
+--- a/packages/memory/v2/server-sync.ts
++++ b/packages/memory/v2/server-sync.ts
+@@ -231,17 +231,6 @@ export const groupedQueries = (
+   return grouped;
+ };
+ 
+-export const mergeWatchesById = (
+-  current: readonly WatchSpec[],
+-  added: readonly WatchSpec[],
+-): WatchSpec[] => {
+-  const merged = new Map(current.map((watch) => [watch.id, watch] as const));
+-  for (const watch of added) {
+-    merged.set(watch.id, watch);
+-  }
+-  return [...merged.values()];
+-};
+-
+ const watchRootIdentity = (root: GraphQuery["roots"][number]): string =>
+   JSON.stringify([
+     root.id,
+diff --git a/packages/runner/test/traverse-staging.test.ts b/packages/runner/test/traverse-staging.test.ts
+index 690828eaf9..1f880a4e97 100644
+--- a/packages/runner/test/traverse-staging.test.ts
++++ b/packages/runner/test/traverse-staging.test.ts
+@@ -25,6 +25,8 @@ describe("MapSetStringToPathSelectors", () => {
+           published.value.add("root", narrow);
+           expect([...published.value.values("root")][0]).toBe(broad);
+           expect([...original.values("root")]).toEqual([broad]);
++          const { changedKeys } = published;
++          expect([...changedKeys()]).toEqual(["root"]);
+           published.commit();
+           expect([...original.values("root")]).toEqual([broad, narrow]);
+           expect([...original.trueSchemaSelectors("root")]).toEqual([broad]);
+diff --git a/packages/utils/src/staged-map.ts b/packages/utils/src/staged-map.ts
+index e4309ebf4b..d48f83455e 100644
+--- a/packages/utils/src/staged-map.ts
++++ b/packages/utils/src/staged-map.ts
+@@ -134,8 +134,10 @@ export class StagedMap<K, V> extends Map<K, V> {
+ 
+   /** Yields keys whose values or membership may differ from the base. */
+   *changedKeys(): IterableIterator<K> {
+-    if (this.#cleared) yield* this.#base.keys();
+-    else yield* this.#removed;
++    const removed = this.#cleared ? this.#base.keys() : this.#removed;
++    for (const key of removed) {
++      if (!this.#changes.has(key)) yield key;
++    }
+     yield* this.#changes.keys();
+   }
+ 
+diff --git a/packages/utils/test/staged-map.test.ts b/packages/utils/test/staged-map.test.ts
+index 63b90eb280..c7b3e15080 100644
+--- a/packages/utils/test/staged-map.test.ts
++++ b/packages/utils/test/staged-map.test.ts
+@@ -5,6 +5,37 @@ import { StagedMap } from "../src/staged-map.ts";
+ 
+ describe("StagedMap", () => {
+   describe("instance members", () => {
++    describe("changedKeys()", () => {
++      it("yields each changed key once after deletion or clearing and reinsertion", () => {
++        for (const clear of [false, true]) {
++          const stage = new StagedMap(new Map([["a", 1], ["b", 2]]));
++          if (clear) stage.clear();
++          else {
++            stage.delete("a");
++            stage.delete("b");
++          }
++          stage.set("a", 3);
++          stage.set("c", 4);
++          expect([...stage.changedKeys()]).toEqual(["b", "a", "c"]);
++        }
++      });
++
++      it("reads only changed keys when the base is not cleared", () => {
++        const base = new Map([["a", 1], ["b", 2]]);
++        base.keys = () => {
++          throw new Error("The unchanged base must not be enumerated");
++        };
++        const stage = new StagedMap(base);
++        expect([...stage.changedKeys()]).toEqual([]);
++        stage.set("a", 3);
++        stage.delete("b");
++        stage.set("c", 4);
++        expect([...stage.changedKeys()]).toEqual(["b", "a", "c"]);
++        expect(base.get("a")).toBe(1);
++        expect(base.has("b")).toBe(true);
++      });
++    });
++
+     describe("getOrInsertComputed()", () => {
+       it("rejects non-callable callbacks before checking membership", () => {
+         const stage = new StagedMap(new Map([["present", 1]]));

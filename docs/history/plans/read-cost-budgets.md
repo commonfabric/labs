@@ -13,7 +13,7 @@ Status: completed. A3 landed in
 and clean Cubic and antagonistic reviews. The authoring surface and measurement boundaries are documented in the
 [read-accounting contract](../../features/read-accounting.md#pattern-test-budgets).
 This plan tracks acceptance in the
-[computation-cost sequence](../../plans/pattern-computation-cost-implementation.md).
+[computation-cost sequence](pattern-computation-cost-implementation.md).
 
 ## Author contract
 

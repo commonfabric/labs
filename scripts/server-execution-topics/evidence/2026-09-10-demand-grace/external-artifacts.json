@@ -1,0 +1,150 @@
+{
+  "root": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09",
+  "files": [
+    {
+      "path": "runs/grace-current-d664-01/stderr.log",
+      "bytes": 297,
+      "sha256": "cae28308d1e50404c156adb30103b43dbc7e05d6db2bab3702edb31a339a0126"
+    },
+    {
+      "path": "runs/grace-current-d664-01/stdout.log",
+      "bytes": 6879,
+      "sha256": "d179da97a0ac1980ec033b6b9a22f095cea974a3044c4b739ba3ed5b0c3be7a6"
+    },
+    {
+      "path": "runs/grace-current-d664-01/manifest.json",
+      "bytes": 1133,
+      "sha256": "5ed34218149cf831f91cb1f0af31a87da7935540a947045d1bd3fba3fb85cd15"
+    },
+    {
+      "path": "runs/grace-current-d664-01/probe.ts.txt",
+      "bytes": 8381,
+      "sha256": "42122d2c5d53aee9d61a5f5fb31d284a4a34e7a3a95d04249a98b71aaed51238"
+    },
+    {
+      "path": "runs/grace-current-3aee-02/stderr.log",
+      "bytes": 50,
+      "sha256": "45f339016020312701124f9880e38fc6e2c8e54f47cfbaf6c537d0689d6790cb"
+    },
+    {
+      "path": "runs/grace-current-3aee-02/candidate.patch",
+      "bytes": 11141,
+      "sha256": "ab6941ad7774623f3e43465b28c606f76a9404fc9eee2fea11ef6a57954fbd34"
+    },
+    {
+      "path": "runs/grace-current-3aee-02/stdout.log",
+      "bytes": 6638,
+      "sha256": "bdb56c1c4643f6bfff0a8df1aadc6ac43ba56564c3e2c155948c32ecf524ecd9"
+    },
+    {
+      "path": "runs/grace-current-3aee-02/manifest.json",
+      "bytes": 2269,
+      "sha256": "4cd638a6e8a8cf0f153c347a2edf674a3c497eae5c34eb8fa6547c94f90ce646"
+    },
+    {
+      "path": "runs/grace-current-3aee-02/probe.ts.txt",
+      "bytes": 9237,
+      "sha256": "fb91315d0353cd03437b7c108e1f431c621f4d09444f823288344c090cfccb31"
+    },
+    {
+      "path": "runs/grace-runtime-bytes-02/stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "runs/grace-runtime-bytes-02/baseline-space-server.ts",
+      "bytes": 249483,
+      "sha256": "ff31d5a7efff62f852080e5f5d368114d84d180d843a082384e55e5c298cdf36"
+    },
+    {
+      "path": "runs/grace-runtime-bytes-02/results.json",
+      "bytes": 1466,
+      "sha256": "1f9e34270be1acd2fa0f287997ed66acffd0818fff647a3f045d8ff098e79a35"
+    },
+    {
+      "path": "runs/grace-runtime-bytes-02/baseline-stats.ts",
+      "bytes": 33956,
+      "sha256": "1622aceba87dba7f0e89d353d24aec052fcd1206b6fc8d7fd09af400c89e6955"
+    },
+    {
+      "path": "runs/grace-runtime-bytes-02/stdout.jsonl",
+      "bytes": 257878,
+      "sha256": "08b99b7f2a6d9afec30de17dc95ace686e2a5f6749167933d13303383bd8835c"
+    },
+    {
+      "path": "validation/grace-focused-01.log",
+      "bytes": 116740,
+      "sha256": "9561ab0d1313c761b28fa49e867c886cc9e9b6068f62df34ebf9ae7dd04da4b1"
+    },
+    {
+      "path": "validation/grace-probe-check-01.log",
+      "bytes": 58,
+      "sha256": "988e07ea60aad9f3e9d41d96c72d8949028526296ed01a7e3951e24012b26ad4"
+    },
+    {
+      "path": "runs/grace-current-3aee-03/stderr.log",
+      "bytes": 50,
+      "sha256": "45f339016020312701124f9880e38fc6e2c8e54f47cfbaf6c537d0689d6790cb"
+    },
+    {
+      "path": "runs/grace-current-3aee-03/candidate.patch",
+      "bytes": 12239,
+      "sha256": "93a14fc0d547af4b74a99676ad317a546e4bb1f20cdf4a28ebb46e1e3eb8110c"
+    },
+    {
+      "path": "runs/grace-current-3aee-03/stdout.log",
+      "bytes": 6638,
+      "sha256": "d9b9c63ba1cc7414b469603667ae2ca374e2a389887b1a4cd85ea96985821648"
+    },
+    {
+      "path": "runs/grace-current-3aee-03/manifest.json",
+      "bytes": 4799,
+      "sha256": "54aa43637aa10cd310b9bbddae1253fd15696759d29193453538584c50d60a29"
+    },
+    {
+      "path": "runs/grace-current-3aee-03/probe.ts.txt",
+      "bytes": 9223,
+      "sha256": "d12bdc5d2d0131dadff4aa82b03cc4c1b796e9d10be85ff8c4cc1cace2a38387"
+    },
+    {
+      "path": "runs/grace-proof-portable-01/stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "runs/grace-proof-portable-01/verify-runtime-bytes.ts",
+      "bytes": 427,
+      "sha256": "69957f463759bbf3345c75dd625b3c9c4b7db300c08391a0d23912d8928e6d6b"
+    },
+    {
+      "path": "runs/grace-proof-portable-01/manifest.json",
+      "bytes": 563,
+      "sha256": "a176a41c998e55dabd079507dea826d7272186947dc565474b0ad7963db743c0"
+    },
+    {
+      "path": "runs/grace-proof-portable-01/stdout.jsonl",
+      "bytes": 128923,
+      "sha256": "0abc9f9fcc6b12dbecf869a5307d9f244d2287ca24d153d18d8139fd4784803d"
+    },
+    {
+      "path": "tools/verify-grace-runtime-bytes.ts",
+      "bytes": 427,
+      "sha256": "69957f463759bbf3345c75dd625b3c9c4b7db300c08391a0d23912d8928e6d6b"
+    },
+    {
+      "path": "metadata/grace-mechanical-gates-01.json",
+      "bytes": 1575,
+      "sha256": "a847d663e3175c2e7beabeb3f7c9416a58a7e7cda1ddeda1d2903adccca77585"
+    },
+    {
+      "path": "validation/grace-typecheck-01.log",
+      "bytes": 1199,
+      "sha256": "916d1ba3c165fd949b14f66aba7e57393f6cc63a92ff9147d6ea3154f91bb34d"
+    },
+    {
+      "path": "validation/grace-docs-01.log",
+      "bytes": 130,
+      "sha256": "cbb32ce449aafc8dffa566db7f8901715df18686e0bbe666d38de2b4f68759f0"
+    }
+  ]
+}

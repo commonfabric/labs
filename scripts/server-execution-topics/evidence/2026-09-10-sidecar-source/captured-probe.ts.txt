@@ -1,0 +1,116 @@
+/**
+ * Counts source resolution and compilation for distinct sidecar slots in real
+ * runtimes. Each arm has fresh storage; cache counters are not wall-clock claims.
+ */
+
+import { expect } from "@std/expect";
+import { PatternsRoute } from "../../packages/runner/src/harness/patterns-route.deno.ts";
+
+import { Identity } from "@commonfabric/identity";
+import { Runtime, systemPatternSource } from "@commonfabric/runner";
+
+import {
+  openSidecarSurface,
+  type SidecarSurfaceState,
+} from "../../packages/runner/src/builtins/wish.ts";
+import { EmulatedStorageManager } from "../../packages/runner/src/storage/v2-emulate.ts";
+
+const signer = await Identity.fromPassphrase("sidecar campaign probe");
+const second = await Identity.fromPassphrase("sidecar campaign second space");
+const surface = {
+  name: "profile-create.tsx",
+  origin: systemPatternSource("system/profile-create.tsx"),
+};
+const route = new PatternsRoute(
+  new URL("../../packages/patterns/", import.meta.url).pathname,
+);
+// The static route identity is prewarmed; this probe measures source requests,
+// compilation entries/cache hits and destination closure presence, not latency.
+const identity = await route.identity("system/profile-create.tsx");
+
+for (const enabled of [false, true]) {
+  const manager = EmulatedStorageManager.emulate({ as: signer });
+  const requests: { pathname: string; identity: boolean; bytes: number }[] = [];
+  const runtime = new Runtime({
+    apiUrl: new URL("http://toolshed.test"),
+    storageManager: manager,
+    experimental: { serverExecution: enabled },
+    servingPosture: enabled,
+    fetch: async (input) => {
+      const url = new URL(
+        input instanceof Request ? input.url : String(input),
+      );
+      const response = await route.serve(new Request(url)) ??
+        new Response("not found", { status: 404 });
+      requests.push({
+        pathname: url.pathname,
+        identity: url.searchParams.has("identity"),
+        bytes: (await response.clone().arrayBuffer()).byteLength,
+      });
+      return response;
+    },
+  });
+  expect(runtime.experimental.serverExecution).toBe(enabled);
+  expect(runtime.servingPosture).toBe(enabled);
+  console.error(
+    JSON.stringify({
+      phase: "posture",
+      serverExecution: runtime.experimental.serverExecution,
+      servingPosture: runtime.servingPosture,
+      memory: "fresh emulated store",
+      shell: null,
+    }),
+  );
+  const compile = runtime.patternManager.compilePattern.bind(
+    runtime.patternManager,
+  );
+  let compilationCalls = 0;
+  runtime.patternManager.compilePattern = (...args) => {
+    compilationCalls += 1;
+    return compile(...args);
+  };
+  const rows = [];
+  try {
+    for (
+      const [index, space] of [
+        signer.did(),
+        signer.did(),
+        signer.did(),
+        second.did(),
+      ].entries()
+    ) {
+      const slot: SidecarSurfaceState = {};
+      const piece = runtime.getCell(space, `campaign-sidecar-${index}`);
+      const before = { requests: requests.length, compilationCalls };
+      const pattern = await openSidecarSurface(runtime, slot, piece, surface);
+      expect(pattern).toBeDefined();
+      expect(runtime.patternManager.getArtifactEntryRef(pattern!)?.identity)
+        .toBe(identity);
+      const after = { requests: requests.length, compilationCalls };
+      expect(await openSidecarSurface(runtime, slot, piece, surface))
+        .toBe(pattern);
+      expect({ requests: requests.length, compilationCalls }).toEqual(after);
+      await runtime.patternManager.flushCompileCacheWrites();
+      expect(
+        await runtime.patternManager.getPatternSourceProgramByIdentity(
+          identity,
+          space,
+        ),
+      ).toBeDefined();
+      rows.push({
+        index,
+        space,
+        requests: requests.slice(before.requests),
+        compilationCalls: after.compilationCalls - before.compilationCalls,
+        compileCache: runtime.patternManager.getCompileCacheStats(),
+        repeatedSlotDidNoWork: true,
+        durableClosurePresent: true,
+      });
+    }
+    console.log(JSON.stringify({ enabled, rows }));
+  } finally {
+    await runtime.sourceReconciler.idle();
+    await runtime.patternManager.flushCompileCacheWrites();
+    await runtime.dispose();
+  }
+}

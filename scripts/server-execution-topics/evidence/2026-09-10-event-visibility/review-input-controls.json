@@ -1,0 +1,173 @@
+{
+  "mode": "source-fragment input controls, no network or pattern workload",
+  "rows": [
+    {
+      "file": "recorded-source/seed-check.ts.txt",
+      "hash": "a30aecd7deb5826addc1360f341ea598ceb96786bc17bc20bf4f8ffd9df43d52",
+      "case": "topicCount",
+      "result": 5
+    },
+    {
+      "file": "recorded-source/seed-check.ts.txt",
+      "hash": "a30aecd7deb5826addc1360f341ea598ceb96786bc17bc20bf4f8ffd9df43d52",
+      "case": "topicCount",
+      "configured": "0",
+      "result": 0
+    },
+    {
+      "file": "recorded-source/seed-check.ts.txt",
+      "hash": "a30aecd7deb5826addc1360f341ea598ceb96786bc17bc20bf4f8ffd9df43d52",
+      "case": "topicCount",
+      "configured": "-1",
+      "result": -1
+    },
+    {
+      "file": "recorded-source/seed-check.ts.txt",
+      "hash": "a30aecd7deb5826addc1360f341ea598ceb96786bc17bc20bf4f8ffd9df43d52",
+      "case": "topicCount",
+      "configured": "1.5",
+      "result": 1.5
+    },
+    {
+      "file": "recorded-source/seed-check.ts.txt",
+      "hash": "a30aecd7deb5826addc1360f341ea598ceb96786bc17bc20bf4f8ffd9df43d52",
+      "case": "topicCount",
+      "configured": "NaN",
+      "result": null
+    },
+    {
+      "file": "recorded-source/seed-check.ts.txt",
+      "hash": "a30aecd7deb5826addc1360f341ea598ceb96786bc17bc20bf4f8ffd9df43d52",
+      "case": "topicCount",
+      "configured": "",
+      "result": 0
+    },
+    {
+      "file": "recorded-source/seed-check.ts.txt",
+      "hash": "a30aecd7deb5826addc1360f341ea598ceb96786bc17bc20bf4f8ffd9df43d52",
+      "case": "topicCount",
+      "configured": "1",
+      "result": 1
+    },
+    {
+      "file": "recorded-source/seed-check.ts.txt",
+      "hash": "a30aecd7deb5826addc1360f341ea598ceb96786bc17bc20bf4f8ffd9df43d52",
+      "case": "topicCount",
+      "configured": "2",
+      "result": 2
+    },
+    {
+      "file": "recorded-source/seed-check.ts.txt",
+      "hash": "a30aecd7deb5826addc1360f341ea598ceb96786bc17bc20bf4f8ffd9df43d52",
+      "case": "topicCount",
+      "configured": "5",
+      "result": 5
+    },
+    {
+      "file": "recorded-source/seed-check.ts.txt",
+      "hash": "a30aecd7deb5826addc1360f341ea598ceb96786bc17bc20bf4f8ffd9df43d52",
+      "case": "stats",
+      "status": 200,
+      "writes": [
+        [
+          "capture/stats-after-seed.json",
+          "{\"status\":200}"
+        ]
+      ]
+    },
+    {
+      "file": "recorded-source/seed-check.ts.txt",
+      "hash": "a30aecd7deb5826addc1360f341ea598ceb96786bc17bc20bf4f8ffd9df43d52",
+      "case": "stats",
+      "status": 503,
+      "writes": [
+        [
+          "capture/stats-after-seed.json",
+          "{\"status\":503}"
+        ]
+      ]
+    },
+    {
+      "file": "seed-check.ts.txt",
+      "hash": "abaac146312c64e5bcbca7cf6ca763f12ef4ee5c25cdd8d2430bc182f7fad414",
+      "case": "topicCount",
+      "result": 5
+    },
+    {
+      "file": "seed-check.ts.txt",
+      "hash": "abaac146312c64e5bcbca7cf6ca763f12ef4ee5c25cdd8d2430bc182f7fad414",
+      "case": "topicCount",
+      "configured": "0",
+      "error": "CF_TOPIC_BOARD_TOPICS must be a positive integer."
+    },
+    {
+      "file": "seed-check.ts.txt",
+      "hash": "abaac146312c64e5bcbca7cf6ca763f12ef4ee5c25cdd8d2430bc182f7fad414",
+      "case": "topicCount",
+      "configured": "-1",
+      "error": "CF_TOPIC_BOARD_TOPICS must be a positive integer."
+    },
+    {
+      "file": "seed-check.ts.txt",
+      "hash": "abaac146312c64e5bcbca7cf6ca763f12ef4ee5c25cdd8d2430bc182f7fad414",
+      "case": "topicCount",
+      "configured": "1.5",
+      "error": "CF_TOPIC_BOARD_TOPICS must be a positive integer."
+    },
+    {
+      "file": "seed-check.ts.txt",
+      "hash": "abaac146312c64e5bcbca7cf6ca763f12ef4ee5c25cdd8d2430bc182f7fad414",
+      "case": "topicCount",
+      "configured": "NaN",
+      "error": "CF_TOPIC_BOARD_TOPICS must be a positive integer."
+    },
+    {
+      "file": "seed-check.ts.txt",
+      "hash": "abaac146312c64e5bcbca7cf6ca763f12ef4ee5c25cdd8d2430bc182f7fad414",
+      "case": "topicCount",
+      "configured": "",
+      "error": "CF_TOPIC_BOARD_TOPICS must be a positive integer."
+    },
+    {
+      "file": "seed-check.ts.txt",
+      "hash": "abaac146312c64e5bcbca7cf6ca763f12ef4ee5c25cdd8d2430bc182f7fad414",
+      "case": "topicCount",
+      "configured": "1",
+      "result": 1
+    },
+    {
+      "file": "seed-check.ts.txt",
+      "hash": "abaac146312c64e5bcbca7cf6ca763f12ef4ee5c25cdd8d2430bc182f7fad414",
+      "case": "topicCount",
+      "configured": "2",
+      "result": 2
+    },
+    {
+      "file": "seed-check.ts.txt",
+      "hash": "abaac146312c64e5bcbca7cf6ca763f12ef4ee5c25cdd8d2430bc182f7fad414",
+      "case": "topicCount",
+      "configured": "5",
+      "result": 5
+    },
+    {
+      "file": "seed-check.ts.txt",
+      "hash": "abaac146312c64e5bcbca7cf6ca763f12ef4ee5c25cdd8d2430bc182f7fad414",
+      "case": "stats",
+      "status": 200,
+      "writes": [
+        [
+          "capture/stats-after-seed.json",
+          "{\"status\":200}"
+        ]
+      ]
+    },
+    {
+      "file": "seed-check.ts.txt",
+      "hash": "abaac146312c64e5bcbca7cf6ca763f12ef4ee5c25cdd8d2430bc182f7fad414",
+      "case": "stats",
+      "status": 503,
+      "writes": [],
+      "error": "Fetching /api/health/stats failed with status 503."
+    }
+  ]
+}

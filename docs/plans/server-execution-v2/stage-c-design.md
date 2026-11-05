@@ -1004,11 +1004,14 @@ are MOOT while (d′) stands.*
 - **Resubscribe cost:** O(union) — `registration.ts:238–319` →
   `setSchedulerDependencies` (sort/compact ×2) → `updateDependents`
   (eager telemetry payload) → `updateDependentEdgesForLog` →
-  `applyActionReadDelta` (four `addressesToPathByEntity` passes);
+  `applyActionReadDelta` (four `addressesToPathByEntity` calls, the two
+  over the previous log answered from the grouping memoized on it);
   67 ms at 67 K reads.
 - **Read anatomy per property ≈ 7 activities:** `getOwnPropertyDescriptor`
   and `get` traps each build a child view (sigil probe read at
-  `[…child,"/","link@1"]`, a parent probe, a SHAPE read), a `toJSON`
+  `[…child,"/","link@1"]`, a parent probe — journaled once per position
+  and transaction, since link resolution memoizes each probe's outcome
+  on the snapshot memo — a SHAPE read), a `toJSON`
   probe per object, `ownKeys`, one recursive whole-array read per
   array — with the cache check AFTER `resolveLink` and the SHAPE read
   (`query-result-proxy.ts:246–256, 351–359, 639–652, 731–790`). A
@@ -2154,7 +2157,7 @@ register OW38 (i)):
   the authored event commit's ADMISSION on the server (the feed's
   admitted-commit notice for the client's append; the append's seq) to
   W COVERING it (the wave commit whose `derivedThrough` ≥ that seq —
-  `waitForSettled(space, seq)`, `packages/runner/src/executor/
+  `waitForSettled(space, seq)`, `runtime/runner/src/executor/
   watermark.ts`, is the instrument; server-side timestamps in a
   bounded per-space series exposed through the §7 block, alongside the
   existing per-wave `scheduler/execute/settle` timing). **Sub-second at

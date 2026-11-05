@@ -1,0 +1,47 @@
+---
+status: historical
+created: 2026-09-29
+archived: 2026-10-15
+reason: "Superseded design; a room offers no message windows to anchor."
+---
+
+# ChatWindowAnchor
+
+Where a window of messages sits in its view of the conversation. A client passes
+one to a message list's `openWindow` (see
+[`ChatMessageList`](../../../specs/fabrichat/ChatMessageList.md#windows)), as `from`.
+
+```ts
+// Shown for illustration only.
+type ChatWindowAnchor =
+  | { before: FabricEpochNsec | "end" }
+  | { after: FabricEpochNsec | "start" }
+  | { around: FabricEpochNsec };
+```
+
+Exactly one of the three keys is present.
+
+## The anchors
+
+- **`{ before: t }`**: the newest messages sent before `t`. With `"end"`, the
+  newest messages there are. A client opening a conversation at its latest
+  messages uses `{ before: "end" }`, and pages back with `{ before: t }`, where
+  `t` is the `sentAt` of the oldest message it has.
+- **`{ after: t }`**: the oldest messages sent after `t`. With `"start"`, the
+  earliest messages there are. A client scrolled to the top of a thread uses
+  `{ after: "start" }`, and pages forward with `{ after: t }`, where `t` is the
+  `sentAt` of the newest message it has.
+- **`{ around: t }`**: the messages on either side of the message whose `sentAt`
+  is `t`, that message included, about half on each side. A side with too few
+  messages is filled from the other, so the window is as full as the view
+  allows. A client uses it to jump to a message, such as a reply's target or a
+  message a link points at, without paging from either end. The message MUST be
+  in the view: an `around` that names a message outside it is refused.
+
+A `sentAt` is not unique in the room (see [times](../../../specs/fabrichat/ChatMessage.md#times)), so an
+anchor names every message at that time together: a window never starts or
+ends between two messages sent at one time.
+
+A window's `hasOlder` and `hasNewer` (see
+[`ChatMessageWindow`](../../../specs/fabrichat/ChatMessageWindow.md)) say whether there is more on either
+side of wherever it was anchored.

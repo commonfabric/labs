@@ -1,0 +1,1 @@
+{"date": "2026-09-29", "from": {"k": "unit", "s": "runner", "n": "cellFromUrl builtin > resolves a URL naming an unknown space to no cell"}, "to": {"k": "unit", "s": "runner", "n": "cellFromUrl builtin > resolves a URL naming a legacy space in the space the name resolves to"}}

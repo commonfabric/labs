@@ -37,8 +37,12 @@ the old one. Two rules drive that comparison, in opposite directions:
 
 - What a pattern **accepts**, it may accept more of, never less. Accepting
   less breaks whoever was sending the thing you dropped.
-- What a pattern **provides**, it may provide more of, never less. Providing
-  less breaks whoever was reading the thing you dropped.
+- What a pattern **provides**, it may provide more of, never less of what it
+  guarantees. Providing less breaks whoever was reading the thing you
+  dropped. A data field it publishes as optional guarantees nothing about
+  presence, so it may stop publishing one: whoever reads it already handles
+  its absence. A verb is not such a field, optional or not, because a holder
+  cannot read its absence.
 
 Sound in principle. Measured against the current runtime — not inferred —
 here is what it does to a verb's author:
@@ -91,12 +95,12 @@ the planned design stream that gives verbs declared, checkable result types
 in the shape — is expected to replace is recording an output *in the durable
 shape*. Recording one at all is already done. A verb's declared result
 travels on `module.resultSchema`, a module field that enters no durable
-schema and that no baseline under `packages/patterns/baselines/` records,
+schema and that no baseline under `patterns/baselines/` records,
 which is what made that road passable while the durable one was not; and it
 is resolvable per deployed piece, because `cf piece verbs` publishes it as a
 row's `outputSchema` and `cf piece call <verb> --help` publishes it for a
 single verb (`listPieceCallables`, `declaredVerbResults` and
-`withDeclaredResult`, `packages/cli/lib/piece.ts`). What is still deferred is
+`withDeclaredResult`, `runtime/cli/lib/piece.ts`). What is still deferred is
 the durable record and the comparison it would feed: nothing holds one
 deploy's output beside the next, so output changes are governed by convention
 alone.
@@ -112,18 +116,22 @@ arrives from the other side:
 | Demand a new **required verb** | **refused** |
 | Stop demanding a field or verb it no longer uses | allowed |
 
-The refusal comes from `packages/piece/src/schema-compatibility.ts`: raising
+The refusal comes from `runtime/piece/src/schema-compatibility.ts`: raising
 a demand hits `newly required argument field has no default`, and a verb is
 a stream, which cannot carry a default, so a newly required verb is the same
 refusal arriving from the other direction.
 
 Giving a demand up is narrowing, and the gate reads it as narrowing. A field
-the pattern stopped reading leaves a writer's value unread rather than
-breaking a reader, so the argument side drops named fields freely; what it
-still proves is that the candidate can hold the value the piece already
-carries, which a closed candidate object fails as `source field is rejected
-by the target object`. The result side preserves every named field it
-published.
+the pattern stopped reading leaves a writer's value unread rather than breaking
+a reader, so the argument side drops named fields freely; what it still proves
+is that the candidate can hold the value the piece already carries, which a
+closed candidate object fails as `source field is rejected by the target
+object`. The result side preserves every required field it published, every
+verb, and every field that holds a verb at any depth. An optional data field it
+may stop publishing, since whoever reads it already reads its absence. An
+optional verb it may not: a stream handle reads as itself when nothing is
+stored, so a holder still bound to a removed verb keeps sending to it, and each
+event is dropped for want of a handler.
 
 Stated plainly, because much of the design rests on it: **a deployed
 holder's demands can be given up freely, and added only where an existing
@@ -204,13 +212,13 @@ A verb is declared as something a piece definitely has, not something it may
 have. Code that holds a piece and calls a verb writes no check: the
 declaration says the verb is there, and the compiler agrees.
 
-Names are stable by default. The gate refuses a shape that removes or renames
-a verb — the one rule in today's gate genuinely protecting callers, and it
-stays — so a verb does not vanish by accident. The ordinary way to retire one
-is to add its replacement and mark the old one `@deprecated`, which hides it
-from listings while keeping it callable. A verb whose contract must change
-incompatibly gets a new name, spelled `append_v2`, introduced when the second
-generation actually appears.
+Names are stable by default. The gate refuses a shape that removes or renames a
+verb, optional or not — the one rule in today's gate genuinely protecting
+callers, and it stays — so a verb does not vanish by accident. The ordinary way
+to retire one is to add its replacement and mark the old one `@deprecated`,
+which hides it from listings while keeping it callable. A verb whose contract
+must change incompatibly gets a new name, spelled `append_v2`, introduced when
+the second generation actually appears.
 
 What this is not is an invariant. A pattern's owner may deliberately break
 their own pattern — retire a verb for real, change what one means — and the
@@ -431,7 +439,7 @@ a bump means is still undesigned, so its cells are contingent.
 
 **The optional-verb and versioned columns are identical.** So the choice
 between them is not about what can evolve but about what a reader can tell.
-`BackwardsCompatibleProfile` in `packages/patterns/system/profile-home.tsx`
+`BackwardsCompatibleProfile` in `patterns/system/profile-home/profile-home.tsx`
 is the exhibit: a `PartialBy` over the full Output that records its vintages
 in a comment, because the type cannot say them, plus a hand-maintained
 instruction to add every future stream to the list. The optionality *is* a
@@ -527,7 +535,7 @@ the recourse this grows into.
 
 The count has a horizon, and the report has to name it. References cross
 spaces — a stored link carries its target's space (`NormalizedFullLink`,
-`packages/runner/src/link-types.ts`) — and links are one-directional,
+`runtime/runner/src/link-types.ts`) — and links are one-directional,
 recorded in the holder's space, with no reverse index anywhere. So the
 report enumerates in rings: the workspace's recorded demands, completely;
 spaces the deployment can read, by scan; and beyond that nothing, because a
@@ -679,14 +687,14 @@ Five smaller calls belong to whoever does the work:
 - Whether the embedding rule warns, lints, or fails, and in what order those
   arrive; [#5746] starts at advisory on purpose.
 - How wide the baseline reset has to be once narrow demands land (the
-  recorded shapes under `packages/patterns/baselines/` that updates are
+  recorded shapes under `patterns/baselines/` that updates are
   checked against), and how it is sequenced against the append-only
   baselines gate.
 - Where an interim output check runs before Fabric-types, and what it does
   on a mismatch. Availability is not the question: a verb's declared result
   resolves from a deployed piece's compiled graph and from a candidate's, so
   a comparison has both of its sides. `setPattern`
-  (`packages/piece/src/ops/piece-controller.ts`) loads the deployed pattern
+  (`runtime/piece/src/ops/piece-controller.ts`) loads the deployed pattern
   and compiles the candidate before it asserts compatibility, so both graphs
   are in hand at that point. What is **not** established is what comparing
   them costs there, or what a graph compiled before `module.resultSchema`
@@ -700,7 +708,7 @@ Five smaller calls belong to whoever does the work:
   but only until a binding check reads them, at which point the key stops
   being annotation-neutral. A real design step, not an extension — and a
   two-registry one. [#5746] adds `demand` to `ANNOTATION_KEYS`
-  (`packages/piece/src/schema-compatibility.ts`), and item 2 of
+  (`runtime/piece/src/schema-compatibility.ts`), and item 2 of
   [the verbs implementation plan](verbs-implementation.md) derives the
   projection reader's *tolerated* keys from that same set, so a key
   reclassified out of it lands in projection's *refused* tier by default and
@@ -708,6 +716,6 @@ Five smaller calls belong to whoever does the work:
   changes both registries deliberately, which is what keeping them siblings
   rather than one list is for.
 
-[#5663]: https://github.com/commontoolsinc/labs/issues/5663
-[#5746]: https://github.com/commontoolsinc/labs/pull/5746
-[#7166]: https://github.com/commontoolsinc/labs/pull/7166
+[#5663]: https://github.com/commonfabric/labs/issues/5663
+[#5746]: https://github.com/commonfabric/labs/pull/5746
+[#7166]: https://github.com/commonfabric/labs/pull/7166

@@ -9,10 +9,10 @@ enforcement-mode vocabulary. The clauses below are the complete harness-facing
 obligations; the runner owns broader label, policy, and release semantics.
 
 The public transport types include the
-[prompt-slot binding](../../../packages/cf-harness/src/contracts/prompt-slot.ts),
-[invocation context](../../../packages/cf-harness/src/contracts/cfc-invocation-context.ts),
-[mediated observation](../../../packages/cf-harness/src/contracts/observation.ts),
-and [policy trace](../../../packages/cf-harness/src/contracts/policy-trace.ts)
+[prompt-slot binding](../../../runtime/cf-harness/src/contracts/prompt-slot.ts),
+[invocation context](../../../runtime/cf-harness/src/contracts/cfc-invocation-context.ts),
+[mediated observation](../../../runtime/cf-harness/src/contracts/observation.ts),
+and [policy trace](../../../runtime/cf-harness/src/contracts/policy-trace.ts)
 contracts.
 
 ## 1. Architectural split
@@ -57,8 +57,10 @@ influence on subsequent model-authored invocation inputs. Opaque or denied
 observations MUST NOT be accumulated as if their content were visible.
 
 **AH-CFC-8.** Explicit trusted input labels and derived prompt-influence labels
-MUST remain distinguishable. Influence is not integrity and does not authorize a
-side effect.
+MUST remain distinguishable. Prompt-slot influence is recorded as
+`PromptSlotInfluence`, a provenance-class integrity atom (CFC spec §15.4): it
+says which inputs the bound prompt shaped, adds no confidentiality, and does not
+authorize a side effect.
 
 ## 4. Side effects
 

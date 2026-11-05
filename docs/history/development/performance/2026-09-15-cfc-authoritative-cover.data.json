@@ -1,0 +1,381 @@
+{
+  "baseline": "dd23b59eea6623e37a490c427d57e86d0c0e0373",
+  "hardware": "Apple M3 Max",
+  "deno": "2.9.4",
+  "v8": "15.0.245.2-rusty",
+  "queries_per_kernel_sample": 8192,
+  "kernel": [
+    {
+      "name": "authoritative cover scan, sources=50, wildcard=0",
+      "ns_per_query": 672.695068359375,
+      "samples": 32
+    },
+    {
+      "name": "authoritative cover index, sources=50, wildcard=0",
+      "ns_per_query": 79.6143798828125,
+      "samples": 46
+    },
+    {
+      "name": "authoritative cover scan, sources=50, wildcard=0.05",
+      "ns_per_query": 770.223388671875,
+      "samples": 32
+    },
+    {
+      "name": "authoritative cover index, sources=50, wildcard=0.05",
+      "ns_per_query": 70.71533203125,
+      "samples": 48
+    },
+    {
+      "name": "authoritative cover scan, sources=50, wildcard=0.3",
+      "ns_per_query": 750.54345703125,
+      "samples": 32
+    },
+    {
+      "name": "authoritative cover index, sources=50, wildcard=0.3",
+      "ns_per_query": 81.57421875,
+      "samples": 46
+    },
+    {
+      "name": "authoritative cover scan, sources=250, wildcard=0",
+      "ns_per_query": 3537.3138427734375,
+      "samples": 31
+    },
+    {
+      "name": "authoritative cover index, sources=250, wildcard=0",
+      "ns_per_query": 125.231689453125,
+      "samples": 40
+    },
+    {
+      "name": "authoritative cover scan, sources=250, wildcard=0.05",
+      "ns_per_query": 3655.9871826171875,
+      "samples": 31
+    },
+    {
+      "name": "authoritative cover index, sources=250, wildcard=0.05",
+      "ns_per_query": 98.61767578125,
+      "samples": 43
+    },
+    {
+      "name": "authoritative cover scan, sources=250, wildcard=0.3",
+      "ns_per_query": 3778.11083984375,
+      "samples": 31
+    },
+    {
+      "name": "authoritative cover index, sources=250, wildcard=0.3",
+      "ns_per_query": 121.3038330078125,
+      "samples": 41
+    },
+    {
+      "name": "authoritative cover scan, sources=1000, wildcard=0",
+      "ns_per_query": 16292.63818359375,
+      "samples": 31
+    },
+    {
+      "name": "authoritative cover index, sources=1000, wildcard=0",
+      "ns_per_query": 177.2427978515625,
+      "samples": 37
+    },
+    {
+      "name": "authoritative cover scan, sources=1000, wildcard=0.05",
+      "ns_per_query": 15665.0908203125,
+      "samples": 31
+    },
+    {
+      "name": "authoritative cover index, sources=1000, wildcard=0.05",
+      "ns_per_query": 213.4820556640625,
+      "samples": 36
+    },
+    {
+      "name": "authoritative cover scan, sources=1000, wildcard=0.3",
+      "ns_per_query": 19681.608032226562,
+      "samples": 31
+    },
+    {
+      "name": "authoritative cover index, sources=1000, wildcard=0.3",
+      "ns_per_query": 214.4046630859375,
+      "samples": 36
+    }
+  ],
+  "runtime": [
+    {
+      "label": "ladder-0-before",
+      "status": 0,
+      "seconds": 5.9636149406433105,
+      "render_ms": [
+        89.0,
+        382.0,
+        3300.0
+      ],
+      "log_sha256": "d68a195906bfda6fdba56a913cc33277927870a4ce08a4deb9d71898040b67d2"
+    },
+    {
+      "label": "ladder-0-after",
+      "status": 0,
+      "seconds": 5.386702060699463,
+      "render_ms": [
+        105.0,
+        430.0,
+        2600.0
+      ],
+      "log_sha256": "2f60d388b5c49e953974b4353ce69904e10ffd4598119f75c4ddd4cd1e4eb390"
+    },
+    {
+      "label": "ladder-1-after",
+      "status": 0,
+      "seconds": 5.649948835372925,
+      "render_ms": [
+        99.0,
+        497.0,
+        2700.0
+      ],
+      "log_sha256": "4897c606e87c7cc9c1a97a66e89ff1bd8aa161dac8cbf675df85166e5c9fec58"
+    },
+    {
+      "label": "ladder-1-before",
+      "status": 0,
+      "seconds": 6.207200050354004,
+      "render_ms": [
+        113.0,
+        580.0,
+        3100.0
+      ],
+      "log_sha256": "583d7c9aaf9955155a6cf5f196335f2b2828a0ee390b91cdd0d76e7efe747d5a"
+    },
+    {
+      "label": "ladder-2-before",
+      "status": 0,
+      "seconds": 5.958294153213501,
+      "render_ms": [
+        93.0,
+        391.0,
+        3200.0
+      ],
+      "log_sha256": "fda1cce914556bc98e6000801f13cfc6c9dfe5e78b89a2883b002159bf9a4ef2"
+    },
+    {
+      "label": "ladder-2-after",
+      "status": 0,
+      "seconds": 4.830333948135376,
+      "render_ms": [
+        80.0,
+        365.0,
+        2300.0
+      ],
+      "log_sha256": "98a93e235194a1cfd6ad71cad280a0ae74a5408a6e4bddfb257f93bc2d4239e4"
+    },
+    {
+      "label": "ladder-3-after",
+      "status": 0,
+      "seconds": 4.9273011684417725,
+      "render_ms": [
+        91.0,
+        436.0,
+        2300.0
+      ],
+      "log_sha256": "4e33be3385386d5a12da8c8fb4eb17060226414b866ed19cca6b12cc3a25c6a5"
+    },
+    {
+      "label": "ladder-3-before",
+      "status": 0,
+      "seconds": 5.92293906211853,
+      "render_ms": [
+        109.0,
+        435.0,
+        3100.0
+      ],
+      "log_sha256": "902fa15c33cbc2f16f23934d611f1b124307359d99e9bb1de144f34ab40b1020"
+    },
+    {
+      "label": "ladder-4-before",
+      "status": 0,
+      "seconds": 5.409684896469116,
+      "render_ms": [
+        81.0,
+        384.0,
+        2800.0
+      ],
+      "log_sha256": "4b24995639b0f695fa7a636bf3a27c5991299417fd466c66647181d71e56dbe3"
+    },
+    {
+      "label": "ladder-4-after",
+      "status": 0,
+      "seconds": 4.852029800415039,
+      "render_ms": [
+        84.0,
+        364.0,
+        2300.0
+      ],
+      "log_sha256": "4b2a4a6ad02e103b1d899444bb730ca26344dec4426707b14919a6ae345fb9ef"
+    },
+    {
+      "label": "ladder-5-after",
+      "status": 0,
+      "seconds": 5.657115936279297,
+      "render_ms": [
+        90.0,
+        384.0,
+        2500.0
+      ],
+      "log_sha256": "102dd2bd4d586584ad96627a14d575b2c15c765f12c329cef3edd7ae277e5699"
+    },
+    {
+      "label": "ladder-5-before",
+      "status": 0,
+      "seconds": 5.709223985671997,
+      "render_ms": [
+        90.0,
+        396.0,
+        2900.0
+      ],
+      "log_sha256": "8e1cb2d1bbb4ed88f1aaae49dae676519d60e36e7d1c63d6e75ab81492f2c707"
+    }
+  ],
+  "profiles": [
+    {
+      "arm": "before",
+      "sha256": "b5af8e3394972eb4f0730b05346c34161eaaf8c6e4e2210fe5b4e1ba845e949e",
+      "sampled_ms": 5212.164,
+      "isPrefix_ms": 437.5289999999988,
+      "authoritativeCoverFor_ms": 13.368,
+      "isPrefix_callers_ms": {
+        "authoritativeCoverFor": 428.9539999999988,
+        "storedCfcMetadataAppliesToPath": 0.748,
+        "labelViewForLink": 0.293,
+        "labelForEntriesAtPath": 7.534
+      }
+    },
+    {
+      "arm": "after",
+      "sha256": "e4756459c6bbb58f9b23a11fc85d7b9d94cb2b469dbd4a26115f4b63d6537dd8",
+      "sampled_ms": 5167.129,
+      "isPrefix_ms": 6.331000000000001,
+      "authoritativeCoverFor_ms": 1.4809999999999999,
+      "isPrefix_callers_ms": {
+        "labelViewForLink": 0.313,
+        "labelForEntriesAtPath": 6.018000000000001
+      }
+    }
+  ],
+  "replay_verification": [
+    {
+      "label": "ladder-0-before",
+      "status": 0,
+      "seconds": 6.276738915999886,
+      "render_ms": [
+        94.0,
+        426.0,
+        3100.0
+      ]
+    },
+    {
+      "label": "ladder-0-after",
+      "status": 0,
+      "seconds": 5.059765917001641,
+      "render_ms": [
+        88.0,
+        361.0,
+        2400.0
+      ]
+    },
+    {
+      "label": "ladder-1-after",
+      "status": 0,
+      "seconds": 5.604805416995077,
+      "render_ms": [
+        90.0,
+        378.0,
+        2900.0
+      ]
+    },
+    {
+      "label": "ladder-1-before",
+      "status": 0,
+      "seconds": 6.115347875005682,
+      "render_ms": [
+        103.0,
+        418.0,
+        3300.0
+      ]
+    },
+    {
+      "label": "ladder-2-before",
+      "status": 0,
+      "seconds": 5.624762125007692,
+      "render_ms": [
+        84.0,
+        389.0,
+        3100.0
+      ]
+    },
+    {
+      "label": "ladder-2-after",
+      "status": 0,
+      "seconds": 5.328221417003078,
+      "render_ms": [
+        96.0,
+        427.0,
+        2600.0
+      ]
+    },
+    {
+      "label": "ladder-3-after",
+      "status": 0,
+      "seconds": 5.718794542000978,
+      "render_ms": [
+        99.0,
+        407.0,
+        3000.0
+      ]
+    },
+    {
+      "label": "ladder-3-before",
+      "status": 0,
+      "seconds": 5.9384536249999655,
+      "render_ms": [
+        94.0,
+        392.0,
+        3200.0
+      ]
+    },
+    {
+      "label": "ladder-4-before",
+      "status": 0,
+      "seconds": 6.178697082999861,
+      "render_ms": [
+        90.0,
+        411.0,
+        3500.0
+      ]
+    },
+    {
+      "label": "ladder-4-after",
+      "status": 0,
+      "seconds": 6.001814834002289,
+      "render_ms": [
+        130.0,
+        405.0,
+        3000.0
+      ]
+    },
+    {
+      "label": "ladder-5-after",
+      "status": 0,
+      "seconds": 6.676107541992678,
+      "render_ms": [
+        116.0,
+        528.0,
+        2800.0
+      ]
+    },
+    {
+      "label": "ladder-5-before",
+      "status": 0,
+      "seconds": 6.31652020799811,
+      "render_ms": [
+        98.0,
+        451.0,
+        3300.0
+      ]
+    }
+  ]
+}

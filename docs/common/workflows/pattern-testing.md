@@ -72,28 +72,78 @@ export default pattern(() => {
 
 ```bash
 # Run a specific test
-deno task cf test packages/patterns/my-pattern/main.test.tsx
+deno task cf test patterns/my-pattern/main.test.tsx
 
 # Run with verbose output
-deno task cf test packages/patterns/my-pattern/main.test.tsx --verbose
+deno task cf test patterns/my-pattern/main.test.tsx --verbose
 
 # Run all tests in a directory
-deno task cf test packages/patterns/my-pattern/
+deno task cf test patterns/my-pattern/
 ```
+
+### Testing labeled data
+
+Use `cf test <file> --cfc-shell-posture --verbose --stats-threshold 0` to run
+with `enforce-explicit` enforcement and `persist` flow labels, which is laxer
+than the shell's current `enforce-strict` posture.
+Individual dials are `--cfc-enforcement-mode` and `--cfc-flow-labels`; the latter
+accepts `off`, `derive` (the runtime's `observe`), `observe`, and `persist`.
+The run prints the resolved posture. When CFC denies something — a write,
+including one the pattern's own setup makes — `--cfc-denials` prints each
+denial with the reasons behind it. The
+[CLI guide](../../../runtime/cli/README.md#pattern-test-cfc-posture-and-labeled-fixtures)
+shows how a test declares a local SQLite store with per-column `ifc` labels and
+explains the per-step CFC preparation timings.
 
 ### Import roots
 
 A test pattern's imports resolve within its root directory. Without `--root`,
 `cf test` anchors at the nearest ancestor whose `deno.json(c)` declares a
-package name — `packages/patterns` for this repository's patterns — so imports
-that span the package (shared helpers such as `test/vnode-helpers.ts`, sibling
-patterns, `cfc/` modules) resolve without a flag. A config file with no `name`,
-such as a workspace member stub that only defines tasks, does not anchor the
-root. Pass `--root` to anchor somewhere else; an import that climbs above the
-root fails naming the import and the importing file. The CI "Pattern Unit
-Tests" job (the `pattern-tests` target in `tasks/integration.ts`) passes
-`--root packages/patterns` explicitly, so a bare local run resolves imports
-the same way CI does.
+package name — `patterns` for this repository's patterns — so imports
+that span the package (shared helpers such as
+`tools/test-support/vnode-helpers.ts`, sibling patterns, `cfc/` modules) resolve
+without a flag. A config file with no `name`, such as a workspace member stub
+that only defines tasks, does not anchor the root. Pass `--root` to anchor
+somewhere else; an import that climbs above the root fails naming the import and
+the importing file. CI's `pattern-unit` suite (the `pattern-tests` target in
+`tasks/integration.ts`) passes `--root patterns` explicitly, so a bare local run
+resolves imports the same way CI does.
+
+### The test's space and its access list
+
+A single-user test runs in its identity's home space, on an in-process store.
+Before the test pattern runs, `cf test` gives that space the access list a home
+space is born with, naming the test's identity as its only OWNER. So
+`spaceAccess()`, asked about any cell in the test's space, returns `"OWNER"`,
+in a handler and in a computed alike.
+
+A multi-user test's participants share one space, which is created with an
+access list. The first participant's user is its OWNER. Every other user holds
+the level one of its participants declares with `access`, or `"WRITE"` when
+none of them declares one; `"none"` leaves the user out of the list, and
+`spaceAccess()` then returns `"none"` for it. Participants that share a `user`
+share its level, so they cannot declare two different ones, and the first
+participant's user cannot declare anything but `"OWNER"`.
+
+```tsx
+// Shown for illustration only.
+export default multiUserTest({
+  setup,
+  participants: {
+    host, // OWNER, as the first participant
+    guest, // WRITE, since it declares no level
+    viewer: { pattern: viewer, access: "READ" },
+    stranger: { pattern: stranger, access: "none" }, // not in the list
+  },
+});
+```
+
+Neither space's storage enforces the list. A participant at `"READ"`, or left
+out at `"none"`, still reads and writes the shared space like any other, so the
+list is what `spaceAccess()` reports and nothing more. A pattern test can check
+what a pattern decides from the level it is given, such as a control only an
+OWNER is offered. What the memory server refuses a principal is a question for
+a test against a server that enforces access lists.
 
 ## Test Step Format
 
@@ -116,10 +166,10 @@ assertion is the record `assert()` produces — see
 ## Walking the Rendered Tree
 
 Both actions and assertions often need to reach into what a pattern rendered.
-`packages/patterns/test/vnode-helpers.ts` is the one place those helpers live;
-import from it rather than writing a private copy in a test file. Each helper
-resolves cells as it walks, so a test does not have to unwrap reactive values
-by hand.
+`patterns/tools/test-support/vnode-helpers.ts` is the one place those helpers
+live; import from it rather than writing a private copy in a test file. Each
+helper resolves cells as it walks, so a test does not have to unwrap reactive
+values by hand.
 
 Reading a single node:
 
@@ -184,7 +234,7 @@ the rendered tree to the node, read the prop, and send it an event:
 ```tsx
 // Shown at module scope.
 import { action, pattern, UI } from "commonfabric";
-import { findElementByText, propsOf } from "../test/vnode-helpers.ts";
+import { findElementByText, propsOf } from "../../tools/test-support/vnode-helpers.ts";
 import MapDemo from "./map-demo.tsx";
 
 export default pattern(() => {
@@ -202,12 +252,79 @@ export default pattern(() => {
 });
 ```
 
-`packages/patterns/map-demo.test.tsx` drives both an inline arrow and a bound
-handler this way.
+`patterns/examples/map-demo/map-demo.test.tsx` drives both an inline arrow and a
+bound handler this way. `fireEvent(node, prop, event)` in the vnode helpers does
+the same for any event prop, and fails when the node binds nothing under it;
+`fireClick(node)` is its `onClick` case, with an empty event.
+`patterns/examples/scoped-group-chat/submit-on-enter.test.tsx` presses Enter in
+a `cf-input` by firing its `oncf-submit`.
 
 Prefer an exported `Stream<T>` when you own the pattern: it states the entry
 point in the output type. Use the tree walk when the handler belongs to the UI
 and exporting it would only serve the test.
+
+### Putting a cell link in an event
+
+A step's `event` may carry a link to a cell, such as one element of a stored
+list. The steps are part of the test pattern's own result, and that result's
+schema comes from the types of what the test returns. So where the linked
+cell's type carries a write policy — a `TrustedActionWrite` or a
+`writeAuthorizedBy` naming the pattern's own handler — the test pattern's
+setup has to satisfy that policy just to store the step, and CFC refuses it:
+
+```
+CFC denied (write-policy-gate): a policy check refused the commit
+  - writeAuthorizedBy requires a trusted verified binding identity at /$TESTS/*/event/note
+```
+
+Give the link the type the handler's event declares, in a local with a type
+annotation, and put that in the event. The annotation is what sets the schema,
+and the event's type names no policy. A cast is refused by the transformer.
+
+```tsx
+// Shown for illustration only.
+// `Notes` stores `StoredNote`s, a `TrustedActionWrite` naming its `add`
+// handler; `pick` takes `{ note: Cell<NoteRecord> }`.
+const board = Notes({
+  notes: Writable.of<StoredNote[]>([]),
+  picked: Writable.of<string>(""),
+});
+const first: Cell<NoteRecord> = board.notes.key(0);
+
+return {
+  [TESTS]: [
+    {
+      action: board.add,
+      event: { text: "hello" },
+      trustedUi: { surface: SURFACE, action: ADD },
+    },
+    { action: board.pick, event: { note: first } },
+    { assertion: assert(() => board.picked === "hello") },
+  ],
+};
+```
+
+`runtime/cli/test/fixtures/action-event/policy-link-typed.test.tsx` is this
+example whole, and `policy-link-inferred.test.tsx` beside it is the refused
+form.
+
+Take the link from a cell the test reaches some other way as well: an output
+of the pattern under test, as `board.notes` is here, or a cell the test also
+passes to that pattern or returns. A `.key()` link into a cell the test uses
+nowhere else fails the build with `Cell not found in pattern aliases`.
+
+`cf test --cfc-denials` prints a setup refusal like this one with its reason.
+
+Before dispatching an action step, both test runners demand the reads needed
+to construct its event. A trusted UI wrapper copies the payload's top-level
+fields, so links supplied there by another pattern or a computation are ready
+without an earlier assertion or render. Nested objects and arrays keep their
+references for event serialization and the handler's reads.
+
+Copying a field can read the immediate linked record's shape or value. The
+runner does not recursively read the records reachable from that field; those
+reads belong to the handler. An action step can therefore exercise cold linked
+descendants, but does not guarantee that every immediate target is unread.
 
 ## Writing Assertions
 
@@ -512,5 +629,6 @@ const assert_total_correct = assert(() => {
 
 - [Testing Handlers via CLI](./handlers-cli-testing.md) - Manual CLI testing workflow
 - [Pattern Testing Spec](../../specs/PATTERN_TESTING_SPEC.md) - Technical specification
-- [Coverage in CI](../../development/COVERAGE.md) - How the pattern unit tests run here feed the coverage-debt gate
-- [Patterns package test lanes](../../../packages/patterns/deno.jsonc) - Where each kind of test (plain Deno unit test, pattern test, integration test) lives in the patterns package and how each is discovered and run
+- [Coverage in CI](../../development/COVERAGE.md) - How the pattern unit tests
+  run here feed the repository-wide coverage figure
+- [Patterns package test lanes](../../../patterns/deno.jsonc) - Where each kind of test (plain Deno unit test, pattern test, integration test) lives in the patterns package and how each is discovered and run

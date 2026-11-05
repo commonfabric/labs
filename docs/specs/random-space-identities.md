@@ -1,0 +1,455 @@
+# Random Space Identities
+
+## Status
+
+Implemented in this repository, deletion and reaping included. The
+[implementation plan](../plans/random-space-identities.md) says what is built
+and the deployment steps that remain.
+
+The [Common Fabric URL](fabric-urls.md) and
+[space name registry](../plans/space-name-registry.md) designs are separate
+concepts. Neither is planned for deployment, and neither is a dependency of
+this specification.
+
+## Scope
+
+This specification applies to newly created ordinary spaces. A Home space
+continues to use its user's DID as its space DID.
+
+Existing ordinary spaces keep their DIDs and keep working, including the
+name-bearing URLs people have already shared. "Existing spaces" below says how,
+and what about them this change does not repair.
+
+A display label is user metadata. It does not select key data, determine a DID,
+or resolve a route.
+
+## Two operations, never one
+
+Creating a space and opening a space are separate operations.
+
+Creating a space takes an authenticated creator and takes no name. It returns a
+DID.
+
+Opening a space takes a DID, or a legacy name that resolves to one. It brings no
+space into being: a DID that has no history opens nothing.
+
+Creating a space computes nothing from a string. Opening one may: a legacy name
+still resolves through the derivation that made it, as "Existing spaces" below
+describes. What the change removes is the derivation's authority, not its
+arithmetic.
+
+## Identity and genesis
+
+- Each create action generates a fresh key pair from at least 256 bits of
+  entropy supplied by the platform cryptographic random source.
+- The public key determines the space DID. The display label, creator DID,
+  application service provider hostname, clock, and process identity do not
+  contribute key material.
+- The private key signs one access-control-only genesis transaction. That
+  transaction has no prior version and makes the authenticated creator the
+  first owner.
+- The genesis transaction makes the creator an owner, and grants nobody else
+  anything the creator did not ask for. A newly created space is not
+  world-writable unless its creator asks for that. The deployment's configured service identities keep the
+  authority the deployment already gives them; that authority is policy, not
+  anything derived from the space key.
+- The private key is destroyed once the genesis commit has been confirmed. It
+  survives an indeterminate submission so that the same transaction can be
+  submitted again, and it is destroyed the moment the commit is known to have
+  landed. It is never stored, returned, logged, or used after that.
+- After genesis, the space DID has no implicit owner or repair capability.
+  Ordinary access-control grants determine access.
+
+## Creating a space
+
+A create action runs in this order:
+
+1. Generate the key pair and derive the DID from the public key.
+2. Sign the genesis transaction and submit it through the ordinary
+   space-addressed Memory endpoint, resubmitting the identical transaction
+   until the commit is confirmed or permanently refused.
+3. Destroy the private key.
+4. Return the DID to the caller, which records it.
+
+A process that stops before step 3 loses the key, and the DID it was creating is
+abandoned whether or not genesis landed. Nothing references that DID, so nothing
+has to recover it: the caller starts a new create action and gets a new DID. A
+process that stops between steps 3 and 4 leaves a space that exists, is owned by
+its creator, and appears in no record. Such a space costs one access-control
+document and is unreachable.
+
+Creating a space twice creates two spaces. There is no idempotency key, no
+resumable creation record, and no deduplication of concurrent create actions. A
+user who asks for two spaces gets two spaces. A user whose create request was
+lost before it was processed asks again and gets one space; a user whose
+response was lost after the space was created asks again and gets a second
+space, and the first is unreferenced. That is accepted: an unreferenced space
+costs one access-control document and is reachable by nobody.
+
+## Recording a created space
+
+A DID is recorded by whatever refers to it, beside the reference. Space
+creation itself records no DID in a shared directory or a per-user name-to-DID
+map, and no provider keeps a table of display names.
+
+References to a space created under this specification record its DID beside
+the reference:
+
+- **A pattern's `PatternFactory.inSpace(name)` target.** The space that calls
+  `inSpace` holds an allocation record for that name. Resolution reads the
+  record; on a miss it creates a space and writes the record in the same commit
+  as the writes that refer to it. `inSpace("notebook")` therefore means "the
+  space this space calls notebook". Two spaces using one name reach two spaces.
+
+  The creator of a space made this way is the identity the run is acting as:
+  on a client, the user whose runtime is resolving the name; on a serving
+  runtime, the run's demanding identity. A serving run with no such identity
+  resolves no name and creates no space, rather than creating one owned by the
+  service. Under server execution a client creates no space at all: its run of
+  a handler is a speculative echo of the serving runtime's, which creates the
+  space. The client resolves a name only through its record, and its echo of a
+  handler naming one that has none withdraws.
+
+  An allocation record is one document per name, addressed by a canonical cause
+  over the calling space and the name, and immutable once written. A
+  compare-and-set against a document that does not yet exist is then the whole
+  of the mutual exclusion. A record held as a row in a list would not be: a list
+  whose reader takes its last matching row lets a later writer take a name over
+  without ever losing a compare-and-set.
+
+- **A user's Home space list.** Each entry carries a space DID and an optional
+  editable display label. The entry is what a person navigates through.
+
+- **A user's Home site table.** Each entry maps a space DID to the origin
+  serving it. This table already exists.
+
+  A runtime learns where that origin serves Memory from the origin itself,
+  not from its own deployment. A runtime whose deployment publishes a memory
+  URL (a memory router) reads `/api/meta` on an entry's origin when the origin
+  is neither its API host nor its memory URL, once per origin for the runtime's
+  lifetime and for at most 64 origins, and opens the space's Memory on the
+  `memoryUrl` the origin publishes, or on the origin itself when it publishes
+  none; the space's HTTP work goes to the origin. An origin whose memory host
+  cannot be read leaves its spaces on no route, since the runtime's own router
+  is not where another deployment keeps its spaces. A runtime whose deployment
+  publishes no memory URL opens Memory on the entry's origin, as before.
+
+- **A host's calendar meeting association.** The
+  [meeting-room allocation boundary](../features/meeting-room-allocation.md)
+  retains a canonical space DID per portable occurrence signature. It creates
+  candidates through ordinary space creation and conditionally records one
+  before a meeting daemon publishes panels or sends invitations. A losing or
+  unrecorded candidate is abandoned. This application reference does not change
+  the creation operation or retain its private key.
+
+For `PatternFactory.inSpace`, the allocation record makes repeated resolution
+converge. A handler that runs more than once for one logical event reads the
+record its first run wrote
+and reaches the same space. Concurrent resolvers contend on one document in one
+logical writable history, and the resolver that loses adopts the recorded DID
+and abandons the space it created.
+
+Resolution must also terminate. A name that a run cannot resolve suspends that
+run and resolves before it is retried, and a name that has resolved once must
+resolve again without suspending, for as long as the run is being retried.
+A resolver that can forget a name it has resolved, or that can leave a name
+unresolved after an attempt, turns the retry into a loop with no bound.
+
+## Deleting a space
+
+A space lives from its genesis commit until it is deleted, and deletion ends
+it for everyone, for good. Nothing else a principal does ends a space:
+removing members, forgetting it in a list, or losing every reference to it
+leaves it in place.
+
+- Only the space's sole member deletes it, holding OWNER: the access list's one
+  entry has to be the deleting principal, or, for a space that owns itself, the
+  space's own DID, which the deleting principal acts for through a [delegation
+  chain](memory-v2/04-protocol.md#proof-chains). A space with other members is
+  deleted once an OWNER has removed them, each removal an ordinary access-list
+  change of its own. Other holders of a delegation are not members of the list,
+  and lose access with no change of their own first.
+- Deletion is one access-list-only commit, which replaces the access list
+  with a deletion tombstone naming the deleting principal. It writes the
+  access-control document and never removes it.
+- A Home space is not deleted, whoever asks, while its access list has a Home's
+  shape. Its DID is its user's identity DID, so its access list grants its own
+  DID OWNER, and it declares no kind, which is how the Memory server tells it
+  from a self-owned space of a declared kind such as a profile's. The test reads
+  the list, which a deployment's service identity can rewrite, so a service
+  identity is trusted not to reshape a Home's list, and a Home with no list has
+  to be given one before deletion is deployed
+  ([INV-15](memory-v2/09-invariants.md#inv-15--space-deletion)).
+- From that commit on, the Memory server refuses the space to every principal,
+  a deployment's service identities included, in every access-control mode, and
+  the space takes no further commit on any write path, the serving plane's
+  included, so deletion is not undone. The refusal says that the space is
+  deleted, which a reader can tell apart from a refusal of access to a space
+  that goes on, and it comes before every check of access, shape and genesis.
+- Every invitation operation on a deleted space is refused with a code of its
+  own, `space-deleted`, once the request has passed rate limiting, proof
+  verification and body validation
+  ([invitation service contract](../../runtime/toolshed/README.md#space-invitations)),
+  so an invitation to a deleted space reads differently from one that has
+  expired or been revoked.
+- A client takes both refusals as final. It does not retry an invitation
+  operation answered `space-deleted`, and it does not treat an
+  `AuthorizationError` marked `deleted` as a refusal a later grant could heal,
+  as it may an ordinary refusal of access.
+
+Deleting a space reclaims no storage by itself. A deleted space's contents
+become unreadable from the Memory server at once. A runtime keeps what it had
+already fetched of the space in its replica, as it does for any refused space,
+and its renderer withholds that content
+([authorization failure surfacing](../features/authorization-failure-surfacing.md)).
+The space's storage is the operator's to reclaim by reaping the space, below,
+which leaves the deletion tombstone in place. A store removed outright would
+leave a DID with no history, and that DID would then be a space its key could
+create again: no one holds the key of a space created under this specification,
+but a legacy space's key can be recomputed from its name.
+
+References to a deleted space keep their DID: a Home list entry, a link stored
+in another space, an `inSpace` allocation record. They reach the refusal.
+Removing them is the work of whatever holds them, and an allocation record,
+being immutable, is never removed. A person's shared-space catalog keeps its
+entry for the space and records the deletion in it
+([`shared-space-catalog.md`](../features/shared-space-catalog.md#deleted-spaces)).
+The refusal reaches a client as an `AuthorizationError` marked `deleted`, and
+pattern code as `spaceDeleted(target)`
+([`space-access.md`](../features/space-access.md#a-deleted-space)).
+
+A space that is not yet down to one member takes ordinary access-list commits
+first, each made with the CLI's ACL commands
+([`random-space-identities` plan](../plans/random-space-identities.md#deleting-a-space)
+says which spaces this covers):
+
+- **Other members.** An OWNER removes every other entry, each with its own
+  `cf acl remove <DID>`, the `*` entry included as `cf acl remove ANYONE`,
+  until the list's one entry names the principal that will delete the space.
+- **No access-control document.** A populated space that predates genesis has
+  no list, and a deployment's service identity holds OWNER there implicitly,
+  which the sole-member clause does not count. A service identity first writes
+  a list naming the deleting principal, `cf acl set <DID> OWNER`, which that
+  implicit OWNER admits: service identities hold it on every space so that
+  they can initialize or repair access-control state
+  ([the Memory protocol's access-control section](memory-v2/04-protocol.md#451-current-pass)).
+  INV-13's genesis rules bind only a space with no history, which a populated
+  space is not. Such a space is
+  open to every authenticated principal, so that one commit is where all of
+  their access ends, with no entry naming any of them, and nothing records who
+  they were. A Home with no list is never one of these: it gets its own list,
+  granting its own DID OWNER, before deletion is deployed.
+- **A list naming only service identities.** A service identity the list names
+  is a named principal, so it could remove the other entries and delete the
+  space itself, as its sole member. The recipe has it add the deleting person at
+  OWNER instead, who then removes the service identities' entries, so that the
+  deletion tombstone's `by` records the person who chose the deletion rather
+  than an operator's identity. That is a choice of record, not something INV-15
+  requires.
+
+The admission rule and the refusal are
+[INV-15](memory-v2/09-invariants.md#inv-15--space-deletion) and
+[the Memory protocol's access-control section](memory-v2/04-protocol.md#451-current-pass).
+`cf space delete` sends the deletion commit, and the Memory server and the
+serving loop implement what follows it.
+
+### Reaping a deleted space
+
+Reaping reclaims a deleted space's storage. It is an operation of its own rather
+than a compaction, and it is not a Memory protocol command, since the protocol
+refuses a deleted space to every principal, service identities included.
+Compaction refuses a deleted space's store: its run writes an audit revision
+that restates the access-control document's value, which it does only over a
+value that is an access list, so it refuses a store whose access-control
+document is a `set` of anything else, a deletion tombstone included. Its outcome
+for an access-control document that a document `delete` removed is a different
+case, one INV-12 forbids, and not a deleted space. Compaction's refusal of a
+deletion tombstone names reaping, so that an operator who reaches for
+`cf space compact` on a deleted space is sent to `cf space reap`.
+
+Reaping follows the compaction plan's safety rails rather than rules of its own.
+It runs offline against the space's store file and never against a file a server
+has open
+([the compaction plan](../plans/compact-space.md#the-store-must-be-offline)),
+and its authority is the operator's access to that file. It writes a copy of the
+backup, never the backup itself
+([backup first](../plans/compact-space.md#backup-first)), and its result is
+checked before it is installed, as a compaction's is
+([verification obligations](../plans/compact-space.md#verification-obligations)):
+the deletion commit and the deletion tombstone read back unchanged, the server
+sequence is the same, and nothing else of the space is left. The state inspector
+reads a reaped store as a deleted space, not as a corrupt one.
+`cf space reap <store.sqlite>` performs it.
+
+- A reap takes only a store whose access-control document holds a deletion
+  tombstone, and refuses any other.
+- It keeps the deletion commit and what that commit needs to stand: the commit's
+  own row in the commit log, the invocation and authorization rows it
+  references, and the deletion tombstone's revision and head rows. The server
+  sequence is the highest `seq` in the commit log, so keeping the deletion
+  commit keeps it at that commit's `seq`. The space therefore goes on refusing
+  every principal as deleted, its refusal names the same `aclRevision` as
+  before, and its DID never again has no history.
+- It removes everything else the store holds for the space: every earlier
+  commit, every other document and its history, the earlier revisions of the
+  access-control document, the genesis receipt, the private tables such as an
+  invitation's admission records and receipts, the outbox, and the
+  instance-naming mark (INV-16). A deleted space admits no session, so the
+  mark has nothing left to decide. Rows the engine's schema itself needs to
+  open a store, such as the default branch's, stay.
+- The space's cell databases are not in the store. They are files beside the
+  live store, `cell-<hash>-*.sqlite`, where `<hash>` is the token the Memory
+  server derives from the space's DID, so a reap, which runs against a copy of
+  the backup, cannot reach them. Its report names them by that pattern, and
+  the install that puts the result in place of the live store moves them out
+  of the live directory, beside the live store it moves aside. The token is a
+  32-bit hash, so the install moves the files under the space's prefix only
+  when no other store in the live directory shares that prefix; when one
+  does, it moves none and reports which store shares it.
+
+### Deleting a space from the command line
+
+`cf space delete` deletes a space as its sole member. While the access list
+names any principal besides the one the command connects as, it refuses, and
+names those principals, so that each one's removal is an ordinary
+`cf acl remove` of its own. Since deletion cannot be undone, it also refuses to
+run without `--confirm <space-DID>`, whose DID has to be the space's own, so
+that a mistyped `--space` deletes nothing. It deletes only a space whose list
+names the connecting principal; deleting a self-owned space through a
+delegation chain is not part of this command.
+
+The CLI's own documentation describes `cf space delete` beside
+`cf space create`, and `cf space reap` beside `cf space compact`.
+
+## Routing across provider processes
+
+The process that receives a create request is not assumed to host the new
+space. Genesis and every later space operation use the provider's ordinary
+space-addressed Memory endpoint, which routes one DID to one logical writable
+Common Memory history and its durable store. They do not call a Memory server
+merely because it is embedded in the process handling the request.
+
+The routed endpoint accepts a previously unseen DID and atomically creates its
+history when it accepts the genesis transaction. Every connection for that DID
+reaches the same logical history even when request processes restart or the
+backend set changes.
+
+The selected process may change after a restart, failover, or placement move.
+Before another process accepts writes, the provider must preserve the durable
+history and fence the previous writer. Process identity is neither space
+identity nor part of any routing decision this specification makes.
+
+Each `inSpace` allocation record lives in a space that reaches its durable
+history through that same route. No additional provider-owned storage is required for
+space creation.
+
+## Deployment mappings
+
+The current Estuary and Rapids
+[process inventory](https://github.com/commonfabric/infra/blob/16e48222254059cc9eff53f5064ab696fbd37236/ansible/vars/toolshed-binary.yml)
+runs 21 Toolshed processes on one host. The checked-in
+[nginx configuration](https://github.com/commonfabric/infra/blob/16e48222254059cc9eff53f5064ab696fbd37236/ansible/roles/nginx/templates/toolshed.conf.j2)
+round-robins ordinary API requests across five processes and routes a Memory
+WebSocket carrying `space=<did>` to one of sixteen processes. Every process
+loads the same
+[service environment](https://github.com/commonfabric/infra/blob/16e48222254059cc9eff53f5064ab696fbd37236/ansible/roles/toolshed-binary/templates/toolshed-binary%40.service.j2),
+and the host prepares one
+[data volume](https://github.com/commonfabric/infra/blob/16e48222254059cc9eff53f5064ab696fbd37236/ansible/playbooks/toolshed_setup_disk.yml).
+Newly allocated space connections must go through that nginx route. In
+particular, each production `MEMORY_URL` must name the host-internal routed
+endpoint rather than a process-local endpoint. Process restarts and changes to
+the nginx backend set must not change the durable history selected by a DID.
+
+Labs supplies the common client boundary. A remote Memory session appends the
+space DID to its
+[`space` query parameter](../../runtime/runner/src/storage/v2-remote-session.ts)
+and Toolshed server runtimes connect through
+[`MEMORY_URL`](../../runtime/toolshed/runtime-options.ts). Both current and
+future deployment routers must preserve that contract. Under the
+[`sharedMemoryConnection`](../development/EXPERIMENTAL_OPTIONS.md#sharedmemoryconnection)
+experimental flag a session's connection carries several spaces and names
+none in its address, which this routing cannot serve; the flag stays off in
+these deployments until a router terminates client connections
+([memory-v2/connection-multiplexing.md](./memory-v2/connection-multiplexing.md)).
+
+## Existing spaces
+
+Every ordinary space that exists when this change lands was created by deriving
+its key from the fixed passphrase `"common user"` and the space name, and was
+born with an access-control document granting every principal write access.
+
+Those spaces keep their DIDs, and every URL that names one keeps opening it.
+
+### Resolving a legacy name
+
+The derivation is a pure function of the name. It takes no host, no user, and no
+clock, so it gives the same answer in every process and at every provider, and
+it needs no record of which names exist. It survives this change as a resolver
+and nothing more:
+
+- Opening a space by a name derives the DID and opens it.
+- Creating a space never derives. A create action generates random key data, so
+  no new space is born at a DID anyone can recompute.
+- The resolver returns a DID. It does not return a key, so no caller reaches a
+  legacy space's signing key through it.
+
+### A name that reaches no space
+
+A name nobody has used derives a DID like any other, and that DID has no
+history. Opening it opens nothing: the reader is told that no space answers to
+that name, and offered the one operation that would make one, which allocates a
+random DID and takes the typed string as its display label.
+
+Opening must not bring the space into being, and this is the case that decides
+it. A conjured space would be born at a DID anyone can recompute from the name
+it was conjured by, which is the whole of what this specification removes. Two
+people typing one name would land in one space, and anyone at all could write
+to it.
+
+Creating the root pattern inside a space that already has history is a different
+matter and continues. The distinction is whether the space exists: a DID whose
+access-control document is absent at sequence zero is not a space, and opening
+leaves it that way.
+
+Deleting the derivation would not make a legacy space's key secret. The
+passphrase and the algorithm are in this repository's history and in every
+bundle already shipped, so those keys are public permanently whatever the
+product does next. Removing the derivation prevents future use; it recovers
+nothing. Only one use has to stop, and that is creating a space.
+
+A record is consulted where the resolution has one to consult: the allocation
+record `PatternFactory.inSpace(name)` reads sits in the space that called it. A
+name a person types, or follows in a URL, has no such record and is derived,
+which is what keeps that resolution local. A Home list entry is not consulted,
+because it is keyed by DID and opening it uses that DID rather than resolving
+its label.
+
+Existing spaces reached through a stored link rather than a name need no
+resolution at all. A cross-space child, including every space an anonymous
+`PatternFactory.inSpace()` call created, is reached through the link its parent
+holds.
+
+### What this does not repair
+
+Narrowing the space identity's authority ends what a recomputed key can do from
+that point on, and rewriting a legacy space's access-control document ends the
+world-writable grant it was born with. Together those make a legacy space
+private going forward. Neither undoes what was already possible. Anyone who
+learned a name could already read that space's whole history, write to it, and
+grant themselves a concrete owner capability. Three facts follow, and they are
+to be recorded rather than repaired:
+
+- The contents of every legacy space are to be treated as already disclosed.
+- Its access-control document is to be treated as untrusted until swept, because
+  a grant in it may have been planted.
+- Its history contains writes that cannot be attributed, because per-commit
+  authorship was never recorded.
+
+Home spaces are not affected. A Home space DID is its user's identity DID, whose
+key was never derived from a name.
+
+## Compatibility
+
+New browser navigation uses the existing Application Service Provider-hosted DID
+route. This change does not add friendly-name lookup, name registration, Domain
+Name System namespaces, or cross-provider move redirects.

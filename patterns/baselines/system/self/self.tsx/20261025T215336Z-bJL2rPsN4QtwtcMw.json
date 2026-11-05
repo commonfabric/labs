@@ -1,0 +1,479 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Neurotype": {
+        "properties": {
+          "detail": {
+            "additionalProperties": {
+              "type": [
+                "number",
+                "string"
+              ]
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "recordedAt": {
+            "type": "number"
+          },
+          "result": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "self-reported",
+              "assessed"
+            ]
+          },
+          "system": {
+            "$ref": "#/$defs/NeurotypeSystem"
+          }
+        },
+        "required": [
+          "system",
+          "result",
+          "source",
+          "recordedAt"
+        ],
+        "type": "object"
+      },
+      "NeurotypeSystem": {
+        "enum": [
+          "mbti",
+          "enneagram",
+          "big5",
+          "custom"
+        ]
+      },
+      "QAResponse": {
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "answeredAt": {
+            "type": "number"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "promptId": {
+            "type": "string"
+          },
+          "track": {
+            "enum": [
+              "meaning",
+              "neurotype",
+              "freeform"
+            ]
+          }
+        },
+        "required": [
+          "promptId",
+          "prompt",
+          "answer",
+          "track",
+          "answeredAt"
+        ],
+        "type": "object"
+      },
+      "SelfModel": {
+        "properties": {
+          "neurotypes": {
+            "items": {
+              "$ref": "#/$defs/Neurotype"
+            },
+            "type": "array"
+          },
+          "responses": {
+            "items": {
+              "$ref": "#/$defs/QAResponse"
+            },
+            "type": "array"
+          },
+          "values": {
+            "items": {
+              "$ref": "#/$defs/ValueCard"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "responses",
+          "values",
+          "neurotypes"
+        ],
+        "type": "object"
+      },
+      "Track": {
+        "enum": [
+          "open",
+          "scissor",
+          "closing"
+        ]
+      },
+      "ValueCard": {
+        "properties": {
+          "attendingTo": {
+            "type": "string"
+          },
+          "contextTags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": {
+            "type": "string"
+          },
+          "sourcePromptId": {
+            "type": "string"
+          },
+          "sourceTrack": {
+            "$ref": "#/$defs/Track"
+          },
+          "stance": {
+            "enum": [
+              "descriptive",
+              "aspirational",
+              "conflicted"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "selfModel": {
+        "$ref": "#/$defs/SelfModel",
+        "asCell": [
+          "cell"
+        ],
+        "default": {
+          "neurotypes": [],
+          "responses": [],
+          "values": []
+        },
+        "description": "Optional external Writable cell for the self-model.\nWhen provided the pattern uses this cell directly (useful for testing\nand for parent patterns that want to own the storage).\nWhen omitted the pattern creates and owns its own durable cell."
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "self.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AddValueCardEvent": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "sourcePromptId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "Neurotype": {
+        "properties": {
+          "detail": {
+            "additionalProperties": {
+              "type": [
+                "number",
+                "string"
+              ]
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "recordedAt": {
+            "type": "number"
+          },
+          "result": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "self-reported",
+              "assessed"
+            ]
+          },
+          "system": {
+            "$ref": "#/$defs/NeurotypeSystem"
+          }
+        },
+        "required": [
+          "system",
+          "result",
+          "source",
+          "recordedAt"
+        ],
+        "type": "object"
+      },
+      "NeurotypeSystem": {
+        "enum": [
+          "mbti",
+          "enneagram",
+          "big5",
+          "custom"
+        ]
+      },
+      "QAResponse": {
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "answeredAt": {
+            "type": "number"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "promptId": {
+            "type": "string"
+          },
+          "track": {
+            "enum": [
+              "meaning",
+              "neurotype",
+              "freeform"
+            ]
+          }
+        },
+        "required": [
+          "promptId",
+          "prompt",
+          "answer",
+          "track",
+          "answeredAt"
+        ],
+        "type": "object"
+      },
+      "RecordNeurotypeEvent": {
+        "properties": {
+          "detail": {
+            "additionalProperties": {
+              "type": [
+                "number",
+                "string"
+              ]
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "result": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "self-reported",
+              "assessed"
+            ]
+          },
+          "system": {
+            "$ref": "#/$defs/NeurotypeSystem"
+          }
+        },
+        "required": [
+          "system",
+          "result",
+          "source"
+        ],
+        "type": "object"
+      },
+      "RecordResponseEvent": {
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "promptId": {
+            "type": "string"
+          },
+          "track": {
+            "enum": [
+              "meaning",
+              "neurotype",
+              "freeform"
+            ]
+          }
+        },
+        "required": [
+          "promptId",
+          "prompt",
+          "answer",
+          "track"
+        ],
+        "type": "object"
+      },
+      "RemoveNeurotypeEvent": {
+        "properties": {
+          "system": {
+            "$ref": "#/$defs/NeurotypeSystem"
+          }
+        },
+        "required": [
+          "system"
+        ],
+        "type": "object"
+      },
+      "RemoveValueCardEvent": {
+        "properties": {
+          "index": {
+            "description": "Zero-based index of the ValueCard to remove.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "type": "object"
+      },
+      "SelfModel": {
+        "properties": {
+          "neurotypes": {
+            "items": {
+              "$ref": "#/$defs/Neurotype"
+            },
+            "type": "array"
+          },
+          "responses": {
+            "items": {
+              "$ref": "#/$defs/QAResponse"
+            },
+            "type": "array"
+          },
+          "values": {
+            "items": {
+              "$ref": "#/$defs/ValueCard"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "responses",
+          "values",
+          "neurotypes"
+        ],
+        "type": "object"
+      },
+      "Track": {
+        "enum": [
+          "open",
+          "scissor",
+          "closing"
+        ]
+      },
+      "ValueCard": {
+        "properties": {
+          "attendingTo": {
+            "type": "string"
+          },
+          "contextTags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": {
+            "type": "string"
+          },
+          "sourcePromptId": {
+            "type": "string"
+          },
+          "sourceTrack": {
+            "$ref": "#/$defs/Track"
+          },
+          "stance": {
+            "enum": [
+              "descriptive",
+              "aspirational",
+              "conflicted"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Private self-model — the user's values, neurotype, and reflective answers. #selfModel",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addValueCard": {
+        "$ref": "#/$defs/AddValueCardEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "recordNeurotype": {
+        "$ref": "#/$defs/RecordNeurotypeEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "recordResponse": {
+        "$ref": "#/$defs/RecordResponseEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "removeNeurotype": {
+        "$ref": "#/$defs/RemoveNeurotypeEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "removeValueCard": {
+        "$ref": "#/$defs/RemoveValueCardEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "selfModel": {
+        "$ref": "#/$defs/SelfModel"
+      }
+    },
+    "required": [
+      "selfModel",
+      "recordNeurotype",
+      "addValueCard",
+      "recordResponse",
+      "removeNeurotype",
+      "removeValueCard",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

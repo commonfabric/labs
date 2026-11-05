@@ -1,0 +1,29 @@
+diff --git a/packages/memory/v2/server.ts b/packages/memory/v2/server.ts
+--- a/packages/memory/v2/server.ts
++++ b/packages/memory/v2/server.ts
+@@ -5806,7 +5806,6 @@
+       ? session.operationWatches.slice()
+       : watches.filter((watch) => watch.kind === "operation");
+     if (operationWatches.length === 0) return;
+-    const cursors = operationCursors ?? session.operationCursors;
+     const engine = await this.#openEngine(space);
+     this.#attachOperationFieldsWithEngine(
+       engine,
+@@ -5814,7 +5813,7 @@
+       session,
+       sync,
+       operationWatches,
+-      cursors,
++      operationCursors,
+     );
+   }
+ 
+@@ -5825,7 +5824,7 @@
+     session: SessionState,
+     sync: SessionSync,
+     watches: readonly OperationWatchSpec[],
+-    operationCursors: Map<string, OpCursor>,
++    operationCursors: Map<string, OpCursor> = session.operationCursors,
+   ): void {
+     if (watches.length === 0) return;
+     operationActiveWatchCount.record(watches.length);

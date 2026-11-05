@@ -31,7 +31,7 @@ directory. The database is tied to a cell the runtime allocates for this call,
 and its **name is derived from that cell's entity id** — which is itself causal
 to creation and opaque to the pattern. The handle cell reads back
 `{ id, tables, rev }` where `id` is that entity id (see
-[`packages/runner/src/builtins/sqlite-builtins.ts`](../../../packages/runner/src/builtins/sqlite-builtins.ts)
+[`runtime/runner/src/builtins/sqlite-builtins.ts`](../../../runtime/runner/src/builtins/sqlite-builtins.ts)
 `sqliteDatabase`).
 
 - The handle value is stored **self-contained** (one raw inline write, no
@@ -49,7 +49,7 @@ to creation and opaque to the pattern. The handle cell reads back
   The handle is always the one the runtime allocates for the call (cell-derived)
   or one injected into an input from outside (Section 03.3).
 - Cell ids are content-addressed and causally derived
-  ([`packages/runner/src/create-ref.ts`](../../../packages/runner/src/create-ref.ts)).
+  ([`runtime/runner/src/create-ref.ts`](../../../runtime/runner/src/create-ref.ts)).
   The runtime allocates (or reuses) the handle cell in the current frame the same
   way other built-ins allocate their result cells, so the identity is stable
   across re-runs and rehydration but never chosen by the pattern.
@@ -57,7 +57,7 @@ to creation and opaque to the pattern. The handle cell reads back
   **same space's storage directory** as the cell. Spaces are already stored
   one-SQLite-file-per-space under `engine-v3/`
   (`{encodeURIComponent(spaceDid)}.sqlite`, see
-  [`packages/memory/v2/storage-path.ts`](../../../packages/memory/v2/storage-path.ts)).
+  [`runtime/memory/v2/storage-path.ts`](../../../runtime/memory/v2/storage-path.ts)).
   A cell-derived database is a **sibling file** in that directory, named from
   the cell id, e.g. `cell-<entityhash>.sqlite`. Per-file gives the cleanest
   isolation, lets the file boundary act as the SQL namespace (no identifier
@@ -134,13 +134,13 @@ cf piece link sqlite:/abs/path/reference-data.db <piece-id>/db
 ```
 
 How the `sqlite:` scheme works
-([`parseSqliteSource`/`deriveDiskHandleId`](../../../packages/cli/lib/sqlite-source.ts),
-[`linkSqliteDiskSource`](../../../packages/cli/lib/piece.ts); the `cf piece link`
+([`parseSqliteSource`/`deriveDiskHandleId`](../../../runtime/cli/lib/sqlite-source.ts),
+[`linkSqliteDiskSource`](../../../runtime/cli/lib/piece.ts); the `cf piece link`
 action detects the scheme before its normal `parseLink`):
 
 1. `cf` recognizes the `sqlite:` scheme and **create-if-absents a handle cell**
    whose id is **content-derived from `(space DID, absolute path)`** via
-   [`createRef`](../../../packages/runner/src/create-ref.ts). As built the handle
+   [`createRef`](../../../runtime/runner/src/create-ref.ts). As built the handle
    cell lives **in the piece's own space** at that derived id (so its entity id,
    its `value.id`, and the server registry key are the same string); the source
    descriptor (`{ disk: { path } }`) is **server-side registration state keyed by

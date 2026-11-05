@@ -219,14 +219,16 @@ it would take a periodic write of its own: a durable write every few seconds for
 every long-running fetch, which every other replica then reads. That is a real
 cost against a residual risk, and it is not paid here.
 
-Two smaller things are named above and also not fixed here, because each is its
-own change rather than part of this policy. Cancellation does not reach a
-program resolution's network requests, so a hung program host leaves that
-replica pending. And `fetch-program.ts` keeps one `AbortController` for the node
-rather than one per in-flight resolution, so when the input changes mid-flight
-the older resolution is no longer reachable to abort.
+Cancellation does not reach a program resolution's network requests, so a hung
+program host leaves that resolution running. `fetch-program.ts` retains one
+controller per dispatched request and resolved user or session instance. Input
+changes preserve older resolutions so returning to an earlier URL can use its
+result. Stopping the node aborts every local controller and releases its accepted
+claims, including requests waiting for outbox dispatch. Claim cleanup and
+completion guards read under the identity that issued each request. Aborting
+suppresses writeback; it does not stop the resolver's network requests.
 
-`packages/runner/test/fetch-claim-takeover.test.ts` pins what makes the residual
+`runtime/runner/test/fetch-claim-takeover.test.ts` pins what makes the residual
 risk survivable: a slow resolution running in this replica still reaches its
 result, a failing request does not erase a result recorded for the same inputs,
 and the staleness branch itself leaves a fresh claim alone while taking over an

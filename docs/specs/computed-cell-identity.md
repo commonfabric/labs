@@ -86,29 +86,310 @@ changes, and only for entities whose ids carry the computed scheme.
 ### Internal cell identity
 
 The pattern builder assigns each internal root cell a `partialCause` —
-the cell's declared name, or an anonymous `{ $generated: N }` counter, with
-`$kind: "stream"` mixed in for stream cells
-(`packages/runner/src/builder/pattern.ts`). At instantiation the runner
-mints the entity id from the piece's result cell and that partial cause:
+the cell's declared name, the instance name of a named sub-pattern instance,
+or an anonymous `{ $generated: N }` counter, with `$kind: "stream"` mixed in
+for stream cells (`runtime/runner/src/builder/pattern.ts`). The counter
+numbers anonymous roots in the order the builder's walk reaches them, which
+is the pattern's inputs and then its result, `[UI]` tree included, so a
+`{ $generated: N }` cause moves when a cell is added ahead of it anywhere in
+that walk. At instantiation the runner mints the entity id from the piece's
+result cell and that partial cause:
 
 ```ts
 // Shown for illustration only.
 createRef({}, { parent, type: "internal", cause: descriptor.partialCause })
 ```
 
-(`packages/runner/src/link-utils.ts`, `getDerivedInternalCellLink`). The
-result is a `FabricHash`: hash bytes plus an algorithm tag, stringified as
-`<tag>:<base64urlHash>`, e.g. `fid1:abc…`
-(`packages/data-model/src/fabric-primitives/FabricHash.ts`). The hash is
-opaque: nothing about the preimage — including `type: "internal"` or the
+(`runtime/runner/src/derived-internal-cell-ids.ts`,
+`DerivedInternalCellIds.idFor()`, which `getDerivedInternalCellLink` in
+`runtime/runner/src/link-utils.ts` calls; a runtime keeps the ids it has
+hashed, by result cell and partial cause). A partial cause that is an object is
+kept by its identity and must be deep-frozen, as the builder leaves every cause
+it assigns; `idFor()` throws for one that is not. The result is a
+`FabricHash`: hash bytes plus an algorithm tag, stringified as
+`<tag>:<base64urlHash>`, e.g.
+`fid1:abc…`
+(`base/data-model/src/fabric-primitives/FabricHash.ts`). The
+hash is opaque: nothing about the preimage — including `type: "internal"` or the
 partial cause — is recoverable from the id. `hashOf` mints the `fid1` tag at
-a single chokepoint (`packages/data-model/src/value-hash.ts`). The URI layer
-(`packages/runner/src/uri-utils.ts`, `toURI`/`fromURI`) prefixes an entity
+a single chokepoint (`base/data-model/src/value-hash/ValueHasher.ts`). The URI layer
+(`runtime/runner/src/uri-utils.ts`, `toURI`/`fromURI`) prefixes an entity
 scheme onto the tagged hash — historically always `of:`.
 
-The manifest of materialized internal cells is stored in result-cell
-metadata and matched by partial cause plus kind
-(`packages/runner/src/runner.ts`, `materializeDerivedInternalCells`).
+The manifest of materialized internal cells is stored in result-cell metadata
+and matched by partial cause plus kind (`runtime/runner/src/runner.ts`,
+`materializeDerivedInternalCells`). Setup also stamps `patternSetupBuild`, a
+record of the build it staged (`runtime/runner/src/stored-setup-build.ts`): the
+pattern identity it describes, a digest of the level's positional cells by
+number and description, the cells holding state by number and description, and a
+digest of the projection map, each result path that links a positional cell with
+the cell's number. A named instance counts as a positional cell at the number
+of its `legacyPartialCause`, in the cells and in the projection map alike, so a
+build's record is the same whether or not it names instances. The descriptions
+are the schema-free ones of
+`runtime/runner/src/cause-assignment.ts`, so a schema-generator change that
+moves no cell changes no record. A sub-pattern child is described by its
+pattern identity and the least of the names its module gives it, so a child
+its module exports under several names is described alike whichever of them a
+load registers first. A record of another version than the one setup writes
+reads as no record. Because a positional cause is a place in the
+build, two builds of one pattern source can name different cells by one cause,
+and the result projection links each slot to the cell of the build that wrote
+it. A start therefore holds the stored setup against the build it loads
+(`Runner.#storedSetupVerdict`): where the manifest misses one of the build's
+cells or names one the build lacks, or the record describes another build, it
+re-stages the internal cells and the projection when every cell that moved is
+one recomputing restores. Where the record says a cell holding state moved, or
+that cells holding state of one description changed so that which went where
+cannot be told (`ambiguousDescriptions`), the start refuses the piece with
+`PieceStateMovedError`, which names those cells: running it would instantiate
+its children, and read its other cells holding state, at the loaded build's
+numbers, where another cell's state sits. The refusal comes before any of the
+piece's nodes are installed and before any transaction is opened, so no child
+runs and nothing is written, and it leaves no in-memory registration, so the
+next start judges the piece again. The start rejects with the refusal, and
+`startWithCommit()` does so whether the first round of its setup commit or a
+retry's reached it. A setup of the version the record names
+refuses the same way, before staging anything. A child's record is judged when
+the child is set up, as part of instantiating its parent's graph, and a refused
+child stops its parent's start, naming the child (`PieceStateMovedError`'s
+`piece`). `runSynced()` and `runSyncedWithCommit()` start the piece after their
+setup commits and report that refusal to their caller, the second as the cause
+of a `PatternSetupPostCommitError`, which a source update's receipt reports as
+a failed refresh. A bare `run(tx)` whose start comes only after its commit, with
+the child's record not yet loaded, cannot judge the child before it returns: the
+piece is left not running, and the refusal is logged. The stored setup and its
+record stay as evidence of what moved, until a build that numbers those cells as
+the record does, or a migration that moves their state and re-stamps the
+record, lets the piece run. A serving runtime counts a refusal into its
+`structureLoadRefused` stat and parks the refused root until a commit to it
+(`docs/specs/server-side-execution/serving-loop.md`). A document with no record
+of the pattern it runs is judged by its manifest alone: it is re-staged on a
+disagreement only when the build has no cell holding state, and otherwise runs
+over its stored setup as it stands, a hold that reports the disagreement,
+since nothing says any cell moved.
+
+A `{ $generated: N }` cause moves with the compiler as well as with the
+source: a transformer change that adds or removes an anonymous cell ahead of
+another renumbers it under a pattern identity that did not change, and a
+deployed piece then reads the moved cell's state from the document another
+cell wrote. `deno task check-cause-assignments` holds the compiler to the
+base revision's numbering of every in-tree pattern whose source is unchanged
+(`docs/development/automated-gates.md`). It matches the cells of one level
+across the two builds by a description that holds across compilers, and by
+their order among cells of one description
+(`runtime/runner/src/cause-assignment.ts`). So where cells holding state share
+a description and their count or their numbers change, which cell went where
+cannot be told, and the gate fails on that as well.
+
+### Sub-pattern instance identity
+
+A sub-pattern instance runs under a child result cell minted from the
+instance's output spot, `{ resultFor: <spot> }`, and the spot is the
+parent's internal cell for the instance's partial cause. Everything the child
+holds hangs off that result cell, so the partial cause is the child's
+identity.
+
+In a runtime with the `instanceNames` experimental flag on
+(`docs/development/EXPERIMENTAL_OPTIONS.md`, off by default), an instance bound
+to a `const` is a **named instance**. The transformer wraps it in
+`__cfHelpers.nameInstance(Child(...), "child")`
+(`docs/specs/ts-transformer/ts_transformers_current_behavior_spec.md` §13.2),
+and the builder takes that name as the instance's partial cause,
+`{ $instance: "child" }`, wherever no result key, node input or authored
+`.for()` names it already. The name sits under the reserved `$instance` key,
+so no authored cause can equal it, and the cause carries no `$generated`, the
+key of the causes the builder mints for anonymous roots. An instance
+name given to more than one root in a pattern names none of them, and each
+keeps a positional cause. A stream root never takes an instance name, and a
+name given to one does not count toward another root's. A named instance's
+child stays where it is however its siblings are rearranged, and moves only
+when the instance is renamed. A named instance stamps its name on the child it
+sets up, in the child's `instanceName` meta.
+
+A named instance also records, as its descriptor's `legacyPartialCause`, the
+`{ $generated: N }` it would take without its name. It still consumes that
+number, so every other anonymous root keeps the number it would have without
+instance names.
+
+A parent's `instanceChildren` meta lists, as `{ name, child }` entries, the
+child a named instance runs in place of the one minted at its own spot, with
+`child` a link (`{ space, id, scope }`). The name is a value rather than a
+record key, since an instance may take any name a `const` can, among them
+names a stored record may not use as a key, such as `constructor` and
+`__proto__`; an entry repeating an earlier entry's name is ignored. Binding reads it on every setup and start: a named
+instance it records a child for runs that child, and any other named instance
+runs the child at its own spot. The record is how a deployed parent's
+positional child becomes a named instance's child without moving to a new
+document.
+
+A sub-pattern instance with a positional cause moves to another child's state
+when a cell is added ahead of it, since its child is the one minted from
+whatever number it now takes. A parent's setup refuses
+(`refuseDisplacedChildren` in `runtime/runner/src/runner.ts`), with an error
+naming whichever of the two pattern identities it knows, to set up a child:
+
+- at a positional spot or a named instance's spot, over a stored child stamped
+  with another instance's name, whatever the two pattern identities, and
+  whether or not the stored child records one;
+- at a positional spot or a named instance's spot, over a stored child the
+  parent's `instanceChildren` records for another named instance, whatever the
+  two pattern identities;
+- at a positional spot, over a stored child of another pattern identity, when a
+  child of the incoming pattern identity runs at another positional spot of the
+  parent; or
+- at a positional spot, over a stored child of another pattern identity, when
+  another positional spot of the pattern sets up the stored child's pattern
+  identity.
+
+The last two see the parent's positional children having moved spots. A stored
+child of a different identity with no such sign is taken for the same child
+under a newer version of its own source, since a child's identity changes
+whenever its own source does, so none of the rules blocks an ordinary update of
+a child's source. Only positional spots are judged by the last two: a spot a
+result key, a node input, `.for()` or an instance name names does not shift. A
+spot a result key, a node input or `.for()` names is not judged at all, since
+only a named instance stamps a child or has one recorded for it. For a named
+instance, the guard judges the child `instanceChildren` records for it, where it
+records one, rather than the one at its own spot. No rule judges a child that
+is its space's root, which its space's genesis places whatever its cause, or a
+child managed independently in a space of its own, which its parent resumes
+rather than sets up. A spot whose node sets up a space's root is not counted as
+another positional spot either, since its child does not sit there.
+
+Only a parent its updater has pointed at a new pattern is judged: its stored
+`patternIdentity` already names the incoming pattern, while its setup marker,
+`patternSetupIdentity`, names another pattern or none. An updater moves the
+pointer before the setup it asks for, and a live update follows the pointer's
+move. A parent that runs whichever pattern a computation returns, such as a
+`computed` choosing among sub-pattern instances, is set up with a pattern its
+pointer does not yet name, and an unrelated pattern there is no sign that its
+children moved. The guard reads a child only at a positional spot or a named
+instance's spot that the parent's stored manifest of internal cells records,
+or a child the parent's `instanceChildren` records for a named instance, since
+no child can be set up at any other, so a fresh parent's setup reads no child
+at all.
+
+A parent set up under a pattern that did not name an instance holds that
+instance's child at the positional spot. The first setup under a pattern that
+names it carries the child over (`planInstanceCarryOver`), taking the first of
+these that applies:
+
+1. Where the pattern the parent last set up is loaded and names the instance,
+   the child is the one at the `legacyPartialCause` that pattern gives the same
+   instance name. This is exact. The pattern last set up is the one the
+   parent's setup record describes, or, with no record of the current version,
+   the one `patternSetupIdentity` names: a start repair re-stamps the record
+   and leaves the marker alone, and the children sit at the numbers of the
+   build the record describes. That build was made by the runtime that set the
+   parent up, and the cause is one this runtime's build of the same pattern
+   gives, so the record is held against this runtime's build
+   (`compareStoredSetupBuild`). Where it disagrees, a number this runtime's
+   builds give may name another child: the numbers of a cell holding state
+   the record shows at another number, and of every cell of a description
+   whose cells the record cannot be matched with, are ones it cannot vouch
+   for. An instance whose cell is at such a number goes to step 3, as does one
+   step 2 would place at such a spot, and step 4 is skipped for every
+   instance of the parent. With no record, this runtime's build places the
+   instance.
+2. Where that pattern is loaded and does not name the instance, which is new or
+   positional there, the instance is matched by order. Counting the new
+   pattern's positional nodes and such instances of one pattern identity in the
+   order the builder numbered them, the i-th takes the child at the i-th
+   positional spot the previous pattern sets up under that identity. So an
+   instance bound to a `const` in place of an inline one takes the inline one's
+   child, whatever is inserted around it, and so does a new instance of the same
+   pattern added where an inline one was deleted. Reordering instances of one
+   pattern in the same update hands each the state of the one whose place it
+   takes. With no such spot, or no child set up there, the instance goes on to
+   the next step. An instance whose own source changed in the same update goes
+   on that way, since its pattern identity changed with it, and so does a new
+   instance of a pattern the previous pattern does not set up, which step 4
+   then hands the child at its own `legacyPartialCause` where no move shows, as
+   a parent with no instance names does.
+3. Without that pattern, or where step 2 places the instance at no set-up child,
+   it is the one set-up child, among the positional spots the parent's manifest
+   records, whose `patternIdentity` is the instance's own child pattern
+   identity, leaving out a child that a positional node of the pattern still
+   sets up at its own spot under that same identity. More than one such child,
+   or one that two instances would each take, goes on to the next step.
+4. Otherwise, it is the child at the instance's own `legacyPartialCause`, which
+   is where the child runs with no instance names, unless the parent shows the
+   children have moved spots: that child carries an instance name stamp, or it
+   runs a pattern identity other than the instance's own while another
+   sub-pattern node sets up the identity it runs, or a child of the instance's
+   own identity runs at another positional spot the manifest records.
+5. Otherwise nothing is carried over. The instance starts fresh, and the setup
+   logs `instance-carry-over` naming it, its positional cause and the child set
+   up there, if any, and whether another instance keeps that child.
+
+A child is carried over by one instance at most. A start's pre-sync loads the
+previous pattern by identity first, and syncs the children at the positional
+spots the parent's manifest records and at the positional causes the previous
+pattern gives the instances it names, so the steps above find them in a runtime
+that has not read them yet. The carried child's link is recorded by instance
+name in the parent's `instanceChildren` meta, and binding the instance reads it
+there on every later start, so carrying a child over is a one-time transition
+for each deployed parent.
+
+Step 4 is what a parent does with no instance names at all, short of a sign that
+its children moved, so carrying a child over is never worse than running
+positionally. Two corners are left. Where the previous pattern builds, the order
+match of step 2 is a guess for instances of one pattern reordered in the same
+update. Steps 3 and 4 decide an instance without the previous pattern, in a
+parent with no setup marker or whose stored source no longer compiles, and an
+instance step 2 places at no set-up child. There a child can take another's
+state where its parent's children moved in the same update and either their
+pattern identities all changed or more than one of them shares the instance's
+identity, as it does with no instance names. Where its schema refuses a stored
+slot, setup drops the slot and logs `setup-stored-slot-dropped` rather than
+refusing.
+
+The refusal comes before anything the setup stages commits, so a refused
+update changes none of the piece's state. A live update the guard refuses
+leaves the previous pattern running. The piece's pattern pointer still names
+the refused pattern, though, so a fresh start sets that pattern up, refuses
+again, and does not start the piece until the pointer names a pattern the guard
+accepts, such as the source the piece ran before.
+
+What this leaves open:
+
+- Where a child's own source changed in the same update that moved it, its
+  identity changed with it, so the positional rules have nothing to judge by
+  and let the setup through. A child can then take another's state.
+- Anonymous roots other than named instances stay positional: an instance not
+  bound to a `const`, every instance in a runtime with naming off, a `.map()`
+  output and the element children under it.
+  When such a root moves to a number nothing held, its children are minted
+  afresh and the old ones are orphaned with no refusal, since nothing sets up
+  over them.
+- A parent set up as part of an update of an enclosing pattern, rather than
+  pointed at its new pattern by an updater, is not judged, so its own
+  positional children can move onto each other's state.
+- A root its updater points at an unrelated pattern is judged as though it ran
+  a newer version of its own, so it can be refused where the new pattern sets
+  up a stored child's pattern at another positional spot. Pointing it back at
+  the pattern it ran before lets it start again.
+- A runtime change to how a pattern lowers, which adds or removes an
+  anonymous root, renumbers positional roots with no change to the pattern's
+  source. A named instance is immune to that; carrying its child over in step
+  1 relies on the previous pattern compiling under today's runtime to the
+  numbering it was deployed with.
+- A runtime with naming off, or one that predates instance names, binds a
+  parent's children positionally, even where a naming runtime carried them
+  over to their names: reopening the parent, it would run whatever instance
+  now takes a carried child's positional number on that child's document. The
+  memory server keeps such a runtime away: a space is marked at the first
+  commit from a naming runtime, which declares its mode in every open, and the
+  server admits no runtime with naming off to a marked space (INV-16 in
+  [`memory-v2/09-invariants.md`](memory-v2/09-invariants.md#inv-16--instance-naming-admission)),
+  so its reopen or update of such a parent is refused
+  (`runtime/runner/test/instance-naming-modes.test.ts`). A naming runtime of a
+  build older than the declaration declares nothing, and is admitted as
+  positional. The `instanceNames` flag stays off until deployments' posture
+  names instances;
+  [`../plans/instance-names-on.md`](../plans/instance-names-on.md) sequences
+  that and the flip.
 
 ### Transaction provenance
 
@@ -116,9 +397,9 @@ The runner already distinguishes recompute transactions from event-handler
 transactions, but only in process memory:
 
 - Reactive action runs open their transaction with a `changeGroup` and set
-  `tx.tx.sourceAction` (`packages/runner/src/scheduler/action-run.ts`).
+  `tx.tx.sourceAction` (`runtime/runner/src/scheduler/action-run.ts`).
 - Event dispatch sets `tx.dispatchedEventId` and `tx.tx.immediate`
-  (`packages/runner/src/scheduler/events.ts`).
+  (`runtime/runner/src/scheduler/events.ts`).
 
 (A retired mechanism once attached a `SchedulerActionObservation` to
 reactive runs' commits behind `EXPERIMENTAL_PERSISTENT_SCHEDULER_STATE`;
@@ -127,7 +408,7 @@ both were deleted by server-execution v2 Phase 1 stage C — see
 
 ### Commit conflict handling
 
-`ClientCommit` (`packages/memory/v2.ts`) carries `localSeq`, a read set
+`ClientCommit` (`runtime/memory/v2.ts`) carries `localSeq`, a read set
 (confirmed reads with sequence watermarks, pending reads referencing prior
 local commits by `localSeq`), operations, and optional preconditions. A
 commit whose reads are stale relative to the space head is rejected; the
@@ -172,7 +453,7 @@ same last-colon `FabricHash.fromString` parse), and no hash-layer parser
 needs to learn anything.
 
 Kind parsing is by scheme (`entityKindOfIdString`,
-`packages/data-model/src/entity-kind.ts`): the segment
+`base/data-model/src/entity-kind.ts`): the segment
 before the FIRST colon. `computed:fid1:H` parses as kind `"computed"`;
 `of:` URIs, bare tagged hashes (`fid1:H`), non-entity URIs (`data:`),
 colon-free strings, and UNKNOWN schemes (e.g. `future:fid1:H`) all parse as
@@ -201,7 +482,7 @@ Rules:
   unkinded, so it never launders a computed id into the bare world.
   `CellHandle.id()` returns the FULL schemed id and is safe as identity.
 - **One mint site.** `getDerivedInternalCellLink`
-  (`packages/runner/src/link-utils.ts`) applies `descriptor.kind` as the
+  (`runtime/runner/src/link-utils.ts`) applies `descriptor.kind` as the
   URI scheme via `toURI`; a kind change names a different entity because
   the URI string differs, even though the hash bytes do not.
 - **Absence means strict.** Unkinded ids — every existing entity — keep
@@ -210,8 +491,7 @@ Rules:
   default covers everything it cannot classify.
 
 Below the URI layer nothing routes on the scheme: storage and the memory
-engine treat `URI` as an opaque string key (only `data:` URIs get special
-routing), so computed docs flow as ordinary documents. The scheme is learned
+engine treat `URI` as an opaque string key (`snapshot:` and Fabric `data:` URIs are read locally), so computed docs flow as ordinary documents. The scheme is learned
 only by the URI codecs (`uri-utils.ts`, `fabric-import-specifier.ts`,
 `fabric-ref-resolution.ts`) and read by the engine's drop policy via
 `entityKindOfIdString`.
@@ -231,7 +511,7 @@ at the definition site, `entity-kind.ts`.
 ### Builder-side classification
 
 The classifier (`assignComputedCellKinds`,
-`packages/runner/src/builder/pattern.ts`) runs at pattern build time, gated
+`runtime/runner/src/builder/pattern.ts`) runs at pattern build time, gated
 on the flag. Its polarity is **computed by default**: an internal cell with
 a writer is tagged `computed` unless something disqualifies it — even when
 its computation involves writes, because a replayable writer
@@ -314,19 +594,20 @@ Builtins appear at classification time as `type: "ref"` modules whose
 `implementation` is a string NAME — the runtime's module registrations are
 invisible to the builder — so replayability is decided by name against
 `REPLAYABLE_BUILTIN_REFS`
-(`packages/runner/src/builder/builtin-replayability.ts`): `map`, `filter`,
+(`runtime/runner/src/builder/builtin-replayability.ts`): `map`, `filter`,
 `flatMap`, `ifElse`, `when`, `unless`, `sqliteDatabase`. Every other name is
 non-replayable, including the documented set `fetchBinary`, `fetchText`,
 `fetchJson`, `fetchJsonUnchecked`, `fetchProgram`, `streamData`, `llm`,
 `llmDialog`, `compileAndRun`, `generateObject`, `generateText`,
-`navigateTo`, `wish`, and `sqliteQuery` (a server round-trip; an effect
-like `llm`, even though its name suggests a query). The registry is
-deliberately NOT derived from the scheduler's `isEffect` (incomplete on the
-fetch family, and it carries scheduler semantics — do not complete or
-repurpose it) and NOT merged with the scheduler-facing
-`EAGER_RESULT_BUILTIN_REFS` set — same shape, different concern. A
-reciprocal comment at `registerBuiltins` (`builtins/index.ts`) keeps the
-registry in sync when builtins are added.
+`navigateTo`, `wish`, and `sqliteQuery` (a server round-trip, even though
+its name suggests a query). The registry is deliberately NOT derived from
+the scheduler's `isEffect`, which carries scheduler semantics and says
+nothing about replay; do not repurpose it. `isEffect` is one of the ways a node
+becomes a standing demand root, and of these names only `navigateTo` carries
+it. A node reaches the same standing demand by other routes too: `llmDialog`
+holds it as a materializer, through the envelope it declares over the
+`messages` cell it writes. A reciprocal comment at `registerBuiltins`
+(`builtins/index.ts`) keeps the registry in sync when builtins are added.
 
 #### Accepted consequence: result-surface exposure
 
@@ -422,7 +703,8 @@ partial-cause matching materializes the new cell and drops the stale entry
 naturally.
 
 Internal-cell identity is already refactor-fragile — anonymous cells re-mint
-on reorder via the `$generated` counter, named cells on rename — so kind
+when a cell is added ahead of them in the builder's walk, named cells and
+named sub-pattern instances on rename — so kind
 flips add a trigger to an existing hazard class (durable cross-piece links
 pointing at an orphaned entity), not a new class. The flipped classifier
 polarity widens the set of cells that flip when a pattern edit adds or

@@ -1,0 +1,1 @@
+{"date":"2026-08-20","from":{"k":"unit","s":"tasks","n":"parseShard rejects unsafe integer values"},"to":{"k":"unit","s":"tasks","n":"shard-utils > parseShard() > throws given an index or total that is not a safe integer"}}

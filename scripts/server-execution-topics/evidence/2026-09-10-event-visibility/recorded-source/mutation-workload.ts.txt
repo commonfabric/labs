@@ -1,0 +1,523 @@
+import { afterEach, beforeEach, describe, it as registerIt } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
+import { Identity } from "@commonfabric/identity";
+import {
+  getServerExecutionConfig,
+  SERVER_EXECUTION_WATERMARK_DOC_ID,
+  setServerExecutionConfig,
+  streamEntriesDocId,
+  type StreamEventEntry,
+  type StreamEventsDocValue,
+  toDirtyKey,
+} from "@commonfabric/memory/v2";
+import * as Engine from "@commonfabric/memory/v2/engine";
+import type * as MemoryServer from "@commonfabric/memory/v2/server";
+
+import { SpaceServer } from "../../src/executor/space-server.ts";
+import { emptyServingLoopStats } from "../../src/executor/stats.ts";
+import { readWatermarkSeq } from "../../src/executor/watermark.ts";
+import { Runtime } from "../../src/runtime.ts";
+import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
+import type { SealedCommitVerdict } from "../../src/storage/interface.ts";
+import { newSharedServer } from "../memory-v2-test-utils.ts";
+
+const owner = await Identity.fromPassphrase("event visibility owner");
+const service = await Identity.fromPassphrase("event visibility service");
+const space = owner.did();
+const streams = ["a", "b"].map((name) => ({
+  id: `of:visibility-stream-${name}` as const,
+  path: [],
+}));
+const sidecars = streams.map((stream) =>
+  streamEntriesDocId(stream) as `of:${string}`
+);
+const logId = "of:visibility-log";
+
+/** Drain transport and scheduler work while positive-delay timers stay fixed. */
+async function settle<T>(operation: Promise<T>): Promise<T> {
+  await clock.settle();
+  return await operation;
+}
+
+describe("SpaceServer", () => {
+  let server: MemoryServer.Server;
+  let serving: SpaceServer | undefined;
+  let previousServerExecution: boolean;
+
+  beforeEach(() => {
+    previousServerExecution = getServerExecutionConfig();
+    setServerExecutionConfig(true);
+    server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
+  });
+
+  afterEach(async () => {
+    try {
+      if (serving !== undefined) await settle(serving.park("test-teardown"));
+      await settle(server.close());
+    } finally {
+      serving = undefined;
+      setServerExecutionConfig(previousServerExecution);
+    }
+  });
+
+  async function openFixture() {
+    const engine = await server.engineForSpace(space);
+    await settle(
+      server.writeDocument(space, SERVER_EXECUTION_WATERMARK_DOC_ID, {
+        seq: 1,
+      }),
+    );
+    const stats = emptyServingLoopStats();
+    const snapshots: {
+      watermark: number;
+      entries: StreamEventEntry[];
+      log: string[];
+    }[] = [];
+    const called: string[] = [];
+    const entries = () =>
+      sidecars.flatMap((id) =>
+        (Engine.read(engine, { id })?.value as StreamEventsDocValue | undefined)
+          ?.entries ?? []
+      );
+    const storedLog = () =>
+      (Engine.read(engine, { id: logId })?.value as string[] | undefined) ?? [];
+    let runtime: Runtime | undefined;
+    serving = new SpaceServer({
+      space,
+      server,
+      engine,
+      serviceIdentity: service.did(),
+      ensureSpaceRoots: false,
+      localSeqRef: { value: 0 },
+      stats,
+      decorateWaveCommitSink: (sink) => ({
+        currentHeads: (space, docs) => sink.currentHeads(space, docs),
+        concurrentWritePaths: (space, doc, seq) =>
+          sink.concurrentWritePaths(space, doc, seq),
+        commitWave: async (batch) => {
+          const result = await sink.commitWave(batch);
+          snapshots.push({
+            watermark: readWatermarkSeq(engine),
+            entries: entries(),
+            log: storedLog(),
+          });
+          return result;
+        },
+      }),
+      createRuntime: async () => {
+        const manager = EmulatedStorageManager.connectTo(server, {
+          as: service,
+        });
+        runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: manager,
+          servingPosture: true,
+          experimental: { serverExecution: true },
+        });
+        const log = runtime.getCellFromLink<string[]>({
+          space,
+          id: logId,
+          scope: "space",
+          path: [],
+        });
+        await log.sync();
+        for (const [index, stream] of streams.entries()) {
+          await runtime.getCellFromLink({ space, ...stream, scope: "space" })
+            .sync();
+          await runtime.getCellFromLink({
+            space,
+            id: sidecars[index] as `of:${string}`,
+            scope: "space",
+            path: [],
+          }).sync();
+          runtime.scheduler.addEventHandler((tx) => {
+            const name = index === 0 ? "A" : "B";
+            called.push(name);
+            const cell = log.withTx(tx);
+            cell.set([...(cell.get() ?? []), name]);
+          }, { space, ...stream, scope: "space" });
+        }
+        const created = runtime;
+        return {
+          runtime: created,
+          dispose: async () => {
+            await created.dispose();
+            await manager.close();
+          },
+        };
+      },
+    });
+    expect(await settle(serving.activate())).toBe(true);
+    await clock.settle();
+    const notices: MemoryServer.AdmittedCommitNotice[] = [];
+    server.setServerExecutionObserver({
+      commitAdmitted: (notice) => notices.push(notice),
+    });
+    const active = serving;
+    const created = runtime!;
+    let localSeq = 0;
+    return {
+      engine,
+      stats,
+      snapshots,
+      called,
+      entries,
+      storedLog,
+      runtime: created,
+      serving: active,
+      notices,
+      async admit(prefix = "visibility") {
+        const admissions = [];
+        for (const streamIndex of [0, 1, 0]) {
+          admissions.push(
+            await settle(server.commitDelegatedAppend({
+              targetSpace: space,
+              targetStream: sidecars[streamIndex],
+              targetStreamLink: streams[streamIndex],
+              eventId: `${prefix}-${streamIndex}`,
+              payload: {},
+              actingPrincipal: owner.did(),
+              actingSession: "session:visibility-actor",
+              capabilityRef: "cap:visibility",
+              sessionId: "session:visibility-delivery",
+              localSeq: ++localSeq,
+            })),
+          );
+        }
+        return admissions;
+      },
+      async drain() {
+        for (const notice of notices) active.enqueueCommit(notice);
+        await clock.settle();
+      },
+    };
+  }
+
+  it("commits admitted events in arrival order before its watermark covers them", async () => {
+    // An established watch still holds absence when admission creates its
+    // sidecar. Manual fan-out preserves that window until the serving drain
+    // publishes and applies the entries. Every durable wave is inspected.
+    const fixture = await openFixture();
+    const {
+      snapshots,
+      entries,
+      runtime,
+      notices,
+      serving,
+      called,
+      storedLog,
+      stats,
+    } = fixture;
+    const admissions = await fixture.admit();
+    const provider = runtime.storageManager.open(space);
+    const pull = provider.pullToServerHead!.bind(provider);
+    using pulls = stub(provider, "pullToServerHead", pull);
+    expect(admissions.map((admission) => admission.deduped))
+      .toEqual([false, false, true]);
+    expect(entries()).toHaveLength(2);
+    expect(notices).toHaveLength(2);
+    expect(runtime).toBeDefined();
+    for (const id of sidecars) {
+      expect(
+        runtime!.getCellFromLink({
+          space,
+          id: id as `of:${string}`,
+          scope: "space",
+          path: [],
+        }).get(),
+      ).toBeUndefined();
+    }
+    const before = snapshots.length;
+    for (const notice of notices) serving.enqueueCommit(notice);
+    await clock.settle();
+    const eventWaves = snapshots.slice(before);
+    expect(eventWaves.length).toBeGreaterThan(0);
+    for (const wave of eventWaves) {
+      const coveredPending = wave.entries.filter((entry) =>
+        entry.consequenced !== true && typeof entry.seq === "number" &&
+        entry.seq <= wave.watermark
+      );
+      expect(coveredPending).toEqual([]);
+    }
+    expect(eventWaves[0].log).toEqual(["A", "B"]);
+    expect(pulls.calls).toHaveLength(1);
+    expect(stats.events.visibilityBarriers).toBe(1);
+    expect(stats.events.visibilityRecoveries).toBe(1);
+    expect(stats.events.visibilityDeferrals).toBe(0);
+    expect(stats.events.deferredRescansArmed).toBe(0);
+    expect(stats.events.deferredRescansFired).toBe(0);
+    expect(called).toEqual(["A", "B"]);
+    expect(storedLog()).toEqual(["A", "B"]);
+    expect(entries().every((entry) => entry.consequenced === true)).toBe(true);
+    expect(stats.wavesBudgetExhausted).toBe(0);
+    await clock.tick(250);
+    expect(called).toEqual(["A", "B"]);
+    expect(storedLog()).toEqual(["A", "B"]);
+  });
+
+  for (const failure of ["publication", "response"] as const) {
+    it(`keeps the watermark below unavailable events after a ${failure} failure`, async () => {
+      const fixture = await openFixture();
+      await fixture.admit();
+      const provider = fixture.runtime.storageManager.open(space);
+      const flush = server.flushSessions.bind(server);
+      const pull = provider.pullToServerHead!.bind(provider);
+      let failures = 0;
+      using _flush = stub(server, "flushSessions", (spaces) => {
+        if (
+          failure === "publication" && spaces !== undefined && failures === 0
+        ) {
+          failures++;
+          return Promise.reject(new Error("injected publication failure"));
+        }
+        return flush(spaces);
+      });
+      using _pull = stub(provider, "pullToServerHead", () => {
+        if (failure === "response" && failures === 0) {
+          failures++;
+          return Promise.reject(new Error("injected response failure"));
+        }
+        return pull();
+      });
+
+      await fixture.drain();
+      expect(failures).toBe(1);
+      for (const wave of fixture.snapshots) {
+        expect(wave.entries.filter((entry) =>
+          entry.consequenced !== true && typeof entry.seq === "number" &&
+          entry.seq <= wave.watermark
+        )).toEqual([]);
+      }
+      expect(fixture.called).toEqual([]);
+      expect(fixture.stats.events.visibilityBarriers).toBe(1);
+      expect(fixture.stats.events.visibilityRecoveries).toBe(0);
+      expect(fixture.stats.events.visibilityDeferrals).toBe(1);
+      expect(fixture.stats.events.deferredRescansArmed).toBe(1);
+      expect(fixture.stats.events.deferredRescansFired).toBe(0);
+      expect(readWatermarkSeq(fixture.engine)).toBe(1);
+      expect(fixture.entries().map((entry) => entry.consequenced === true))
+        .toEqual([false, false]);
+      // The wave's settle publishes the input even after the preflight failed.
+      // Only the next actual event scan can establish consequence coverage.
+      expect(provider.replica.getDocument(sidecars[0])?.value).toBeDefined();
+
+      await clock.tick(250);
+      expect(fixture.stats.events.deferredRescansFired).toBe(1);
+      expect(fixture.called).toEqual(["A", "B"]);
+      expect(fixture.storedLog()).toEqual(["A", "B"]);
+      expect(fixture.entries().map((entry) => entry.consequenced === true))
+        .toEqual([true, true]);
+      for (const wave of fixture.snapshots) {
+        expect(
+          wave.entries.filter((entry) =>
+            entry.consequenced !== true && typeof entry.seq === "number" &&
+            entry.seq <= wave.watermark
+          ),
+        ).toEqual([]);
+      }
+    });
+  }
+
+  it("marks the current entry index after consumed history compacts during synchronization", async () => {
+    const fixture = await openFixture();
+    await fixture.admit();
+    await fixture.drain();
+    expect(fixture.called).toEqual(["A", "B"]);
+    fixture.notices.length = 0;
+    await fixture.admit("after-compaction");
+    const provider = fixture.runtime.storageManager.open(space);
+    const pull = provider.pullToServerHead!.bind(provider);
+    using pulls = stub(provider, "pullToServerHead", async () => {
+      for (const id of sidecars) {
+        const current = Engine.read(fixture.engine, { id })!
+          .value as StreamEventsDocValue;
+        expect(current.entries).toHaveLength(2);
+        expect(current.entries?.[0].consequenced).toBe(true);
+      }
+      Engine.applyCommit(fixture.engine, {
+        space,
+        sessionId: "visibility-history-compactor",
+        principal: service.did(),
+        commitClass: "system",
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: sidecars.map((id) => ({
+            op: "patch",
+            id,
+            patches: [{ op: "remove", path: "/value/entries/0" }],
+          })),
+        },
+      });
+      server.markSpaceDirty(space, sidecars.map((id) => toDirtyKey(id)));
+      await server.flushSessions([space]);
+      await pull();
+    });
+    const before = fixture.snapshots.length;
+    await fixture.drain();
+    expect(pulls.calls).toHaveLength(1);
+    expect(fixture.snapshots[before]?.log).toEqual(["A", "B", "A", "B"]);
+    expect(fixture.called).toEqual(["A", "B", "A", "B"]);
+    expect(
+      fixture.entries().map((entry) => ({
+        id: entry.eventId,
+        consequenced: entry.consequenced,
+      })),
+    ).toEqual([
+      { id: "after-compaction-0", consequenced: true },
+      { id: "after-compaction-1", consequenced: true },
+    ]);
+  });
+
+  it("leaves admitted events pending when its tenure ends during the visibility response", async () => {
+    const fixture = await openFixture();
+    await fixture.admit();
+    const provider = fixture.runtime.storageManager.open(space);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    using _pull = stub(provider, "pullToServerHead", async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    try {
+      await fixture.drain();
+      await entered.promise;
+      await settle(fixture.serving.park("visibility-test"));
+      release.resolve();
+      await clock.settle();
+      expect(fixture.called).toEqual([]);
+      expect(fixture.storedLog()).toEqual([]);
+      expect(readWatermarkSeq(fixture.engine)).toBe(1);
+      expect(fixture.entries().map((entry) => entry.consequenced === true))
+        .toEqual([false, false]);
+    } finally {
+      release.resolve();
+    }
+  });
+
+  it("skips an entry whose durable consequence arrives during synchronization", async () => {
+    const fixture = await openFixture();
+    await fixture.admit();
+    const provider = fixture.runtime.storageManager.open(space);
+    const pull = provider.pullToServerHead!.bind(provider);
+    using _pull = stub(provider, "pullToServerHead", async () => {
+      Engine.applyCommit(fixture.engine, {
+        space,
+        sessionId: "visibility-consequence",
+        principal: service.did(),
+        commitClass: "system",
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "patch",
+            id: sidecars[0],
+            patches: [{
+              op: "add",
+              path: "/value/entries/0/consequenced",
+              value: true,
+            }, {
+              op: "add",
+              path: "/value/eventWatermark",
+              value: fixture.entries()[0].seq!,
+            }],
+          }, {
+            op: "set",
+            id: logId,
+            value: { value: ["A"] },
+          }],
+        },
+      });
+      server.markSpaceDirty(
+        space,
+        [sidecars[0], logId].map((id) => toDirtyKey(id)),
+      );
+      await server.flushSessions([space]);
+      await pull();
+    });
+    await fixture.drain();
+    expect(fixture.called).toEqual(["B"]);
+    expect(fixture.storedLog()).toEqual(["A", "B"]);
+    expect(fixture.entries().map((entry) => entry.consequenced === true))
+      .toEqual([true, true]);
+  });
+
+  for (
+    const pending of [
+      "unrelated",
+      "absent entry",
+      "different sequence",
+    ] as const
+  ) {
+    const shadow = pending !== "unrelated";
+    it(`completes visibility synchronization with a sealed ${pending} write pending`, async () => {
+      const fixture = await openFixture();
+      const provider = fixture.runtime.storageManager.open(space);
+      await fixture.admit();
+      const hidden = pending === "different sequence"
+        ? {
+          entries: [{
+            ...fixture.entries()[0],
+            seq: fixture.entries()[0].seq! + 100,
+          }],
+        }
+        : { entries: [] };
+      const verdict = Promise.withResolvers<SealedCommitVerdict>();
+      const sealed = provider.replica.sealNative!(
+        {
+          operations: [{
+            op: "set",
+            id: shadow ? sidecars[0] : "of:visibility-unrelated",
+            scope: "space",
+            type: "application/json",
+            value: { value: hidden },
+          }],
+        },
+        undefined,
+        verdict.promise,
+      );
+      let settled = false;
+      void sealed.settled.then(() => settled = true);
+      const pull = provider.pullToServerHead!.bind(provider);
+      let responses = 0;
+      using _pull = stub(provider, "pullToServerHead", async () => {
+        await pull();
+        responses++;
+      });
+      try {
+        await fixture.drain();
+        expect(responses).toBe(1);
+        expect(settled).toBe(false);
+        if (shadow) {
+          expect(fixture.called).toEqual([]);
+          expect(readWatermarkSeq(fixture.engine)).toBe(1);
+          expect(provider.replica.getDocument(sidecars[0])?.value)
+            .toEqual(hidden);
+          expect(provider.replica.unappliedForeignSeqFloor!())
+            .toBe(fixture.entries()[0].seq);
+          // Repeated backstop scans cannot claim the still-hidden event.
+          await clock.tick(250);
+          expect(responses).toBe(2);
+          expect(fixture.called).toEqual([]);
+          expect(readWatermarkSeq(fixture.engine)).toBe(1);
+        } else {
+          expect(fixture.called).toEqual(["A", "B"]);
+          expect(fixture.storedLog()).toEqual(["A", "B"]);
+        }
+      } finally {
+        verdict.resolve({ withdrawn: { message: "test release" } });
+        await settle(sealed.settled);
+      }
+      if (shadow) await clock.tick(250);
+      expect(fixture.called).toEqual(["A", "B"]);
+      expect(fixture.storedLog()).toEqual(["A", "B"]);
+      expect(fixture.entries().map((entry) => entry.consequenced === true))
+        .toEqual([true, true]);
+    });
+  }
+});
+
+function it(name: string, body: () => Promise<void>) {
+  if (name.includes(Deno.args[0] ?? "")) registerIt(name, body);
+}

@@ -1,0 +1,261 @@
+{
+  "status": "historical",
+  "created": "2026-09-15",
+  "archived": "2026-09-15",
+  "reason": "Captured policy-processing counts from the September 14 Loom thread-open investigation.",
+  "counts": {
+    "header-policy-1": {
+      "errors": [],
+      "prepares": 1560,
+      "verificationCalls": 419,
+      "readVisits": 447605,
+      "envelopeLookups": 41747,
+      "refusalCalls": 206,
+      "sourceClauseComparisons": 150020,
+      "rebaseCalls": 454,
+      "rebaseInputEntries": 146425,
+      "mergeCalls": 6212,
+      "mergeInputEntries": 166611,
+      "heavy": {
+        "targets": 201,
+        "readsPerTarget": 2210,
+        "readVisits": 444210,
+        "uniqueReadAddresses": 1507,
+        "sourceDocuments": 203,
+        "scopeCounts": {
+          "space": 1,
+          "session": 202
+        },
+        "identicalReadAddressMultisets": true,
+        "firstEnvelopeValues": 1,
+        "allEnvelopeValues": 53,
+        "uniqueEnvelopeSerializedBytes": 588693,
+        "fullLabelValues": 102,
+        "confidentialityValues": 1,
+        "firstLabelValues": 2,
+        "allTargetSchemaValues": [
+          {}
+        ]
+      }
+    },
+    "header-policy-2": {
+      "errors": [],
+      "prepares": 1560,
+      "verificationCalls": 419,
+      "readVisits": 447605,
+      "envelopeLookups": 41747,
+      "refusalCalls": 206,
+      "sourceClauseComparisons": 150020,
+      "rebaseCalls": 454,
+      "rebaseInputEntries": 146425,
+      "mergeCalls": 6212,
+      "mergeInputEntries": 166611,
+      "heavy": {
+        "targets": 201,
+        "readsPerTarget": 2210,
+        "readVisits": 444210,
+        "uniqueReadAddresses": 1507,
+        "sourceDocuments": 203,
+        "scopeCounts": {
+          "space": 1,
+          "session": 202
+        },
+        "identicalReadAddressMultisets": true,
+        "firstEnvelopeValues": 1,
+        "allEnvelopeValues": 53,
+        "uniqueEnvelopeSerializedBytes": 588693,
+        "fullLabelValues": 102,
+        "confidentialityValues": 1,
+        "firstLabelValues": 2,
+        "allTargetSchemaValues": [
+          {}
+        ]
+      }
+    },
+    "cf-person-inbox-policy-1": {
+      "errors": [],
+      "prepares": 1,
+      "verificationCalls": 2,
+      "readVisits": 1264,
+      "envelopeLookups": 268,
+      "refusalCalls": 0,
+      "sourceClauseComparisons": 0,
+      "rebaseCalls": 329,
+      "rebaseInputEntries": 21439,
+      "mergeCalls": 2150,
+      "mergeInputEntries": 9746
+    }
+  },
+  "rebase": {
+    "errors": [],
+    "calls": 409,
+    "inputEntries": 146587,
+    "matchingEntries": 136458,
+    "contentPathPairs": 112,
+    "objectPathPairs": 311,
+    "distinctViews": 304,
+    "distinctViewValues": 32,
+    "maxViewEntries": 1234,
+    "maxViewSerializedBytes": 424810,
+    "contentPairDuplicateCalls": 297
+  },
+  "offlineReplay": {
+    "candidate": "820bd94a9079633fbbbd27b42e7fc311238edb52",
+    "calls": 206,
+    "usedSourceSnapshots": 106,
+    "sourcePairs": 4010,
+    "inputRecordCount": 37505,
+    "validations": "Full equality, fresh container identity and mutation isolation for every recorded call, both candidates",
+    "limitation": "Offline Deno replay of serialized browser data. Excludes collection, policy decisions and deep-freezing output details. Includes index build once per used source snapshot in each replay. No end-to-end latency claim.",
+    "summaries": {
+      "baseline": {
+        "rawMs": [
+          28.287750000000017,
+          26.533209,
+          26.24066700000003
+        ],
+        "medianMs": 26.533209
+      },
+      "index": {
+        "rawMs": [
+          10.152291999999989,
+          9.704291999999953,
+          9.627459000000044
+        ],
+        "medianMs": 9.704291999999953
+      },
+      "index-result-memo": {
+        "rawMs": [
+          4.180666000000031,
+          4.131374999999991,
+          4.072000000000003
+        ],
+        "medianMs": 4.131374999999991
+      }
+    },
+    "results": [
+      {
+        "rep": 1,
+        "arm": "baseline",
+        "ms": 28.287750000000017,
+        "inputs": 37505,
+        "before": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34",
+        "after": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34"
+      },
+      {
+        "rep": 1,
+        "arm": "index",
+        "ms": 10.152291999999989,
+        "inputs": 37505,
+        "before": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34",
+        "after": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34"
+      },
+      {
+        "rep": 1,
+        "arm": "index-result-memo",
+        "ms": 4.180666000000031,
+        "inputs": 37505,
+        "before": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34",
+        "after": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34"
+      },
+      {
+        "rep": 2,
+        "arm": "index-result-memo",
+        "ms": 4.131374999999991,
+        "inputs": 37505,
+        "before": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34",
+        "after": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34"
+      },
+      {
+        "rep": 2,
+        "arm": "index",
+        "ms": 9.704291999999953,
+        "inputs": 37505,
+        "before": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34",
+        "after": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34"
+      },
+      {
+        "rep": 2,
+        "arm": "baseline",
+        "ms": 26.533209,
+        "inputs": 37505,
+        "before": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34",
+        "after": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34"
+      },
+      {
+        "rep": 3,
+        "arm": "index",
+        "ms": 9.627459000000044,
+        "inputs": 37505,
+        "before": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34",
+        "after": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34"
+      },
+      {
+        "rep": 3,
+        "arm": "baseline",
+        "ms": 26.24066700000003,
+        "inputs": 37505,
+        "before": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34",
+        "after": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34"
+      },
+      {
+        "rep": 3,
+        "arm": "index-result-memo",
+        "ms": 4.072000000000003,
+        "inputs": 37505,
+        "before": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34",
+        "after": "21:52  up  7:24, 14 users, load averages: 33.32 63.25 50.34"
+      }
+    ]
+  },
+  "countAttempts": [
+    {
+      "arm": "runtime",
+      "pane": "header",
+      "rep": "policy-1",
+      "at": "2026-09-15T04:45:11.395Z",
+      "uptimeBefore": "21:45  up  7:16, 14 users, load averages: 44.23 47.90 32.86",
+      "uptimeAfter": "21:45  up  7:17, 14 users, load averages: 53.63 49.45 34.01",
+      "readiness": "visible source counts then runtime idle",
+      "error": null,
+      "instrumentedOpenMs": 10233.699999999255,
+      "visibleBubbles": 50
+    },
+    {
+      "arm": "runtime",
+      "pane": "cf-person-inbox",
+      "rep": "policy-1",
+      "at": "2026-09-15T04:47:04.041Z",
+      "uptimeBefore": "21:47  up  7:18, 14 users, load averages: 97.14 62.46 40.16",
+      "uptimeAfter": "21:47  up  7:18, 14 users, load averages: 95.57 64.42 41.38",
+      "readiness": "visible source counts then runtime idle",
+      "error": null,
+      "instrumentedOpenMs": 993.6999999992549,
+      "visibleBubbles": 50
+    },
+    {
+      "arm": "runtime",
+      "pane": "header",
+      "rep": "policy-2",
+      "at": "2026-09-15T04:49:46.220Z",
+      "uptimeBefore": "21:49  up  7:21, 14 users, load averages: 78.25 72.67 48.64",
+      "uptimeAfter": "21:50  up  7:21, 14 users, load averages: 100.80 78.84 51.98",
+      "readiness": "visible source counts then runtime idle",
+      "error": null,
+      "instrumentedOpenMs": 6159.199999999255,
+      "visibleBubbles": 50
+    },
+    {
+      "arm": "runtime",
+      "pane": "header",
+      "rep": "policy-3",
+      "at": "2026-09-15T04:51:31.849Z",
+      "uptimeBefore": "21:51  up  7:22, 14 users, load averages: 74.25 76.73 53.26",
+      "uptimeAfter": "21:51  up  7:23, 14 users, load averages: 65.52 74.78 52.84",
+      "readiness": "visible source counts then runtime idle",
+      "error": null,
+      "instrumentedOpenMs": 2031.7999999970198,
+      "visibleBubbles": 50
+    }
+  ]
+}

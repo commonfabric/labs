@@ -35,11 +35,9 @@ runs Toolshed on `localhost:8000`; use `dev-local` for the shell, not
 `dev`). Then:
 
 ```bash
-# Create a unique dev key. Redirect from `deno run -A packages/cli/mod.ts`,
-# never `deno task cf` — the task wrapper prints ANSI preamble that corrupts
-# the key file. (Chapter 10 covers the shared `implicit trust` dev identity
-# and the narrow case where you'd derive it instead.)
-deno run -A packages/cli/mod.ts id new > cf.key
+# Create a unique dev key. (Chapter 10 covers the shared `implicit trust` dev
+# identity and the narrow case where you'd derive it instead.)
+deno task cf id new > cf.key
 
 export CF_IDENTITY=./cf.key
 export CF_API_URL=http://localhost:8000
@@ -55,7 +53,7 @@ tab completion:
 
 ```bash
 # zsh: add to ~/.zshrc after compinit (bash: swap zsh -> bash, use ~/.bashrc)
-source <(deno run -A packages/cli/mod.ts completion zsh)
+source <(deno run -A runtime/cli/mod.ts completion zsh)
 ```
 
 It completes commands and flags offline, and — once `CF_IDENTITY`/`CF_API_URL`
@@ -192,9 +190,10 @@ deno task cf piece set-slug myslug <ID>                   # pretty URL
 ```
 
 A reference names the target, and one grammar covers every part of the name:
-`/[@<space>/]<piece>[@<scope>][/<path>]`. The space is a name or a DID, the
-piece a slug or a handle, so `/@my-space/tracker/items` and
-`/@did:key:.../of:fid1:.../items` are the same shape. A reference carrying its
+`//<space>/<piece>[#member][@qualifier…][/<path>]`. The space is a name or a
+DID, the piece a slug or a handle, so `//my-space/tracker@space/items` and
+`//did:key:.../of:fid1:...@space/items` are the same shape. Within the current
+space, `/tracker/items` omits the space and inherits the context scope. A reference carrying its
 space needs no `-s` beside it: the embedded space supplies the target, and a
 `-s` that disagrees with it is refused. So an address copied off one command's
 output drives the next command unchanged, even from a shell configured for a
@@ -227,7 +226,7 @@ streams, same cells. The browser shell is just one more client.
 Tests are patterns that test patterns: instantiate the subject, alternate
 `action` steps and `assert(() => boolean)` assertions, and return them
 under the reserved `[TESTS]` key. From
-`packages/patterns/counter/counter.test.tsx`:
+`patterns/examples/counter/counter.test.tsx`:
 
 ```tsx
 // Shown at module scope.
@@ -256,8 +255,8 @@ export default pattern(() => {
 ```
 
 ```bash
-deno task cf test packages/patterns/counter/counter.test.tsx --verbose
-deno task cf test packages/patterns/my-pattern/      # all tests in a directory
+deno task cf test patterns/examples/counter/counter.test.tsx --verbose
+deno task cf test patterns/my-pattern/      # all tests in a directory
 ```
 
 Notice what makes the subject *testable*: dual type parameters on
@@ -267,7 +266,7 @@ Chapter 3 insisted on them. Keep assertions deterministic — no
 (`fetchJson` and friends) can still be tested deterministically: export a
 module-scope `fetchMocks` array from the test file and the harness injects
 it as the runtime's fetch (worked examples in
-`packages/patterns/examples/fetch-mock.test.tsx`). The guidance from the
+`patterns/examples/fetch-json/fetch-mock.test.tsx`). The guidance from the
 canonical guide: primary verification is still runtime behavior; write
 tests for logic that's awkward or expensive to verify by clicking.
 

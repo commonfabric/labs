@@ -1,0 +1,106 @@
+{
+  "method": "Exact captured/current source; path alias and injected setup/flush failures. Current cleanup closes the manager exactly once and releases the serving enabler. Raw replays write results.json; this file is the compact snapshot. No latency claim.",
+  "runtime": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3\n",
+  "cases": [
+    {
+      "variant": "captured",
+      "case": "path",
+      "sourceSha256": "cb4cd070f208a7423e7a71729478bd570cb7a55fa9e617c27b64eb616b53b137",
+      "injectedSourceSha256": "b6cf9cf54bc7302806243f17216df796d5355fee6db0d0eda21c214c8325f163",
+      "exitCode": 1,
+      "passed": false
+    },
+    {
+      "variant": "captured",
+      "case": "construction",
+      "sourceSha256": "cb4cd070f208a7423e7a71729478bd570cb7a55fa9e617c27b64eb616b53b137",
+      "injectedSourceSha256": "8d775c46898c9797fb177045872e3a8c94d3c65d14b10ceb41970f35cf1db590",
+      "exitCode": 0,
+      "observed": {
+        "case": "construction",
+        "disposed": 0,
+        "closed": 0,
+        "enabled": false,
+        "error": "Error: controlled setup failure"
+      }
+    },
+    {
+      "variant": "captured",
+      "case": "posture",
+      "sourceSha256": "cb4cd070f208a7423e7a71729478bd570cb7a55fa9e617c27b64eb616b53b137",
+      "injectedSourceSha256": "268dbb38b1d7ea9adfce543ba4f678c7df5b116fab6708055cde49be92555076",
+      "exitCode": 0,
+      "observed": {
+        "case": "posture",
+        "disposed": 0,
+        "closed": 0,
+        "enabled": true,
+        "error": "Error: controlled setup failure"
+      }
+    },
+    {
+      "variant": "captured",
+      "case": "flush",
+      "sourceSha256": "cb4cd070f208a7423e7a71729478bd570cb7a55fa9e617c27b64eb616b53b137",
+      "injectedSourceSha256": "96d7f09160b6d1dbd862d483416caada2a20f29953e3af70324144a2fe0dedb8",
+      "exitCode": 0,
+      "observed": {
+        "case": "flush",
+        "disposed": 0,
+        "closed": 0,
+        "enabled": true,
+        "error": "Error: controlled setup failure"
+      }
+    },
+    {
+      "variant": "current",
+      "case": "path",
+      "sourceSha256": "529be9a13435180d153fe5f92ee455c6c0fe6fc8a616b35c98fca74783663b5c",
+      "injectedSourceSha256": "340647457b3f754efd79ba281da73b46f26a71d8898c0add73e8a7b43d54e6c4",
+      "exitCode": 0,
+      "passed": true
+    },
+    {
+      "variant": "current",
+      "case": "construction",
+      "sourceSha256": "529be9a13435180d153fe5f92ee455c6c0fe6fc8a616b35c98fca74783663b5c",
+      "injectedSourceSha256": "097aa678204ec9ccb45620691476f0846d06398dd0aa38d17d9fa50353c5c813",
+      "exitCode": 0,
+      "observed": {
+        "case": "construction",
+        "disposed": 0,
+        "closed": 1,
+        "enabled": false,
+        "error": "Error: controlled setup failure"
+      }
+    },
+    {
+      "variant": "current",
+      "case": "posture",
+      "sourceSha256": "529be9a13435180d153fe5f92ee455c6c0fe6fc8a616b35c98fca74783663b5c",
+      "injectedSourceSha256": "21d141cb95bcc1374ab13adf5e0e7163359ff22280bef1f1998cd5ada0fb4a75",
+      "exitCode": 0,
+      "observed": {
+        "case": "posture",
+        "disposed": 1,
+        "closed": 1,
+        "enabled": false,
+        "error": "Error: controlled setup failure"
+      }
+    },
+    {
+      "variant": "current",
+      "case": "flush",
+      "sourceSha256": "529be9a13435180d153fe5f92ee455c6c0fe6fc8a616b35c98fca74783663b5c",
+      "injectedSourceSha256": "153419770ef633acefae09180f95723f2130dbc55922dda0974bddc9f37e4a2e",
+      "exitCode": 0,
+      "observed": {
+        "case": "flush",
+        "disposed": 1,
+        "closed": 1,
+        "enabled": false,
+        "error": "Error: controlled setup failure"
+      }
+    }
+  ]
+}

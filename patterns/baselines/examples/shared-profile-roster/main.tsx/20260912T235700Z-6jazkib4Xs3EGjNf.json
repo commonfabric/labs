@@ -1,0 +1,193 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Participant": {
+        "properties": {
+          "avatar": {
+            "description": "Avatar URL or glyph, snapshotted from the joiner's profile (may be \"\").",
+            "type": "string"
+          },
+          "joinedAt": {
+            "type": "number"
+          },
+          "name": {
+            "description": "Display name, snapshotted from the joiner's profile at join time.",
+            "type": "string"
+          },
+          "profile": {
+            "asCell": [
+              "cell"
+            ],
+            "description": "Link to the contributor's profile cell — the stable identity key. Two\nparticipants are \"the same\" iff `equals()` matches on this, never on name.",
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "profile",
+          "name",
+          "avatar",
+          "joinedAt"
+        ],
+        "type": "object"
+      },
+      "Roster": {
+        "properties": {
+          "participants": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Participant"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "participants"
+        ],
+        "type": "object"
+      },
+      "ViewerState": {
+        "properties": {
+          "joined": {
+            "description": "Set once this viewer has contributed their entry to the shared roster.",
+            "type": "boolean"
+          },
+          "joinedName": {
+            "description": "The display name shown on the join button after joining (cosmetic only).",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "roster": {
+        "$ref": "#/$defs/Roster",
+        "default": {
+          "participants": []
+        },
+        "description": "Shared roster — every user in the space reads & appends to this.",
+        "scope": "space"
+      },
+      "viewer": {
+        "$ref": "#/$defs/ViewerState",
+        "default": {},
+        "description": "Current viewer's join marker — follows the user, not broadcast directly.",
+        "scope": "user"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "shared-profile-roster/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Participant": {
+        "properties": {
+          "avatar": {
+            "description": "Avatar URL or glyph, snapshotted from the joiner's profile (may be \"\").",
+            "type": "string"
+          },
+          "joinedAt": {
+            "type": "number"
+          },
+          "name": {
+            "description": "Display name, snapshotted from the joiner's profile at join time.",
+            "type": "string"
+          },
+          "profile": {
+            "description": "Link to the contributor's profile cell — the stable identity key. Two\nparticipants are \"the same\" iff `equals()` matches on this, never on name.",
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "profile",
+          "name",
+          "avatar",
+          "joinedAt"
+        ],
+        "type": "object"
+      },
+      "Roster": {
+        "properties": {
+          "participants": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Participant"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "participants"
+        ],
+        "type": "object"
+      },
+      "ViewerState": {
+        "properties": {
+          "joined": {
+            "description": "Set once this viewer has contributed their entry to the shared roster.",
+            "type": "boolean"
+          },
+          "joinedName": {
+            "description": "The display name shown on the join button after joining (cosmetic only).",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "join": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "participantCount": {
+        "type": "number"
+      },
+      "roster": {
+        "$ref": "#/$defs/Roster",
+        "default": {
+          "participants": []
+        },
+        "scope": "space"
+      },
+      "viewer": {
+        "$ref": "#/$defs/ViewerState",
+        "default": {},
+        "scope": "user"
+      }
+    },
+    "required": [
+      "roster",
+      "viewer",
+      "participantCount",
+      "join",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

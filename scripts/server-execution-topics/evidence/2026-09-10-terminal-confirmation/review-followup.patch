@@ -1,0 +1,242 @@
+diff --git a/docs/specs/server-side-execution/serving-loop.md b/docs/specs/server-side-execution/serving-loop.md
+index b9f17a0047..81b507f436 100644
+--- a/docs/specs/server-side-execution/serving-loop.md
++++ b/docs/specs/server-side-execution/serving-loop.md
+@@ -1369,7 +1369,9 @@ input. A shadowed retry waits for the replica's shadow-flip signal, allowing
+ the wave to commit the sealed writes that make its input visible. The load pass
+ runs under §3's flush deadline and is single-flighted across cycles of one
+ tenure. Demand departure drops terminal decisions; a new tenure starts its own
+-pass, and completion from a parked tenure cannot publish a terminal decision.
++pass. Park cancels structure loading at its next asynchronous boundary, before
++any subsequent piece start. Completion from a parked tenure cannot publish a
++terminal decision; park does not wait for unresolved pattern loading.
+ `watermarkClamped` counts
+ non-exhausted cycles whose foreign-write shadow floor is below an input batch
+ head above W. An event-visibility floor can constrain the same cycle, so the
+diff --git a/packages/runner/src/ensure-piece-running.ts b/packages/runner/src/ensure-piece-running.ts
+index 14ee08083a..e6e56bb0c1 100644
+--- a/packages/runner/src/ensure-piece-running.ts
++++ b/packages/runner/src/ensure-piece-running.ts
+@@ -47,6 +47,7 @@ async function followResultCellChain(
+   rootCell: Cell<any>,
+   tx: IExtendedStorageTransaction,
+   observedDocIds: string[],
++  signal?: AbortSignal,
+ ): Promise<Cell<any> | undefined> {
+   let currentCell = rootCell;
+   const visited: NormalizedFullLink[] = [];
+@@ -65,6 +66,7 @@ async function followResultCellChain(
+     if (!observedDocIds.includes(currentId)) observedDocIds.push(currentId);
+ 
+     await currentCell.sync();
++    signal?.throwIfAborted();
+     const resultLink = getMetaLink(currentCell, "result");
+     if (resultLink === undefined) return currentCell;
+ 
+@@ -101,8 +103,8 @@ export type EnsurePieceVerdict = {
+     /** The chain's owning doc, named before it was read, carries no
+      * `patternIdentity` meta at the scope the chain was walked in. A
+      * scoped instance can read meta-less while the space instance holds
+-     * the pointer, so a terminal decision re-asks at the space scope
+-     * first (the caller's confirm step). */
++     * the pointer. The serving caller tries the requested scope, then
++     * falls back to space scope; confirmation repeats that order. */
+     | "no-pattern-meta"
+     /** Meta present but `loadPatternByIdentity` found nothing. */
+     | "pattern-unloadable";
+@@ -131,15 +133,18 @@ export type EnsurePieceVerdict = {
+  * collapsing every exception into a verdict (review thread
+  * r3739139521): the serving loop's demand cycle must distinguish a
+  * deferral from an actual load/start FAILURE; default stays
+- * best-effort for the event-recovery caller.
++ * best-effort for the event-recovery caller. An aborted `signal` stops the
++ * traversal at its next asynchronous boundary and prevents a later piece start.
+  */
+ export async function ensurePieceRunningVerdict(
+   runtime: Runtime,
+   cellLink: NormalizedFullLink,
+-  options?: { propagateErrors?: boolean },
++  options?: { propagateErrors?: boolean; signal?: AbortSignal },
+ ): Promise<EnsurePieceVerdict> {
+   const observedDocIds: string[] = [];
++  const signal = options?.signal;
+   try {
++    signal?.throwIfAborted();
+     const tx = runtime.edit();
+     tx.tx.immediate = true;
+ 
+@@ -160,7 +165,9 @@ export async function ensurePieceRunningVerdict(
+         rootCell,
+         tx,
+         observedDocIds,
++        signal,
+       );
++      signal?.throwIfAborted();
+       if (resultCell === undefined) {
+         return { started: false, reason: "chain-cycle", observedDocIds };
+       }
+@@ -184,6 +191,7 @@ export async function ensurePieceRunningVerdict(
+       // Commit the read transaction before starting the piece
+       runtime.prepareTxForCommit(tx);
+       await tx.commit();
++      signal?.throwIfAborted();
+ 
+       // Load the pattern by its content identity.
+       const pattern = await runtime.patternManager.loadPatternByIdentity(
+@@ -191,6 +199,7 @@ export async function ensurePieceRunningVerdict(
+         identityRef.symbol,
+         cellLink.space,
+       );
++      signal?.throwIfAborted();
+ 
+       if (!pattern) {
+         logger.debug("ensure-piece", () => [
+@@ -224,6 +233,10 @@ export async function ensurePieceRunningVerdict(
+         observedDocIds,
+       };
+     } catch (error) {
++      if (signal?.aborted) {
++        tx.abort(signal.reason);
++        throw error;
++      }
+       // Make sure to commit/rollback the transaction on error
+       try {
+         runtime.prepareTxForCommit(tx);
+diff --git a/packages/runner/src/executor/space-server.ts b/packages/runner/src/executor/space-server.ts
+index 219cec600d..d69f0a2375 100644
+--- a/packages/runner/src/executor/space-server.ts
++++ b/packages/runner/src/executor/space-server.ts
+@@ -542,6 +542,9 @@ export class SpaceServer implements TransactionSealDestination {
+    * its wave keeps running and later cycles join it. */
+   #structureLoadPass: Promise<void> | undefined;
+ 
++  /** Cancellation boundary for structure work owned by this tenure. */
++  readonly #structureLoadAbort = new AbortController();
++
+   /** Documents changed by admissions during the active structure attempt. */
+   #structureLoadChangedDocs: Set<string> | undefined;
+ 
+@@ -4325,7 +4328,7 @@ export class SpaceServer implements TransactionSealDestination {
+       id: root.id as never,
+       scope: scope as never,
+       path: [],
+-    }, { propagateErrors: true });
++    }, { propagateErrors: true, signal: this.#structureLoadAbort.signal });
+     if (
+       verdict.started || scope === "space" ||
+       verdict.reason !== "no-pattern-meta"
+@@ -4337,7 +4340,7 @@ export class SpaceServer implements TransactionSealDestination {
+       id: root.id as never,
+       scope: "space",
+       path: [],
+-    }, { propagateErrors: true });
++    }, { propagateErrors: true, signal: this.#structureLoadAbort.signal });
+     // Merge observed docs: the re-arm must watch both instances' reads.
+     for (const id of verdict.observedDocIds) {
+       if (!spaceVerdict.observedDocIds.includes(id)) {
+@@ -5342,6 +5345,7 @@ export class SpaceServer implements TransactionSealDestination {
+     if (!this.#active) return;
+     this.#active = false;
+     this.#parkRequested = true;
++    this.#structureLoadAbort.abort();
+     this.#options.stats.activeSpaces = Math.max(
+       0,
+       this.#options.stats.activeSpaces - 1,
+diff --git a/packages/runner/test/executor/space-server-terminal-confirmation.test.ts b/packages/runner/test/executor/space-server-terminal-confirmation.test.ts
+index 987ba73ae0..d26b46c9ed 100644
+--- a/packages/runner/test/executor/space-server-terminal-confirmation.test.ts
++++ b/packages/runner/test/executor/space-server-terminal-confirmation.test.ts
+@@ -187,6 +187,93 @@ describe("SpaceServer", () => {
+         }
+       });
+ 
++      for (const parkDuringLoad of [false, true]) {
++        it(`${parkDuringLoad ? "cancels" : "starts"} a resolved piece ${parkDuringLoad ? "after park" : "during its tenure"}`, async () => {
++          const fixture = await openFixture();
++          const publications: Promise<void>[] = [];
++          server.setServerExecutionObserver({
++            commitAdmitted: () => publications.push(server.idle()),
++          });
++          const creatorManager = EmulatedStorageManager.connectTo(server, {
++            as: owner,
++          });
++          const creator = new Runtime({
++            apiUrl: new URL(import.meta.url),
++            storageManager: creatorManager,
++            experimental: { serverExecution: true },
++          });
++          const release = Promise.withResolvers<void>();
++          try {
++            const compiled = await creator.patternManager.compilePattern({
++              main: "/main.tsx",
++              files: [{
++                name: "/main.tsx",
++                contents:
++                  "import { pattern } from 'commonfabric'; export default pattern(() => ({ total: 10 }));",
++              }],
++            }, { space });
++            const root = creator.getCellFromLink({
++              space,
++              id: ids[2],
++              scope: "space",
++              path: [],
++            });
++            await settle(root.sync());
++            const tx = creator.edit();
++            creator.run(tx, compiled, {}, root);
++            expect((await settle(tx.commit())).error).toBeUndefined();
++            await settle(creator.storageManager.synced());
++            await Promise.all(publications);
++            server.setServerExecutionObserver({
++              commitAdmitted: (notice) => fixture.serving.enqueueCommit(notice),
++            });
++            const ref = creator.patternManager.getArtifactEntryRef(compiled)!;
++            const load = fixture.runtime.patternManager.loadPatternByIdentity
++              .bind(fixture.runtime.patternManager);
++            let held = 0;
++            fixture.runtime.patternManager.loadPatternByIdentity = async (
++              ...args
++            ) => {
++              const pattern = await load(...args);
++              if (args[0] === ref.identity && held === 0) {
++                expect(pattern).toBeDefined();
++                held++;
++                await release.promise;
++              }
++              return pattern;
++            };
++            const start = fixture.runtime.start.bind(fixture.runtime);
++            let starts = 0;
++            fixture.runtime.start = async (cell) => {
++              starts++;
++              return await start(cell);
++            };
++            expect(await settle(fixture.serving.activate())).toBe(true);
++            expect(held).toBe(1);
++            expect(starts).toBe(0);
++            if (parkDuringLoad) {
++              await settle(fixture.serving.park("pattern-resolution"));
++            }
++            release.resolve();
++            await clock.settle();
++            expect(starts).toBe(parkDuringLoad ? 0 : 1);
++            const servingRoot = fixture.runtime.getCellFromLink({
++              space,
++              id: ids[2],
++              scope: "space",
++              path: [],
++            });
++            expect(fixture.runtime.runner.pieceGraphIsInstalled(servingRoot))
++              .toBe(!parkDuringLoad);
++            expect(fixture.stats.structureLoadFailures).toBe(0);
++          } finally {
++            release.resolve();
++            await settle(creator.dispose());
++            await settle(creatorManager.close());
++          }
++        });
++      }
++
+       for (const scope of ["space", "user"] as const) {
+         it(`confirms a cold ${scope} chain using only its traversed addresses`, async () => {
+           const fixture = await openFixture(scope);

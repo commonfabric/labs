@@ -27,6 +27,16 @@ not evidence of what to write. A new file follows this guide closely. An edit
 to an existing file conforms the area around the edit; converting a whole file
 is its own change, made deliberately rather than as a side effect.
 
+## What a test checks
+
+A test checks the behavior that users care about, not implementation details,
+so a correct refactor leaves it unchanged. It fails when that behavior breaks;
+check this by breaking the behavior and running the test.
+
+A test checks the negative as well as the positive: the code acts where it
+should, and does not act where it should not. A test of a filter checks that it
+keeps a match and that it drops a non-match.
+
 ## Where a test file lives, and what it is called
 
 Unit tests go in a `test` directory directly under the package they test, not
@@ -39,8 +49,8 @@ That rule is about a package of interdependent source files. A directory whose
 entries are instead independent components — each self-contained, with no
 shared structure for a parallel tree to mirror — keeps each component's test
 beside it, and that arrangement is correct where it is already in use.
-`packages/ui` is one, a component and its test sitting together in the
-component's own directory. `packages/patterns` is another, where a pattern and
+`runtime/ui` is one, a component and its test sitting together in the
+component's own directory. `patterns` is another, where a pattern and
 its test are a pair; its tests are pattern tests, so nothing else in this guide
 reaches them, but the placement question is the same one. A `test/` tree buys
 nothing in either case: what it would mirror is a flat list of unrelated
@@ -49,8 +59,8 @@ find. Follow whichever arrangement the directory already uses.
 
 Name the file `<topic>.test.ts`, where `<topic>` is one of:
 
-- The base name of the source file under test — `value-hash.test.ts` for
-  `value-hash.ts`. This is the default.
+- The base name of the source file under test — `value-clone.test.ts` for
+  `value-clone.ts`. This is the default.
 - The name of a single class, function, or other export, when the file tests
   only that one thing — `SchemaAndHash.test.ts`. Prefer this when it applies.
 - A `lower-kebab-case` phrase describing the subject, when the tests span
@@ -88,6 +98,29 @@ banners. A `describe()` title appears in the test run transcript, where it
 tells a reader which group failed; a comment does not. A comment that turns out
 to describe several adjacent tests is the usual sign that a group is missing;
 see [Commenting a block](#commenting-a-block).
+
+### Each case stands on its own
+
+A case may not depend on another case in the file having run. What a case
+needs goes in the case or in a hook, and that reaches process-wide setup as
+much as it reaches a local fixture: a one-time initialization another case
+happens to trigger is setup like any other.
+
+A whole-file run passes either way, so nothing local shows the dependence.
+What shows it is a lane of a continuous-integration run, which takes part of
+a file and skips the rest, so the case whose setup came from a sibling fails
+there and nowhere else.
+[Test selection](test-selection.md#a-case-that-fails-only-when-its-siblings-do-not-run)
+holds the recipe for running one case of a file with its siblings skipped.
+
+The shuffle every run applies does not find such a dependence either, and the
+shape this guide asks for is why. `deno test --shuffle` reorders a run's files
+and each file's top-level registrations, and a file holding one top-level
+`describe()` registers one test whose cases are its steps, which keep their
+order. So a case leaning on a sibling is caught by a lane that skips that
+sibling, and by nothing else.
+[Every test run shuffles its order](TESTING.md#every-test-run-shuffles-its-order)
+covers what the shuffle does reach.
 
 ### Describing a class
 
@@ -176,6 +209,14 @@ not ``describe("`eatDonut()`")``.
 Description strings may run past the 80-column line width the rest of the
 repository holds to. A description that reads well is worth more than a
 description that wraps well.
+
+Changing a description renames the test. The description string, together with
+the `describe()` chain above it, is the test's identity in the run-record
+store, so a reworded description starts a fresh identity and leaves the old
+one's history where it was. Append a line under
+`tasks/test-identity-aliases/` to join the two halves, as described in
+[test records](test-records.md). No gate reports a rename that was never
+bridged.
 
 ### Commenting a block
 
@@ -453,7 +494,7 @@ expect(replica.getDocument(id, "space")).toBeUndefined();
 
 `hasDocumentRecord()` reports whether the replica holds a record for the
 document, which is the predicate the absence-reconciliation path in
-`packages/runner/src/storage/v2.ts` decides by. A record appears once the
+`runtime/runner/src/storage/v2.ts` decides by. A record appears once the
 replica has examined the document and also once a local write for it is
 pending, so a case turning on the first of those says in a comment that
 nothing has written the document yet.

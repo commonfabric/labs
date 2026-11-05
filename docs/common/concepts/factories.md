@@ -51,8 +51,8 @@ const append = handler<{ text: string }, { rows: Writable<string[]> }>(
 
 export interface Output {
   appendFactory: HandlerFactory<
-    { rows: Writable<string[]> },
-    { text: string }
+    { text: string },
+    { rows: Writable<string[]> }
   >;
 }
 
@@ -70,6 +70,11 @@ closures preserve synchronous speculative visibility; a cold closure delays
 only ordered server submission, not the authored setter or local commit.
 Cells and links remain opaque aliases rather than snapshots of their current
 factory value.
+
+Factory derivations survive the same trip. In particular, `asScope()` and the
+complete `inSpace()` placement — its selector, grants, root reservation, space
+kind, and self-ownership request — are reapplied when the runner materializes a
+stored pattern factory.
 
 ## Inline pattern closures
 

@@ -1,0 +1,90 @@
+{
+  "argumentSchema": false,
+  "pattern": "examples/fetch-program-test.tsx",
+  "resultSchema": {
+    "$defs": {
+      "JSXElement": {
+        "anyOf": [
+          {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          },
+          {
+            "$ref": "#/$defs/UIRenderable"
+          },
+          {
+            "properties": {},
+            "type": "object"
+          }
+        ]
+      },
+      "UIRenderable": {
+        "properties": {
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          }
+        },
+        "required": [
+          "$UI"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "#/$defs/JSXElement"
+      },
+      "program": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "properties": {
+              "files": {
+                "items": {
+                  "properties": {
+                    "contents": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "contents"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "main": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "files",
+              "main"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "result": true,
+      "url": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI",
+      "url",
+      "program",
+      "result"
+    ],
+    "type": "object"
+  }
+}

@@ -1,0 +1,247 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "SharedFile": {
+        "properties": {
+          "id": {
+            "description": "Hash of the media type and bytes, prefixed `fid1:`.",
+            "type": "string"
+          },
+          "mediaType": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "type": "number"
+          },
+          "uploadedBy": {
+            "asCell": [
+              "cell"
+            ],
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "url": {
+            "description": "Absolute URL the bytes are served from.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadedBy",
+          "id",
+          "name",
+          "mediaType",
+          "size",
+          "url"
+        ],
+        "type": "object"
+      },
+      "ViewerClaim": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "profile": {
+            "asCell": [
+              "cell"
+            ],
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "ViewerValue": {
+        "$ref": "#/$defs/ViewerClaim",
+        "default": {}
+      }
+    },
+    "properties": {
+      "files": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SharedFile"
+        },
+        "type": "array"
+      },
+      "viewer": {
+        "$ref": "#/$defs/ViewerValue",
+        "scope": "user"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "file-share/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AddFilesEvent": {
+        "properties": {
+          "detail": {
+            "properties": {
+              "files": {
+                "items": {
+                  "$ref": "#/$defs/UploadedFile"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "SharedFile": {
+        "properties": {
+          "id": {
+            "description": "Hash of the media type and bytes, prefixed `fid1:`.",
+            "type": "string"
+          },
+          "mediaType": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "type": "number"
+          },
+          "uploadedBy": {
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "url": {
+            "description": "Absolute URL the bytes are served from.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadedBy",
+          "id",
+          "name",
+          "mediaType",
+          "size",
+          "url"
+        ],
+        "type": "object"
+      },
+      "UploadedFile": {
+        "properties": {
+          "id": {
+            "description": "Hash of the media type and bytes, prefixed `fid1:`.",
+            "type": "string"
+          },
+          "mediaType": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "type": "number"
+          },
+          "url": {
+            "description": "Absolute URL the bytes are served from.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "mediaType",
+          "size",
+          "url"
+        ],
+        "type": "object"
+      },
+      "ViewerClaim": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "profile": {
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addFiles": {
+        "$ref": "#/$defs/AddFilesEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "claimViewer": {
+        "$ref": "#/$defs/ViewerClaim",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "fileCount": {
+        "type": "number"
+      },
+      "files": {
+        "default": [],
+        "description": "The shared list, as a read-only view.",
+        "items": {
+          "$ref": "#/$defs/SharedFile"
+        },
+        "scope": "space",
+        "type": "array"
+      }
+    },
+    "required": [
+      "files",
+      "fileCount",
+      "addFiles",
+      "claimViewer",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

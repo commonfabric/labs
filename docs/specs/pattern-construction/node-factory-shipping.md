@@ -84,9 +84,9 @@ protocol. An inline pattern closes over the values to bind, and the resulting
 
 All three factory kinds are directly branded callable Factory@1 values.
 Registered Fabric codecs preserve their kind, content-addressed builder artifact
-ref, schemas, params, scope, and space selector, and context-free decode returns
-an inert callable shell. Runner-owned materialization is the only execution
-chokepoint.
+ref, schemas, params, scope, space selector, and complete `inSpace()` creation
+request, and context-free decode returns an inert callable shell. Runner-owned
+materialization is the only execution chokepoint.
 
 Although `lift()` exposes only its generic call signature, its runtime value is
 an ordinary module factory. Compiler lowering therefore recognizes a trusted
@@ -103,7 +103,17 @@ Nested patterns use lexical closure conversion: public input is callback
 argument 0, closure params are callback argument 1, and the transformer carries
 the private params schema through `withPatternParamsSchema(callback, schema)`
 before applying its private one-shot `.curry(params)` operation. List lowering
-passes one bound factory and no sibling params.
+passes one bound factory and no sibling params. A runtime-owned, keyless list
+adapter instead binds its private value into the generated graph before passing
+that single capture-free factory; hidden factory params require a durable
+artifact ref and are not a back door for session-only factories.
+The row piece's stored argument therefore carries only its public list input;
+captured state remains in the bound factory. Authorization for a captured
+writable follows its verified binding identity at that factory boundary, never
+a duplicated writable alias under a sibling `params` field. When a new pattern
+version binds that capture to another cell, its replacement factory installs
+the new verified binding just as direct sub-pattern composition does; no
+separate durable params slot keeps the prior cell.
 
 Direct factory-function `toJSON()` remains a compatibility graph serializer.
 Canonical Fabric writers dispatch through the Factory@1 codec. `$implRef`
@@ -120,9 +130,13 @@ unbound, because the embedded graph does not contain the hidden factory params
 state. Such a value remains a factory at the Fabric boundary and fails the
 normal missing-ref validation. Keyless module and handler factories have no
 embedded-graph fallback. A session-local keyless pattern identity hashes the
-same normalized embedded graph. Result projection likewise normalizes
-graph-local builder artifacts before alias binding, so the binding walk does
-not misclassify builder artifacts as arbitrary JavaScript functions.
+same normalized embedded graph. Hashing a live legacy graph serializes its
+runtime-owned module descriptors through their encodable form and excludes the
+graph's serializer methods; those methods are graph machinery, not authored
+function values. This exception is available only after the graph has already
+been admitted as a session-local keyless pattern. Result projection likewise
+normalizes graph-local builder artifacts before alias binding, so the binding
+walk does not misclassify builder artifacts as arbitrary JavaScript functions.
 
 ## Goals
 
@@ -326,9 +340,12 @@ This is the only author-facing currying model in version 1.
 
 `asScope()` and `PatternFactory.inSpace()` continue returning new factories.
 Their state is part of `Factory@1`, so modifiers survive storage. The raw
-`inSpace()` selector is retained until graph construction; serializing a named,
-anonymous, or cell-derived selector must not prematurely resolve it in the
-writer's runtime.
+`inSpace()` selector and its copied creation request (`grants`, `root`,
+`spaceKind`, and `selfOwned`) are retained until graph construction;
+serializing a named, anonymous, or cell-derived selector must not prematurely
+resolve it in the writer's runtime. The request is authored placement metadata,
+not `FrameworkProvided` compiler metadata, and it is revalidated through the
+ordinary `inSpace()` builder when a runner materializes the factory.
 
 For a pattern with closure params, modifiers may be applied before or after the
 transformer-created binding. Every derivation preserves whether params are
@@ -408,6 +425,12 @@ interface PatternFactoryStateV1 extends FactoryStateBaseV1 {
   params?: FabricPlainObject;
   defaultScope?: CellScope;
   spaceSelector?: FabricValue;
+  spaceRequest?: {
+    grants?: Record<string, "READ" | "WRITE" | "OWNER">;
+    root?: true;
+    spaceKind?: string;
+    selfOwned?: true;
+  };
 }
 
 interface ModuleFactoryStateV1 extends FactoryStateBaseV1 {
@@ -453,6 +476,9 @@ cannot change.
 
 JavaScript hardening of the callable before registration does not imply Fabric
 deep-frozenness; the side-table state is not canonical until sealing succeeds.
+Generic deep-freeze inspection therefore returns false for an admitted but
+unsealed factory. Conversion may seal and freeze it, but no function-shaped
+leaf shortcut may claim that its hidden mutable state is already frozen.
 
 `module` covers `ModuleFactory`, including factories returned by `lift`,
 `byRef`, raw/builtin builders, and equivalent helpers.
@@ -561,10 +587,11 @@ prepareFactory(
 
 The warm hook returns an existing live builder factory or synchronously
 resolves an indexed shell. The async-ready form may cold-load the artifact,
-then reconstruct the correct callable builder factory and reapply params and
-modifiers. Owner/generation information fences an async result from reviving a
-stopped or superseded consumer. Authored code receives only the completed live
-callable; a decoded shell is never used as a lazy executable wrapper.
+then reconstruct the correct callable builder factory and reapply params,
+scope, and the complete `inSpace()` selector and request. Owner/generation
+information fences an async result from reviving a stopped or superseded
+consumer. Authored code receives only the completed live callable; a decoded
+shell is never used as a lazy executable wrapper.
 
 `artifactSpace` is trusted boundary provenance, not a field accepted from
 `Factory@1`. It identifies where the content-addressed source closure is
@@ -603,6 +630,10 @@ verified source closure for every factory ref recursively contained in that
 value. The containing write is determined after data-URI expansion, link
 normalization, and codec-state traversal; data URIs are transport syntax and do
 not create a separate durability exception.
+An immutable value stays under its runtime-local `snapshot:` identifier until a
+portable boundary asks for an encoded form. That boundary emits the canonical
+data URI, and a durable write expands either immutable form into the containing
+document before storage.
 
 Publication preserves the memory system's optimistic local-commit contract:
 
@@ -623,6 +654,14 @@ Publication preserves the memory system's optimistic local-commit contract:
    roots. Every other verified module identity retains its separately rooted
    forward-import closure, so a factory defined outside the entry module remains
    synchronously publishable without including importer-only siblings.
+   The same rule applies to selector-schema preparation during ordinary Cell
+   synchronization: when a selector names no external schema documents, the
+   preparation path performs no await and starts the provider sync in the
+   caller's existing synchronous turn. Only an actual cold schema-document
+   fetch introduces an asynchronous readiness boundary. That continuation is
+   single-shot: if a fetched document is absent or the closure remains
+   unverifiable, the sync fails closed instead of recursively resubmitting the
+   same selector.
 3. If a trusted source closure is not loaded, the same local commit remains
    speculative while runner-owned preparation loads and verifies it. No
    authored callback or setter becomes asynchronous.
@@ -660,6 +699,14 @@ Publication preserves the memory system's optimistic local-commit contract:
    every builder artifact already indexed under that identity to its canonical
    durable ref.
 
+Ordinary runtime commits, scheduler waves, effect completions, and direct
+server commits all preserve this split for the same logical commit. Semantic
+operations seal into the optimistic local overlay immediately, while wire-only
+artifact publication remains outside that overlay. Each server submission
+awaits and prepends the publication operations to the containing atomic batch;
+later submissions cannot pass a cold predecessor, and publication confirmation
+or rejection follows the durable verdict for that batch.
+
 Verified module evaluation assigns every indexed builder callable its complete
 content-addressed artifact ref immediately; exact-space artifact availability
 is a separate fact. This lets internal inline inputs encode canonical Factory@1
@@ -671,11 +718,21 @@ An evaluated artifact may be reused across spaces because its identity fixes
 the module bytes, but the requested source space is verified independently
 before that reuse grants exact-space availability. A globally warm evaluation
 alone never authorizes a source space and a compiled-only cache is insufficient
-without the verified source closure needed for cold recovery.
+without the verified source closure needed for cold recovery. Verification
+includes every fabric-imported source closure, so a missing import rejects that
+space before shared compilation begins and cannot poison a load in another
+space that holds the complete closure.
 Source verification also does not satisfy a deferred compiled-cache repair. If
 a non-persisting preview warmed an artifact, the next ordinary load bypasses
 that warm artifact, repairs the runtime-versioned cache, and only then clears
 the deferred-repair marker; another preview may reuse it without persisting.
+Likewise, verified source availability in a destination does not establish
+that a compiled-cache variant exists there. An in-memory load may execute from
+the already materialized artifact, but it still copies or writes the compiled
+closure into that destination before a fresh runtime can claim a warm hit.
+An in-flight local publication can make the already materialized artifact
+usable speculatively, but it does not become an exact-space durable source
+until the publication confirms.
 Once a verified module identity evaluates successfully, a missing export or
 hoist symbol is a definitive miss for that evaluation; it does not trigger a
 second compilation or evaluation of the same bytes.
@@ -693,8 +750,9 @@ Publication installs exact `cid:` code and schema leaves with idempotent `set`
 operations. The memory engine verifies that each document's inner value hashes
 to its id; an equal re-set is a no-op and different content is an integrity
 failure. Source, compiled, and cache-root documents use `ensure` because their
-identity-bearing core is content-addressed while their import/root sets may
-grow and incidental annotations may differ. An artifact ensure is resolved
+identity-bearing core is content-addressed while their synthetic root sets may
+grow and incidental annotations may differ. Authored imports remain part of
+the core. An artifact ensure is resolved
 against durable server state, not expressed as a compare-and-swap read of the
 destination cache document:
 
@@ -708,11 +766,18 @@ ensure(id, expected)
 The equality payload is the canonical identity-bearing artifact content;
 incidental annotations, cache metadata, and CFC representation are handled by
 their owning layers and cannot turn an identical artifact into a conflict.
-Both operation forms remain wire-only preparation for the containing write and
-never enter the speculative replica independently. Concurrent publication of
-the same closure is therefore idempotent and does not reject either containing
-write. Different content under one content identity is
-not a harmless race and must fail closed.
+An `ensure` passes the same ordinary document admission as a `set`, including
+inline-label metadata requirements and link/schema-envelope validation. Its
+idempotent comparison and additive-root policy do not provide a route around
+admission.
+Both operation forms remain wire-only only when an artifact-publication
+preparation produces them for the containing write, and never enter the
+speculative replica independently. An ordinary content-addressed operation
+staged by the transaction itself remains a semantic operation: it enters the
+speculative replica immediately and promotes or reverts with the transaction.
+Concurrent publication of the same closure is therefore idempotent and does
+not reject either containing write. Different content under one content
+identity is not a harmless race and must fail closed.
 
 Synthetic `cf:cache-root/` edges are closure-load topology, not authored module
 imports and not part of a module's Merkle identity. Stored source documents and
@@ -737,6 +802,13 @@ source and runtime-versioned compiled identity sets with the destination. A
 destination that independently verifies but covers only an older topology is
 repaired; a destination superset is accepted without rewriting. Exact-space
 availability is granted only after that coverage proof.
+
+Source and compiled topology are verified independently. Replication preserves
+the origin's complete verified source closure, including attached source-only
+roots, while requiring and copying compiled documents only for the entry's
+authored-import closure selected by that runtime-versioned compilation. A valid
+source-only root is not a missing compiled module and remains available for a
+later cold recovery.
 
 The global source-root set may retain valid synthetic helper generations from
 several compiler/runtime versions. A runtime-versioned compiled closure selects
@@ -946,6 +1018,10 @@ and stream writes, normal result/output binding, query-result-derived Cell
 handles, runtime-client, CLI, and FUSE adapters. A route may not bypass
 publication merely because it reaches storage through a binding or a derived
 handle rather than `Cell.set()` directly.
+Result binding carries the outer factory's publication context through every
+object and array branch of hidden state. A nested alias therefore cannot write
+any part of that state before the complete outer factory closure is publishable
+in the alias target's space.
 Factory-publication preflight uses the same atomic-leaf classifications as the
 write it precedes. In particular, it does not enumerate live query-result
 views, because doing so would add dependencies proportional to unread container
@@ -956,12 +1032,14 @@ target space, not the address space of the link container. A later cross-space
 publication therefore copies from the space that actually supplied the artifact.
 
 When a parent pattern is built, traversal recursively maps `params` and
-`spaceSelector`. Captured cells become normal aliases, captured factory state
+`spaceSelector`. The already validated, primitive-only `spaceRequest` remains
+factory metadata. Captured cells become normal aliases, captured factory state
 recurses, and a derived branded factory is returned with the mapped hidden
 state. A captured factory Cell/link remains a symbolic binding with its link
 parent and artifact-source provenance intact; traversal never reads it merely
 to snapshot the currently selected ref. No public or enumerable `curried`
-property is required.
+property is required. When traversal changes no hidden state, it retains the
+original callable factory identity.
 
 ## Pattern Closure Transformation
 
@@ -1099,7 +1177,9 @@ The compiler-only method has exactly one argument and these rules:
    the author-facing `PatternFactory` type does not declare it.
 2. It always binds callback argument 1. There is no argument-index parameter.
 3. The supplied record is the complete closure environment and must satisfy
-   the trusted params schema.
+   the trusted params schema. Capability validation is substitutive: a
+   writable `Cell` satisfies a read-only capture slot, while a read-only cell
+   does not satisfy a writable slot; stream capability remains distinct.
 4. It returns a new branded `PatternFactory` whose hidden state contains
    `params`.
 5. It does not change the public TypeScript input type or public
@@ -1131,6 +1211,10 @@ the normal back-link to `result` for resume and teardown.
 Before child nodes instantiate, setup resolves the bound factory state's params
 against the parent binding context, writes or links them into this cell while
 preserving CFC labels, and supplies the cell to alias resolution.
+Preservation follows ordinary reference semantics: a cross-space capture stays
+a link, so its source labels remain on the source and are visible through the
+params cell's dereferenced label view; they are not copied into the params
+document's stored label map.
 
 Factory-valued entries in params follow the same exposure rules as public
 input. During graph construction their aliases remain bindings; neither curry
@@ -1202,6 +1286,18 @@ invalidate and rerun the coordinator so it can install the resumed rows and
 publish the rebuilt aggregate. Ordinary aggregate comparison reads remain
 non-scheduling to avoid read-own-output feedback; only this absent-container
 presence probe owns the recovery wake-up.
+
+A list that only appears empty while its input is still loading retains the
+resume batch's initial-sync hold. Once the input sync confirms an empty or
+absent durable value, that batch is complete. Any later non-empty value is an
+ordinary post-resume edit: `map`, `filter`, and `flatMap` start its new row
+patterns immediately rather than carrying the retired resume hold forward.
+
+List-row planning resolves each element slot once before it derives row
+identity and scope. When a slot's link chain is cyclic, the slot names no value
+and its own place in the list is the canonical fallback for both purposes.
+Scope derivation uses that already-resolved place; it must not follow the
+cyclic link chain again and fail the whole list operation.
 
 An asynchronous replay of a session-local projection may still own
 broader-scoped computed cells whose identities survive the session. The caller
@@ -1429,7 +1525,13 @@ keyword is made order-insensitive by this rule. Schema-generator's expanded
 is limited to a real runner Cell and that exact two-arm empty-array
 representation: the absence arm contains only `type: "array"`, `items: false`,
 and `default: []`. It does not apply to arbitrary reactive-shaped values or
-widen ordinary authored unions. Schema variance is deferred.
+widen ordinary authored unions. For the same trusted Cell comparison, a simple
+`anyOf` whose arms contain only scalar `type` keywords is equivalent to the
+corresponding `type: [...]` spelling after nested Cell markers are removed. A
+root `default` on an `anyOf` is compared at its unique matching object branch,
+which is where a producing Cell schema may retain that annotation; no rewrite
+occurs when the default matches zero or multiple branches. Schema variance is
+deferred.
 Local URI-fragment JSON Pointers are split into segments before percent decoding,
 so a `%2F` names a slash inside one property rather than a path separator.
 Every `argumentSchema`, `resultSchema`, `contextSchema`, and `eventSchema`
@@ -1510,11 +1612,24 @@ alone is not proof: property writes, mutable aliases, exports, or arbitrary-call
 escapes make the binding ineligible. The compiler must not execute authored code
 to discover a schema. A schema expression that requires execution or lacks that
 stability proof is rejected when compiling a first-class factory contract
-rather than producing a knowingly mismatched containing schema.
+rather than producing a knowingly mismatched containing schema. A top-level
+factory whose exact contract is not embedded in another value may retain an
+executable authored schema expression: normal module evaluation supplies that
+schema to the factory constructor. Direct static invocation likewise uses the
+constructed factory's contract. The compiler reports the rejection only when
+it must copy that contract into a containing schema or hoisted closure; merely
+transforming the builder call does not execute the expression or guess its
+value. This top-level deferral applies equally to `pattern()`, `lift()`, and
+`handler()`; all three fail closed when the same executable schema would need
+to become a nested first-class contract.
 `toSchema<T>(options)` is a compiler-owned schema source rather than authored
 execution: for a proven-stable reference, contract capture uses the same schema
 generator and options evaluation as final emission. Arbitrary calls remain
-unresolvable and fail closed.
+unresolvable and fail closed. JSON-compatible object and array assembly may
+spread or select from a proven `toSchema<T>(options)` value and overlay other
+statically resolvable schema data; this is structural evaluation of compiler
+output, not execution of authored code. The same assembly hidden behind an
+authored helper call remains unresolvable.
 
 Schema-light factories may still be passed and stored. Before symbolically
 invoking a `type: "ref"` module factory such as `byRef()`, resolution follows
@@ -1589,6 +1704,24 @@ eager synchronous read of reactive graph input and could shift the internal
 expected-contract argument. Direct calls on live factories retain ordinary
 JavaScript call semantics.
 
+A statically selected pattern node stores the directly branded PatternFactory
+as its module value. Every runner path that plans the node, including cold
+resume, owned-cell discovery, setup-build cause assignment, instance
+carry-over, view installation, and ordinary instantiation, presents that value
+to the existing pattern-module planner without rewriting the stored graph. A
+first-class factory must not be rejected as an unknown legacy module or omitted
+from stateful-cell accounting merely because planning occurs before the node's
+normal instantiation path.
+The compatibility adapter recognizes only pattern factories. Direct module and
+handler factories remain on their existing module and event paths rather than
+being rejected or reclassified as static pattern nodes.
+
+Adding a factory-selection dependency to scheduled nodes does not weaken
+view-local graph installation. A transaction restricted to local reads must
+not chase an unavailable static write redirect while registering a node; it
+records the redirect set as incomplete and leaves resolution to the node's
+ordinary runtime dependency collection.
+
 At instantiation, the runner subscribes to the binding before its first value.
 Initial absence means that the node is pending and has no child. Once a value
 exists, the runner reads it in the consuming transaction, validates kind and
@@ -1623,8 +1756,16 @@ that first run, never unrelated activity already present in the enclosing
 transaction. On a different canonical factory state, that scope instance's
 supervisor:
 
+Long-lived scheduled registrations retain only transactionless input and
+result Cells. Each execution rebinds those Cells to its own transaction before
+materializing factory inputs. A registration must not retain the transaction
+that instantiated its piece merely because its argument schema can carry a
+factory.
+
 1. increments a generation token and cancels the prior instance;
-2. fences late async writes/results from older generations;
+2. aborts any still-ready transaction owned by the prior generation before
+   the replacement runs, then fences late async writes/results from older
+   generations;
 3. tears down the prior child internals and stream subscription while retaining
    the call site's output binding;
 4. resolves and validates the replacement, including artifact-source
@@ -1644,9 +1785,24 @@ named by the notification's resolved scope key. JavaScript promises are not
 forcibly settled; the canceled promise may finish later, but its transaction
 and subscriptions are generation-fenced and cannot commit. The replacement
 begins when the ordinary scheduler lane advances.
+Canonical `map`, `filter`, and `flatMap` factory supervisors use the same
+identity rule: their cancellation listener filters keyed notifications to the
+coordinator's user/session identity and performs its authoritative reread under
+that identity, so another demander's replacement cannot stop these rows.
 Cancellation owns both an installed child registration and any deferred
 named-family start that has not installed one yet; a superseded deferred start
 cannot become live after the replacement has written its params.
+An event queued at a stable stream call site remains owned by the exact handler
+registration captured at enqueue time. Replacing that registration drops the
+older intent; it does not retarget the event into the new handler. The one
+exception is the scheduler-owned whole-piece pattern-swap protocol described
+below: an event explicitly held on that transition follows the registration
+chosen when the swap settles. Registration-generation fences also cancel
+readiness and prevent an already executing superseded handler from committing.
+A non-served client intent with no durable re-delivery path may hydrate in place
+when its exact handler registers. A served intent remains owned by the durable
+drain: a handler registered inside speculative setup does not consume it, and
+the creating consequence re-drains it only after that setup commits.
 The selection transaction stages the new content-addressed pattern pointer
 before a named-family delay in the child's full setup. That pointer is visible
 through the normal synchronous speculative commit, and subsequent setup commits
@@ -1742,7 +1898,12 @@ a nested list/dynamic handler has registered yet: the event remains parked for
 that exact registration. A failed piece start settles it as an error. This rule
 applies only to an intent that had no registration when queued. It does not
 retarget an event already captured by an older handler generation into a
-replacement registration. Runtime teardown is a terminal owner cancellation:
+replacement registration. The existing whole-piece pattern-swap protocol is a
+separate scheduler-owned transition: an event parked on that explicit pattern
+change follows the handler registration chosen when the swap settles, or keeps
+its captured handler when the piece stops without installing a replacement.
+That exception does not let a direct dynamic-handler generation retarget its
+own parked events. Runtime teardown is a terminal owner cancellation:
 it settles any still-load-pending intent before waiting for scheduler
 quiescence, aborts the event-owned load continuation before it can start a
 piece after teardown, and releases the scheduler's wait even when the
@@ -1768,7 +1929,11 @@ the parked attempt without recording the ready key, so the scheduler reruns the
 coordinator and starts a fresh pre-sync. A coordinator parked on either cold
 factory readiness or this row readiness is deliberately absent from ordinary
 scheduler running-work counts, so plain `idle()` remains available to unrelated
-reactive work. Once a resumed row pre-sync is selected, it is registered with
+reactive work. When the enclosing piece pre-sync already named the exact row
+family under the selected pattern identity, the coordinator consumes that
+evidence and does not plan or sync the row a second time. Rows without that
+evidence retain the separate cold fallback. Once a resumed row pre-sync is
+selected, it is registered with
 the client-facing durable-readiness barrier: `idleWithPendingCommits()`. The
 `pull()`/piece-start safe-read paths join that barrier when their ordinary
 reactive-idle pass discovers pending durable readiness. They stay open until the
@@ -1788,6 +1953,9 @@ The selection reads above occur in the consuming action/event transaction so
 CFC authority and reactive dependencies flow from the actual current value.
 Prewarming outside that transaction is cache-only and cannot authorize later
 execution.
+When a caller needs the post-readiness value across a runtime boundary, it uses
+the commit-aware pull barrier. Plain reactive idleness may still expose the
+speculative absence while publication or replacement settlement is pending.
 
 ## Resolution
 
@@ -1809,6 +1977,11 @@ not use the pattern's execution `spaceSelector`:
 
 This generalized `loadArtifactByIdentity()` path serves pattern, module, and
 handler factories.
+
+An LLM tool call that waits on this cold path retains the turn's abort signal
+across preparation. After the await and before opening a transaction, starting
+a pattern, or sending a handler event, it rechecks cancellation. A canceled
+turn may warm the trusted artifact cache, but it cannot begin tool execution.
 
 There are three cold entry paths: non-transactional Promise-based root
 `setup(undefined, ...)`, a direct dynamic node, and scheduled `lift`/handler
@@ -1880,6 +2053,9 @@ an internal materializer must call it to create a derived shell.
   execution.
 - CFC and alias traversal descend into params, so hiding params from the public
   object shape does not hide their labels or dependencies.
+- That traversal does not restore a pattern-level join from every public input
+  onto every result cell. Confidentiality follows the node edge that consumes
+  a value; the pattern body itself only assembles the graph.
 - A factory's schema, ref, description, or debug preview is never an authority
   grant.
 
@@ -2059,6 +2235,9 @@ child is interpreted as metadata, because a heterogeneous map schema can
 project a direct factory shell to an empty object. Discovery reads an
 already-resolved leaf directly; it does not require another resolution
 operation before applying the same admission checks.
+An ordinary non-factory tool takes the legacy catalog path without asking for a
+runner materialization context; the runner resolves that context only after a
+factory leaf has been selected.
 
 The same no-wildcard rule applies to scheduled callbacks that choose among
 heterogeneous factories. Their input schema must retain every concrete factory
@@ -2165,29 +2344,29 @@ Each stage is independently testable and revertible.
 
 ## Implementation Areas
 
-- `packages/data-model`: FabricFactory type arm and brand, `FactoryCodec`, codec
-  registry function dispatch, conversion, freeze/clone, equality/hash, JSON
-  cycle tracking, and formal type declarations.
-- `packages/memory` and runner storage/update paths: treat branded factories as
+- `base/data-model`: FabricFactory type arm and brand,
+  `FactoryCodec`, codec registry function dispatch, conversion, freeze/clone,
+  equality/hash, JSON cycle tracking, and formal type declarations.
+- `runtime/memory` and runner storage/update paths: treat branded factories as
   atomic codec values at storage boundaries, preserve them through patches and
   diffs, and reject unbranded functions even when an identical callable reaches
   a read or comparison fast path.
-- `packages/api`: mirrored FabricFactory and `asFactory` schema declarations;
+- `base/api`: mirrored FabricFactory and `asFactory` schema declarations;
   keep `.curry` out of the public `PatternFactory` type.
-- `packages/runner/src/builder`: brand/state attachment for every factory,
+- `runtime/runner/src/builder`: brand/state attachment for every factory,
   pre-construction callback params-schema metadata, pattern params root,
   internal curry derivation, symbolic invocation helper, modifier persistence,
   root-token provenance, and live-to-canonical protocol traversal.
-- `packages/runner`: params pseudo-alias types and binding functions, hidden
+- `runtime/runner`: params pseudo-alias types and binding functions, hidden
   params-cell metadata/lifecycle, dynamic-module supervision, generic artifact
   resolution/loading, runner materialization, scheduled action/event readiness
   and retry ownership, artifact-source context, and compatibility adapters.
-- `packages/schema-generator`: recognize all factory kinds before generic
+- `base/schema-generator`: recognize all factory kinds before generic
   callable handling and emit public factory schemas.
-- `packages/ts-transformers`: capture analysis, nested-pattern closure rewrite,
+- `base/ts-transformers`: capture analysis, nested-pattern closure rewrite,
   `withPatternParamsSchema` emission, deterministic hoisting, symbolic call
   lowering, framework-input threading, list callback lowering, and diagnostics.
-- `packages/llm`, CLI, FUSE, and schema formatting: consume Factory values
+- `base/llm`, runtime CLI/FUSE, and schema formatting: consume Factory values
   directly.
 - pattern sources: replace `patternTool` with inline patterns.
 
@@ -2204,6 +2383,8 @@ Each stage is independently testable and revertible.
   keyless artifacts, kind mismatches, and schema mismatches.
 - Reject encode/hash/deep-freeze before ref sealing and verify that a sealed
   factory's state and hash never change.
+- Assert generic value-kind dispatch and visitors recognize admitted factories
+  through the dedicated factory tag while arbitrary functions remain invalid.
 - Verify equal state hashes equally across independent module evaluations.
 - Verify params and space selectors participate in traversal and hashing.
 - In untransformed builder unit tests, give every nested factory an explicit
@@ -2227,6 +2408,8 @@ Each stage is independently testable and revertible.
   callees; reject cross-kind callable unions.
 - Lower `map`/`filter`/`flatMap` captures through a bound PatternFactory rather
   than a sibling params object.
+- Permit executable authored schemas on top-level pattern, lift, and handler
+  construction while rejecting them when a nested contract must be embedded.
 
 ### Runtime
 
@@ -2256,7 +2439,8 @@ Each stage is independently testable and revertible.
 - Capture and invoke another stored factory from a nested pattern.
 - Verify Factory state uses the builder artifact ref, never an implementation
   `$implRef`, and exercise schema-light `byRef()` resolution.
-- Preserve `asScope()` and every `inSpace()` selector form across round-trip.
+- Preserve `asScope()`, every `inSpace()` selector form, and every creation
+  option (`grants`, `root`, `spaceKind`, and `selfOwned`) across round-trip.
 - Resume all factory kinds cold by content-addressed identity.
 - Resolve a cross-space linked factory from its artifact source while applying
   `spaceSelector` only as the child execution target; verify by-value transport
@@ -2266,6 +2450,11 @@ Each stage is independently testable and revertible.
   allowing them to read its pending overlay.
 - Publish concurrent identical closures idempotently; reject different content
   under the same artifact identity as an integrity failure.
+- Keep authored cache imports in the immutable ensure core while concurrent
+  synthetic roots union additively; verify retained roots are not compiled as
+  authored source input.
+- Cancel during a cold LLM-tool load and assert no pattern or handler starts
+  after readiness completes.
 - Exercise factory publication through arrays, codec-backed Fabric instances,
   ordinary output bindings, writable query-result proxies, runtime-client, CLI,
   and FUSE.

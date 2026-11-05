@@ -1,0 +1,1 @@
+{"date":"2026-10-30","from":{"k":"unit","s":"cf-harness","n":"loom-authoring > held Pattern Instances > resolves held whole instances and rejects restricted, foreign-space, and subpath tokens"},"to":{"k":"unit","s":"cf-harness","n":"loom-authoring > held Pattern Instances > resolves producer refs and rejects restricted, foreign-space, and subpath tokens in a DID session"}}

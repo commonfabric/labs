@@ -1,0 +1,11 @@
+--- a/packages/runner/src/executor/space-server.ts
++++ b/packages/runner/src/executor/space-server.ts
+@@ -3082,7 +3082,7 @@
+               path: ["entries", String(index)],
+             }).get();
+           const matches = (value: ReturnType<typeof readViewEntry>) =>
+-            value?.eventId === entry.eventId && value?.seq === entry.seq;
++            value?.eventId === entry.eventId;
+           let viewEntry = readViewEntry();
+           const provider = runtime.storageManager.open(space);
+           if (

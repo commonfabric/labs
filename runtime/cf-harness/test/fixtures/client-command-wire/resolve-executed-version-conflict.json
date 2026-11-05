@@ -1,0 +1,51 @@
+{
+  "sessionId": "session-1",
+  "actionId": "action-2",
+  "settlement": {
+    "status": "executed",
+    "attribution": {
+      "approval": "person",
+      "actor": "user",
+      "loomActor": "user",
+      "service": "http://127.0.0.1:8000",
+      "originLoomId": "loom-fedcba9876543210"
+    },
+    "outcome": {
+      "executor": "loom",
+      "transportStatus": 409,
+      "ok": false,
+      "id": "loom.move",
+      "code": "version-conflict",
+      "error": "expected version 12, the loom is at 14",
+      "bodyBytes": 328,
+      "body": {
+        "ok": false,
+        "id": "loom.move",
+        "code": "version-conflict",
+        "message": "expected version 12, the loom is at 14",
+        "version": 14,
+        "manifest": {
+          "loom_id": "loom-0123456789abcdef",
+          "title": "Reading",
+          "version": 14,
+          "components": [
+            {
+              "id": "c-1",
+              "kind": "page",
+              "title": "Notes"
+            },
+            {
+              "id": "c-2",
+              "kind": "pattern",
+              "title": "Reading list"
+            }
+          ],
+          "selection": [
+            "c-1"
+          ]
+        }
+      }
+    },
+    "receipt": "loom.move did not run: the loom changed (version 14)."
+  }
+}

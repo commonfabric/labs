@@ -1,0 +1,39 @@
+{
+  "head": "d66493076b00ad62533436dcbfb91163e63354b9",
+  "command": [
+    "deno",
+    "run",
+    "-A",
+    "tools/server-execution-topics/serving-probe.ts"
+  ],
+  "cwd": "/Users/berni/.codex/worktrees/topics-campaign-grace-verify-d664/labs",
+  "sourceSha256": "42122d2c5d53aee9d61a5f5fb31d284a4a34e7a3a95d04249a98b71aaed51238",
+  "runtime": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3\n",
+  "loadBefore": [
+    18.291015625,
+    22.64501953125,
+    25.54150390625
+  ],
+  "kind": "Controlled grace/terminal observation, not latency",
+  "sourceChecks": [
+    {
+      "phase": "before",
+      "head": "d66493076b00ad62533436dcbfb91163e63354b9",
+      "status": "?? tools/server-execution-topics/serving-probe.ts\n"
+    },
+    {
+      "phase": "after",
+      "head": "d66493076b00ad62533436dcbfb91163e63354b9",
+      "status": "?? tools/server-execution-topics/serving-probe.ts\n"
+    }
+  ],
+  "startedAt": "2026-09-10T23:02:21.449473+00:00",
+  "exitCode": 0,
+  "endedAt": "2026-09-10T23:02:22.700693+00:00",
+  "loadAfter": [
+    18.291015625,
+    22.64501953125,
+    25.54150390625
+  ],
+  "captureDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/grace-current-d664-01"
+}

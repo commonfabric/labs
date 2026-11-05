@@ -1,0 +1,10 @@
+{"fallback":false,"flag":"unset","expected":false}
+{"fallback":false,"flag":"false","expected":false}
+error: Uncaught (in promise) AssertionError: Expected "error" to be an Error object.
+    throw new AssertionError(
+          ^
+    at assertIsError (https://jsr.io/@std/expect/1.0.20/_assert_is_error.ts:27:11)
+    at toThrow (https://jsr.io/@std/expect/1.0.20/_matchers.ts:1042:10)
+    at applyMatcher (https://jsr.io/@std/expect/1.0.20/expect.ts:231:13)
+    at Proxy.<anonymous> (https://jsr.io/@std/expect/1.0.20/expect.ts:241:13)
+    at file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/tools/server-execution-topics/evidence/2026-09-10-incremental-watch/review/verify-seed-posture.ts:40:70

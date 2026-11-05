@@ -1,0 +1,107 @@
+diff --git a/packages/runner/src/cfc/consumed-label-index.ts b/packages/runner/src/cfc/consumed-label-index.ts
+index b7dcb0e206..8c959ad1f6 100644
+--- a/packages/runner/src/cfc/consumed-label-index.ts
++++ b/packages/runner/src/cfc/consumed-label-index.ts
+@@ -49,10 +49,20 @@ const createNode = (): Node => ({
+ export class ConsumedLabelIndex {
+   #root = createNode();
+
+-  /** Constructs an instance over validated entries, canonicalizing each path once. */
+-  constructor(entries: readonly LabelMapEntry[]) {
++  /**
++   * Constructs a snapshot over validated entries. `canonicalPaths` preserves
++   * paths already in payload coordinates, including a field named `value`.
++   */
++  constructor(
++    entries: readonly LabelMapEntry[],
++    options: { canonicalPaths?: boolean } = {},
++  ) {
+     for (const [ordinal, entry] of entries.entries()) {
+-      const path = canonicalizeLogicalPath(entry.path);
++      const path = options.canonicalPaths
++        ? Object.isFrozen(entry.path)
++          ? entry.path
++          : Object.freeze([...entry.path])
++        : canonicalizeLogicalPath(entry.path);
+       const indexed = { entry, path, ordinal };
+       let current = this.#root;
+       current.descendants.push(indexed);
+@@ -73,14 +83,21 @@ export class ConsumedLabelIndex {
+
+   /**
+    * Ancestor, equal, and descendant entries in their original map order.
++   * With `includeDescendants` false, returns ancestors and equals only.
+    * `path` must already be canonical: a payload field named `value` must not
+    * lose another segment when querying the index.
+    */
+-  overlapping(path: readonly string[]): readonly IndexedEntry[] {
+-    if (path.length === 0) return this.#root.descendants;
++  overlapping(
++    path: readonly string[],
++    includeDescendants = true,
++  ): readonly IndexedEntry[] {
++    if (path.length === 0) {
++      return includeDescendants ? this.#root.descendants : this.#root.exact;
++    }
+     if (path.includes("*")) {
+       return this.#root.descendants.filter((source) =>
+-        isPrefix(source.path, path) || isPrefix(path, source.path)
++        isPrefix(source.path, path) ||
++        (includeDescendants && isPrefix(path, source.path))
+       );
+     }
+     const candidates: IndexedEntry[] = [];
+@@ -88,7 +105,10 @@ export class ConsumedLabelIndex {
+     for (const segment of path) {
+       for (const entry of current.exact) candidates.push(entry);
+       for (const source of current.wildcard) {
+-        if (isPrefix(source.path, path) || isPrefix(path, source.path)) {
++        if (
++          isPrefix(source.path, path) ||
++          (includeDescendants && isPrefix(path, source.path))
++        ) {
+           candidates.push(source);
+         }
+       }
+@@ -98,9 +118,12 @@ export class ConsumedLabelIndex {
+       }
+       current = child;
+     }
+-    // The query ends at a concrete prefix. Every entry below it overlaps,
++    // Recursive reads also include every entry below this concrete endpoint,
+     // including wildcard tails bucketed here or at a deeper concrete node.
+-    for (const entry of current.descendants) candidates.push(entry);
++    const finalEntries = includeDescendants
++      ? current.descendants
++      : current.exact;
++    for (const entry of finalEntries) candidates.push(entry);
+     return candidates.sort((a, b) => a.ordinal - b.ordinal);
+   }
+ }
+diff --git a/packages/runner/src/cfc/prepare.ts b/packages/runner/src/cfc/prepare.ts
+index cd8ee1c310..7ae87afa57 100644
+--- a/packages/runner/src/cfc/prepare.ts
++++ b/packages/runner/src/cfc/prepare.ts
+@@ -7204,12 +7204,20 @@ export const prepareBoundaryCommit = (
+           label: entry.label,
+         })),
+       ];
++      let authoritativeIndex: ConsumedLabelIndex | undefined;
+       const authoritativeCoverFor = (
+         entryPath: readonly string[],
+       ): IFCLabel | undefined => {
++        authoritativeIndex ??= new ConsumedLabelIndex(authoritativeEntries, {
++          canonicalPaths: true,
++        });
+         let best: { path: readonly string[]; label: IFCLabel } | undefined;
+-        for (const auth of authoritativeEntries) {
+-          if (!isPrefix(auth.path, entryPath)) continue;
++        for (
++          const { entry: auth } of authoritativeIndex.overlapping(
++            entryPath,
++            false,
++          )
++        ) {
+           if (best === undefined || auth.path.length > best.path.length) {
+             best = auth;
+           } else if (auth.path.length === best.path.length) {

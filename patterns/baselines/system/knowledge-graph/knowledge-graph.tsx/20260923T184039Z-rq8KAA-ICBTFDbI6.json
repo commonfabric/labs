@@ -1,0 +1,136 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "system/knowledge-graph.tsx",
+  "resultSchema": {
+    "$defs": {
+      "CellScope": {
+        "enum": [
+          "space",
+          "user",
+          "session"
+        ]
+      },
+      "JSXElement": {
+        "anyOf": [
+          {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          },
+          {
+            "$ref": "#/$defs/UIRenderable"
+          },
+          {
+            "properties": {},
+            "type": "object"
+          }
+        ]
+      },
+      "Pattern": {
+        "properties": {
+          "argumentSchema": true,
+          "defaultScope": {
+            "$ref": "#/$defs/CellScope"
+          },
+          "resultSchema": true
+        },
+        "required": [
+          "argumentSchema",
+          "resultSchema"
+        ],
+        "type": "object"
+      },
+      "UIRenderable": {
+        "properties": {
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          }
+        },
+        "required": [
+          "$UI"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "#/$defs/JSXElement"
+      },
+      "compoundNodes": true,
+      "edges": {
+        "items": true,
+        "type": "array"
+      },
+      "getNeighbors": {
+        "properties": {
+          "extraParams": {
+            "properties": {
+              "edges": {
+                "items": true,
+                "type": "array"
+              }
+            },
+            "required": [
+              "edges"
+            ],
+            "type": "object"
+          },
+          "pattern": {
+            "$ref": "#/$defs/Pattern"
+          },
+          "useResultSchemaForObservation": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pattern",
+          "extraParams"
+        ],
+        "type": "object"
+      },
+      "searchGraph": {
+        "properties": {
+          "extraParams": {
+            "properties": {
+              "compoundNodes": true,
+              "edges": {
+                "items": true,
+                "type": "array"
+              }
+            },
+            "required": [
+              "edges",
+              "compoundNodes"
+            ],
+            "type": "object"
+          },
+          "pattern": {
+            "$ref": "#/$defs/Pattern"
+          },
+          "useResultSchemaForObservation": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pattern",
+          "extraParams"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI",
+      "edges",
+      "compoundNodes",
+      "getNeighbors",
+      "searchGraph"
+    ],
+    "type": "object"
+  }
+}

@@ -1,8 +1,8 @@
 # CFC Authoring Contract
 
 **Status:** Implemented direct-authoring contract
-**Scope:** `packages/api`, `packages/ts-transformers`,
-`packages/schema-generator`
+**Scope:** `base/api`, `base/ts-transformers`,
+`base/schema-generator`
 
 This document specifies the compile-time contract for CFC-aware TypeScript
 authoring. It is intentionally narrower than the runner CFC specs: the concern
@@ -41,13 +41,39 @@ Related contracts:
 The canonical compiler-facing carrier is:
 
 ```ts
-type Cfc<T, Meta> = T & {
-  readonly __ct_cfc__?: Meta;
+type CfcStamp<T, Meta> = {
+  readonly meta?: Meta;
+  readonly of?: T;
 };
+
+type CfcTag<T, Meta, Stamp = CfcStamp<T, Meta>> = [T] extends [unknown]
+  ? { readonly __ct_cfc__?: Stamp } | Extract<T, null | undefined>
+  : { readonly __ct_cfc__?: Stamp } | Extract<T, null | undefined>;
+
+type Cfc<T, Meta> = T & CfcTag<T, Meta>;
 ```
 
 `Cfc<T, Meta>` must preserve the runtime/schema shape of `T` and only add to
-the emitted `ifc` metadata.
+the emitted `ifc` metadata. The stamp records the payload `T` beside the
+metadata. TypeScript merges the carrier into whatever the value is merged
+into, and the recorded payload is what tells the schema generator which part
+of the merged value the policy names (mapping spec §11).
+
+The tag leaves `null` and `undefined` beside the stamp, since an intersection
+with the stamp alone would reduce them to `never`, and the intersection
+distributes over `T`'s members. So `Confidential<string | null, L>` is
+`(string & carrier) | null`, holds `null`, and keeps the alias name a reader of
+its type finds the declaration by. While `T` holds a type parameter the tag is
+a conditional the checker defers, so `Cfc<T, Meta>` around a bare type
+parameter is one intersection, whose members are read through it; around
+`T | null` it is a union, as around any other union. The conditional checks
+`[T]`, and both its branches are the same type, so a value of the payload's
+type is assignable to `Cfc<T, Meta>` while `T` is a type parameter whose
+constraint excludes `null` and `undefined`, as it is once `T` is known:
+`function label<T extends {}>(value: T): Confidential<T, L>` may return
+`value`. An unconstrained `T` may be `null` or `undefined`, which the stamp is
+not assignable from, so the same function with `<T>` does not type-check.
+Every member's stamp records the whole payload `T`.
 
 ### Path-Bearing Helpers
 
@@ -85,6 +111,7 @@ Canonical alias set:
 - `AnyOf`
 - `PolicyOf`
 - `WriteAuthorizedBy`
+- `WritePolicyAnyOf`
 - `TrustedActionWriteWithIntegrity`
 - `TrustedActionWrite`
 - `TrustedActionUiContract`
@@ -114,8 +141,18 @@ gone.
 - Lower the base schema exactly as if `T` had been authored directly.
 - Evaluate `Meta` as a type-level object/tuple/literal payload.
 - Merge the evaluated metadata into `schema.ifc`.
-- If the base schema already contains `ifc`, the merge is additive/overwriting
-  by key, not replacement of the entire schema object.
+- If the base schema already contains `ifc`, the metadata combines with it key
+  by key rather than replacing the schema object. `confidentiality` lists join,
+  the base schema's atoms first and each atom once. Any other key both declare
+  must be declared alike, or lowering fails.
+- Where the base schema is a `$ref` to a definition carrying `ifc`, the `ifc`
+  written beside the `$ref` also carries the labels of every definition its
+  reference chain reaches, because resolving the reference replaces the
+  definition's `ifc` with it. They combine by the same rule with the
+  definitions as the inner declarations: the farthest definition's
+  `confidentiality` atoms first and the reference's own last. The mapping
+  spec's §11 (`docs/specs/schema-generator/ts_to_json_schema_mapping.md`) has
+  the details.
 
 ### Simple Wrapper Aliases
 
@@ -127,6 +164,10 @@ These aliases lower to direct `ifc` keys:
 - `RequiresIntegrity<T, X>` -> `ifc.requiredIntegrity = X`
 - `MaxConfidentiality<T, X>` -> `ifc.maxConfidentiality = X`
 - `ExactCopy<T, P>` -> `ifc.exactCopyOf = P`
+
+`X` must read as a list of atoms, a tuple such as `readonly ["secret"]`. One
+that reads as no list, as an array type or a union of tuples does, is an error
+(`cfc-label:not-a-list`), since the runtime reads labels only from a list.
 
 ### `AnyOf<X>`
 
@@ -175,12 +216,18 @@ implementation binding, not a plain JSON value.
 Normative behavior:
 
 1. The second type argument must be a direct `typeof ...` query.
-2. The queried root binding must be declared in the same source file.
+2. The queried root binding must be declared in an authored module: the
+   source file itself, or a module it imports, through any re-export. A
+   declaration file cannot declare a writer.
 3. Supported binding declarations are intentionally narrow:
-   - a local variable initialized from `handler(...)`
-   - a local variable initialized from `module(...)`
-   - a local variable initialized from `requireEventIntegrity(...)`
-   - a local function declaration
+   - a variable initialized from `handler(...)`
+   - a variable initialized from `module(...)`
+   - a variable initialized from `requireEventIntegrity(...)`
+   - any of the three called on a Common Fabric module's namespace
+     (`cf.handler(...)` after `import * as cf`, or a namespace an authored
+     module re-exports); a member of any other object, including a named
+     export of a Common Fabric module, is not a builder
+   - a function declaration
 4. The transformer must report `cfc-write-authorized-by` if any of the above
    conditions fail.
 5. The schema-generator must preserve the declaring source and binding path in
@@ -190,6 +237,66 @@ Normative behavior:
    `moduleIdentity`, so engine-authored claims are stamped when minted.
 6. If `moduleIdentities` is supplied but omits the defining source, compilation
    must fail instead of silently minting an unstamped claim.
+7. The defining module gives the binding its runtime binding identity,
+   whichever module wrote the claim: a claim in an importing module is
+   verified against the writer's own module, never the importer's. The
+   direct-root `toSchema<WriteAuthorizedBy<…>>()` path and nested claims
+   resolve the binding to its declaration the same way.
+8. A policy written through a user alias has its binding read where the alias
+   writes it, with the alias's parameters replaced by the reference's
+   arguments: through a chain of plain aliases, or through the one branch of a
+   conditional alias that is not `never`. A binding that cannot be read that
+   way, such as one passed through a parameter the conditional checks, or one
+   in a conditional with more than one such branch, must fail compilation with
+   `cfc-write-authorized-by:unread` rather than yield a schema with no write
+   restriction. A reload of stored source fails the same way: the error guards
+   a write restriction, not an authoring shape, and a pattern does not run
+   without the restriction its author wrote. Plain generic interfaces, classes
+   and structural aliases preserve whole policy arguments and writer parameters
+   through member declarations, inherited members, forwarded aliases, parameter
+   defaults, arrays, tuples, literal index signatures, nullable alias bodies and
+   recursive definitions. Library views follow named policy aliases to their
+   authored writer queries; ordinary value queries keep checker semantics.
+   Generic binding terms are defined in the schema-generator mapping spec §4.1.
+   A generic member operator that leaves a writer
+   carrier without readable binding syntax must report that unsupported form
+   where the schema defines a document (rule 9), rather than silently discard
+   its restriction. A schema
+   generated from a type alone, such as a computed's capture, has no reference
+   to read a binding from: it carries no write claim, and outside a schema that
+   defines a document (rule 9) nothing reports that.
+9. A schema that defines a document — the one a pattern's argument document,
+   its result document where the author wrote the result type (as a type
+   argument or as the callback's return annotation), or a created cell stores
+   its policy envelope from, whether the compiler writes it or the author does
+   with `toSchema`, in place or through a constant — must carry every writer
+   policy its type declares, or
+   compilation must fail with
+   `cfc-write-authorized-by:unread`. Without the claim the document stores no
+   write restriction, and any writer writes the field. So a writer the schema
+   reaches where no syntax names it fails there: through a type parameter
+   bound to an argument with no syntax, a generic member's operator syntax
+   (rule 8), a number index signature beside a string one, a carrier read
+   from a type alone, or a cell value whose type is inferred.
+   Stored source fails the same way. Every other schema views a document
+   whose stored envelope already binds its writers, so a writer such a view
+   reads from a type alone is left out of it and not reported. A result
+   inferred from the pattern's callback is such a view: its fields link to the
+   documents they come from, which store their own envelopes. So is the
+   result of a pattern lowered from an array method's callback, whose
+   argument, the element and the captures, views the documents they come
+   from; its type arguments are the lowering's, so only the callback's return
+   annotation makes its result authored. Anything else it
+   returns under a writer policy — a literal, an object or array literal, a
+   spread, a constant, a plain call's result: any value that is not a reactive
+   reference — is the exception: the result document holds that data itself,
+   so its schema defines the document there. A cell or a stream within it is
+   still a link, and a writer policy inside the type it links to is the
+   linked document's. A view reads a
+   writer policy whole or not at all: where its writer cannot be read, the
+   principal claims that need a writer, an `ownerPrincipal` and integrity
+   naming the current principal, are left out with it, since either alone
+   refuses every write against it, its own writer's included.
 
 One valid marker shape is:
 
@@ -207,6 +314,42 @@ One valid marker shape is:
 `moduleIdentity` is absent for compatibility callers that do not supply source
 identities and for aged stored claims. The marker is an implementation detail,
 but the implementation still needs an equivalent cross-stage identity channel.
+
+### `WritePolicyAnyOf<T, [P, …]>`
+
+`WritePolicyAnyOf` admits a write through any one of several complete writer
+policies, for a record that more than one handler writes. Each member `P` is a
+`WriteAuthorizedBy`, `TrustedActionWrite`, or `TrustedActionWriteWithIntegrity`
+over `unknown`, written directly or through a user alias.
+
+Normative behavior:
+
+1. It lowers to `ifc.writePolicyAnyOf`, a list holding, for each member in
+   order, the `writeAuthorizedBy` and any `uiContract` that member lowers to on
+   its own. Each member's binding follows every rule above for
+   `WriteAuthorizedBy`, and `WriteAuthorizedByValidationTransformer` reports a
+   member's binding exactly as it reports a lone one's.
+2. The tuple must be written in place, nonempty; parentheses around it, a
+   `readonly`, and member labels are allowed. A tuple named through an alias,
+   an empty one, an optional or rest member, a member that is not a writer
+   policy, and a member whose writer does not lower each fail compilation.
+3. The runtime admits a write when one member admits it whole: its writer
+   wrote, and a trusted event matching its contract, if it names one, was
+   recorded for the write. Writer and gesture are of the same member, so one
+   member's gesture never admits another's writer.
+4. The runtime refuses a position declaring `writePolicyAnyOf` beside its own
+   `writeAuthorizedBy` or `uiContract`, whether one schema declares both or a
+   later schema declares one where the stored schema declares the other, and
+   refuses a later schema that adds, drops, reorders, or changes a stored
+   member. That last refusal is terminal where the stored schema it compared
+   against is one the transaction holds: the commit is refused as
+   `CfcCommitRefusalError` and is not retried. Each member's claim is stamped
+   with its module identity where the list is lowered, by rule 5 for
+   `WriteAuthorizedBy`; a stored member with no stamp admits no writer, as a
+   stored lone claim with none does.
+5. An `AuthoredByCurrentUser` label beside it needs nothing more of the list:
+   every member names a writer, which is what a claim about the current
+   principal requires, and a member naming a contract keeps its gesture.
 
 ## Pipeline Contract
 
@@ -262,19 +405,26 @@ Required diagnostic type:
 - `cfc-write-authorized-by`
 - `cfc-policy-authoring`
 - `cfc-policy-of`
+- `cfc-label:not-a-list`
 
 Required failure modes:
 
 - second type argument is not `typeof ...`
-- target is imported rather than local
+- target is declared in a declaration file, or not resolvable to a declaration
 - target is not a supported handler/module-style binding
 - policy declarations contain dynamic content, unsupported fields, unbound
   variables, missing guards, invalid exports, or rule reuse
 - `PolicyOf` does not directly query an exported `exchangeRules` binding
+- a label list, a simple wrapper alias's `X`, a `Cfc` payload's label key, or a
+  UI contract's `requiredEventIntegrity`, that reads as no list
 
 ## Current Limits
 
-- `WriteAuthorizedBy` only supports in-scope local bindings.
+- `WriteAuthorizedBy` only supports bindings the checker resolves to a
+  declaration in an authored module; dynamic lookup is rejected.
+- `WritePolicyAnyOf` takes its members as a tuple written in place, and has no
+  form beside an `ownerPrincipal`, which still requires a lone
+  `writeAuthorizedBy`.
 - Exchange-rule declarations use a closed static expression grammar and must be
   module-level exports.
 - `PolicyOf` supports local, direct imported, and pinned `cf:` bindings; general
@@ -291,5 +441,7 @@ Required failure modes:
 The contract is not fully implemented until these tests pass or equivalent
 coverage exists:
 
-- `packages/ts-transformers/test/cfc-authoring.test.ts`
-- `packages/schema-generator/test/schema/cfc-authoring.test.ts`
+- `base/ts-transformers/test/cfc-authoring.test.ts`
+- `base/schema-generator/test/schema/cfc-authoring.test.ts`
+- `base/schema-generator/test/schema/write-policy-any-of.test.ts`
+- `runtime/runner/test/cfc-write-policy-any-of.test.ts`

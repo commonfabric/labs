@@ -1,0 +1,436 @@
+diff --git a/packages/runner/src/ensure-piece-running.ts b/packages/runner/src/ensure-piece-running.ts
+index f8f5af66a0..14ee08083a 100644
+--- a/packages/runner/src/ensure-piece-running.ts
++++ b/packages/runner/src/ensure-piece-running.ts
+@@ -1,7 +1,11 @@
+ import { getLogger } from "@commonfabric/utils/logger";
+ import { isObjectOrArray } from "@commonfabric/utils/types";
+ import type { Cell } from "./cell.ts";
+-import { getMetaLink, type NormalizedFullLink } from "./link-utils.ts";
++import {
++  areNormalizedLinksSame,
++  getMetaLink,
++  type NormalizedFullLink,
++} from "./link-utils.ts";
+ import type { Runtime } from "./runtime.ts";
+ import type { IExtendedStorageTransaction } from "./storage/interface.ts";
+ 
+@@ -30,11 +34,6 @@ const logger = getLogger("ensure-piece-running", {
+ 
+ const MAX_RESULT_LINK_DEPTH = 10;
+ 
+-function cellTraversalKey(cell: Cell<any>): string {
+-  const { space, id, path } = cell.getAsNormalizedFullLink();
+-  return JSON.stringify([space, id, path]);
+-}
+-
+ /**
+  * Follows `result` backlinks from `rootCell` to the result document that
+  * owns the chain, naming each document before its metadata is read: the
+@@ -50,19 +49,19 @@ async function followResultCellChain(
+   observedDocIds: string[],
+ ): Promise<Cell<any> | undefined> {
+   let currentCell = rootCell;
+-  const visited = new Set<string>();
++  const visited: NormalizedFullLink[] = [];
+   let depth = 0;
+ 
+   while (true) {
+-    const key = cellTraversalKey(currentCell);
+-    if (visited.has(key)) {
++    const link = currentCell.getAsNormalizedFullLink();
++    if (visited.some((previous) => areNormalizedLinksSame(previous, link))) {
+       logger.debug("ensure-piece", () => [
+         `Cycle found while following result metadata at ${currentCell.getAsNormalizedFullLink().id}`,
+       ]);
+       return undefined;
+     }
+-    visited.add(key);
+-    const currentId = currentCell.getAsNormalizedFullLink().id;
++    visited.push(link);
++    const currentId = link.id;
+     if (!observedDocIds.includes(currentId)) observedDocIds.push(currentId);
+ 
+     await currentCell.sync();
+@@ -106,13 +105,7 @@ export type EnsurePieceVerdict = {
+      * first (the caller's confirm step). */
+     | "no-pattern-meta"
+     /** Meta present but `loadPatternByIdentity` found nothing. */
+-    | "pattern-unloadable"
+-    /** Minted by the serving loop's confirm step (space-server's
+-     * `#confirmNoPatternMeta`), never by the traversal here: an
+-     * observed-doc pull failed, so the no-meta verdict stays
+-     * UNCONFIRMED — no terminal decision; the caller's deferred arm
+-     * retries next cycle. */
+-    | "confirm-pull-failed";
++    | "pattern-unloadable";
+ 
+   /** Whether the started piece has a pattern graph installed AT THE
+    * MOMENT THIS IS CALLED. `started` reports what the start walk did,
+diff --git a/packages/runner/src/executor/space-server.ts b/packages/runner/src/executor/space-server.ts
+index 3429a169cd..219cec600d 100644
+--- a/packages/runner/src/executor/space-server.ts
++++ b/packages/runner/src/executor/space-server.ts
+@@ -542,17 +542,16 @@ export class SpaceServer implements TransactionSealDestination {
+    * its wave keeps running and later cycles join it. */
+   #structureLoadPass: Promise<void> | undefined;
+ 
+-  /** Re-armed roots whose retry waits for the CURRENT cycle's settle
+-   * (frame application) before re-entering `#pendingStructureLoads` —
+-   * retrying inside the re-arming cycle reads the replica's stale
+-   * pre-commit state and re-terminalizes the root. Promoted at the
+-   * settle boundary; the promotion latches a wake so a then-quiet
+-   * space retries promptly instead of sitting out the idle window. */
++  /** Documents changed by admissions during the active structure attempt. */
++  #structureLoadChangedDocs: Set<string> | undefined;
++
++  /**
++   * Re-armed roots whose retry follows frame application. The settle loop
++   * retries them before declaring their demanded derivations current.
++   */
+   readonly #rearmedAwaitingSettle = new Set<string>();
+ 
+-  /** Level-converted wake for the promotion above (the same latch
+-   * shape as the shadow-flip wake): set when re-armed roots became
+-   * retryable mid-cycle, consumed by the next #waitForInput. */
++  /** A structure retry that must wake a cycle after an asynchronous load. */
+   #pendingStructureRetryWake = false;
+ 
+   /** Level-converted demand wake (stage B): a session's watch set
+@@ -1359,6 +1358,11 @@ export class SpaceServer implements TransactionSealDestination {
+    * this space, own derived commits included (skipped by class + holder
+    * below — serving-loop.md §3's self-echo rule). */
+   enqueueCommit(record: AdmittedCommitNotice): void {
++    if (this.#structureLoadChangedDocs !== undefined) {
++      for (const write of record.writes) {
++        this.#structureLoadChangedDocs.add(write.id);
++      }
++    }
+     // The no-owner skip's re-arm (see #rootEnsureAwaitingOwner): the
+     // genesis ACL just landed — the owner is now resolvable, so the
+     // tenure re-owes its ensure. Checked on the raw doc id: the ACL
+@@ -2786,9 +2790,8 @@ export class SpaceServer implements TransactionSealDestination {
+       return;
+     }
+     if (this.#pendingStructureRetryWake) {
+-      // Consume the settle-gated retry latch (stage P2-F): re-armed
+-      // roots became retryable mid-cycle; run a cycle now so the
+-      // demand-load pass re-attempts them against the settled replica.
++      // A load that completed after its cycle's deadline left a retry.
++      // The next settle applies its input before attempting it again.
+       this.#pendingStructureRetryWake = false;
+       return;
+     }
+@@ -2918,8 +2921,8 @@ export class SpaceServer implements TransactionSealDestination {
+       }
+       // The commit-triggered RE-ARM (stage P2-F, the OW19 design's
+       // second half): a commit touching one of a terminal root's
+-      // observed docs returns that root to the pending set — the next
+-      // cycle retries its load. This is what makes the terminal state
++      // observed docs re-arms that root for a retry after frame application.
++      // This is what makes the terminal state
+       // safe for the creation race: a not-yet-created piece's
+       // instantiation commit writes the demanded doc, re-arms it here,
+       // and the retry then finds the meta (not-yet vs never).
+@@ -2927,13 +2930,9 @@ export class SpaceServer implements TransactionSealDestination {
+         for (const [key, observed] of this.#terminalStructureLoads) {
+           if (!record.writes.some((write) => observed.has(write.id))) continue;
+           this.#terminalStructureLoads.delete(key);
+-          // SETTLE-GATED (not straight to pending): the retry must run
+-          // against a replica that has APPLIED the re-arming commit's
+-          // frames, which only this cycle's settle guarantees. A retry
+-          // in the same load pass reads the stale pre-commit state,
+-          // re-confirms "no meta", and re-terminalizes a root whose
+-          // meta just landed — the not-yet case would break exactly
+-          // where the re-arm exists to keep it sound.
++          // The settle loop applies the re-arming commit's frames before
++          // retrying, so a covered watch's stale value cannot terminalize
++          // the root again.
+           this.#rearmedAwaitingSettle.add(key);
+           this.#options.stats.structureLoadRearmed += 1;
+           logger.info?.("structure-load-rearmed", () => [
+@@ -4037,6 +4036,8 @@ export class SpaceServer implements TransactionSealDestination {
+         this.#structureLoadDeferralStreaks.delete(key);
+         continue;
+       } else {
++        const changedDocs = new Set<string>();
++        this.#structureLoadChangedDocs = changedDocs;
+         try {
+           // propagateErrors: the catch below is the loop's FAILURE arm
+           // (§7 structureLoadFailures); with the helper's default
+@@ -4044,6 +4045,7 @@ export class SpaceServer implements TransactionSealDestination {
+           // load/start error masqueraded as a creation-race deferral,
+           // silently retried each input-driven cycle (r3739139521).
+           const verdict = await this.#attemptStructureLoad(runtime, root);
++          if (!this.#active || this.#runtime !== runtime) return;
+           if (verdict.started) {
+             this.#pendingStructureLoads.delete(key);
+             this.#structureLoadDeferralStreaks.delete(key);
+@@ -4056,17 +4058,14 @@ export class SpaceServer implements TransactionSealDestination {
+               this.#indexResolvedRoot(key, verdict.rootId);
+             }
+           } else if (verdict.reason === "no-pattern-meta") {
+-            // The OW19 terminal class — but only ON CONFIRMED durable
+-            // state: an un-synced doc reads identically, so sync the
+-            // observed docs from the store and re-ask once. Still
+-            // no meta ⇒ the durable state genuinely lacks it ⇒ TERMINAL
+-            // (no more per-cycle churn); a creation commit later
+-            // touches the doc and re-arms (not-yet vs never).
++            // Each traversal syncs the complete addresses it reads. Re-ask
++            // before terminalizing so metadata arriving during the first
++            // traversal can start the piece.
+             const confirmed = await this.#confirmNoPatternMeta(
+               runtime,
+               root,
+-              verdict,
+             );
++            if (!this.#active || this.#runtime !== runtime) return;
+             if (confirmed.started) {
+               this.#pendingStructureLoads.delete(key);
+               this.#structureLoadDeferralStreaks.delete(key);
+@@ -4077,6 +4076,26 @@ export class SpaceServer implements TransactionSealDestination {
+                 this.#indexResolvedRoot(key, confirmed.rootId);
+               }
+             } else if (confirmed.reason === "no-pattern-meta") {
++              const changed = [
++                ...verdict.observedDocIds,
++                ...confirmed.observedDocIds,
++              ]
++                .some((id) => changedDocs.has(id));
++              const shadowed = runtime.storageManager.open(this.#options.space)
++                .replica.unappliedForeignSeqFloor?.() !== undefined;
++              if (changed || shadowed) {
++                this.#pendingStructureLoads.delete(key);
++                this.#rearmedAwaitingSettle.add(key);
++                this.#pendingStructureRetryWake = true;
++                stats.structureLoadDeferred += 1;
++                this.#noteStructureLoadDeferral(
++                  key,
++                  root.id,
++                  "confirmation-invalidated",
++                  stats,
++                );
++                continue;
++              }
+               this.#pendingStructureLoads.delete(key);
+               this.#structureLoadDeferralStreaks.delete(key);
+               this.#terminalStructureLoads.set(
+@@ -4120,12 +4139,17 @@ export class SpaceServer implements TransactionSealDestination {
+             ]);
+           }
+         } catch (error) {
++          if (!this.#active || this.#runtime !== runtime) return;
+           this.#pendingStructureLoads.add(key);
+           stats.structureLoadFailures += 1;
+           logger.warn("structure-load-failed", () => [
+             `demanded root ${root.id} did not load`,
+             error,
+           ]);
++        } finally {
++          if (this.#structureLoadChangedDocs === changedDocs) {
++            this.#structureLoadChangedDocs = undefined;
++          }
+         }
+       }
+     }
+@@ -4323,34 +4347,15 @@ export class SpaceServer implements TransactionSealDestination {
+     return spaceVerdict;
+   }
+ 
+-  /** The terminal decision's sync-and-re-ask half (stage P2-F): a
+-   * no-meta verdict on an UN-synced doc is not evidence about durable
+-   * state, so pull every observed doc from the store (loopback,
+-   * co-hosted — cheap) and ask once more. Only a verdict that survives
+-   * this confirmation parks the root terminal. */
+-  async #confirmNoPatternMeta(
++  /**
++   * Re-read the owning chain and scoped fallback before a terminal decision.
++   * The traversal syncs each address before reading its metadata.
++   */
++  #confirmNoPatternMeta(
+     runtime: Runtime,
+     root: { id: string; scope?: string },
+-    verdict: EnsurePieceVerdict,
+   ): Promise<EnsurePieceVerdict> {
+-    const scopes = new Set<string>(["space", root.scope ?? "space"]);
+-    for (const id of verdict.observedDocIds) {
+-      for (const scope of scopes) {
+-        try {
+-          await runtime.getCellFromLink({
+-            space: this.#options.space,
+-            id: id as never,
+-            scope: scope as never,
+-            path: [],
+-          }).sync();
+-        } catch {
+-          // A failed pull leaves the verdict unconfirmed; the caller's
+-          // deferred arm retries next cycle.
+-          return { ...verdict, reason: "confirm-pull-failed" };
+-        }
+-      }
+-    }
+-    return await this.#attemptStructureLoad(runtime, root);
++    return this.#attemptStructureLoad(runtime, root);
+   }
+ 
+   /**
+@@ -4580,24 +4585,39 @@ export class SpaceServer implements TransactionSealDestination {
+     // pass over the same roots — and its completion wakes the loop so
+     // freshly loaded structure settles in a fresh cycle rather than
+     // waiting out the idle window.
+-    const loadPass = this.#structureLoadPass ??= this.#loadDemandedStructure()
+-      .catch((error) => {
+-        logger.warn("structure-load-pass-failed", () => [
+-          "demand-structure load pass failed",
+-          error,
+-        ]);
+-      })
+-      .finally(() => {
+-        this.#structureLoadPass = undefined;
+-        // MINOR-1: a demand note that landed AFTER this pass snapshotted
+-        // its rows (a straddling pass) did not reach the rows it read;
+-        // re-latch so the next wait runs a FRESH pass rather than
+-        // sleeping out the idle window.
+-        if (this.#demandNoteGeneration !== this.#passDemandNoteGen) {
+-          this.#pendingDemandWake = true;
+-        }
+-        this.#feedArrived?.resolve();
+-      });
++    const joinLoadPass = () => {
++      if (this.#structureLoadPass !== undefined) return this.#structureLoadPass;
++      const pass = this.#loadDemandedStructure()
++        .catch((error) => {
++          logger.warn("structure-load-pass-failed", () => [
++            "demand-structure load pass failed",
++            error,
++          ]);
++        })
++        .finally(() => {
++          if (this.#structureLoadPass !== pass) return;
++          this.#structureLoadPass = undefined;
++          if (!this.#active || this.#runtime !== runtime) return;
++          // MINOR-1: a demand note that landed AFTER this pass snapshotted
++          // its rows (a straddling pass) did not reach the rows it read;
++          // re-latch so the next wait runs a FRESH pass rather than
++          // sleeping out the idle window.
++          if (this.#demandNoteGeneration !== this.#passDemandNoteGen) {
++            this.#pendingDemandWake = true;
++          }
++          if (
++            this.#rearmedAwaitingSettle.size > 0 &&
++            runtime.storageManager.open(this.#options.space).replica
++                .unappliedForeignSeqFloor?.() === undefined
++          ) {
++            this.#pendingStructureRetryWake = true;
++          }
++          this.#feedArrived?.resolve();
++        });
++      this.#structureLoadPass = pass;
++      return pass;
++    };
++    let loadPass = joinLoadPass();
+     let exhausted = false;
+     // The segment the deadline actually cuts. Read against
+     // `executor/wave/cycle`: a settle at the deadline inside a much longer
+@@ -4648,6 +4668,27 @@ export class SpaceServer implements TransactionSealDestination {
+           this.#purgeLt1Leftovers(runtime);
+           break;
+         }
++        if (!this.#active || this.#runtime !== runtime) break;
++        if (
++          this.#rearmedAwaitingSettle.size > 0 &&
++          runtime.storageManager.open(this.#options.space).replica
++              .unappliedForeignSeqFloor?.() === undefined
++        ) {
++          if (Date.now() >= deadline) {
++            exhausted = true;
++            this.#purgeLt1Leftovers(runtime);
++            break;
++          }
++          // Frame application makes the re-arming metadata readable. Its
++          // structure load and derivations still belong to this settle.
++          for (const key of this.#rearmedAwaitingSettle) {
++            this.#pendingStructureLoads.add(key);
++          }
++          this.#rearmedAwaitingSettle.clear();
++          this.#pendingStructureRetryWake = false;
++          loadPass = joinLoadPass();
++          continue;
++        }
+         if (runtime.scheduler.isIdle()) break;
+         if (Date.now() >= deadline) {
+           exhausted = true;
+@@ -4662,21 +4703,7 @@ export class SpaceServer implements TransactionSealDestination {
+     // the cycle span is: a settle that threw is a failed wave, not a slow
+     // one, and folding its duration in would blunt the measurement.
+     timing.time(settleStart, "executor", "wave", "settle");
+-
+-    // Promote settle-gated re-armed roots (stage P2-F): a TRUE settle
+-    // proved every frame ≤ batchHead applied — the re-arming commit's
+-    // included — so the retry now reads the post-commit state. An
+-    // exhausted flush proves nothing and keeps them gated. The latch
+-    // wakes the next input wait so a then-quiet space retries promptly
+-    // (the shadow-flip wake's shape).
+-    if (!exhausted && this.#rearmedAwaitingSettle.size > 0) {
+-      for (const key of this.#rearmedAwaitingSettle) {
+-        this.#pendingStructureLoads.add(key);
+-      }
+-      this.#rearmedAwaitingSettle.clear();
+-      this.#pendingStructureRetryWake = true;
+-      this.#feedArrived?.resolve();
+-    }
++    if (!this.#active || this.#runtime !== runtime) return;
+ 
+     const wave = this.#currentWave;
+     const haveContributions = (wave?.contributionCount ?? 0) > 0;
+@@ -5370,6 +5397,8 @@ export class SpaceServer implements TransactionSealDestination {
+     this.#lastCovered = undefined;
+     this.#growthAwaitingLanding = false;
+     this.#pendingStructureLoads.clear();
++    this.#structureLoadPass = undefined;
++    this.#structureLoadChangedDocs = undefined;
+     this.#terminalStructureLoads.clear();
+     this.#rearmedAwaitingSettle.clear();
+     this.#pendingStructureRetryWake = false;
+diff --git a/packages/runner/test/executor-serving-loop.test.ts b/packages/runner/test/executor-serving-loop.test.ts
+index 8b29ccd980..e655dc3896 100644
+--- a/packages/runner/test/executor-serving-loop.test.ts
++++ b/packages/runner/test/executor-serving-loop.test.ts
+@@ -19,6 +19,7 @@
+ //   idle space with no live sessions parks per IDLE_PARK_MS (§1).
+ 
+ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
++import { stub } from "@std/testing/mock";
+ import { expect } from "@std/expect";
+ import { Identity } from "@commonfabric/identity";
+ import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+@@ -401,6 +402,17 @@ describe("stage F serving loop", () => {
+     const settles = () =>
+       timing.getTimeStats("executor", "wave", "settle")?.count ?? 0;
+     const before = { cycle: cycles(), drain: drains(), settle: settles() };
++    const recorded = Promise.withResolvers<void>();
++    let finalDrains: number | undefined;
++    const time = timing.time.bind(timing);
++    using _time = stub(timing, "time", (...args) => {
++      const result = time(...args);
++      if (
++        finalDrains !== undefined &&
++        cycles() - before.cycle >= finalDrains
++      ) recorded.resolve();
++      return result;
++    });
+ 
+     host = newHost({ flushDeadlineMs: 5_000, idleParkMs: 600_000 });
+     openClient();
+@@ -424,6 +436,11 @@ describe("stage F serving loop", () => {
+     // before the cycle that encloses it, so the counts differ by one at an
+     // arbitrary observation point and only agree at rest.
+     await host.close();
++    // Closing releases the runtimes and leases. The cancelled cycle records
++    // its final span when its remaining transport continuations complete.
++    finalDrains = drains() - before.drain;
++    if (cycles() - before.cycle >= finalDrains) recorded.resolve();
++    await recorded.promise;
+ 
+     // Every cycle runs its drain and its settle, so at rest the three
+     // counts agree — a phase recorded on only some paths through the cycle

@@ -1,0 +1,4189 @@
+{
+  "status": "complete-with-existing-feature-off-control-failure",
+  "sourceBase": "f59231ee3d9a1cf85b37076639067b648b7fa64b",
+  "pr": "https://github.com/commontoolsinc/labs/pull/7349",
+  "artifactRoot": "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11",
+  "machine": {
+    "os": "macOS-26.4.1-arm64-arm-64bit-Mach-O",
+    "deno": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3"
+  },
+  "productionAndTestSources": {
+    "packages/runner/src/runner.ts": "7a758300328a0da7863a0469eec0e05f42b9fd6223518033373e523274306a01",
+    "packages/runner/src/scheduler/facade.ts": "56b36beaa52a1d55d3e3d38b93973dcc17b3cecbd773e920a26c0d3e1895b0bd",
+    "packages/runner/src/scheduler/node-record.ts": "2d6a495d0a3e08450276f3509598bbda0b4ff094351d1506f902f267bc182383",
+    "packages/runner/src/scheduler/registration.ts": "5689fe3178afc96f7a7f7fc63270a82b951af503ee7e6d067fd656e754774502",
+    "packages/runner/src/view-replication-client.ts": "4842560c32266678ae8b839420fcb59d0390f5f92ee1934b20604ef52c625033",
+    "packages/runner/test/view-replication-client.test.ts": "9f5138557b07bf74c304ba43ee18b00f454dfe21bab6d4e55e4d9a69048fd313",
+    "packages/runner/test/view-server-currency.test.ts": "95fc3c69e187c16ed624d2f5da2e070c3ed1383112bb98f22b2ec937a75faeac"
+  },
+  "method": {
+    "runOrder": [
+      "on-1",
+      "off-1",
+      "on-2",
+      "off-2",
+      "on-3",
+      "off-3"
+    ],
+    "topics": 30,
+    "headless": true,
+    "serverExecutionInBothArms": true,
+    "viewScopedReplicationInBothArms": true,
+    "onlyDifference": "Artifact-only synchronous initialViewDependencies bypass; public feature flag remains on in both arms.",
+    "latencyClaim": false,
+    "limitation": "Profiled runs on a heavily loaded shared machine; package tests and other work were active.",
+    "counterMeaning": "viewBodies counts scheduler attempts that entered an authored view body; action wall spans include the entire attempt, not only body CPU.",
+    "proofMeaning": "Initial registrations check independently; each proof memo covers its synchronous recursive traversal. Later accepted plans and coverage changes revalidate adopted nodes.",
+    "readyBoundary": "Startup counters wait for local graph-ready event plus board and all 30 topic identities; navigation verifies rendered topic and cross-reference content plus mount/idle acknowledgments."
+  },
+  "trials": [
+    {
+      "label": "on-1",
+      "startup": {
+        "label": "on-1",
+        "adoptionEnabled": true,
+        "serverExecution": true,
+        "viewScopedReplication": true,
+        "driverCode": 0,
+        "load": [
+          194.74560546875,
+          241.9833984375,
+          248.52099609375
+        ],
+        "adoptions": 121,
+        "proofCalls": 1032,
+        "acceptedProofs": 121,
+        "proofMs": 61.000001430511475,
+        "bindingMs": 1182.9999995231628,
+        "bindingPasses": 123,
+        "bindings": 1033,
+        "graphs": 61,
+        "actionAttempts": 159,
+        "entered": 33,
+        "viewBodies": 0,
+        "controlBodies": 33,
+        "startupMs": 17517,
+        "phases": [
+          {
+            "name": "load",
+            "startEpoch": 1789153664816,
+            "ms": 852.2505000000001,
+            "epoch": 1789153665668
+          },
+          {
+            "name": "login",
+            "startEpoch": 1789153665699,
+            "ms": 442.2462080000005,
+            "epoch": 1789153666141
+          },
+          {
+            "name": "initial idle",
+            "startEpoch": 1789153666162,
+            "ms": 18.022124999999505,
+            "epoch": 1789153666180
+          },
+          {
+            "name": "cards",
+            "startEpoch": 1789153666194,
+            "ms": 1283.818292,
+            "epoch": 1789153667478
+          },
+          {
+            "name": "board settled",
+            "startEpoch": 1789153667499,
+            "ms": 26.067124999999578,
+            "epoch": 1789153667525
+          },
+          {
+            "name": "mount acknowledged",
+            "startEpoch": 1789153667588,
+            "ms": 7069.257249999999,
+            "epoch": 1789153674658
+          },
+          {
+            "name": "registry ready",
+            "startEpoch": 1789153674677,
+            "ms": 212.11279099999956,
+            "epoch": 1789153674889
+          },
+          {
+            "name": "post-mount idle",
+            "startEpoch": 1789153674912,
+            "ms": 13.614790999999968,
+            "epoch": 1789153674926
+          },
+          {
+            "name": "local graph ready",
+            "startEpoch": 1789153674943,
+            "ms": 7089.098292000002,
+            "epoch": 1789153682032
+          },
+          {
+            "name": "graph idle",
+            "startEpoch": 1789153682070,
+            "ms": 248.6133329999975,
+            "epoch": 1789153682318
+          },
+          {
+            "name": "open topic",
+            "startEpoch": 1789153684744,
+            "ms": 2084.9089170000007,
+            "epoch": 1789153686829
+          },
+          {
+            "name": "topic mount acknowledged",
+            "startEpoch": 1789153686887,
+            "ms": 1806.1069580000003,
+            "epoch": 1789153688694
+          },
+          {
+            "name": "post-open idle",
+            "startEpoch": 1789153688753,
+            "ms": 10.955499999996391,
+            "epoch": 1789153688764
+          }
+        ],
+        "errors": [],
+        "failure": null,
+        "ipcFailures": [],
+        "pending": [],
+        "profileErrors": []
+      },
+      "costs": {
+        "label": "on-1",
+        "profiles": {
+          "worker": {
+            "totalSampledMs": 16386.546,
+            "nonIdleSampledMs": 2177.94,
+            "proofInclusiveSampledMs": 48.541,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 14208.606
+              },
+              {
+                "name": "",
+                "ms": 116.844
+              },
+              {
+                "name": "wasm-function[3]",
+                "ms": 115.615
+              },
+              {
+                "name": "addToDeepFrozenCache",
+                "ms": 104.312
+              },
+              {
+                "name": "update",
+                "ms": 97.782
+              },
+              {
+                "name": "(garbage collector)",
+                "ms": 84.168
+              },
+              {
+                "name": "toOwnedUint8Array",
+                "ms": 56.426
+              },
+              {
+                "name": "feedPlainObject",
+                "ms": 54.836
+              },
+              {
+                "name": "utf8SortedKeysOf",
+                "ms": 53.49
+              },
+              {
+                "name": "(program)",
+                "ms": 41.335
+              },
+              {
+                "name": "freeze",
+                "ms": 39.172
+              },
+              {
+                "name": "prepareViewAction",
+                "ms": 33.109
+              },
+              {
+                "name": "traverse",
+                "ms": 32.309
+              },
+              {
+                "name": "serializedFromEncoded",
+                "ms": 28.541
+              },
+              {
+                "name": "getStringRep",
+                "ms": 28.43
+              }
+            ]
+          },
+          "main": {
+            "totalSampledMs": 17629.231,
+            "nonIdleSampledMs": 1350.408,
+            "proofInclusiveSampledMs": 0.0,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 16278.823
+              },
+              {
+                "name": "(program)",
+                "ms": 796.073
+              },
+              {
+                "name": "readMessage",
+                "ms": 186.596
+              },
+              {
+                "name": "mojo.internal.DataViewWrapper",
+                "ms": 153.64
+              },
+              {
+                "name": "read_",
+                "ms": 151.611
+              },
+              {
+                "name": "onMessageReceived",
+                "ms": 34.96
+              },
+              {
+                "name": "dispatch_",
+                "ms": 27.528
+              }
+            ]
+          },
+          "server": {
+            "totalSampledMs": 22146.813,
+            "nonIdleSampledMs": 14994.991,
+            "proofInclusiveSampledMs": 0.0,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 7151.822
+              },
+              {
+                "name": "(garbage collector)",
+                "ms": 1288.924
+              },
+              {
+                "name": "",
+                "ms": 1129.278
+              },
+              {
+                "name": "#loadDemandedStructure",
+                "ms": 901.311
+              },
+              {
+                "name": "trackedIdsFromEntries",
+                "ms": 870.719
+              },
+              {
+                "name": "emit",
+                "ms": 592.742
+              },
+              {
+                "name": "demandedInstancesForSpace",
+                "ms": 561.366
+              },
+              {
+                "name": "extendTrackedGraph",
+                "ms": 438.511
+              },
+              {
+                "name": "traverseWithSchema",
+                "ms": 316.163
+              },
+              {
+                "name": "#watchAdd",
+                "ms": 295.215
+              },
+              {
+                "name": "#denyExplicitInstanceReads",
+                "ms": 264.104
+              },
+              {
+                "name": "#addMissedToTrackedIds",
+                "ms": 254.792
+              },
+              {
+                "name": "copyStateFrom",
+                "ms": 236.439
+              },
+              {
+                "name": "op_node_hash_update",
+                "ms": 234.482
+              },
+              {
+                "name": "cloneTrackedGraphState",
+                "ms": 220.685
+              }
+            ]
+          }
+        },
+        "startup": {
+          "actions": {
+            "authored": {
+              "count": 0,
+              "wallSpanMs": 0
+            },
+            "control": {
+              "count": 33,
+              "wallSpanMs": 9.099999189376831
+            },
+            "parked": {
+              "count": 126,
+              "wallSpanMs": 65.30000114440918
+            }
+          },
+          "proofCalls": 1032,
+          "acceptedProofs": 121,
+          "proofMs": 61.000001430511475,
+          "adoptions": 121
+        },
+        "final": {
+          "actions": {
+            "authored": {
+              "count": 0,
+              "wallSpanMs": 0
+            },
+            "control": {
+              "count": 33,
+              "wallSpanMs": 9.099999189376831
+            },
+            "parked": {
+              "count": 150,
+              "wallSpanMs": 69.50000095367432
+            }
+          },
+          "proofCalls": 1200,
+          "acceptedProofs": 127,
+          "proofMs": 67.70000123977661,
+          "adoptions": 123
+        },
+        "startupPhases": [
+          {
+            "name": "load",
+            "startEpoch": 1789153664816,
+            "ms": 852.2505000000001,
+            "epoch": 1789153665668
+          },
+          {
+            "name": "login",
+            "startEpoch": 1789153665699,
+            "ms": 442.2462080000005,
+            "epoch": 1789153666141
+          },
+          {
+            "name": "initial idle",
+            "startEpoch": 1789153666162,
+            "ms": 18.022124999999505,
+            "epoch": 1789153666180
+          },
+          {
+            "name": "cards",
+            "startEpoch": 1789153666194,
+            "ms": 1283.818292,
+            "epoch": 1789153667478
+          },
+          {
+            "name": "board settled",
+            "startEpoch": 1789153667499,
+            "ms": 26.067124999999578,
+            "epoch": 1789153667525
+          },
+          {
+            "name": "mount acknowledged",
+            "startEpoch": 1789153667588,
+            "ms": 7069.257249999999,
+            "epoch": 1789153674658
+          },
+          {
+            "name": "registry ready",
+            "startEpoch": 1789153674677,
+            "ms": 212.11279099999956,
+            "epoch": 1789153674889
+          },
+          {
+            "name": "post-mount idle",
+            "startEpoch": 1789153674912,
+            "ms": 13.614790999999968,
+            "epoch": 1789153674926
+          },
+          {
+            "name": "local graph ready",
+            "startEpoch": 1789153674943,
+            "ms": 7089.098292000002,
+            "epoch": 1789153682032
+          },
+          {
+            "name": "graph idle",
+            "startEpoch": 1789153682070,
+            "ms": 248.6133329999975,
+            "epoch": 1789153682318
+          }
+        ],
+        "navigationPhases": [
+          {
+            "name": "open topic",
+            "startEpoch": 1789153684744,
+            "ms": 2084.9089170000007,
+            "epoch": 1789153686829
+          },
+          {
+            "name": "topic mount acknowledged",
+            "startEpoch": 1789153686887,
+            "ms": 1806.1069580000003,
+            "epoch": 1789153688694
+          },
+          {
+            "name": "post-open idle",
+            "startEpoch": 1789153688753,
+            "ms": 10.955499999996391,
+            "epoch": 1789153688764
+          }
+        ]
+      },
+      "experimental": {
+        "commitPreconditions": true,
+        "computedCellIds": true,
+        "contentAddressedSchemas": true,
+        "lazyMaterialization": true,
+        "modernCellRep": false,
+        "plainResultReceipts": true,
+        "readerSchemaPrecedence": true,
+        "serverExecution": true,
+        "viewScopedReplication": true
+      },
+      "environment": {
+        "EXPERIMENTAL_SERVER_EXECUTION": "true",
+        "EXPERIMENTAL_VIEW_SCOPED_REPLICATION": "true",
+        "API_URL": "http://localhost:8965/",
+        "FRONTEND_URL": "http://localhost:8965/",
+        "MEMORY_DIR": "file:///var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-on-1-9amx96ug/memory/",
+        "HEADLESS": "1"
+      },
+      "source": {
+        "head": "f59231ee3d9a1cf85b37076639067b648b7fa64b",
+        "hashes": {
+          "packages/runner/test/view-server-currency.test.ts": "55e803458e5d2390c3d80ccfa6d1103f4613f1c6510b324b3ea44ddac1fde27f",
+          "packages/runner/src/runner.ts": "9c51f31cdcb847e420998e8e8d518070c5625276dc481abd37dc00e1c17aed28",
+          "packages/runner/src/scheduler/facade.ts": "e28a57357cb11e77e7a7c5315d6a3908af994ff70822866c1f5c49b8bab9344d",
+          "packages/runner/src/scheduler/node-record.ts": "2d6a495d0a3e08450276f3509598bbda0b4ff094351d1506f902f267bc182383",
+          "packages/runner/src/scheduler/registration.ts": "e7249f0cd3668de12733f65951f3ac38b8026ffea528d33e4c195483ea3fa571",
+          "packages/runner/src/scheduler/run.ts": "23a4965d9e910273b8463aa64aae78fd5161c90af463223e247821426d2494a9",
+          "packages/runner/src/view-replication-client.ts": "5c7b412fdb459cc083be8be8ad14b630d4380f56b3dbcb220fd4574f79a6ec38",
+          "packages/runner/test/view-replication-client.test.ts": "9f5138557b07bf74c304ba43ee18b00f454dfe21bab6d4e55e4d9a69048fd313"
+        }
+      },
+      "commands": {
+        "seed.command": {
+          "command": [
+            "deno",
+            "run",
+            "--frozen",
+            "-A",
+            "--config",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/diagnostic-tree/deno.jsonc",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/rig/seed.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789153415.534334,
+            "load": [
+              319.0166015625,
+              308.5849609375,
+              268.45849609375
+            ]
+          },
+          "after": {
+            "epoch": 1789153654.40515,
+            "load": [
+              194.74560546875,
+              241.9833984375,
+              248.52099609375
+            ]
+          }
+        },
+        "start.command": {
+          "command": [
+            "bash",
+            "scripts/start-local-dev.sh",
+            "--port-offset=965",
+            "--inspect",
+            "--inspect-port=9865"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789153236.730897,
+            "load": [
+              306.53076171875,
+              296.74365234375,
+              255.67919921875
+            ]
+          },
+          "after": {
+            "epoch": 1789153256.102741,
+            "load": [
+              311.09228515625,
+              298.47607421875,
+              257.2578125
+            ]
+          }
+        },
+        "stop.command": {
+          "command": [
+            "bash",
+            "scripts/stop-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789153708.1849558,
+            "load": [
+              175.51318359375,
+              229.37939453125,
+              243.4814453125
+            ]
+          },
+          "after": {
+            "epoch": 1789153709.629094,
+            "load": [
+              177.1533203125,
+              228.8251953125,
+              243.203125
+            ]
+          }
+        },
+        "flags.command": {
+          "command": [
+            "deno",
+            "test",
+            "--frozen",
+            "-A",
+            "integration/view-scoped-replication.test.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789153256.1605031,
+            "load": [
+              311.09228515625,
+              298.47607421875,
+              257.2578125
+            ]
+          },
+          "after": {
+            "epoch": 1789153415.533826,
+            "load": [
+              319.0166015625,
+              308.5849609375,
+              268.45849609375
+            ]
+          }
+        },
+        "open.command": {
+          "command": [
+            "deno",
+            "run",
+            "--frozen",
+            "-A",
+            "--config",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/diagnostic-tree/deno.jsonc",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/rig/open.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789153654.406234,
+            "load": [
+              194.74560546875,
+              241.9833984375,
+              248.52099609375
+            ]
+          },
+          "after": {
+            "epoch": 1789153708.182393,
+            "load": [
+              175.51318359375,
+              229.37939453125,
+              243.4814453125
+            ]
+          }
+        }
+      },
+      "profiles": {
+        "startup.worker.cpuprofile": "3b5966e444cd61a6a8e73520a7eafd5482ef6db35587b4502ba9f73dfb685e04",
+        "startup.server.cpuprofile": "ac3c95562be767a1031d4c337ea088588e0e779a5bf790b2edc5b910777ca273",
+        "startup.main.cpuprofile": "b23590d80ef8b1c806201f251cd046505f2c5769871df6fb521f24c8b491f1fc"
+      },
+      "rawResultSha256": "4ae13f1cd9010144e13600dba271a8f7926a5bf06f330e5d72931bd098d29c26"
+    },
+    {
+      "label": "off-1",
+      "startup": {
+        "label": "off-1",
+        "adoptionEnabled": false,
+        "serverExecution": true,
+        "viewScopedReplication": true,
+        "driverCode": 0,
+        "load": [
+          335.2314453125,
+          336.0009765625,
+          292.869140625
+        ],
+        "adoptions": 0,
+        "proofCalls": 1032,
+        "acceptedProofs": 0,
+        "proofMs": 0.3000001907348633,
+        "bindingMs": 1069.8000004291534,
+        "bindingPasses": 123,
+        "bindings": 1033,
+        "graphs": 61,
+        "actionAttempts": 280,
+        "entered": 154,
+        "viewBodies": 121,
+        "controlBodies": 33,
+        "startupMs": 14941,
+        "phases": [
+          {
+            "name": "load",
+            "startEpoch": 1789154127987,
+            "ms": 906.5625409999993,
+            "epoch": 1789154128894
+          },
+          {
+            "name": "login",
+            "startEpoch": 1789154128910,
+            "ms": 695.0057500000003,
+            "epoch": 1789154129605
+          },
+          {
+            "name": "initial idle",
+            "startEpoch": 1789154129621,
+            "ms": 4.9444579999999405,
+            "epoch": 1789154129626
+          },
+          {
+            "name": "cards",
+            "startEpoch": 1789154129642,
+            "ms": 1160.4193749999995,
+            "epoch": 1789154130803
+          },
+          {
+            "name": "board settled",
+            "startEpoch": 1789154130818,
+            "ms": 6.986207999998442,
+            "epoch": 1789154130825
+          },
+          {
+            "name": "mount acknowledged",
+            "startEpoch": 1789154130867,
+            "ms": 5292.960583,
+            "epoch": 1789154136160
+          },
+          {
+            "name": "registry ready",
+            "startEpoch": 1789154136177,
+            "ms": 120.92520800000057,
+            "epoch": 1789154136298
+          },
+          {
+            "name": "post-mount idle",
+            "startEpoch": 1789154136317,
+            "ms": 3.5728329999983544,
+            "epoch": 1789154136321
+          },
+          {
+            "name": "local graph ready",
+            "startEpoch": 1789154136336,
+            "ms": 4589.652332999998,
+            "epoch": 1789154140925
+          },
+          {
+            "name": "graph idle",
+            "startEpoch": 1789154140951,
+            "ms": 1962.6578330000011,
+            "epoch": 1789154142913
+          },
+          {
+            "name": "open topic",
+            "startEpoch": 1789154143360,
+            "ms": 909.4060839999984,
+            "epoch": 1789154144270
+          },
+          {
+            "name": "topic mount acknowledged",
+            "startEpoch": 1789154144316,
+            "ms": 265.6020000000026,
+            "epoch": 1789154144581
+          },
+          {
+            "name": "post-open idle",
+            "startEpoch": 1789154144619,
+            "ms": 3.3752499999973224,
+            "epoch": 1789154144623
+          }
+        ],
+        "errors": [],
+        "failure": null,
+        "ipcFailures": [],
+        "pending": [],
+        "profileErrors": []
+      },
+      "costs": {
+        "label": "off-1",
+        "profiles": {
+          "worker": {
+            "totalSampledMs": 13909.209,
+            "nonIdleSampledMs": 3794.743,
+            "proofInclusiveSampledMs": 0.0,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 10114.466
+              },
+              {
+                "name": "recordLocalReadWake",
+                "ms": 607.282
+              },
+              {
+                "name": "",
+                "ms": 218.71
+              },
+              {
+                "name": "(program)",
+                "ms": 151.474
+              },
+              {
+                "name": "wasm-function[3]",
+                "ms": 148.166
+              },
+              {
+                "name": "(garbage collector)",
+                "ms": 104.971
+              },
+              {
+                "name": "addToDeepFrozenCache",
+                "ms": 103.452
+              },
+              {
+                "name": "observeViewInput",
+                "ms": 93.418
+              },
+              {
+                "name": "update",
+                "ms": 77.966
+              },
+              {
+                "name": "scan",
+                "ms": 76.032
+              },
+              {
+                "name": "check",
+                "ms": 73.4
+              },
+              {
+                "name": "prepareViewAction",
+                "ms": 66.198
+              },
+              {
+                "name": "resolveLinkTracingDereferences",
+                "ms": 57.853
+              },
+              {
+                "name": "feedPlainObject",
+                "ms": 55.739
+              },
+              {
+                "name": "get",
+                "ms": 49.289
+              }
+            ]
+          },
+          "main": {
+            "totalSampledMs": 15057.182,
+            "nonIdleSampledMs": 3646.069,
+            "proofInclusiveSampledMs": 0.0,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 11411.113
+              },
+              {
+                "name": "(program)",
+                "ms": 2229.147
+              },
+              {
+                "name": "",
+                "ms": 1306.95
+              },
+              {
+                "name": "(garbage collector)",
+                "ms": 62.038
+              },
+              {
+                "name": "insertBefore",
+                "ms": 13.382
+              },
+              {
+                "name": "onMessageReceived_",
+                "ms": 7.908
+              },
+              {
+                "name": "getBoundingClientRect",
+                "ms": 2.304
+              },
+              {
+                "name": "createRenderRoot",
+                "ms": 2.081
+              },
+              {
+                "name": "MostVisitedElement",
+                "ms": 1.727
+              },
+              {
+                "name": "$",
+                "ms": 1.62
+              },
+              {
+                "name": "j",
+                "ms": 1.411
+              },
+              {
+                "name": "i",
+                "ms": 1.408
+              },
+              {
+                "name": "N",
+                "ms": 1.405
+              },
+              {
+                "name": "willUpdate",
+                "ms": 1.404
+              },
+              {
+                "name": "connectedCallback",
+                "ms": 1.36
+              }
+            ]
+          },
+          "server": {
+            "totalSampledMs": 17835.072,
+            "nonIdleSampledMs": 10913.381,
+            "proofInclusiveSampledMs": 0.0,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 6921.691
+              },
+              {
+                "name": "(garbage collector)",
+                "ms": 1404.729
+              },
+              {
+                "name": "",
+                "ms": 1126.266
+              },
+              {
+                "name": "#loadDemandedStructure",
+                "ms": 615.72
+              },
+              {
+                "name": "emit",
+                "ms": 428.808
+              },
+              {
+                "name": "trackedIdsFromEntries",
+                "ms": 423.585
+              },
+              {
+                "name": "extendTrackedGraph",
+                "ms": 418.861
+              },
+              {
+                "name": "demandedInstancesForSpace",
+                "ms": 405.736
+              },
+              {
+                "name": "#addMissedToTrackedIds",
+                "ms": 201.352
+              },
+              {
+                "name": "copyStateFrom",
+                "ms": 191.439
+              },
+              {
+                "name": "cloneTrackedGraphState",
+                "ms": 184.865
+              },
+              {
+                "name": "traverseWithSchema",
+                "ms": 159.197
+              },
+              {
+                "name": "#watchAdd",
+                "ms": 151.973
+              },
+              {
+                "name": "encodePlainObject",
+                "ms": 142.525
+              },
+              {
+                "name": "op_inspector_emit_protocol_event",
+                "ms": 138.471
+              }
+            ]
+          }
+        },
+        "startup": {
+          "actions": {
+            "authored": {
+              "count": 121,
+              "wallSpanMs": 1414.4000010490417
+            },
+            "control": {
+              "count": 33,
+              "wallSpanMs": 8.799998998641968
+            },
+            "parked": {
+              "count": 126,
+              "wallSpanMs": 80.59999990463257
+            }
+          },
+          "proofCalls": 1032,
+          "acceptedProofs": 0,
+          "proofMs": 0.3000001907348633,
+          "adoptions": 0
+        },
+        "final": {
+          "actions": {
+            "authored": {
+              "count": 121,
+              "wallSpanMs": 1414.4000010490417
+            },
+            "control": {
+              "count": 33,
+              "wallSpanMs": 8.799998998641968
+            },
+            "parked": {
+              "count": 126,
+              "wallSpanMs": 80.59999990463257
+            }
+          },
+          "proofCalls": 1032,
+          "acceptedProofs": 0,
+          "proofMs": 0.3000001907348633,
+          "adoptions": 0
+        },
+        "startupPhases": [
+          {
+            "name": "load",
+            "startEpoch": 1789154127987,
+            "ms": 906.5625409999993,
+            "epoch": 1789154128894
+          },
+          {
+            "name": "login",
+            "startEpoch": 1789154128910,
+            "ms": 695.0057500000003,
+            "epoch": 1789154129605
+          },
+          {
+            "name": "initial idle",
+            "startEpoch": 1789154129621,
+            "ms": 4.9444579999999405,
+            "epoch": 1789154129626
+          },
+          {
+            "name": "cards",
+            "startEpoch": 1789154129642,
+            "ms": 1160.4193749999995,
+            "epoch": 1789154130803
+          },
+          {
+            "name": "board settled",
+            "startEpoch": 1789154130818,
+            "ms": 6.986207999998442,
+            "epoch": 1789154130825
+          },
+          {
+            "name": "mount acknowledged",
+            "startEpoch": 1789154130867,
+            "ms": 5292.960583,
+            "epoch": 1789154136160
+          },
+          {
+            "name": "registry ready",
+            "startEpoch": 1789154136177,
+            "ms": 120.92520800000057,
+            "epoch": 1789154136298
+          },
+          {
+            "name": "post-mount idle",
+            "startEpoch": 1789154136317,
+            "ms": 3.5728329999983544,
+            "epoch": 1789154136321
+          },
+          {
+            "name": "local graph ready",
+            "startEpoch": 1789154136336,
+            "ms": 4589.652332999998,
+            "epoch": 1789154140925
+          },
+          {
+            "name": "graph idle",
+            "startEpoch": 1789154140951,
+            "ms": 1962.6578330000011,
+            "epoch": 1789154142913
+          }
+        ],
+        "navigationPhases": [
+          {
+            "name": "open topic",
+            "startEpoch": 1789154143360,
+            "ms": 909.4060839999984,
+            "epoch": 1789154144270
+          },
+          {
+            "name": "topic mount acknowledged",
+            "startEpoch": 1789154144316,
+            "ms": 265.6020000000026,
+            "epoch": 1789154144581
+          },
+          {
+            "name": "post-open idle",
+            "startEpoch": 1789154144619,
+            "ms": 3.3752499999973224,
+            "epoch": 1789154144623
+          }
+        ]
+      },
+      "experimental": {
+        "commitPreconditions": true,
+        "computedCellIds": true,
+        "contentAddressedSchemas": true,
+        "lazyMaterialization": true,
+        "modernCellRep": false,
+        "plainResultReceipts": true,
+        "readerSchemaPrecedence": true,
+        "serverExecution": true,
+        "viewScopedReplication": true
+      },
+      "environment": {
+        "EXPERIMENTAL_SERVER_EXECUTION": "true",
+        "EXPERIMENTAL_VIEW_SCOPED_REPLICATION": "true",
+        "API_URL": "http://localhost:8965/",
+        "FRONTEND_URL": "http://localhost:8965/",
+        "MEMORY_DIR": "file:///var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-off-1-1lnzyrho/memory/",
+        "HEADLESS": "1"
+      },
+      "source": {
+        "head": "f59231ee3d9a1cf85b37076639067b648b7fa64b",
+        "hashes": {
+          "packages/runner/test/view-server-currency.test.ts": "55e803458e5d2390c3d80ccfa6d1103f4613f1c6510b324b3ea44ddac1fde27f",
+          "packages/runner/src/runner.ts": "9c51f31cdcb847e420998e8e8d518070c5625276dc481abd37dc00e1c17aed28",
+          "packages/runner/src/scheduler/facade.ts": "e28a57357cb11e77e7a7c5315d6a3908af994ff70822866c1f5c49b8bab9344d",
+          "packages/runner/src/scheduler/node-record.ts": "2d6a495d0a3e08450276f3509598bbda0b4ff094351d1506f902f267bc182383",
+          "packages/runner/src/scheduler/registration.ts": "e7249f0cd3668de12733f65951f3ac38b8026ffea528d33e4c195483ea3fa571",
+          "packages/runner/src/scheduler/run.ts": "23a4965d9e910273b8463aa64aae78fd5161c90af463223e247821426d2494a9",
+          "packages/runner/src/view-replication-client.ts": "34f16a00fb08ae9b7344760e3085756996e22cd2c6fd7c7cbb6fbd1817932fee",
+          "packages/runner/test/view-replication-client.test.ts": "9f5138557b07bf74c304ba43ee18b00f454dfe21bab6d4e55e4d9a69048fd313"
+        }
+      },
+      "commands": {
+        "seed.command": {
+          "command": [
+            "deno",
+            "run",
+            "--frozen",
+            "-A",
+            "--config",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/diagnostic-tree/deno.jsonc",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/rig/seed.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789153742.763426,
+            "load": [
+              194.6328125,
+              227.8427734375,
+              242.3310546875
+            ]
+          },
+          "after": {
+            "epoch": 1789154117.8081641,
+            "load": [
+              335.2314453125,
+              336.0009765625,
+              292.869140625
+            ]
+          }
+        },
+        "start.command": {
+          "command": [
+            "bash",
+            "scripts/start-local-dev.sh",
+            "--port-offset=965",
+            "--inspect",
+            "--inspect-port=9865"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789153716.94365,
+            "load": [
+              176.259765625,
+              227.78173828125,
+              242.75048828125
+            ]
+          },
+          "after": {
+            "epoch": 1789153742.7574248,
+            "load": [
+              194.6328125,
+              227.8427734375,
+              242.3310546875
+            ]
+          }
+        },
+        "stop.command": {
+          "command": [
+            "bash",
+            "scripts/stop-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154148.835306,
+            "load": [
+              309.61181640625,
+              330.1904296875,
+              292.28515625
+            ]
+          },
+          "after": {
+            "epoch": 1789154149.5874612,
+            "load": [
+              297.0703125,
+              327.24853515625,
+              291.46875
+            ]
+          }
+        },
+        "open.command": {
+          "command": [
+            "deno",
+            "run",
+            "--frozen",
+            "-A",
+            "--config",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/diagnostic-tree/deno.jsonc",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/rig/open.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154117.809394,
+            "load": [
+              335.2314453125,
+              336.0009765625,
+              292.869140625
+            ]
+          },
+          "after": {
+            "epoch": 1789154148.8334029,
+            "load": [
+              309.61181640625,
+              330.1904296875,
+              292.28515625
+            ]
+          }
+        }
+      },
+      "profiles": {
+        "startup.worker.cpuprofile": "8fc1f2b73fcc557516e09d1a270236aff023b46a169ea3d32c8511f9bc3870d2",
+        "startup.server.cpuprofile": "babc906bb730bcf3f52b22b76210d9c8d5470a973eacebb8af9efd09dce9bcdf",
+        "startup.main.cpuprofile": "3087ac4c3890f5e5479f3f413137463c327ee1511af95c30712375d2050bd4d0"
+      },
+      "rawResultSha256": "2e391916396c62ba8215a84a86b262e2870ca9cb4faf330a5e0b8ab34836c2c7"
+    },
+    {
+      "label": "on-2",
+      "startup": {
+        "label": "on-2",
+        "adoptionEnabled": true,
+        "serverExecution": true,
+        "viewScopedReplication": true,
+        "driverCode": 0,
+        "load": [
+          126.24755859375,
+          258.81103515625,
+          268.9228515625
+        ],
+        "adoptions": 121,
+        "proofCalls": 1032,
+        "acceptedProofs": 121,
+        "proofMs": 72.09999918937683,
+        "bindingMs": 1401.7000002861023,
+        "bindingPasses": 123,
+        "bindings": 1033,
+        "graphs": 61,
+        "actionAttempts": 159,
+        "entered": 33,
+        "viewBodies": 0,
+        "controlBodies": 33,
+        "startupMs": 7955,
+        "phases": [
+          {
+            "name": "load",
+            "startEpoch": 1789154263900,
+            "ms": 897.1599159999996,
+            "epoch": 1789154264797
+          },
+          {
+            "name": "login",
+            "startEpoch": 1789154264810,
+            "ms": 419.85050000000047,
+            "epoch": 1789154265230
+          },
+          {
+            "name": "initial idle",
+            "startEpoch": 1789154265284,
+            "ms": 85.59479200000078,
+            "epoch": 1789154265370
+          },
+          {
+            "name": "cards",
+            "startEpoch": 1789154265387,
+            "ms": 1109.1151659999996,
+            "epoch": 1789154266496
+          },
+          {
+            "name": "board settled",
+            "startEpoch": 1789154267419,
+            "ms": 17.947124999998778,
+            "epoch": 1789154267437
+          },
+          {
+            "name": "mount acknowledged",
+            "startEpoch": 1789154267487,
+            "ms": 1018.4280419999996,
+            "epoch": 1789154268506
+          },
+          {
+            "name": "registry ready",
+            "startEpoch": 1789154268519,
+            "ms": 65.7327920000007,
+            "epoch": 1789154268585
+          },
+          {
+            "name": "post-mount idle",
+            "startEpoch": 1789154268602,
+            "ms": 9.584915999999794,
+            "epoch": 1789154268611
+          },
+          {
+            "name": "local graph ready",
+            "startEpoch": 1789154268641,
+            "ms": 2880.153292000001,
+            "epoch": 1789154271521
+          },
+          {
+            "name": "graph idle",
+            "startEpoch": 1789154271535,
+            "ms": 303.54379100000006,
+            "epoch": 1789154271839
+          },
+          {
+            "name": "open topic",
+            "startEpoch": 1789154272075,
+            "ms": 606.2169169999997,
+            "epoch": 1789154272681
+          },
+          {
+            "name": "topic mount acknowledged",
+            "startEpoch": 1789154272708,
+            "ms": 367.8266249999997,
+            "epoch": 1789154273075
+          },
+          {
+            "name": "post-open idle",
+            "startEpoch": 1789154273111,
+            "ms": 4.606665999999677,
+            "epoch": 1789154273115
+          }
+        ],
+        "errors": [],
+        "failure": null,
+        "ipcFailures": [],
+        "pending": [],
+        "profileErrors": []
+      },
+      "costs": {
+        "label": "on-2",
+        "profiles": {
+          "worker": {
+            "totalSampledMs": 6815.86,
+            "nonIdleSampledMs": 2587.524,
+            "proofInclusiveSampledMs": 62.521,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 4228.336
+              },
+              {
+                "name": "",
+                "ms": 154.496
+              },
+              {
+                "name": "wasm-function[3]",
+                "ms": 133.492
+              },
+              {
+                "name": "update",
+                "ms": 113.566
+              },
+              {
+                "name": "addToDeepFrozenCache",
+                "ms": 100.614
+              },
+              {
+                "name": "(garbage collector)",
+                "ms": 67.246
+              },
+              {
+                "name": "toOwnedUint8Array",
+                "ms": 56.614
+              },
+              {
+                "name": "get",
+                "ms": 56.046
+              },
+              {
+                "name": "(program)",
+                "ms": 48.589
+              },
+              {
+                "name": "freeze",
+                "ms": 47.802
+              },
+              {
+                "name": "prepareViewAction",
+                "ms": 45.399
+              },
+              {
+                "name": "utf8SortedKeysOf",
+                "ms": 42.89
+              },
+              {
+                "name": "feedPlainObject",
+                "ms": 40.91
+              },
+              {
+                "name": "internSchemaReturningSchemaAndHash",
+                "ms": 32.175
+              },
+              {
+                "name": "serializedFromEncoded",
+                "ms": 30.269
+              }
+            ]
+          },
+          "main": {
+            "totalSampledMs": 8133.316,
+            "nonIdleSampledMs": 184.486,
+            "proofInclusiveSampledMs": 0.0,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 7948.83
+              },
+              {
+                "name": "(program)",
+                "ms": 172.752
+              },
+              {
+                "name": "readMessage",
+                "ms": 5.733
+              },
+              {
+                "name": "set",
+                "ms": 3.194
+              },
+              {
+                "name": "mojo.internal.DataViewWrapper",
+                "ms": 2.807
+              }
+            ]
+          },
+          "server": {
+            "totalSampledMs": 9683.527,
+            "nonIdleSampledMs": 4859.275,
+            "proofInclusiveSampledMs": 0.0,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 4824.252
+              },
+              {
+                "name": "",
+                "ms": 1538.276
+              },
+              {
+                "name": "(garbage collector)",
+                "ms": 179.002
+              },
+              {
+                "name": "trackedIdsFromEntries",
+                "ms": 139.063
+              },
+              {
+                "name": "#loadDemandedStructure",
+                "ms": 134.639
+              },
+              {
+                "name": "extendTrackedGraph",
+                "ms": 108.913
+              },
+              {
+                "name": "emit",
+                "ms": 101.657
+              },
+              {
+                "name": "copyStateFrom",
+                "ms": 95.623
+              },
+              {
+                "name": "parseLink",
+                "ms": 95.396
+              },
+              {
+                "name": "demandedInstancesForSpace",
+                "ms": 89.484
+              },
+              {
+                "name": "#addMissedToTrackedIds",
+                "ms": 88.017
+              },
+              {
+                "name": "traverseWithSchema",
+                "ms": 83.097
+              },
+              {
+                "name": "cloneTrackedGraphState",
+                "ms": 69.166
+              },
+              {
+                "name": "encode",
+                "ms": 63.957
+              },
+              {
+                "name": "op_inspector_emit_protocol_event",
+                "ms": 58.222
+              }
+            ]
+          }
+        },
+        "startup": {
+          "actions": {
+            "authored": {
+              "count": 0,
+              "wallSpanMs": 0
+            },
+            "control": {
+              "count": 33,
+              "wallSpanMs": 12.90000057220459
+            },
+            "parked": {
+              "count": 126,
+              "wallSpanMs": 78.3999993801117
+            }
+          },
+          "proofCalls": 1032,
+          "acceptedProofs": 121,
+          "proofMs": 72.09999918937683,
+          "adoptions": 121
+        },
+        "final": {
+          "actions": {
+            "authored": {
+              "count": 0,
+              "wallSpanMs": 0
+            },
+            "control": {
+              "count": 33,
+              "wallSpanMs": 12.90000057220459
+            },
+            "parked": {
+              "count": 150,
+              "wallSpanMs": 83.39999961853027
+            }
+          },
+          "proofCalls": 1200,
+          "acceptedProofs": 127,
+          "proofMs": 79.29999947547913,
+          "adoptions": 123
+        },
+        "startupPhases": [
+          {
+            "name": "load",
+            "startEpoch": 1789154263900,
+            "ms": 897.1599159999996,
+            "epoch": 1789154264797
+          },
+          {
+            "name": "login",
+            "startEpoch": 1789154264810,
+            "ms": 419.85050000000047,
+            "epoch": 1789154265230
+          },
+          {
+            "name": "initial idle",
+            "startEpoch": 1789154265284,
+            "ms": 85.59479200000078,
+            "epoch": 1789154265370
+          },
+          {
+            "name": "cards",
+            "startEpoch": 1789154265387,
+            "ms": 1109.1151659999996,
+            "epoch": 1789154266496
+          },
+          {
+            "name": "board settled",
+            "startEpoch": 1789154267419,
+            "ms": 17.947124999998778,
+            "epoch": 1789154267437
+          },
+          {
+            "name": "mount acknowledged",
+            "startEpoch": 1789154267487,
+            "ms": 1018.4280419999996,
+            "epoch": 1789154268506
+          },
+          {
+            "name": "registry ready",
+            "startEpoch": 1789154268519,
+            "ms": 65.7327920000007,
+            "epoch": 1789154268585
+          },
+          {
+            "name": "post-mount idle",
+            "startEpoch": 1789154268602,
+            "ms": 9.584915999999794,
+            "epoch": 1789154268611
+          },
+          {
+            "name": "local graph ready",
+            "startEpoch": 1789154268641,
+            "ms": 2880.153292000001,
+            "epoch": 1789154271521
+          },
+          {
+            "name": "graph idle",
+            "startEpoch": 1789154271535,
+            "ms": 303.54379100000006,
+            "epoch": 1789154271839
+          }
+        ],
+        "navigationPhases": [
+          {
+            "name": "open topic",
+            "startEpoch": 1789154272075,
+            "ms": 606.2169169999997,
+            "epoch": 1789154272681
+          },
+          {
+            "name": "topic mount acknowledged",
+            "startEpoch": 1789154272708,
+            "ms": 367.8266249999997,
+            "epoch": 1789154273075
+          },
+          {
+            "name": "post-open idle",
+            "startEpoch": 1789154273111,
+            "ms": 4.606665999999677,
+            "epoch": 1789154273115
+          }
+        ]
+      },
+      "experimental": {
+        "commitPreconditions": true,
+        "computedCellIds": true,
+        "contentAddressedSchemas": true,
+        "lazyMaterialization": true,
+        "modernCellRep": false,
+        "plainResultReceipts": true,
+        "readerSchemaPrecedence": true,
+        "serverExecution": true,
+        "viewScopedReplication": true
+      },
+      "environment": {
+        "EXPERIMENTAL_SERVER_EXECUTION": "true",
+        "EXPERIMENTAL_VIEW_SCOPED_REPLICATION": "true",
+        "API_URL": "http://localhost:8965/",
+        "FRONTEND_URL": "http://localhost:8965/",
+        "MEMORY_DIR": "file:///var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-on-2-ngdcueql/memory/",
+        "HEADLESS": "1"
+      },
+      "source": {
+        "head": "f59231ee3d9a1cf85b37076639067b648b7fa64b",
+        "hashes": {
+          "packages/runner/test/view-server-currency.test.ts": "55e803458e5d2390c3d80ccfa6d1103f4613f1c6510b324b3ea44ddac1fde27f",
+          "packages/runner/src/runner.ts": "9c51f31cdcb847e420998e8e8d518070c5625276dc481abd37dc00e1c17aed28",
+          "packages/runner/src/scheduler/facade.ts": "e28a57357cb11e77e7a7c5315d6a3908af994ff70822866c1f5c49b8bab9344d",
+          "packages/runner/src/scheduler/node-record.ts": "2d6a495d0a3e08450276f3509598bbda0b4ff094351d1506f902f267bc182383",
+          "packages/runner/src/scheduler/registration.ts": "e7249f0cd3668de12733f65951f3ac38b8026ffea528d33e4c195483ea3fa571",
+          "packages/runner/src/scheduler/run.ts": "23a4965d9e910273b8463aa64aae78fd5161c90af463223e247821426d2494a9",
+          "packages/runner/src/view-replication-client.ts": "5c7b412fdb459cc083be8be8ad14b630d4380f56b3dbcb220fd4574f79a6ec38",
+          "packages/runner/test/view-replication-client.test.ts": "9f5138557b07bf74c304ba43ee18b00f454dfe21bab6d4e55e4d9a69048fd313"
+        }
+      },
+      "commands": {
+        "seed.command": {
+          "command": [
+            "deno",
+            "run",
+            "--frozen",
+            "-A",
+            "--config",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/diagnostic-tree/deno.jsonc",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/rig/seed.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154163.3304188,
+            "load": [
+              270.0771484375,
+              320.486328125,
+              289.48779296875
+            ]
+          },
+          "after": {
+            "epoch": 1789154258.776428,
+            "load": [
+              126.24755859375,
+              258.81103515625,
+              268.9228515625
+            ]
+          }
+        },
+        "start.command": {
+          "command": [
+            "bash",
+            "scripts/start-local-dev.sh",
+            "--port-offset=965",
+            "--inspect",
+            "--inspect-port=9865"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154152.623466,
+            "load": [
+              297.0703125,
+              327.24853515625,
+              291.46875
+            ]
+          },
+          "after": {
+            "epoch": 1789154163.324724,
+            "load": [
+              270.0771484375,
+              320.486328125,
+              289.48779296875
+            ]
+          }
+        },
+        "stop.command": {
+          "command": [
+            "bash",
+            "scripts/stop-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154273.622962,
+            "load": [
+              108.5947265625,
+              248.41796875,
+              265.0380859375
+            ]
+          },
+          "after": {
+            "epoch": 1789154274.1286762,
+            "load": [
+              108.5947265625,
+              248.41796875,
+              265.0380859375
+            ]
+          }
+        },
+        "open.command": {
+          "command": [
+            "deno",
+            "run",
+            "--frozen",
+            "-A",
+            "--config",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/diagnostic-tree/deno.jsonc",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/rig/open.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154258.777319,
+            "load": [
+              126.24755859375,
+              258.81103515625,
+              268.9228515625
+            ]
+          },
+          "after": {
+            "epoch": 1789154273.6216772,
+            "load": [
+              108.5947265625,
+              248.41796875,
+              265.0380859375
+            ]
+          }
+        }
+      },
+      "profiles": {
+        "startup.worker.cpuprofile": "a853dc3f59b8e272cb5dc50e3eb0205c864b0d58ed311507c48ac9f515a8b980",
+        "startup.server.cpuprofile": "c35e789cc1acdd57587973d31e56abef0bbfe19e475497ccbbd8b7ad9a10219f",
+        "startup.main.cpuprofile": "36b81856510665f11256068319018ffebc4f5705c40c86bd2b1e60594fc51dc6"
+      },
+      "rawResultSha256": "351a2700830986ef83af8a7c5afea198c5ee4aafa0d3307a0250503f1f0fd288"
+    },
+    {
+      "label": "off-2",
+      "startup": {
+        "label": "off-2",
+        "adoptionEnabled": false,
+        "serverExecution": true,
+        "viewScopedReplication": true,
+        "driverCode": 0,
+        "load": [
+          53.71435546875,
+          192.94482421875,
+          241.86083984375
+        ],
+        "adoptions": 0,
+        "proofCalls": 1032,
+        "acceptedProofs": 0,
+        "proofMs": 0.2999997138977051,
+        "bindingMs": 1035.400001525879,
+        "bindingPasses": 123,
+        "bindings": 1033,
+        "graphs": 61,
+        "actionAttempts": 280,
+        "entered": 154,
+        "viewBodies": 121,
+        "controlBodies": 33,
+        "startupMs": 9564,
+        "phases": [
+          {
+            "name": "load",
+            "startEpoch": 1789154372499,
+            "ms": 896.0288329999994,
+            "epoch": 1789154373395
+          },
+          {
+            "name": "login",
+            "startEpoch": 1789154373410,
+            "ms": 308.7697500000004,
+            "epoch": 1789154373719
+          },
+          {
+            "name": "initial idle",
+            "startEpoch": 1789154373734,
+            "ms": 8.553165999999692,
+            "epoch": 1789154373743
+          },
+          {
+            "name": "cards",
+            "startEpoch": 1789154373762,
+            "ms": 1418.5180410000003,
+            "epoch": 1789154375180
+          },
+          {
+            "name": "board settled",
+            "startEpoch": 1789154375194,
+            "ms": 6.764250000000175,
+            "epoch": 1789154375200
+          },
+          {
+            "name": "mount acknowledged",
+            "startEpoch": 1789154375235,
+            "ms": 2309.7498749999995,
+            "epoch": 1789154377545
+          },
+          {
+            "name": "registry ready",
+            "startEpoch": 1789154377565,
+            "ms": 73.49070799999936,
+            "epoch": 1789154377639
+          },
+          {
+            "name": "post-mount idle",
+            "startEpoch": 1789154377655,
+            "ms": 5.531000000000859,
+            "epoch": 1789154377661
+          },
+          {
+            "name": "local graph ready",
+            "startEpoch": 1789154377677,
+            "ms": 2516.3269999999993,
+            "epoch": 1789154380193
+          },
+          {
+            "name": "graph idle",
+            "startEpoch": 1789154380219,
+            "ms": 1793.519624999999,
+            "epoch": 1789154382013
+          },
+          {
+            "name": "open topic",
+            "startEpoch": 1789154382663,
+            "ms": 680.5858329999974,
+            "epoch": 1789154383344
+          },
+          {
+            "name": "topic mount acknowledged",
+            "startEpoch": 1789154383391,
+            "ms": 435.88887500000055,
+            "epoch": 1789154383827
+          },
+          {
+            "name": "post-open idle",
+            "startEpoch": 1789154383863,
+            "ms": 8.898459000000003,
+            "epoch": 1789154383872
+          }
+        ],
+        "errors": [],
+        "failure": null,
+        "ipcFailures": [],
+        "pending": [],
+        "profileErrors": []
+      },
+      "costs": {
+        "label": "off-2",
+        "profiles": {
+          "worker": {
+            "totalSampledMs": 8503.167,
+            "nonIdleSampledMs": 3588.281,
+            "proofInclusiveSampledMs": 0.0,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 4914.886
+              },
+              {
+                "name": "",
+                "ms": 170.541
+              },
+              {
+                "name": "observeViewInput",
+                "ms": 141.25
+              },
+              {
+                "name": "update",
+                "ms": 127.275
+              },
+              {
+                "name": "addToDeepFrozenCache",
+                "ms": 115.837
+              },
+              {
+                "name": "wasm-function[3]",
+                "ms": 115.056
+              },
+              {
+                "name": "scan",
+                "ms": 112.027
+              },
+              {
+                "name": "hasLocalDocumentCoverage",
+                "ms": 108.846
+              },
+              {
+                "name": "(garbage collector)",
+                "ms": 100.584
+              },
+              {
+                "name": "check",
+                "ms": 87.828
+              },
+              {
+                "name": "(program)",
+                "ms": 75.951
+              },
+              {
+                "name": "prepareViewAction",
+                "ms": 69.549
+              },
+              {
+                "name": "recordLocalReadWake",
+                "ms": 62.284
+              },
+              {
+                "name": "#visibleVersion",
+                "ms": 57.973
+              },
+              {
+                "name": "transactionLayers",
+                "ms": 56.669
+              }
+            ]
+          },
+          "main": {
+            "totalSampledMs": 9851.627,
+            "nonIdleSampledMs": 452.088,
+            "proofInclusiveSampledMs": 0.0,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 9399.539
+              },
+              {
+                "name": "(program)",
+                "ms": 452.088
+              }
+            ]
+          },
+          "server": {
+            "totalSampledMs": 11799.165,
+            "nonIdleSampledMs": 5485.194,
+            "proofInclusiveSampledMs": 0.0,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 6313.971
+              },
+              {
+                "name": "",
+                "ms": 555.757
+              },
+              {
+                "name": "(garbage collector)",
+                "ms": 370.91
+              },
+              {
+                "name": "#loadDemandedStructure",
+                "ms": 338.077
+              },
+              {
+                "name": "extendTrackedGraph",
+                "ms": 255.82
+              },
+              {
+                "name": "demandedInstancesForSpace",
+                "ms": 225.279
+              },
+              {
+                "name": "trackedIdsFromEntries",
+                "ms": 207.736
+              },
+              {
+                "name": "encodePlainObject",
+                "ms": 151.108
+              },
+              {
+                "name": "#addMissedToTrackedIds",
+                "ms": 134.752
+              },
+              {
+                "name": "#watchAdd",
+                "ms": 126.739
+              },
+              {
+                "name": "copyStateFrom",
+                "ms": 111.158
+              },
+              {
+                "name": "emit",
+                "ms": 107.915
+              },
+              {
+                "name": "traverseWithSchema",
+                "ms": 93.502
+              },
+              {
+                "name": "cloneTrackedGraphState",
+                "ms": 92.42
+              },
+              {
+                "name": "topologicalSort",
+                "ms": 80.661
+              }
+            ]
+          }
+        },
+        "startup": {
+          "actions": {
+            "authored": {
+              "count": 121,
+              "wallSpanMs": 1273.900000333786
+            },
+            "control": {
+              "count": 33,
+              "wallSpanMs": 14.099999904632568
+            },
+            "parked": {
+              "count": 126,
+              "wallSpanMs": 74.99999928474426
+            }
+          },
+          "proofCalls": 1032,
+          "acceptedProofs": 0,
+          "proofMs": 0.2999997138977051,
+          "adoptions": 0
+        },
+        "final": {
+          "actions": {
+            "authored": {
+              "count": 123,
+              "wallSpanMs": 1324.2000000476837
+            },
+            "control": {
+              "count": 33,
+              "wallSpanMs": 14.099999904632568
+            },
+            "parked": {
+              "count": 150,
+              "wallSpanMs": 79.69999957084656
+            }
+          },
+          "proofCalls": 1075,
+          "acceptedProofs": 0,
+          "proofMs": 0.2999997138977051,
+          "adoptions": 0
+        },
+        "startupPhases": [
+          {
+            "name": "load",
+            "startEpoch": 1789154372499,
+            "ms": 896.0288329999994,
+            "epoch": 1789154373395
+          },
+          {
+            "name": "login",
+            "startEpoch": 1789154373410,
+            "ms": 308.7697500000004,
+            "epoch": 1789154373719
+          },
+          {
+            "name": "initial idle",
+            "startEpoch": 1789154373734,
+            "ms": 8.553165999999692,
+            "epoch": 1789154373743
+          },
+          {
+            "name": "cards",
+            "startEpoch": 1789154373762,
+            "ms": 1418.5180410000003,
+            "epoch": 1789154375180
+          },
+          {
+            "name": "board settled",
+            "startEpoch": 1789154375194,
+            "ms": 6.764250000000175,
+            "epoch": 1789154375200
+          },
+          {
+            "name": "mount acknowledged",
+            "startEpoch": 1789154375235,
+            "ms": 2309.7498749999995,
+            "epoch": 1789154377545
+          },
+          {
+            "name": "registry ready",
+            "startEpoch": 1789154377565,
+            "ms": 73.49070799999936,
+            "epoch": 1789154377639
+          },
+          {
+            "name": "post-mount idle",
+            "startEpoch": 1789154377655,
+            "ms": 5.531000000000859,
+            "epoch": 1789154377661
+          },
+          {
+            "name": "local graph ready",
+            "startEpoch": 1789154377677,
+            "ms": 2516.3269999999993,
+            "epoch": 1789154380193
+          },
+          {
+            "name": "graph idle",
+            "startEpoch": 1789154380219,
+            "ms": 1793.519624999999,
+            "epoch": 1789154382013
+          }
+        ],
+        "navigationPhases": [
+          {
+            "name": "open topic",
+            "startEpoch": 1789154382663,
+            "ms": 680.5858329999974,
+            "epoch": 1789154383344
+          },
+          {
+            "name": "topic mount acknowledged",
+            "startEpoch": 1789154383391,
+            "ms": 435.88887500000055,
+            "epoch": 1789154383827
+          },
+          {
+            "name": "post-open idle",
+            "startEpoch": 1789154383863,
+            "ms": 8.898459000000003,
+            "epoch": 1789154383872
+          }
+        ]
+      },
+      "experimental": {
+        "commitPreconditions": true,
+        "computedCellIds": true,
+        "contentAddressedSchemas": true,
+        "lazyMaterialization": true,
+        "modernCellRep": false,
+        "plainResultReceipts": true,
+        "readerSchemaPrecedence": true,
+        "serverExecution": true,
+        "viewScopedReplication": true
+      },
+      "environment": {
+        "EXPERIMENTAL_SERVER_EXECUTION": "true",
+        "EXPERIMENTAL_VIEW_SCOPED_REPLICATION": "true",
+        "API_URL": "http://localhost:8965/",
+        "FRONTEND_URL": "http://localhost:8965/",
+        "MEMORY_DIR": "file:///var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-off-2-8rnyjw4h/memory/",
+        "HEADLESS": "1"
+      },
+      "source": {
+        "head": "f59231ee3d9a1cf85b37076639067b648b7fa64b",
+        "hashes": {
+          "packages/runner/test/view-server-currency.test.ts": "55e803458e5d2390c3d80ccfa6d1103f4613f1c6510b324b3ea44ddac1fde27f",
+          "packages/runner/src/runner.ts": "9c51f31cdcb847e420998e8e8d518070c5625276dc481abd37dc00e1c17aed28",
+          "packages/runner/src/scheduler/facade.ts": "e28a57357cb11e77e7a7c5315d6a3908af994ff70822866c1f5c49b8bab9344d",
+          "packages/runner/src/scheduler/node-record.ts": "2d6a495d0a3e08450276f3509598bbda0b4ff094351d1506f902f267bc182383",
+          "packages/runner/src/scheduler/registration.ts": "e7249f0cd3668de12733f65951f3ac38b8026ffea528d33e4c195483ea3fa571",
+          "packages/runner/src/scheduler/run.ts": "23a4965d9e910273b8463aa64aae78fd5161c90af463223e247821426d2494a9",
+          "packages/runner/src/view-replication-client.ts": "34f16a00fb08ae9b7344760e3085756996e22cd2c6fd7c7cbb6fbd1817932fee",
+          "packages/runner/test/view-replication-client.test.ts": "9f5138557b07bf74c304ba43ee18b00f454dfe21bab6d4e55e4d9a69048fd313"
+        }
+      },
+      "commands": {
+        "seed.command": {
+          "command": [
+            "deno",
+            "run",
+            "--frozen",
+            "-A",
+            "--config",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/diagnostic-tree/deno.jsonc",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/rig/seed.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154282.9903748,
+            "load": [
+              99.220703125,
+              241.7890625,
+              262.490234375
+            ]
+          },
+          "after": {
+            "epoch": 1789154366.467788,
+            "load": [
+              53.71435546875,
+              192.94482421875,
+              241.86083984375
+            ]
+          }
+        },
+        "start.command": {
+          "command": [
+            "bash",
+            "scripts/start-local-dev.sh",
+            "--port-offset=965",
+            "--inspect",
+            "--inspect-port=9865"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154276.450134,
+            "load": [
+              102.4609375,
+              244.82470703125,
+              263.67236328125
+            ]
+          },
+          "after": {
+            "epoch": 1789154282.9857621,
+            "load": [
+              99.220703125,
+              241.7890625,
+              262.490234375
+            ]
+          }
+        },
+        "stop.command": {
+          "command": [
+            "bash",
+            "scripts/stop-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154384.4892428,
+            "load": [
+              56.8701171875,
+              184.64111328125,
+              237.7451171875
+            ]
+          },
+          "after": {
+            "epoch": 1789154385.003237,
+            "load": [
+              56.8701171875,
+              184.64111328125,
+              237.7451171875
+            ]
+          }
+        },
+        "open.command": {
+          "command": [
+            "deno",
+            "run",
+            "--frozen",
+            "-A",
+            "--config",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/diagnostic-tree/deno.jsonc",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/rig/open.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154366.4684129,
+            "load": [
+              53.71435546875,
+              192.94482421875,
+              241.86083984375
+            ]
+          },
+          "after": {
+            "epoch": 1789154384.488207,
+            "load": [
+              56.8701171875,
+              184.64111328125,
+              237.7451171875
+            ]
+          }
+        }
+      },
+      "profiles": {
+        "startup.worker.cpuprofile": "cee4ab94570b1d541796082ca9735e812f21595684aeda57be9453f7dc26d166",
+        "startup.server.cpuprofile": "63d3b49f0cac963e0f75fee5372c72d0360a1246680de0eb84062074da9efb22",
+        "startup.main.cpuprofile": "33f54f6ad9e08cb22c0789d0918c211f7e2a720cb4431d86e7f4e229155882d2"
+      },
+      "rawResultSha256": "ed6035b630c2c718b4ae3967bc571c6680c0006a73adb3b0b3f16eb236d543ba"
+    },
+    {
+      "label": "on-3",
+      "startup": {
+        "label": "on-3",
+        "adoptionEnabled": true,
+        "serverExecution": true,
+        "viewScopedReplication": true,
+        "driverCode": 0,
+        "load": [
+          48.67724609375,
+          148.6748046875,
+          218.53076171875
+        ],
+        "adoptions": 121,
+        "proofCalls": 1153,
+        "acceptedProofs": 242,
+        "proofMs": 111.30000329017639,
+        "bindingMs": 1360.5000002384186,
+        "bindingPasses": 154,
+        "bindings": 1033,
+        "graphs": 61,
+        "actionAttempts": 285,
+        "entered": 33,
+        "viewBodies": 0,
+        "controlBodies": 33,
+        "startupMs": 6455,
+        "phases": [
+          {
+            "name": "load",
+            "startEpoch": 1789154481453,
+            "ms": 917.5872090000003,
+            "epoch": 1789154482371
+          },
+          {
+            "name": "login",
+            "startEpoch": 1789154482383,
+            "ms": 442.9930409999997,
+            "epoch": 1789154482826
+          },
+          {
+            "name": "initial idle",
+            "startEpoch": 1789154482838,
+            "ms": 4.669499999999971,
+            "epoch": 1789154482843
+          },
+          {
+            "name": "cards",
+            "startEpoch": 1789154482856,
+            "ms": 1404.4851250000002,
+            "epoch": 1789154484261
+          },
+          {
+            "name": "board settled",
+            "startEpoch": 1789154484273,
+            "ms": 6.444333999999799,
+            "epoch": 1789154484279
+          },
+          {
+            "name": "mount acknowledged",
+            "startEpoch": 1789154484308,
+            "ms": 1599.6569579999996,
+            "epoch": 1789154485907
+          },
+          {
+            "name": "registry ready",
+            "startEpoch": 1789154485920,
+            "ms": 1591.3582920000008,
+            "epoch": 1789154487511
+          },
+          {
+            "name": "post-mount idle",
+            "startEpoch": 1789154487528,
+            "ms": 307.8850000000002,
+            "epoch": 1789154487836
+          },
+          {
+            "name": "local graph ready",
+            "startEpoch": 1789154487851,
+            "ms": 7.418582999998762,
+            "epoch": 1789154487858
+          },
+          {
+            "name": "graph idle",
+            "startEpoch": 1789154487874,
+            "ms": 5.281834000001254,
+            "epoch": 1789154487879
+          },
+          {
+            "name": "open topic",
+            "startEpoch": 1789154488171,
+            "ms": 688.8974999999991,
+            "epoch": 1789154488860
+          },
+          {
+            "name": "topic mount acknowledged",
+            "startEpoch": 1789154488899,
+            "ms": 354.635542,
+            "epoch": 1789154489253
+          },
+          {
+            "name": "post-open idle",
+            "startEpoch": 1789154489284,
+            "ms": 3.3790420000004815,
+            "epoch": 1789154489288
+          }
+        ],
+        "errors": [],
+        "failure": null,
+        "ipcFailures": [],
+        "pending": [],
+        "profileErrors": []
+      },
+      "costs": {
+        "label": "on-3",
+        "profiles": {
+          "worker": {
+            "totalSampledMs": 5319.994,
+            "nonIdleSampledMs": 2604.352,
+            "proofInclusiveSampledMs": 108.047,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 2715.642
+              },
+              {
+                "name": "",
+                "ms": 189.651
+              },
+              {
+                "name": "addToDeepFrozenCache",
+                "ms": 147.23
+              },
+              {
+                "name": "update",
+                "ms": 125.189
+              },
+              {
+                "name": "wasm-function[3]",
+                "ms": 99.624
+              },
+              {
+                "name": "(garbage collector)",
+                "ms": 81.805
+              },
+              {
+                "name": "toOwnedUint8Array",
+                "ms": 73.977
+              },
+              {
+                "name": "prepareViewAction",
+                "ms": 73.362
+              },
+              {
+                "name": "(program)",
+                "ms": 49.063
+              },
+              {
+                "name": "utf8SortedKeysOf",
+                "ms": 39.777
+              },
+              {
+                "name": "freeze",
+                "ms": 39.141
+              },
+              {
+                "name": "get",
+                "ms": 34.334
+              },
+              {
+                "name": "internSchemaReturningSchemaAndHash",
+                "ms": 33.866
+              },
+              {
+                "name": "feedPlainObject",
+                "ms": 33.039
+              },
+              {
+                "name": "recursiveStripAsCellFromSchema",
+                "ms": 30.693
+              }
+            ]
+          },
+          "main": {
+            "totalSampledMs": 6678.602,
+            "nonIdleSampledMs": 304.324,
+            "proofInclusiveSampledMs": 0.0,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 6374.278
+              },
+              {
+                "name": "(program)",
+                "ms": 274.869
+              },
+              {
+                "name": "readMessage",
+                "ms": 29.455
+              }
+            ]
+          },
+          "server": {
+            "totalSampledMs": 8332.154,
+            "nonIdleSampledMs": 3930.483,
+            "proofInclusiveSampledMs": 0.0,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 4401.671
+              },
+              {
+                "name": "addToDeepFrozenCache",
+                "ms": 553.31
+              },
+              {
+                "name": "(garbage collector)",
+                "ms": 422.209
+              },
+              {
+                "name": "",
+                "ms": 327.56
+              },
+              {
+                "name": "trackedIdsFromEntries",
+                "ms": 150.504
+              },
+              {
+                "name": "#loadDemandedStructure",
+                "ms": 122.571
+              },
+              {
+                "name": "extendTrackedGraph",
+                "ms": 100.944
+              },
+              {
+                "name": "emit",
+                "ms": 100.377
+              },
+              {
+                "name": "traverseWithSchema",
+                "ms": 72.854
+              },
+              {
+                "name": "op_compression_write",
+                "ms": 59.666
+              },
+              {
+                "name": "op_inspector_emit_protocol_event",
+                "ms": 59.451
+              },
+              {
+                "name": "cloneTrackedGraphState",
+                "ms": 53.446
+              },
+              {
+                "name": "demandedInstancesForSpace",
+                "ms": 51.653
+              },
+              {
+                "name": "#watchAdd",
+                "ms": 50.565
+              },
+              {
+                "name": "#addMissedToTrackedIds",
+                "ms": 50.404
+              }
+            ]
+          }
+        },
+        "startup": {
+          "actions": {
+            "authored": {
+              "count": 0,
+              "wallSpanMs": 0
+            },
+            "control": {
+              "count": 33,
+              "wallSpanMs": 15.3000009059906
+            },
+            "parked": {
+              "count": 252,
+              "wallSpanMs": 137.20000195503235
+            }
+          },
+          "proofCalls": 1153,
+          "acceptedProofs": 242,
+          "proofMs": 111.30000329017639,
+          "adoptions": 121
+        },
+        "final": {
+          "actions": {
+            "authored": {
+              "count": 0,
+              "wallSpanMs": 0
+            },
+            "control": {
+              "count": 33,
+              "wallSpanMs": 15.3000009059906
+            },
+            "parked": {
+              "count": 276,
+              "wallSpanMs": 140.70000195503235
+            }
+          },
+          "proofCalls": 1321,
+          "acceptedProofs": 248,
+          "proofMs": 117.20000314712524,
+          "adoptions": 123
+        },
+        "startupPhases": [
+          {
+            "name": "load",
+            "startEpoch": 1789154481453,
+            "ms": 917.5872090000003,
+            "epoch": 1789154482371
+          },
+          {
+            "name": "login",
+            "startEpoch": 1789154482383,
+            "ms": 442.9930409999997,
+            "epoch": 1789154482826
+          },
+          {
+            "name": "initial idle",
+            "startEpoch": 1789154482838,
+            "ms": 4.669499999999971,
+            "epoch": 1789154482843
+          },
+          {
+            "name": "cards",
+            "startEpoch": 1789154482856,
+            "ms": 1404.4851250000002,
+            "epoch": 1789154484261
+          },
+          {
+            "name": "board settled",
+            "startEpoch": 1789154484273,
+            "ms": 6.444333999999799,
+            "epoch": 1789154484279
+          },
+          {
+            "name": "mount acknowledged",
+            "startEpoch": 1789154484308,
+            "ms": 1599.6569579999996,
+            "epoch": 1789154485907
+          },
+          {
+            "name": "registry ready",
+            "startEpoch": 1789154485920,
+            "ms": 1591.3582920000008,
+            "epoch": 1789154487511
+          },
+          {
+            "name": "post-mount idle",
+            "startEpoch": 1789154487528,
+            "ms": 307.8850000000002,
+            "epoch": 1789154487836
+          },
+          {
+            "name": "local graph ready",
+            "startEpoch": 1789154487851,
+            "ms": 7.418582999998762,
+            "epoch": 1789154487858
+          },
+          {
+            "name": "graph idle",
+            "startEpoch": 1789154487874,
+            "ms": 5.281834000001254,
+            "epoch": 1789154487879
+          }
+        ],
+        "navigationPhases": [
+          {
+            "name": "open topic",
+            "startEpoch": 1789154488171,
+            "ms": 688.8974999999991,
+            "epoch": 1789154488860
+          },
+          {
+            "name": "topic mount acknowledged",
+            "startEpoch": 1789154488899,
+            "ms": 354.635542,
+            "epoch": 1789154489253
+          },
+          {
+            "name": "post-open idle",
+            "startEpoch": 1789154489284,
+            "ms": 3.3790420000004815,
+            "epoch": 1789154489288
+          }
+        ]
+      },
+      "experimental": {
+        "commitPreconditions": true,
+        "computedCellIds": true,
+        "contentAddressedSchemas": true,
+        "lazyMaterialization": true,
+        "modernCellRep": false,
+        "plainResultReceipts": true,
+        "readerSchemaPrecedence": true,
+        "serverExecution": true,
+        "viewScopedReplication": true
+      },
+      "environment": {
+        "EXPERIMENTAL_SERVER_EXECUTION": "true",
+        "EXPERIMENTAL_VIEW_SCOPED_REPLICATION": "true",
+        "API_URL": "http://localhost:8965/",
+        "FRONTEND_URL": "http://localhost:8965/",
+        "MEMORY_DIR": "file:///var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-on-3-ldqjlomm/memory/",
+        "HEADLESS": "1"
+      },
+      "source": {
+        "head": "f59231ee3d9a1cf85b37076639067b648b7fa64b",
+        "hashes": {
+          "packages/runner/test/view-server-currency.test.ts": "55e803458e5d2390c3d80ccfa6d1103f4613f1c6510b324b3ea44ddac1fde27f",
+          "packages/runner/src/runner.ts": "9c51f31cdcb847e420998e8e8d518070c5625276dc481abd37dc00e1c17aed28",
+          "packages/runner/src/scheduler/facade.ts": "e28a57357cb11e77e7a7c5315d6a3908af994ff70822866c1f5c49b8bab9344d",
+          "packages/runner/src/scheduler/node-record.ts": "2d6a495d0a3e08450276f3509598bbda0b4ff094351d1506f902f267bc182383",
+          "packages/runner/src/scheduler/registration.ts": "e7249f0cd3668de12733f65951f3ac38b8026ffea528d33e4c195483ea3fa571",
+          "packages/runner/src/scheduler/run.ts": "23a4965d9e910273b8463aa64aae78fd5161c90af463223e247821426d2494a9",
+          "packages/runner/src/view-replication-client.ts": "5c7b412fdb459cc083be8be8ad14b630d4380f56b3dbcb220fd4574f79a6ec38",
+          "packages/runner/test/view-replication-client.test.ts": "9f5138557b07bf74c304ba43ee18b00f454dfe21bab6d4e55e4d9a69048fd313"
+        }
+      },
+      "commands": {
+        "seed.command": {
+          "command": [
+            "deno",
+            "run",
+            "--frozen",
+            "-A",
+            "--config",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/diagnostic-tree/deno.jsonc",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/rig/seed.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154393.868714,
+            "load": [
+              55.91943359375,
+              182.32275390625,
+              236.61572265625
+            ]
+          },
+          "after": {
+            "epoch": 1789154475.365688,
+            "load": [
+              48.67724609375,
+              148.6748046875,
+              218.53076171875
+            ]
+          }
+        },
+        "start.command": {
+          "command": [
+            "bash",
+            "scripts/start-local-dev.sh",
+            "--port-offset=965",
+            "--inspect",
+            "--inspect-port=9865"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154387.408677,
+            "load": [
+              56.8701171875,
+              184.64111328125,
+              237.7451171875
+            ]
+          },
+          "after": {
+            "epoch": 1789154393.864192,
+            "load": [
+              55.91943359375,
+              182.32275390625,
+              236.61572265625
+            ]
+          }
+        },
+        "stop.command": {
+          "command": [
+            "bash",
+            "scripts/stop-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154492.5547252,
+            "load": [
+              51.48681640625,
+              144.396484375,
+              215.78271484375
+            ]
+          },
+          "after": {
+            "epoch": 1789154493.045867,
+            "load": [
+              51.48681640625,
+              144.396484375,
+              215.78271484375
+            ]
+          }
+        },
+        "open.command": {
+          "command": [
+            "deno",
+            "run",
+            "--frozen",
+            "-A",
+            "--config",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/diagnostic-tree/deno.jsonc",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/rig/open.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154475.3666,
+            "load": [
+              48.67724609375,
+              148.6748046875,
+              218.53076171875
+            ]
+          },
+          "after": {
+            "epoch": 1789154492.553772,
+            "load": [
+              51.48681640625,
+              144.396484375,
+              215.78271484375
+            ]
+          }
+        }
+      },
+      "profiles": {
+        "startup.worker.cpuprofile": "77d45a164dab9be777ab57d9f8d02447b210382c96571868405a7f32d9b50a49",
+        "startup.server.cpuprofile": "d88c38880229b611af99bddf641f67a8e1f89378422cfae6711b68a925262d44",
+        "startup.main.cpuprofile": "d25c04492d25b095912a724fef478e46f30d4f96ddbf4673b5a07d388206af3e"
+      },
+      "rawResultSha256": "74b6c592ea9b92f3d963e53dd3f7152b3f4d0c060b99e89f7f4102b0b1d0f87f"
+    },
+    {
+      "label": "off-3",
+      "startup": {
+        "label": "off-3",
+        "adoptionEnabled": false,
+        "serverExecution": true,
+        "viewScopedReplication": true,
+        "driverCode": 0,
+        "load": [
+          33.890625,
+          118.66845703125,
+          200.00537109375
+        ],
+        "adoptions": 0,
+        "proofCalls": 1032,
+        "acceptedProofs": 0,
+        "proofMs": 0.20000004768371582,
+        "bindingMs": 656.9000008106232,
+        "bindingPasses": 123,
+        "bindings": 1033,
+        "graphs": 61,
+        "actionAttempts": 280,
+        "entered": 154,
+        "viewBodies": 121,
+        "controlBodies": 33,
+        "startupMs": 4870,
+        "phases": [
+          {
+            "name": "load",
+            "startEpoch": 1789154569137,
+            "ms": 768.3359169999999,
+            "epoch": 1789154569906
+          },
+          {
+            "name": "login",
+            "startEpoch": 1789154569917,
+            "ms": 248.29599999999937,
+            "epoch": 1789154570165
+          },
+          {
+            "name": "initial idle",
+            "startEpoch": 1789154570178,
+            "ms": 3.6862499999997453,
+            "epoch": 1789154570181
+          },
+          {
+            "name": "cards",
+            "startEpoch": 1789154570193,
+            "ms": 663.5670839999993,
+            "epoch": 1789154570857
+          },
+          {
+            "name": "board settled",
+            "startEpoch": 1789154570869,
+            "ms": 5.671124999999847,
+            "epoch": 1789154570875
+          },
+          {
+            "name": "mount acknowledged",
+            "startEpoch": 1789154570901,
+            "ms": 955.5536659999998,
+            "epoch": 1789154571856
+          },
+          {
+            "name": "registry ready",
+            "startEpoch": 1789154571867,
+            "ms": 2088.050875,
+            "epoch": 1789154573955
+          },
+          {
+            "name": "post-mount idle",
+            "startEpoch": 1789154573970,
+            "ms": 4.968791999999667,
+            "epoch": 1789154573975
+          },
+          {
+            "name": "local graph ready",
+            "startEpoch": 1789154573984,
+            "ms": 0.8893330000009882,
+            "epoch": 1789154573985
+          },
+          {
+            "name": "graph idle",
+            "startEpoch": 1789154573994,
+            "ms": 3.4492079999999987,
+            "epoch": 1789154573997
+          },
+          {
+            "name": "open topic",
+            "startEpoch": 1789154574156,
+            "ms": 401.28691699999945,
+            "epoch": 1789154574557
+          },
+          {
+            "name": "topic mount acknowledged",
+            "startEpoch": 1789154574577,
+            "ms": 26.218583000001672,
+            "epoch": 1789154574603
+          },
+          {
+            "name": "post-open idle",
+            "startEpoch": 1789154574621,
+            "ms": 2.336874999999054,
+            "epoch": 1789154574624
+          }
+        ],
+        "errors": [],
+        "failure": null,
+        "ipcFailures": [],
+        "pending": [],
+        "profileErrors": []
+      },
+      "costs": {
+        "label": "off-3",
+        "profiles": {
+          "worker": {
+            "totalSampledMs": 4040.989,
+            "nonIdleSampledMs": 2559.148,
+            "proofInclusiveSampledMs": 0.0,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 1481.841
+              },
+              {
+                "name": "(program)",
+                "ms": 141.049
+              },
+              {
+                "name": "observeViewInput",
+                "ms": 137.67
+              },
+              {
+                "name": "",
+                "ms": 116.018
+              },
+              {
+                "name": "(garbage collector)",
+                "ms": 93.515
+              },
+              {
+                "name": "wasm-function[3]",
+                "ms": 92.446
+              },
+              {
+                "name": "scan",
+                "ms": 79.453
+              },
+              {
+                "name": "addToDeepFrozenCache",
+                "ms": 77.135
+              },
+              {
+                "name": "check",
+                "ms": 67.348
+              },
+              {
+                "name": "hasLocalDocumentCoverage",
+                "ms": 59.887
+              },
+              {
+                "name": "update",
+                "ms": 54.781
+              },
+              {
+                "name": "prepareViewAction",
+                "ms": 49.258
+              },
+              {
+                "name": "set",
+                "ms": 44.529
+              },
+              {
+                "name": "#visibleVersion",
+                "ms": 43.877
+              },
+              {
+                "name": "transactionLayers",
+                "ms": 42.958
+              }
+            ]
+          },
+          "main": {
+            "totalSampledMs": 4998.995,
+            "nonIdleSampledMs": 150.571,
+            "proofInclusiveSampledMs": 0.0,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 4848.424
+              },
+              {
+                "name": "(program)",
+                "ms": 149.51
+              },
+              {
+                "name": "readMessage",
+                "ms": 1.061
+              }
+            ]
+          },
+          "server": {
+            "totalSampledMs": 6149.716,
+            "nonIdleSampledMs": 1939.686,
+            "proofInclusiveSampledMs": 0.0,
+            "topSelfMs": [
+              {
+                "name": "(idle)",
+                "ms": 4210.03
+              },
+              {
+                "name": "",
+                "ms": 216.625
+              },
+              {
+                "name": "(garbage collector)",
+                "ms": 90.135
+              },
+              {
+                "name": "op_inspector_emit_protocol_event",
+                "ms": 67.616
+              },
+              {
+                "name": "#loadDemandedStructure",
+                "ms": 66.96
+              },
+              {
+                "name": "trackedIdsFromEntries",
+                "ms": 62.958
+              },
+              {
+                "name": "extendTrackedGraph",
+                "ms": 53.461
+              },
+              {
+                "name": "emit",
+                "ms": 45.088
+              },
+              {
+                "name": "op_compression_write",
+                "ms": 43.603
+              },
+              {
+                "name": "encodePlainObject",
+                "ms": 43.171
+              },
+              {
+                "name": "demandedInstancesForSpace",
+                "ms": 41.775
+              },
+              {
+                "name": "#traverseWithSchemaInner",
+                "ms": 33.177
+              },
+              {
+                "name": "cloneTrackedGraphState",
+                "ms": 32.57
+              },
+              {
+                "name": "traverseWithSchema",
+                "ms": 32.09
+              },
+              {
+                "name": "jsonFromFabricValue",
+                "ms": 30.548
+              }
+            ]
+          }
+        },
+        "startup": {
+          "actions": {
+            "authored": {
+              "count": 121,
+              "wallSpanMs": 822.199999332428
+            },
+            "control": {
+              "count": 33,
+              "wallSpanMs": 9.299999475479126
+            },
+            "parked": {
+              "count": 126,
+              "wallSpanMs": 54.39999985694885
+            }
+          },
+          "proofCalls": 1032,
+          "acceptedProofs": 0,
+          "proofMs": 0.20000004768371582,
+          "adoptions": 0
+        },
+        "final": {
+          "actions": {
+            "authored": {
+              "count": 121,
+              "wallSpanMs": 822.199999332428
+            },
+            "control": {
+              "count": 33,
+              "wallSpanMs": 9.299999475479126
+            },
+            "parked": {
+              "count": 126,
+              "wallSpanMs": 54.39999985694885
+            }
+          },
+          "proofCalls": 1032,
+          "acceptedProofs": 0,
+          "proofMs": 0.20000004768371582,
+          "adoptions": 0
+        },
+        "startupPhases": [
+          {
+            "name": "load",
+            "startEpoch": 1789154569137,
+            "ms": 768.3359169999999,
+            "epoch": 1789154569906
+          },
+          {
+            "name": "login",
+            "startEpoch": 1789154569917,
+            "ms": 248.29599999999937,
+            "epoch": 1789154570165
+          },
+          {
+            "name": "initial idle",
+            "startEpoch": 1789154570178,
+            "ms": 3.6862499999997453,
+            "epoch": 1789154570181
+          },
+          {
+            "name": "cards",
+            "startEpoch": 1789154570193,
+            "ms": 663.5670839999993,
+            "epoch": 1789154570857
+          },
+          {
+            "name": "board settled",
+            "startEpoch": 1789154570869,
+            "ms": 5.671124999999847,
+            "epoch": 1789154570875
+          },
+          {
+            "name": "mount acknowledged",
+            "startEpoch": 1789154570901,
+            "ms": 955.5536659999998,
+            "epoch": 1789154571856
+          },
+          {
+            "name": "registry ready",
+            "startEpoch": 1789154571867,
+            "ms": 2088.050875,
+            "epoch": 1789154573955
+          },
+          {
+            "name": "post-mount idle",
+            "startEpoch": 1789154573970,
+            "ms": 4.968791999999667,
+            "epoch": 1789154573975
+          },
+          {
+            "name": "local graph ready",
+            "startEpoch": 1789154573984,
+            "ms": 0.8893330000009882,
+            "epoch": 1789154573985
+          },
+          {
+            "name": "graph idle",
+            "startEpoch": 1789154573994,
+            "ms": 3.4492079999999987,
+            "epoch": 1789154573997
+          }
+        ],
+        "navigationPhases": [
+          {
+            "name": "open topic",
+            "startEpoch": 1789154574156,
+            "ms": 401.28691699999945,
+            "epoch": 1789154574557
+          },
+          {
+            "name": "topic mount acknowledged",
+            "startEpoch": 1789154574577,
+            "ms": 26.218583000001672,
+            "epoch": 1789154574603
+          },
+          {
+            "name": "post-open idle",
+            "startEpoch": 1789154574621,
+            "ms": 2.336874999999054,
+            "epoch": 1789154574624
+          }
+        ]
+      },
+      "experimental": {
+        "commitPreconditions": true,
+        "computedCellIds": true,
+        "contentAddressedSchemas": true,
+        "lazyMaterialization": true,
+        "modernCellRep": false,
+        "plainResultReceipts": true,
+        "readerSchemaPrecedence": true,
+        "serverExecution": true,
+        "viewScopedReplication": true
+      },
+      "environment": {
+        "EXPERIMENTAL_SERVER_EXECUTION": "true",
+        "EXPERIMENTAL_VIEW_SCOPED_REPLICATION": "true",
+        "API_URL": "http://localhost:8965/",
+        "FRONTEND_URL": "http://localhost:8965/",
+        "MEMORY_DIR": "file:///var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-off-3-qjxwa8p1/memory/",
+        "HEADLESS": "1"
+      },
+      "source": {
+        "head": "f59231ee3d9a1cf85b37076639067b648b7fa64b",
+        "hashes": {
+          "packages/runner/test/view-server-currency.test.ts": "55e803458e5d2390c3d80ccfa6d1103f4613f1c6510b324b3ea44ddac1fde27f",
+          "packages/runner/src/runner.ts": "9c51f31cdcb847e420998e8e8d518070c5625276dc481abd37dc00e1c17aed28",
+          "packages/runner/src/scheduler/facade.ts": "e28a57357cb11e77e7a7c5315d6a3908af994ff70822866c1f5c49b8bab9344d",
+          "packages/runner/src/scheduler/node-record.ts": "2d6a495d0a3e08450276f3509598bbda0b4ff094351d1506f902f267bc182383",
+          "packages/runner/src/scheduler/registration.ts": "e7249f0cd3668de12733f65951f3ac38b8026ffea528d33e4c195483ea3fa571",
+          "packages/runner/src/scheduler/run.ts": "23a4965d9e910273b8463aa64aae78fd5161c90af463223e247821426d2494a9",
+          "packages/runner/src/view-replication-client.ts": "34f16a00fb08ae9b7344760e3085756996e22cd2c6fd7c7cbb6fbd1817932fee",
+          "packages/runner/test/view-replication-client.test.ts": "9f5138557b07bf74c304ba43ee18b00f454dfe21bab6d4e55e4d9a69048fd313"
+        }
+      },
+      "commands": {
+        "seed.command": {
+          "command": [
+            "deno",
+            "run",
+            "--frozen",
+            "-A",
+            "--config",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/diagnostic-tree/deno.jsonc",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/rig/seed.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154501.146262,
+            "load": [
+              49.60498046875,
+              140.92724609375,
+              213.716796875
+            ]
+          },
+          "after": {
+            "epoch": 1789154565.489648,
+            "load": [
+              33.890625,
+              118.66845703125,
+              200.00537109375
+            ]
+          }
+        },
+        "start.command": {
+          "command": [
+            "bash",
+            "scripts/start-local-dev.sh",
+            "--port-offset=965",
+            "--inspect",
+            "--inspect-port=9865"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154495.618277,
+            "load": [
+              50.00634765625,
+              142.546875,
+              214.71142578125
+            ]
+          },
+          "after": {
+            "epoch": 1789154501.130823,
+            "load": [
+              49.60498046875,
+              140.92724609375,
+              213.716796875
+            ]
+          }
+        },
+        "stop.command": {
+          "command": [
+            "bash",
+            "scripts/stop-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154575.1407979,
+            "load": [
+              30.99853515625,
+              115.2548828125,
+              197.84326171875
+            ]
+          },
+          "after": {
+            "epoch": 1789154575.52101,
+            "load": [
+              30.99853515625,
+              115.2548828125,
+              197.84326171875
+            ]
+          }
+        },
+        "open.command": {
+          "command": [
+            "deno",
+            "run",
+            "--frozen",
+            "-A",
+            "--config",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/diagnostic-tree/deno.jsonc",
+            "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/rig/open.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154565.490161,
+            "load": [
+              33.890625,
+              118.66845703125,
+              200.00537109375
+            ]
+          },
+          "after": {
+            "epoch": 1789154575.139981,
+            "load": [
+              30.99853515625,
+              115.2548828125,
+              197.84326171875
+            ]
+          }
+        }
+      },
+      "profiles": {
+        "startup.worker.cpuprofile": "19887d91b91c686bbee038980c03370062c0b04940a4721973d0cda9368591fb",
+        "startup.server.cpuprofile": "aeae71082c0b6cc6a3f1bc23dafd01065e37092777ece108a87b81de98d56b97",
+        "startup.main.cpuprofile": "bf420fc99ddc3c60cf531b08b4c39bebe922dd52fd24044745200e819a1edcb4"
+      },
+      "rawResultSha256": "fb5300f924449bef857b409f06c6fbf22bf788d3d79aef745bd451e8c5ab9966"
+    }
+  ],
+  "browserValidation": [
+    {
+      "label": "on-lunch",
+      "serverExecution": true,
+      "viewScopedReplication": true,
+      "instrumented": false,
+      "environment": {
+        "EXPERIMENTAL_SERVER_EXECUTION": "true",
+        "EXPERIMENTAL_VIEW_SCOPED_REPLICATION": "true",
+        "API_URL": "http://localhost:8965/",
+        "FRONTEND_URL": "http://localhost:8965/",
+        "MEMORY_DIR": "file:///var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-on-lunch-atvf_uop/memory/",
+        "HEADLESS": "1"
+      },
+      "source": {
+        "head": "f59231ee3d9a1cf85b37076639067b648b7fa64b",
+        "hashes": {
+          "packages/runner/test/view-server-currency.test.ts": "55e803458e5d2390c3d80ccfa6d1103f4613f1c6510b324b3ea44ddac1fde27f",
+          "packages/runner/src/runner.ts": "7a758300328a0da7863a0469eec0e05f42b9fd6223518033373e523274306a01",
+          "packages/runner/src/scheduler/facade.ts": "56b36beaa52a1d55d3e3d38b93973dcc17b3cecbd773e920a26c0d3e1895b0bd",
+          "packages/runner/src/scheduler/node-record.ts": "2d6a495d0a3e08450276f3509598bbda0b4ff094351d1506f902f267bc182383",
+          "packages/runner/src/scheduler/registration.ts": "5689fe3178afc96f7a7f7fc63270a82b951af503ee7e6d067fd656e754774502",
+          "packages/runner/src/view-replication-client.ts": "4842560c32266678ae8b839420fcb59d0390f5f92ee1934b20604ef52c625033",
+          "packages/runner/test/view-replication-client.test.ts": "9f5138557b07bf74c304ba43ee18b00f454dfe21bab6d4e55e4d9a69048fd313"
+        }
+      },
+      "commands": {
+        "start.command": {
+          "command": [
+            "bash",
+            "scripts/start-local-dev.sh",
+            "--port-offset=965",
+            "--inspect",
+            "--inspect-port=9865"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154593.943755,
+            "load": [
+              30.62451171875,
+              111.03271484375,
+              194.89208984375
+            ]
+          },
+          "after": {
+            "epoch": 1789154598.2222981,
+            "load": [
+              29.212890625,
+              109.40478515625,
+              193.826171875
+            ]
+          }
+        },
+        "lunch.command": {
+          "command": [
+            "deno",
+            "test",
+            "--frozen",
+            "--no-check",
+            "-A",
+            "integration/lunch-poll-vote.test.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154609.899872,
+            "load": [
+              27.59130859375,
+              105.134765625,
+              190.828125
+            ]
+          },
+          "after": {
+            "epoch": 1789154713.9749382,
+            "load": [
+              29.18017578125,
+              83.5478515625,
+              172.89892578125
+            ]
+          }
+        },
+        "stop.command": {
+          "command": [
+            "bash",
+            "scripts/stop-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154713.97579,
+            "load": [
+              29.18017578125,
+              83.5478515625,
+              172.89892578125
+            ]
+          },
+          "after": {
+            "epoch": 1789154714.383848,
+            "load": [
+              29.18017578125,
+              83.5478515625,
+              172.89892578125
+            ]
+          }
+        },
+        "flags.command": {
+          "command": [
+            "deno",
+            "test",
+            "--frozen",
+            "-A",
+            "integration/view-scoped-replication.test.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154598.239317,
+            "load": [
+              29.212890625,
+              109.40478515625,
+              193.826171875
+            ]
+          },
+          "after": {
+            "epoch": 1789154609.8988318,
+            "load": [
+              27.59130859375,
+              105.134765625,
+              190.828125
+            ]
+          }
+        }
+      },
+      "flagLog": {
+        "path": "browser-validation/on-lunch/flags.out",
+        "sha256": "d28e22552e9b67875121df993d62fe1df9661e67b9f44015ab6409d2b032384d",
+        "lastLines": [
+          "view-scoped replication environment ...",
+          "  passes deployment flags through the shell into its browser worker ... ok (1s)",
+          "view-scoped replication environment ... ok (2s)",
+          "",
+          "ok | 1 passed (1 step) | 0 failed (2s)",
+          ""
+        ]
+      },
+      "lunchLog": {
+        "path": "browser-validation/on-lunch/lunch.out",
+        "sha256": "3f15872200e98aaa0a70902821469977658c0edbe0277ca998140f77a9226440",
+        "lastLines": [
+          "  both users' votes on the same option survive, and a second option tallies independently ... ok (21s)",
+          "'lunch poll: two users vote on a shared option' has been running for over (1m0s)",
+          "lunch poll: two users vote on a shared option ... ok (1m42s)",
+          "",
+          "ok | 1 passed (1 step) | 0 failed (1m42s)",
+          ""
+        ]
+      },
+      "lunchErrors": {
+        "path": "browser-validation/on-lunch/lunch.err",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "lastLines": []
+      }
+    },
+    {
+      "label": "off-lunch",
+      "serverExecution": true,
+      "viewScopedReplication": false,
+      "instrumented": false,
+      "environment": {
+        "EXPERIMENTAL_SERVER_EXECUTION": "true",
+        "EXPERIMENTAL_VIEW_SCOPED_REPLICATION": "false",
+        "API_URL": "http://localhost:8965/",
+        "FRONTEND_URL": "http://localhost:8965/",
+        "MEMORY_DIR": "file:///var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-off-lunch-45lt3bvd/memory/",
+        "HEADLESS": "1"
+      },
+      "source": {
+        "head": "f59231ee3d9a1cf85b37076639067b648b7fa64b",
+        "hashes": {
+          "packages/runner/test/view-server-currency.test.ts": "55e803458e5d2390c3d80ccfa6d1103f4613f1c6510b324b3ea44ddac1fde27f",
+          "packages/runner/src/runner.ts": "7a758300328a0da7863a0469eec0e05f42b9fd6223518033373e523274306a01",
+          "packages/runner/src/scheduler/facade.ts": "56b36beaa52a1d55d3e3d38b93973dcc17b3cecbd773e920a26c0d3e1895b0bd",
+          "packages/runner/src/scheduler/node-record.ts": "2d6a495d0a3e08450276f3509598bbda0b4ff094351d1506f902f267bc182383",
+          "packages/runner/src/scheduler/registration.ts": "5689fe3178afc96f7a7f7fc63270a82b951af503ee7e6d067fd656e754774502",
+          "packages/runner/src/view-replication-client.ts": "4842560c32266678ae8b839420fcb59d0390f5f92ee1934b20604ef52c625033",
+          "packages/runner/test/view-replication-client.test.ts": "9f5138557b07bf74c304ba43ee18b00f454dfe21bab6d4e55e4d9a69048fd313"
+        }
+      },
+      "commands": {
+        "start.command": {
+          "command": [
+            "bash",
+            "scripts/start-local-dev.sh",
+            "--port-offset=965",
+            "--inspect",
+            "--inspect-port=9865"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154716.659265,
+            "load": [
+              29.24560546875,
+              82.65869140625,
+              172.0615234375
+            ]
+          },
+          "after": {
+            "epoch": 1789154722.040691,
+            "load": [
+              28.8251953125,
+              81.6845703125,
+              171.19384765625
+            ]
+          }
+        },
+        "lunch.command": {
+          "command": [
+            "deno",
+            "test",
+            "--frozen",
+            "--no-check",
+            "-A",
+            "integration/lunch-poll-vote.test.ts"
+          ],
+          "code": 1,
+          "before": {
+            "epoch": 1789154727.865452,
+            "load": [
+              36.5263671875,
+              82.4033203125,
+              170.9228515625
+            ]
+          },
+          "after": {
+            "epoch": 1789154832.9988601,
+            "load": [
+              107.662109375,
+              92.02978515625,
+              164.26611328125
+            ]
+          }
+        },
+        "stop.command": {
+          "command": [
+            "bash",
+            "scripts/stop-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154833.001169,
+            "load": [
+              107.662109375,
+              92.02978515625,
+              164.26611328125
+            ]
+          },
+          "after": {
+            "epoch": 1789154834.1889439,
+            "load": [
+              107.662109375,
+              92.02978515625,
+              164.26611328125
+            ]
+          }
+        },
+        "flags.command": {
+          "command": [
+            "deno",
+            "test",
+            "--frozen",
+            "-A",
+            "integration/view-scoped-replication.test.ts"
+          ],
+          "code": 0,
+          "before": {
+            "epoch": 1789154722.044214,
+            "load": [
+              28.8251953125,
+              81.6845703125,
+              171.19384765625
+            ]
+          },
+          "after": {
+            "epoch": 1789154727.8648489,
+            "load": [
+              36.5263671875,
+              82.4033203125,
+              170.9228515625
+            ]
+          }
+        }
+      },
+      "flagLog": {
+        "path": "browser-validation/off-lunch/flags.out",
+        "sha256": "1c685447855fea74129a250eaff1e15e7b04ade3069630485b95fb061da08005",
+        "lastLines": [
+          "view-scoped replication environment ...",
+          "  passes deployment flags through the shell into its browser worker ... ok (1s)",
+          "view-scoped replication environment ... ok (4s)",
+          "",
+          "ok | 1 passed (1 step) | 0 failed (4s)",
+          ""
+        ]
+      },
+      "lunchLog": {
+        "path": "browser-validation/off-lunch/lunch.out",
+        "sha256": "9c06448db551132c4a2161ffa31db101cf930a13864c09d81d51c227da6474aa",
+        "lastLines": [
+          " FAILURES ",
+          "",
+          "lunch poll: two users vote on a shared option ... both users' votes on the same option survive, and a second option tallies independently => https://jsr.io/@std/testing/1.0.19/_test_suite.ts:172:39",
+          "",
+          "FAILED | 0 passed | 1 failed (1 step) (1m42s)",
+          ""
+        ]
+      },
+      "lunchErrors": {
+        "path": "browser-validation/off-lunch/lunch.err",
+        "sha256": "4f229c116cbae2c6dff7f06196beb073c09053a73c31d9b53e0560bd21231525",
+        "lastLines": [
+          "error: Test failed"
+        ]
+      }
+    }
+  ],
+  "validation": {
+    "runner-full": {
+      "command": {
+        "package": "runner",
+        "code": 0,
+        "seconds": 2104.7424278259277,
+        "command": [
+          "deno",
+          "task",
+          "test"
+        ]
+      },
+      "log": {
+        "path": "runner-full.log",
+        "sha256": "fb1bc462f27c6e128d85f3150589c76518440707b4946a05cc69eab1087c4819",
+        "lastLines": [
+          "    keeps a binding prop as a cell when there is no link context ... ok (1ms)",
+          "  binding props ... ok (41ms)",
+          "jsx ... ok (53ms)",
+          "",
+          "ok | 1456 passed (9254 steps) | 0 failed | 0 ignored (1 step) (35m1s)",
+          ""
+        ]
+      }
+    },
+    "runtime-client-full": {
+      "command": {
+        "package": "runtime-client",
+        "code": 0,
+        "seconds": 67.07357406616211,
+        "command": [
+          "deno",
+          "task",
+          "test"
+        ]
+      },
+      "log": {
+        "path": "runtime-client-full.log",
+        "sha256": "c514547cc35523a32dd58cbaed0794b928a6e0547a75a50c090d363a926999a8",
+        "lastLines": [
+          "    keeps space instances independent of the viewer ... ok (0ms)",
+          "  cellRefToInstanceId ... ok (45ms)",
+          "runtime client shared utilities ... ok (416ms)",
+          "",
+          "ok | 32 passed (668 steps) | 0 failed (1m2s)",
+          ""
+        ]
+      }
+    },
+    "gates": [
+      {
+        "name": "fmt",
+        "command": [
+          "deno",
+          "fmt",
+          "--check"
+        ],
+        "code": 1,
+        "seconds": 1.1132779121398926
+      },
+      {
+        "name": "lint",
+        "command": [
+          "deno",
+          "lint"
+        ],
+        "code": 0,
+        "seconds": 40.056485176086426
+      },
+      {
+        "name": "runner-types",
+        "command": [
+          "deno",
+          "task",
+          "check",
+          "--scope=runner"
+        ],
+        "code": 0,
+        "seconds": 20.883267641067505
+      },
+      {
+        "name": "docs",
+        "command": [
+          "deno",
+          "task",
+          "check-docs"
+        ],
+        "code": 0,
+        "seconds": 75.39311218261719
+      },
+      {
+        "name": "history-index",
+        "command": [
+          "deno",
+          "task",
+          "check-docs-history-index"
+        ],
+        "code": 0,
+        "seconds": 0.9229922294616699
+      },
+      {
+        "name": "cycles",
+        "command": [
+          "deno",
+          "task",
+          "check-package-cycles"
+        ],
+        "code": 0,
+        "seconds": 6.5793211460113525
+      }
+    ],
+    "red": {
+      "path": "red.log",
+      "sha256": "b22b752b5921bc05e7181336da6505b2e1ce5379de590f66abd1031f240cd8a7",
+      "lastLines": [
+        "",
+        "view replication client ... installs a stored graph and previews only the visible admitted computation => https://jsr.io/@std/testing/1.0.19/_test_suite.ts:402:15",
+        "",
+        "FAILED | 0 passed (3 steps) | 1 failed (1 step) (9s)",
+        "",
+        "error: Test failed"
+      ]
+    },
+    "focused": {
+      "path": "focused.log",
+      "sha256": "b445cef59f9e4d9972d28dce992a7931b4ddfc61c4d35d8b8bc9c289d7bbcfea",
+      "lastLines": [
+        "  releases a parked action's coverage subscription on disposal ... ok (27ms)",
+        "  parks when commit preparation discovers an unavailable input ... ok (23ms)",
+        "local-read-policy ... ok (1s)",
+        "",
+        "ok | 4 passed (40 steps) | 0 failed (27s)",
+        ""
+      ]
+    },
+    "currency-final": {
+      "path": "currency-final.log",
+      "sha256": "6791e2cc1a28a641cb820f6fe352ea1ca30b132e9605ac21a9686a9ed14d6c0b",
+      "lastLines": [
+        "----- output end -----",
+        "  keeps effect and ordinary registrations on their execution path ... ok (33ms)",
+        "view-server-currency ... ok (2s)",
+        "",
+        "ok | 1 passed (17 steps) | 0 failed (2s)",
+        ""
+      ]
+    },
+    "typecheck": {
+      "path": "typecheck.log",
+      "sha256": "4610fc06b0035fc0e90d8d7d20982e0a652d577a4cf2059cfd826aef4a79d067",
+      "lastLines": [
+        "        ~~~~~~~~~~~~",
+        "        at file:///Users/berni/.codex/worktrees/1503/labs/packages/runner/src/storage/interface.ts:2966:5",
+        "",
+        "error: Type checking failed.",
+        "",
+        "Type check failed in 1 of 46 groups."
+      ]
+    },
+    "runner-types": {
+      "path": "runner-types.log",
+      "sha256": "3af08f3607231ce6803172ce616c7a3c281217a94ab2fd9c08064239c7c61195",
+      "lastLines": [
+        "Task check ./tasks/check.sh '--scope=runner'",
+        "Type checking 1 paths in 1 package groups...",
+        "ok  runner (19.7s)",
+        "Type check complete."
+      ]
+    },
+    "fmt-final": {
+      "path": "fmt-final.log",
+      "sha256": "ed9af92e3f4d400fbbfd65ded3e4ce54b0e9fff9e506830fed4848b953159356",
+      "lastLines": [
+        "Checked 6082 files"
+      ]
+    },
+    "docs": {
+      "path": "docs.log",
+      "sha256": "cbb32ce449aafc8dffa566db7f8901715df18686e0bbe666d38de2b4f68759f0",
+      "lastLines": [
+        "Task check-docs deno run --allow-read --allow-write --allow-run --allow-env ./docs/check.ts",
+        "All 599 checked code block(s) passed."
+      ]
+    },
+    "history-index": {
+      "path": "history-index.log",
+      "sha256": "53a747a6f0819a8150df864db38ab0fcce4ca7e2a05c97091b8cf6d2aee254e1",
+      "lastLines": [
+        "Task check-docs-history-index deno run --allow-read ./tasks/check-docs-history-index.ts",
+        "docs/history/INDEX.md: 230 entries covering 306 documents."
+      ]
+    },
+    "lint": {
+      "path": "lint.log",
+      "sha256": "a37e67239bdf67a3ba89cf1cc0cdd5f36ddad116691813ccf51ec01aa2073697",
+      "lastLines": [
+        "Checked 5882 files"
+      ]
+    },
+    "final-gates": {
+      "path": "final-gates.log",
+      "sha256": "167c1e0ee1b07b8b650857b1d20bfdf56404cb594b46d46f28663a362cfa53d3",
+      "lastLines": [
+        "{\"name\": \"fmt\", \"command\": [\"deno\", \"fmt\", \"--check\"], \"code\": 0, \"seconds\": 0.8029570579528809}",
+        "{\"name\": \"types\", \"command\": [\"deno\", \"task\", \"check\", \"--scope=runner\"], \"code\": 0, \"seconds\": 11.864634990692139}",
+        "{\"name\": \"history\", \"command\": [\"deno\", \"task\", \"check-docs-history-index\"], \"code\": 0, \"seconds\": 0.1895160675048828}",
+        "{\"name\": \"conflicts\", \"command\": [\"deno\", \"task\", \"check-conflict-markers\"], \"code\": 0, \"seconds\": 4.614910125732422}",
+        "{\"name\": \"lint\", \"command\": [\"deno\", \"lint\"], \"code\": 0, \"seconds\": 19.846224308013916}",
+        "{\"name\": \"docs\", \"command\": [\"deno\", \"task\", \"check-docs\"], \"code\": 0, \"seconds\": 23.757982969284058}"
+      ]
+    },
+    "initialCorrections": [
+      "The real-graph regression failed before implementation: visible body count was 2, expected 1.",
+      "A test replica stub lacked required confirmedSeq; the full type check passed 45 groups and failed runner. After correcting the stub, the runner type scope passed.",
+      "The initial fmt check found indentation; fmt-final passed after formatting.",
+      "The shared-producer test originally counted parked body entries as completed runs; it now counts completed read/write attempts and passes."
+    ]
+  },
+  "interventions": [
+    {
+      "kind": "external runner termination",
+      "record": {
+        "package": "runner",
+        "code": 143,
+        "seconds": 17.795523166656494,
+        "command": [
+          "deno",
+          "task",
+          "test"
+        ]
+      },
+      "log": {
+        "path": "runner-full-interrupted.log",
+        "sha256": "0cbb3485b302fcba86521ece817eb985c4a25925d1c13e42a8cb5c4bf62de1dc",
+        "lastLines": [
+          "    matches a full rebuild when edges are wired before their writer registers ... ok (196ms)",
+          "  incremental maintenance ... ok (2s)",
+          "dependency-graph ... ok (2s)",
+          "running 1 test from ./test/scheduler/graph-snapshot.test.ts",
+          "graph-snapshot ...",
+          "  buildSchedulerGraphSnapshot() ..."
+        ]
+      },
+      "classification": "Exit 143; incomplete suite, not assertion failure or passing validation."
+    },
+    {
+      "kind": "flag test assisted teardown",
+      "record": {
+        "epoch": 1789153415.4474618,
+        "signal": "SIGTERM",
+        "pid": 21234,
+        "reason": "Flag assertion completed; Chrome retained only defunct children and did not exit during teardown",
+        "processes": "  PID  PPID ELAPSED  %CPU STAT COMMAND\n21234 18922   01:44   0.0 R    /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=0 --no-first-run --password-store=basic --use-mock-keychain --disable-blink-features=AutomationControlled --headless=new --hide-scrollbars --user-data-dir=/var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/integration-browser-2d0a88e5ad695d97\n21301 21234   01:42   0.0 Z    <defunct>\n21307 21234   01:42   0.0 Z    <defunct>\n"
+      },
+      "classification": "Assertion passed but Chrome required termination; excluded as clean flag-validation evidence. Later uninstrumented flag runs are recorded separately."
+    }
+  ],
+  "baselineControl": {
+    "head": "f59231ee3d9a1cf85b37076639067b648b7fa64b",
+    "productionDiffEmpty": true,
+    "source": {
+      "head": "f59231ee3d9a1cf85b37076639067b648b7fa64b",
+      "hashes": {
+        "packages/runner/test/view-server-currency.test.ts": "55e803458e5d2390c3d80ccfa6d1103f4613f1c6510b324b3ea44ddac1fde27f",
+        "packages/runner/test/view-replication-client.test.ts": "9f5138557b07bf74c304ba43ee18b00f454dfe21bab6d4e55e4d9a69048fd313"
+      }
+    },
+    "commands": {
+      "start.command": {
+        "command": [
+          "bash",
+          "scripts/start-local-dev.sh",
+          "--port-offset=965",
+          "--inspect",
+          "--inspect-port=9865"
+        ],
+        "code": 0,
+        "before": {
+          "epoch": 1789154877.568104,
+          "load": [
+            174.9326171875,
+            111.8017578125,
+            167.80908203125
+          ]
+        },
+        "after": {
+          "epoch": 1789154888.3475049,
+          "load": [
+            178.54638671875,
+            114.62939453125,
+            168.15625
+          ]
+        }
+      },
+      "lunch.command": {
+        "command": [
+          "deno",
+          "test",
+          "--frozen",
+          "--no-check",
+          "-A",
+          "integration/lunch-poll-vote.test.ts"
+        ],
+        "code": 1,
+        "before": {
+          "epoch": 1789154914.7900732,
+          "load": [
+            149.677734375,
+            114.01611328125,
+            166.095703125
+          ]
+        },
+        "after": {
+          "epoch": 1789154982.222496,
+          "load": [
+            89.9287109375,
+            104.13818359375,
+            158.603515625
+          ]
+        }
+      },
+      "stop.command": {
+        "command": [
+          "bash",
+          "scripts/stop-local-dev.sh",
+          "--port-offset=965"
+        ],
+        "code": 0,
+        "before": {
+          "epoch": 1789154982.224004,
+          "load": [
+            89.9287109375,
+            104.13818359375,
+            158.603515625
+          ]
+        },
+        "after": {
+          "epoch": 1789154982.9442391,
+          "load": [
+            89.9287109375,
+            104.13818359375,
+            158.603515625
+          ]
+        }
+      },
+      "flags.command": {
+        "command": [
+          "deno",
+          "test",
+          "--frozen",
+          "-A",
+          "integration/view-scoped-replication.test.ts"
+        ],
+        "code": 0,
+        "before": {
+          "epoch": 1789154888.376967,
+          "load": [
+            178.54638671875,
+            114.62939453125,
+            168.15625
+          ]
+        },
+        "after": {
+          "epoch": 1789154914.789241,
+          "load": [
+            149.677734375,
+            114.01611328125,
+            166.095703125
+          ]
+        }
+      }
+    },
+    "lunchLog": {
+      "path": "browser-baseline/off-baseline/lunch.out",
+      "sha256": "390104df3248e63af36dea8c3385008b48963b4d8f4629c0df21ad50f27c7247",
+      "lastLines": [
+        " FAILURES ",
+        "",
+        "lunch poll: two users vote on a shared option ... both users' votes on the same option survive, and a second option tallies independently => https://jsr.io/@std/testing/1.0.19/_test_suite.ts:172:39",
+        "",
+        "FAILED | 0 passed | 1 failed (1 step) (1m4s)",
+        ""
+      ]
+    },
+    "classification": "Voting assertions completed, then console-error gate failed with ownerPrincipal requires writeAuthorizedBy; same failure as candidate feature-off arm."
+  },
+  "instrumentation": {
+    "rig/diagnostic-source.patch": "d394ffc729b09966528cec8beec8a86f5fd56473c6883179f69474fae950ed76",
+    "rig/instrument.py": "18a5e46cbd3ba3b54751bbf6bd5be9ff8c0d3140bff6b8fabae37fafd9868cd7",
+    "rig/open.ts": "f611715ceb0d2ed4d99fe185283c8de7d627f77b02de738ef9094102be95f9e1",
+    "rig/seed.ts": "9257bc66227543f31e9e7706aa80f417160421c8258177d1dd35b8e680e82b78",
+    "rig/run.py": "9edfc469ae5cb1e529aeb373615d37dde3e366d4d55e0876a1d439e8b9cc3148",
+    "rig/costs.py": "242f1fb7bdeb317bc18cc727244f2c6c136b8c4dc3a2e21141f395ff403e6ff3",
+    "rig/summarize.py": "8f1b25d9fd3d19e6b8f283303f158a79b4278a4fe99aebe1ff49693ed932f4c3",
+    "browser-validation.py": "5fe1fa0e631eb6ad931e94979d2f2a645c12a371975f4570951b26123a4b80b9"
+  },
+  "cleanup": {
+    "servers": {
+      "8965": "no listener",
+      "6138": "no listener",
+      "9865": "no listener"
+    },
+    "retainedFailureStores": [
+      {
+        "trial": "off-lunch",
+        "original": "/var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-off-lunch-45lt3bvd/memory",
+        "retained": "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/retained-stores/off-lunch/memory",
+        "openFilesBeforeMove": false
+      },
+      {
+        "trial": "off-baseline",
+        "original": "/var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-off-baseline-s4rmaar9/memory",
+        "retained": "/Users/berni/.codex/artifacts/view-server-currency-2026-09-11/retained-stores/off-baseline/memory",
+        "openFilesBeforeMove": false
+      }
+    ],
+    "deletedSuccessStores": [
+      "/var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-on-3-ldqjlomm/memory",
+      "/var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-on-2-ngdcueql/memory",
+      "/var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-off-3-qjxwa8p1/memory",
+      "/var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-off-2-8rnyjw4h/memory",
+      "/var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-on-1-9amx96ug/memory",
+      "/var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-off-1-1lnzyrho/memory",
+      "/var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-open-on-lunch-atvf_uop/memory"
+    ],
+    "baselineProductionHashes": {
+      "packages/runner/src/runner.ts": "d69677136d0887f44f66a3b07cf9fa7b927af530d23e820fbed888eabf2af8bf",
+      "packages/runner/src/scheduler/facade.ts": "7d094b34d2b199d3a3edf1cb0fd65aff7848b1b70883b20ec4a0d8a599a2184e",
+      "packages/runner/src/scheduler/node-record.ts": "2ebb63a9355fc39ebbb024063a50fe3e5e8699049ee653ac394d904535b63f1f",
+      "packages/runner/src/scheduler/registration.ts": "f16826d01a841caa11d00e01ca4e8c79c692b1c8b2569f7e4109a7add2719d8b",
+      "packages/runner/src/view-replication-client.ts": "3ed619b7d44b71159c77e37cf91b74a933f40a094cf403cd19102bbfae2903c0"
+    },
+    "diagnosticWorktree": "removed"
+  },
+  "final-gates": [
+    {
+      "name": "fmt",
+      "command": [
+        "deno",
+        "fmt",
+        "--check"
+      ],
+      "code": 0,
+      "seconds": 0.8029570579528809
+    },
+    {
+      "name": "lint",
+      "command": [
+        "deno",
+        "lint"
+      ],
+      "code": 0,
+      "seconds": 19.846224308013916
+    },
+    {
+      "name": "types",
+      "command": [
+        "deno",
+        "task",
+        "check",
+        "--scope=runner"
+      ],
+      "code": 0,
+      "seconds": 11.864634990692139
+    },
+    {
+      "name": "docs",
+      "command": [
+        "deno",
+        "task",
+        "check-docs"
+      ],
+      "code": 0,
+      "seconds": 23.757982969284058
+    },
+    {
+      "name": "history",
+      "command": [
+        "deno",
+        "task",
+        "check-docs-history-index"
+      ],
+      "code": 0,
+      "seconds": 0.1895160675048828
+    },
+    {
+      "name": "conflicts",
+      "command": [
+        "deno",
+        "task",
+        "check-conflict-markers"
+      ],
+      "code": 0,
+      "seconds": 4.614910125732422
+    }
+  ]
+}

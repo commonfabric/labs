@@ -1,0 +1,361 @@
+{
+  "note": "Instrumentation work counts only; loadedAddresses overlaps map/array work and must not be summed. All four arms explicitly verified.",
+  "runs": {
+    "baseline-off": [
+      {
+        "size": 100,
+        "phases": {
+          "add-covered": {
+            "Map.": 411,
+            "Set.": 1,
+            "Array.": 1024,
+            "loadedAddresses": 0
+          },
+          "add-one": {
+            "Map.": 1119,
+            "Set.": 1,
+            "Array.": 2383,
+            "loadedAddresses": 201
+          },
+          "refresh-one": {
+            "Map.": 232,
+            "Set.": 7,
+            "Array.": 621,
+            "loadedAddresses": 1
+          },
+          "remove-one": {
+            "Map.": 1609,
+            "Set.": 3,
+            "Array.": 16734,
+            "loadedAddresses": 100
+          }
+        }
+      },
+      {
+        "size": 1000,
+        "phases": {
+          "add-covered": {
+            "Map.": 4011,
+            "Set.": 1,
+            "Array.": 8224,
+            "loadedAddresses": 0
+          },
+          "add-one": {
+            "Map.": 11019,
+            "Set.": 1,
+            "Array.": 21283,
+            "loadedAddresses": 2001
+          },
+          "refresh-one": {
+            "Map.": 2032,
+            "Set.": 7,
+            "Array.": 4221,
+            "loadedAddresses": 1
+          },
+          "remove-one": {
+            "Map.": 16009,
+            "Set.": 3,
+            "Array.": 165234,
+            "loadedAddresses": 1000
+          }
+        }
+      },
+      {
+        "size": 10000,
+        "phases": {
+          "add-covered": {
+            "Map.": 40011,
+            "Set.": 1,
+            "Array.": 80224,
+            "loadedAddresses": 0
+          },
+          "add-one": {
+            "Map.": 110019,
+            "Set.": 1,
+            "Array.": 210283,
+            "loadedAddresses": 20001
+          },
+          "refresh-one": {
+            "Map.": 20032,
+            "Set.": 7,
+            "Array.": 40221,
+            "loadedAddresses": 1
+          },
+          "remove-one": {
+            "Map.": 160009,
+            "Set.": 3,
+            "Array.": 1720227,
+            "loadedAddresses": 10000
+          }
+        }
+      }
+    ],
+    "candidate-off": [
+      {
+        "size": 100,
+        "phases": {
+          "add-covered": {
+            "Map.": 7,
+            "Set.": 1,
+            "Array.": 222,
+            "loadedAddresses": 0
+          },
+          "add-one": {
+            "Map.": 16,
+            "Set.": 2,
+            "Array.": 281,
+            "loadedAddresses": 0
+          },
+          "refresh-one": {
+            "Map.": 30,
+            "Set.": 8,
+            "Array.": 209,
+            "loadedAddresses": 1
+          },
+          "remove-one": {
+            "Map.": 1609,
+            "Set.": 3,
+            "Array.": 17334,
+            "loadedAddresses": 100
+          }
+        }
+      },
+      {
+        "size": 1000,
+        "phases": {
+          "add-covered": {
+            "Map.": 7,
+            "Set.": 1,
+            "Array.": 222,
+            "loadedAddresses": 0
+          },
+          "add-one": {
+            "Map.": 16,
+            "Set.": 2,
+            "Array.": 281,
+            "loadedAddresses": 0
+          },
+          "refresh-one": {
+            "Map.": 30,
+            "Set.": 8,
+            "Array.": 209,
+            "loadedAddresses": 1
+          },
+          "remove-one": {
+            "Map.": 16009,
+            "Set.": 3,
+            "Array.": 171234,
+            "loadedAddresses": 1000
+          }
+        }
+      },
+      {
+        "size": 10000,
+        "phases": {
+          "add-covered": {
+            "Map.": 7,
+            "Set.": 1,
+            "Array.": 222,
+            "loadedAddresses": 0
+          },
+          "add-one": {
+            "Map.": 16,
+            "Set.": 2,
+            "Array.": 281,
+            "loadedAddresses": 0
+          },
+          "refresh-one": {
+            "Map.": 30,
+            "Set.": 8,
+            "Array.": 209,
+            "loadedAddresses": 1
+          },
+          "remove-one": {
+            "Map.": 160009,
+            "Set.": 3,
+            "Array.": 1780227,
+            "loadedAddresses": 10000
+          }
+        }
+      }
+    ],
+    "candidate-on": [
+      {
+        "size": 100,
+        "phases": {
+          "add-covered": {
+            "Map.": 7,
+            "Set.": 1,
+            "Array.": 223,
+            "loadedAddresses": 0
+          },
+          "add-one": {
+            "Map.": 16,
+            "Set.": 2,
+            "Array.": 287,
+            "loadedAddresses": 0
+          },
+          "refresh-one": {
+            "Map.": 30,
+            "Set.": 8,
+            "Array.": 214,
+            "loadedAddresses": 1
+          },
+          "remove-one": {
+            "Map.": 1609,
+            "Set.": 3,
+            "Array.": 17938,
+            "loadedAddresses": 100
+          }
+        }
+      },
+      {
+        "size": 1000,
+        "phases": {
+          "add-covered": {
+            "Map.": 7,
+            "Set.": 1,
+            "Array.": 223,
+            "loadedAddresses": 0
+          },
+          "add-one": {
+            "Map.": 16,
+            "Set.": 2,
+            "Array.": 287,
+            "loadedAddresses": 0
+          },
+          "refresh-one": {
+            "Map.": 30,
+            "Set.": 8,
+            "Array.": 214,
+            "loadedAddresses": 1
+          },
+          "remove-one": {
+            "Map.": 16009,
+            "Set.": 3,
+            "Array.": 177238,
+            "loadedAddresses": 1000
+          }
+        }
+      },
+      {
+        "size": 10000,
+        "phases": {
+          "add-covered": {
+            "Map.": 7,
+            "Set.": 1,
+            "Array.": 223,
+            "loadedAddresses": 0
+          },
+          "add-one": {
+            "Map.": 16,
+            "Set.": 2,
+            "Array.": 287,
+            "loadedAddresses": 0
+          },
+          "refresh-one": {
+            "Map.": 30,
+            "Set.": 8,
+            "Array.": 214,
+            "loadedAddresses": 1
+          },
+          "remove-one": {
+            "Map.": 160009,
+            "Set.": 3,
+            "Array.": 1840231,
+            "loadedAddresses": 10000
+          }
+        }
+      }
+    ],
+    "baseline-on": [
+      {
+        "size": 100,
+        "phases": {
+          "add-covered": {
+            "Map.": 411,
+            "Set.": 1,
+            "Array.": 1025,
+            "loadedAddresses": 0
+          },
+          "add-one": {
+            "Map.": 1119,
+            "Set.": 1,
+            "Array.": 2389,
+            "loadedAddresses": 201
+          },
+          "refresh-one": {
+            "Map.": 232,
+            "Set.": 7,
+            "Array.": 626,
+            "loadedAddresses": 1
+          },
+          "remove-one": {
+            "Map.": 1609,
+            "Set.": 3,
+            "Array.": 17338,
+            "loadedAddresses": 100
+          }
+        }
+      },
+      {
+        "size": 1000,
+        "phases": {
+          "add-covered": {
+            "Map.": 4011,
+            "Set.": 1,
+            "Array.": 8225,
+            "loadedAddresses": 0
+          },
+          "add-one": {
+            "Map.": 11019,
+            "Set.": 1,
+            "Array.": 21289,
+            "loadedAddresses": 2001
+          },
+          "refresh-one": {
+            "Map.": 2032,
+            "Set.": 7,
+            "Array.": 4226,
+            "loadedAddresses": 1
+          },
+          "remove-one": {
+            "Map.": 16009,
+            "Set.": 3,
+            "Array.": 171238,
+            "loadedAddresses": 1000
+          }
+        }
+      },
+      {
+        "size": 10000,
+        "phases": {
+          "add-covered": {
+            "Map.": 40011,
+            "Set.": 1,
+            "Array.": 80225,
+            "loadedAddresses": 0
+          },
+          "add-one": {
+            "Map.": 110019,
+            "Set.": 1,
+            "Array.": 210289,
+            "loadedAddresses": 20001
+          },
+          "refresh-one": {
+            "Map.": 20032,
+            "Set.": 7,
+            "Array.": 40226,
+            "loadedAddresses": 1
+          },
+          "remove-one": {
+            "Map.": 160009,
+            "Set.": 3,
+            "Array.": 1780231,
+            "loadedAddresses": 10000
+          }
+        }
+      }
+    ]
+  }
+}

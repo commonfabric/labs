@@ -38,7 +38,7 @@ deno task cf check main.tsx
 
 ## Tests
 
-When writing patterns for the commontoolsinc/labs repository, all new code must be
+When writing patterns for the commonfabric/labs repository, all new code must be
 covered by tests. Therefore, before the work is done, add automated tests for new
 or changed behavior:
 

@@ -37,7 +37,11 @@ rendering still work: a `$cell` binding passes the path, and the renderer reads
 it under a schema of its own (`asSchema(rendererVDOMSchema)` —
 `runner/src/runner.ts` on the mainline path, `shell/src/views/BodyView.ts`, and
 `html/src/in-process.ts` when the reconciler runs in the caller's own process),
-while every read of the *value* comes back empty.
+while every read of the *value* comes back empty. An attribute or a property
+the renderer reads through such a reference shows the string, number,
+boolean, or null it names: a DOM attribute can hold only the value, so the
+reconciler reads the reference's own position for the scalar there. A record
+or a list behind the reference stays a reference.
 
 Three transformer diagnostics cover neighboring cases and none catches this
 one: `reactive-capture:unknown-type` reports a closure capture whose inferred
@@ -72,7 +76,7 @@ type Right = { [NAME]: string; [UI]: VNode; label: string };
 
 The compiler rejects the first form: `pattern-result:opaque-reserved-key`,
 raised at the `pattern()` call by `reserved-result-keys.ts` in
-`packages/ts-transformers`. The rejection applies where an author can act —
+`base/ts-transformers`. The rejection applies where an author can act —
 `cf check`, deploy, candidate admission; the runtime's identity-pinned reload
 of already-deployed stored source demotes it to a warning, so pieces that
 predate the rule keep loading. It reaches the root of a **result** schema and

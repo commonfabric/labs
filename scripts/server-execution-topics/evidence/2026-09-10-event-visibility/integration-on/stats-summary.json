@@ -1,0 +1,24 @@
+{
+  "servingLoopPresent": true,
+  "eventsAfter": {
+    "appended": 48,
+    "processed": 48,
+    "visibilityBarriers": 18,
+    "visibilityRecoveries": 18,
+    "visibilityDeferrals": 0,
+    "deferredRescansArmed": 0,
+    "deferredRescansFired": 0
+  },
+  "eventsBefore": {
+    "appended": 0,
+    "processed": 0,
+    "visibilityBarriers": 0,
+    "visibilityRecoveries": 0,
+    "visibilityDeferrals": 0,
+    "deferredRescansArmed": 0,
+    "deferredRescansFired": 0
+  },
+  "fullStatsAfterSha256": "38150673b7887716eec0798eefb2ff44882ef5d02a846f3d44464f43a32d610c",
+  "fullStatsBeforeSha256": "075783897dfbc4281a7bea066135e30e9d59bd5d732b721e961a1edf982b941e",
+  "sourceDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/event-visibility-integration-on-01"
+}

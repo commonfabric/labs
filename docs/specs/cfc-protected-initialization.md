@@ -1,0 +1,400 @@
+# Protected initialization
+
+CFC's `writeAuthorizedBy` declaration gates modification. Trusted runtime
+initialization may install a new protected value without executing the field's
+edit handler (normative CFC §8.15.4). This permission is local to one transaction,
+one storage address, and one exact value. It grants no authority to adopt an
+existing unprotected value.
+
+## New cells
+
+When the runtime serializes a constructed cell with a default, it materializes
+the seed and records the cell's complete schema for CFC preparation. The value,
+schema document, and CFC envelope commit together. Failure aborts the operation.
+The default a pattern's setup writes into an internal cell it materializes for
+the pattern is recorded as the same initialization, whether the pattern exports
+the cell, passes it to a sub-pattern, or keeps it to itself. The reference that
+exposes the cell requires its own protection: changing that reference must not
+provide an alternative way to replace the protected value.
+
+A setup that creates a new piece's argument document records, the same way, the
+default it writes into each concrete protected field the caller leaves to that
+default. The document is new, so every field in it is new; "New fields during a
+source update" below covers an argument document that exists already, where
+only a field the prior schema did not declare is. A value the caller supplies in
+place of the default, explicit `undefined` included, is not initialization, and
+a path containing `*` receives no permission here either.
+
+When a generated initializer returns the same protected cell again, its changed
+default does not replace an existing backing value. The runtime may record a
+private claim for an unchanged ordinary root output reference with no carried
+labels. Preparation permits that single attempt only when its final reference
+and complete stored CFC envelope remain unchanged. Extra attempts, applied
+writes, and changed policy require ordinary writer authorization. This cannot
+adopt an unprotected reference. Streams retain their ordinary declaration path.
+The envelope's version is not a change: a version-1 envelope spells the same
+labels as its version-2 rewrite, so a preserved output leaves it in version 1
+and the document migrates on its next authorized write.
+
+Lowering preserves authored writer-binding syntax through a cell constructor,
+its `.for()` call, and stable local bindings. Generated lift-result and inferred
+pattern-result schemas retain the same `writeAuthorizedBy` identity as the
+constructed cell. A structural function type cannot substitute for `typeof`
+writer identity.
+
+## New fields during a source update
+
+Verified pattern setup may initialize a concrete, newly declared protected field
+of an argument document that exists already from its schema default. It uses the
+candidate schema's ordinary default extraction and argument validation. The
+prior argument schema must be known and must not already declare the field. The
+argument document must be readable. Paths containing `*` (including a literal
+property with that name) and ambiguous previous declarations do not receive this
+permission. CFC's schema-entry paths do not distinguish literal `*` properties
+from wildcards.
+
+The setup records the permission alongside the candidate argument schema and
+source transition. Preparation requires the field to be absent and the final
+transaction value to equal the extracted default. Supplied nondefault values,
+explicit `undefined`, `null`, and other existing values are not initialization.
+An existing policy on the field or an ancestor remains effective.
+
+The source pointer, argument update, merged CFC policy, and setup receipt share
+one commit. A failed validation or authorization leaves the prior state intact.
+Source-update delegations continue to use `PreparedSourceUpdate`; initialization
+neither replaces that authority nor authorizes ordinary input rebinding.
+
+## References into a sub-pattern argument
+
+A collection builtin — `map`, `filter`, `flatMap` — instantiates one sub-pattern
+per entry of the list it runs over, and stages that entry into the new piece's
+argument as a link to the entry's own cell, beside a link to the list. The
+builtin hands the piece a reference; it writes nothing of what the entry holds.
+The runtime records each such field as a capture when it stages the argument, at
+the builtin's request, and only where the staged value is a link to a cell that
+is not a write redirect, since a redirect sends writes on to the entry. A field
+holding a value receives no record.
+
+Preparation permits a capture on these terms: the slot ends holding a link to
+the recorded cell, and before the transaction it was absent or held a link to
+that same cell. A link is matched by the cell it names and by whether it is a
+write redirect, not by its bytes, because a later version of the pattern can
+stage the same link under a different schema. Installing a link into an absent
+slot is refused where the stored envelope already declares a writer or UI
+contract on the slot, as for any initialization. A link to another cell over a
+slot that held one before the transaction is a modification, even when the
+transaction empties the slot first, and requires the slot's ordinary writer.
+The same link staged again, as a runtime starting a piece it finds set up
+stages its argument, lands no write at the slot and is permitted whatever the
+slot's stored policy: the slot keeps its link, and the labels stored with that
+link stay with it beside any entry the slot's schema declares there.
+
+The receiving slot's schema is the entry's own, so it can declare integrity the
+entry's writer adds, such as authorship by the current principal. Staging a
+link writes none of that content, so preparation mints none of that integrity
+for the principal staging it: not on the slot's declared label, not on the
+link's label, and not toward an integrity floor at the slot. The slot persists
+the reference's own label and nothing of the entry's (CFC §8.2.5, §8.12.8):
+the entry's authorship and labels stay with the entry, where a reader reaching
+it through the link finds them composed with the slot's restriction (§8.2.4).
+
+An integrity floor at a path below a staged link is checked against the value
+the link brings there, which is the source's value at the matching path. Where
+the source holds nothing at that path, nothing lands at the floor, and the
+floor does not apply. Where the source reaches that value through references
+staged in the same transaction, the floor uses the evidence derived through
+them, as described below. Where it reaches the value through a link stored
+before the transaction, the floor uses the label of the document holding the
+value, at the value's own position, and only that label. A stored link's slot
+describes the reference, so it is no evidence about the value there now.
+
+When deriving a pending reference source for a floor, schema labels are minted
+at their declaration paths, with wildcard segments bound to the projected
+source path. Covering declarations join their confidentiality and static
+integrity, including when the reference slot has its own nonempty
+confidentiality declaration. A declaration at or below an initialized
+reference mints no integrity for the referenced content. Principal claims,
+including `authored-by` and `represents-principal`, come from the most
+specific source label covering the projected path, and a container's claims
+never reach a path that holds a reference: a container's author does not
+become the author of a reference it holds. This applies to both pending and
+stored source labels. Inline data without a more specific label keeps its
+container's authorship. An empty declaration without a persistent gate does
+not shadow an ancestor during this derivation.
+
+Each slot persists the label of its last recorded link matching the source it
+still holds: the same space, scope, document, and path. A raw write restoring
+an earlier reference therefore uses the last input for that source. A
+replacement by another reference, inline data, or absence removes the
+superseded link's entry. Every link attempt remains subject to verification,
+but only the selected input persists a slot entry. Write-side integrity floors
+use the final references.
+
+When a floor's link source is a reference staged in the same transaction, or a
+value holding one, the floor derives that reference's evidence through the
+recorded chain. A reference at or above the source path supplies the evidence
+there. One held below it supplies the evidence at the matching paths beneath
+the link, and none at the link itself. This does not depend on staging order
+or on the references occupying different documents. A chain of pending
+references that never reaches a value refuses the derivation terminally, and a
+floor over it fails. An object holding a reference back to itself or another
+object is valid; the derivation expands each held reference once per branch
+and follows back-references only as far as a floor requires. Nothing of this
+derivation is persisted: the slot stores the reference's own label, and a read
+beyond it follows the stored references and consumes the labels at each hop.
+
+### Captured bindings
+
+The builtin also stages the bindings its callback captures from the enclosing
+pattern, as a record in the argument's `params` field. A captured cell arrives
+there as a write redirect to it, whose payload carries the binding's schema
+beside the cell's address; the record may hold values too. The runtime records
+each link in the record, at any depth of records and lists, as a capture at the
+link's own path, on the terms above. A value in the record receives no record. A
+record covers the link's slot and nothing above it, so a protected record in
+`params` that holds a value beside a link is refused as any write of that value
+is.
+
+A capture covers the slot that holds the link, never the cell the link names. A
+write through a staged redirect lands at that cell and is checked against that
+cell's stored policy, its writer and owner binding included, as any other write
+to it is, in the staging transaction and after it. As for a reference, staging a
+capture mints none of the integrity the slot's schema adds for the principal
+staging it, so the slot names no owner, and an owner's runtime and a visitor's
+stage the same row alike.
+
+## Bindings a setup stages
+
+A pattern that passes a binding to a sub-pattern it composes, as in
+`Child({ items })`, has setup stage a write redirect to the bound cell into the
+sub-pattern's argument. A pattern's result can name a cell the pattern did not
+create the same way: its argument, passed through to a result field, or a cell
+the code setting the pattern up closed over, as when a handler defines a
+pattern that returns one of the handler's own bindings and sets it up. Setup
+records each such redirect as a binding of the slot holding it. A binding is
+matched as a capture is, by the cell its link names and by whether it is a
+write redirect. It differs in one respect: a setup stages its bindings again on
+every run, and a pattern version may name another cell for one, so preparation
+accepts a binding wherever the slot ends holding a link to the cell this setup
+staged, whatever the slot held before. A write in the setting-up transaction
+that leaves the slot naming another cell, at the slot or at an ancestor, is no
+binding and needs the slot's writer. A list builtin's capture is never
+re-pointed this way. Whether a trusted setup may re-point a capture when a
+pattern version names another cell for it is not settled.
+
+A binding covers the slot alone. The cell its redirect names belongs to
+whoever handed the piece the binding, and setup writes none of it, so a write
+to that cell, through the slot or directly, needs the cell's own writer and
+owner binding in the setting-up transaction as in any other. Only a result
+field naming one of the piece's own internal cells covers that cell as well,
+since setup creates and initializes it. Those cells are minted from the
+piece's result cell, so no other code names them.
+
+## Setup replay over a stored argument
+
+A runtime that starts a piece it did not create replays the setup of the
+sub-pieces its pattern composes, and the replay stages each argument document
+again. A sub-piece whose code changed is set up again the same way, over the
+argument document it already has, with the argument its parent supplies. In
+both, the slots the caller does not name are carried over from the stored
+document with the bytes they hold, and the runtime records each such slot as a
+replay. The record permits nothing but leaving those bytes as they are. A slot
+the changed code's argument schema refuses is not carried over, and receives
+no record. Its value is copied into the piece's refused-slot store instead
+([pattern updates](./pattern-imports/pattern-updates.md)), which the runtime
+names as a store it owns for the piece.
+
+A piece whose own code changed, as when its origin publishes a release the
+source reconciler adopts, is set up again over its stored argument with no
+argument supplied. Every slot the document holds is carried over and recorded
+as a replay, and a default the changed schema adds where the document holds
+nothing is not. A stored slot the changed schema refuses refuses the setup as
+a whole.
+
+Preparation defers a protected field's writer requirements — its
+`writeAuthorizedBy`, and the trusted event its UI contract requires — when the
+field lies at or under a recorded replay slot and no write the transaction
+recorded changes a byte at the field, at an ancestor where the difference
+reaches the field, or below it. The deferred requirement is waived only when the
+envelope the transaction would store leaves the field as it was too: the policy
+claims and the label positions they declare are the same throughout the
+document, and every label entry at the field, above it or below it is the same.
+Claims are compared at the positions they apply to, each reference followed to
+the definition it names, so a definition no reference reaches declares nothing;
+a release whose merged envelope keeps the stored claims in force, under another
+layout of definitions, leaves them the same. In a release, the claims beneath a
+position where the stored document holds links describe the documents linked
+there, which the release may re-describe, so they are not compared. Nor are the
+claims at or beneath a new field: a concrete property the object holding it
+lacked before the transaction, so that one holding `undefined` is not new, which
+the stored envelope declares nothing at or beneath, and which lies beneath no
+protected field the setup restates. Such a field is initialized as "New fields
+during a source update" above describes, and a list there whose entries are
+protected may hold no entry. The stored schema document and envelope version are
+then kept where the comparison left out no new field's claims. Otherwise the
+envelope the transaction derives is stored. It differs from the stored one at
+the new fields, whose claims it declares, and, in a release, beneath links,
+where it re-describes the claims as the specification's link-position rule
+("Claims Beneath a Link Position", "Release") lets a release do. Labels
+elsewhere in the document persist as for any write. An authoritative
+transaction, which commits each document whole, receives no deferral. Any other
+write attempt at a protected field — pattern code setting a whole document with
+the field's own bytes among them — requires the field's ordinary writer. The
+same requirements are deferred at the root of a document holding a runtime
+output that a re-run initializer preserves, as "New cells" above describes, and
+are waived there only when the transaction leaves the complete stored envelope
+as it was.
+
+## Attribution of an initialized value
+
+An initialized value is the pattern's default, and the principal whose runtime
+constructed the cell chose nothing of it. A claim the field's schema makes
+about the current principal — `RepresentsCurrentUser`, `AuthoredByCurrentUser`
+— names a principal only when the initialization is their act: the
+transaction of a handler run they invoked, a piece start deferred from one,
+and the transaction that brings a piece into being outside any action — a
+deploy, a host creating a piece on the principal's behalf. The runtime marks
+those transactions through its authorization: a handler run's transaction
+whole (`CfcTxState.attributedInitialization`), and a creation's for the new
+piece's own documents (`CfcTxState.attributedPieces`): its result document,
+and the argument and internal documents its setup names for it. The piece a
+handler creates, its cross-space children included, is initialized in the
+handler's own transaction, and a served creation carries the requester's trust
+snapshot. A builtin that instantiates a pattern from a continuation of its
+action declines the mark (`attributeInitialization: false`): the piece is
+nobody's act. A deferred piece start runs in a transaction of its own, carries
+the marks of the transaction it was deferred from and takes that transaction's
+trust snapshot, so the root a serving runtime's space-root ensure creates,
+under the snapshot of the owner it resolves, starts on that owner's behalf. A
+creation's mark reaches no other piece: a projection the same transaction
+re-stages for a piece that already existed, when a release of its parent adds
+a child the next start brings into being, is initialized on nobody's behalf,
+as the next paragraph describes. A run under the serving runtime's own trust snapshot,
+which is what a served run that acts for no one keeps, is refused an
+initialization it would attribute, whether the claim would name the service
+or the service would become a field's owner, as any of its writes carrying
+such a claim is. A reference the runtime stages at an owner position, the
+result document's binding to an argument field a release adds, writes nothing
+of the value it names and mints no owner claim, so a served run acting for no
+one is admitted it as it is admitted an initialization on nobody's behalf.
+
+In any other transaction — a runtime starting a piece it finds set up, a
+collection builtin instantiating a sub-pattern over a new entry, a source
+update installing a new field's default — the seed, the reference that
+exposes it, the new field's default, the internal cells a setup projects
+result fields to and the slots it stages bindings into are all persisted
+without a claim about the current principal.
+Other integrity the schema adds is minted as for any write. Who owns a field
+such an initialization installs at a placeholder `ownerPrincipal` depends on
+whether the piece records its creator.
+
+A piece records the principal it was created for in the `creator` meta field
+of its result document, written by the setup that brings it into being and
+admitted by no later write, a setup that installs the pointer again over a
+retained record included: a creation outside any action and a handler's
+creation record the acting principal; a child a piece instantiates records its
+parent's creator, whoever's run instantiated it; a served run acting for no
+one records nothing. A piece created before the runtime recorded creators gains
+one at its next source transition: a space root takes the owner its space's
+access list names, and any other piece the one principal the stored labels of
+its owner-protected fields represent, none where those fields name two
+principals or none. The record is written only while the
+`pieceCreatorRecord` experimental option is on
+([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md)).
+
+Where the piece records a creator and the stored label at the position names
+no owner, the initialization binds the creator: the persisted label mints
+`represents-principal` for the recorded creator and no other claim about the
+current principal, whichever runtime performs the update and whether or not
+the run acts for anyone. The piece's creator chose its origin and with it
+delegated every later release, so a field a release adds is theirs, not the
+updater's, not the first writer's and not the service's. Where the piece
+records no creator, no owner is bound: the field's `ownerPrincipal` binding is
+established by the first write an acting principal makes through the field's
+writer, and that write mints the claim for its actor as every handler write
+does. From then on the field is that principal's either way: the
+`ownerPrincipal` placeholder names the principal the stored label represents,
+and a write through the writer by any other principal is refused
+(`ownerPrincipal mismatch`), as is one to a field whose stored label names
+more than one principal. An initialization on nobody's behalf at a position
+whose stored label already names an owner leaves that owner as it is.
+`runtime/runner/test/cfc-creator-owner-binding.test.ts` covers the binding
+under the creator's runtime, another member's and a serving runtime acting for
+no one, the writer afterward, a piece without a record, and the record a
+source transition writes from a legacy piece's fields;
+`runtime/runner/test/cfc-piece-creator.test.ts` covers the record itself and
+the writes to it that are refused.
+
+An initialization that is nobody's act leaves the claim a stored label
+already makes at its path about a principal: the claim is carried forward as
+it stands. A preserved runtime output and a replayed argument slot write
+nothing and are nobody's act either, so what they store equals what was
+stored; a source update another principal's runtime performs re-projects the
+fields and strips no owner.
+
+A default computed at run time rather than declared — an initializer wrapped
+in a lift — is seeded in the reactive pass that first serializes it, which is
+no handler's transaction, so it is not attributed either. Declaring such
+defaults, and settling their attribution, is open work.
+
+## Authorization and transaction evidence
+
+An initialization policy input is authoritative only when the runtime records it
+with its private authorization mark. A record submitted through the public
+transaction interface has no initialization authority.
+
+Overlapping writes can record different intermediate snapshots. A write detail
+keeps its path's state from before the transaction first wrote that path, and
+details come in the order their paths were first written, so the first detail
+covering the slot shows what the slot held before the transaction. That
+snapshot alone decides the slot's prior state. It must show the slot absent, or
+for a capture a link to the cell the capture names; a snapshot showing another
+value, an unreadable path, a write redirect standing on the path above the
+slot, or unknown presence prevents initialization. A later covering snapshot can
+show a value the transaction itself wrote earlier, so it neither prevents nor
+permits initialization. A whole-object deletion followed by a child write
+therefore cannot turn an existing field into a new field: the deletion is the
+first write covering the field, and its snapshot shows the field. A binding,
+which a later setup may re-point, does not consult the slot's prior state.
+
+What the slot ends the transaction holding is a separate check. It reads the
+transaction's final value rather than reconstructing it from overlapping write
+details.
+
+The permission waives `writeAuthorizedBy` and a UI contract's trusted-event
+requirement for that initialization, the two declarations that name who may
+write a value. A stored declaration of the same kind on the field or an ancestor
+refuses its waiver: a stored writer binding keeps its writer requirement, and a
+stored UI contract keeps its trusted-event requirement, while a declaration the
+candidate schema introduces beside it is waived. Owner binding,
+represented-principal integrity, confidentiality, required integrity, schema
+compatibility, and storage authorization remain enforced. Stored policy is read
+and merged through ordinary CFC preparation; an unreadable envelope is never
+treated as absent.
+
+## Existing unprotected values
+
+Source following preserves existing state. Installing a new source does not
+prove who wrote an old value or permit silently accepting it as a trusted seed.
+Repairing such state requires an explicit owner-authorized adoption operation
+that preserves the value and installs its policy in the same commit.
+
+The profile-name repair is one such operation. Its host-only adoption input is
+private, exact-address, and exact-value. Preparation treats it as a policy
+attempt even when the value write would be a no-op, so the normal requirement
+gates and envelope persistence run. Only the writer-binding gate receives the
+adoption permission. No raw CFC metadata is installed by the repair caller.
+
+The operation reads the durable represented principal from declared stored
+labels and checks that the actor matches it. A schema's current-principal
+placeholder alone cannot establish ownership. It supports only the field-local
+owner, represented-principal, and writer-binding policy; additional provenance
+claims or ancestor policies are refused. Owner acceptance cannot confer an
+`authored-by` claim on an old value.
+
+An inspection receipt binds the profile's verified pattern identity and setup,
+name projection, stored policies, and exact name-chain values. Application
+revalidates them on one transaction, including ordinary concurrency reads of
+policy metadata. Missing protection commits atomically across the supported
+chain. Existing protection is never replaced or weakened. The CLI surface is
+[`cf profile repair-name-protection`](../../runtime/cli/README.md#repairing-profile-name-protection).

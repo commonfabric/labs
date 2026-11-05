@@ -1,0 +1,470 @@
+running 1 test from ./packages/patterns/integration/topic-board-fixture.test.ts
+topic-board-fixture ...
+  topicTitle ...
+    returns a title carrying the index, zero-padded to four digits ... ok (0ms)
+    returns a distinct title for each of the first thousand indices ... ok (1ms)
+    orders titles by index under a plain string sort ... ok (0ms)
+  topicTitle ... ok (2ms)
+  crossrefTargets ...
+    returns nothing for a topic older than the citing window ... ok (0ms)
+    returns citations for every topic inside the citing window ... ok (0ms)
+    returns citations for the newest topic, which the board lists first ... ok (0ms)
+    returns only earlier topics ... ok (0ms)
+    returns distinct targets ... ok (0ms)
+    returns as many citations as were asked for ... ok (0ms)
+    returns every earlier topic when asked for more than exist ... ok (0ms)
+    spreads citations across everything earlier ... ok (0ms)
+    returns nothing when no topic is asked to cite ... ok (0ms)
+    returns nothing for the first topic, which has nothing to cite ... ok (0ms)
+  crossrefTargets ... ok (2ms)
+topic-board-fixture ... ok (8ms)
+running 2 tests from ./packages/patterns/integration/topic-board-child-contract.test.ts
+topic-board-child-contract ...
+------- post-test output -------
+Experimental flag overrides: modernCellRep=false, commitPreconditions=true, plainResultReceipts=true, computedCellIds=true, lazyMaterialization=true, serverExecution=false, contentAddressedSchemas=true, readerSchemaPrecedence=true
+----- post-test output end -----
+  leaves the body-update stamps unset on a topic filed with a body ... ok (16ms)
+  wires a filed topic to the board's pivot, so a sibling's mention becomes an inbound reference ... ok (542ms)
+  carries the updated comment count on the board's index row ... ok (330ms)
+topic-board-child-contract ... ok (7s)
+topic-board-pivot-contract ...
+------- post-test output -------
+Experimental flag overrides: modernCellRep=false, commitPreconditions=true, plainResultReceipts=true, computedCellIds=true, lazyMaterialization=true, serverExecution=false, contentAddressedSchemas=true, readerSchemaPrecedence=true
+----- post-test output end -----
+  builds one pivot row per topic, claiming no edges before any mention ... ok (28ms)
+  records a self-mention without earning the topic an inbound edge ... ok (363ms)
+  gives each mentioned topic its own inbound edge, and is not symmetric ... ok (520ms)
+  drops only the retracted edge on unmention, leaving the other standing ... ok (73ms)
+topic-board-pivot-contract ... ok (3s)
+running 1 test from ./packages/patterns/integration/topic-create-onscreen.test.ts
+Topics create, on screen against off screen ...
+------- post-test output -------
+Experimental flag overrides: modernCellRep=false, commitPreconditions=true, plainResultReceipts=true, computedCellIds=true, lazyMaterialization=true, serverExecution=false, contentAddressedSchemas=true, readerSchemaPrecedence=true
+----- post-test output end -----
+  times one more topic on a rendered board against an unrendered one ...
+------- post-test output -------
+TOPIC_CREATE render=1 size=5 i=0 off=323 onWrite=233 onTotal=257 render=24
+TOPIC_CREATE render=1 size=5 i=1 off=206 onWrite=222 onTotal=236 render=14
+TOPIC_CREATE render=1 size=5 i=2 off=219 onWrite=226 onTotal=271 render=45
+TOPIC_CREATE render=1 size=5 i=3 off=220 onWrite=235 onTotal=290 render=55
+TOPIC_CREATE render=1 size=5 i=4 off=235 onWrite=246 onTotal=308 render=62
+
+[topic-create size=5 render=1] main-thread runtime-client IPC round-trips (ms):
+    ipc/piece:get                  n=    2 p50=   193.7 p95=   193.7 max=    193.7 total=       217
+    ipc/piece:getAll               n=    1 p50=   193.6 p95=   193.6 max=    193.6 total=     193.6
+    ipc/cell:subscribe             n=   11 p50=    12.2 p95=      36 max=       36 total=     137.6
+    ipc/cell:unsubscribe           n=    4 p50=    32.5 p95=    36.1 max=     36.1 total=     107.9
+    ipc/piece:synced               n=    1 p50=    31.7 p95=    31.7 max=     31.7 total=      31.7
+    ipc/cell:resolveAsCell         n=    7 p50=     1.1 p95=    12.1 max=     12.1 total=      31.3
+    ipc/vdom:mount                 n=    2 p50=    25.7 p95=    25.7 max=     25.7 total=      29.2
+    ipc/runtime:listEventAttention n=    1 p50=    22.5 p95=    22.5 max=     22.5 total=      22.5
+    loop/mainLag                   n=   15 p50=     0.2 p95=     6.2 max=      6.2 total=      17.8
+    ipc/runtime:resolveSpaceName   n=    2 p50=     8.7 p95=     8.7 max=      8.7 total=      17.3
+    ipc/runtime:idle               n=    2 p50=     5.1 p95=     5.1 max=      5.1 total=       9.1
+    ipc/runtime:setTelemetryEnabled n=    1 p50=     8.8 p95=     8.8 max=      8.8 total=       8.8
+    ipc/runtime:setBreakpoints     n=    1 p50=     8.7 p95=     8.7 max=      8.7 total=       8.7
+    ipc/initialize                 n=    1 p50=     7.5 p95=     7.5 max=      7.5 total=       7.5
+[topic-create size=5 render=1] main-thread IPC still pending:
+    (none)
+[topic-create size=5 render=1] request timeline (sentAt..doneAt ms):
+          0..      8 initialize
+          8..     30 runtime:listEventAttention
+          8..     17 runtime:resolveSpaceName
+          8..     17 runtime:resolveSpaceName
+          8..     17 runtime:setTelemetryEnabled
+          9..     17 runtime:setBreakpoints
+          9..     40 piece:synced
+         17..     40 piece:get
+         21..     23 runtime:getHomeSpaceCell
+         23..     28 runtime:idle
+         36..     40 runtime:idle
+         40..    234 piece:getAll
+         40..    234 piece:get
+        234..    235 cell:get
+        234..    235 piece:getSlug
+        235..    238 cell:subscribe
+        236..    238 cell:get
+        238..    243 cell:resolveAsCell
+        243..    269 vdom:mount
+        268..    281 cell:subscribe
+        269..    281 cell:resolveAsCell
+        281..    285 vdom:mount
+        598..    609 cell:resolveAsCell
+        609..    621 cell:subscribe
+       1031..   1032 cell:resolveAsCell
+       1032..   1033 cell:subscribe
+       1050..   1063 cell:unsubscribe
+       1050..   1063 cell:subscribe
+       1503..   1504 cell:resolveAsCell
+       1504..   1504 cell:subscribe
+       1526..   1553 cell:unsubscribe
+       1526..   1553 cell:subscribe
+       1994..   1996 cell:resolveAsCell
+       1996..   1996 cell:subscribe
+       2029..   2062 cell:unsubscribe
+       2029..   2062 cell:subscribe
+       2530..   2530 cell:resolveAsCell
+       2530..   2530 cell:subscribe
+       2569..   2605 cell:unsubscribe
+       2569..   2605 cell:subscribe
+[topic-create size=5 render=1] worker request ledger (received/responded):
+    received/cell:get=2 received/cell:resolveAsCell=7 received/cell:subscribe=11
+    received/cell:unsubscribe=4 received/initialize=1 received/piece:get=2
+    received/piece:getAll=1 received/piece:getSlug=1 received/piece:synced=1
+    received/runtime:getHomeSpaceCell=1 received/runtime:getLoggerCounts=1
+    received/runtime:idle=2 received/runtime:listEventAttention=1
+    received/runtime:resolveSpaceName=2 received/runtime:setBreakpoints=1
+    received/runtime:setTelemetryEnabled=1 received/vdom:mount=2 responded/cell:get=2
+    responded/cell:resolveAsCell=7 responded/cell:subscribe=11 responded/cell:unsubscribe=4
+    responded/initialize=1 responded/piece:get=2 responded/piece:getAll=1
+    responded/piece:getSlug=1 responded/piece:synced=1 responded/runtime:getHomeSpaceCell=1
+    responded/runtime:idle=2 responded/runtime:listEventAttention=1
+    responded/runtime:resolveSpaceName=2 responded/runtime:setBreakpoints=1
+    responded/runtime:setTelemetryEnabled=1 responded/vdom:mount=2 total=81
+[topic-create size=5 render=1] worker scheduler/runner/storage (ms):
+    runner/start/resumeCellSync    n=  219 p50=    33.3 p95=    96.5 max=     96.6 total=     10431
+    storage.v2/watchRefresh/total  n=   47 p50=     7.7 p95=    60.3 max=       90 total=     707.9
+    storage.v2/watchRefresh/watchAddSync n=   47 p50=     5.7 p95=    59.9 max=     88.1 total=     664.6
+    runner/start/syncCellsForRunningPattern n=    7 p50=    55.1 p95=   115.2 max=    115.2 total=     421.4
+    runner/start/resumeCellSyncWave n=    7 p50=    25.4 p95=    96.9 max=     96.9 total=     225.8
+    runner.ipc/handle/piece:get    n=    2 p50=   191.9 p95=   191.9 max=    191.9 total=     214.8
+    runner.ipc/handle/piece:getAll n=    1 p50=   193.5 p95=   193.5 max=    193.5 total=     193.5
+    piece/phase/get.runtime.start  n=    1 p50=   191.5 p95=   191.5 max=    191.5 total=     191.5
+    piece/phase/get.reconcileSource n=    2 p50=   163.4 p95=   163.4 max=    163.4 total=     163.5
+    piece/phase/getDefaultPattern.get(reconcile=true,start=false) n=    1 p50=   163.5 p95=   163.5 max=    163.5 total=     163.5
+    runner/start/resumeMentionedInputSyncWave n=    7 p50=    25.1 p95=    42.5 max=     42.5 total=     156.7
+    scheduler/scheduler/execute    n=   41 p50=     1.9 p95=     7.7 max=     13.1 total=     110.4
+    scheduler/scheduler/execute/settle n=   41 p50=     1.8 p95=     7.6 max=       13 total=     107.4
+    scheduler/scheduler/run        n=  156 p50=     0.4 p95=     2.7 max=      5.1 total=     102.5
+    pattern-manager/compile-cache/load-pattern-by-identity n=    3 p50=    15.7 p95=    73.5 max=     73.5 total=     100.8
+    scheduler/scheduler/run/action n=  156 p50=     0.2 p95=     1.8 max=        5 total=      75.8
+    runner/start/loadPatternByIdentity n=    1 p50=    66.2 p95=    66.2 max=     66.2 total=      66.2
+    runner/start/resumeArgumentLinkTargetSync n=   35 p50=     0.4 p95=      11 max=     11.3 total=        59
+    runner.loop/workerLag          n=   13 p50=     2.3 p95=    17.5 max=     17.5 total=      48.9
+    runner.ipc/delivery/cell:subscribe n=    9 p50=       2 p95=    11.1 max=     11.1 total=      25.5
+    runner/start/resumeFollowupSync n=    7 p50=       2 p95=    12.3 max=     12.3 total=        24
+    runner/start/resumeArgumentLinkTargetSyncWave n=   14 p50=     0.9 p95=      12 max=       12 total=      23.7
+    runner.ipc/handle/vdom:mount   n=    2 p50=    20.8 p95=    20.8 max=     20.8 total=      23.2
+    runner.ipc/handle/piece:synced n=    1 p50=    23.1 p95=    23.1 max=     23.1 total=      23.1
+    runner.ipc/handle/runtime:listEventAttention n=    1 p50=    21.9 p95=    21.9 max=     21.9 total=      21.9
+    storage.v2.remote/receive/dispatchPayload n=  134 p50=       0 p95=       1 max=        3 total=      20.4
+    runner.ipc/delivery/cell:resolveAsCell n=    7 p50=     0.7 p95=    10.7 max=     10.7 total=        17
+    runner/raw/run/map             n=   14 p50=     1.2 p95=     1.7 max=      1.7 total=      16.2
+[topic-create size=5 render=1] churn / conflict counters:
+    actionRuns=156 commitConflicts=10 commitReverts=12 commitRejected=0 scheduleRunErrors=12 eventLostRaces=0 overlayLateEchoDrops=0 overlayArrivalSweeps=0 overlayIntentChecks=0 overlayIntentsByConsequenceOf=0 overlayIntentEchoBackstops=0 overlayCascadeEchoRetired=0 overlayCascadeEchoFlickers=0
+----- post-test output end -----
+  times one more topic on a rendered board against an unrendered one ... ok (3s)
+Topics create, on screen against off screen ... ok (5s)
+running 1 test from ./packages/patterns/integration/sx2-events.test.ts
+sx2 events (Phase 3 gates) ...
+------- post-test output -------
+Experimental flag overrides: modernCellRep=false, commitPreconditions=true, plainResultReceipts=true, computedCellIds=true, lazyMaterialization=true, serverExecution=false, contentAddressedSchemas=true, readerSchemaPrecedence=true
+----- post-test output end -----
+  server-processed handlers, duplicate submission, and rapid-fire coalescing (events.md §2/§4/§5; D-v2-2) ... ok (26ms)
+sx2 events (Phase 3 gates) ... ok (635ms)
+running 1 test from ./packages/patterns/integration/lunch-poll-vote.test.ts
+lunch poll: two users vote on a shared option ...
+------- post-test output -------
+Experimental flag overrides: modernCellRep=false, commitPreconditions=true, plainResultReceipts=true, computedCellIds=true, lazyMaterialization=true, serverExecution=false, contentAddressedSchemas=true, readerSchemaPrecedence=true
+----- post-test output end -----
+  both users' votes on the same option survive, and a second option tallies independently ...
+------- post-test output -------
+
+[lunch-poll vote] step timings (total 2448ms):
+       825ms  navigate + login both
+       374ms  both active space roots ready
+       551ms  both runtimes idle
+        11ms  host profile name filled
+         7ms  host joined (count reaches 1)
+        73ms  guest profile name filled
+        58ms  both join lands (confirmed roster: exactly {Alice, Bob} on both)
+        58ms  option A propagates to both
+       268ms  both cast green concurrently
+       112ms  both browsers see 2 love it (merge)
+         1ms  both voters' swatches visible on both browsers
+       110ms  option B vote lands (3 votes); option A unchanged
+
+[Alice] main-thread runtime-client IPC round-trips (ms):
+    ipc/runtime:idle               n=   26 p50=     0.3 p95=     353 max=    395.4 total=    1868.2
+    ipc/cell:resolveAsCell         n=   18 p50=       3 p95=   175.9 max=    175.9 total=     401.2
+    ipc/piece:get                  n=    2 p50=   356.2 p95=   356.2 max=    356.2 total=     384.3
+    ipc/piece:getAll               n=    1 p50=   302.6 p95=   302.6 max=    302.6 total=     302.6
+    ipc/vdom:unmount               n=    1 p50=   176.3 p95=   176.3 max=    176.3 total=     176.3
+    ipc/cell:subscribe             n=    8 p50=     3.3 p95=    21.1 max=     21.1 total=      56.9
+    ipc/vdom:mount                 n=    2 p50=    42.4 p95=    42.4 max=     42.4 total=      49.4
+    ipc/piece:synced               n=    1 p50=    37.1 p95=    37.1 max=     37.1 total=      37.1
+    loop/mainLag                   n=   21 p50=     1.1 p95=     4.6 max=      4.8 total=      29.1
+    ipc/cell:unsubscribe           n=    1 p50=    27.4 p95=    27.4 max=     27.4 total=      27.4
+    ipc/runtime:listEventAttention n=    1 p50=    22.4 p95=    22.4 max=     22.4 total=      22.4
+    ipc/runtime:resolveSpaceName   n=    2 p50=     9.1 p95=     9.1 max=      9.1 total=      18.2
+    ipc/runtime:setTelemetryEnabled n=    1 p50=     9.2 p95=     9.2 max=      9.2 total=       9.2
+    ipc/runtime:setBreakpoints     n=    1 p50=     9.1 p95=     9.1 max=      9.1 total=       9.1
+[Alice] main-thread IPC still pending:
+    (none)
+[Alice] request timeline (sentAt..doneAt ms):
+          0..      8 initialize
+          8..     31 runtime:listEventAttention
+          9..     18 runtime:resolveSpaceName
+          9..     18 runtime:resolveSpaceName
+          9..     18 runtime:setTelemetryEnabled
+          9..     18 runtime:setBreakpoints
+          9..     46 piece:synced
+         18..     46 piece:get
+         27..     30 runtime:getHomeSpaceCell
+         30..     30 runtime:idle
+         46..    348 piece:getAll
+         46..    402 piece:get
+        349..    349 cell:get
+        402..    403 piece:getSlug
+        403..    406 cell:subscribe
+        403..    406 cell:get
+        406..    408 cell:resolveAsCell
+        408..    451 vdom:mount
+        409..    597 runtime:idle
+        439..    480 cell:resolveAsCell
+        451..    481 cell:resolveAsCell
+        481..    482 cell:resolveAsCell
+        481..    488 vdom:mount
+        483..    488 cell:subscribe
+        961..    961 runtime:idle
+        971..    972 runtime:idle
+       1011..   1364 runtime:idle
+       1366..   1366 runtime:idle
+       1368..   1368 runtime:idle
+       1403..   1580 vdom:unmount
+       1404..   1630 runtime:idle
+       1404..   1580 cell:resolveAsCell
+       1483..   1581 cell:resolveAsCell
+       1581..   1591 cell:resolveAsCell
+       1591..   1610 cell:resolveAsCell
+       1610..   1612 cell:resolveAsCell
+       1612..   1617 cell:resolveAsCell
+       1617..   1618 cell:resolveAsCell
+       1618..   1620 cell:subscribe
+       1630..   1630 runtime:idle
+       1795..   1979 runtime:idle
+       1870..   1897 cell:unsubscribe
+       1877..   1898 cell:subscribe
+       1877..   1898 cell:subscribe
+       1938..   1942 cell:resolveAsCell
+       1940..   1942 cell:resolveAsCell
+       1942..   1944 cell:resolveAsCell
+       1943..   1944 cell:resolveAsCell
+       1944..   1946 cell:subscribe
+       1945..   1947 cell:subscribe
+       1981..   1981 runtime:idle
+       2657..   2660 cell:resolveAsCell
+       2660..   2661 cell:resolveAsCell
+       2661..   2664 cell:resolveAsCell
+       2664..   2665 cell:subscribe
+       2720..   2742 runtime:idle
+       2720..   2742 runtime:idle
+       2773..   2773 runtime:idle
+       2774..   2775 cell:set
+       2775..   2776 cell:set
+       2806..   2807 runtime:idle
+       2845..   3240 runtime:idle
+       3300..   3300 runtime:idle
+       3309..   3309 runtime:idle
+       3349..   3538 runtime:idle
+       3670..   3670 runtime:idle
+       3689..   3689 runtime:idle
+       3690..   3691 cell:set
+       3691..   3692 cell:set
+       3722..   3723 runtime:idle
+       3760..   4044 runtime:idle
+       4098..   4099 runtime:idle
+       4437..   4437 runtime:idle
+       4437..   4437 runtime:idle
+[Alice] worker request ledger (received/responded):
+    received/cell:get=2 received/cell:resolveAsCell=18 received/cell:set=4
+    received/cell:subscribe=8 received/cell:unsubscribe=1 received/initialize=1
+    received/piece:get=2 received/piece:getAll=1 received/piece:getSlug=1
+    received/piece:synced=1 received/runtime:getHomeSpaceCell=1
+    received/runtime:getLoggerCounts=1 received/runtime:idle=26
+    received/runtime:listEventAttention=1 received/runtime:resolveSpaceName=2
+    received/runtime:setBreakpoints=1 received/runtime:setTelemetryEnabled=1
+    received/vdom:mount=2 received/vdom:unmount=1 responded/cell:get=2
+    responded/cell:resolveAsCell=18 responded/cell:set=4 responded/cell:subscribe=8
+    responded/cell:unsubscribe=1 responded/initialize=1 responded/piece:get=2
+    responded/piece:getAll=1 responded/piece:getSlug=1 responded/piece:synced=1
+    responded/runtime:getHomeSpaceCell=1 responded/runtime:idle=26
+    responded/runtime:listEventAttention=1 responded/runtime:resolveSpaceName=2
+    responded/runtime:setBreakpoints=1 responded/runtime:setTelemetryEnabled=1
+    responded/vdom:mount=2 responded/vdom:unmount=1 total=149
+[Alice] worker scheduler/runner/storage (ms):
+    runner/start/resumeCellSync    n=  497 p50=   132.7 p95=   137.5 max=    137.9 total=   47846.6
+    storage.v2/watchRefresh/total  n=   65 p50=    18.1 p95=   196.6 max=    257.1 total=    2553.3
+    storage.v2/watchRefresh/watchAddSync n=   65 p50=    15.8 p95=   127.1 max=    197.1 total=    2242.6
+    runner.ipc/handle/runtime:idle n=   26 p50=     0.2 p95=   352.1 max=    395.2 total=    1500.3
+    scheduler/scheduler/execute    n=   77 p50=     1.1 p95=    75.1 max=    201.4 total=    1004.9
+    scheduler/scheduler/execute/settle n=   77 p50=     0.2 p95=    62.6 max=    201.1 total=       861
+    scheduler/scheduler/run        n=  480 p50=     0.7 p95=     6.8 max=     64.2 total=     830.2
+    runner.loop/workerLag          n=   22 p50=       7 p95=   103.7 max=    156.2 total=     523.3
+    runner/start/resumeArgumentLinkTargetSync n=   48 p50=       2 p95=    28.1 max=     28.9 total=       436
+    scheduler/scheduler/run/action n=  480 p50=     0.4 p95=     2.5 max=     41.4 total=     413.3
+    runner.ipc/delivery/cell:resolveAsCell n=   18 p50=     2.3 p95=   175.5 max=    175.5 total=     390.9
+    runner/start/syncCellsForRunningPattern n=    4 p50=   129.6 p95=   200.4 max=    200.4 total=     390.1
+    runner.ipc/handle/piece:get    n=    2 p50=   354.4 p95=   354.4 max=    354.4 total=     382.2
+    runner.ipc/delivery/runtime:idle n=   10 p50=     1.6 p95=   175.6 max=    175.6 total=     363.7
+    piece/phase/get.runtime.start  n=    1 p50=   353.7 p95=   353.7 max=    353.7 total=     353.7
+    scheduler/scheduler/run/commit n=  480 p50=     0.1 p95=     4.4 max=     20.6 total=       343
+    runner.ipc/handle/piece:getAll n=    1 p50=   302.3 p95=   302.3 max=    302.3 total=     302.3
+    piece/phase/getDefaultPattern.get(reconcile=true,start=false) n=    1 p50=     256 p95=     256 max=      256 total=       256
+    piece/phase/get.reconcileSource n=    2 p50=   255.8 p95=   255.8 max=    255.8 total=     255.9
+    pattern-manager/compile-cache/load-pattern-by-identity n=    3 p50=    24.7 p95=   139.7 max=    139.7 total=       183
+    runner/start/resumeCellSyncWave n=    4 p50=    40.7 p95=   138.5 max=    138.5 total=     182.2
+    runner.ipc/delivery/vdom:unmount n=    1 p50=   175.9 p95=   175.9 max=    175.9 total=     175.9
+    scheduler/scheduler/execute/event n=   77 p50=       0 p95=     8.9 max=     73.4 total=     135.1
+    runner/start/resumeMentionedInputSyncWave n=    4 p50=    27.3 p95=      77 max=       77 total=     104.6
+    runner/start/loadPatternByIdentity n=    1 p50=   101.1 p95=   101.1 max=    101.1 total=     101.1
+    scheduler/scheduler/execute/event/handlerAction n=    8 p50=     3.8 p95=    71.6 max=     71.6 total=      94.3
+    runner/action/invokeJavaScriptImplementation n=  202 p50=     0.2 p95=     1.4 max=      2.9 total=      77.2
+    runner/raw/run/map             n=   15 p50=     0.7 p95=    41.3 max=     41.3 total=      76.9
+[Alice] churn / conflict counters:
+    actionRuns=480 commitConflicts=13 commitReverts=19 commitRejected=0 scheduleRunErrors=19 eventLostRaces=0 overlayLateEchoDrops=0 overlayArrivalSweeps=0 overlayIntentChecks=0 overlayIntentsByConsequenceOf=0 overlayIntentEchoBackstops=0 overlayCascadeEchoRetired=0 overlayCascadeEchoFlickers=0
+
+[Bob] main-thread runtime-client IPC round-trips (ms):
+    ipc/runtime:idle               n=   20 p50=     0.3 p95=   546.4 max=    546.4 total=    1431.7
+    ipc/piece:getAll               n=    1 p50=   632.7 p95=   632.7 max=    632.7 total=     632.7
+    ipc/cell:resolveAsCell         n=   15 p50=     2.6 p95=   157.9 max=    157.9 total=     358.5
+    ipc/piece:synced               n=    1 p50=   314.5 p95=   314.5 max=    314.5 total=     314.5
+    ipc/piece:get                  n=    2 p50=     253 p95=     253 max=      253 total=       287
+    ipc/vdom:unmount               n=    1 p50=   158.4 p95=   158.4 max=    158.4 total=     158.4
+    ipc/vdom:mount                 n=    2 p50=    30.3 p95=    30.3 max=     30.3 total=      31.7
+    ipc/runtime:listEventAttention n=    1 p50=      27 p95=      27 max=       27 total=        27
+    loop/mainLag                   n=   22 p50=     1.2 p95=       3 max=      3.1 total=      25.9
+    ipc/runtime:resolveSpaceName   n=    2 p50=     9.2 p95=     9.2 max=      9.2 total=      18.3
+    ipc/cell:unsubscribe           n=    1 p50=    17.8 p95=    17.8 max=     17.8 total=      17.8
+    ipc/cell:subscribe             n=    6 p50=     1.6 p95=     3.6 max=      3.6 total=       9.4
+    ipc/runtime:setTelemetryEnabled n=    1 p50=     9.3 p95=     9.3 max=      9.3 total=       9.3
+    ipc/runtime:setBreakpoints     n=    1 p50=     9.2 p95=     9.2 max=      9.2 total=       9.2
+[Bob] main-thread IPC still pending:
+    (none)
+[Bob] request timeline (sentAt..doneAt ms):
+          0..      8 initialize
+          8..     35 runtime:listEventAttention
+          9..     18 runtime:resolveSpaceName
+          9..     18 runtime:resolveSpaceName
+          9..     18 runtime:setTelemetryEnabled
+          9..     18 runtime:setBreakpoints
+          9..    323 piece:synced
+         18..     52 piece:get
+         29..     31 runtime:getHomeSpaceCell
+         31..     31 runtime:idle
+         52..    305 piece:get
+        305..    308 piece:getSlug
+        308..    312 cell:subscribe
+        309..    312 cell:get
+        312..    321 cell:resolveAsCell
+        322..    352 vdom:mount
+        323..    956 piece:getAll
+        345..    416 cell:resolveAsCell
+        410..    956 runtime:idle
+        416..    418 cell:resolveAsCell
+        418..    418 cell:subscribe
+        600..    601 cell:resolveAsCell
+        601..    603 vdom:mount
+        956..    956 cell:get
+       1929..   1930 cell:resolveAsCell
+       1930..   1931 cell:resolveAsCell
+       1931..   1932 cell:subscribe
+       1986..   2023 runtime:idle
+       2059..   2059 runtime:idle
+       2099..   2300 runtime:idle
+       2302..   2302 runtime:idle
+       2304..   2304 runtime:idle
+       2359..   2517 vdom:unmount
+       2360..   2527 runtime:idle
+       2360..   2518 cell:resolveAsCell
+       2430..   2518 cell:resolveAsCell
+       2518..   2524 cell:resolveAsCell
+       2524..   2526 cell:resolveAsCell
+       2526..   2528 cell:subscribe
+       2527..   2528 runtime:idle
+       2563..   2712 runtime:idle
+       2627..   2644 cell:unsubscribe
+       2631..   2645 cell:resolveAsCell
+       2645..   2648 cell:resolveAsCell
+       2648..   2649 cell:resolveAsCell
+       2649..   2650 cell:subscribe
+       2676..   2677 cell:resolveAsCell
+       2677..   2678 cell:resolveAsCell
+       2678..   2679 cell:subscribe
+       2714..   2714 runtime:idle
+       2719..   2719 runtime:idle
+       3298..   3298 runtime:idle
+       3307..   3307 runtime:idle
+       3347..   3557 runtime:idle
+       3668..   3668 runtime:idle
+       4096..   4146 runtime:idle
+       4195..   4195 runtime:idle
+       4231..   4298 runtime:idle
+       4383..   4383 runtime:idle
+[Bob] worker request ledger (received/responded):
+    received/cell:get=2 received/cell:resolveAsCell=15 received/cell:subscribe=6
+    received/cell:unsubscribe=1 received/initialize=1 received/piece:get=2
+    received/piece:getAll=1 received/piece:getSlug=1 received/piece:synced=1
+    received/runtime:getHomeSpaceCell=1 received/runtime:getLoggerCounts=1
+    received/runtime:idle=20 received/runtime:listEventAttention=1
+    received/runtime:resolveSpaceName=2 received/runtime:setBreakpoints=1
+    received/runtime:setTelemetryEnabled=1 received/vdom:mount=2 received/vdom:unmount=1
+    responded/cell:get=2 responded/cell:resolveAsCell=15 responded/cell:subscribe=6
+    responded/cell:unsubscribe=1 responded/initialize=1 responded/piece:get=2
+    responded/piece:getAll=1 responded/piece:getSlug=1 responded/piece:synced=1
+    responded/runtime:getHomeSpaceCell=1 responded/runtime:idle=20
+    responded/runtime:listEventAttention=1 responded/runtime:resolveSpaceName=2
+    responded/runtime:setBreakpoints=1 responded/runtime:setTelemetryEnabled=1
+    responded/vdom:mount=2 responded/vdom:unmount=1 total=119
+[Bob] worker scheduler/runner/storage (ms):
+    runner/start/resumeCellSync    n=  627 p50=    29.6 p95=    93.7 max=     94.2 total=   16913.9
+    storage.v2/watchRefresh/total  n=   80 p50=    21.4 p95=   182.9 max=    297.8 total=    3015.4
+    storage.v2/watchRefresh/watchAddSync n=   80 p50=    18.7 p95=   107.9 max=    183.4 total=    2526.6
+    runner.ipc/handle/runtime:idle n=   20 p50=     0.1 p95=   540.6 max=    540.6 total=    1259.4
+    scheduler/scheduler/execute    n=   78 p50=     1.7 p95=    94.4 max=    187.1 total=    1143.2
+    scheduler/scheduler/execute/settle n=   78 p50=     0.1 p95=    66.5 max=    187.1 total=     976.5
+    scheduler/scheduler/run        n=  807 p50=     0.5 p95=     4.7 max=     66.4 total=     936.2
+    runner/start/resumeArgumentLinkTargetSync n=   82 p50=       1 p95=      39 max=     81.9 total=       742
+    runner.loop/workerLag          n=   24 p50=     7.4 p95=    97.4 max=    117.6 total=     659.2
+    runner/start/syncCellsForRunningPattern n=    5 p50=   164.8 p95=   192.9 max=    192.9 total=     648.9
+    runner.ipc/handle/piece:getAll n=    1 p50=   612.1 p95=   612.1 max=    612.1 total=     612.1
+    scheduler/scheduler/run/action n=  807 p50=     0.2 p95=       2 max=     42.6 total=     476.6
+    scheduler/scheduler/run/commit n=  807 p50=     0.1 p95=     2.6 max=     20.7 total=     358.9
+    runner.ipc/delivery/cell:resolveAsCell n=   15 p50=     2.2 p95=   157.6 max=    157.6 total=       350
+    runner.ipc/handle/piece:synced n=    1 p50=   304.9 p95=   304.9 max=    304.9 total=     304.9
+    runner.ipc/handle/piece:get    n=    2 p50=     253 p95=     253 max=      253 total=     286.6
+    piece/phase/get.runtime.start  n=    1 p50=   252.2 p95=   252.2 max=    252.2 total=     252.2
+    runner/start/resumeCellSyncWave n=    5 p50=    34.7 p95=    94.9 max=     94.9 total=     252.1
+    runner/start/resumeMentionedInputSyncWave n=    5 p50=    47.2 p95=    95.5 max=     95.5 total=     197.9
+    runner.ipc/delivery/runtime:idle n=   19 p50=     0.2 p95=   157.7 max=    157.7 total=     171.5
+    runner.ipc/delivery/vdom:unmount n=    1 p50=   158.1 p95=   158.1 max=    158.1 total=     158.1
+    runner/start/resumeFollowupSync n=    5 p50=    32.3 p95=    83.1 max=     83.1 total=       158
+    runner/start/resumeArgumentLinkTargetSyncWave n=   10 p50=     1.4 p95=    82.6 max=     82.6 total=     157.8
+    scheduler/scheduler/execute/event n=   78 p50=       0 p95=    11.9 max=     90.8 total=     156.9
+    piece/phase/get.reconcileSource n=    2 p50=   149.9 p95=   149.9 max=    149.9 total=     150.1
+    piece/phase/getDefaultPattern.get(reconcile=true,start=false) n=    1 p50=     150 p95=     150 max=      150 total=       150
+    scheduler/scheduler/execute/event/handlerAction n=    8 p50=     3.9 p95=    88.6 max=     88.6 total=     108.8
+    runner/start/loadPatternByIdentity n=    1 p50=   102.4 p95=   102.4 max=    102.4 total=     102.4
+[Bob] churn / conflict counters:
+    actionRuns=807 commitConflicts=56 commitReverts=173 commitRejected=0 scheduleRunErrors=171 eventLostRaces=0 overlayLateEchoDrops=0 overlayArrivalSweeps=0 overlayIntentChecks=0 overlayIntentsByConsequenceOf=0 overlayIntentEchoBackstops=0 overlayCascadeEchoRetired=0 overlayCascadeEchoFlickers=0
+----- post-test output end -----
+  both users' votes on the same option survive, and a second option tallies independently ... ok (5s)
+lunch poll: two users vote on a shared option ... ok (10s)
+running 1 test from ./packages/patterns/integration/cfc-group-chat-chained-event-gate-multi-runtime.test.ts
+group chat chained-event gates across sessions ...
+  firing the trusted send once the SENDER observes the draft appends the message (the UI-enablement gate, both arms) ...
+------- post-test output -------
+Experimental flag overrides: serverExecution=false
+Experimental flag overrides: serverExecution=false
+Experimental flag overrides: serverExecution=false
+----- post-test output end -----
+  firing the trusted send once the SENDER observes the draft appends the message (the UI-enablement gate, both arms) ... ok (14s)
+  awaitEventConsequences alone is a sufficient gate under ON (the overlay primitive the same-session helpers rely on) ...
+------- post-test output -------
+[chained-event-gate] OFF arm: awaitEventConsequences step self-skips (no overlay; the primitive is ON-only)
+----- post-test output end -----
+  awaitEventConsequences alone is a sufficient gate under ON (the overlay primitive the same-session helpers rely on) ... ok (7ms)
+group chat chained-event gates across sessions ... ok (14s)
+
+ok | 7 passed (27 steps) | 0 failed (43s)
+

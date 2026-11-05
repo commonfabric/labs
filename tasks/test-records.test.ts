@@ -32,7 +32,7 @@ const CONTEXT: RunContext = {
   schema: RECORD_SCHEMA_VERSION,
   line: "context",
   reportId: "01SHIPTEST00000000000000",
-  repo: "commontoolsinc/labs",
+  repo: "commonfabric/labs",
   commit: "d".repeat(40),
   dirty: false,
   branch: "main",
@@ -66,7 +66,7 @@ describe("test-records", () => {
   describe("buildLocalContext()", () => {
     it("returns this repository's commit, branch, and machine facts", async () => {
       const context = await buildLocalContext(Deno.cwd(), () => undefined);
-      expect(context.repo).toBe("commontoolsinc/labs");
+      expect(context.repo).toBe("commonfabric/labs");
       expect(context.commit).toMatch(/^[0-9a-f]{40}$/);
       expect(context.env).toBe("local");
       expect(context.denoVersion).toBe(Deno.version.deno);
@@ -110,6 +110,39 @@ describe("test-records", () => {
       }
     });
 
+    it("stamps the seed of the commit it read, or the one the environment names", async () => {
+      const repo = await Deno.makeTempDir({ prefix: "test-records-seed-" });
+      try {
+        const git = async (...args: string[]) => {
+          const result = await new Deno.Command("git", {
+            args: ["-C", repo, ...args],
+            // Late on the 21st in the Pacific zone and early on the 22nd
+            // in UTC, so reading the wrong zone reads the wrong day.
+            env: { GIT_COMMITTER_DATE: "2026-09-21T23:30:00-07:00" },
+            stdout: "null",
+            stderr: "null",
+          }).output();
+          expect(result.success).toBe(true);
+        };
+        await git("init");
+        await git("config", "user.name", "Probe");
+        await git("config", "user.email", "probe@example.invalid");
+        await Deno.writeTextFile(`${repo}/probe.txt`, "probe\n");
+        await git("add", "probe.txt");
+        await git("commit", "-m", "probe");
+
+        const fromCommit = await buildLocalContext(repo, () => undefined);
+        expect(fromCommit.shuffleSeed).toBe(20260921);
+        const overridden = await buildLocalContext(
+          repo,
+          (name) => name === "CF_TEST_SHUFFLE_SEED" ? "7" : undefined,
+        );
+        expect(overridden.shuffleSeed).toBe(7);
+      } finally {
+        await Deno.remove(repo, { recursive: true });
+      }
+    });
+
     it("falls back to unknown facts outside a repository", async () => {
       const context = await buildLocalContext(root, () => undefined);
       expect(context.commit).toBe("unknown");
@@ -128,6 +161,36 @@ describe("test-records", () => {
         readPersonalKey((name) =>
           name === "CF_TEST_RECORDS_KEY_FILE"
             ? join(root, "absent.json")
+            : undefined
+        ),
+      ).toBeUndefined();
+    });
+
+    it("follows a key moved out of the legacy directory", async () => {
+      const env = (name: string) =>
+        name === "CF_TEST_RECORDS_KEY_FILE"
+          ? join(root, "common-fabric", "test-records-key.json")
+          : undefined;
+      // Nothing at either place: still no key.
+      expect(readPersonalKey(env)).toBeUndefined();
+      await Deno.mkdir(join(root, "commonfabric"), { recursive: true });
+      await Deno.writeTextFile(
+        join(root, "commonfabric", "test-records-key.json"),
+        JSON.stringify(KEY),
+      );
+      expect(readPersonalKey(env)).toEqual(KEY);
+    });
+
+    it("follows no other missing path to the shared directory", async () => {
+      await Deno.mkdir(join(root, "commonfabric"), { recursive: true });
+      await Deno.writeTextFile(
+        join(root, "commonfabric", "test-records-key.json"),
+        JSON.stringify(KEY),
+      );
+      expect(
+        readPersonalKey((name) =>
+          name === "CF_TEST_RECORDS_KEY_FILE"
+            ? join(root, "elsewhere", "test-records-key.json")
             : undefined
         ),
       ).toBeUndefined();

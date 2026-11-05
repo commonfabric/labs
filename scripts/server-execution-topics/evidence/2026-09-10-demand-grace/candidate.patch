@@ -1,0 +1,178 @@
+diff --git a/docs/specs/server-side-execution/serving-loop.md b/docs/specs/server-side-execution/serving-loop.md
+index 068a1836b3..cb31dbb238 100644
+--- a/docs/specs/server-side-execution/serving-loop.md
++++ b/docs/specs/server-side-execution/serving-loop.md
+@@ -325,10 +325,12 @@ on wave budget exhaustion — EITHER trigger (deadline RULED, owner
+ 2026-08-04): (a) a cascade that will not quiesce within the
+ scheduler's pass budget, or (b) the CONSEQUENCE-FLUSH DEADLINE — a
+ wave still running at T_flush commits what is sealed so far. ONE
+-mechanism for both: commit the wave anyway — the in-memory state is
+-a consistent snapshot — count wavesBudgetExhausted, and advance W NOT AT
+-ALL: an exhausted wave's commit carries no watermark movement
+-(`derivedThrough` stays at the current W). Continuation waves carry the
++mechanism for both: close a wave when it has sealed contributions or pending
++effects, count `wavesBudgetExhausted`, and keep W unchanged. A zero-delta
++cycle with no pending effects closes no wave and makes no durable commit,
++but still increments the exhaustion counter. A committed exhausted wave
++contains a consistent sealed snapshot; its `derivedThrough` stays at the
++current W. Continuation waves carry the
+ cascade as dirtiness; W jumps to the top of the pending input batch only
+ at true quiescence. Crash recovery stays sound because the basis index
+ re-marks the truncated dirty frontier (§3b, §6) and memo hits suppress
+@@ -387,9 +389,14 @@ Light waves never reach the deadline and stay single-commit — the
+ zero-delta case, which is why this is a trigger on the EXISTING
+ exhaustion machinery rather than a new commit topology. T_flush is
+ a policy knob (order 50–100 ms), tuned in Phase 6 with the other
+-budgets; `wavesBudgetExhausted` counts both triggers, and the
+-amplification budget's inspection rule treats deadline flushes
+-under load as a legitimate re-baseline reason (testing.md §4).
++budgets. The configured default is 100 ms. `wavesBudgetExhausted` counts
++exhausted cycles, including those with no wave closure or durable commit;
++`waves` counts closures, including vacuous or aborted outcomes. Their ratio
++is not a committed-wave exhaustion fraction. The amplification budget's
++inspection rule treats deadline flushes under load as a reason to inspect
++and, with the required evidence, re-baseline (testing.md §4). The deadline
++allows sealed consequences to become visible under sustained multi-user
++input while full input coverage remains gated on quiescence.
+ 
+ **Sealing order makes the first flush worth flushing**: events and
+ their handler consequences MUST seal ahead of deep demanded
+@@ -1402,9 +1409,13 @@ registry deltas; the label is wall time, review MINOR-3);
+ `demandChanged`, the `session.watch.set`/`.add` notifies, and the warm
+ request's staged-instance captures — the third kept apart so
+ `watchWakes` keeps meaning exactly the session-watch notifies) BEFORE the
+-300 ms-grace coalescing — a burst is several notifies but one demand pass,
+-so these exceed the pass-wake count (review NIT-5); the service (loopback)
+-session's notifies are DROPPED — its tracked-set growth is the serving
++300 ms grace coalesces notifications into one pending callback. Each
++notification advances the demand generation; a notification racing a pass
++can require another pass after it completes. Input-driven cycles reconcile
++demand before a held grace callback fires, so 300 ms is not a universal
++cold-session latency floor. Count notifications, callbacks, passes, wave
++closures, and durable commits separately. The service (loopback) session's
++notifies are DROPPED — its tracked-set growth is the serving
+ graph's own reads, not client demand (review MINOR-4). `demandArrivals`
+ (top-level) the root-level arrival re-arm's count. The `settle` block is
+ SERVER SETTLE per authored input — admission (the feed's admitted-commit
+diff --git a/docs/specs/server-side-execution/testing.md b/docs/specs/server-side-execution/testing.md
+index 44cf02f224..e874208330 100644
+--- a/docs/specs/server-side-execution/testing.md
++++ b/docs/specs/server-side-execution/testing.md
+@@ -14,9 +14,23 @@ implemented as the gates below. Method inherited from the v1 learning run
+ - **Workloads are uninstrumented and byte-identical across arms.** v1's
+   own measurement probes warmed the measured path and understated its
+   cost. Measurement reads counters and JUnit timings from outside.
+-- Arms run adjacent (same load window), ≥3 reps for any latency claim,
+-  no latency quoted above load ~5. Counters and set relations are
+-  load-insensitive and always quotable.
++- Arms run adjacent in alternating order (same load window), ≥3 paired
++  repetitions for any latency claim, with one-minute machine load ≤5
++  throughout every eligible run. Record the workload and server heads,
++  runtime version, server/client/baked-shell posture, fixture shape, cache
++  state, load samples, commands, and identical completion conditions.
++- Counters require a stated boundary. Fixed-work counts and set relations
++  can establish a mechanism under a controlled schedule. Counts affected by
++  deadlines, scheduling, coalescing, or stopping conditions are load-sensitive
++  observations unless a control proves otherwise. In particular,
++  `wavesBudgetExhausted / waves` is not the fraction of committed waves that
++  exhausted: the numerator includes zero-delta cycles, while the denominator
++  counts wave closures, including vacuous or aborted outcomes.
++- Keep uninstrumented end-to-end runs separate from profiling. Name nested
++  and overlapping intervals: demand-pass wall time includes awaited structure
++  loading, so it cannot isolate terminal confirmation or be added to that
++  nested duration. Measure serving-session tracked entities separately from
++  demand counters that exclude the serving principal.
+ - Causation by ablation: a slowdown is "explained" when toggling the
+   suspected mechanism moves the number, not when a narrative fits.
+ - Fresh store per measured run (`rm -rf packages/toolshed/cache` between
+diff --git a/packages/runner/src/executor/space-server.ts b/packages/runner/src/executor/space-server.ts
+index 5d80bc07cc..5a62914806 100644
+--- a/packages/runner/src/executor/space-server.ts
++++ b/packages/runner/src/executor/space-server.ts
+@@ -372,10 +372,10 @@ const demanderPairKey = (identity: ScopeKeyIdentity): string =>
+     identity.sessionId === undefined ? "" : String(identity.sessionId)
+   }`;
+ 
+-/** The demand wake's coalescing grace (stage B): a watch-set change waits
+- * this long before it runs a demand pass, so a burst of watches (a shell's
+- * boot, a creator syncing its new piece) costs one pass and lands after
+- * the creator's own setup commits. Well under the flush deadline. */
++/** Coalesces demand notifications into one pending wake callback. Input
++ * cycles can reconcile demand before it fires, and notifications racing a
++ * pass can require another pass. The grace is separate from the active
++ * wave's consequence-flush deadline. */
+ const DEMAND_WAKE_GRACE_MS = 300;
+ 
+ const neverAPieceRootId = (id: string): boolean =>
+@@ -1475,20 +1475,13 @@ export class SpaceServer implements TransactionSealDestination {
+     }
+   }
+ 
+-  /** A session opened or its demand may have changed: reconsider the
+-   * demanded roots on a cycle SOON. LEVEL-converted with a GRACE
+-   * (fan-out stage B, the arrival re-arm's trigger): the note arms a
+-   * short timer (DEMAND_WAKE_GRACE_MS) and, when it fires, latches a
+-   * cycle — so a note landing MID-CYCLE (no input waiter installed, or a
+-   * demand pass that already read the roots in flight) is not lost (the
+-   * same latch shape as the shadow-flip and structure-retry wakes), and
+-   * a BURST of watch changes (a shell opening dozens of watches at boot;
+-   * a piece's creator syncing what it just created) coalesces into ONE
+-   * demand pass that runs after the burst — the creator's own setup
+-   * commits get a head start over the loop's first structure load and
+-   * derivations of that piece (protocol.md §4: a fresh subscription's
+-   * recompute lands in a LATER derived commit; arrival is later demand).
+-   * Input-driven cycles are unaffected (they run their pass regardless). */
++  /** Reconsiders demanded roots after a session's demand changes.
++   * Notifications share one pending grace callback, which latches a cycle.
++   * Each notification also advances the demand generation, so a pass that
++   * already captured its rows re-arms on completion. One callback can
++   * therefore lead to multiple passes. Input-driven cycles reconcile demand
++   * independently of the timer; the grace is a coalescing interval, not a
++   * minimum wait for every new demand. */
+   noteDemandChanged(reason: "watch" | "push-growth" | "warm" = "watch"): void {
+     // MINOR-1: a fresh demand note — bump the generation so a pass that
+     // already snapshotted its rows re-latches on completion.
+diff --git a/packages/runner/src/executor/stats.ts b/packages/runner/src/executor/stats.ts
+index 017c1f3947..72ce26c500 100644
+--- a/packages/runner/src/executor/stats.ts
++++ b/packages/runner/src/executor/stats.ts
+@@ -33,8 +33,13 @@
+ 
+ export type ServingLoopStats = {
+   activeSpaces: number;
++
++  /** Wave closures, including vacuous and aborted outcomes. */
+   waves: number;
++
++  /** Exhausted cycles, including zero-delta cycles that close no wave. */
+   wavesBudgetExhausted: number;
++
+   supersededWrites: number;
+   authoredSeen: number;
+   effectAcks: number;
+@@ -228,9 +233,10 @@ export type ServingLoopStats = {
+    * the reconcile itself is the O(rows) map work — W1 review MINOR-3);
+    * `pushGrowthWakes` / `watchWakes` count NOTIFIES (the push-time
+    * `demandChanged` and the `session.watch.set` / `.add` notifies) BEFORE
+-   * the 300 ms-grace coalescing — a burst is several notifies but one
+-   * pass, so these exceed the actual demand-pass wake count (W1 review
+-   * NIT-5); the service (loopback) session's notifies are dropped (they
++   * the 300 ms grace coalesces them into a pending callback. A callback
++   * can lead to multiple passes, and input cycles can run a pass before
++   * it fires; notification and pass counts have different boundaries.
++   * The service (loopback) session's notifies are dropped (they
+    * are the serving graph's own reads, MINOR-4). `demandArrivals` is the
+    * pre-existing top-level `servingLoop.demandArrivals` counter (the
+    * root-level arrival re-arm's count), not duplicated here. */
+@@ -300,8 +306,9 @@ export type ServingLoopStats = {
+        * when promoted. */
+       growthWaves?: number;
+ 
+-      /** ms from the growth WAKE to its landing (the demand-wake grace +
+-       * derive); present only when promoted and a wake time was seen. */
++      /** ms from the growth notification to its attributed landing.
++       * Includes intervening scheduling and derivation; input-driven work
++       * can bypass the grace timer. Present when a wake time was seen. */
+       graceMs?: number;
+ 
+       /** performance.now() of the growth landing; present only when

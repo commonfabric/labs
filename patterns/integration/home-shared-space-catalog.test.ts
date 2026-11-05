@@ -1,0 +1,2701 @@
+import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
+import { beforeAll, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
+
+import { createSession, Identity } from "@commonfabric/identity";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  sharedSpaceCollectionViewSchema,
+  sharedSpaceCommandsSchema,
+  sharedSpaceReceiptViewSchema,
+} from "@commonfabric/home-schemas";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+import * as Engine from "@commonfabric/memory/v2/engine";
+import {
+  streamEntriesDocId,
+  type StreamEventsDocValue,
+} from "@commonfabric/memory/v2";
+import { Server } from "@commonfabric/memory/v2/server";
+import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { PiecesController } from "@commonfabric/piece/ops";
+import {
+  ACLManager,
+  type Cell,
+  getDerivedInternalCellLink,
+  getPatternIdentityRef,
+  type IExtendedStorageTransaction,
+  isLink,
+  type MemorySpace,
+  parseLink,
+  Runtime,
+  sendEvent,
+} from "@commonfabric/runner";
+import {
+  markRendererTrustedEvent,
+  readStoredCfcMetadata,
+  reviewedActionProvenance,
+} from "@commonfabric/runner/cfc";
+import {
+  ExecutorHost,
+  type ExecutorHostOptions,
+} from "@commonfabric/runner/executor/host";
+import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import {
+  EmulatedStorageManager,
+  namesInstancesByDefault,
+} from "@commonfabric/runner/storage/cache.deno";
+import { defer } from "@commonfabric/async/defer";
+
+import { createTransactionCommitReceipt } from "../../runtime/runner/src/storage/commit-receipt.ts";
+import { interceptTransaction } from "../../runtime/runner/test/support/intercept-transaction.ts";
+import { writeDeletionTombstone } from "../../runtime/runner/test/memory-v2-test-utils.ts";
+import { refusingServer } from "../../runtime/runner/test/support/refusing-server.ts";
+import {
+  ArrivalLog,
+  awaitAdmitted,
+  awaitEdges,
+} from "../../runtime/runner/test/support/serving-waits.ts";
+
+import type {
+  SharedSpaceCatalog,
+  SharedSpaceMembershipChange,
+  SharedSpaceRegistration,
+  SharedSpaceRemoval,
+  SharedSpaceRetitle,
+} from "../system/shared-space/shared-space-catalog.ts";
+import type {
+  SharedSpaceCollectionView,
+  SharedSpaceInterface,
+} from "../system/shared-space/shared-space-interface.ts";
+import { moduleByteCache } from "./pieces-controller.ts";
+
+const owner = await Identity.fromPassphrase("Home catalog owner");
+const service = await Identity.fromPassphrase("Home catalog service");
+const registration: SharedSpaceRegistration = {
+  space: "did:key:catalog-room",
+  host: "https://room.example",
+  kind: "loom",
+  offer: { from: "did:key:catalog-sender", id: "first" },
+  since: 1000,
+};
+
+interface HomeSurface {
+  sharedSpaces: SharedSpaceInterface;
+  sharedSpaceCatalog: SharedSpaceCatalog;
+  registerSharedSpace: SharedSpaceRegistration;
+  changeSharedSpaceMembership: SharedSpaceMembershipChange;
+  removeSharedSpace: SharedSpaceRemoval;
+  retitleSharedSpace: SharedSpaceRetitle;
+  addSpace: { did: string; name: string };
+  spaces: { did: string; name: string }[];
+  createProfile: { name?: string };
+  profiles: unknown[];
+  retiredProfiles: unknown[];
+  restoreProfile: { profile?: unknown };
+  chatManager: {
+    createGroup: { requestId: string; title: string; members: string[] };
+    openDirect: { requestId: string; counterpart: string };
+    forget: { requestId: string; room: unknown; revision: string };
+    joinRoom: { requestId: string; room: unknown };
+    accept: { requestId: string; room: unknown };
+    offerRoom: { requestId: string; room: unknown; member: string };
+    requests: Record<
+      string,
+      { status: string; reason?: string; entry?: { room: unknown } }
+    >;
+    rooms: { kind: string; counterpart?: string }[];
+    deletedRooms: { kind: string; counterpart?: string }[];
+    direct: Record<string, { room: unknown }>;
+  };
+}
+
+/** Whether this process has compiled Home, which fills `moduleByteCache`. */
+let homeCompiled = false;
+
+/** Compiles Home and its production imports as authored source. */
+async function compileHome(runtime: Runtime, revision?: string) {
+  const program = await resolveLocalProgram(
+    (resolver) => runtime.harness.resolve(resolver),
+    {
+      main: fromFileUrl(new URL("../system/home/home.tsx", import.meta.url)),
+      root: fromFileUrl(new URL("..", import.meta.url)),
+    },
+  );
+  if (revision !== undefined) {
+    for (const file of program.files) {
+      if (file.name === program.main) {
+        file.contents += `\n// Source revision ${revision}\n`;
+      }
+    }
+  }
+  const compiled = await runtime.patternManager.compilePattern(program, {
+    space: owner.did(),
+  });
+  homeCompiled = true;
+  return compiled;
+}
+
+/**
+ * Runs the profile picker in `runtime` over `home`'s profile lists, as Home's
+ * Profile tab does, and returns its result.
+ */
+async function runProfilePicker(runtime: Runtime, home: Cell<HomeSurface>) {
+  const program = await resolveLocalProgram(
+    (resolver) => runtime.harness.resolve(resolver),
+    {
+      main: fromFileUrl(
+        new URL("../system/profile-picker/profile-picker.tsx", import.meta.url),
+      ),
+      root: fromFileUrl(new URL("..", import.meta.url)),
+    },
+  );
+  const compiled = await runtime.patternManager.compilePattern(program, {
+    space: owner.did(),
+  });
+  const picker = runtime.getCell<{ $UI: unknown }>(
+    owner.did(),
+    "home profile picker",
+    compiled.resultSchema,
+  );
+  const tx = runtime.edit();
+  runtime.run(tx, compiled, {
+    profiles: home.key("profiles"),
+    retiredProfiles: home.key("retiredProfiles"),
+    mru: home.key("mru" as keyof HomeSurface),
+    defaultProfile: home.key("defaultProfile" as keyof HomeSurface),
+    legacyDefaultProfileSpace: home.key(
+      "legacyDefaultProfileSpace" as keyof HomeSurface,
+    ),
+    privateInbox: home.key("privateInbox" as keyof HomeSurface),
+    offersSetDefault: true,
+  }, picker);
+  expect((await tx.commit().settled).error).toBeUndefined();
+  return picker;
+}
+
+/**
+ * The text of the view `root` holds, in document order: each element's
+ * children, strings and the views links name, followed as a renderer does.
+ * Props are not followed, so a link to a profile's document is not read.
+ */
+async function renderedText(runtime: Runtime, root: Cell<unknown>) {
+  const text: string[] = [];
+  const visit = async (value: unknown, base: Cell<unknown>): Promise<void> => {
+    if (isLink(value)) {
+      const cell = runtime.getCellFromLink(parseLink(value, base));
+      await cell.pull();
+      return visit(cell.getRaw(), cell);
+    }
+    if (typeof value === "string") text.push(value);
+    else if (Array.isArray(value)) {
+      for (const each of value) await visit(each, base);
+    } else if (isObjectNotArray(value) && "children" in value) {
+      await visit(value.children, base);
+    }
+  };
+  await root.pull();
+  await visit(root.getRaw(), root);
+  return text;
+}
+
+/** Opens the stored Home root, retaining its constructor-owned cells. */
+async function openHome(runtime: Runtime, create: boolean) {
+  const compiled = await compileHome(runtime);
+  const result = runtime.getCell<HomeSurface>(
+    owner.did(),
+    "catalog-home",
+    compiled.resultSchema,
+  );
+  if (create) {
+    const root = runtime.getSpaceCell(owner.did());
+    await root.sync();
+    const tx = runtime.edit();
+    root.withTx(tx).key("defaultPattern").set(result);
+    runtime.run(tx, compiled, {}, result);
+    expect((await tx.commit().settled).error).toBeUndefined();
+  } else {
+    await result.sync();
+    expect(await runtime.start(result)).toBe(true);
+  }
+  return result;
+}
+
+/** Reads the actual owned storage selected by Home's named manifest entry. */
+async function backingCatalog(runtime: Runtime, home: Cell<HomeSurface>) {
+  const manifest = home.getMetaRaw("internal") as {
+    partialCause: string;
+    kind?: "computed";
+  }[];
+  const descriptor = manifest.find((entry) =>
+    entry.partialCause === "sharedSpaceCatalog"
+  );
+  expect(descriptor).toBeDefined();
+  expect(descriptor!.kind).toBeUndefined();
+  const cell = runtime.getCellFromLink(
+    getDerivedInternalCellLink(home, descriptor!),
+  )
+    .asSchema<Record<string, any>>({
+      type: "object",
+      additionalProperties: true,
+    });
+  await cell.sync();
+  expect(cell.getRaw()).toMatchObject({ entries: {}, offers: {} });
+  return cell;
+}
+
+/** Awaits this handling's own settlement and reads its ordinary receipt. */
+async function invoke<T>(
+  runtime: Runtime,
+  stream: Cell<T>,
+  event: unknown,
+  id: string,
+  onCommit?: () => void,
+) {
+  const tx = await new Promise<IExtendedStorageTransaction>((resolve) => {
+    sendEvent(stream, event as T, (tx) => {
+      onCommit?.();
+      resolve(tx);
+    }, {
+      eventId: id,
+      session: "catalog-test",
+    });
+  });
+  const status = tx.status();
+  if (
+    status.status === "error" &&
+    !("precondition" in status.error &&
+      status.error.precondition === "receipt-exists")
+  ) {
+    throw "reason" in status.error && status.error.reason !== undefined
+      ? status.error.reason
+      : status.error;
+  }
+  expect(tx.handlingReceiptLink).toBeDefined();
+  const receipt = runtime.getCellFromLink(tx.handlingReceiptLink!);
+  return await receipt.pull();
+}
+
+/** Observes a failed handler's generic terminal result without a value receipt. */
+async function rejectInvocation<T>(
+  runtime: Runtime,
+  stream: Cell<T>,
+  event: unknown,
+  server: Server,
+  serving: boolean,
+  message = "",
+) {
+  if (!serving) {
+    await expect(invoke(runtime, stream, event, crypto.randomUUID())).rejects
+      .toMatchObject({ message: expect.stringContaining(message) });
+    return;
+  }
+  const target = stream.resolveAsCell().getAsNormalizedFullLink();
+  const engine = await server.engineForSpace(target.space);
+  const sidecarId = streamEntriesDocId(target);
+  const entries = () =>
+    (Engine.read(engine, { id: sidecarId })?.value as
+      | StreamEventsDocValue
+      | undefined)?.entries ?? [];
+  const index = entries().length;
+  sendEvent(stream, event as T);
+  await awaitAdmitted(server, () => {
+    const entry = entries()[index];
+    return entry?.consequenced === true && typeof entry.error === "string";
+  });
+  expect(entries()[index].error).toContain(message);
+}
+
+/** Records tentative handler receipts and commit verdicts without extra writes. */
+function watchHandlingCommits(runtime: Runtime) {
+  const outcomes = new ArrivalLog<{ eventId: string; value: unknown }>();
+  const verdicts = new ArrivalLog<
+    Awaited<ReturnType<IExtendedStorageTransaction["commit"]>["verdict"]>
+  >();
+  const edit = runtime.edit.bind(runtime);
+  const wrapped = stub(runtime, "edit", (...args) => {
+    const tx = interceptTransaction(edit(...args), (method, _args, proceed) => {
+      if (!tx.dispatchedEventId || !tx.handlingReceiptLink) return proceed();
+      // The receipt is read before the transaction is prepared for commit: a
+      // read after that invalidates a prepared transaction's flow checks.
+      if (method === "prepareForCommit") {
+        outcomes.record({
+          eventId: tx.dispatchedEventId,
+          value: runtime.getCellFromLink(tx.handlingReceiptLink).withTx(tx)
+            .getRaw(),
+        });
+        return proceed();
+      }
+      if (method !== "commit") return proceed();
+      const receipt = proceed() as ReturnType<
+        IExtendedStorageTransaction["commit"]
+      >;
+      return createTransactionCommitReceipt(
+        receipt.settled,
+        receipt.verdict.then((result) => {
+          verdicts.record(result);
+          return result;
+        }),
+        receipt,
+      );
+    });
+    return tx;
+  });
+  return { outcomes, verdicts, [Symbol.dispose]: () => wrapped.restore() };
+}
+
+/**
+ * Independent replicas against an ACL-enforcing memory server. `connect`
+ * wraps the server once, and every runtime connects through what it returns,
+ * the serving runtimes `ExecutorHost` creates included.
+ */
+async function withHome(
+  serverExecution: boolean,
+  body: (
+    runtime: Runtime,
+    home: Cell<HomeSurface>,
+    peer: (
+      serverExecution?: boolean,
+    ) => Promise<{ runtime: Runtime; home: Cell<HomeSurface> }>,
+    server: Server,
+  ) => Promise<void>,
+  decorateWaveCommitSink?: ExecutorHostOptions["decorateWaveCommitSink"],
+  connect: (server: Server) => Server = (server) => server,
+) {
+  const server = new Server({
+    namesInstances: namesInstancesByDefault,
+    acl: { mode: "enforce", delegatingDids: [service.did()] },
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
+    sessionOpenAuth: { audience: "did:key:home-catalog-memory" },
+    subscriptionRefreshDelayMs: 0,
+  });
+  const reachable = connect(server);
+  const clients: {
+    runtime: Runtime;
+    storage: EmulatedStorageManager;
+    cancel?: () => void;
+  }[] = [];
+  let executor: ExecutorHost | undefined;
+  const fresh = (executeOnServer = serverExecution) => {
+    const storage = EmulatedStorageManager.connectTo(reachable, {
+      as: owner,
+    });
+    const runtime = new Runtime({
+      moduleByteCache,
+      apiUrl: new URL("https://home.example"),
+      storageManager: storage,
+      experimental: { serverExecution: executeOnServer },
+    });
+    const client = {
+      runtime,
+      storage,
+      cancel: undefined as undefined | (() => void),
+    };
+    clients.push(client);
+    return client;
+  };
+  try {
+    const first = fresh();
+    await new ACLManager(first.runtime, owner.did()).set(owner.did(), "OWNER");
+    const home = await openHome(first.runtime, true);
+    first.cancel = home.key("sharedSpaceCatalog").sink(() => {});
+    await first.runtime.idle();
+    if (serverExecution) {
+      executor = new ExecutorHost({
+        server,
+        decorateWaveCommitSink,
+        serviceIdentity: service.did(),
+        createRuntime: (space) => {
+          const storage = EmulatedStorageManager.connectTo(reachable, {
+            as: service,
+            servingHomeSpace: space,
+          });
+          const runtime = new Runtime({
+            moduleByteCache,
+            apiUrl: new URL("https://home.example"),
+            storageManager: storage,
+            servingPosture: true,
+            experimental: { serverExecution: true },
+          });
+          return Promise.resolve({
+            runtime,
+            dispose: async () => {
+              await runtime.dispose();
+              await storage.close();
+            },
+          });
+        },
+        policy: { flushDeadlineMs: 5000, idleParkMs: 600000 },
+      });
+    }
+    await body(first.runtime, home, async (executeOnServer) => {
+      const client = fresh(executeOnServer);
+      const home = await openHome(client.runtime, false);
+      client.cancel = home.key("sharedSpaceCatalog").sink(() => {});
+      await client.runtime.idle();
+      return { runtime: client.runtime, home };
+    }, server);
+  } finally {
+    await executor?.close();
+    await server.flushSessions();
+    for (const { runtime, storage, cancel } of clients) {
+      cancel?.();
+      await runtime.idle();
+      await runtime.storageManager.synced();
+      await runtime.patternManager.flushCompileCacheWrites();
+      await runtime.dispose();
+      await storage.close();
+    }
+    await server.close();
+  }
+}
+
+/** The label of the owner's own space, as a cross-space read carries it. */
+const OWNER_LABEL = {
+  type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+  owner: owner.did(),
+} as const;
+
+/**
+ * Sends `event` to `stream` as a user's gesture on the reviewed `action` of
+ * `surface`, and waits for this runtime to go idle.
+ */
+async function sendReviewed(
+  runtime: Runtime,
+  stream: Cell<unknown>,
+  event: Record<string, unknown>,
+  surface: string,
+  action: string,
+) {
+  const gesture = {
+    type: "click",
+    ...event,
+    provenance: reviewedActionProvenance("dom", { surface, action }),
+  };
+  markRendererTrustedEvent(gesture);
+  const { error } = await runtime.editWithRetry((tx) => {
+    stream.withTx(tx).send(gesture);
+  });
+  expect(error).toBeUndefined();
+  await runtime.idle();
+}
+
+/**
+ * The paths of `link`'s document whose stored label carries a
+ * `PersonalSpace` atom.
+ */
+function personalSpacePathsOf(
+  runtime: Runtime,
+  link: Parameters<typeof readStoredCfcMetadata>[1],
+): string[][] {
+  const tx = runtime.edit();
+  try {
+    return (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [])
+      .filter((entry) =>
+        (entry.label.confidentiality ?? []).some((atom) =>
+          (atom as { type?: unknown }).type === OWNER_LABEL.type
+        )
+      )
+      .map((entry) => [...entry.path]);
+  } finally {
+    tx.abort("label read");
+  }
+}
+
+/**
+ * Stamps the title of `space`'s entry in Home's catalog storage with the
+ * owner's `PersonalSpace` label, as a writer outside Home can: a transaction
+ * that reads a value so labeled, in a space of its own, and writes the
+ * catalog.
+ */
+async function stampCatalogTitle(
+  runtime: Runtime,
+  catalog: Cell<Record<string, any>>,
+  space: string,
+) {
+  const outside = await runtime.createSpace({ grants: {} });
+  const offers = runtime.getCell<string>(outside, "labeled offers", {
+    type: "string",
+    ifc: { confidentiality: [OWNER_LABEL] },
+  });
+  const seed = runtime.edit();
+  offers.withTx(seed).set("offer");
+  runtime.prepareTxForCommit(seed);
+  expect((await seed.commit().settled).error).toBeUndefined();
+  const stamp = runtime.edit();
+  offers.withTx(stamp).get();
+  catalog.withTx(stamp).key("entries").key(space).key("title").set("Stamped");
+  runtime.prepareTxForCommit(stamp);
+  expect((await stamp.commit().settled).error).toBeUndefined();
+}
+
+/**
+ * For each document in Home's space holding a `sessionProfile` slot, as the
+ * FabriChat manager's arguments do, the paths covering that slot whose stored
+ * label carries a `PersonalSpace` atom: the slot and anything under it, the
+ * document's root, and a wildcard over its top-level keys.
+ */
+async function sessionProfileStampsIn(runtime: Runtime) {
+  const controller = new PiecesController(
+    createSession({ identity: owner, spaceDid: owner.did() }),
+    runtime,
+  );
+  const stamps: string[][][] = [];
+  for (const id of await controller.listEntityIds() ?? []) {
+    const holder = runtime.getCellFromLink({
+      space: owner.did(),
+      id: id as `${string}:${string}`,
+      path: [],
+    });
+    const value = holder.getRaw();
+    if (!isObjectNotArray(value) || !("sessionProfile" in value)) continue;
+    stamps.push(
+      personalSpacePathsOf(runtime, holder.getAsNormalizedFullLink())
+        .filter((path) =>
+          path.length === 0 || path[0] === "sessionProfile" || path[0] === "*"
+        ),
+    );
+  }
+  return stamps;
+}
+
+/**
+ * Opens a Home once, in a process that has not compiled one yet. The first
+ * compile of Home in a process takes about forty seconds in CI, and every
+ * later one reads its modules from `moduleByteCache`, so a hook that calls
+ * this keeps that first compile out of the cases after it.
+ */
+async function compileHomeOnce() {
+  if (homeCompiled) return;
+  await withHome(false, async () => {});
+}
+
+/** What {@link withChatManager} hands its body. */
+interface ChatManagerCase {
+  runtime: Runtime;
+  home: Cell<HomeSurface>;
+  manager: Cell<HomeSurface["chatManager"]>;
+
+  /**
+   * Starts a chat through the manager's `stream` as the user's reviewed
+   * gesture, expects the request `done`, and returns the room it names.
+   */
+  start(
+    stream: "openDirect" | "createGroup",
+    requestId: string,
+    event: Record<string, unknown>,
+  ): Promise<Cell<unknown>>;
+
+  /** Forgets `room` at its catalog entry's revision, and expects `done`. */
+  forget(requestId: string, room: Cell<unknown>): Promise<void>;
+
+  /** Deletes each of `spaces` on the memory server. */
+  deleteSpaces(spaces: string[]): Promise<void>;
+
+  /** Has Home's catalog mark each of `spaces` deleted. */
+  markDeleted(spaces: string[]): Promise<void>;
+
+  /** Has the memory server refuse each of `spaces`, which go on existing. */
+  refuseSpaces(spaces: string[]): void;
+}
+
+/**
+ * A Home whose owner has a profile, against a memory server that refuses a
+ * space once the case deletes it, for the chat manager's deleted-room cases.
+ */
+async function withChatManager(
+  serving: boolean,
+  body: (chats: ChatManagerCase) => Promise<void>,
+) {
+  let refuse: ReturnType<typeof refusingServer>["refuse"] | undefined;
+  await withHome(
+    serving,
+    async (runtime, home, _peer, server) => {
+      await sendReviewed(
+        runtime,
+        home.key("createProfile"),
+        { name: "Ada" },
+        "ProfileCreateSurface",
+        "CreateProfile",
+      );
+      // A start needs the profile, which a served Home creates after the
+      // gesture's commit.
+      await waitForCellValue<unknown[]>(
+        runtime,
+        home.key("profiles"),
+        (value) => (value?.length ?? 0) > 0,
+        { stuckLabel: "the profile" },
+      );
+      const manager = home.key("chatManager");
+      const commands = home.key("sharedSpaces").key("commands")
+        .asSchema(sharedSpaceCommandsSchema);
+      await body({
+        runtime,
+        home,
+        manager,
+        async start(stream, requestId, event) {
+          await sendReviewed(
+            runtime,
+            manager.key(stream),
+            { requestId, ...event },
+            "ChatStartSurface",
+            "ChatStart",
+          );
+          const outcome = await waitForCellValue<{ status: string }>(
+            runtime,
+            manager.key("requests").key(requestId),
+            (value) => value !== undefined && value.status !== "pending",
+            { stuckLabel: `the ${requestId} request` },
+          );
+          expect(outcome.status).toBe("done");
+          return manager.key("requests").key(requestId).key("entry")
+            .key("room").resolveAsCell();
+        },
+        async forget(requestId, room) {
+          const { entries } = await home.key("sharedSpaceCatalog").pull();
+          // `invoke` returns once the handling has committed, a served one
+          // included; the request's status alone can come from the client's
+          // speculative run first. A served `forget` that runs after its
+          // room's space is deleted cannot load the room, and holds every
+          // later event in Home's space until the server's 60-second budget
+          // for a failed delivery runs out.
+          await invoke(runtime, manager.key("forget"), {
+            requestId,
+            room,
+            revision: entries[room.space].revision,
+          }, requestId);
+          const outcome = await waitForCellValue<{ status: string }>(
+            runtime,
+            manager.key("requests").key(requestId),
+            (value) => value !== undefined && value.status !== "pending",
+            { stuckLabel: `the ${requestId} request` },
+          );
+          expect(outcome.status).toBe("done");
+        },
+        async deleteSpaces(spaces) {
+          // Each space's deletion tombstone is written straight into its
+          // engine, and the stand-in revokes the sessions every runtime holds
+          // on it, a serving runtime's included, as a deletion commit does,
+          // so the manager hears of each deletion at once.
+          for (const space of spaces) {
+            writeDeletionTombstone(
+              await server.engineForSpace(space),
+              space,
+              owner.did(),
+            );
+          }
+          for (const space of spaces) refuse!(space, "deleted");
+        },
+        refuseSpaces(spaces) {
+          for (const space of spaces) refuse!(space, "unauthorized");
+        },
+        async markDeleted(spaces) {
+          const { entries } = await home.key("sharedSpaceCatalog").pull();
+          for (const space of spaces) {
+            await invoke(runtime, commands.key("markDeleted"), {
+              space,
+              expectedRevision: entries[space].revision,
+            }, `mark ${space}`);
+          }
+          await waitForCellValue<Record<string, { state: string }>>(
+            runtime,
+            home.key("sharedSpaceCatalog").key("entries"),
+            (value) =>
+              spaces.every((space) => value?.[space]?.state === "deleted"),
+            { stuckLabel: "the entries marked deleted" },
+          );
+        },
+      });
+    },
+    undefined,
+    (server) => {
+      const refusing = refusingServer(server);
+      refuse = refusing.refuse;
+      return refusing.server as Server;
+    },
+  );
+}
+
+describe("Home catalog retitles", () => {
+  it("answers a retitle's outcome and keeps the entry's revision", async () => {
+    await withHome(true, async (_runtime, home, fresh) => {
+      const client = await fresh(false);
+      const catalog = client.home.key("sharedSpaceCatalog");
+      const retitle = client.home.key("retitleSharedSpace");
+      await invoke(
+        client.runtime,
+        client.home.key("registerSharedSpace"),
+        registration,
+        "register-for-retitle",
+      );
+      const before = (await catalog.pull()).entries[registration.space];
+
+      expect(
+        await invoke(client.runtime, retitle, {
+          space: registration.space,
+          title: "Renamed through the root",
+        }, "retitle"),
+      ).toEqual({ status: "retitled", space: registration.space });
+      expect(
+        await invoke(client.runtime, retitle, {
+          space: registration.space,
+          title: "Renamed through the root",
+        }, "retitle-again"),
+      ).toEqual({ status: "unchanged", space: registration.space });
+      expect(
+        await invoke(client.runtime, retitle, {
+          space: "did:key:catalog-retitle-unlisted",
+          title: "Nowhere",
+        }, "retitle-unlisted"),
+      ).toEqual({ status: "conflict", reason: "missing" });
+
+      // A host reaches the same stream through its command projection.
+      const commands = client.home.key("sharedSpaces").key("commands")
+        .asSchema(sharedSpaceCommandsSchema);
+      expect((await commands.pull()).retitle).toBeDefined();
+      expect(
+        await invoke(
+          client.runtime,
+          commands.key("retitle"),
+          { space: registration.space, title: "Renamed by the host" },
+          "retitle-projected",
+        ),
+      ).toEqual({ status: "retitled", space: registration.space });
+
+      const after = (await home.key("sharedSpaceCatalog").pull())
+        .entries[registration.space];
+      expect(after).toEqual({ ...before, title: "Renamed by the host" });
+      expect(
+        Object.keys((await home.key("sharedSpaceCatalog").pull()).entries),
+      ).toEqual([registration.space]);
+    });
+  });
+
+  it("refuses a malformed retitle and leaves the title", async () => {
+    await withHome(false, async (runtime, home) => {
+      await invoke(
+        runtime,
+        home.key("registerSharedSpace"),
+        registration,
+        "register-for-malformed-retitle",
+      );
+      const before = (await home.key("sharedSpaceCatalog").pull())
+        .entries[registration.space];
+
+      await expect(
+        invoke(runtime, home.key("retitleSharedSpace"), {
+          space: registration.space,
+          title: "x".repeat(201),
+        }, "retitle-too-long"),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("Invalid shared-space retitle"),
+      });
+      expect(
+        (await home.key("sharedSpaceCatalog").pull())
+          .entries[registration.space],
+      ).toEqual(before);
+    });
+  });
+});
+
+describe("Home catalog revisions across execution modes", () => {
+  it("keeps an old revision stale when an invocation ID is admitted again", async () => {
+    await withHome(true, async (runtime, home, fresh) => {
+      const client = await fresh(false);
+      const catalog = client.home.key("sharedSpaceCatalog");
+      const membership = client.home.key("changeSharedSpaceMembership");
+      await invoke(
+        client.runtime,
+        client.home.key("registerSharedSpace"),
+        registration,
+        "register",
+      );
+      const registered = (await catalog.pull()).entries[registration.space]
+        .revision;
+      const archive = {
+        space: registration.space,
+        id: "old-archive",
+        state: "archived",
+        expectedRevision: registered,
+      };
+      expect(
+        await invoke(client.runtime, membership, archive, "reused-event"),
+      ).toEqual({
+        status: "applied",
+        space: registration.space,
+        id: archive.id,
+      });
+      const oldRevision = (await catalog.pull()).entries[registration.space]
+        .revision;
+      const restore = {
+        space: registration.space,
+        id: "restore",
+        state: "saved",
+        expectedRevision: oldRevision,
+      };
+      await invoke(client.runtime, membership, restore, "restore-event");
+      const restored = (await catalog.pull()).entries[registration.space]
+        .revision;
+      expect(restored).not.toBe(oldRevision);
+
+      // Serving execution can admit an ID first handled on a client. Both write
+      // one receipt, so it stays first-writer-wins, and the handler's writes
+      // still commit.
+      const servedMembership = home.key("changeSharedSpaceMembership");
+      expect(
+        await invoke(runtime, servedMembership, {
+          ...archive,
+          id: "new-archive",
+          expectedRevision: restored,
+        }, "reused-event"),
+      ).toEqual({
+        status: "applied",
+        space: registration.space,
+        id: archive.id,
+      });
+      const archived = (await home.key("sharedSpaceCatalog").pull())
+        .entries[registration.space];
+      expect(archived.state).toBe("archived");
+      expect(archived.revision).not.toBe(oldRevision);
+      expect(archived.revision).not.toBe(restored);
+      expect(archived.revision.length).toBeLessThanOrEqual(320);
+      expect(
+        await invoke(runtime, servedMembership, {
+          ...restore,
+          id: "stale-choice",
+        }, "stale-choice-event"),
+      ).toEqual({ status: "conflict", reason: "revision" });
+      expect(
+        (await home.key("sharedSpaceCatalog").pull())
+          .entries[registration.space].state,
+      ).toBe("archived");
+    });
+  });
+});
+
+describe("Home catalog speculative revisions", () => {
+  it("refuses a choice based on an optimistic transition that loses to a peer", async () => {
+    await withHome(false, async (runtime, home, fresh, server) => {
+      await invoke(
+        runtime,
+        home.key("registerSharedSpace"),
+        registration,
+        "seed",
+      );
+      const catalog = await backingCatalog(runtime, home);
+      const original = (await home.key("sharedSpaceCatalog").pull())
+        .entries[registration.space].revision;
+      const peer = await fresh();
+      server.options.subscriptionRefreshDelayMs = "manual";
+      const pending: Promise<unknown>[] = [];
+      try {
+        pending.push(invoke(
+          peer.runtime,
+          peer.home.key("changeSharedSpaceMembership"),
+          {
+            space: registration.space,
+            id: "peer-choice",
+            expectedRevision: original,
+            state: "saved",
+          },
+          "peer-choice",
+        ));
+        const engine = await server.engineForSpace(owner.did());
+        const id = catalog.getAsNormalizedFullLink().id;
+        await awaitAdmitted(server, () => {
+          const stored = Engine.read(engine, { id })
+            ?.value as unknown as SharedSpaceCatalog;
+          return stored.entries[registration.space].revision !== original;
+        });
+        const peerEntry =
+          (Engine.read(engine, { id })!.value as unknown as SharedSpaceCatalog)
+            .entries[registration.space];
+        expect(peerEntry.lastAction).toEqual({
+          id: "peer-choice",
+          expectedRevision: original,
+          state: "saved",
+        });
+        expect(catalog.key("entries", registration.space, "revision").getRaw())
+          .toBe(original);
+        using watch = watchHandlingCommits(runtime);
+        const first = invoke(runtime, home.key("changeSharedSpaceMembership"), {
+          space: registration.space,
+          id: "my-archive",
+          expectedRevision: original,
+          state: "archived",
+        }, "my-archive");
+        pending.push(first);
+        await watch.outcomes.reached(1);
+        const speculative = catalog.key(
+          "entries",
+          registration.space,
+          "revision",
+        ).getRaw();
+        expect(speculative).not.toBe(original);
+        const second = invoke(
+          runtime,
+          home.key("changeSharedSpaceMembership"),
+          {
+            space: registration.space,
+            id: "my-restore",
+            expectedRevision: speculative,
+            state: "saved",
+          },
+          "my-restore",
+        );
+        pending.push(second);
+        await watch.outcomes.reached(2);
+        expect(watch.outcomes.entries.slice(0, 2).map((entry) => entry.value))
+          .toEqual([
+            { status: "applied", space: registration.space, id: "my-archive" },
+            { status: "applied", space: registration.space, id: "my-restore" },
+          ]);
+        await watch.verdicts.matching((verdict) => verdict.error !== undefined);
+        server.options.subscriptionRefreshDelayMs = 0;
+        await server.flushSessions();
+        const results = await Promise.all([first, second]);
+        await runtime.idle();
+        const final = catalog.getRaw() as SharedSpaceCatalog;
+        expect(final.entries[registration.space]).toEqual(peerEntry);
+        expect(results).toEqual([
+          { status: "conflict", reason: "revision" },
+          { status: "conflict", reason: "revision" },
+        ]);
+      } finally {
+        server.options.subscriptionRefreshDelayMs = 0;
+        await server.flushSessions();
+        await Promise.allSettled(pending);
+      }
+    });
+  });
+});
+
+describe("Home shared-space catalog", () => {
+  for (const serving of [false, true]) {
+    it(`writes shared records through command bindings without reading Home's private collection with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home, fresh, server) => {
+        expect(runtime.cfcEnforcementMode).toBe("enforce-strict");
+        // The control supplies a synthetic privately labeled observation
+        // beside Home's real command streams. Reading it exercises the write
+        // boundary; the real Home collection projection is asserted below.
+        const viewSchema = {
+          type: "object",
+          additionalProperties: true,
+          ifc: {
+            confidentiality: [{
+              type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+              owner: owner.did(),
+            }],
+          },
+        } as const;
+        const privateView = runtime.getCell(
+          owner.did(),
+          "private collection observation",
+          viewSchema,
+        );
+        const observation = await home.key("sharedSpaces").key("view")
+          .asSchema(sharedSpaceCollectionViewSchema).pull();
+        expect(observation).toMatchObject({
+          status: "ready",
+          saved: [],
+          archived: [],
+        });
+        const homeTx = runtime.edit();
+        privateView.withTx(homeTx).set({
+          status: "ready",
+          entries: {},
+          saved: [],
+          archived: [],
+          other: [],
+          byKind: {},
+        });
+        runtime.prepareTxForCommit(homeTx);
+        expect((await homeTx.commit().settled).error).toBeUndefined();
+        const serviceTx = runtime.edit();
+        const service = runtime.getCell(
+          owner.did(),
+          "Home collection interface",
+          undefined,
+          serviceTx,
+        );
+        service.set({
+          view: privateView,
+          commands: home.key("sharedSpaces").key("commands").asSchema(
+            sharedSpaceCommandsSchema,
+          ),
+        });
+        runtime.prepareTxForCommit(serviceTx);
+        expect((await serviceTx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        const social = await runtime.createSpace({});
+        const program = await resolveLocalProgram(
+          (resolver) => runtime.harness.resolve(resolver),
+          {
+            main: fromFileUrl(
+              new URL(
+                "./fixtures/home-catalog-commands/main.tsx",
+                import.meta.url,
+              ),
+            ),
+            root: fromFileUrl(new URL("..", import.meta.url)),
+          },
+        );
+        const compiled = await runtime.patternManager.compilePattern(program, {
+          space: social,
+        });
+        const tx = runtime.edit();
+        const client = runtime.run(tx, compiled, {
+          commands: service.key("commands"),
+          messages: [],
+        }, runtime.getCell(social, "social catalog consumer", undefined, tx));
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        await client.pull();
+        await invoke(runtime, client.key("send"), {
+          message: "A public social-space write",
+          registration: {
+            space: social,
+            host: "https://home.example",
+            kind: "loom",
+          },
+        }, "social-send");
+        await runtime.idle();
+        expect(await client.key("messages").pull()).toEqual([
+          "A public social-space write",
+        ]);
+        const viewCell = home.key("sharedSpaces").key("view")
+          .asSchema(sharedSpaceCollectionViewSchema);
+        if (serving) {
+          // Served, Home's `register` commits in Home's space apart from the
+          // social-space event, whose consequence retires the local preview
+          // of that write before it lands. The wait is on the record itself,
+          // so what is asserted below is the served write, not the preview.
+          await waitForCellValue<SharedSpaceCollectionView>(
+            runtime,
+            viewCell,
+            (value) =>
+              value?.status === "ready" &&
+              value.saved.some((entry) => entry.space === social),
+            { stuckLabel: "the social space saved in Home's collection view" },
+          );
+        }
+        const view = await viewCell.pull();
+        expect(view).toMatchObject({
+          status: "ready",
+          saved: [{ space: social }],
+        });
+        expect(
+          await home.key("sharedSpaces").key("receipts")
+            .asSchema(sharedSpaceReceiptViewSchema).pull(),
+        )
+          .toMatchObject({ status: "ready", offers: {} });
+        const peer = await fresh();
+        expect(
+          await peer.runtime.getCellFromLink(client.getAsNormalizedFullLink())
+            .key("messages").pull(),
+        )
+          .toEqual(["A public social-space write"]);
+        const discoveredPattern = await runtime.patternManager.compilePattern({
+          ...program,
+          mainExport: "DiscoveredConsumer",
+        }, { space: social });
+        const discoveredTx = runtime.edit();
+        const discovered = runtime.run(
+          discoveredTx,
+          discoveredPattern,
+          { messages: [] },
+          runtime.getCell(
+            social,
+            "consumer discovering Home",
+            undefined,
+            discoveredTx,
+          ),
+        );
+        runtime.prepareTxForCommit(discoveredTx);
+        expect((await discoveredTx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        await discovered.pull();
+        await invoke(runtime, discovered.key("send"), {
+          message: "A write through discovered Home commands",
+          registration: {
+            space: social,
+            host: "https://home.example",
+            kind: "loom",
+          },
+        }, "discovered-send");
+        expect(await discovered.key("messages").pull()).toEqual([
+          "A write through discovered Home commands",
+        ]);
+        const observed = await runtime.patternManager.compilePattern({
+          ...program,
+          mainExport: "ObservingConsumer",
+        }, { space: social });
+        const controlTx = runtime.edit();
+        const control = runtime.run(
+          controlTx,
+          observed,
+          {
+            commands: service.key("commands"),
+            observation: privateView,
+            messages: [],
+          },
+          runtime.getCell(
+            social,
+            "consumer with private observation",
+            undefined,
+            controlTx,
+          ),
+        );
+        runtime.prepareTxForCommit(controlTx);
+        expect((await controlTx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        await control.pull();
+        await rejectInvocation(
+          runtime,
+          control.key("send"),
+          {
+            message: "A write with private observations",
+            registration: {
+              space: social,
+              host: "https://home.example",
+              kind: "loom",
+            },
+          },
+          server,
+          serving,
+          "writer-fit confidentiality misfit",
+        );
+        expect(await control.key("messages").pull()).toEqual([]);
+      });
+    });
+  }
+
+  for (
+    const scenario of ["existing", "rejected-predecessor", "first-registration"]
+  ) {
+    it(`settles ${scenario} against withheld peer writes with client execution`, async () => {
+      await withHome(false, async (runtime, home, fresh, server) => {
+        if (scenario !== "first-registration") {
+          await invoke(
+            runtime,
+            home.key("registerSharedSpace"),
+            registration,
+            "seed",
+          );
+        }
+        const catalog = await backingCatalog(runtime, home);
+        const before = await home.key("sharedSpaceCatalog").pull();
+        const originalRevision = before.entries[registration.space]?.revision;
+        const peer = await fresh();
+        const peerCatalog = await backingCatalog(peer.runtime, peer.home);
+        server.options.subscriptionRefreshDelayMs = "manual";
+        const tx = peer.runtime.edit();
+        const target = peerCatalog.withTx(tx);
+        if (scenario === "first-registration") {
+          target.key("entries", "did:key:peer-room").set({
+            space: "did:key:peer-room",
+            host: registration.host,
+            kind: "fabrichat-room",
+            state: "saved",
+            revision: "peer-revision",
+          });
+          target.key("offers", JSON.stringify([owner.did(), "peer-offer"])).set(
+            {
+              from: owner.did(),
+              id: "peer-offer",
+              space: "did:key:peer-room",
+              host: registration.host,
+              kind: "fabrichat-room",
+            },
+          );
+        } else {
+          const state = scenario === "existing" ? "archived" : "saved";
+          target.key("entries", registration.space, "state").set(state);
+          target.key("entries", registration.space, "revision").set(
+            "peer-revision",
+          );
+          target.key("entries", registration.space, "lastAction").set({
+            id: "peer-choice",
+            expectedRevision: originalRevision,
+            state,
+          });
+        }
+        expect((await tx.commit().verdict).error)
+          .toBeUndefined();
+        expect(catalog.getRaw()).toEqual(before);
+        using watch = watchHandlingCommits(runtime);
+        const completed = new ArrivalLog<unknown>();
+        const invokeAndRecord = (id: string) => {
+          const pending = scenario === "rejected-predecessor"
+            ? invoke(runtime, home.key("changeSharedSpaceMembership"), {
+              space: registration.space,
+              id: "my-archive",
+              state: "archived",
+              expectedRevision: originalRevision,
+            }, id)
+            : invoke(
+              runtime,
+              home.key("registerSharedSpace"),
+              registration,
+              id,
+            );
+          return pending.then((result) => {
+            completed.record(result);
+            return result;
+          });
+        };
+        const first = invokeAndRecord("first-attempt");
+        const second = scenario === "rejected-predecessor"
+          ? invokeAndRecord("second-attempt")
+          : undefined;
+        try {
+          await watch.outcomes.reached(second ? 2 : 1);
+          if (second) {
+            expect(
+              watch.outcomes.entries.slice(0, 2).map((entry) => entry.value),
+            )
+              .toEqual([
+                {
+                  status: "applied",
+                  space: registration.space,
+                  id: "my-archive",
+                },
+                {
+                  status: "confirmed",
+                  space: registration.space,
+                  id: "my-archive",
+                },
+              ]);
+          }
+          await watch.verdicts.matching((verdict) =>
+            verdict.error !== undefined
+          );
+          expect(completed.entries).toHaveLength(0);
+          server.options.subscriptionRefreshDelayMs = 0;
+          await server.flushSessions();
+          if (second) {
+            expect(await Promise.all([first, second])).toEqual([
+              { status: "conflict", reason: "revision" },
+              { status: "conflict", reason: "revision" },
+            ]);
+          } else {
+            expect(await first).toEqual({
+              status: scenario === "existing" ? "existing" : "registered",
+              space: registration.space,
+            });
+          }
+          const final = await home.key("sharedSpaceCatalog").pull();
+          if (scenario === "first-registration") {
+            expect(Object.keys(final.entries).sort()).toEqual(
+              [registration.space, "did:key:peer-room"].sort(),
+            );
+            expect(Object.keys(final.offers)).toHaveLength(2);
+          } else {
+            expect(final.entries[registration.space]).toMatchObject({
+              state: scenario === "existing" ? "archived" : "saved",
+              revision: "peer-revision",
+            });
+            expect(
+              catalog.key("entries", registration.space, "lastAction").getRaw(),
+            ).toEqual({
+              id: "peer-choice",
+              expectedRevision: originalRevision,
+              state: scenario === "existing" ? "archived" : "saved",
+            });
+          }
+        } finally {
+          server.options.subscriptionRefreshDelayMs = 0;
+          await server.flushSessions();
+          await Promise.allSettled([first, second]);
+        }
+      });
+    });
+  }
+
+  it("confirms a held serving registration only after its wave commits", async () => {
+    const held = new ArrivalLog<void>();
+    const release = defer<void>();
+    let armed = false;
+    await withHome(true, async (runtime, home, fresh) => {
+      const peer = await fresh();
+      const catalog = await backingCatalog(peer.runtime, peer.home);
+      const completed = new ArrivalLog<unknown>();
+      const committed = new ArrivalLog<void>();
+      armed = true;
+      const pending = invoke(
+        runtime,
+        home.key("registerSharedSpace"),
+        registration,
+        "held",
+        () => committed.record(),
+      )
+        .then((result) => {
+          completed.record(result);
+          return result;
+        });
+      try {
+        await held.reached(1);
+        expect(committed.entries).toHaveLength(0);
+        expect(completed.entries).toHaveLength(0);
+        const tx = peer.runtime.edit();
+        catalog.withTx(tx).key("entries", "did:key:peer-room").set({
+          space: "did:key:peer-room",
+          host: registration.host,
+          kind: "fabrichat-room",
+          state: "saved",
+          revision: "peer-revision",
+        });
+        catalog.withTx(tx).key(
+          "offers",
+          JSON.stringify([owner.did(), "peer-offer"]),
+        ).set({
+          from: owner.did(),
+          id: "peer-offer",
+          space: "did:key:peer-room",
+          host: registration.host,
+          kind: "fabrichat-room",
+        });
+        expect((await tx.commit().verdict).error)
+          .toBeUndefined();
+        expect(committed.entries).toHaveLength(0);
+        expect(completed.entries).toHaveLength(0);
+        release.resolve();
+        expect(await pending).toEqual({
+          status: "registered",
+          space: registration.space,
+        });
+        expect(committed.entries).toHaveLength(1);
+        const final = await home.key("sharedSpaceCatalog").pull();
+        expect(Object.keys(final.entries).sort()).toEqual(
+          [registration.space, "did:key:peer-room"].sort(),
+        );
+        expect(Object.keys(final.offers)).toHaveLength(2);
+      } finally {
+        release.resolve();
+        await pending;
+      }
+    }, (sink) => ({
+      currentHeads: sink.currentHeads.bind(sink),
+      concurrentWritePaths: sink.concurrentWritePaths.bind(sink),
+      ...(sink.intrusionSince
+        ? { intrusionSince: sink.intrusionSince.bind(sink) }
+        : {}),
+      commitWave: async (batch) => {
+        if (armed && batch.consequenceOf.length > 0) {
+          armed = false;
+          held.record();
+          await release.promise;
+        }
+        return await sink.commitWave(batch);
+      },
+    }));
+  });
+
+  for (const serving of [false, true]) {
+    it(`distinguishes an unfinished catalog read from a synchronized empty catalog with serving ${serving}`, async () => {
+      await withHome(serving, async (_runtime, home, _fresh, server) => {
+        const storage = EmulatedStorageManager.connectTo(server, { as: owner });
+        const reader = new Runtime({
+          moduleByteCache,
+          apiUrl: new URL("https://home.example"),
+          storageManager: storage,
+          experimental: { serverExecution: serving },
+        });
+        const entered = defer<void>();
+        const release = defer<void>();
+        const sync = storage.syncCell.bind(storage);
+        using _gate = stub(storage, "syncCell", async (cell, ...args) => {
+          if (cell.getAsNormalizedFullLink().space === owner.did()) {
+            entered.resolve();
+            await release.promise;
+          }
+          return await sync(cell, ...args);
+        });
+        const catalog = reader.getCellFromLink<HomeSurface>(
+          home.getAsNormalizedFullLink(),
+        ).key("sharedSpaceCatalog");
+        const values = new ArrivalLog<unknown>();
+        const settled = new ArrivalLog<unknown>();
+        const cancel = catalog.sink((value) => values.record(value));
+        const pending = catalog.pull().then((value) => {
+          settled.record(value);
+          return value;
+        });
+        try {
+          await entered.promise;
+          await reader.idle();
+          expect(values.entries).toEqual([undefined]);
+          expect(settled.entries).toHaveLength(0);
+          release.resolve();
+          const firstRead = await pending;
+          // A serving producer may publish after this replica finishes loading.
+          if (firstRead !== undefined) {
+            expect(firstRead).toEqual({ entries: {}, offers: {} });
+          }
+          const ready = await values.matching((value) => value !== undefined);
+          expect(ready).toEqual({ entries: {}, offers: {} });
+          expect(storage.authorizationError(owner.did())).toBeUndefined();
+          expect(storage.spaceAccessError(owner.did())).toBeUndefined();
+        } finally {
+          release.resolve();
+          await pending;
+          cancel();
+          await reader.idle();
+          await storage.synced();
+          await reader.dispose();
+          await storage.close();
+        }
+      });
+    });
+
+    it(`reports denied Home access separately from an empty collection with serving ${serving}`, async () => {
+      await withHome(serving, async (_runtime, home, _fresh, server) => {
+        const outsider = await Identity.fromPassphrase(
+          "Home catalog denied reader",
+        );
+        const storage = EmulatedStorageManager.connectTo(server, {
+          as: outsider,
+        });
+        const reader = new Runtime({
+          moduleByteCache,
+          apiUrl: new URL("https://home.example"),
+          storageManager: storage,
+          experimental: { serverExecution: serving },
+        });
+        const catalog = reader.getCellFromLink<HomeSurface>(
+          home.getAsNormalizedFullLink(),
+        ).key("sharedSpaceCatalog");
+        const values = new ArrivalLog<unknown>();
+        const cancel = catalog.sink((value) => values.record(value));
+        try {
+          expect(await catalog.pull()).toBeUndefined();
+          expect(storage.authorizationError(owner.did())?.name).toBe(
+            "AuthorizationError",
+          );
+          expect(values.entries.length).toBeGreaterThan(0);
+          expect(values.entries.every((value) => value === undefined)).toBe(
+            true,
+          );
+        } finally {
+          cancel();
+          await reader.dispose();
+          await storage.close();
+        }
+      });
+    });
+
+    it(`refuses Home replacement without resetting its catalog or navigation with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home) => {
+        await invoke(runtime, home.key("registerSharedSpace"), {
+          ...registration,
+          initialState: "archived",
+        }, "seed");
+        await invoke(runtime, home.key("addSpace"), {
+          did: registration.space,
+          name: "Retained navigation",
+        }, "navigation");
+        const before = await home.key("sharedSpaceCatalog").pull();
+        const spaces = await home.key("spaces").pull();
+        expect(spaces).toHaveLength(1);
+        const catalog = await backingCatalog(runtime, home);
+        const stored = catalog.getAsNormalizedFullLink();
+        const controller = new PiecesController(
+          createSession({ identity: owner, spaceDid: owner.did() }),
+          runtime,
+        );
+        await expect(controller.recreateDefaultPattern()).rejects.toThrow(
+          "Cannot recreate an identity Home root",
+        );
+        expect((await controller.getDefaultPattern(false))?.equals(home)).toBe(
+          true,
+        );
+        expect((await backingCatalog(runtime, home)).getAsNormalizedFullLink())
+          .toEqual(stored);
+        expect(await home.key("sharedSpaceCatalog").pull()).toEqual(before);
+        expect(await home.key("spaces").pull()).toEqual(spaces);
+        expect(
+          await invoke(
+            runtime,
+            home.key("registerSharedSpace"),
+            registration,
+            "still-running",
+          ),
+        )
+          .toEqual({ status: "existing", space: registration.space });
+      });
+    });
+    it(`retains constructor state across new Home source and a fresh replica with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home, fresh) => {
+        await invoke(runtime, home.key("registerSharedSpace"), {
+          ...registration,
+          initialState: "archived",
+        }, "seed");
+        // Source-update setup reads the catalog, so its snapshot must be
+        // authoritative rather than a speculative registration result.
+        await runtime.speculationOverlay?.waitForSpaceQuiescence(owner.did());
+        await runtime.idle();
+        const original = await backingCatalog(runtime, home);
+        const originalId = original.getAsNormalizedFullLink().id;
+        const before = original.getRaw();
+        const previousPattern = getPatternIdentityRef(home);
+        const next = await compileHome(runtime, "constructor-retention");
+        expect(runtime.patternManager.getArtifactEntryRef(next)?.identity).not
+          .toBe(previousPattern?.identity);
+        await runtime.runSynced(home, next);
+        expect(getPatternIdentityRef(home)?.identity).toBe(
+          runtime.patternManager.getArtifactEntryRef(next)?.identity,
+        );
+        const updated = await backingCatalog(runtime, home);
+        expect(updated.getAsNormalizedFullLink().id).toBe(originalId);
+        expect(updated.getRaw()).toEqual(before);
+        const peer = await fresh();
+        const reopened = await backingCatalog(peer.runtime, peer.home);
+        expect(reopened.getAsNormalizedFullLink().id).toBe(originalId);
+        expect(reopened.getRaw()).toEqual(before);
+        expect(
+          (await peer.home.key("sharedSpaceCatalog").pull())
+            .entries[registration.space].state,
+        ).toBe("archived");
+      });
+    });
+
+    it(`keeps offer identities and explicit choices immutable with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home) => {
+        await invoke(runtime, home.key("registerSharedSpace"), {
+          ...registration,
+          initialState: "archived",
+        }, "seed");
+        const stored = await backingCatalog(runtime, home);
+        const entry = (await home.key("sharedSpaceCatalog").pull())
+          .entries[registration.space];
+        expect(entry.state).toBe("archived");
+        expect(
+          await invoke(runtime, home.key("registerSharedSpace"), {
+            ...registration,
+            host: "https://other.example",
+            offer: undefined,
+          }, "reroute"),
+        ).toEqual({ status: "conflict", reason: "host" });
+        expect(
+          await invoke(runtime, home.key("registerSharedSpace"), {
+            ...registration,
+            space: "did:key:other-room",
+          }, "retarget"),
+        ).toEqual({ status: "conflict", reason: "offer" });
+        expect(
+          await invoke(runtime, home.key("registerSharedSpace"), {
+            ...registration,
+            kind: "other",
+            offer: undefined,
+          }, "retype"),
+        ).toEqual({ status: "conflict", reason: "kind" });
+        expect(
+          await invoke(runtime, home.key("registerSharedSpace"), {
+            ...registration,
+            offer: { ...registration.offer!, id: "new-offer" },
+            title: "Changed",
+          }, "another-offer"),
+        ).toEqual({ status: "existing", space: registration.space });
+        const withOffer = await home.key("sharedSpaceCatalog").pull();
+        expect(withOffer.entries[registration.space]).toEqual(entry);
+        expect(Object.keys(withOffer.offers)).toHaveLength(2);
+        const change = {
+          space: registration.space,
+          id: "restore",
+          expectedRevision: entry.revision,
+          state: "saved",
+        };
+        expect(
+          await invoke(
+            runtime,
+            home.key("changeSharedSpaceMembership"),
+            change,
+            "restore",
+          ),
+        ).toMatchObject({ status: "applied" });
+        expect(
+          await invoke(runtime, home.key("changeSharedSpaceMembership"), {
+            ...change,
+            state: "archived",
+          }, "reuse-action"),
+        ).toEqual({ status: "conflict", reason: "action" });
+        for (
+          const [index, evidence] of ["opaque", {
+            id: "foreign",
+            state: "future-state",
+            expectedRevision: entry.revision,
+          }].entries()
+        ) {
+          await runtime.editWithRetry((tx) =>
+            stored.withTx(tx).key("entries", registration.space, "lastAction")
+              .set(evidence)
+          );
+          expect(
+            await invoke(runtime, home.key("changeSharedSpaceMembership"), {
+              ...change,
+              id: "new-choice",
+              expectedRevision: (await home.key("sharedSpaceCatalog").pull())
+                .entries[registration.space].revision,
+            }, `unsupported-action-${index}`),
+          ).toEqual({ status: "conflict", reason: "action" });
+          expect(
+            stored.key("entries", registration.space, "lastAction").getRaw(),
+          ).toEqual(evidence);
+          expect(stored.key("entries", registration.space, "state").getRaw())
+            .toBe("saved");
+        }
+      });
+    });
+
+    it(`rejects malformed optional fields in a linked event payload with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home, _fresh, server) => {
+        const payload = runtime.getCell<SharedSpaceRegistration>(
+          owner.did(),
+          "malformed-event",
+          {
+            type: "object",
+            properties: { since: { type: "number" } },
+            additionalProperties: true,
+          },
+        );
+        await runtime.editWithRetry((tx) =>
+          payload.withTx(tx).asSchema<unknown>(true).set({
+            ...registration,
+            since: "bad",
+          })
+        );
+        await rejectInvocation(
+          runtime,
+          home.key("registerSharedSpace"),
+          payload,
+          server,
+          serving,
+          "Invalid shared-space registration.",
+        );
+        expect(await home.key("sharedSpaceCatalog").pull()).toEqual({
+          entries: {},
+          offers: {},
+        });
+      });
+    });
+
+    it(`rejects malformed registration values with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home, _peer, server) => {
+        for (
+          const input of [
+            ...[
+              "https://room.example/path",
+              "https://room.example/path/..",
+              "https://room.example/%2e%2e/",
+              "https://user:secret@room.example",
+              "https://@room.example",
+              "https://room.example?",
+              "https://room.example#",
+              "https://room.example/?region=west",
+              "https://room.example/#primary",
+              "https://room.example\\\\",
+              "https://ro\tom.example",
+              "https://[",
+              "ftp://room.example",
+            ].map((host) => ({ ...registration, host })),
+            { ...registration, since: "bad" },
+            { ...registration, since: -1 },
+            { ...registration, space: "not-a-did" },
+            { ...registration, offer: { from: "did:key:sender", id: "" } },
+          ]
+        ) {
+          await rejectInvocation(
+            runtime,
+            home.key("registerSharedSpace"),
+            input,
+            server,
+            serving,
+          );
+        }
+        expect(await home.key("sharedSpaceCatalog").pull()).toEqual({
+          entries: {},
+          offers: {},
+        });
+      });
+    });
+
+    it(`advances revisions exactly and refuses unsupported counters with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home) => {
+        await invoke(
+          runtime,
+          home.key("registerSharedSpace"),
+          registration,
+          "seed",
+        );
+        const catalog = await backingCatalog(runtime, home);
+        const valid = catalog.getRaw() as SharedSpaceCatalog;
+        expect(valid.entries[registration.space].revision).toMatch(/^1:.+$/);
+        const eventSuffix = valid.entries[registration.space].revision.slice(2);
+        expect(eventSuffix).toMatch(/^evk:[A-Za-z0-9_-]{43}$/);
+        const exhausted = `${"9".repeat(272)}:${eventSuffix}`;
+        expect(exhausted.length).toBe(320);
+        await runtime.editWithRetry((tx) =>
+          catalog.withTx(tx).key("entries", registration.space, "revision").set(
+            "9007199254740992:seed",
+          )
+        );
+        await invoke(runtime, home.key("changeSharedSpaceMembership"), {
+          space: registration.space,
+          id: "large-counter",
+          expectedRevision: "9007199254740992:seed",
+          state: "archived",
+        }, "large-counter");
+        expect(
+          (await home.key("sharedSpaceCatalog").pull())
+            .entries[registration.space],
+        )
+          .toMatchObject({
+            state: "archived",
+            revision: expect.stringMatching(/^9007199254740993:.+$/),
+          });
+        for (
+          const revision of [
+            "0:seed",
+            "01:seed",
+            "-1:seed",
+            "2:",
+            "legacy",
+            exhausted,
+            `${"9".repeat(318)}:x`,
+          ]
+        ) {
+          const entry = { ...valid.entries[registration.space], revision };
+          await runtime.editWithRetry((tx) =>
+            catalog.withTx(tx).key("entries", registration.space).set(entry)
+          );
+          expect(
+            await invoke(
+              runtime,
+              home.key("changeSharedSpaceMembership"),
+              {
+                space: registration.space,
+                id: "unsupported-counter",
+                expectedRevision: revision,
+                state: "archived",
+              },
+              `unsupported:${revision}`,
+            ),
+          ).toEqual({ status: "conflict", reason: "unsupported-revision" });
+          expect(catalog.getRaw()).toEqual({
+            ...valid,
+            entries: { ...valid.entries, [registration.space]: entry },
+          });
+        }
+      });
+    });
+
+    it(`refuses malformed stored fields and scalar roots with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home, _fresh, server) => {
+        await invoke(
+          runtime,
+          home.key("registerSharedSpace"),
+          registration,
+          "seed",
+        );
+        const catalog = await backingCatalog(runtime, home);
+        const valid = catalog.getRaw() as SharedSpaceCatalog;
+        const malformed = [
+          {
+            ...valid,
+            entries: {
+              ...valid.entries,
+              [registration.space]: {
+                ...valid.entries[registration.space],
+                since: "bad",
+              },
+            },
+          },
+          {
+            ...valid,
+            entries: {
+              ...valid.entries,
+              [registration.space]: {
+                ...valid.entries[registration.space],
+                title: 42,
+              },
+            },
+          },
+          "not-a-catalog",
+        ];
+        for (const value of malformed) {
+          await runtime.editWithRetry((tx) =>
+            catalog.withTx(tx).asSchema<unknown>(true).set(value)
+          );
+          await rejectInvocation(
+            runtime,
+            home.key("registerSharedSpace"),
+            {
+              space: "did:key:new-room",
+              host: registration.host,
+              kind: registration.kind,
+            },
+            server,
+            serving,
+            "The shared-space catalog is unavailable or malformed.",
+          );
+          expect(catalog.getRaw()).toEqual(value);
+        }
+        await runtime.editWithRetry((tx) => catalog.withTx(tx).set(valid));
+        expect(
+          (await home.key("sharedSpaceCatalog").pull())
+            .entries[registration.space],
+        ).toEqual(valid.entries[registration.space]);
+      });
+    });
+
+    it(`retains extensions and future states with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home) => {
+        await invoke(
+          runtime,
+          home.key("registerSharedSpace"),
+          registration,
+          "register",
+        );
+        const catalog = await backingCatalog(runtime, home);
+        const tx = runtime.edit();
+        catalog.withTx(tx).key("entries", registration.space, "futureField")
+          .set({ nested: [1, 2] });
+        catalog.withTx(tx).key("futureField").set({ version: 2 });
+        expect((await tx.commit().settled).error).toBeUndefined();
+        const first = await home.key("sharedSpaceCatalog").pull();
+        await invoke(runtime, home.key("changeSharedSpaceMembership"), {
+          space: registration.space,
+          id: "archive",
+          state: "archived",
+          expectedRevision: first.entries[registration.space].revision,
+        }, "archive");
+        expect(catalog.getRaw()).toMatchObject({
+          futureField: { version: 2 },
+          entries: {
+            [registration.space]: {
+              state: "archived",
+              futureField: { nested: [1, 2] },
+            },
+          },
+        });
+        await runtime.editWithRetry((tx) =>
+          catalog.withTx(tx).key("entries", registration.space, "state").set(
+            "future-state",
+          )
+        );
+        expect(
+          await invoke(runtime, home.key("changeSharedSpaceMembership"), {
+            space: registration.space,
+            id: "future",
+            state: "saved",
+            expectedRevision: (await home.key("sharedSpaceCatalog").pull())
+              .entries[registration.space].revision,
+          }, "future"),
+        ).toEqual({ status: "conflict", reason: "unsupported-state" });
+        expect(
+          await invoke(
+            runtime,
+            home.key("registerSharedSpace"),
+            registration,
+            "replay",
+          ),
+        ).toEqual({ status: "existing", space: registration.space });
+        expect(catalog.getRaw()).toMatchObject({
+          entries: {
+            [registration.space]: {
+              state: "future-state",
+              futureField: { nested: [1, 2] },
+            },
+          },
+        });
+      });
+    });
+
+    it(`preserves concurrent registrations and refuses competing choices with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home, fresh) => {
+        const peer = await fresh();
+        const second = {
+          ...registration,
+          space: "did:key:second-room",
+          offer: { from: "did:key:catalog-sender", id: "second" },
+        };
+        expect(
+          await Promise.all([
+            invoke(
+              runtime,
+              home.key("registerSharedSpace"),
+              registration,
+              "first",
+            ),
+            invoke(
+              peer.runtime,
+              peer.home.key("registerSharedSpace"),
+              second,
+              "second",
+            ),
+          ]),
+        ).toEqual([{ status: "registered", space: registration.space }, {
+          status: "registered",
+          space: second.space,
+        }]);
+        await awaitEdges(
+          [(wake) => home.key("sharedSpaceCatalog").sink(wake)],
+          () =>
+            Object.keys(home.key("sharedSpaceCatalog").get().entries).length ===
+              2,
+        );
+        const catalog = await home.key("sharedSpaceCatalog").pull();
+        expect(Object.keys(catalog.entries).sort()).toEqual(
+          [registration.space, second.space].sort(),
+        );
+        const choice = {
+          space: registration.space,
+          state: "archived",
+          expectedRevision: catalog.entries[registration.space].revision,
+        };
+        const results = await Promise.all([
+          invoke(runtime, home.key("changeSharedSpaceMembership"), {
+            ...choice,
+            id: "mine",
+          }, "mine"),
+          invoke(peer.runtime, peer.home.key("changeSharedSpaceMembership"), {
+            ...choice,
+            id: "theirs",
+          }, "theirs"),
+        ]);
+        expect(
+          results.map((value) => (value as { status: string }).status).sort(),
+        ).toEqual(["applied", "conflict"]);
+        expect(results).toContainEqual({
+          status: "conflict",
+          reason: "revision",
+        });
+        expect(
+          (await peer.home.key("sharedSpaceCatalog").pull())
+            .entries[registration.space].state,
+        ).toBe("archived");
+      });
+    });
+
+    it(`returns durable operation receipts separately from current membership with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home) => {
+        expect(
+          await invoke(
+            runtime,
+            home.key("registerSharedSpace"),
+            registration,
+            "register",
+          ),
+        ).toEqual({ status: "registered", space: registration.space });
+        const catalog = home.key("sharedSpaceCatalog");
+        const first = await catalog.pull();
+        const archive = {
+          space: registration.space,
+          id: "archive",
+          expectedRevision: first.entries[registration.space].revision,
+          state: "archived" as const,
+        };
+        expect(
+          await invoke(
+            runtime,
+            home.key("changeSharedSpaceMembership"),
+            archive,
+            "archive",
+          ),
+        ).toEqual({
+          status: "applied",
+          space: registration.space,
+          id: "archive",
+        });
+        expect(
+          await invoke(
+            runtime,
+            home.key("registerSharedSpace"),
+            registration,
+            "register-again",
+          ),
+        ).toEqual({ status: "existing", space: registration.space });
+        expect((await catalog.pull()).entries[registration.space].state).toBe(
+          "archived",
+        );
+        expect(
+          await invoke(
+            runtime,
+            home.key("changeSharedSpaceMembership"),
+            archive,
+            "confirm-archive",
+          ),
+        ).toEqual({
+          status: "confirmed",
+          space: registration.space,
+          id: "archive",
+        });
+        const archived = await catalog.pull();
+        expect(
+          await invoke(runtime, home.key("changeSharedSpaceMembership"), {
+            ...archive,
+            id: "restore",
+            state: "saved",
+            expectedRevision: archived.entries[registration.space].revision,
+          }, "restore"),
+        ).toMatchObject({ status: "applied" });
+        expect(
+          await invoke(
+            runtime,
+            home.key("changeSharedSpaceMembership"),
+            archive,
+            "archive",
+          ),
+        ).toEqual({
+          status: "applied",
+          space: registration.space,
+          id: "archive",
+        });
+        expect((await catalog.pull()).entries[registration.space].state).toBe(
+          "saved",
+        );
+        expect(
+          await invoke(
+            runtime,
+            home.key("changeSharedSpaceMembership"),
+            archive,
+            "stale-archive",
+          ),
+        ).toEqual({ status: "conflict", reason: "revision" });
+        await runtime.idle();
+      });
+    });
+
+    it(`removes only an entry no receipt names, at its observed revision, with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home, _peer, server) => {
+        const imported: SharedSpaceRegistration = {
+          space: "did:key:catalog-import",
+          host: "https://room.example",
+          kind: "loom",
+          title: "Imported loom",
+        };
+        const remove = home.key("removeSharedSpace");
+        await invoke(
+          runtime,
+          home.key("registerSharedSpace"),
+          registration,
+          "register",
+        );
+        await invoke(
+          runtime,
+          home.key("registerSharedSpace"),
+          imported,
+          "import",
+        );
+        const catalog = home.key("sharedSpaceCatalog");
+        const observed = await catalog.pull();
+        expect(
+          await invoke(runtime, remove, {
+            space: imported.space,
+            expectedRevision: "1:not-the-observed-revision",
+          }, "stale"),
+        ).toEqual({ status: "conflict", reason: "revision" });
+        expect(
+          await invoke(runtime, remove, {
+            space: registration.space,
+            expectedRevision: observed.entries[registration.space].revision,
+          }, "receipted"),
+        ).toEqual({ status: "conflict", reason: "offer" });
+        const take: SharedSpaceRemoval = {
+          space: imported.space,
+          expectedRevision: observed.entries[imported.space].revision,
+        };
+        expect(await invoke(runtime, remove, take, "take")).toEqual({
+          status: "removed",
+          space: imported.space,
+        });
+        expect(await invoke(runtime, remove, take, "take")).toEqual({
+          status: "removed",
+          space: imported.space,
+        });
+        expect(await invoke(runtime, remove, take, "take-again")).toEqual({
+          status: "conflict",
+          reason: "missing",
+        });
+        const stored = await backingCatalog(runtime, home);
+        expect(Object.keys(stored.getRaw().entries)).toEqual([
+          registration.space,
+        ]);
+        expect(await catalog.pull()).toEqual({
+          entries: {
+            [registration.space]: observed.entries[registration.space],
+          },
+          offers: observed.offers,
+        });
+        for (
+          const input of [
+            { space: imported.space },
+            { space: "not-a-did", expectedRevision: take.expectedRevision },
+            { space: imported.space, expectedRevision: "" },
+          ]
+        ) {
+          await rejectInvocation(runtime, remove, input, server, serving);
+        }
+        await runtime.idle();
+      });
+    });
+  }
+
+  describe("with a `PersonalSpace` stamp on catalog storage", () => {
+    // A writer outside Home can leave Home's catalog storage carrying the
+    // owner's `PersonalSpace` label, which no FabriChat room's space admits.
+    // The guard: a stamped catalog must not reach the room-creating
+    // transaction through `sessionProfile`. The profile a session's
+    // `#profile` wish finds is written to the manager's `sessionProfile`
+    // slot, and a link written after a labeled read carries that read's
+    // label; a create then follows the link and joins the label, and its
+    // writes into the room's space are refused. Whether following a stamped
+    // link of a wish's choosing should count as reading the stamp is an open
+    // Contextual Flow Control question for @seefeldb, so a slot stamped some
+    // other way is not exercised here.
+
+    for (const serving of [false, true]) {
+      it(`creates a group from a session brought up before or after the stamp with serving ${serving}`, async () => {
+        await withHome(serving, async (runtime, home, fresh) => {
+          await sendReviewed(
+            runtime,
+            home.key("createProfile"),
+            { name: "Ada" },
+            "ProfileCreateSurface",
+            "CreateProfile",
+          );
+          await invoke(
+            runtime,
+            home.key("registerSharedSpace"),
+            registration,
+            "seed",
+          );
+          const catalog = await backingCatalog(runtime, home);
+          await stampCatalogTitle(runtime, catalog, registration.space);
+          expect(
+            personalSpacePathsOf(runtime, catalog.getAsNormalizedFullLink()),
+          ).toContainEqual(["entries", registration.space, "title"]);
+
+          const peer = await fresh();
+          const sessions = [
+            { name: "later", ...peer },
+            { name: "earlier", runtime, home },
+          ];
+          for (const session of sessions) {
+            const stamps = await sessionProfileStampsIn(session.runtime);
+            expect(stamps.length).toBeGreaterThan(0);
+            expect(stamps).toEqual(stamps.map(() => []));
+
+            const manager = session.home.key("chatManager");
+            const requestId = `group-${session.name}`;
+            await sendReviewed(
+              session.runtime,
+              manager.key("createGroup"),
+              { requestId, title: `Team ${session.name}`, members: [] },
+              "ChatStartSurface",
+              "ChatStart",
+            );
+            const outcome = await waitForCellValue<{ status: string }>(
+              session.runtime,
+              manager.key("requests").key(requestId),
+              (value) => value !== undefined && value.status !== "pending",
+              { stuckLabel: `the ${session.name} session's group request` },
+            );
+            expect(outcome.status).toBe("done");
+          }
+          // A created room is listed by an event of its own that the creating
+          // one queues, so the catalog can still lack a group whose request
+          // is done.
+          const titlesOf = (catalog: SharedSpaceCatalog | undefined) =>
+            Object.values(catalog?.entries ?? {}).map((entry) => entry.title);
+          const listed = await waitForCellValue<SharedSpaceCatalog>(
+            runtime,
+            home.key("sharedSpaceCatalog"),
+            (value) => {
+              const titles = titlesOf(value);
+              return titles.includes("Team later") &&
+                titles.includes("Team earlier");
+            },
+            { stuckLabel: "the catalog listing both groups" },
+          );
+          expect(titlesOf(listed)).toEqual(
+            expect.arrayContaining(["Team later", "Team earlier"]),
+          );
+        });
+      });
+
+      it(`starts a first direct chat with serving ${serving}`, async () => {
+        // `openDirect` asks whether a held direct room is deleted before it
+        // creates one, and asks the memory server alone: a catalog read there
+        // would bring the stamp into the transaction that creates the room.
+
+        await withHome(serving, async (runtime, home) => {
+          await sendReviewed(
+            runtime,
+            home.key("createProfile"),
+            { name: "Ada" },
+            "ProfileCreateSurface",
+            "CreateProfile",
+          );
+          await invoke(
+            runtime,
+            home.key("registerSharedSpace"),
+            registration,
+            "seed",
+          );
+          const catalog = await backingCatalog(runtime, home);
+          await stampCatalogTitle(runtime, catalog, registration.space);
+
+          const manager = home.key("chatManager");
+          await sendReviewed(
+            runtime,
+            manager.key("openDirect"),
+            { requestId: "direct", counterpart: "did:key:z6MkBob" },
+            "ChatStartSurface",
+            "ChatStart",
+          );
+          const outcome = await waitForCellValue<{ status: string }>(
+            runtime,
+            manager.key("requests").key("direct"),
+            (value) => value !== undefined && value.status !== "pending",
+            { stuckLabel: "the direct request" },
+          );
+          expect(outcome.status).toBe("done");
+        });
+      });
+    }
+  });
+});
+
+describe("Home catalog deletion marks", () => {
+  for (const serving of [false, true]) {
+    it(`records a space the memory server refuses as deleted, and leaves a live one and a deleted one as they are with serving ${serving}`, async () => {
+      let refuse: ReturnType<typeof refusingServer>["refuse"] | undefined;
+      await withHome(
+        serving,
+        async (runtime, home) => {
+          const gone = "did:key:catalog-gone";
+          const live = "did:key:catalog-live";
+          const commands = home.key("sharedSpaces").key("commands")
+            .asSchema(sharedSpaceCommandsSchema);
+          const view = home.key("sharedSpaces").key("view")
+            .asSchema(sharedSpaceCollectionViewSchema);
+          const entries = () =>
+            home.key("sharedSpaceCatalog").pull().then((catalog) =>
+              catalog.entries
+            );
+          for (const space of [gone, live]) {
+            await invoke(runtime, commands.key("register"), {
+              space,
+              host: "https://room.example",
+              kind: "loom",
+            }, `register ${space}`);
+          }
+          const first = await entries();
+          // Neither space has been opened by Home's runtime yet, so each mark
+          // waits for the server's answer and runs again with it.
+          refuse!(gone, "deleted");
+          const mark = async (space: string, expectedRevision: string) => {
+            sendEvent(commands.key("markDeleted"), { space, expectedRevision });
+            await runtime.idle();
+            await runtime.storageManager.synced();
+          };
+          await mark(gone, first[gone].revision);
+          await mark(live, first[live].revision);
+          const marked = await waitForCellValue<
+            Record<string, { state: string }>
+          >(
+            runtime,
+            home.key("sharedSpaceCatalog").key("entries"),
+            (value) => value?.[gone]?.state === "deleted",
+            { stuckLabel: "the deleted space's entry marked deleted" },
+          );
+          expect(marked[gone].state).toBe("deleted");
+          expect(marked[live]).toMatchObject({
+            state: "saved",
+            revision: first[live].revision,
+          });
+          const after = await entries();
+          expect(after[gone].revision).not.toBe(first[gone].revision);
+          // A deleted entry is terminal: a later mark at its new revision, and a
+          // membership choice, both leave it as it is.
+          await mark(gone, after[gone].revision);
+          await invoke(runtime, commands.key("changeMembership"), {
+            space: gone,
+            id: "restore gone",
+            expectedRevision: after[gone].revision,
+            state: "saved",
+          }, "restore gone");
+          expect((await entries())[gone]).toMatchObject({
+            state: "deleted",
+            revision: after[gone].revision,
+          });
+          expect(await view.pull()).toMatchObject({
+            status: "ready",
+            saved: [{ space: live }],
+            deleted: [{ space: gone }],
+            byKind: { loom: { deleted: [{ space: gone }] } },
+          });
+        },
+        undefined,
+        (server) => {
+          const refusing = refusingServer(server);
+          refuse = refusing.refuse;
+          return refusing.server as Server;
+        },
+      );
+    });
+  }
+});
+
+describe("Home profile retirement on deletion", () => {
+  for (const serving of [false, true]) {
+    it(`retires a profile whose space is deleted, the one \`#profile\` returns, and keeps it retired with serving ${serving}`, async () => {
+      let refuse: ReturnType<typeof refusingServer>["refuse"] | undefined;
+      await withHome(
+        serving,
+        async (runtime, home, _peer, server) => {
+          const links = { type: "array", items: { asCell: ["cell"] } } as const;
+          const spacesIn = async (key: "profiles" | "retiredProfiles") =>
+            ((await home.key(key).asSchema(links).pull()) ?? []).map((link) =>
+              link.getAsNormalizedFullLink().space
+            );
+          for (const name of ["Ada", "Bea"]) {
+            await sendReviewed(
+              runtime,
+              home.key("createProfile"),
+              { name },
+              "ProfileCreateSurface",
+              "CreateProfile",
+            );
+          }
+          await waitForCellValue<unknown[]>(
+            runtime,
+            home.key("profiles"),
+            (value) => (value?.length ?? 0) === 2,
+            { stuckLabel: "both profiles" },
+          );
+          // The first profile is the one `#profile` returns, which an
+          // ordinary retirement refuses; its runtime holds its document from
+          // creating it.
+          const [gone, kept] = await spacesIn("profiles");
+          writeDeletionTombstone(
+            await server.engineForSpace(gone),
+            gone,
+            owner.did(),
+          );
+          refuse!(gone, "deleted");
+          const controller = new PiecesController(
+            createSession({ identity: owner, spaceDid: owner.did() }),
+            runtime,
+          );
+          expect(await controller.markDeletedSpace(gone as MemorySpace)).toBe(
+            "not-listed",
+          );
+          await runtime.idle();
+          await waitForCellValue<unknown[]>(
+            runtime,
+            home.key("retiredProfiles"),
+            (value) => (value?.length ?? 0) === 1,
+            { stuckLabel: "the deleted profile retired" },
+          );
+          expect(await spacesIn("retiredProfiles")).toEqual([gone]);
+          // Neither a second deletion nor a restore brings it back, and the
+          // live profile is left as it is.
+          expect(await controller.markDeletedSpace(gone as MemorySpace)).toBe(
+            "not-listed",
+          );
+          const [listed] = await home.key("profiles").asSchema(links).pull();
+          await rejectInvocation(
+            runtime,
+            home.key("restoreProfile"),
+            { profile: listed },
+            server,
+            serving,
+            "Cannot restore a profile whose space is deleted.",
+          );
+          await runtime.idle();
+          expect(await spacesIn("retiredProfiles")).toEqual([gone]);
+          expect(await spacesIn("profiles")).toEqual([gone, kept]);
+          // This runtime still holds the deleted profile's document from
+          // creating it, which counts it as the user's own; the picker lists
+          // it only as deleted, with nothing to restore.
+          const picker = await runProfilePicker(runtime, home);
+          const shown = await renderedText(runtime, picker.key("$UI"));
+          expect(shown).toContain("Deleted profiles");
+          expect(shown).toContain(gone);
+          expect(shown).not.toContain("Removed profiles");
+          expect(shown).not.toContain("Restore");
+        },
+        undefined,
+        (server) => {
+          const refusing = refusingServer(server);
+          refuse = refusing.refuse;
+          return refusing.server as Server;
+        },
+      );
+    });
+  }
+});
+
+describe("Home chat manager and a deleted room", () => {
+  const BOB = "did:key:z6MkBob";
+
+  // Each case compiles Home, and only the first compile in a process is slow.
+  beforeAll(compileHomeOnce);
+
+  for (const serving of [false, true]) {
+    it(`leaves a deleted room out of \`rooms\` and lists it under \`deletedRooms\` with serving ${serving}`, async () => {
+      await withChatManager(serving, async (chats) => {
+        const { runtime, manager } = chats;
+        const direct = (await chats.start("openDirect", "d-1", {
+          counterpart: BOB,
+        })).space;
+        const group = (await chats.start("createGroup", "g-1", {
+          title: "Team",
+          members: [],
+        })).space;
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("rooms"),
+          (value) => value?.length === 2,
+          { stuckLabel: "both rooms listed" },
+        );
+        expect(await manager.key("deletedRooms").pull()).toEqual([]);
+        await chats.deleteSpaces([direct, group]);
+        const gone = await waitForCellValue<
+          { kind: string; counterpart?: string }[]
+        >(
+          runtime,
+          manager.key("deletedRooms"),
+          (value) => value?.length === 2,
+          { stuckLabel: "both rooms listed as deleted" },
+        );
+        expect(gone.map((entry) => entry.kind)).toEqual(["group", "direct"]);
+        expect(gone[1].counterpart).toBe(BOB);
+        // `deletedRooms` reads only the manager's memberships, where `rooms`
+        // reads each room's own records as well, which are in the deleted
+        // spaces. So `rooms` can leave the rooms out some time after
+        // `deletedRooms` lists them, and is waited for in its own right.
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("rooms"),
+          (value) => value?.length === 0,
+          { stuckLabel: "both rooms left out of rooms" },
+        );
+        // Home's catalog records the deletions, as the shell's worker has it
+        // do, so the catalog no longer finds either room: each stays held by
+        // the membership the manager recorded when it created the room.
+        await chats.markDeleted([direct, group]);
+        expect((await manager.key("deletedRooms").pull()).length).toBe(2);
+      });
+    });
+
+    it(`replaces a deleted direct room on the next \`openDirect\` and keeps the deleted one under \`deletedRooms\` with serving ${serving}`, async () => {
+      // Forgetting the direct room archives its membership, which has to
+      // name the counterpart still once `direct` holds a replacement.
+
+      await withChatManager(serving, async (chats) => {
+        const { runtime, manager } = chats;
+        const room = await chats.start("openDirect", "d-1", {
+          counterpart: BOB,
+        });
+        const first = room.space;
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("rooms"),
+          (value) => value?.length === 1,
+          { stuckLabel: "the direct room listed" },
+        );
+        await chats.forget("forget-d-1", room);
+        await chats.deleteSpaces([first]);
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("deletedRooms"),
+          (value) => value?.length === 1,
+          { stuckLabel: "the room listed as deleted" },
+        );
+        await chats.markDeleted([first]);
+        // The next start with the same person creates a new room and
+        // replaces the direct entry; the deleted room stays listed as
+        // deleted, held by its membership.
+        const second = (await chats.start("openDirect", "d-2", {
+          counterpart: BOB,
+        })).space;
+        expect(second).not.toBe(first);
+        expect(
+          manager.key("direct").key(BOB).key("room").resolveAsCell().space,
+        ).toBe(second);
+        const listed = await waitForCellValue<
+          { kind: string; counterpart?: string }[]
+        >(
+          runtime,
+          manager.key("rooms"),
+          (value) => value?.length === 1,
+          { stuckLabel: "the new direct room listed" },
+        );
+        expect(listed[0]).toMatchObject({ kind: "direct", counterpart: BOB });
+        expect(await manager.key("deletedRooms").pull()).toEqual([
+          expect.objectContaining({ kind: "direct", counterpart: BOB }),
+        ]);
+      });
+    });
+  }
+
+  for (const serving of [false, true]) {
+    it(`refuses to join, accept or offer a deleted room, and leaves its entry as it is, with serving ${serving}`, async () => {
+      await withChatManager(serving, async (chats) => {
+        const { runtime, manager, home } = chats;
+        const listed = await chats.start("createGroup", "g-listed", {
+          title: "Listed",
+          members: [],
+        });
+        const forgotten = await chats.start("createGroup", "g-forgotten", {
+          title: "Forgotten",
+          members: [],
+        });
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("rooms"),
+          (value) => value?.length === 2,
+          { stuckLabel: "both rooms listed" },
+        );
+        await chats.forget("forget-it", forgotten);
+        await chats.deleteSpaces([listed.space, forgotten.space]);
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("deletedRooms"),
+          (value) => value?.length === 2,
+          { stuckLabel: "both rooms listed as deleted" },
+        );
+
+        for (
+          const [requestId, stream, room] of [
+            ["join-listed", "joinRoom", listed],
+            ["join-forgotten", "joinRoom", forgotten],
+            ["accept-listed", "accept", listed],
+            ["accept-forgotten", "accept", forgotten],
+          ] as const
+        ) {
+          // `invoke` returns once the handling has committed, a served one
+          // included, so what the request says is not the client's own
+          // speculative run.
+          await invoke(
+            runtime,
+            manager.key(stream),
+            { requestId, room },
+            requestId,
+          );
+          expect(await manager.key("requests").key(requestId).pull())
+            .toMatchObject({ status: "refused" });
+        }
+
+        // The offer is sent without waiting on its send's callback, which
+        // doesn't always settle for a served offer naming a deleted room. A
+        // start sent after it is handled after it, in Home's own order.
+        sendEvent(manager.key("offerRoom"), {
+          requestId: "offer-listed",
+          room: listed,
+          member: BOB,
+        });
+        await chats.start("createGroup", "g-after", {
+          title: "After",
+          members: [],
+        });
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("rooms"),
+          (value) => value?.length === 1,
+          { stuckLabel: "the room started after the offer" },
+        );
+        expect(await manager.key("requests").key("offer-listed").pull())
+          .toMatchObject({ status: "refused" });
+
+        const { entries } = await home.key("sharedSpaceCatalog").pull();
+        expect(entries[forgotten.space].state).toBe("archived");
+      });
+    });
+  }
+
+  for (const serving of [false, true]) {
+    it(`takes a room the memory server merely refuses for no deleted room, with serving ${serving}`, async () => {
+      await withChatManager(serving, async (chats) => {
+        const { runtime, manager, home } = chats;
+        const refused = await chats.start("createGroup", "g-refused", {
+          title: "Refused",
+          members: [],
+        });
+        const deleted = await chats.start("createGroup", "g-deleted", {
+          title: "Deleted",
+          members: [],
+        });
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("rooms"),
+          (value) => value?.length === 2,
+          { stuckLabel: "both rooms listed" },
+        );
+
+        chats.refuseSpaces([refused.space]);
+        // The deleted room is the control: `deletedRooms` is read once it has
+        // taken this room in, so it has had its chance to take in the other.
+        await chats.deleteSpaces([deleted.space]);
+        const gone = await waitForCellValue<{ room: unknown }[]>(
+          runtime,
+          manager.key("deletedRooms"),
+          (value) => (value?.length ?? 0) > 0,
+          { stuckLabel: "the deleted room listed as deleted" },
+        );
+        await runtime.idle();
+        await runtime.storageManager.synced();
+
+        expect(gone.length).toBe(1);
+        expect((await manager.key("deletedRooms").pull()).length).toBe(1);
+        const { entries } = await home.key("sharedSpaceCatalog").pull();
+        expect(entries[refused.space].state).toBe("saved");
+      });
+    });
+  }
+
+  it("keeps the counterpart of a forgotten direct room the manager held only through the catalog", async () => {
+    // A room from before the manager recorded memberships is held through the
+    // catalog alone. Forgetting it records a membership, which has to name the
+    // counterpart while `direct` still does: once a replacement takes the
+    // room's place there, nothing else names it.
+
+    await withChatManager(false, async (chats) => {
+      const { runtime, manager } = chats;
+      const room = await chats.start("openDirect", "d-1", {
+        counterpart: BOB,
+      });
+      const first = room.space;
+      const { error } = await runtime.editWithRetry((tx) => {
+        manager.key("roomMembership").withTx(tx).set([]);
+      });
+      expect(error).toBeUndefined();
+      await waitForCellValue<unknown[]>(
+        runtime,
+        manager.key("rooms"),
+        (value) => value?.length === 1,
+        { stuckLabel: "the room found through the catalog" },
+      );
+      await chats.forget("forget-d-1", room);
+      await chats.deleteSpaces([first]);
+      await chats.markDeleted([first]);
+      const second = await chats.start("openDirect", "d-2", {
+        counterpart: BOB,
+      });
+      expect(second.space).not.toBe(first);
+      const deleted = await waitForCellValue<
+        { kind: string; counterpart?: string }[]
+      >(
+        runtime,
+        manager.key("deletedRooms"),
+        (value) => value?.length === 1,
+        { stuckLabel: "the forgotten room listed as deleted" },
+      );
+      expect(deleted[0]).toMatchObject({ kind: "direct", counterpart: BOB });
+    });
+  });
+});

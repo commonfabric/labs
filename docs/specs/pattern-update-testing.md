@@ -15,10 +15,10 @@ update does not throw — it leaves a piece that can no longer materialize.
 
 The two gates guard different halves of the same risk:
 
-| | Gate | CI job | What it proves |
+| | Gate | Test topology suite | What it proves |
 | --- | --- | --- | --- |
-| Tier 1 | `deno task pattern-compat` | Pattern Update Compatibility | The **contract** a pattern declares can still be applied over every contract it has declared before |
-| Tier 2 | `deno task pattern-vintage` | Pattern Update State and Baseline Integrity | A real **document** written by an older version is still readable, and its data survives |
+| Tier 1 | `deno task pattern-compat` | `pattern-compat` | The **contract** a pattern declares can still be applied over every contract it has declared before |
+| Tier 2 | `deno task pattern-vintage` | `pattern-vintage` | A real **document** written by an older version is still readable, and its data survives |
 
 Tier 1 is a statement about schemas. Tier 2 proves the stronger thing schemas
 cannot say. Neither subsumes the other: a contract can stay compatible while
@@ -27,17 +27,17 @@ actually instantiates.
 
 ## Tier 1 — contract compatibility
 
-Compiles **every** authored pattern under `packages/patterns/`, derives its
+Compiles **every** authored pattern under `patterns/`, derives its
 argument and result schemas, and proves the current contract can be applied
-over every contract recorded for it under `packages/patterns/baselines/`.
+over every contract recorded for it under `patterns/baselines/`.
 There is no opt-in: a pattern is covered by existing.
 
 Baselines are **append-only**, enforced mechanically by
-`tasks/check-baselines-append-only.ts` in the Pattern Update State and Baseline
-Integrity job. An author-run `--update` that could remove a baseline could
-remove the very one that would have caught a break. A break the repository
-decides to ship is declared instead, in `tasks/pattern-compat-accepted-breaks.ts`
-— see the finding it answers below.
+`tasks/check-baselines-append-only.ts`, which the test topology's
+`repo-history-gates` suite runs. An author-run `--update` that could remove a
+baseline could remove the very one that would have caught a break. A break the
+repository decides to ship is declared instead, in
+`tasks/pattern-compat-accepted-breaks.ts` — see the finding it answers below.
 
 ### Findings and their remedies
 
@@ -65,13 +65,22 @@ decides to ship is declared instead, in `tasks/pattern-compat-accepted-breaks.ts
   An entry is bounded twice. It forgives specific `(pattern, baseline)` pairs,
   so the contract recorded once the break ships is a baseline no entry names
   and the next change to that pattern is gated again. Within a pair it forgives
-  only the schema paths it names: one finding carries every issue the proof
-  found against that baseline, so accepting by pair alone would suppress an
-  unintended break landing beside the decided one — and `--update` would then
-  record that contract. A finding blaming any unnamed path stands, and so does
-  one whose paths cannot be parsed. What the proof reports is at most one issue
-  per role, so a second problem in a role whose issue is an accepted path can
-  still hide behind it; name as few paths as the removal needs.
+  only the schema paths it names. The proof reports every issue it finds
+  against a baseline, in both roles, each as a finding blaming one path: each
+  field of an object is judged on its own, and a node that fails at its own
+  level — a changed type, `asCell`, `ifc`, or `scope`, or a union alternative
+  the candidate no longer accepts — is reported once and not descended. So an
+  issue at an unnamed path stands beside the forgiven ones, and so does one
+  whose path cannot be parsed; accepting by pair alone would suppress an
+  unintended break landing beside the decided one, and `--update` would then
+  record that contract.
+
+  An entry names exactly the paths its pairs blame. A named path that none of
+  the entry's pairs blames fails the run, the way a pair that needs no
+  forgiving does: kept, it would silently forgive a later break at that path
+  against the listed baselines, including the one recorded just before the
+  break, which is where an unintended second break in the same change is
+  judged.
 
   An entry also names its decision record under `docs/history/` (`record`),
   and may not name a required pattern — the home and default-app roots update
@@ -79,11 +88,15 @@ decides to ship is declared instead, in `tasks/pattern-compat-accepted-breaks.ts
   are enforced whenever either gate runs
   (`tasks/pattern-break-registry-guards.ts`).
 
-  The run prints every pair it forgave, and fails on one that no longer needs
-  forgiving, so the list can only shrink. That audit is asked per pattern rather
-  than of the whole list, because the CI job always sets `PATTERN_COMPAT_SHARD`
-  — the shard that examined a pattern is the one that can judge its entries,
-  and the shards between them cover all of them.
+  The run prints every pair it forgave, with how many issues, and fails on a
+  pair or a named path that no longer needs forgiving, so the list can only
+  shrink. That audit is asked per pattern rather than of the whole list, because
+  CI divides the patterns among its lanes, each lane passing the ones it runs
+  with `--only` — the run that examined a pattern is the one that can judge its
+  entries, and the runs between them cover all of them. A run given every
+  pattern passes no `--only`. An entry whose pattern file does not exist keeps
+  that pattern among the ones the gate is given, and the run given the pattern
+  fails on the entry.
 
   Reaching for any of this is a decision to strand data on running pieces; a
   break that also strands state needs the Tier 2 entry below.
@@ -93,7 +106,9 @@ decides to ship is declared instead, in `tasks/pattern-compat-accepted-breaks.ts
   a pattern no longer exports one. Every piece tracking that path is pinned to
   its current pattern **forever**: the updater's identity probe fails and
   nothing surfaces on the piece. Restore the pattern, or delete its baseline
-  directory to record the retirement deliberately.
+  directory to record the retirement deliberately. A pattern whose file is
+  gone is still one of the patterns the gate divides between its runs, for as
+  long as its baselines remain, so `--only` names it as it would any other.
 - **`newly fails to evaluate`** — a pattern that cannot evaluate gets no
   contract, so no baseline, so no check, forever. Fix it, or add it to
   `tasks/pattern-compat-unevaluable.ts` with a reason. That allowlist can only
@@ -253,6 +268,24 @@ separately: nothing replayed could have needed its entry, so the run has no
 evidence either way, and an exemption nothing can audit is one nobody can
 retire.
 
+### Corrections of stale derived state
+
+An approved correction of calculated state is recorded separately in
+`tasks/pattern-vintage-derived-corrections.ts`. Its scope includes the exact
+fixture provenance and SHA-256, absence of companion stores, recorded root and
+pattern identities, field, and before/after values. Different fixture bytes or
+additional stores receive no correction policy.
+
+The comparison still runs on all fields. Only an exact approved transition is
+graded as a reported change instead of a loss; a missing field, nested loss, or
+other transition retains its ordinary grade. The run prints each correction and
+its decision record. A verified fixture whose correction is unused fails, so
+an exemption must be removed or reassessed when the evidence changes.
+
+The [derived-state correction decision](../history/development/2026-09-14-derived-state-correction.md)
+records the approved case and alternatives. This policy does not classify
+derived values generally as expendable.
+
 ### Findings are graded
 
 A replay recomputes as well as reads, so a derived value the vintage never
@@ -269,11 +302,11 @@ the candidate for closing that gap.
 ## Fixture layout
 
 ```
-packages/piece/test/vintages/<test key>/<tier>/<iso>-<identity>.sqlite
-packages/piece/test/vintages/<test key>/<tier>/<iso>-<identity>.sqlite.spaces/<did>.sqlite
+runtime/piece/test/vintages/<test key>/<tier>/<iso>-<identity>.sqlite
+runtime/piece/test/vintages/<test key>/<tier>/<iso>-<identity>.sqlite.spaces/<did>.sqlite
 ```
 
-- **`<test key>`** is the path under `packages/patterns/` of the **test** that
+- **`<test key>`** is the path under `patterns/` of the **test** that
   produced the fixture. Keyed by test rather than by pattern because a test
   need not be named after what it drives, and one fixture routinely covers
   several patterns.
@@ -290,7 +323,7 @@ packages/piece/test/vintages/<test key>/<tier>/<iso>-<identity>.sqlite.spaces/<d
   not have. It is part of the fixture, not a fixture itself, so
   `parseVintagePath` declines everything inside one.
 
-The tree is deliberately **not** under `packages/patterns/`.
+The tree is deliberately **not** under `patterns/`.
 `tasks/build-binaries.ts` passes that whole directory to `deno compile
 --include`, which is recursive over non-source files, so fixtures would ship
 inside the toolshed binary; and `PatternsServer` serves the same directory by
@@ -325,14 +358,14 @@ not history.
 
 ```
 deno task pattern-vintage                                  # replay every fixture (what CI runs)
-deno task pattern-vintage --update topics/topics.test.tsx  # capture a first pinned fixture
+deno task pattern-vintage --update apps/topics/topics.test.tsx  # capture a first pinned fixture
 deno task pattern-vintage --capture-changed                # capture a generation where due
-deno task pattern-vintage --pin topics/topics.test.tsx     # promote the newest generation
+deno task pattern-vintage --pin apps/topics/topics.test.tsx     # promote the newest generation
 ```
 
 `--update` and `--pin` name a **test** path, never a pattern path: a fixture is
 produced by running a test and covers whatever that test instantiates.
-`system/home.tsx` names no test and captures nothing.
+`system/home/home.tsx` names no test and captures nothing.
 
 There is no bare `--update` and no list of what CI replays. Every fixture under
 the vintages tree is replayed by the plain command, so committing a captured
@@ -483,10 +516,10 @@ specification:
   load failures — it has no eyes on them — so a path that *depends* on such a
   load succeeding is outside what a green run asserts. Two consequences worth
   naming: the replay runtime opens no piece, so nothing follows an origin
-  during it (CFC enforcement stays at its `enforce-explicit` default), and the
+  during it (CFC enforcement stays at its `enforce-strict` default), and the
   heal above is the parent re-creating children, not the production
   roll-forward repair — that path has its own assertion in
-  `packages/runner/test/pattern-pointer-unloadable-swap.test.ts`;
+  `runtime/runner/test/pattern-pointer-unloadable-swap.test.ts`;
   and what an adopted fixture pins is old *source*, not old *storage format* —
   the memory migration chain runs once at adopt time, so the committed file
   already carries today's schema and CI does not re-exercise the migrations.

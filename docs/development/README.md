@@ -16,7 +16,8 @@ mapped in [`../README.md`](../README.md).
 - [`code-comment-style.md`](code-comment-style.md) — how a comment is written:
   what earns one, the rule that a comment describes the system as it stands and
   the shapes that break it, the Markdown markup comments and error messages
-  share, and what a doc comment carries
+  share, the `debugStr` template tag for putting a value into a message, and
+  what a doc comment carries
 - [`imports.md`](imports.md) — why a file's dependencies belong in its import
   list, the two lint rules that keep them there, and what earns a deferred
   `import()` the ignore directive that keeps it
@@ -27,6 +28,13 @@ mapped in [`../README.md`](../README.md).
   testing documents
 - [`debugging/`](debugging/README.md) — the error reference and the debugging
   workflows, including a large catalog of specific gotchas
+- [`cfc-spec-correspondence.md`](cfc-spec-correspondence.md) — changing
+  Contextual Flow Control: where the specification lives, how to classify a
+  change, when the specification moves first, and what a pending ruling
+  permits
+- [`automated-gates.md`](automated-gates.md) — what `deno task check`
+  type-checks, how the trees it leaves out are recorded, and the gates that
+  fail CI on their own. Read it before you push
 
 ## Dependencies and configuration
 
@@ -65,18 +73,24 @@ mapped in [`../README.md`](../README.md).
   comments on a pull request: the commands that list a reviewer's findings and
   tell you which threads are still open, which automated reviewers post here,
   and why `gh pr view` returns none of it
-- [`deploying.md`](deploying.md) — how a commit reaches a host: which jobs
-  deploy where, and the contract the bastion's deploy wrapper enforces on what
-  they pass it. Read this before editing a deploy step, because that wrapper
-  lives in the infra repository rather than this one
+- [`deploying.md`](deploying.md) — coordinated Rapids releases and manual
+  Estuary deployments: which jobs deploy where, and the contracts the bastion's
+  wrappers enforce. Read this before editing a deploy step; those wrappers are
+  installed from the infra repository
 - [`staging-space-copy.md`](staging-space-copy.md) — how a *space* reaches a
   host: snapshotting one space's store and serving the copy from rapids, what
   installing it commits you to, and the questions a local clone answers more
   cheaply
+- [`space-compaction.md`](space-compaction.md) — compacting one space's
+  revision history on a host: the clone rehearsal, the verification that
+  stands between the result and the install, and the Estuary recipe with its
+  rollback
+- [`space-reaping.md`](space-reaping.md) — reaping a deleted space's store on
+  a host: the copy it runs against, the check before the install, and the cell
+  databases the install moves aside
 - [`CI_PERFORMANCE.md`](CI_PERFORMANCE.md) — how continuous-integration wall
-  time is tracked, and when to start or stop work on splitting and
-  rebalancing jobs
-- [`COVERAGE.md`](COVERAGE.md) — the two coverage mechanisms, which job
+  time is tracked, the dials that govern the lanes, and when to move them
+- [`COVERAGE.md`](COVERAGE.md) — the two coverage mechanisms, which suite
   collects which, and how to read the resulting numbers
 - [`test-records.md`](test-records.md) — the record of every test execution:
   what gets recorded, the environment surface, opting a workstation in with

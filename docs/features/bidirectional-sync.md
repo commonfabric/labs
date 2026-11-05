@@ -303,7 +303,12 @@ export async function doSyncCycle(
     await runtime.storageManager.synced();
 
     const tx = runtime.edit();
-    pushFrameFromCause("fs-sync", { runtime, tx, space, inHandler: true });
+    const frame = pushFrameFromCause("fs-sync", {
+      runtime,
+      tx,
+      space,
+      inHandler: true,
+    });
 
     try {
       // Bind the cells to this transaction, so every read and write below
@@ -366,13 +371,13 @@ export async function doSyncCycle(
       txFailed.push(...failed);
       txEdits.set([]);
     } finally {
-      popFrame();
+      popFrame(frame);
     }
 
     // 5. Commit. A failure means a new edit was appended while this cycle was
     //    running, so go round again and catch up. The watermark keeps the
     //    filesystem from receiving the earlier edits a second time.
-    const { error } = await tx.commit();
+    const { error } = await tx.commit().settled;
     if (!error) {
       committed = true;
       // The redirects are durable now, so stop offering those cells.
@@ -934,9 +939,9 @@ async function fullRebuild() {
       ),
     });
   } finally {
-    popFrame();
+    popFrame(frame);
   }
-  await tx.commit();
+  await tx.commit().settled;
 }
 ```
 

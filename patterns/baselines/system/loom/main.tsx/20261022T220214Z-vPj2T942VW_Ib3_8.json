@@ -1,0 +1,2207 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "AddFileEvent": {
+        "properties": {
+          "blob": {
+            "$ref": "#/$defs/BlobRef",
+            "description": "The blob holding the bytes."
+          },
+          "mediaType": {
+            "description": "The media type the blob was stored with.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The new entry's name, the name its blob was stored under.",
+            "type": "string"
+          },
+          "onConflict": {
+            "$ref": "#/$defs/NameConflict",
+            "description": "What to do when `name` is taken; `refuse` when absent."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the event's own key when there is none.",
+            "type": "string"
+          },
+          "size": {
+            "description": "The size of the file, in bytes.",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "BlobRef": {
+        "properties": {
+          "id": {
+            "description": "The blob's id: `fid1:` and the hash of its name, media type and bytes.",
+            "type": "string"
+          },
+          "space": {
+            "description": "The DID of the space whose blob store holds the bytes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "space",
+          "id"
+        ],
+        "type": "object"
+      },
+      "ChatRoomRecord": {
+        "properties": {
+          "room": {
+            "$ref": "#/$defs/LinkedChatRoom",
+            "asCell": [
+              "cell"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "FileEntry": {
+        "properties": {
+          "addedAt": {
+            "description": "When the file was added.",
+            "type": "FabricEpochNsec"
+          },
+          "addedBy": {
+            "$ref": "#/$defs/FileProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The profile of whoever added it."
+          },
+          "blob": {
+            "$ref": "#/$defs/BlobRef",
+            "description": "The blob holding the bytes."
+          },
+          "mediaType": {
+            "description": "The media type of the bytes.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name the store finds this file by, and its blob's name.",
+            "type": "string"
+          },
+          "removedAt": {
+            "description": "When the file was removed from its store, if it has been.",
+            "type": "FabricEpochNsec"
+          },
+          "size": {
+            "description": "The size of the file, in bytes.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "mediaType",
+          "blob",
+          "size",
+          "addedAt",
+          "addedBy"
+        ],
+        "type": "object"
+      },
+      "FileProfile": {
+        "properties": {
+          "avatar": {
+            "description": "A URL of their picture.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name the person goes by.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "FileRefusalCode": {
+        "enum": [
+          "invalid-request",
+          "invalid-name",
+          "name-taken",
+          "other-space",
+          "no-blob",
+          "not-found",
+          "not-permitted"
+        ]
+      },
+      "FileRequestOutcome": {
+        "anyOf": [
+          {
+            "properties": {
+              "entry": {
+                "$ref": "#/$defs/FileEntry",
+                "asCell": [
+                  "cell"
+                ],
+                "description": "The entry the request added or changed."
+              },
+              "name": {
+                "description": "The name the request gave the entry.",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "done"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "entry",
+              "name"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/FileRefusalCode",
+                "description": "Why, as a code a client can act on."
+              },
+              "reason": {
+                "description": "Why, as prose for a person.",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "refused"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason",
+              "code"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "FileStoreFiles": {
+        "properties": {
+          "add": {
+            "$ref": "#/$defs/AddFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Adds a file, for a blob already in the store's space."
+          },
+          "byName": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileEntry",
+              "asCell": [
+                "cell"
+              ]
+            },
+            "description": "The same files, by name.",
+            "properties": {},
+            "type": "object"
+          },
+          "entries": {
+            "description": "Every file in the store, in the order they were added.",
+            "items": {
+              "$ref": "#/$defs/FileEntry",
+              "asCell": [
+                "cell"
+              ]
+            },
+            "type": "array"
+          },
+          "remove": {
+            "$ref": "#/$defs/RemoveFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Takes a file out of the store, and marks it removed."
+          },
+          "rename": {
+            "$ref": "#/$defs/RenameFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Changes a file's name, and its blob with it."
+          },
+          "requests": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileRequestOutcome"
+            },
+            "description": "The outcome of each request, by its `requestId`.",
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "entries",
+          "byName",
+          "requests",
+          "add",
+          "remove",
+          "rename"
+        ],
+        "type": "object"
+      },
+      "FileStoreOutput": {
+        "properties": {
+          "$VIEWS": {
+            "properties": {
+              "files": {
+                "$ref": "#/$defs/FileStoreFiles"
+              }
+            },
+            "required": [
+              "files"
+            ],
+            "type": "object"
+          },
+          "add": {
+            "$ref": "#/$defs/AddFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Adds a file, for a blob already in the store's space."
+          },
+          "byName": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileEntry",
+              "asCell": [
+                "cell"
+              ]
+            },
+            "description": "The same files, by name.",
+            "properties": {},
+            "type": "object"
+          },
+          "entries": {
+            "description": "Every file in the store, in the order they were added.",
+            "items": {
+              "$ref": "#/$defs/FileEntry",
+              "asCell": [
+                "cell"
+              ]
+            },
+            "type": "array"
+          },
+          "remove": {
+            "$ref": "#/$defs/RemoveFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Takes a file out of the store, and marks it removed."
+          },
+          "rename": {
+            "$ref": "#/$defs/RenameFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Changes a file's name, and its blob with it."
+          },
+          "requests": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileRequestOutcome"
+            },
+            "description": "The outcome of each request, by its `requestId`.",
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "$VIEWS",
+          "entries",
+          "byName",
+          "requests",
+          "add",
+          "remove",
+          "rename"
+        ],
+        "type": "object"
+      },
+      "FileStoreRecord": {
+        "properties": {
+          "store": {
+            "$ref": "#/$defs/FileStoreOutput",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The store; absent while the root names none."
+          }
+        },
+        "type": "object"
+      },
+      "JSONArray": {
+        "items": {
+          "$ref": "#/$defs/JSONValue"
+        },
+        "type": "array"
+      },
+      "JSONObject": {
+        "additionalProperties": {
+          "$ref": "#/$defs/JSONValue"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "JSONValue": {
+        "anyOf": [
+          {
+            "type": [
+              "null",
+              "number",
+              "string"
+            ]
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "$ref": "#/$defs/JSONArray"
+          },
+          {
+            "$ref": "#/$defs/JSONObject"
+          }
+        ]
+      },
+      "LinkedChatRoom": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LoomStyle": {
+        "anyOf": [
+          {
+            "properties": {
+              "id": {
+                "description": "Catalog identifier interpreted by the viewer.",
+                "type": "string"
+              },
+              "mode": {
+                "description": "Explicit rendering mode, or the catalog's native mode.",
+                "enum": [
+                  "native",
+                  "light",
+                  "dark"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "mode"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "MeetingAssociation": {
+        "additionalProperties": {
+          "type": "unknown"
+        },
+        "properties": {
+          "key": {
+            "description": "Immutable lowercase 64-character hexadecimal legacy meeting key.",
+            "type": "string"
+          },
+          "portableIdentity": {
+            "$ref": "#/$defs/PortableMeetingIdentity",
+            "description": "Portable occurrence evidence supplied by an authorized caller."
+          }
+        },
+        "type": "object"
+      },
+      "NameConflict": {
+        "enum": [
+          "refuse",
+          "rename"
+        ]
+      },
+      "Panel": {
+        "anyOf": [
+          {
+            "properties": {
+              "addedBy": {
+                "$ref": "#/$defs/PanelAdderDid"
+              },
+              "addedByProfile": {
+                "$ref": "#/$defs/PanelAdderProfile"
+              },
+              "kind": {
+                "enum": [
+                  "piece"
+                ],
+                "type": "string"
+              },
+              "piece": {
+                "asCell": [
+                  "cell"
+                ],
+                "type": "unknown"
+              },
+              "titleOverride": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "piece"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "addedBy": {
+                "$ref": "#/$defs/PanelAdderDid"
+              },
+              "addedByProfile": {
+                "$ref": "#/$defs/PanelAdderProfile"
+              },
+              "content": {
+                "$ref": "#/$defs/PublishedDocument",
+                "asCell": [
+                  "cell"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "document"
+                ],
+                "type": "string"
+              },
+              "titleOverride": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "addedBy": {
+                "$ref": "#/$defs/PanelAdderDid"
+              },
+              "addedByProfile": {
+                "$ref": "#/$defs/PanelAdderProfile"
+              },
+              "kind": {
+                "enum": [
+                  "url"
+                ],
+                "type": "string"
+              },
+              "titleOverride": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "PanelAdderDid": {
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/loom/admission.tsx",
+              "moduleIdentity": "0VGfCYWPsVSAEPP4M0GKG-neiDbm8AgsU8Y21QH6vno",
+              "path": [
+                "admitPanel"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "PanelAdderProfile": {
+        "asCell": [
+          "cell"
+        ],
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "represents-principal",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "ownerPrincipal": {
+            "__ctCurrentPrincipal": true
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/loom/admission.tsx",
+              "moduleIdentity": "0VGfCYWPsVSAEPP4M0GKG-neiDbm8AgsU8Y21QH6vno",
+              "path": [
+                "admitPanel"
+              ]
+            }
+          }
+        },
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ParticipantList": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/loom/participants.tsx",
+              "moduleIdentity": "2JVdprOR9IEmGnR5Xsekzh5C6hu4LpD5K34cbAOMKyk",
+              "path": [
+                "addParticipant"
+              ]
+            }
+          }
+        },
+        "items": {
+          "asCell": [
+            "cell"
+          ],
+          "properties": {
+            "avatar": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "ParticipantRoster": {
+        "properties": {
+          "items": {
+            "$ref": "#/$defs/ParticipantList"
+          }
+        },
+        "type": "object"
+      },
+      "PortableMeetingIdentity": {
+        "additionalProperties": {
+          "$ref": "#/$defs/JSONValue"
+        },
+        "properties": {
+          "item_key": {
+            "description": "Canonical lowercase SHA-256 item key.",
+            "type": "string"
+          },
+          "occurrence_key": {
+            "description": "Canonical lowercase SHA-256 occurrence key.",
+            "type": "string"
+          },
+          "scheme": {
+            "description": "The UID and typed original-slot hash contract.",
+            "enum": [
+              "ical-uid-slot"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "scheme",
+          "item_key",
+          "occurrence_key"
+        ],
+        "type": "object"
+      },
+      "Presentation": {
+        "properties": {
+          "focusedPanel": {
+            "$ref": "#/$defs/Panel",
+            "asCell": [
+              "cell"
+            ]
+          },
+          "stagedPanels": {
+            "items": {
+              "$ref": "#/$defs/Panel",
+              "asCell": [
+                "cell"
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "stagedPanels"
+        ],
+        "type": "object"
+      },
+      "PrivatePanel": {
+        "properties": {
+          "before": {
+            "$ref": "#/$defs/Panel",
+            "asCell": [
+              "cell"
+            ]
+          },
+          "panel": {
+            "$ref": "#/$defs/Panel",
+            "asCell": [
+              "cell"
+            ]
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "PublishedChannel": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PublishedDocument": {
+        "properties": {
+          "notes": {
+            "default": "",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/$defs/PublishedSource"
+          }
+        },
+        "required": [
+          "source",
+          "notes"
+        ],
+        "type": "object"
+      },
+      "PublishedSource": {
+        "anyOf": [
+          {
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "page-excerpt"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "title",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "channels": {
+                "items": {
+                  "$ref": "#/$defs/PublishedChannel"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "person-card"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "photo": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "channels"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RemoveFileEvent": {
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/FileEntry",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The entry to remove."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the event's own key when there is none.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RenameFileEvent": {
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/FileEntry",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The entry to rename."
+          },
+          "name": {
+            "description": "The entry's new name.",
+            "type": "string"
+          },
+          "onConflict": {
+            "$ref": "#/$defs/NameConflict",
+            "description": "What to do when `name` is taken; `refuse` when absent."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the event's own key when there is none.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "description": "Shared state supplied when a Loom is instantiated.",
+    "properties": {
+      "chatRoom": {
+        "$ref": "#/$defs/ChatRoomRecord",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": {}
+      },
+      "fileStore": {
+        "$ref": "#/$defs/FileStoreRecord",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": {},
+        "description": "The Loom's space's file store, absent until it is first needed."
+      },
+      "hiddenPanels": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Panel",
+          "asCell": [
+            "cell"
+          ]
+        },
+        "type": "array"
+      },
+      "meeting": {
+        "$ref": "#/$defs/MeetingAssociation",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": {}
+      },
+      "panels": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Panel",
+          "asCell": [
+            "cell"
+          ]
+        },
+        "type": "array"
+      },
+      "participants": {
+        "$ref": "#/$defs/ParticipantRoster",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": {}
+      },
+      "presentation": {
+        "$ref": "#/$defs/Presentation",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": {
+          "stagedPanels": []
+        }
+      },
+      "privatePanels": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/PrivatePanel"
+        },
+        "type": "array"
+      },
+      "style": {
+        "$ref": "#/$defs/LoomStyle",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": null,
+        "description": "Confirmed appearance; transient previews stay in the viewer."
+      },
+      "title": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "Shared Loom",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "loom/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AddFileEvent": {
+        "properties": {
+          "blob": {
+            "$ref": "#/$defs/BlobRef",
+            "description": "The blob holding the bytes."
+          },
+          "mediaType": {
+            "description": "The media type the blob was stored with.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The new entry's name, the name its blob was stored under.",
+            "type": "string"
+          },
+          "onConflict": {
+            "$ref": "#/$defs/NameConflict",
+            "description": "What to do when `name` is taken; `refuse` when absent."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the event's own key when there is none.",
+            "type": "string"
+          },
+          "size": {
+            "description": "The size of the file, in bytes.",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "BindMeetingRequest": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "portableIdentity": {
+            "$ref": "#/$defs/JSONValue",
+            "description": "Raw portable identity evidence that bindMeeting validates."
+          },
+          "reply": {
+            "$ref": "#/$defs/BindMeetingResult"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "type": "object"
+      },
+      "BindMeetingResult": {
+        "anyOf": [
+          {
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "bound"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "key"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "already-bound"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "key"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "conflict"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "key"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "invalid-key"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "invalid-state"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "BlobRef": {
+        "properties": {
+          "id": {
+            "description": "The blob's id: `fid1:` and the hash of its name, media type and bytes.",
+            "type": "string"
+          },
+          "space": {
+            "description": "The DID of the space whose blob store holds the bytes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "space",
+          "id"
+        ],
+        "type": "object"
+      },
+      "ChatRoomChoice": {
+        "properties": {
+          "room": {
+            "$ref": "#/$defs/LinkedChatRoom"
+          }
+        },
+        "type": "object"
+      },
+      "FileEntry": {
+        "properties": {
+          "addedAt": {
+            "description": "When the file was added.",
+            "type": "FabricEpochNsec"
+          },
+          "addedBy": {
+            "$ref": "#/$defs/FileProfile",
+            "description": "The profile of whoever added it."
+          },
+          "blob": {
+            "$ref": "#/$defs/BlobRef",
+            "description": "The blob holding the bytes."
+          },
+          "mediaType": {
+            "description": "The media type of the bytes.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name the store finds this file by, and its blob's name.",
+            "type": "string"
+          },
+          "removedAt": {
+            "description": "When the file was removed from its store, if it has been.",
+            "type": "FabricEpochNsec"
+          },
+          "size": {
+            "description": "The size of the file, in bytes.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "mediaType",
+          "blob",
+          "size",
+          "addedAt",
+          "addedBy"
+        ],
+        "type": "object"
+      },
+      "FileProfile": {
+        "properties": {
+          "avatar": {
+            "description": "A URL of their picture.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name the person goes by.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "FileRefusalCode": {
+        "enum": [
+          "invalid-request",
+          "invalid-name",
+          "name-taken",
+          "other-space",
+          "no-blob",
+          "not-found",
+          "not-permitted"
+        ]
+      },
+      "FileRequestOutcome": {
+        "anyOf": [
+          {
+            "properties": {
+              "entry": {
+                "$ref": "#/$defs/FileEntry",
+                "description": "The entry the request added or changed."
+              },
+              "name": {
+                "description": "The name the request gave the entry.",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "done"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "entry",
+              "name"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/FileRefusalCode",
+                "description": "Why, as a code a client can act on."
+              },
+              "reason": {
+                "description": "Why, as prose for a person.",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "refused"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason",
+              "code"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "FileStoreFiles": {
+        "properties": {
+          "add": {
+            "$ref": "#/$defs/AddFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Adds a file, for a blob already in the store's space."
+          },
+          "byName": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileEntry"
+            },
+            "description": "The same files, by name.",
+            "properties": {},
+            "type": "object"
+          },
+          "entries": {
+            "description": "Every file in the store, in the order they were added.",
+            "items": {
+              "$ref": "#/$defs/FileEntry"
+            },
+            "type": "array"
+          },
+          "remove": {
+            "$ref": "#/$defs/RemoveFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Takes a file out of the store, and marks it removed."
+          },
+          "rename": {
+            "$ref": "#/$defs/RenameFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Changes a file's name, and its blob with it."
+          },
+          "requests": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileRequestOutcome"
+            },
+            "description": "The outcome of each request, by its `requestId`.",
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "entries",
+          "byName",
+          "requests",
+          "add",
+          "remove",
+          "rename"
+        ],
+        "type": "object"
+      },
+      "FileStoreOutput": {
+        "properties": {
+          "$VIEWS": {
+            "properties": {
+              "files": {
+                "$ref": "#/$defs/FileStoreFiles"
+              }
+            },
+            "required": [
+              "files"
+            ],
+            "type": "object"
+          },
+          "add": {
+            "$ref": "#/$defs/AddFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Adds a file, for a blob already in the store's space."
+          },
+          "byName": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileEntry"
+            },
+            "description": "The same files, by name.",
+            "properties": {},
+            "type": "object"
+          },
+          "entries": {
+            "description": "Every file in the store, in the order they were added.",
+            "items": {
+              "$ref": "#/$defs/FileEntry"
+            },
+            "type": "array"
+          },
+          "remove": {
+            "$ref": "#/$defs/RemoveFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Takes a file out of the store, and marks it removed."
+          },
+          "rename": {
+            "$ref": "#/$defs/RenameFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Changes a file's name, and its blob with it."
+          },
+          "requests": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileRequestOutcome"
+            },
+            "description": "The outcome of each request, by its `requestId`.",
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "$VIEWS",
+          "entries",
+          "byName",
+          "requests",
+          "add",
+          "remove",
+          "rename"
+        ],
+        "type": "object"
+      },
+      "FileStoreRecord": {
+        "properties": {
+          "store": {
+            "$ref": "#/$defs/FileStoreOutput",
+            "description": "The store; absent while the root names none."
+          }
+        },
+        "type": "object"
+      },
+      "JSONArray": {
+        "items": {
+          "$ref": "#/$defs/JSONValue"
+        },
+        "type": "array"
+      },
+      "JSONObject": {
+        "additionalProperties": {
+          "$ref": "#/$defs/JSONValue"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "JSONValue": {
+        "anyOf": [
+          {
+            "type": [
+              "null",
+              "number",
+              "string"
+            ]
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "$ref": "#/$defs/JSONArray"
+          },
+          {
+            "$ref": "#/$defs/JSONObject"
+          }
+        ]
+      },
+      "LinkedChatRoom": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LoomStyle": {
+        "anyOf": [
+          {
+            "properties": {
+              "id": {
+                "description": "Catalog identifier interpreted by the viewer.",
+                "type": "string"
+              },
+              "mode": {
+                "description": "Explicit rendering mode, or the catalog's native mode.",
+                "enum": [
+                  "native",
+                  "light",
+                  "dark"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "mode"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "MeetingAssociation": {
+        "additionalProperties": {
+          "type": "unknown"
+        },
+        "properties": {
+          "key": {
+            "description": "Immutable lowercase 64-character hexadecimal legacy meeting key.",
+            "type": "string"
+          },
+          "portableIdentity": {
+            "$ref": "#/$defs/PortableMeetingIdentity",
+            "description": "Portable occurrence evidence supplied by an authorized caller."
+          }
+        },
+        "type": "object"
+      },
+      "NameConflict": {
+        "enum": [
+          "refuse",
+          "rename"
+        ]
+      },
+      "Panel": {
+        "anyOf": [
+          {
+            "properties": {
+              "addedBy": {
+                "$ref": "#/$defs/PanelAdderDid"
+              },
+              "addedByProfile": {
+                "$ref": "#/$defs/PanelAdderProfile"
+              },
+              "kind": {
+                "enum": [
+                  "piece"
+                ],
+                "type": "string"
+              },
+              "piece": {
+                "type": "unknown"
+              },
+              "titleOverride": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "piece"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "addedBy": {
+                "$ref": "#/$defs/PanelAdderDid"
+              },
+              "addedByProfile": {
+                "$ref": "#/$defs/PanelAdderProfile"
+              },
+              "content": {
+                "$ref": "#/$defs/PublishedDocument"
+              },
+              "kind": {
+                "enum": [
+                  "document"
+                ],
+                "type": "string"
+              },
+              "titleOverride": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "addedBy": {
+                "$ref": "#/$defs/PanelAdderDid"
+              },
+              "addedByProfile": {
+                "$ref": "#/$defs/PanelAdderProfile"
+              },
+              "kind": {
+                "enum": [
+                  "url"
+                ],
+                "type": "string"
+              },
+              "titleOverride": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "PanelAdderDid": {
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/loom/admission.tsx",
+              "moduleIdentity": "0VGfCYWPsVSAEPP4M0GKG-neiDbm8AgsU8Y21QH6vno",
+              "path": [
+                "admitPanel"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "PanelAdderProfile": {
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "represents-principal",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "ownerPrincipal": {
+            "__ctCurrentPrincipal": true
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/loom/admission.tsx",
+              "moduleIdentity": "0VGfCYWPsVSAEPP4M0GKG-neiDbm8AgsU8Y21QH6vno",
+              "path": [
+                "admitPanel"
+              ]
+            }
+          }
+        },
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PanelAdmission": {
+        "properties": {
+          "as": {
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "before": {
+            "$ref": "#/$defs/Panel"
+          },
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          },
+          "piece": {
+            "type": "unknown"
+          }
+        },
+        "type": "object"
+      },
+      "PanelPosition": {
+        "properties": {
+          "before": {
+            "$ref": "#/$defs/Panel"
+          },
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "PanelRetarget": {
+        "properties": {
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          },
+          "target": {
+            "$ref": "#/$defs/PanelTarget"
+          }
+        },
+        "required": [
+          "panel",
+          "target"
+        ],
+        "type": "object"
+      },
+      "PanelTarget": {
+        "anyOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "url"
+                ],
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "piece"
+                ],
+                "type": "string"
+              },
+              "piece": {
+                "type": "unknown"
+              }
+            },
+            "required": [
+              "kind",
+              "piece"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "PanelTitle": {
+        "properties": {
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          },
+          "titleOverride": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel",
+          "titleOverride"
+        ],
+        "type": "object"
+      },
+      "PortableMeetingIdentity": {
+        "additionalProperties": {
+          "$ref": "#/$defs/JSONValue"
+        },
+        "properties": {
+          "item_key": {
+            "description": "Canonical lowercase SHA-256 item key.",
+            "type": "string"
+          },
+          "occurrence_key": {
+            "description": "Canonical lowercase SHA-256 occurrence key.",
+            "type": "string"
+          },
+          "scheme": {
+            "description": "The UID and typed original-slot hash contract.",
+            "enum": [
+              "ical-uid-slot"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "scheme",
+          "item_key",
+          "occurrence_key"
+        ],
+        "type": "object"
+      },
+      "Presentation": {
+        "properties": {
+          "focusedPanel": {
+            "$ref": "#/$defs/Panel"
+          },
+          "stagedPanels": {
+            "items": {
+              "$ref": "#/$defs/Panel"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "stagedPanels"
+        ],
+        "type": "object"
+      },
+      "PrivatePanel": {
+        "properties": {
+          "before": {
+            "$ref": "#/$defs/Panel"
+          },
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "PublishedChannel": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PublishedDocument": {
+        "properties": {
+          "notes": {
+            "default": "",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/$defs/PublishedSource"
+          }
+        },
+        "required": [
+          "source",
+          "notes"
+        ],
+        "type": "object"
+      },
+      "PublishedSource": {
+        "anyOf": [
+          {
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "page-excerpt"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "title",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "channels": {
+                "items": {
+                  "$ref": "#/$defs/PublishedChannel"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "person-card"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "photo": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "channels"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RemoveFileEvent": {
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/FileEntry",
+            "description": "The entry to remove."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the event's own key when there is none.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RenameFileEvent": {
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/FileEntry",
+            "description": "The entry to rename."
+          },
+          "name": {
+            "description": "The entry's new name.",
+            "type": "string"
+          },
+          "onConflict": {
+            "$ref": "#/$defs/NameConflict",
+            "description": "What to do when `name` is taken; `refuse` when absent."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the event's own key when there is none.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ViewerState": {
+        "properties": {
+          "actingProfile": {
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "selectedPanel": {
+            "$ref": "#/$defs/Panel"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "description": "Standard default-pattern exports and the public composition actions.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addPanel": {
+        "$ref": "#/$defs/PanelAdmission",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "addParticipant": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "profile": {
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "type": "object"
+      },
+      "addPiece": {
+        "$ref": "#/$defs/PanelAdmission",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "addPrivatePanel": {
+        "$ref": "#/$defs/PanelPosition",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "bindMeeting": {
+        "$ref": "#/$defs/BindMeetingRequest",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "chatRoom": {
+        "$ref": "#/$defs/LinkedChatRoom"
+      },
+      "duplicatePanel": {
+        "$ref": "#/$defs/PanelAdmission",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "ensureChatRoom": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "ensureFileStore": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Names a new store as the Loom's space's, unless it names one already."
+      },
+      "fileStore": {
+        "$ref": "#/$defs/FileStoreOutput",
+        "description": "The Loom's space's file store, absent until `ensureFileStore` names one."
+      },
+      "fileStoreRecord": {
+        "$ref": "#/$defs/FileStoreRecord",
+        "description": "Where the Loom keeps its space's file store, which its chat room, as a\nFabriChat container's, names a store in too."
+      },
+      "hiddenPanels": {
+        "items": {
+          "$ref": "#/$defs/Panel"
+        },
+        "type": "array"
+      },
+      "hidePanel": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "meeting": {
+        "$ref": "#/$defs/MeetingAssociation"
+      },
+      "movePanel": {
+        "$ref": "#/$defs/PanelPosition",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "movePrivatePanel": {
+        "$ref": "#/$defs/PanelPosition",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "panels": {
+        "items": {
+          "$ref": "#/$defs/Panel"
+        },
+        "type": "array"
+      },
+      "participants": {
+        "items": {
+          "properties": {
+            "avatar": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "pieceRegistry": {
+        "items": {
+          "type": "unknown"
+        },
+        "type": "array"
+      },
+      "presentation": {
+        "$ref": "#/$defs/Presentation"
+      },
+      "privatePanels": {
+        "items": {
+          "$ref": "#/$defs/PrivatePanel"
+        },
+        "type": "array"
+      },
+      "removePanel": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "removePiece": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "piece": {
+            "type": "unknown"
+          }
+        },
+        "required": [
+          "piece"
+        ],
+        "type": "object"
+      },
+      "removePrivatePanel": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "retargetPanel": {
+        "$ref": "#/$defs/PanelRetarget",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "retitleLoom": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "retitlePanel": {
+        "$ref": "#/$defs/PanelTitle",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "setChatRoom": {
+        "$ref": "#/$defs/ChatRoomChoice",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "setPresentation": {
+        "$ref": "#/$defs/Presentation",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "setStyle": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Replaces the complete style and mode atomically; null clears it.",
+        "properties": {
+          "style": {
+            "$ref": "#/$defs/LoomStyle"
+          }
+        },
+        "required": [
+          "style"
+        ],
+        "type": "object"
+      },
+      "style": {
+        "$ref": "#/$defs/LoomStyle",
+        "description": "Confirmed appearance for all participants."
+      },
+      "title": {
+        "type": "string"
+      },
+      "unhidePanel": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "type": "object"
+      },
+      "viewerPanels": {
+        "items": {
+          "$ref": "#/$defs/Panel"
+        },
+        "type": "array"
+      },
+      "viewerState": {
+        "$ref": "#/$defs/ViewerState"
+      }
+    },
+    "required": [
+      "title",
+      "style",
+      "setStyle",
+      "viewerState",
+      "panels",
+      "presentation",
+      "pieceRegistry",
+      "addPiece",
+      "removePiece",
+      "addPanel",
+      "removePanel",
+      "movePanel",
+      "duplicatePanel",
+      "setPresentation",
+      "participants",
+      "addParticipant",
+      "setChatRoom",
+      "ensureChatRoom",
+      "ensureFileStore",
+      "fileStoreRecord",
+      "meeting",
+      "bindMeeting",
+      "retitleLoom",
+      "retitlePanel",
+      "retargetPanel",
+      "hiddenPanels",
+      "privatePanels",
+      "viewerPanels",
+      "hidePanel",
+      "unhidePanel",
+      "addPrivatePanel",
+      "removePrivatePanel",
+      "movePrivatePanel",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

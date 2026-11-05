@@ -1,7 +1,7 @@
 # ts-transformer specs — map and ground rules
 
-Documentation corpus for the CTS compile pipeline (`packages/ts-transformers`)
-and its schema companion (`packages/schema-generator`). This README is the
+Documentation corpus for the CTS compile pipeline (`base/ts-transformers`)
+and its schema companion (`base/schema-generator`). This README is the
 entrypoint: what each document is, which ones win arguments, and what you must
 update when behavior changes.
 
@@ -22,7 +22,7 @@ update when behavior changes.
 
 Related, outside this directory: [JSON Schema](../json_schema.md), the runtime
 schema dialect these schemas target; the `JSONSchema` type in
-`packages/api/index.ts` is the authoritative field inventory. The
+`base/api/index.ts` is the authoritative field inventory. The
 [pattern-construction specs](../pattern-construction/README.md) define the
 runner-side builder and graph design. The
 [compilation tutorial](../../tutorial/07-compilation.md) is the narrative
@@ -51,7 +51,7 @@ instruments, and conventions.
   `deno task cf check <file> --show-transformed --no-run` FIRST, then the
   current-behavior spec for the why.
 - **"Is this emitted schema right?"** → schema-generator mapping spec +
-  `json_schema.md` + the `JSONSchema` type in `packages/api/index.ts`.
+  `json_schema.md` + the `JSONSchema` type in `base/api/index.ts`.
 - **Reviewing a transformer PR** → lowering contract (which invariant is at
   stake?), then the current-behavior spec sections the diff touches, then the
   fixture suites named there.
@@ -65,7 +65,7 @@ instruments, and conventions.
    new pipeline stages get §3; new runtime exports get §5 + the registry.
 2. Enumerable facts cite their canonical source (constant / function / test)
    rather than restating it — see §21.1. The load-bearing enumerations are
-   pinned by `packages/ts-transformers/test/spec-sync.test.ts`; extend it when
+   pinned by `base/ts-transformers/test/spec-sync.test.ts`; extend it when
    you add one.
 3. Prose lists are labeled "as of this writing". Status headers say what kind
    of document you're in. Docs whose content is superseded move to

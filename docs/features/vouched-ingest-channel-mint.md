@@ -28,12 +28,12 @@ from any write whose authoring identity is not `builtin`, screening on the
 **only** when `writeIdentity.identity` is defined and uniform
 (`prepare.ts:~1372`).
 
-Untrusted pattern/handler code **does** reach `cell.tx` (the SES sandbox does not
-interpose on host `IExtendedStorageTransaction` methods —
-`ses-runtime.ts` / `query-result-proxy.ts`). So a method like
+Any code holding a transaction can call the methods on
+`IExtendedStorageTransaction`. Untrusted pattern/handler code holds none (a cell
+keeps its transaction private), but that is one layer, and a method like
 `setCfcExternalIngest` on the public interface, feeding an **unconditional**
-`ExternalIngest` push into the builtin-authored flow join, would let *any*
-handler stamp a trusted "this arrived via external source X" mark on its own
+`ExternalIngest` push into the builtin-authored flow join, would let any holder
+stamp a trusted "this arrived via external source X" mark on its own
 outputs — and because the push is builtin-authored by construction, the gate
 is a no-op for it. That is strictly worse than the existing atoms, which are
 all screened on write identity.
@@ -82,8 +82,9 @@ the ingest stamp, independent of the `flowLabels` dial:
 
 A runtime can be explicitly configured with `cfcEnforcementMode: "disabled"`
 (the types-level `DEFAULT_CFC_ENFORCEMENT_MODE = "disabled"` is only the
-bare-transaction fallback — toolshed itself passes no CFC options and runs the
-`Runtime` constructor's `enforce-explicit` default), and the pre-commit CFC
+bare-transaction fallback — toolshed runs at `enforce-strict`, which its
+production preset pins through `presetCfcOptions` and the `Runtime`
+constructor resolves to as well), and the pre-commit CFC
 step early-returns when disabled — so the mint would never run there. Rather
 than abuse `enforcement = "observe"` to force prepare (a smell: it's not
 observing anything, and it desyncs ingest txs from the operator's real mode),

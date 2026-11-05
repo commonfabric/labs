@@ -1,0 +1,120 @@
+{
+  "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+  "helperCommit": "f6bc2af1e36b5a3d817be75c1d3632bc964e3e37",
+  "startedAt": "2026-09-10T20:42:07.364131+00:00",
+  "endedAt": "2026-09-10T20:48:53.115658+00:00",
+  "status": "passed",
+  "sourceChecks": [
+    {
+      "phase": "before-helper-copy",
+      "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+      "status": ""
+    },
+    {
+      "phase": "before-build",
+      "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+      "status": "?? tools/server-execution-topics/run-arm.ts\n?? tools/server-execution-topics/seed-check.ts\n"
+    },
+    {
+      "phase": "after-build",
+      "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+      "status": "?? tools/server-execution-topics/run-arm.ts\n?? tools/server-execution-topics/seed-check.ts\n"
+    },
+    {
+      "phase": "after-workload",
+      "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+      "status": "?? tools/server-execution-topics/run-arm.ts\n?? tools/server-execution-topics/seed-check.ts\n"
+    }
+  ],
+  "helpers": {
+    "tools/server-execution-topics/run-arm.ts": "88b3cae902036884745c5a0017521af77dde2e96ac0b602d9f31a3cb2ee0412e",
+    "tools/server-execution-topics/seed-check.ts": "abaac146312c64e5bcbca7cf6ca763f12ef4ee5c25cdd8d2430bc182f7fad414"
+  },
+  "flags": {
+    "EXPERIMENTAL_SERVER_EXECUTION": "true",
+    "COMMIT_SHA": "27f10d2d4f02f125c0492e5d6288acb3f0da148b"
+  },
+  "binarySha256": "866d47fbf498c7414412c30aeac0f16cdfed2bfd77d9238547984f47bee6c8ac",
+  "checkout": ".",
+  "captureMetadata": "external-captures.json",
+  "workloadResult": {
+    "tests": 7,
+    "steps": 27,
+    "failed": 0
+  },
+  "runtime": {
+    "deno": "2.9.4",
+    "v8": "15.0.245.2-rusty",
+    "typescript": "6.0.3"
+  },
+  "posture": {
+    "role": "opposite",
+    "enabled": true,
+    "label": "ON",
+    "experimentalValue": "true",
+    "recordVariant": "server-execution"
+  },
+  "counts": [
+    {
+      "logger": "wave-accumulator",
+      "event": "foreign-write-refused",
+      "warn": 40,
+      "error": 0
+    },
+    {
+      "logger": "wave-accumulator",
+      "event": "contribution-dropped",
+      "warn": 6,
+      "error": 0
+    },
+    {
+      "logger": "scheduler",
+      "event": "scheduler-non-settling",
+      "warn": 2,
+      "error": 0
+    },
+    {
+      "logger": "storage.v2.multi-space-commit",
+      "event": "seal-space-commit-failed",
+      "warn": 0,
+      "error": 40
+    },
+    {
+      "logger": "storage.v2.session-remount",
+      "event": "session-remount",
+      "warn": 3,
+      "error": 0
+    },
+    {
+      "logger": "runner.wish-flow",
+      "event": "sidecar-run-raced",
+      "warn": 3,
+      "error": 0
+    },
+    {
+      "logger": "runner",
+      "event": "piece-start-commit-recovering",
+      "warn": 1,
+      "error": 0
+    },
+    {
+      "logger": "provider-registry",
+      "event": "Missing OAuth credentials (clientId/clientSecret), skipping provider",
+      "warn": 8,
+      "error": 0
+    },
+    {
+      "logger": "space-server",
+      "event": "space-root-ensure-no-owner",
+      "warn": 10,
+      "error": 0
+    },
+    {
+      "logger": "space-server",
+      "event": "event-view-lag",
+      "warn": 18,
+      "error": 0
+    }
+  ],
+  "latencyEligible": false
+}

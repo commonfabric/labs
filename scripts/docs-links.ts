@@ -151,8 +151,12 @@ const readDirectoryTree = async (
       childGraphPath,
       excludedDirectoryPaths,
     );
-    directoryPaths.push(...child.directoryPaths);
-    otherFilePaths.push(...child.otherFilePaths);
+    for (const directoryPath of child.directoryPaths) {
+      directoryPaths.push(directoryPath);
+    }
+    for (const otherFilePath of child.otherFilePaths) {
+      otherFilePaths.push(otherFilePath);
+    }
     if (child.files.length > 0 || child.directories.length > 0) {
       directories.push(child);
     }
@@ -382,7 +386,9 @@ const renderDirectory = (
     lines.push(nodeLine(file, incoming, childIndent));
   }
   for (const child of directory.directories) {
-    lines.push(...renderDirectory(child, incoming, depth + 1));
+    for (const line of renderDirectory(child, incoming, depth + 1)) {
+      lines.push(line);
+    }
   }
   lines.push(`${indent}}`);
   return lines;
@@ -450,7 +456,10 @@ const renderDocsDot = (
   outputLines.push("");
 
   for (const directory of graph.directoryTree.directories) {
-    outputLines.push(...renderDirectory(directory, graph.incoming, 1), "");
+    for (const line of renderDirectory(directory, graph.incoming, 1)) {
+      outputLines.push(line);
+    }
+    outputLines.push("");
   }
 
   for (const [index, edge] of graph.renderedEdges.entries()) {

@@ -1,0 +1,229 @@
+Check packages/memory/test/v2-watch-incremental.test.ts
+running 1 test from ./packages/memory/test/v2-watch-incremental.test.ts
+Server ...
+  instance members ...
+    watchAdd() ...
+      leaves a resumed session unchanged when an earlier addition completes ... FAILED (18ms)
+      keeps a shared miss reactive until its last branch owner departs ... ok (41ms)
+      reconciles normalized duplicate operation owners with graph ownership false ... ok (11ms)
+      reconciles normalized duplicate operation owners with graph ownership true ... ok (11ms)
+      abandons changed miss ownership and retries against a newly created target ... ok (37ms)
+      retains an operation owner's interest after the last graph miss retires ... ok (9ms)
+      publishes a large valid batch without an argument-count limit ... ok (436ms)
+      retains accepted duplicate-id roots when removing an unrelated watch ... ok (8ms)
+      leaves established delivery and graph state unchanged when a later branch fails ... ok (19ms)
+      rolls back graph and cursor changes when a later operation snapshot fails ... ok (28ms)
+      keeps an in-flight operation snapshot paired with its original cursors ... ok (13ms)
+      refreshes without filtering the 32 established graph watches for operation fields ... ok (10ms)
+      adds one root without enumerating the 32 established delivered entries ... ok (13ms)
+      refreshes one root without enumerating the 32 established delivered entries ... ok (10ms)
+      adds one root without scanning the 32 established manager addresses ... ok (10ms)
+      refreshes without filtering the 256 established graph watches for operation fields ... ok (35ms)
+      adds one root without enumerating the 256 established delivered entries ... ok (33ms)
+      refreshes one root without enumerating the 256 established delivered entries ... ok (29ms)
+      adds one root without scanning the 256 established manager addresses ... ok (27ms)
+    watchAdd() ... FAILED (due to 1 failed step) (806ms)
+  instance members ... FAILED (due to 1 failed step) (807ms)
+Server ... FAILED (due to 1 failed step) (816ms)
+
+ ERRORS 
+
+Server ... instance members ... watchAdd() ... leaves a resumed session unchanged when an earlier addition completes => https://jsr.io/@std/testing/1.0.19/_test_suite.ts:373:39
+error: AssertionError: Values are not equal.
+
+
+    [Diff] Actual / Expected
+
+
+    {
+      caughtUpLocalSeq: 0,
+      cursors: [],
+      entities: [
+        [
+          "\x00space\x00of:a",
+          {
+            branch: "",
+            deleted: true,
+            id: "of:a",
+            scope: "space",
+            scopeKey: "space",
+            seq: 0,
+          },
+        ],
+      ],
+      graphs: [
+        {
+          branch: "",
+          entities: [
+            [
+              "did:key:z6Mk-watch-resume/space/of:a",
+              {
+                branch: "",
+                document: null,
+                id: "of:a",
+                seq: 0,
+              },
+            ],
+          ],
+          loaded: [],
+          memo: [],
+          missed: [],
+          missedBy: [],
+          missesOf: [],
+          schemaRefCounts: [],
+          schemaRefs: [
+            [
+              "did:key:z6Mk-watch-resume/space/of:a",
+              {
+                refs: Set(0) {},
+                seq: 0,
+              },
+            ],
+          ],
+          tracker: [
+            [
+              "did:key:z6Mk-watch-resume/space/of:a",
+              [
+                {
+                  path: [
+                    "value",
+                  ],
+                  schema: false,
+                },
+              ],
+            ],
+          ],
+        },
+      ],
+      lastSyncedSeq: 0,
+-     operationTrackedIds: [
+-       "space\x00of:b",
+-     ],
+-     operationWatches: [
+-       {
+-         id: "operation",
+-         kind: "operation",
+-         query: {
+-           id: "of:b",
+-           path: [],
+-         },
+-       },
+-     ],
++     operationTrackedIds: [],
++     operationWatches: [],
+      pendingCaughtUpLocalSeq: 0,
+      seenSeq: 0,
+      trackedIds: [
+        "space\x00of:a",
+      ],
+      watchIndex: [
+        [
+          "of:a",
+          {
+            id: "of:a",
+            kind: "graph",
+            query: {
+              roots: [
+                {
+                  id: "of:a",
+                  selector: {
+                    path: [],
+                    schema: false,
+                  },
+                },
+              ],
+            },
+          },
+        ],
+-       [
+-         "of:b",
+-         {
+-           id: "of:b",
+-           kind: "graph",
+-           query: {
+-             roots: [
+-               {
+-                 id: "of:b",
+-                 selector: {
+-                   path: [],
+-                   schema: false,
+-                 },
+-               },
+-             ],
+-           },
+-         },
+-       ],
+-       [
+-         "operation",
+-         {
+-           id: "operation",
+-           kind: "operation",
+-           query: {
+-             id: "of:b",
+-             path: [],
+-           },
+-         },
+-       ],
+      ],
+      watches: [
+        {
+          id: "of:a",
+          kind: "graph",
+          query: {
+            roots: [
+              {
+                id: "of:a",
+                selector: {
+                  path: [],
+                  schema: false,
+                },
+              },
+            ],
+          },
+        },
+-       {
+-         id: "of:b",
+-         kind: "graph",
+-         query: {
+-           roots: [
+-             {
+-               id: "of:b",
+-               selector: {
+-                 path: [],
+-                 schema: false,
+-               },
+-             },
+-           ],
+-         },
+-       },
+-       {
+-         id: "operation",
+-         kind: "operation",
+-         query: {
+-           id: "of:b",
+-           path: [],
+-         },
+-       },
+      ],
+    }
+
+  throw new AssertionError(message);
+        ^
+    at assertEquals (https://jsr.io/@std/expect/1.0.20/_assert_equals.ts:37:9)
+    at toEqual (https://jsr.io/@std/expect/1.0.20/_matchers.ts:69:5)
+    at applyMatcher (https://jsr.io/@std/expect/1.0.20/expect.ts:231:13)
+    at Proxy.<anonymous> (https://jsr.io/@std/expect/1.0.20/expect.ts:241:13)
+    at Object.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/test/v2-watch-incremental.test.ts:209:37)
+    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:437:7)
+    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:425:9)
+    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:425:9)
+    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:425:9)
+    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:386:13)
+
+ FAILURES 
+
+Server ... instance members ... watchAdd() ... leaves a resumed session unchanged when an earlier addition completes => https://jsr.io/@std/testing/1.0.19/_test_suite.ts:373:39
+
+FAILED | 0 passed (18 steps) | 1 failed (3 steps) (828ms)
+
+error: Test failed

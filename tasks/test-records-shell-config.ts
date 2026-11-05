@@ -485,6 +485,46 @@ export async function unexportFromProfiles(
   return removals;
 }
 
+/**
+ * Points this tool's export of a variable at a new value in every
+ * profile it writes or reads, returning the profiles it changed. Only a
+ * marked line that is word for word the one this tool writes for the
+ * old value changes; any other line is a person's own.
+ */
+export async function reexportFromProfiles(
+  name: string,
+  from: string,
+  to: string,
+  env: Environment = Deno.env.get,
+  os: string = Deno.build.os,
+): Promise<string[]> {
+  const home = readEnv("HOME", env) ?? readEnv("USERPROFILE", env);
+  const kind = shellKind(env);
+  const written = exportLine(kind, name, from, home);
+  const replacement = exportLine(kind, name, to, home);
+  const changed: string[] = [];
+  for (
+    const path of [...profileCandidates(env, os), ...profilesToInspect(env)]
+  ) {
+    const text = await readIfPresent(path);
+    if (text === undefined) continue;
+    const lines = text.split("\n");
+    let found = false;
+    for (let index = 1; index < lines.length; index += 1) {
+      if (
+        lines[index - 1]!.trim() === MARKER && lines[index]!.trim() === written
+      ) {
+        lines[index] = lines[index]!.replace(written, replacement);
+        found = true;
+      }
+    }
+    if (!found) continue;
+    await replaceFile(path, lines.join("\n"));
+    changed.push(path);
+  }
+  return changed;
+}
+
 /** The command that loads a profile into the shell already running. */
 export function reloadHint(path: string, kind: ShellKind): string {
   return kind === "fish" ? `source ${path}` : `. ${path}`;

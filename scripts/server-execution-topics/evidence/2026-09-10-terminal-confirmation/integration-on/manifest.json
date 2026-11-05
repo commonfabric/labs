@@ -1,0 +1,746 @@
+{
+  "version": 2,
+  "mode": "correctness",
+  "role": "opposite",
+  "expectedPosture": {
+    "role": "opposite",
+    "enabled": true,
+    "label": "ON",
+    "experimentalValue": "true",
+    "recordVariant": "server-execution"
+  },
+  "workloadHead": "8814af62a7ddfd50262f3f2f98421f66519a3c95",
+  "sourcePaths": [
+    "tools/server-execution-topics/run-arm.ts",
+    "tools/server-execution-topics/seed-check.ts",
+    "packages/patterns/integration/topic-board-fixture.ts"
+  ],
+  "artifactRoot": ".",
+  "store": "store",
+  "provenance": {
+    "checkout": "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs",
+    "captureDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/terminal-integration-on-01",
+    "commands": [
+      {
+        "command": "git",
+        "args": [
+          "rev-parse",
+          "HEAD"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs"
+      },
+      {
+        "command": "git",
+        "args": [
+          "diff",
+          "HEAD",
+          "--binary"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs"
+      },
+      {
+        "command": "/usr/sbin/sysctl",
+        "args": [
+          "-n",
+          "machdep.cpu.brand_string"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs"
+      },
+      {
+        "command": "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs/.ci-cache/binaries/toolshed-baked-opposite",
+        "args": [
+          "--port=62670",
+          "--background",
+          "--log-file=/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/terminal-integration-on-01/toolshed-62670.log"
+        ],
+        "cwd": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/terminal-integration-on-01/store"
+      },
+      {
+        "command": "shasum",
+        "args": [
+          "-a",
+          "256",
+          "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs/.ci-cache/binaries/toolshed-baked-opposite"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs"
+      },
+      {
+        "command": "/opt/homebrew/bin/deno",
+        "args": [
+          "test",
+          "--no-check",
+          "-A",
+          "packages/patterns/integration/topic-board-fixture.test.ts",
+          "packages/patterns/integration/topic-board-child-contract.test.ts",
+          "packages/patterns/integration/topic-create-onscreen.test.ts",
+          "packages/patterns/integration/sx2-events.test.ts",
+          "packages/patterns/integration/lunch-poll-vote.test.ts",
+          "packages/patterns/integration/cfc-group-chat-chained-event-gate-multi-runtime.test.ts"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs"
+      }
+    ],
+    "workloadEnvironment": {
+      "API_URL": "http://localhost:62670",
+      "MEMORY_URL": "http://localhost:62670",
+      "TOOLSHED_URL": "http://localhost:62670",
+      "TOOLSHED_PORT": "62670",
+      "EXPERIMENTAL_SERVER_EXECUTION": "true",
+      "FRONTEND_URL": "http://localhost:62670",
+      "SPACE_NAME": "topics-campaign-cb638144-448b-4992-acde-5c5641074c09",
+      "HEADLESS": "1",
+      "CF_LOG_LEVEL": "silent",
+      "CF_CAMPAIGN_RUN_DIR": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/terminal-integration-on-01"
+    }
+  },
+  "cache": "fresh store and server; existing Deno dependency cache",
+  "machine": {
+    "cpu": "Apple M3 Max",
+    "arch": "aarch64",
+    "os": "darwin",
+    "logicalCpus": 16,
+    "totalmem": 137438953472
+  },
+  "runtime": {
+    "deno": "2.9.4",
+    "v8": "15.0.245.2-rusty",
+    "typescript": "6.0.3"
+  },
+  "flags": {
+    "EXPERIMENTAL_SERVER_EXECUTION": "true"
+  },
+  "samples": [
+    {
+      "at": "2026-09-10T10:43:32.950Z",
+      "load": [
+        6.64697265625,
+        10.958984375,
+        10.5615234375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:42.144Z",
+      "load": [
+        6.90234375,
+        10.87646484375,
+        10.537109375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:43.148Z",
+      "load": [
+        6.669921875,
+        10.76220703125,
+        10.49853515625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:44.150Z",
+      "load": [
+        6.669921875,
+        10.76220703125,
+        10.49853515625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:45.153Z",
+      "load": [
+        6.669921875,
+        10.76220703125,
+        10.49853515625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:46.155Z",
+      "load": [
+        6.669921875,
+        10.76220703125,
+        10.49853515625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:47.157Z",
+      "load": [
+        6.669921875,
+        10.76220703125,
+        10.49853515625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:48.159Z",
+      "load": [
+        6.6962890625,
+        10.69970703125,
+        10.47802734375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:49.161Z",
+      "load": [
+        6.6962890625,
+        10.69970703125,
+        10.47802734375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:50.162Z",
+      "load": [
+        6.6962890625,
+        10.69970703125,
+        10.47802734375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:51.164Z",
+      "load": [
+        6.6962890625,
+        10.69970703125,
+        10.47802734375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:52.166Z",
+      "load": [
+        6.6962890625,
+        10.69970703125,
+        10.47802734375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:53.168Z",
+      "load": [
+        6.72021484375,
+        10.63818359375,
+        10.45751953125
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:54.170Z",
+      "load": [
+        6.72021484375,
+        10.63818359375,
+        10.45751953125
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:55.172Z",
+      "load": [
+        6.72021484375,
+        10.63818359375,
+        10.45751953125
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:56.174Z",
+      "load": [
+        6.72021484375,
+        10.63818359375,
+        10.45751953125
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:57.176Z",
+      "load": [
+        6.72021484375,
+        10.63818359375,
+        10.45751953125
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:58.178Z",
+      "load": [
+        7.0625,
+        10.64404296875,
+        10.46044921875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:43:59.180Z",
+      "load": [
+        7.0625,
+        10.64404296875,
+        10.46044921875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:00.182Z",
+      "load": [
+        7.0625,
+        10.64404296875,
+        10.46044921875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:01.183Z",
+      "load": [
+        7.0625,
+        10.64404296875,
+        10.46044921875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:02.185Z",
+      "load": [
+        7.0625,
+        10.64404296875,
+        10.46044921875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:03.186Z",
+      "load": [
+        6.73681640625,
+        10.51708984375,
+        10.41650390625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:04.187Z",
+      "load": [
+        6.73681640625,
+        10.51708984375,
+        10.41650390625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:05.189Z",
+      "load": [
+        6.73681640625,
+        10.51708984375,
+        10.41650390625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:06.191Z",
+      "load": [
+        6.73681640625,
+        10.51708984375,
+        10.41650390625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:07.193Z",
+      "load": [
+        6.73681640625,
+        10.51708984375,
+        10.41650390625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:08.196Z",
+      "load": [
+        6.59765625,
+        10.42529296875,
+        10.384765625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:09.196Z",
+      "load": [
+        6.59765625,
+        10.42529296875,
+        10.384765625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:10.198Z",
+      "load": [
+        6.59765625,
+        10.42529296875,
+        10.384765625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:11.201Z",
+      "load": [
+        6.59765625,
+        10.42529296875,
+        10.384765625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:12.203Z",
+      "load": [
+        6.59765625,
+        10.42529296875,
+        10.384765625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:13.205Z",
+      "load": [
+        7.18994140625,
+        10.484375,
+        10.40576171875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:14.207Z",
+      "load": [
+        7.18994140625,
+        10.484375,
+        10.40576171875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:15.209Z",
+      "load": [
+        7.18994140625,
+        10.484375,
+        10.40576171875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:16.211Z",
+      "load": [
+        7.18994140625,
+        10.484375,
+        10.40576171875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:17.213Z",
+      "load": [
+        7.18994140625,
+        10.484375,
+        10.40576171875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:18.215Z",
+      "load": [
+        7.49462890625,
+        10.49267578125,
+        10.4091796875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:19.217Z",
+      "load": [
+        7.49462890625,
+        10.49267578125,
+        10.4091796875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:20.218Z",
+      "load": [
+        7.49462890625,
+        10.49267578125,
+        10.4091796875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:21.237Z",
+      "load": [
+        7.49462890625,
+        10.49267578125,
+        10.4091796875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:22.239Z",
+      "load": [
+        7.49462890625,
+        10.49267578125,
+        10.4091796875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:23.242Z",
+      "load": [
+        7.93505859375,
+        10.5341796875,
+        10.42431640625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:24.242Z",
+      "load": [
+        7.93505859375,
+        10.5341796875,
+        10.42431640625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:25.245Z",
+      "load": [
+        7.93505859375,
+        10.5341796875,
+        10.42431640625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:26.246Z",
+      "load": [
+        7.93505859375,
+        10.5341796875,
+        10.42431640625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:27.247Z",
+      "load": [
+        7.93505859375,
+        10.5341796875,
+        10.42431640625
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:28.249Z",
+      "load": [
+        7.37939453125,
+        10.37548828125,
+        10.36865234375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:29.252Z",
+      "load": [
+        7.37939453125,
+        10.37548828125,
+        10.36865234375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:30.254Z",
+      "load": [
+        7.37939453125,
+        10.37548828125,
+        10.36865234375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:31.256Z",
+      "load": [
+        7.37939453125,
+        10.37548828125,
+        10.36865234375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:32.258Z",
+      "load": [
+        7.37939453125,
+        10.37548828125,
+        10.36865234375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:33.258Z",
+      "load": [
+        7.1083984375,
+        10.26953125,
+        10.3310546875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:34.259Z",
+      "load": [
+        7.1083984375,
+        10.26953125,
+        10.3310546875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:35.260Z",
+      "load": [
+        7.1083984375,
+        10.26953125,
+        10.3310546875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:36.262Z",
+      "load": [
+        7.1083984375,
+        10.26953125,
+        10.3310546875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:37.265Z",
+      "load": [
+        7.1083984375,
+        10.26953125,
+        10.3310546875
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:38.268Z",
+      "load": [
+        7.099609375,
+        10.21484375,
+        10.3115234375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:39.269Z",
+      "load": [
+        7.099609375,
+        10.21484375,
+        10.3115234375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:40.274Z",
+      "load": [
+        7.099609375,
+        10.21484375,
+        10.3115234375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:41.275Z",
+      "load": [
+        7.099609375,
+        10.21484375,
+        10.3115234375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:42.277Z",
+      "load": [
+        7.099609375,
+        10.21484375,
+        10.3115234375
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:43.279Z",
+      "load": [
+        7.97216796875,
+        10.34375,
+        10.3564453125
+      ]
+    },
+    {
+      "at": "2026-09-10T10:44:43.687Z",
+      "load": [
+        7.97216796875,
+        10.34375,
+        10.3564453125
+      ]
+    }
+  ],
+  "status": "passed",
+  "meta": {
+    "did": "did:key:z6MksHnZGdHxNoCqcC3kPvBSo2goCzLSWheQ8LrVpAtQwgwW",
+    "gitSha": "8814af62a7ddfd50262f3f2f98421f66519a3c95",
+    "shellServerExecutionDefine": "true",
+    "experimental": {
+      "commitPreconditions": true,
+      "computedCellIds": true,
+      "contentAddressedSchemas": true,
+      "lazyMaterialization": true,
+      "modernCellRep": false,
+      "plainResultReceipts": true,
+      "readerSchemaPrecedence": true,
+      "serverExecution": true
+    },
+    "cfc": {
+      "provenance": "resolved",
+      "enforcementMode": {
+        "rung": "enforce-explicit",
+        "diagnosticOnly": false,
+        "decidesOn": "a recorded reason, which rejects the commit"
+      },
+      "flowLabels": {
+        "rung": "off",
+        "diagnosticOnly": true,
+        "decidesOn": "nothing; no derived label component comes into existence"
+      },
+      "writeFloor": {
+        "rung": "off",
+        "diagnosticOnly": true,
+        "decidesOn": "nothing; the write-side integrity floor is not checked"
+      },
+      "triggerReadGating": false,
+      "decomposedEnvelopes": false,
+      "policyEvaluation": {
+        "rung": "off",
+        "diagnosticOnly": true,
+        "decidesOn": "nothing; gated labels reach the gates un-rewritten"
+      },
+      "labelMetadataProtection": {
+        "rung": "off",
+        "diagnosticOnly": true,
+        "decidesOn": "nothing; label metadata writes are not gated"
+      },
+      "declaredMonotonicity": {
+        "rung": "off",
+        "diagnosticOnly": true,
+        "decidesOn": "nothing; a declared-monotonicity violation is not checked"
+      },
+      "policyDigest": null,
+      "sinks": [
+        {
+          "sink": "fetchBinary",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "fetchText",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "fetchJson",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "fetchJsonUnchecked",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "fetchProgram",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "streamData",
+          "ungated": "no confidentiality ceiling is configured for this sink"
+        },
+        {
+          "sink": "llm",
+          "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+        },
+        {
+          "sink": "llmDialog",
+          "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+        },
+        {
+          "sink": "generateText",
+          "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+        },
+        {
+          "sink": "generateObject",
+          "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+        }
+      ],
+      "deviations": [
+        {
+          "what": "sink `llm` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+          "owner": "CFC runtime (Epic B, sink governance)",
+          "retirement": "a boundary-scoped admission mechanism exists — a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+        },
+        {
+          "what": "sink `llmDialog` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+          "owner": "CFC runtime (Epic B, sink governance)",
+          "retirement": "a boundary-scoped admission mechanism exists — a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+        },
+        {
+          "what": "sink `generateText` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+          "owner": "CFC runtime (Epic B, sink governance)",
+          "retirement": "a boundary-scoped admission mechanism exists — a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+        },
+        {
+          "what": "sink `generateObject` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+          "owner": "CFC runtime (Epic B, sink governance)",
+          "retirement": "a boundary-scoped admission mechanism exists — a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+        }
+      ]
+    }
+  },
+  "serverBuildHead": "8814af62a7ddfd50262f3f2f98421f66519a3c95",
+  "binarySha256": "5ac5498b678ca9f1afe6ed3ade4258b40dfeb5f22182f3137a7d92905791b3d4",
+  "exitCode": 0,
+  "latencyEligible": false
+}

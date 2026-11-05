@@ -1,0 +1,105 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "SpendTransaction": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "category_primary": {
+            "type": "string"
+          },
+          "iso_currency_code": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "category_primary"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "includeIncome": {
+        "default": false,
+        "description": "Whether deposits count toward the totals. They do not by default.",
+        "type": "boolean"
+      },
+      "rows": {
+        "default": [],
+        "description": "The month's transactions, as a reader returned them.",
+        "items": {
+          "$ref": "#/$defs/SpendTransaction"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "primitives/spend-by-category.tsx",
+  "resultSchema": {
+    "$defs": {
+      "CategoryTotal": {
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "category",
+          "total",
+          "count"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "categories": {
+        "description": "Every category with spending, largest total first.",
+        "items": {
+          "$ref": "#/$defs/CategoryTotal"
+        },
+        "type": "array"
+      },
+      "categoryCount": {
+        "type": "number"
+      },
+      "currency": {
+        "description": "The currency the rows carried, empty when they carried none.",
+        "type": "string"
+      },
+      "errorMessage": {
+        "description": "Why totals are unavailable, empty for a single-currency input.",
+        "type": "string"
+      },
+      "grandTotal": {
+        "description": "What every category below comes to.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "categories",
+      "categoryCount",
+      "grandTotal",
+      "currency",
+      "errorMessage",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

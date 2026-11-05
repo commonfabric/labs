@@ -26,7 +26,7 @@ unique key you use for normal development — see
 
 ```bash
 mkdir -p .cf
-deno run -A packages/cli/mod.ts id new > .cf/shared-dev.key
+deno run -A runtime/cli/mod.ts id new > .cf/shared-dev.key
 export CF_IDENTITY="$PWD/.cf/shared-dev.key"
 ```
 
@@ -69,6 +69,10 @@ packages and type-checks attached tests but does not run them.
 
 ## Stale Computed Values After `cf cell set`
 
+This section describes a deployment with server execution off. Under server
+execution `cf cell get` pulls the value from the server, so it is current, and
+only `cf cell get --no-run` can return a stale one.
+
 **Gotcha:** `cf cell set` updates data but does NOT trigger computed re-evaluation. You must run `piece step` after `set` to get fresh computed values.
 
 ```bash
@@ -97,7 +101,7 @@ When the question is "what did the compiler emit?", use `cf check` with
 `--show-transformed` instead of reaching for ad hoc test harness code.
 
 ```bash
-deno task cf check ./packages/patterns/my-pattern.tsx --root $(pwd) --show-transformed
+deno task cf check ./patterns/my-pattern.tsx --root $(pwd) --show-transformed
 ```
 
 This is the fastest way to inspect how `ts-transformers` rewrote:
@@ -111,7 +115,7 @@ It also works on fixture inputs while debugging the compiler itself:
 
 ```bash
 deno task cf check \
-  packages/ts-transformers/test/fixtures/jsx-expressions/jsx-property-access.input.tsx \
+  base/ts-transformers/test/fixtures/jsx-expressions/jsx-property-access.input.tsx \
   --root $(pwd) \
   --show-transformed
 ```

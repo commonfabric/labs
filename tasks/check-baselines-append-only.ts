@@ -7,7 +7,7 @@
  * store is actually append-only, and `rm` is not `--update`. Two commands
  * launder an incompatible change:
  *
- *     rm packages/patterns/baselines/system/home.tsx/2026...-<hash>.json
+ *     rm patterns/baselines/system/home/home.tsx/2026...-<hash>.json
  *     deno task pattern-compat --update      # now green
  *
  * In a diff that already carries tens of thousands of lines of recorded JSON,

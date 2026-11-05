@@ -1,0 +1,753 @@
+diff --git a/packages/cli/commands/test-command.ts b/packages/cli/commands/test-command.ts
+--- a/packages/cli/commands/test-command.ts
++++ b/packages/cli/commands/test-command.ts
+@@ -1,7 +1,9 @@
+ import { expandGlob } from "@std/fs";
+ import { resolve } from "@std/path";
+ 
+-import { Command } from "@cliffy/command";
++import { Command, EnumType } from "@cliffy/command";
++
++import { CFC_ENFORCEMENT_MODES } from "@commonfabric/runner/cfc";
+ 
+ import { cliText } from "../lib/cli-name.ts";
+ import {
+@@ -19,6 +21,8 @@
+ ) {
+   return new Command()
+     .name("test")
++    .type("cfc-enforcement", new EnumType(CFC_ENFORCEMENT_MODES))
++    .type("cfc-flow", new EnumType(["off", "derive", "observe", "persist"]))
+     .description("Run pattern tests (.test.tsx files).")
+     .example(
+       cliText("cf test ./counter.test.tsx"),
+@@ -37,6 +41,19 @@
+         "cf test ./battleship/pass-and-play/main.test.tsx --root ./battleship",
+       ),
+       "Run with custom root for resolving imports from sibling directories.",
++    )
++    .option(
++      "--cfc-enforcement-mode <mode:cfc-enforcement>",
++      "Override the test runtime CFC enforcement mode.",
++    )
++    .option(
++      "--cfc-flow-labels <mode:cfc-flow>",
++      "Flow labels: off, derive (runtime observe), or persist.",
++    )
++    .option(
++      "--cfc-shell-posture",
++      "Use enforce-explicit enforcement and persist flow labels.",
++      { conflicts: ["cfc-enforcement-mode", "cfc-flow-labels"] },
+     )
+     .option(
+       "--verbose",
+@@ -179,6 +196,14 @@
+       // Run tests
+       const { failed } = await runTests(uniqueTestFiles, {
+         verbose: options.verbose,
++        cfcEnforcementMode: options.cfcShellPosture
++          ? "enforce-explicit"
++          : options.cfcEnforcementMode,
++        cfcFlowLabels: options.cfcShellPosture
++          ? "persist"
++          : options.cfcFlowLabels === "derive"
++          ? "observe"
++          : options.cfcFlowLabels,
+         noIdempotencyCheck: options.idempotencyCheck === false,
+         root,
+         dataFilePaths: options.datafile?.map((path: string) =>
+diff --git a/packages/cli/lib/multi-user-test-runner.ts b/packages/cli/lib/multi-user-test-runner.ts
+--- a/packages/cli/lib/multi-user-test-runner.ts
++++ b/packages/cli/lib/multi-user-test-runner.ts
+@@ -276,11 +276,23 @@
+           // A test that names a mode names it for every participant, the way
+           // the single-user runner honors it.
+           cfcEnforcementMode: options.cfcEnforcementMode,
++          cfcFlowLabels: options.cfcFlowLabels,
+         }) as ParticipantInitResult;
+         assertParticipantRung(
+           spec.name,
+           options.cfcEnforcementMode,
+           init.cfcEnforcementMode,
++        );
++        if (
++          options.cfcFlowLabels !== undefined &&
++          init.cfcFlowLabels !== options.cfcFlowLabels
++        ) {
++          throw new Error(
++            `Participant "${spec.name}" resolved flow labels to ${init.cfcFlowLabels}, expected ${options.cfcFlowLabels}`,
++          );
++        }
++        console.log(
++          `  [${spec.name}] CFC posture: enforcement=${init.cfcEnforcementMode} flowLabels=${init.cfcFlowLabels}`,
+         );
+         participants.push({
+           spec,
+diff --git a/packages/cli/lib/multi-user-test-worker.ts b/packages/cli/lib/multi-user-test-worker.ts
+--- a/packages/cli/lib/multi-user-test-worker.ts
++++ b/packages/cli/lib/multi-user-test-worker.ts
+@@ -31,6 +31,7 @@
+ import {
+   CFC_ENFORCEMENT_MODES,
+   type CfcEnforcementMode,
++  type CfcFlowLabelsMode,
+   isCfcEnforcementMode,
+ } from "@commonfabric/runner/cfc";
+ import {
+@@ -108,6 +109,9 @@
+    * named, so a participant that came up on another rung says so.
+    */
+   cfcEnforcementMode: CfcEnforcementMode;
++
++  /** Flow-label mode resolved by this participant runtime. */
++  cfcFlowLabels: CfcFlowLabelsMode;
+ }
+ 
+ const SETUP_CAUSE = "multi-user-test-setup";
+@@ -320,6 +324,17 @@
+    */
+   async init(args) {
+     const requestedMode = requestedEnforcementMode(args.cfcEnforcementMode);
++    const flowLabels = args.cfcFlowLabels;
++    if (
++      flowLabels !== undefined && flowLabels !== "off" &&
++      flowLabels !== "observe" && flowLabels !== "persist"
++    ) {
++      throw new Error(
++        `Initialization cfcFlowLabels is ${
++          String(flowLabels)
++        }, not off, observe, or persist`,
++      );
++    }
+     const identity = await Identity.fromKeyPair(
+       keyPairFromRealmValue(
+         args.identity as RealmEncodedValue,
+@@ -355,6 +370,7 @@
+       experimental: experimentalOptionsFromEnv(Deno.env.get),
+       errorHandlers: [(error: Error) => runtimeErrors.push(String(error))],
+       moduleByteCache: getDefaultModuleByteCache(),
++      ...(flowLabels !== undefined ? { cfcFlowLabels: flowLabels } : {}),
+       ...(requestedMode !== undefined
+         ? { cfcEnforcementMode: requestedMode }
+         : {}),
+@@ -532,6 +548,7 @@
+         await (resultCell.key("allowConsoleWarnings") as Cell<unknown>)
+           .pull() === true,
+       cfcEnforcementMode: rt().cfcEnforcementMode,
++      cfcFlowLabels: rt().cfcFlowLabels,
+     };
+     return result;
+   },
+diff --git a/packages/cli/lib/test-runner.ts b/packages/cli/lib/test-runner.ts
+--- a/packages/cli/lib/test-runner.ts
++++ b/packages/cli/lib/test-runner.ts
+@@ -67,7 +67,10 @@
+   SettleStats,
+   Stream,
+ } from "@commonfabric/runner";
+-import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
++import type {
++  CfcEnforcementMode,
++  CfcFlowLabelsMode,
++} from "@commonfabric/runner/cfc";
+ import {
+   type CDFPoint,
+   clearTimingMeasures,
+@@ -381,6 +384,9 @@
+ 
+   /** Override CFC enforcement mode for the test runtime. */
+   cfcEnforcementMode?: CfcEnforcementMode;
++
++  /** Override flow-label propagation for every test runtime. */
++  cfcFlowLabels?: CfcFlowLabelsMode;
+ 
+   /** Shared compiled-module-byte cache for direct harness compiles. */
+   moduleByteCache?: ModuleByteCache;
+@@ -598,6 +604,11 @@
+   label?: string,
+   statsInclude: string[] = [],
+ ): void {
++  statsInclude = [
++    "cfc",
++    "extended-storage-transaction/prepareCfc",
++    ...statsInclude,
++  ];
+   const counts = useDelta ? getGlobalLogCountDeltas() : getGlobalLogCounts();
+   const dp = useDelta ? "Δ" : "";
+   const labelStr = label ? ` | ${label}:` : ":";
+@@ -646,6 +657,20 @@
+           max: timing.max,
+         });
+       }
++    }
++  }
++
++  // Zero rows distinguish a phase that did no CFC work from a missing probe.
++  for (
++    const name of [
++      "extended-storage-transaction/prepareCfc",
++      "cfc/deriveFlowJoin",
++      "cfc/collectConsumedLabel",
++      "cfc/preparedDigestFor",
++    ]
++  ) {
++    if (!entries.some((entry) => entry.name === name)) {
++      entries.push({ name, n: 0, total: 0, avg: 0, p50: 0, p95: 0, max: 0 });
+     }
+   }
+ 
+@@ -1159,6 +1184,9 @@
+         ...(options.cfcEnforcementMode !== undefined
+           ? { cfcEnforcementMode: options.cfcEnforcementMode }
+           : {}),
++        ...(options.cfcFlowLabels !== undefined
++          ? { cfcFlowLabels: options.cfcFlowLabels }
++          : {}),
+         ...(options.storageHost?.onPatternInstantiated !== undefined
+           ? { onPatternInstantiated: options.storageHost.onPatternInstantiated }
+           : {}),
+@@ -1175,6 +1203,9 @@
+           }
+         },
+       })),
++  );
++  console.log(
++    `  CFC posture: enforcement=${runtime.cfcEnforcementMode} flowLabels=${runtime.cfcFlowLabels}`,
+   );
+   if (!options.noIdempotencyCheck) runtime.enableIdempotencyCheck();
+   else if (options.verbose) {
+@@ -1679,18 +1710,35 @@
+         if (isRender) {
+           renderCount++;
+           const renderName = `render_${renderCount}`;
++          const digestBenchRenderStart = performance.now();
+           try {
+             if (!stepValue.skip) {
+-              await materializeTestVDOM(
+-                stepCell.key("render") as Cell<unknown>,
+-                () => settleRuntime(renderName, 20),
++              await withPhase(
++                ["runTestPattern", "step", renderName, "materialize"],
++                () =>
++                  materializeTestVDOM(
++                    stepCell.key("render") as Cell<unknown>,
++                    () => settleRuntime(renderName, 20),
++                  ),
+               );
+               if (options.verbose) console.log(`  ◇ ${renderName}`);
+             } else if (options.verbose) {
+               console.log(`  ⊘ ${renderName} (skipped)`);
+             }
+           } finally {
++            performance.measure(`digest-bench/${renderName}`, { start: digestBenchRenderStart, end: performance.now() });
+             printReadCost(renderName, itemStart);
++            const duration = performance.now() - itemStart;
++            if (
++              options.verbose && duration >= (options.statsThreshold ?? 5000)
++            ) {
++              printLoggerStats(
++                performance.now() - startTime,
++                true,
++                `${renderName} took ${fmtMs(duration)}`,
++                options.statsInclude,
++              );
++            }
+           }
+           continue;
+         }
+@@ -1790,6 +1838,8 @@
+               durationMs: performance.now() - itemStart,
+             });
+           }
++
++          performance.measure(`digest-update/${actionName}`, { start: itemStart, end: performance.now() });
+ 
+           // Print per-action run deltas for slow actions
+           if (
+diff --git a/packages/runner/src/runtime-presets.ts b/packages/runner/src/runtime-presets.ts
+--- a/packages/runner/src/runtime-presets.ts
++++ b/packages/runner/src/runtime-presets.ts
+@@ -62,8 +62,9 @@
+  * |                            | patternTest/unitTest (per-test laxer mode) and   |
+  * |                            | remoteClient/browserWorker (host-controlled      |
+  * |                            | rollout)                                         |
+- * | cfcFlowLabels              | core-default (off); remoteClient / browserWorker |
+- * |                            | delta (host-controlled rollout)                  |
++ * | cfcFlowLabels              | core-default (off); patternTest override and      |
++ * |                            | remoteClient / browserWorker host-controlled     |
++ * |                            | rollout                                          |
+  * | cfcWriteFloor              | core-default (off); remoteClient delta           |
+  * |                            | (host-controlled rollout) — flip in coreOptions  |
+  * |                            | when a first-party rollout begins                |
+@@ -878,6 +879,9 @@
+   /** Per-test laxer mode; defaults to the shared core pin. */
+   cfcEnforcementMode?: CfcEnforcementMode;
+ 
++  /** Per-test flow-label propagation; defaults to the shared core posture. */
++  cfcFlowLabels?: CfcFlowLabelsMode;
++
+   /** Statement-coverage collector for `cf test` and the pattern harnesses. */
+   patternCoverage?: PatternCoverageCollector;
+ 
+@@ -1032,6 +1036,9 @@
+       ...(params.cfcEnforcementMode !== undefined
+         ? { cfcEnforcementMode: params.cfcEnforcementMode }
+         : {}),
++      ...(params.cfcFlowLabels !== undefined
++        ? { cfcFlowLabels: params.cfcFlowLabels }
++        : {}),
+       ...(params.fetch !== undefined ? { fetch: params.fetch } : {}),
+       ...(params.errorHandlers !== undefined
+         ? { errorHandlers: params.errorHandlers }
+diff --git a/packages/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx b/packages/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx
+new file mode 100644
+--- /dev/null
++++ b/packages/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx
+@@ -0,0 +1,109 @@
++/**
++ * Labeled SQLite mapped-render scaling fixture. Each render demands the full
++ * mapped view at the named row count; seeding precedes the render intervals.
++ * Run the same file with --cfc-enforcement-mode disabled --cfc-flow-labels off
++ * and with --cfc-shell-posture, adding --verbose --stats-threshold 0 to both.
++ */
++import {
++  action,
++  assert,
++  pattern,
++  sqliteDatabase,
++  type SqliteDb,
++  table,
++  TESTS,
++  UI,
++  Writable,
++} from "commonfabric";
++
++interface Row {
++  id: number;
++  title: string;
++}
++
++const MappedRows = pattern<{ db: SqliteDb; count: number }>(({ db, count }) => {
++  const query = db.query<Row>(
++    "SELECT id, title FROM messages ORDER BY id LIMIT ?",
++    { params: [count] },
++  );
++  return {
++    query,
++    [UI]: <div>{query.result?.map((row) => <p>{row.title}</p>)}</div>,
++  };
++});
++
++export default pattern(() => {
++  const db = sqliteDatabase({
++    tables: {
++      messages: table({
++        id: "integer primary key",
++        title: {
++          type: "string",
++          sqlType: "text",
++          ifc: { confidentiality: ["fixture-private"] },
++        },
++      }),
++    },
++  });
++  const seed = action(() => {
++    for (let i = 1; i <= 150; i++) {
++      db.exec("INSERT INTO messages (id, title) VALUES (?, ?)", [
++        i,
++        `Message ${i}`,
++      ]);
++    }
++  });
++  const small = MappedRows({ db, count: 11 });
++  const medium = MappedRows({ db, count: 50 });
++  const large = MappedRows({ db, count: 150 });
++
++  const copied = new Writable<Row[]>([]);
++
++  return {
++    small,
++    copied,
++    [TESTS]: [
++      { action: seed },
++      { action: action(() => console.log("Mapped render N=11")) },
++      { assertion: assert(() => small.query.result?.length === 11) },
++      { render: small[UI] },
++      {
++        action: action(() => {
++          console.log("Labeled copy N=11");
++          copied.set((small.query.result ?? []).map((row: Row) => ({
++            id: row.id,
++            title: row.title,
++          })));
++        }),
++      },
++      { assertion: assert(() => copied.get().length === 11) },
++      { action: action(() => console.log("Mapped render N=50")) },
++      { assertion: assert(() => medium.query.result?.length === 50) },
++      { render: medium[UI] },
++      {
++        action: action(() => {
++          console.log("Labeled copy N=50");
++          copied.set((medium.query.result ?? []).map((row: Row) => ({
++            id: row.id,
++            title: row.title,
++          })));
++        }),
++      },
++      { assertion: assert(() => copied.get().length === 50) },
++      { action: action(() => console.log("Mapped render N=150")) },
++      { assertion: assert(() => large.query.result?.length === 150) },
++      { render: large[UI] },
++      {
++        action: action(() => {
++          console.log("Labeled copy N=150");
++          copied.set((large.query.result ?? []).map((row: Row) => ({
++            id: row.id,
++            title: row.title,
++          })));
++        }),
++      },
++      { assertion: assert(() => copied.get().length === 150) },
++      { settle: true },
++    ],
++  };
++});
+diff --git a/packages/cli/test/fixtures/cfc-flow-labels/prepared-digest-repeated.test.tsx b/packages/cli/test/fixtures/cfc-flow-labels/prepared-digest-repeated.test.tsx
+new file mode 100644
+--- /dev/null
++++ b/packages/cli/test/fixtures/cfc-flow-labels/prepared-digest-repeated.test.tsx
+@@ -0,0 +1,39 @@
++/** Repeated updates of the same fifty rows under one confidentiality policy. */
++import {
++  action, assert, computed, pattern, sqliteDatabase, type SqliteDb, table, TESTS, UI, Writable,
++} from "commonfabric";
++interface Row { id: number; title: string }
++const MappedRows = pattern<{ db: SqliteDb; revision: number }>(({ db, revision }) => {
++  const query = db.query<Row>("SELECT id, title FROM messages ORDER BY id");
++  const titles = query.result?.map((row) => computed(() => `${row.title} revision ${revision}`));
++  return { query, titles, [UI]: <div>{titles?.map((title) => <p>{title}</p>)}</div> };
++});
++export default pattern(() => {
++  const db = sqliteDatabase({ tables: { messages: table({
++    id: "integer primary key",
++    title: { type: "string", sqlType: "text", ifc: { confidentiality: ["fixture-private"] } },
++  }) } });
++  const seed = action(() => {
++    Array.from({ length: 50 }, (_, i) => i + 1).forEach((id) => {
++      db.exec("INSERT INTO messages (id, title) VALUES (?, ?)", [id, `Message ${id}`]);
++    });
++  });
++  const revision = new Writable(0);
++  const update = action(() => revision.set(revision.get() + 1));
++  const rows = MappedRows({ db, revision });
++  return { [TESTS]: [
++    { action: seed },
++    { assertion: assert(() => rows.query.result?.length === 50) },
++    { render: rows[UI] },
++    { action: update },
++    { render: rows[UI] },
++    { assertion: assert(() => rows.titles?.[0] === "Message 1 revision 1") },
++    { action: update },
++    { render: rows[UI] },
++    { assertion: assert(() => rows.titles?.[0] === "Message 1 revision 2") },
++    { action: update },
++    { render: rows[UI] },
++    { assertion: assert(() => rows.titles?.[0] === "Message 1 revision 3") },
++    { settle: true },
++  ] };
++});
+diff --git a/packages/runner/test/cfc-digest-commit.bench.ts b/packages/runner/test/cfc-digest-commit.bench.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/runner/test/cfc-digest-commit.bench.ts
+@@ -0,0 +1,99 @@
++/** Measures prepared-digest work over frozen transaction records. */
++import { getFrozenObjectHashCacheHits } from "@commonfabric/data-model";
++import { Identity } from "@commonfabric/identity";
++
++import { preparedDigestFor } from "../src/cfc/canonical.ts";
++import { Runtime } from "../src/runtime.ts";
++import { StorageManager } from "../src/storage/cache.deno.ts";
++import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
++import { benchDiagnostic } from "./bench-diagnostics.ts";
++
++const signer = await Identity.fromPassphrase("cfc-prepared-digest-bench");
++const storageManager = StorageManager.emulate({ as: signer });
++const runtime = new Runtime({
++  apiUrl: new URL("https://example.com"),
++  storageManager,
++});
++
++/** Records a payload and its policy material at a distinct address. */
++function write(tx: ExtendedStorageTransaction, index: number, bytes: number) {
++  const target = {
++    space: signer.did(),
++    scope: "space" as const,
++    id: `of:digest-${index}` as const,
++    path: [],
++  };
++  const value = { text: "x".repeat(bytes), index };
++  tx.writeValueOrThrow(target, value);
++  tx.recordCfcWritePolicyInput({
++    kind: "custom",
++    name: `payload-${index}`,
++    target,
++    value: { value, schema: { type: "object" } },
++  });
++  return target;
++}
++
++for (const writes of [5, 50, 200]) {
++  for (const bytes of [1024, 10240]) {
++    for (const phase of ["prepare-and-recheck"]) {
++      let reported = false;
++      Deno.bench({
++        name: `${writes} writes / ${bytes / 1024} KiB / ${phase}`,
++        group: "prepared digest",
++        fn(b) {
++          const tx = runtime.edit() as ExtendedStorageTransaction;
++          try {
++            const targets = Array.from(
++              { length: writes },
++              (_, index) => write(tx, index, bytes),
++            );
++            for (let index = 0; index < 300; index++) {
++              const target = targets[index % writes];
++              tx.readValueOrThrow(target);
++              tx.recordCfcDereferenceTrace({
++                source: { ...target, path: ["links", String(index)] },
++                target,
++                kind: "value",
++              });
++            }
++            const access = tx.accessForTestingOnly;
++            const input = phase === "warm-parts"
++              ? access.buildPreparedDigestInput()
++              : undefined;
++            const first = phase === "first" || phase === "prepare-and-recheck"
++              ? undefined
++              : input === undefined
++              ? access.preparedDigest()
++              : preparedDigestFor(input);
++            if (phase === "one-write") write(tx, writes, bytes);
++            const hitsBefore = getFrozenObjectHashCacheHits();
++            b.start();
++            const digest = input === undefined
++              ? access.preparedDigest()
++              : preparedDigestFor({ ...input });
++            if (phase === "prepare-and-recheck") {
++              const recheck = access.preparedDigest();
++              if (recheck !== digest) throw new Error("Recheck changed the digest");
++            }
++            b.end();
++            const hits = getFrozenObjectHashCacheHits() - hitsBefore;
++            if (!digest || (phase === "one-write" && digest === first)) {
++              throw new Error("Digest did not bind the added write");
++            }
++            if (
++              (phase === "unchanged" || phase === "warm-parts") &&
++              digest !== first
++            ) throw new Error("Unchanged activity changed the digest");
++            if (!reported) {
++              benchDiagnostic(JSON.stringify({ writes, bytes, phase, hits }));
++              reported = true;
++            }
++          } finally {
++            tx.abort();
++          }
++        },
++      });
++    }
++  }
++}
+diff --git a/scripts/prepared-digest-arm-b.ts b/scripts/prepared-digest-arm-b.ts
+new file mode 100644
+--- /dev/null
++++ b/scripts/prepared-digest-arm-b.ts
+@@ -0,0 +1,31 @@
++import { Session } from "node:inspector";
++import { runTestPattern } from "../packages/cli/lib/test-runner.ts";
++import { getFrozenObjectHashCacheHits } from "@commonfabric/data-model";
++const output = Deno.env.get("DIGEST_BENCH_OUT")!;
++const profiled = Deno.env.get("DIGEST_BENCH_PROFILE") === "1";
++const session = new Session();
++const post = (method: string, params = {}) => new Promise<any>((resolve,reject) => session.post(method,params,(err,result) => err ? reject(err) : resolve(result)));
++let profileStartMs = 0;
++if (profiled) {
++  session.connect();
++  await post("Profiler.enable");
++  await post("Profiler.setSamplingInterval", { interval: 500 });
++  await post("Profiler.start");
++  profileStartMs = performance.now();
++}
++const result = await runTestPattern(new URL("../packages/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx", import.meta.url).pathname, {
++  cfcEnforcementMode: "enforce-explicit",
++  cfcFlowLabels: "persist",
++  noIdempotencyCheck: true,
++  verbose: true,
++  statsThreshold: 0,
++});
++const renders = performance.getEntriesByType("measure").filter(e => e.name.startsWith("digest-bench/")).map(e => ({ name:e.name, startMs:e.startTime, durationMs:e.duration }));
++if (profiled) {
++  const {profile} = await post("Profiler.stop");
++  await Deno.writeTextFile(output + ".cpuprofile",JSON.stringify(profile));
++  session.disconnect();
++}
++await Deno.writeTextFile(output + ".json", JSON.stringify({posture:{ cfcEnforcementMode:"enforce-explicit",cfcFlowLabels:"persist" },renders,profileStartMs,cacheHits:getFrozenObjectHashCacheHits(),result}));
++if (result.error || result.runtimeErrors.length || result.results.some(r => !r.passed)) Deno.exit(1);
++Deno.exit(0);
+diff --git a/scripts/prepared-digest-repeated.ts b/scripts/prepared-digest-repeated.ts
+new file mode 100644
+--- /dev/null
++++ b/scripts/prepared-digest-repeated.ts
+@@ -0,0 +1,32 @@
++import { Session } from "node:inspector";
++import { runTestPattern } from "../packages/cli/lib/test-runner.ts";
++import { getFrozenObjectHashCacheHits } from "@commonfabric/data-model";
++const output = Deno.env.get("DIGEST_BENCH_OUT")!;
++const profiled = Deno.env.get("DIGEST_BENCH_PROFILE") === "1";
++const session = new Session();
++const post = (method: string, params = {}) => new Promise<any>((resolve,reject) => session.post(method,params,(err,result) => err ? reject(err) : resolve(result)));
++let profileStartMs = 0;
++if (profiled) {
++  session.connect();
++  await post("Profiler.enable");
++  await post("Profiler.setSamplingInterval", { interval: 500 });
++  await post("Profiler.start");
++  profileStartMs = performance.now();
++}
++const result = await runTestPattern(new URL("../packages/cli/test/fixtures/cfc-flow-labels/prepared-digest-repeated.test.tsx", import.meta.url).pathname, {
++  cfcEnforcementMode: "enforce-explicit",
++  cfcFlowLabels: "persist",
++  noIdempotencyCheck: true,
++  verbose: true,
++  statsThreshold: 0,
++});
++const updates = performance.getEntriesByType("measure").filter(e => e.name.startsWith("digest-update/")).map(e => ({ name:e.name,startMs:e.startTime,durationMs:e.duration }));
++const renders = performance.getEntriesByType("measure").filter(e => e.name.startsWith("digest-bench/")).map(e => ({ name:e.name, startMs:e.startTime, durationMs:e.duration }));
++if (profiled) {
++  const {profile} = await post("Profiler.stop");
++  await Deno.writeTextFile(output + ".cpuprofile",JSON.stringify(profile));
++  session.disconnect();
++}
++await Deno.writeTextFile(output + ".json", JSON.stringify({posture:{ cfcEnforcementMode:"enforce-explicit",cfcFlowLabels:"persist" },renders,updates,profileStartMs,cacheHits:getFrozenObjectHashCacheHits(),result}));
++if (result.error || result.runtimeErrors.length || result.results.some(r => !r.passed)) Deno.exit(1);
++Deno.exit(0);
+diff --git a/scripts/prepared-digest-gc-probe.ts b/scripts/prepared-digest-gc-probe.ts
+new file mode 100644
+--- /dev/null
++++ b/scripts/prepared-digest-gc-probe.ts
+@@ -0,0 +1,31 @@
++import { deepFreeze, getFrozenObjectHashCacheHits, hashStringOf } from "@commonfabric/data-model";
++import { preparedDigestFor } from "../packages/runner/src/cfc/canonical.ts";
++import type { PreparedDigestInput } from "../packages/runner/src/cfc/types.ts";
++const gc = (globalThis as { gc?: () => void }).gc!;
++if (!gc) throw new Error("Run with --v8-flags=--expose-gc");
++const space = "did:key:digest-gc" as const;
++const schema = deepFreeze({ type: "object", ifc: { confidentiality: ["private"] } });
++const payload = deepFreeze({ text: "x".repeat(10240), schema });
++const address = (id: number) => ({ space, id: `of:${id}`, scope: "space" as const, path: [] });
++function input(changed = false): PreparedDigestInput {
++  return {
++    consumedReads: Array.from({length:300},(_,i)=>deepFreeze(address(i))),
++    attemptedWrites: [], writes: [], writeAttemptLog: [], triggerReads: [],
++    dereferenceTraces: Array.from({length:300},(_,i)=>deepFreeze({source:address(i),target:address(i+1),kind:"value" as const})),
++    writePolicyInputs: Array.from({length:50},(_,i)=>deepFreeze({kind:"custom" as const,name:`p${i}`,target:address(i),value:changed&&i===0?{text:"changed",schema}:payload})),
++  };
++}
++const retained = input();
++const digest = preparedDigestFor(retained);
++gc();
++let hits = getFrozenObjectHashCacheHits();
++const afterGc = preparedDigestFor(retained);
++const retainedHits = getFrozenObjectHashCacheHits()-hits;
++hits=getFrozenObjectHashCacheHits();
++const fresh = preparedDigestFor(input());
++const freshHits = getFrozenObjectHashCacheHits()-hits;
++const changed = preparedDigestFor(input(true));
++const object = deepFreeze({ payload });
++hashStringOf(object);gc();hits=getFrozenObjectHashCacheHits();hashStringOf(object);
++const ordinaryRetainedHits=getFrozenObjectHashCacheHits()-hits;
++console.log(JSON.stringify({retainedHits,freshHits,ordinaryRetainedHits,sameDigest:afterGc===digest&&fresh===digest,changedDigest:changed!==digest}));
+diff --git a/scripts/prepared-digest-retention.ts b/scripts/prepared-digest-retention.ts
+new file mode 100644
+--- /dev/null
++++ b/scripts/prepared-digest-retention.ts
+@@ -0,0 +1,9 @@
++import { deepFreeze, hashStringOf } from "@commonfabric/data-model";
++const gc = (globalThis as {gc?:()=>void}).gc!;
++if (!gc) throw new Error("Run with --v8-flags=--expose-gc");
++function fill() {
++  for (let i=0;i<4000;i++) hashStringOf(deepFreeze({text: "x".repeat(10240)+i}));
++}
++gc(); const before=Deno.memoryUsage().heapUsed;
++fill(); gc(); const after=Deno.memoryUsage().heapUsed;
++console.log(JSON.stringify({before,after,retainedDelta:after-before,objects:4000,payloadBytes:10240}));
+diff --git a/scripts/prepared-digest-repeat-probe.ts b/scripts/prepared-digest-repeat-probe.ts
+new file mode 100644
+--- /dev/null
++++ b/scripts/prepared-digest-repeat-probe.ts
+@@ -0,0 +1,62 @@
++import { ExtendedStorageTransaction } from "../packages/runner/src/storage/extended-storage-transaction.ts";
++import { canonicalizePreparedDigestInput } from "../packages/runner/src/cfc/canonical.ts";
++import { deepEqual } from "@commonfabric/utils/deep-equal";
++import type { PreparedDigestInput } from "../packages/runner/src/cfc/types.ts";
++const prior = new WeakMap<object,{digest:string,input:PreparedDigestInput}>();
++const activityProbe = { prepared:0,withAction:0,repeatedAction:0,sameDigest:0,samePolicies:0,identityMatches:{reads:0,traces:0,policies:0},records:{reads:0,traces:0,policies:0},changedFields:{} as Record<string,number> };
++const prepare = ExtendedStorageTransaction.prototype.prepareCfc;
++ExtendedStorageTransaction.prototype.prepareCfc = function() {
++ const digest=prepare.call(this);activityProbe.prepared++;
++ const action=this.tx.sourceAction;
++ if(!action||!digest)return digest;
++ activityProbe.withAction++;
++ const input=canonicalizePreparedDigestInput(this.accessForTestingOnly.buildPreparedDigestInput());
++ const old=prior.get(action);
++ if(old){
++  activityProbe.repeatedAction++;
++  if(old.digest===digest)activityProbe.sameDigest++;
++  if(deepEqual(old.input.writePolicyInputs,input.writePolicyInputs))activityProbe.samePolicies++;
++  for(const [name,key] of [['reads','consumedReads'],['traces','dereferenceTraces'],['policies','writePolicyInputs']] as const){
++   const previous=new Set<object>(old.input[key]);
++   activityProbe.records[name]+=input[key].length;
++   activityProbe.identityMatches[name]+=input[key].filter(record=>previous.has(record)).length;
++  }
++  for(const key of Object.keys(input) as (keyof PreparedDigestInput)[]){
++   if(!deepEqual(old.input[key],input[key]))activityProbe.changedFields[key]=(activityProbe.changedFields[key]??0)+1;
++  }
++ }
++ prior.set(action,{digest,input});return digest;
++};
++
++import { Session } from "node:inspector";
++import { runTestPattern } from "../packages/cli/lib/test-runner.ts";
++import { getFrozenObjectHashCacheHits } from "@commonfabric/data-model";
++const output = Deno.env.get("DIGEST_BENCH_OUT")!;
++const profiled = Deno.env.get("DIGEST_BENCH_PROFILE") === "1";
++const session = new Session();
++const post = (method: string, params = {}) => new Promise<any>((resolve,reject) => session.post(method,params,(err,result) => err ? reject(err) : resolve(result)));
++let profileStartMs = 0;
++if (profiled) {
++  session.connect();
++  await post("Profiler.enable");
++  await post("Profiler.setSamplingInterval", { interval: 500 });
++  await post("Profiler.start");
++  profileStartMs = performance.now();
++}
++const result = await runTestPattern(new URL("../packages/cli/test/fixtures/cfc-flow-labels/prepared-digest-repeated.test.tsx", import.meta.url).pathname, {
++  cfcEnforcementMode: "enforce-explicit",
++  cfcFlowLabels: "persist",
++  noIdempotencyCheck: true,
++  verbose: true,
++  statsThreshold: 0,
++});
++const updates = performance.getEntriesByType("measure").filter(e => e.name.startsWith("digest-update/")).map(e => ({ name:e.name,startMs:e.startTime,durationMs:e.duration }));
++const renders = performance.getEntriesByType("measure").filter(e => e.name.startsWith("digest-bench/")).map(e => ({ name:e.name, startMs:e.startTime, durationMs:e.duration }));
++if (profiled) {
++  const {profile} = await post("Profiler.stop");
++  await Deno.writeTextFile(output + ".cpuprofile",JSON.stringify(profile));
++  session.disconnect();
++}
++await Deno.writeTextFile(output + ".json", JSON.stringify({posture:{ cfcEnforcementMode:"enforce-explicit",cfcFlowLabels:"persist" },activityProbe,renders,updates,profileStartMs,cacheHits:getFrozenObjectHashCacheHits(),result}));
++if (result.error || result.runtimeErrors.length || result.results.some(r => !r.passed)) Deno.exit(1);
++Deno.exit(0);

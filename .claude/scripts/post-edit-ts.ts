@@ -33,8 +33,8 @@ if (
 // one alone reports every such name as missing. Every other `test/fixtures`
 // directory in the workspace is type-checked, so none is listed here.
 if (
-  filePath.includes("packages/schema-generator/test/fixtures/") ||
-  filePath.includes("packages/ts-transformers/test/fixtures/")
+  filePath.includes("base/schema-generator/test/fixtures/") ||
+  filePath.includes("base/ts-transformers/test/fixtures/")
 ) {
   Deno.exit(0);
 }

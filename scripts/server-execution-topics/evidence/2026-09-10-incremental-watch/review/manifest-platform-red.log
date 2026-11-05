@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/Users/berni/.codex/worktrees/topics-campaign-watch/labs/tools/server-execution-topics/evidence/2026-09-10-incremental-watch/review/verify-manifest-portability.py", line 59, in <module>
+    assert hashlib.sha256(provenance.read_bytes()).hexdigest() == portable["externalProvenance"]["sha256"]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

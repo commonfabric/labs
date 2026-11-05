@@ -1,0 +1,74 @@
+{
+  "description": "Helper input validation; no server or pattern workload. The five-only source mutation rejects valid positive counts other than 5.",
+  "sourceMutation": {
+    "before": "!Number.isInteger(topicCount) || topicCount < 1",
+    "after": "topicCount !== 5"
+  },
+  "verifierSha256": "633f36d796f21b7df1f8f8e7293253952ebc1c183f719fdc00c0ba1a1e03f647",
+  "rows": [
+    {
+      "case": "relative",
+      "command": [
+        "deno",
+        "run",
+        "--allow-read",
+        "--allow-write",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/tools/verify-replay-inputs-current.ts",
+        ".",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-verifier-review-02/relative.json"
+      ],
+      "cwd": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-verifier-review-02/evidence with spaces",
+      "exitCode": 0,
+      "stdout": "Replay input controls passed.\n",
+      "stderr": ""
+    },
+    {
+      "case": "absolute-with-spaces",
+      "command": [
+        "deno",
+        "run",
+        "--allow-read",
+        "--allow-write",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/tools/verify-replay-inputs-current.ts",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-verifier-review-02/evidence with spaces",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-verifier-review-02/absolute-with-spaces.json"
+      ],
+      "cwd": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-verifier-review-02/evidence with spaces",
+      "exitCode": 0,
+      "stdout": "Replay input controls passed.\n",
+      "stderr": ""
+    },
+    {
+      "case": "five-only-old-verifier",
+      "command": [
+        "deno",
+        "run",
+        "--allow-read",
+        "--allow-write",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/tools/verify-replay-inputs-relative-red.ts",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-verifier-review-02/evidence with spaces",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-verifier-review-02/five-only-old-verifier.json"
+      ],
+      "cwd": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-verifier-review-02/evidence with spaces",
+      "exitCode": 0,
+      "stdout": "Replay input controls passed.\n",
+      "stderr": ""
+    },
+    {
+      "case": "five-only-current-verifier",
+      "command": [
+        "deno",
+        "run",
+        "--allow-read",
+        "--allow-write",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/tools/verify-replay-inputs-current.ts",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-verifier-review-02/evidence with spaces",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-verifier-review-02/five-only-current-verifier.json"
+      ],
+      "cwd": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-verifier-review-02/evidence with spaces",
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "error: Uncaught (in promise) Error: Wrong validation for 1\n      throw new Error(`Wrong validation for ${configured}`);\n            ^\n    at file:///Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/tools/verify-replay-inputs-current.ts:34:13\n"
+    }
+  ]
+}

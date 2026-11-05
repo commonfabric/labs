@@ -1,0 +1,265 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Expense": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "date": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "paidBy": {
+            "type": "string"
+          },
+          "sharedBy": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "description",
+          "amount",
+          "paidBy",
+          "sharedBy",
+          "date"
+        ],
+        "type": "object"
+      },
+      "Person": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "picture": {
+            "type": "FabricBytes"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "expenses": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Expense"
+        },
+        "type": "array"
+      },
+      "myName": {
+        "default": "",
+        "scope": "user",
+        "type": "string"
+      },
+      "people": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Person"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "people",
+      "expenses",
+      "myName"
+    ],
+    "type": "object"
+  },
+  "pattern": "fair-share/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Balance": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "net": {
+            "type": "number"
+          },
+          "paid": {
+            "type": "number"
+          },
+          "picture": {
+            "type": "FabricBytes"
+          },
+          "share": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "paid",
+          "share",
+          "net"
+        ],
+        "type": "object"
+      },
+      "Expense": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "date": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "paidBy": {
+            "type": "string"
+          },
+          "sharedBy": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "description",
+          "amount",
+          "paidBy",
+          "sharedBy",
+          "date"
+        ],
+        "type": "object"
+      },
+      "JSXElement": {
+        "anyOf": [
+          {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          },
+          {
+            "$ref": "#/$defs/UIRenderable"
+          },
+          {
+            "properties": {},
+            "type": "object"
+          }
+        ]
+      },
+      "Person": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "picture": {
+            "type": "FabricBytes"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "Settlement": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "amount"
+        ],
+        "type": "object"
+      },
+      "UIRenderable": {
+        "properties": {
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          }
+        },
+        "required": [
+          "$UI"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "enum": [
+          "Fair Share"
+        ],
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "#/$defs/JSXElement"
+      },
+      "balances": {
+        "items": {
+          "$ref": "#/$defs/Balance"
+        },
+        "type": "array"
+      },
+      "expenses": {
+        "items": {
+          "$ref": "#/$defs/Expense"
+        },
+        "type": "array"
+      },
+      "myName": {
+        "default": "",
+        "scope": "user",
+        "type": "string"
+      },
+      "people": {
+        "items": {
+          "$ref": "#/$defs/Person"
+        },
+        "type": "array"
+      },
+      "settlements": {
+        "items": {
+          "$ref": "#/$defs/Settlement"
+        },
+        "type": "array"
+      },
+      "total": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI",
+      "people",
+      "expenses",
+      "myName",
+      "balances",
+      "settlements",
+      "total"
+    ],
+    "type": "object"
+  }
+}

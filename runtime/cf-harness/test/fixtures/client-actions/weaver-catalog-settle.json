@@ -1,0 +1,302 @@
+{
+  "settlement": {
+    "status": "executed",
+    "catalog": {
+      "entries": [
+        {
+          "effect": "read",
+          "summary": "List the looms this Weaver holds, or find one by name.",
+          "scope": "global",
+          "executes": "weaver",
+          "command": "looms.list",
+          "approval": "automatic",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "limit": { "minimum": 1, "type": "integer", "maximum": 256 },
+              "query": { "type": "string" },
+              "include_archived": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Bring a loom forward on the person's screen.",
+          "scope": "global",
+          "executes": "weaver",
+          "command": "loom.open",
+          "approval": "person",
+          "inputSchema": {
+            "properties": {
+              "focus": { "type": "boolean" },
+              "loom": { "type": "string" },
+              "wait": { "type": "boolean" }
+            },
+            "required": ["loom"],
+            "type": "object",
+            "additionalProperties": false
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Retain a supplied public picture URL on an existing folder Page.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "artifact.fetch-image",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "request_id": { "type": "string" },
+              "name": { "type": "string" },
+              "url": { "type": "string" },
+              "page": { "type": "string" }
+            },
+            "required": ["url", "page", "name", "request_id"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "What's on a day, or a window of days, across every connected",
+          "scope": "global",
+          "executes": "loom",
+          "command": "calendar.day",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "all_calendars": {
+                "type": "boolean",
+                "description": "read every calendar, not only the Home selection"
+              },
+              "days": {
+                "type": "integer",
+                "description": "days from the date, inclusive (1..62); 1 by default"
+              },
+              "zone": {
+                "type": "string",
+                "description": "IANA zone the days are placed in; the daemon's by default"
+              },
+              "date": {
+                "type": "string",
+                "description": "YYYY-MM-DD; today by default"
+              }
+            },
+            "required": []
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Give this device its ingest channel, binding it on first sight.",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.connectDevice",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "device_name": {
+                "type": "string",
+                "title": "what to call this device in the pool"
+              },
+              "keep_pause": {
+                "type": "boolean",
+                "title": "leave a pause alone on reconnect"
+              },
+              "claim": {
+                "title": "the opaque claim the device minted once and keeps (its Keychain holds it)",
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest"
+              },
+              "connector": {
+                "type": "string",
+                "title": "the connector the device writes into (loom.context.location)",
+                "x-source": "context.connector"
+              }
+            },
+            "required": ["connector", "claim"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Delete the legacy shared msgvault archive after every mailbox has",
+          "scope": "global",
+          "executes": "loom",
+          "command": "connector.msgvaultRetireLegacy",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "connector": { "title": "connector id", "type": "string" }
+            },
+            "required": ["connector"]
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Start a chat that belongs to the loom in focus and show it.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "create.chat",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "text": { "type": "string", "default": "", "x-source": "rest" }
+            },
+            "required": []
+          }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Re-download Epic's brand directory and rewrite the shipped copy.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "epic-fhir.refresh-endpoints",
+          "approval": "person",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Add a reference to the loom in focus and show it.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.add",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "stage": { "type": "boolean", "default": true },
+              "title": { "type": "string", "x-source": "rest" },
+              "focus": { "type": "boolean", "default": false },
+              "ref": { "type": "string", "x-complete": "looms-find" }
+            },
+            "required": []
+          }
+        },
+        {
+          "effect": "read",
+          "summary": "Read the current Loom manifest.",
+          "scope": "loom",
+          "executes": "loom",
+          "description": "context.loom_id names the exact record. Returns its components, selection and version without appending an op or searching the user's content.",
+          "command": "loom.inspect",
+          "approval": "automatic",
+          "inputSchema": { "type": "object", "properties": {}, "required": [] }
+        },
+        {
+          "effect": "mutation",
+          "summary": "Move a panel within the loom's order.",
+          "scope": "loom",
+          "executes": "loom",
+          "command": "loom.move",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "component": {
+                "type": "string",
+                "x-target": "component",
+                "x-source": "context.pane"
+              },
+              "before": { "type": "string", "x-target": "component" }
+            },
+            "required": ["component"]
+          }
+        },
+        {
+          "summary": "Find someone by name",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "person-entry.find",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "offset": { "type": "integer", "title": "skip this many" },
+              "facet": { "type": "string", "x-accepts": ["facet"] },
+              "scope": {
+                "type": "string",
+                "title": "facet (the default): one facet; all: every facet, the user's only",
+                "enum": ["facet", "all"]
+              },
+              "starred": {
+                "type": "boolean",
+                "title": "only the starred (or the unstarred)"
+              },
+              "limit": {
+                "type": "integer",
+                "title": "at most this many (100 by default)"
+              },
+              "name": {
+                "x-echo": "elide",
+                "type": "string",
+                "x-source": "rest",
+                "x-accepts": ["name"]
+              },
+              "introduced": {
+                "type": "boolean",
+                "title": "only the introduced (or the imported)"
+              }
+            },
+            "required": ["name"]
+          }
+        },
+        {
+          "summary": "Undo a change by its token",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "revert",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "token": {
+                "type": "string",
+                "title": "the undo token a change returned",
+                "x-echo": "elide"
+              }
+            },
+            "required": ["token"]
+          }
+        },
+        {
+          "summary": "Bind the human's explicit facet answer to their still-unscoped wish submission.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "wish.choose_facet",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "facet_ids": { "type": "array", "items": { "type": "string" } },
+              "reply_ref": { "type": "string" },
+              "submission_ref": { "type": "string" }
+            },
+            "required": ["submission_ref", "reply_ref", "facet_ids"]
+          }
+        },
+        {
+          "summary": "Refresh delivery into the admitted home; this never restarts the wish worker.",
+          "effect": "mutation",
+          "scope": "global",
+          "executes": "loom",
+          "command": "wish.delivery_retry",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": { "wish_id": { "type": "string" } },
+            "required": ["wish_id"]
+          }
+        }
+      ]
+    }
+  },
+  "sessionId": "dbf4424d-afb3-4c66-a515-f41b4fd93be6",
+  "actionId": "94274d2c-4327-44bc-9769-af3b35505755"
+}

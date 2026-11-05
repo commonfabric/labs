@@ -1,0 +1,1 @@
+{"date":"2026-09-08","from":{"k":"unit","s":"shell","n":"scheduler graph entity identity > preserves the URI scheme when extracting an action's entity"},"to":{"k":"unit","s":"shell","n":"entityUriFromActionId() > returns `undefined` when the entity segment carries no scheme"}}

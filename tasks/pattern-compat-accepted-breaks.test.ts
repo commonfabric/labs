@@ -20,7 +20,7 @@ const exists = async (path: string): Promise<boolean> => {
 
 describe("pattern-compat-accepted-breaks", () => {
   // The compatibility run reaches these entries only after compiling every
-  // authored pattern, and it reads each one under the shard that examined its
+  // authored pattern, and it reads each one in the run that examined its
   // pattern. So the shape of an entry — a pattern that exists, a baseline that
   // exists, a pair named once, a path spelled the way the proof spells it — is
   // worth settling here, in milliseconds, against the files on disk.
@@ -67,11 +67,11 @@ describe("pattern-compat-accepted-breaks", () => {
     });
 
     it("spells every path as an argument or result path", () => {
-      // A finding is forgiven only when every path it blames is one the entry
+      // A finding is forgiven only when the path it blames is one the entry
       // named, and the proof spells a path as its role followed by the schema
       // pointer. A path under any other name forgives nothing.
       //
-      // The role alone is one of those spellings. `schemaSubsetIssue` starts
+      // The role alone is one of those spellings. `schemaSubsetIssues` starts
       // at `"argument"` or `"result"` and appends `.<property>` on the way
       // down, so an issue found at the root of a schema — `ifc` on the schema
       // itself, rather than on any field of it — is reported as the bare role.

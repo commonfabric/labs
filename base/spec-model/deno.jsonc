@@ -1,0 +1,15 @@
+{
+  "name": "@commonfabric/spec-model",
+  "version": "0.0.1",
+  "exports": {
+    "./server-execution": "./server-execution/model.ts"
+  },
+  "tasks": {
+    "check": "deno check .",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST",
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test"
+  },
+  "imports": {
+    "@std/assert": "jsr:@std/assert@^1.0.19"
+  }
+}

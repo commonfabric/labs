@@ -52,7 +52,7 @@ interface GatewayInput {
 - `sink:` / `paths:` are sugar: they lower to `pre.boundary` patterns over
   the `BoundaryContext` atoms the evaluator mints per boundary evaluation —
   the shipped generalization of the spec's `allowedSink` / `allowedPaths`
-  metadata (`packages/runner/src/cfc/policy.ts`).
+  metadata (`runtime/runner/src/cfc/policy.ts`).
 - `AuthorityOnly<T>` is classification, not magic: the response drops the
   token's taint only because the sink-scoped rule fires at the permitted
   path — "not a global exemption such as 'tokens never taint'" (§5.3.1). A

@@ -74,18 +74,3 @@ kill_deno_on_port "$TOOLSHED_PORT"
 if [[ "$CF_HARNESS" == "true" ]]; then
     kill_deno_on_port "$CONSOLE_PORT"
 fi
-
-# Kill background-piece-service if running (tracked via PID file)
-BG_PID_FILE="$SCRIPT_DIR/../.bg-piece-service.pid"
-if [[ -f "$BG_PID_FILE" ]]; then
-    BG_PID=$(cat "$BG_PID_FILE")
-    if ps -p "$BG_PID" > /dev/null 2>&1; then
-        kill "$BG_PID" 2>/dev/null
-        sleep 1
-        # Force kill if still running
-        if ps -p "$BG_PID" > /dev/null 2>&1; then
-            kill -9 "$BG_PID" 2>/dev/null
-        fi
-    fi
-    rm -f "$BG_PID_FILE"
-fi

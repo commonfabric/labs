@@ -1,0 +1,1 @@
+{"date":"2026-08-24","from":{"k":"unit","s":"shell","n":"AppState > accepts only the four display toggles as config keys"},"to":{"k":"unit","s":"shell","n":"AppState > accepts only the three display toggles as config keys"}}

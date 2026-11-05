@@ -1,0 +1,403 @@
+{
+  "version": 1,
+  "runtime": "Deno/2.9.4 aarch64-apple-darwin",
+  "cpu": "Apple M3 Max",
+  "benches": [
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "fresh create and read / 1 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 2221,
+            "min": 15750.0,
+            "max": 40678375.0,
+            "avg": 179599.0,
+            "p75": 22416.0,
+            "p99": 369250.0,
+            "p995": 12810583.0,
+            "p999": 33078250.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "native fresh create and read / 1 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 4944,
+            "min": 12750.0,
+            "max": 26013750.0,
+            "avg": 89332.0,
+            "p75": 17208.0,
+            "p99": 216417.0,
+            "p995": 5464542.0,
+            "p999": 19288416.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "native repeated create / 1 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 42,
+            "min": 236.4875,
+            "max": 21963.1667,
+            "avg": 1402.1150880952384,
+            "p75": 864.075,
+            "p99": 21963.1667,
+            "p995": 21963.1667,
+            "p999": 21963.1667,
+            "highPrecision": false,
+            "usedExplicitTimers": false
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "native repeated read / 1 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 355,
+            "min": 14.7166,
+            "max": 3916.3792,
+            "avg": 158.60445943661972,
+            "p75": 22.8667,
+            "p99": 2663.9666,
+            "p995": 3142.3959,
+            "p999": 3916.3792,
+            "highPrecision": false,
+            "usedExplicitTimers": false
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "repeated create / 1 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 16760,
+            "min": 3500.0,
+            "max": 36978750.0,
+            "avg": 29836.0,
+            "p75": 4250.0,
+            "p99": 11167.0,
+            "p995": 47750.0,
+            "p999": 10237709.0,
+            "highPrecision": true,
+            "usedExplicitTimers": false
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "repeated read / 1 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 9997,
+            "min": 8208.0,
+            "max": 28557375.0,
+            "avg": 50766.0,
+            "p75": 10084.0,
+            "p99": 51750.0,
+            "p995": 304041.0,
+            "p999": 15669125.0,
+            "highPrecision": true,
+            "usedExplicitTimers": false
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "fresh create and read / 100 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 111,
+            "min": 830292.0,
+            "max": 41673458.0,
+            "avg": 4680411.0,
+            "p75": 2844041.0,
+            "p99": 37514042.0,
+            "p995": 41673458.0,
+            "p999": 41673458.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "native fresh create and read / 100 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 174,
+            "min": 469791.0,
+            "max": 50149958.0,
+            "avg": 2055367.0,
+            "p75": 662625.0,
+            "p99": 34849250.0,
+            "p995": 50149958.0,
+            "p999": 50149958.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "native repeated create / 100 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 41,
+            "min": 230.2458,
+            "max": 12145.45,
+            "avg": 1577.079680487805,
+            "p75": 1678.5958,
+            "p99": 12145.45,
+            "p995": 12145.45,
+            "p999": 12145.45,
+            "highPrecision": false,
+            "usedExplicitTimers": false
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "native repeated read / 100 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 497,
+            "min": 12.5625,
+            "max": 4063.75,
+            "avg": 105.81840181086525,
+            "p75": 16.625,
+            "p99": 2502.5875,
+            "p995": 3581.9917,
+            "p999": 4063.75,
+            "highPrecision": false,
+            "usedExplicitTimers": false
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "repeated create / 100 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 191,
+            "min": 224667.0,
+            "max": 43039375.0,
+            "avg": 2854138.0,
+            "p75": 298291.0,
+            "p99": 36061041.0,
+            "p995": 43039375.0,
+            "p999": 43039375.0,
+            "highPrecision": true,
+            "usedExplicitTimers": false
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "repeated read / 100 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 131,
+            "min": 521792.0,
+            "max": 103243375.0,
+            "avg": 4660912.0,
+            "p75": 968708.0,
+            "p99": 49649458.0,
+            "p995": 103243375.0,
+            "p999": 103243375.0,
+            "highPrecision": true,
+            "usedExplicitTimers": false
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "fresh create and read / 1000 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 17,
+            "min": 14716583.0,
+            "max": 178796667.0,
+            "avg": 83409515.0,
+            "p75": 102615167.0,
+            "p99": 178796667.0,
+            "p995": 178796667.0,
+            "p999": 178796667.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "native fresh create and read / 1000 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 16,
+            "min": 5173334.0,
+            "max": 143323833.0,
+            "avg": 62468099.0,
+            "p75": 97342167.0,
+            "p99": 143323833.0,
+            "p995": 143323833.0,
+            "p999": 143323833.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "native repeated create / 1000 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 48,
+            "min": 229.1708,
+            "max": 9729.0459,
+            "avg": 1659.6944416666663,
+            "p75": 1618.0458,
+            "p99": 9729.0459,
+            "p995": 9729.0459,
+            "p999": 9729.0459,
+            "highPrecision": false,
+            "usedExplicitTimers": false
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "native repeated read / 1000 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 420,
+            "min": 14.5916,
+            "max": 5459.7958,
+            "avg": 137.59217023809524,
+            "p75": 17.4708,
+            "p99": 2752.9167,
+            "p995": 3800.9709,
+            "p999": 5459.7958,
+            "highPrecision": false,
+            "usedExplicitTimers": false
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "repeated create / 1000 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 43,
+            "min": 2479708.0,
+            "max": 92601000.0,
+            "avg": 19878659.0,
+            "p75": 31751000.0,
+            "p99": 92601000.0,
+            "p995": 92601000.0,
+            "p999": 92601000.0,
+            "highPrecision": true,
+            "usedExplicitTimers": false
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///Users/berni/.codex/worktrees/be34/labs/packages/runner/test/immutable-cell.bench.ts",
+      "group": null,
+      "name": "repeated read / 1000 rows",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 24,
+            "min": 5598084.0,
+            "max": 183139167.0,
+            "avg": 42836957.0,
+            "p75": 42226500.0,
+            "p99": 183139167.0,
+            "p995": 183139167.0,
+            "p999": 183139167.0,
+            "highPrecision": true,
+            "usedExplicitTimers": false
+          }
+        }
+      ]
+    }
+  ]
+}

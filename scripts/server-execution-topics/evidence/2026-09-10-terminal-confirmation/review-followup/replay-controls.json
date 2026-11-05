@@ -1,0 +1,142 @@
+{
+  "method": "Exact archived source fragments executed by Deno; real child environment inheritance, synthetic HTTP responses, no workload or latency claim.",
+  "runtime": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3\n",
+  "rows": [
+    {
+      "source": "recorded-source/run-arm.ts.txt",
+      "sourceSha256": "10514ccaeb5f3549bb96817b2976d52b91d322b3b31edbf1c67d2d5c9ba7f1e9",
+      "case": "child flag",
+      "parentFlag": null,
+      "role": "default",
+      "observed": "false",
+      "expected": "false"
+    },
+    {
+      "source": "recorded-source/run-arm.ts.txt",
+      "sourceSha256": "10514ccaeb5f3549bb96817b2976d52b91d322b3b31edbf1c67d2d5c9ba7f1e9",
+      "case": "child flag",
+      "parentFlag": null,
+      "role": "opposite",
+      "observed": "true",
+      "expected": "true"
+    },
+    {
+      "source": "recorded-source/run-arm.ts.txt",
+      "sourceSha256": "10514ccaeb5f3549bb96817b2976d52b91d322b3b31edbf1c67d2d5c9ba7f1e9",
+      "case": "child flag",
+      "parentFlag": "true",
+      "role": "default",
+      "observed": "false",
+      "expected": "false"
+    },
+    {
+      "source": "recorded-source/run-arm.ts.txt",
+      "sourceSha256": "10514ccaeb5f3549bb96817b2976d52b91d322b3b31edbf1c67d2d5c9ba7f1e9",
+      "case": "child flag",
+      "parentFlag": "true",
+      "role": "opposite",
+      "observed": "true",
+      "expected": "true"
+    },
+    {
+      "source": "recorded-source/run-arm.ts.txt",
+      "sourceSha256": "10514ccaeb5f3549bb96817b2976d52b91d322b3b31edbf1c67d2d5c9ba7f1e9",
+      "case": "child flag",
+      "parentFlag": "false",
+      "role": "default",
+      "observed": "false",
+      "expected": "false"
+    },
+    {
+      "source": "recorded-source/run-arm.ts.txt",
+      "sourceSha256": "10514ccaeb5f3549bb96817b2976d52b91d322b3b31edbf1c67d2d5c9ba7f1e9",
+      "case": "child flag",
+      "parentFlag": "false",
+      "role": "opposite",
+      "observed": "true",
+      "expected": "true"
+    },
+    {
+      "source": "recorded-source/run-arm.ts.txt",
+      "case": "post-run HTTP",
+      "status": 200,
+      "writes": 1,
+      "error": null
+    },
+    {
+      "source": "recorded-source/run-arm.ts.txt",
+      "case": "post-run HTTP",
+      "status": 503,
+      "writes": 1,
+      "error": null
+    },
+    {
+      "source": "run-arm.ts.txt",
+      "sourceSha256": "88b3cae902036884745c5a0017521af77dde2e96ac0b602d9f31a3cb2ee0412e",
+      "case": "child flag",
+      "parentFlag": null,
+      "role": "default",
+      "observed": null,
+      "expected": null
+    },
+    {
+      "source": "run-arm.ts.txt",
+      "sourceSha256": "88b3cae902036884745c5a0017521af77dde2e96ac0b602d9f31a3cb2ee0412e",
+      "case": "child flag",
+      "parentFlag": null,
+      "role": "opposite",
+      "observed": "true",
+      "expected": "true"
+    },
+    {
+      "source": "run-arm.ts.txt",
+      "sourceSha256": "88b3cae902036884745c5a0017521af77dde2e96ac0b602d9f31a3cb2ee0412e",
+      "case": "child flag",
+      "parentFlag": "true",
+      "role": "default",
+      "observed": null,
+      "expected": null
+    },
+    {
+      "source": "run-arm.ts.txt",
+      "sourceSha256": "88b3cae902036884745c5a0017521af77dde2e96ac0b602d9f31a3cb2ee0412e",
+      "case": "child flag",
+      "parentFlag": "true",
+      "role": "opposite",
+      "observed": "true",
+      "expected": "true"
+    },
+    {
+      "source": "run-arm.ts.txt",
+      "sourceSha256": "88b3cae902036884745c5a0017521af77dde2e96ac0b602d9f31a3cb2ee0412e",
+      "case": "child flag",
+      "parentFlag": "false",
+      "role": "default",
+      "observed": null,
+      "expected": null
+    },
+    {
+      "source": "run-arm.ts.txt",
+      "sourceSha256": "88b3cae902036884745c5a0017521af77dde2e96ac0b602d9f31a3cb2ee0412e",
+      "case": "child flag",
+      "parentFlag": "false",
+      "role": "opposite",
+      "observed": "true",
+      "expected": "true"
+    },
+    {
+      "source": "run-arm.ts.txt",
+      "case": "post-run HTTP",
+      "status": 200,
+      "writes": 1,
+      "error": null
+    },
+    {
+      "source": "run-arm.ts.txt",
+      "case": "post-run HTTP",
+      "status": 503,
+      "writes": 0,
+      "error": "Fetching http://controlled.invalid/api/health/stats failed with status 503."
+    }
+  ]
+}

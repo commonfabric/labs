@@ -1,0 +1,1 @@
+{"date":"2026-10-16","from":{"k":"unit","s":"cf-harness","n":"client command contract > approval and actor > refuses a catalog entry that runs a mutation automatically"},"to":{"k":"unit","s":"cf-harness","n":"client command contract > approval and actor > reads effect independently of the host's confirmation policy"}}

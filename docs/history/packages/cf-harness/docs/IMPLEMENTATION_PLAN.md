@@ -43,7 +43,7 @@ Current Loom migration judgment:
 See also:
 
 - [LOOM_MIGRATION_NOTES.md](LOOM_MIGRATION_NOTES.md)
-- [SKILLS_SUPPORT_SPEC.md](../../../../../packages/cf-harness/docs/SKILLS_SUPPORT_SPEC.md)
+- [SKILLS_SUPPORT_SPEC.md](../../../../../runtime/cf-harness/docs/SKILLS_SUPPORT_SPEC.md)
 
 ## Design Principles
 
@@ -89,15 +89,15 @@ The package already includes:
 
 ### Stage A: Package skeleton and contracts
 
-- package scaffold under [packages/cf-harness](../../../../../packages/cf-harness)
-- package exports and tasks in [deno.jsonc](../../../../../packages/cf-harness/deno.jsonc)
+- package scaffold under [packages/cf-harness](../../../../../runtime/cf-harness)
+- package exports and tasks in [deno.jsonc](../../../../../runtime/cf-harness/deno.jsonc)
 - initial contract surfaces:
-  - [prompt-slot.ts](../../../../../packages/cf-harness/src/contracts/prompt-slot.ts)
-  - [run-manifest.ts](../../../../../packages/cf-harness/src/contracts/run-manifest.ts)
-  - [observation.ts](../../../../../packages/cf-harness/src/contracts/observation.ts)
-  - [policy.ts](../../../../../packages/cf-harness/src/contracts/policy.ts)
-  - [transcript.ts](../../../../../packages/cf-harness/src/contracts/transcript.ts)
-  - [tool-result.ts](../../../../../packages/cf-harness/src/contracts/tool-result.ts)
+  - [prompt-slot.ts](../../../../../runtime/cf-harness/src/contracts/prompt-slot.ts)
+  - [run-manifest.ts](../../../../../runtime/cf-harness/src/contracts/run-manifest.ts)
+  - [observation.ts](../../../../../runtime/cf-harness/src/contracts/observation.ts)
+  - [policy.ts](../../../../../runtime/cf-harness/src/contracts/policy.ts)
+  - [transcript.ts](../../../../../runtime/cf-harness/src/contracts/transcript.ts)
+  - [tool-result.ts](../../../../../runtime/cf-harness/src/contracts/tool-result.ts)
 
 Why this was done first:
 
@@ -105,9 +105,9 @@ Why this was done first:
 
 ### Stage B: Execution core
 
-- sandbox adapter in [src/sandbox](../../../../../packages/cf-harness/src/sandbox)
-- engine in [engine.ts](../../../../../packages/cf-harness/src/engine.ts)
-- built-in tool implementations in [src/tools](../../../../../packages/cf-harness/src/tools)
+- sandbox adapter in [src/sandbox](../../../../../runtime/cf-harness/src/sandbox)
+- engine in [engine.ts](../../../../../runtime/cf-harness/src/engine.ts)
+- built-in tool implementations in [src/tools](../../../../../runtime/cf-harness/src/tools)
 
 Why:
 
@@ -116,9 +116,9 @@ Why:
 
 ### Stage C: Prompt/tool loop
 
-- bounded prompt loop in [prompt-loop.ts](../../../../../packages/cf-harness/src/prompt-loop.ts)
+- bounded prompt loop in [prompt-loop.ts](../../../../../runtime/cf-harness/src/prompt-loop.ts)
 - OpenAI-compatible client in
-  [openai-client.ts](../../../../../packages/cf-harness/src/gateway/openai-client.ts)
+  [openai-client.ts](../../../../../runtime/cf-harness/src/gateway/openai-client.ts)
 
 Why:
 
@@ -127,8 +127,8 @@ Why:
 
 ### Stage D: Persistence and resumability
 
-- artifact store in [artifacts.ts](../../../../../packages/cf-harness/src/artifacts.ts)
-- run-state tracking in [run-state.ts](../../../../../packages/cf-harness/src/run-state.ts)
+- artifact store in [artifacts.ts](../../../../../runtime/cf-harness/src/artifacts.ts)
+- run-state tracking in [run-state.ts](../../../../../runtime/cf-harness/src/run-state.ts)
 - retained Loom run manifest artifacts
 - transcript-based resume support in the prompt loop and CLI
 
@@ -139,8 +139,8 @@ Why:
 
 ### Stage E: Operator CLI
 
-- package-local CLI in [cli.ts](../../../../../packages/cf-harness/src/cli.ts)
-- entrypoint in [main.ts](../../../../../packages/cf-harness/src/main.ts)
+- package-local CLI in [cli.ts](../../../../../runtime/cf-harness/src/cli.ts)
+- entrypoint in [main.ts](../../../../../runtime/cf-harness/src/main.ts)
 
 Why:
 
@@ -328,7 +328,7 @@ Why:
 
 See the package-local spec:
 
-- [SKILLS_SUPPORT_SPEC.md](../../../../../packages/cf-harness/docs/SKILLS_SUPPORT_SPEC.md)
+- [SKILLS_SUPPORT_SPEC.md](../../../../../runtime/cf-harness/docs/SKILLS_SUPPORT_SPEC.md)
 
 ## Current Verified State
 
@@ -459,14 +459,14 @@ The remaining subagent work is still substantial:
 
 For a new engineer or agent:
 
-1. [README.md](../../../../../packages/cf-harness/README.md)
-2. [config.ts](../../../../../packages/cf-harness/src/config.ts)
-3. [engine.ts](../../../../../packages/cf-harness/src/engine.ts)
-4. [prompt-loop.ts](../../../../../packages/cf-harness/src/prompt-loop.ts)
-5. [cli.ts](../../../../../packages/cf-harness/src/cli.ts)
+1. [README.md](../../../../../runtime/cf-harness/README.md)
+2. [config.ts](../../../../../runtime/cf-harness/src/config.ts)
+3. [engine.ts](../../../../../runtime/cf-harness/src/engine.ts)
+4. [prompt-loop.ts](../../../../../runtime/cf-harness/src/prompt-loop.ts)
+5. [cli.ts](../../../../../runtime/cf-harness/src/cli.ts)
 6. [integration/engine.integration.test.ts](../../../../../packages/cf-harness/integration/engine.integration.test.ts)
 
 For the broader architectural context:
 
-- [runner README](../../../../../packages/runner/README.md)
+- [runner README](../../../../../runtime/runner/README.md)
 - `specs/cfc/18-runtime-implementation-profiles.md` in the sibling `specs` repo

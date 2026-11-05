@@ -106,7 +106,7 @@ If not investigated or unclear, state that.
 ### Relevant Code
 Link to files on GitHub with line ranges. Use small focused snippets only when needed to explain the issue inline.
 
-Format: `https://github.com/commontoolsinc/labs/blob/<branch>/<path>#L<start>-L<end>`
+Format: `https://github.com/commonfabric/labs/blob/<branch>/<path>#L<start>-L<end>`
 
 Get the current branch via `git rev-parse --abbrev-ref HEAD` and current commit via `git rev-parse --short HEAD`.
 

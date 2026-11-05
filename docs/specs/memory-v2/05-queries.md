@@ -96,7 +96,7 @@ Starting from a set of root entities, the server follows references embedded in
 entity values, guided by a schema that constrains which paths to explore and
 which linked entities to include.
 
-The traversal code in `packages/runner/src/traverse.ts` is **shared between
+The traversal code in `runtime/runner/src/traverse.ts` is **shared between
 client and server**. The client reaches `SchemaObjectTraverser` through
 `schema.ts` for validation and transformation; the server reaches the same
 traverser through `@commonfabric/runner/graph-query`, which drives it over
@@ -202,12 +202,17 @@ function traverseWithSchema(value, schema):
         matches.push(match)
     return mergeAnyOfMatches(matches)
 
-  if schema.allOf:
-    // All must match
+  if schema.allOf and schema.allOf is not empty:
+    // An empty allOf constrains nothing and is passed over; the keywords
+    // beside it decide the node below.
+    // All must match, and their results merge the same way
+    matches = []
     for each option in schema.allOf:
-      if traverseWithSchema(value, merge(schema, option)) == undefined:
+      match = traverseWithSchema(value, merge(schema, option))
+      if match == undefined:
         return undefined  // mismatch
-    return last successful result
+      matches.push(match)
+    return mergeAnyOfMatches(matches)
 
   // Primitive types: validate and return
   if typeMatches(value, schema.type):
@@ -216,7 +221,10 @@ function traverseWithSchema(value, schema):
 ```
 
 This mirrors the `SchemaObjectTraverser.traverseWithSchema` method from
-`traverse.ts`.
+`traverse.ts`. `merge(schema, option)` there is shallow, and
+`mergeAnyOfMatches` unions the properties of the surviving branches; both are
+specified under
+[Logical schema operators](../space-model/8-traversal.md#logical-schema-operators).
 
 #### Reference Resolution
 
@@ -264,11 +272,14 @@ ordinary cell references. The `internal` field is raw metadata, not a direct
 metadata link. It stores a manifest array, and each manifest-entry `link` names
 an internal cell owned by the result cell. The `cfc` metadata field is also
 special: it uses a compact metadata object, and traversal converts its
-`schemaHash` into a CID sigil link before loading the referenced document. The
+`schemaHash` into a CID sigil link before loading the referenced document, and
+does the same for every label document a version-2 envelope's entries
+reference by `{ "$ref": "cid:…" }`
+([content-addressed-cfc-labels.md](../content-addressed-cfc-labels.md)). Each
 synthesized link MUST declare
 [space scope](../content-addressed-schemas.md#schema-documents) even when the
 document carrying the metadata is user- or session-scoped: content-addressed
-schema documents never inherit a referrer's scope.
+documents never inherit a referrer's scope.
 
 What the evaluation loads of that metadata is the same for every document it
 delivers, whether a query NAMED the document as a root or the walk reached it
@@ -279,6 +290,11 @@ through a link crossing:
   resolve the envelope's hash to a CID document, load it, add it to the query
   result and the watch tracker, and track an absent one so that it is
   delivered when it is written.
+
+- The label documents its `cfc` envelope references, one per distinct
+  reference. A reader resolves the envelope's labels from them synchronously,
+  so the server MUST load, deliver, and track each of them exactly as it does
+  the schema document.
 
 - Nothing else. The server MUST NOT load, deliver, or track the target of a
   `pattern`, `argument`, or `result` link, or the cells an `internal`
@@ -295,7 +311,15 @@ nothing else, so a subscription's delivered shape does not depend on the
 order in which documents changed or on which query first reached a
 document. Coverage follows the same rule: a later query naming a document
 an earlier evaluation reached is covered by existing watch state when the
-tracker already covers its selector.
+tracker already covers its selector. A server attributes each tracker record
+to what reached it: a watch root to its watch, a linked document to the
+document holding the link, a schema document to each delivered document whose
+refs reach it, directly or through the schema documents between. A covered
+root or link attributes to the record covering it. A record whose last
+walking referrer lets go retires, and the referrers it covered are walked on
+their own. Removing a watch releases its roots, and a write re-walks the
+changed document and releases what the re-walk does not reach again. Either
+way the documents nothing reaches any more leave the result.
 
 Content-addressed schema documents ride the same mechanism
 (`docs/specs/content-addressed-schemas.md`): a link or selector schema
@@ -308,8 +332,8 @@ registered, and refs to it stay unresolved.
 
 ### 5.3.3 Cycle Detection
 
-Graph traversal must handle cycles. Two cycle detection mechanisms are used,
-both derived from `traverse.ts`:
+Graph traversal must handle cycles. Three cycle detection mechanisms are used,
+all derived from `traverse.ts`:
 
 #### CycleTracker
 
@@ -364,6 +388,28 @@ type PointerCycleTracker = CompoundCycleTracker<
   any // The traversal result for this node
 >;
 ```
+
+#### Branches returning to their own position
+
+A combinator branch evaluates the same value at the same address as the schema
+it belongs to, so neither tracker sees it come back. A union whose handle
+branch names the union itself (`type Recursive = Cell<Recursive> | null`)
+returns to its own traversal without descending. The traverser keeps the memo
+keys of the traversals in progress at the current position, and a branch that
+reaches one of them stands for that traversal's result, which the traversal
+that began the position reaches as a fixed point in rounds. The first round
+takes the branch as no match. Each later round takes the result the traversal
+it comes back to had in the latest round that reached it, and a traversal
+reached again within a round takes its result from earlier in the round, so a
+round traverses each schema at the position once. Rounds repeat until one
+leaves no traversal a branch came back to matching where what stood in for it
+did not. The result then matches as the schema unrolled does and selects the
+properties it selects; where matching branches project one property
+differently, the round's merges decide which projection is kept, since an
+unrolling need not settle on one. A `oneOf`, which can reject in one round what
+it accepted in the round before, keeps the round before that rejection. A result
+that took something standing in for a traversal holds only for its round, so it
+is returned but not memoized.
 
 ### 5.3.4 Schema Narrowing
 
@@ -425,7 +471,7 @@ with `prefixItems` omitted when the merged prefix is empty.
 
 Neither operation is a complete JSON Schema intersection, and neither resolves
 `$ref` values. See `combineSchemaForLink`, `combineSchema`, and `narrowSchema`
-in `packages/runner/src/traverse.ts` for the implementation.
+in `runtime/runner/src/traverse.ts` for the implementation.
 
 ### 5.3.5 Schema Tracker
 
@@ -466,7 +512,7 @@ Given a `SchemaQuery`, the server:
 5. Returns the `FactSet` along with the schema tracker (for watch setup).
 
 The initial execution and every later schema-watch refresh MUST use the same
-traversal semantics as `packages/runner/src/traverse.ts`. The server MAY cache
+traversal semantics as `runtime/runner/src/traverse.ts`. The server MAY cache
 bookkeeping such as reachable-entity sets or dirty roots, but the result sent to
 clients must be equivalent to rerunning `graph.query` with the shared traversal
 code against the current committed state.
@@ -524,9 +570,9 @@ union:
    and the schema context used.
 2. **Watch add**: for new roots, start traversal only from those roots. If the
    traversal reaches an entity-plus-selector pair that is already tracked, stop
-   immediately and reuse the existing downstream result. Additive watch growth
-   may also reuse a persistent traversal memo for already-seen
-   document-path-plus-schema work.
+   immediately and reuse the existing downstream result. Traversal memo entries
+   are shared only within that evaluation and released when it finishes;
+   coverage between evaluations belongs to the persistent tracker.
 3. **On commit**: for each changed entity, determine whether it can affect the
    current tracked graph.
 4. **Re-evaluate affected topology**: if links or source chains changed, re-run
@@ -917,7 +963,7 @@ selector is built as:
 // Shown for illustration only.
 const selector = {
   path: cell.path.map((p) => p.toString()),
-  schema: schema ?? false,
+  schema: ContextualFlowControl.declaresStream(schema) ? false : schema ?? false,
 };
 ```
 
@@ -925,3 +971,10 @@ When a cell has no schema (common for many cell types), the selector becomes
 `{ path: [...], schema: false }`. Per section 5.3.2, `schema: false` means
 "reject — skip this subtree." A traverser with `schema: false` will not follow
 any references or discover any linked entities.
+
+A cell whose schema declares a stream is asked for the same way. Its document
+holds no value a read uses: an event sent to it is appended beside the
+document, and the handler reads the event, never the document. A selector
+carrying the stream's event schema would walk a shape the document never
+holds, and would cost the request a root carrying that schema per stream; the
+whole document is what a meta write to it retries a conflict against.

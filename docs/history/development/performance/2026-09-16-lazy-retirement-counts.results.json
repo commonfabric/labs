@@ -1,0 +1,2072 @@
+{
+  "baselineRevision": "ccc751b2d4b19005e6a9ef1503a8e94ccc466022",
+  "retirementRevision": "91139fd3aa266f646ec593692b9ce26f547e126f",
+  "machine": "macOS-27.0-arm64-arm-64bit",
+  "deno": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3",
+  "measurements": {
+    "baseline": {
+      "handlers": [
+        {
+          "size": 74,
+          "workload": "scalarKey",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 7
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 93,
+              "shallowReadCount": 818
+            },
+            {
+              "skipped": false,
+              "readCount": 93,
+              "shallowReadCount": 818
+            }
+          ]
+        },
+        {
+          "size": 74,
+          "workload": "scalarGet",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 80
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 93,
+              "shallowReadCount": 818
+            },
+            {
+              "skipped": false,
+              "readCount": 93,
+              "shallowReadCount": 818
+            }
+          ]
+        },
+        {
+          "size": 74,
+          "workload": "walk",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 80
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 93,
+              "shallowReadCount": 818
+            },
+            {
+              "skipped": false,
+              "readCount": 93,
+              "shallowReadCount": 818
+            }
+          ]
+        },
+        {
+          "size": 74,
+          "workload": "mutate",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 10
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 93,
+              "shallowReadCount": 818
+            },
+            {
+              "skipped": false,
+              "readCount": 93,
+              "shallowReadCount": 818
+            }
+          ]
+        },
+        {
+          "size": 74,
+          "workload": "plainScalar",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 80
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 80
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 93,
+              "shallowReadCount": 818
+            },
+            {
+              "skipped": false,
+              "readCount": 93,
+              "shallowReadCount": 818
+            }
+          ]
+        },
+        {
+          "size": 74,
+          "workload": "plainWalk",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 80
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 80
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 93,
+              "shallowReadCount": 818
+            },
+            {
+              "skipped": false,
+              "readCount": 93,
+              "shallowReadCount": 818
+            }
+          ]
+        },
+        {
+          "size": 296,
+          "workload": "scalarKey",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 7
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            },
+            {
+              "skipped": false,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            }
+          ]
+        },
+        {
+          "size": 296,
+          "workload": "scalarGet",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 302
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            },
+            {
+              "skipped": false,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            }
+          ]
+        },
+        {
+          "size": 296,
+          "workload": "walk",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 302
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            },
+            {
+              "skipped": false,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            }
+          ]
+        },
+        {
+          "size": 296,
+          "workload": "mutate",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 10
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            },
+            {
+              "skipped": false,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            }
+          ]
+        },
+        {
+          "size": 296,
+          "workload": "plainScalar",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 302
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 302
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            },
+            {
+              "skipped": false,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            }
+          ]
+        },
+        {
+          "size": 296,
+          "workload": "plainWalk",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 302
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 302
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            },
+            {
+              "skipped": false,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            }
+          ]
+        },
+        {
+          "size": 1184,
+          "workload": "scalarKey",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 7
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            },
+            {
+              "skipped": false,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            }
+          ]
+        },
+        {
+          "size": 1184,
+          "workload": "scalarGet",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 1190
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            },
+            {
+              "skipped": false,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            }
+          ]
+        },
+        {
+          "size": 1184,
+          "workload": "walk",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 1190
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            },
+            {
+              "skipped": false,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            }
+          ]
+        },
+        {
+          "size": 1184,
+          "workload": "mutate",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 10
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            },
+            {
+              "skipped": false,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            }
+          ]
+        },
+        {
+          "size": 1184,
+          "workload": "plainScalar",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 1190
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 1190
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            },
+            {
+              "skipped": false,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            }
+          ]
+        },
+        {
+          "size": 1184,
+          "workload": "plainWalk",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 1190
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 1190
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            },
+            {
+              "skipped": false,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            }
+          ]
+        }
+      ],
+      "loops": [
+        {
+          "size": 32,
+          "mode": "computed",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 65,
+              "linkResolutions": 35,
+              "distinctDocuments": 39,
+              "registeredDependencies": 172
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 65,
+              "linkResolutions": 35,
+              "distinctDocuments": 38,
+              "registeredDependencies": 171
+            }
+          ]
+        },
+        {
+          "size": 32,
+          "mode": "lift-wide",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 65,
+              "linkResolutions": 35,
+              "distinctDocuments": 39,
+              "registeredDependencies": 172
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 65,
+              "linkResolutions": 35,
+              "distinctDocuments": 38,
+              "registeredDependencies": 171
+            }
+          ]
+        },
+        {
+          "size": 32,
+          "mode": "lift-narrow",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 65,
+              "linkResolutions": 35,
+              "distinctDocuments": 39,
+              "registeredDependencies": 172
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 65,
+              "linkResolutions": 35,
+              "distinctDocuments": 38,
+              "registeredDependencies": 171
+            }
+          ]
+        },
+        {
+          "size": 128,
+          "mode": "computed",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 257,
+              "linkResolutions": 131,
+              "distinctDocuments": 135,
+              "registeredDependencies": 652
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 257,
+              "linkResolutions": 131,
+              "distinctDocuments": 134,
+              "registeredDependencies": 651
+            }
+          ]
+        },
+        {
+          "size": 128,
+          "mode": "lift-wide",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 257,
+              "linkResolutions": 131,
+              "distinctDocuments": 135,
+              "registeredDependencies": 652
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 257,
+              "linkResolutions": 131,
+              "distinctDocuments": 134,
+              "registeredDependencies": 651
+            }
+          ]
+        },
+        {
+          "size": 128,
+          "mode": "lift-narrow",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 257,
+              "linkResolutions": 131,
+              "distinctDocuments": 135,
+              "registeredDependencies": 652
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 257,
+              "linkResolutions": 131,
+              "distinctDocuments": 134,
+              "registeredDependencies": 651
+            }
+          ]
+        },
+        {
+          "size": 512,
+          "mode": "computed",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 1025,
+              "linkResolutions": 515,
+              "distinctDocuments": 519,
+              "registeredDependencies": 2572
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 1025,
+              "linkResolutions": 515,
+              "distinctDocuments": 518,
+              "registeredDependencies": 2571
+            }
+          ]
+        },
+        {
+          "size": 512,
+          "mode": "lift-wide",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 1025,
+              "linkResolutions": 515,
+              "distinctDocuments": 519,
+              "registeredDependencies": 2572
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 1025,
+              "linkResolutions": 515,
+              "distinctDocuments": 518,
+              "registeredDependencies": 2571
+            }
+          ]
+        },
+        {
+          "size": 512,
+          "mode": "lift-narrow",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 1025,
+              "linkResolutions": 515,
+              "distinctDocuments": 519,
+              "registeredDependencies": 2572
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 1025,
+              "linkResolutions": 515,
+              "distinctDocuments": 518,
+              "registeredDependencies": 2571
+            }
+          ]
+        }
+      ]
+    },
+    "retirement": {
+      "handlers": [
+        {
+          "size": 74,
+          "workload": "scalarKey",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 7
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 93,
+              "shallowReadCount": 818
+            },
+            {
+              "skipped": false,
+              "readCount": 93,
+              "shallowReadCount": 818
+            }
+          ]
+        },
+        {
+          "size": 74,
+          "workload": "scalarGet",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 80
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 93,
+              "shallowReadCount": 818
+            },
+            {
+              "skipped": false,
+              "readCount": 93,
+              "shallowReadCount": 818
+            }
+          ]
+        },
+        {
+          "size": 74,
+          "workload": "walk",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 80
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 93,
+              "shallowReadCount": 818
+            },
+            {
+              "skipped": false,
+              "readCount": 93,
+              "shallowReadCount": 818
+            }
+          ]
+        },
+        {
+          "size": 74,
+          "workload": "mutate",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 10
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 93,
+              "shallowReadCount": 818
+            },
+            {
+              "skipped": false,
+              "readCount": 93,
+              "shallowReadCount": 818
+            }
+          ]
+        },
+        {
+          "size": 74,
+          "workload": "plainScalar",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 80
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 80
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 93,
+              "shallowReadCount": 818
+            },
+            {
+              "skipped": false,
+              "readCount": 93,
+              "shallowReadCount": 818
+            }
+          ]
+        },
+        {
+          "size": 74,
+          "workload": "plainWalk",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 78
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 80
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 80
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 93,
+              "shallowReadCount": 818
+            },
+            {
+              "skipped": false,
+              "readCount": 93,
+              "shallowReadCount": 818
+            }
+          ]
+        },
+        {
+          "size": 296,
+          "workload": "scalarKey",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 7
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            },
+            {
+              "skipped": false,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            }
+          ]
+        },
+        {
+          "size": 296,
+          "workload": "scalarGet",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 302
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            },
+            {
+              "skipped": false,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            }
+          ]
+        },
+        {
+          "size": 296,
+          "workload": "walk",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 302
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            },
+            {
+              "skipped": false,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            }
+          ]
+        },
+        {
+          "size": 296,
+          "workload": "mutate",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 10
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            },
+            {
+              "skipped": false,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            }
+          ]
+        },
+        {
+          "size": 296,
+          "workload": "plainScalar",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 302
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 302
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            },
+            {
+              "skipped": false,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            }
+          ]
+        },
+        {
+          "size": 296,
+          "workload": "plainWalk",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 300
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 302
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 302
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            },
+            {
+              "skipped": false,
+              "readCount": 315,
+              "shallowReadCount": 3260
+            }
+          ]
+        },
+        {
+          "size": 1184,
+          "workload": "scalarKey",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 7
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            },
+            {
+              "skipped": false,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            }
+          ]
+        },
+        {
+          "size": 1184,
+          "workload": "scalarGet",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 1190
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            },
+            {
+              "skipped": false,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            }
+          ]
+        },
+        {
+          "size": 1184,
+          "workload": "walk",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 1190
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            },
+            {
+              "skipped": false,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            }
+          ]
+        },
+        {
+          "size": 1184,
+          "workload": "mutate",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 6
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 10
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            },
+            {
+              "skipped": false,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            }
+          ]
+        },
+        {
+          "size": 1184,
+          "workload": "plainScalar",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 1190
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 1190
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            },
+            {
+              "skipped": false,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            }
+          ]
+        },
+        {
+          "size": 1184,
+          "workload": "plainWalk",
+          "nodesBefore": 1,
+          "nodesAfter": 1,
+          "attempts": [
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "preflight",
+              "proxyAccesses": 0,
+              "linkResolutions": 1188
+            },
+            {
+              "kind": "presync",
+              "proxyAccesses": 0,
+              "linkResolutions": 1190
+            },
+            {
+              "kind": "event",
+              "proxyAccesses": 0,
+              "linkResolutions": 1190
+            }
+          ],
+          "preflights": [
+            {
+              "skipped": true,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            },
+            {
+              "skipped": false,
+              "readCount": 1203,
+              "shallowReadCount": 13028
+            }
+          ]
+        }
+      ],
+      "loops": [
+        {
+          "size": 32,
+          "mode": "computed",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 65,
+              "linkResolutions": 35,
+              "distinctDocuments": 39,
+              "registeredDependencies": 172
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 65,
+              "linkResolutions": 35,
+              "distinctDocuments": 38,
+              "registeredDependencies": 171
+            }
+          ]
+        },
+        {
+          "size": 32,
+          "mode": "lift-wide",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 65,
+              "linkResolutions": 35,
+              "distinctDocuments": 39,
+              "registeredDependencies": 172
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 65,
+              "linkResolutions": 35,
+              "distinctDocuments": 38,
+              "registeredDependencies": 171
+            }
+          ]
+        },
+        {
+          "size": 32,
+          "mode": "lift-narrow",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 65,
+              "linkResolutions": 35,
+              "distinctDocuments": 39,
+              "registeredDependencies": 172
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 65,
+              "linkResolutions": 35,
+              "distinctDocuments": 38,
+              "registeredDependencies": 171
+            }
+          ]
+        },
+        {
+          "size": 128,
+          "mode": "computed",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 257,
+              "linkResolutions": 131,
+              "distinctDocuments": 135,
+              "registeredDependencies": 652
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 257,
+              "linkResolutions": 131,
+              "distinctDocuments": 134,
+              "registeredDependencies": 651
+            }
+          ]
+        },
+        {
+          "size": 128,
+          "mode": "lift-wide",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 257,
+              "linkResolutions": 131,
+              "distinctDocuments": 135,
+              "registeredDependencies": 652
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 257,
+              "linkResolutions": 131,
+              "distinctDocuments": 134,
+              "registeredDependencies": 651
+            }
+          ]
+        },
+        {
+          "size": 128,
+          "mode": "lift-narrow",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 257,
+              "linkResolutions": 131,
+              "distinctDocuments": 135,
+              "registeredDependencies": 652
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 257,
+              "linkResolutions": 131,
+              "distinctDocuments": 134,
+              "registeredDependencies": 651
+            }
+          ]
+        },
+        {
+          "size": 512,
+          "mode": "computed",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 1025,
+              "linkResolutions": 515,
+              "distinctDocuments": 519,
+              "registeredDependencies": 2572
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 1025,
+              "linkResolutions": 515,
+              "distinctDocuments": 518,
+              "registeredDependencies": 2571
+            }
+          ]
+        },
+        {
+          "size": 512,
+          "mode": "lift-wide",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 1025,
+              "linkResolutions": 515,
+              "distinctDocuments": 519,
+              "registeredDependencies": 2572
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 1025,
+              "linkResolutions": 515,
+              "distinctDocuments": 518,
+              "registeredDependencies": 2571
+            }
+          ]
+        },
+        {
+          "size": 512,
+          "mode": "lift-narrow",
+          "lazyMaterialization": true,
+          "steps": [
+            {
+              "phase": "initialize",
+              "runs": 3,
+              "writingRuns": 1,
+              "proxyAccesses": 1025,
+              "linkResolutions": 515,
+              "distinctDocuments": 519,
+              "registeredDependencies": 2572
+            },
+            {
+              "phase": "unread title",
+              "runs": 0,
+              "writingRuns": 0,
+              "proxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            {
+              "phase": "read amount",
+              "runs": 2,
+              "writingRuns": 1,
+              "proxyAccesses": 1025,
+              "linkResolutions": 515,
+              "distinctDocuments": 518,
+              "registeredDependencies": 2571
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

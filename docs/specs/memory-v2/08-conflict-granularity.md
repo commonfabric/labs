@@ -1,8 +1,9 @@
 # Commit-conflict granularity
 
 This note describes how Memory v2 decides whether a committing transaction's
-**reads** conflict with concurrent **writes**, and the four refinements that
-make distinct, non-interacting operations stop colliding.
+**reads** conflict with concurrent **writes**, the four refinements that make
+distinct, non-interacting operations stop colliding, and how a client states a
+subtree it read in full.
 
 ## The model
 
@@ -16,6 +17,21 @@ two-tier:
   longer exists in the form it saw.
 - **Tier-2** (`patch`): path-**aware**. A patch conflicts with a read only if a
   touched path overlaps the read path.
+
+The conflict a read reports is the newest `set` or `delete` after its basis,
+whatever its path, when there is one, and otherwise the newest overlapping
+patch.
+
+The reads of one commit commonly share a document and a basis — a per-key write
+of K keys reads K paths of one map — so a scan of the patches after a basis
+indexes their touched paths, newest first, and a scan that reaches the last of
+them serves every later read of the same document and exclusion at that basis
+or a later one, which conflicts with the newest patch it matches exactly when
+that patch is newer than its basis. Such a read is decided from the index in
+time proportional to its path's depth, whatever the number of patches. A read that conflicts stops the scan at the
+patch it conflicts with. The index decides exactly what the predicates the
+sections below name, `patchOverlapsRead` and `patchOverlapsNonRecursiveRead`,
+decide; they remain the definition of a Tier-2 conflict.
 
 The bug this note addresses: two writers touching **different keys of the same
 container** (e.g. `votes.alice` and `votes.bob`) collided at Tier-2 even though
@@ -54,6 +70,13 @@ path captures only the touched index — so a recursive reader of a shifted sibl
 re-trigger via the (also leaf-only) reader-dirty index. That would be a silent
 stale read.
 
+A segment is an index because the container above it is an array, not because
+of how it is written. A plain object may be keyed by strings written as
+non-negative integers — ids, counters, timestamps — and an `add` or a `remove`
+at such a key shifts no sibling. Its leaf path is the whole of what it changed,
+and the parent injection of §2 reports the key-set change to a shape reader as
+it does for any other key, so leaf-only matching has no blind spot there.
+
 This is safe because **the runner never emits an indexed-array
 `add`/`remove`/`move`**. `buildArrayPatchCandidates`
 (runner `storage/v2-transaction.ts`) encodes every array change as one of three
@@ -70,14 +93,43 @@ reader-dirty index handle conservatively:
 engine as a `splice` or whole-array `replace` on the array path — never as an
 indexed structural op.
 
+Which array a write is diffed against is decided by `findArrayPatchPath`
+(runner `storage/v2-transaction.ts`), from the document the commit started from
+and the one it leaves. A write beneath an element both documents hold is diffed
+against the deepest array above it. A write beneath an element one document
+lacks is a change to the array that gains or loses that element, and is diffed
+there: an element that arrives holding a nested array, or a record with an
+array inside it, reaches the engine in one of the three shapes above, on the
+array that holds the element. An array that arrives beneath a new key of a
+plain object is sent whole, as an `add` at its own path.
+
+With no array above it, a write is diffed at the path it was made at, and that
+holds for a key written as an integer, inside the range of array indices or
+past it, and for a key named `length`: beneath a plain object each is a key of
+that object. So a record keyed by ids or counters keeps the per-key granularity
+of §1, and a mergeable op at such a key (an `increment`, a first `append`)
+travels alone, with no `replace` of the record beside it to undo it.
+
+One case is sent coarser. The engine creates a container the stored document
+lacks as it applies an `add` beneath it, and shapes it by the segment that
+follows: an array for an index inside the range or for `-`, an object for
+anything else (`01-data-model.md` §6.2). Where the commit holds a plain object
+at a path the starting document lacks, and a segment that would make the
+engine create an array follows it, the generator sends that object whole, as
+one `add` at its path.
+
 Because the safety of leaf-only matching *depends* on this — and it is a
 whole-system property of the producer rather than something the engine enforces —
 it is guarded two ways:
 
 - a runtime assertion, `assertNoIndexedArrayStructuralOps`, runs at the sole
   patch-generator chokepoint (`buildPatchOperation`) and throws if a future
-  regression ever emits an indexed-array `add`/`remove`/`move`; and
-- a generator test (`packages/runner/test/memory-v2-native-commit.test.ts`,
+  regression ever emits an indexed-array `add`/`remove`/`move`. It reads the
+  container off the two documents the patch was diffed between: an op is
+  refused where its last segment is written as an index and the path above
+  that segment holds an array in either document, and an op at a key of a
+  plain object passes however the key is written; and
+- a generator test (`runtime/runner/test/memory-v2-native-commit.test.ts`,
   "v2 patch generator never emits indexed-array add/remove/move") drives every
   array idiom through real cell writes and asserts the emitted ops.
 
@@ -100,9 +152,27 @@ write touching the read path **itself or an ancestor** — `isPrefixPath(touched
 readPath)`. This keeps the **parent-injecting** `touchedPathsForPatch`, so a key
 `add`/`remove` (which injects the container's path) still conflicts with a keyset
 reader — the shape it observed changed. A disjoint deep-value `replace` strictly
-*below* the read path no longer over-conflicts. The shallow predicate is a strict
-subset of the recursive one, so it can only remove spurious conflicts, never miss
-a genuine one.
+*below* the read path does not conflict.
+
+The shallow predicate is not a subset of the recursive one. The parent a key
+`add` or `remove` injects lies above every sibling of that key, so a shallow
+read of a sibling conflicts with it — an `add` at `/value/c` against a shallow
+read of `/value/b` — where a recursive read of the sibling, matched on leaf
+paths alone (§1), does not. The shape reader pays a retry for a key set it did
+not observe.
+
+What a shape read observed changes only by a write at or above its path, or by
+a change to its path's key set, which a patch reports by injecting the path as a
+parent: `add`, `remove` and `move` always, and a mergeable op when it carries
+`createsKey` (below). Whether a patch changes a key set is decided by its
+writer, from the writer's base — `add` rather than `replace` for a key the base
+lacks, `createsKey` on a mergeable op whose path the base lacks — so the match
+is exact where that base is current for the key. It is not where a key was
+removed durably after the writer's base was taken and the writer, not reading
+the key, writes it again: its `replace`, or its mergeable op without
+`createsKey`, creates the key, and a shallow read of the parent taken after the
+removal does not conflict with it. That is an under-approximation, of the kind
+INV-2 in [09-invariants.md](09-invariants.md) rules out.
 
 ### Mergeable creates and parent shape readers
 
@@ -121,17 +191,18 @@ create happened is value-dependent, so the static op tag cannot express it. The
 writer records it instead: the mergeable-op build stamps the wire op's
 `createsKey` flag when its transaction base held no value at the path (see
 `runner storage/mergeable-ops.ts` and the `createsKey` field in
-`packages/memory/v2.ts`), and `patchOpChangesParentKeySet` injects the parent for
+`runtime/memory/v2.ts`), and `patchOpChangesParentKeySet` injects the parent for
 a flagged op. So a cross-session shape-only reader of the parent now conflicts
 with a create-from-absent mergeable op, but not with an append to an
 already-present child.
 
-The writer's base is authoritative for the "never miss a genuine conflict"
-guarantee: the *first* commit to create a key necessarily saw it absent and sets
-the flag, so a shape reader whose base predates the create always conflicts; a
-later append to the now-present key does not carry the flag. A stale base can
-only set the flag when the key already existed durably, which over-conflicts a
-parent shape reader conservatively (an extra retry), never missing one.
+The *first* commit to create a key necessarily saw it absent and sets the flag,
+so a shape reader whose base predates the create always conflicts; a later
+append to the now-present key does not carry the flag. A stale base can set the
+flag when the key already existed durably, which over-conflicts a parent shape
+reader conservatively (an extra retry). A stale base can also hold a key that
+has since been removed, and an append re-creating it then carries no flag: the
+under-approximation the section above describes.
 
 (Recursive readers of the parent already conflict via the leaf-only matcher —
 the read path prefixes the created leaf — independent of `createsKey`; the flag
@@ -169,15 +240,64 @@ specification names as the intended outcome.
 Persisting flow labels makes an append to a labeled collection rewrite that
 collection's `["cfc"]` member alongside the appended element. The drop is what
 lets a transaction resolve a label against a collection another session is
-appending to.
+appending to, when the transaction only reads that label.
+
+A transaction that writes the envelope beside a mergeable op is different. The
+envelope is a whole-member replace: its entries name positions in the array
+the transaction read, and it carries forward the entries the transaction read
+there, while the op is placed by the store against the live array. For such a
+document the envelope read and the reads under the op's path stay commit
+dependencies (`SpaceReplica.#commitReadActivities`, the same method that
+narrows them otherwise). A concurrent change to either conflicts, and the
+writer re-derives its envelope against the list the store holds, so an entry
+never describes an element at a position the store gave to another, and
+another writer's entries are never dropped by a replace computed without them.
+The op itself stays mergeable; what stops merging is a stale envelope. An
+append that persists no labels keeps its zero-read merge.
 
 Handler-initiated label introspection (`inspectConfLabel`) consumes through an
 explicit observation record rather than through the raw read, so its result
 carries a label independently of this drop.
 
+## 5. A subtree read in full is stated at its root
+
+A reader that walks a whole value, such as validation of a stored argument
+following every link in it, reads each container's shape and each member below
+it. Stated path by path, that read set grows with every member of every
+document the walk reaches, and a large enough value makes the commit too large
+to send.
+
+`SpaceReplica.#buildReads()` therefore states the reads in such a subtree as
+one recursive read at its root, plus one shallow read there when any of them
+was shallow. Under a recursive ancestor, which already covers the subtree, only
+the shallow read is sent. A path is read in full when a recursive read names
+it, or when a read at the same basis names it and every member its value holds
+is read in full, judged against the replica's confirmed document. A read with
+no reads below it is sent as it is, and a shallow and a recursive read of one
+path are both sent. Pending reads are not merged, though a recursive read among
+them still covers the reads below it.
+
+The two reads conflict with every write the reads they replace conflict with.
+The recursive read conflicts with every write at, above, or below the root. A
+shallow read below the root also conflicts, by §2, with a key added or removed
+beside the root or one of its ancestors. Beside an array's element, such a write
+shifts the element, so it matters to what the reads observed. The shallow read
+at the root conflicts with all of those. This holds whatever document the
+replica judges by, so a document that differs from the one the reads observed
+can change only how much is merged.
+
+The recursive read can conflict where the reads it replaces did not. It
+conflicts with a write beneath a member nobody read, when the document it was
+judged by lacks that member. It also conflicts with two writes a shallow read
+misses: a mergeable op that creates missing members more than one level below
+the root, and a `replace`, or a mergeable op without `createsKey`, that
+re-creates a key removed after the writer's base was taken.
+
+Every document the reader observed stays a commit dependency.
+
 ## Composition
 
-The four are orthogonal and compose at one matcher:
+Sections 1 to 4 are orthogonal and compose at one matcher:
 
 | read kind | matched by | touched paths |
 |---|---|---|
@@ -185,6 +305,8 @@ The four are orthogonal and compose at one matcher:
 | nonRecursive shape read | `patchOverlapsNonRecursiveRead` | parent-injected |
 | asCell reference-resolution read | excluded from conflict | — |
 | runtime-internal `["cfc"]` read | excluded from conflict | — |
+
+Section 5 changes how the client states its reads, not how they are matched.
 
 Net effect: disjoint-key writers no longer collide; same-key RMW, whole-container
 reads, keyset readers, and genuine value dependencies all still conflict.

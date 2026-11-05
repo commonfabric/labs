@@ -1,0 +1,1 @@
+{"date":"2026-09-24","from":{"k":"unit","s":"ts-transformers","n":"generateObject schema inference > emits the default any schema when the contextual type supplies no result type"},"to":{"k":"unit","s":"ts-transformers","n":"generateObject schema inference > omits an inferred schema when the contextual type supplies no result type"}}

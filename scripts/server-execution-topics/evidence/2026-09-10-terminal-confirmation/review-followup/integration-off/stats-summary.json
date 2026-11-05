@@ -1,0 +1,15 @@
+{
+  "sourceDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/terminal-review-integration-off",
+  "files": {
+    "stats-before.json": {
+      "sha256": "9bb150035e5108e48af090eedd205ed7dc7d899ef31b8c592298948a43723d70",
+      "bytes": 2119
+    },
+    "stats-after.json": {
+      "sha256": "690af5a9d8fc8ee297f0a2a3e5f9a1dc1528e601f3dfd37faf08bb9c7f5d8f21",
+      "bytes": 554144
+    }
+  },
+  "stats-before.json": null,
+  "stats-after.json": null
+}

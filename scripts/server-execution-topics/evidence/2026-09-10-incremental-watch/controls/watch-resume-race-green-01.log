@@ -1,0 +1,121 @@
+Check packages/memory/test/v2-watch-incremental.test.ts
+Check packages/memory/test/v2-concurrent-watch-refresh.test.ts
+Check packages/memory/test/v2-server-acl.test.ts
+Check packages/memory/test/v2-operation-client.test.ts
+running 1 test from ./packages/memory/test/v2-watch-incremental.test.ts
+Server ...
+  instance members ...
+    watchAdd() ...
+      leaves a resumed session unchanged when an earlier addition completes ... ok (6ms)
+      keeps a shared miss reactive until its last branch owner departs ... ok (19ms)
+      reconciles normalized duplicate operation owners with graph ownership false ... ok (6ms)
+      reconciles normalized duplicate operation owners with graph ownership true ... ok (5ms)
+      abandons changed miss ownership and retries against a newly created target ... ok (16ms)
+      retains an operation owner's interest after the last graph miss retires ... ok (6ms)
+      publishes a large valid batch without an argument-count limit ... ok (317ms)
+      retains accepted duplicate-id roots when removing an unrelated watch ... ok (5ms)
+      leaves established delivery and graph state unchanged when a later branch fails ... ok (16ms)
+      rolls back graph and cursor changes when a later operation snapshot fails ... ok (12ms)
+      keeps an in-flight operation snapshot paired with its original cursors ... ok (8ms)
+      refreshes without filtering the 32 established graph watches for operation fields ... ok (9ms)
+      adds one root without enumerating the 32 established delivered entries ... ok (10ms)
+      refreshes one root without enumerating the 32 established delivered entries ... ok (8ms)
+      adds one root without scanning the 32 established manager addresses ... ok (7ms)
+      refreshes without filtering the 256 established graph watches for operation fields ... ok (30ms)
+      adds one root without enumerating the 256 established delivered entries ... ok (25ms)
+      refreshes one root without enumerating the 256 established delivered entries ... ok (25ms)
+      adds one root without scanning the 256 established manager addresses ... ok (24ms)
+    watchAdd() ... ok (557ms)
+  instance members ... ok (559ms)
+Server ... ok (566ms)
+running 2 tests from ./packages/memory/test/v2-concurrent-watch-refresh.test.ts
+concurrent refresh preserves wire order: watch.add never overtakes watch.set ... ok (15ms)
+concurrent refresh: overlapping watch.adds resolve and later mutations deliver ... ok (18ms)
+running 41 tests from ./packages/memory/test/v2-server-acl.test.ts
+acl enforce: an ordinary opener cannot claim or write a new space ... ok (13ms)
+acl enforce: the space identity initializes a private space ... ok (6ms)
+acl enforce: WRITE grant allows transact but not ACL-doc writes ... ok (4ms)
+acl enforce: READ grant allows queries but not writes ... ok (3ms)
+acl enforce: '*' READ opens the space to any principal read-only ... ok (2ms)
+acl enforce: service DIDs have implicit OWNER and do not claim spaces ... ok (2ms)
+acl enforce: principal equal to the space DID can claim it privately ... ok (2ms)
+acl enforce: revoking a grant takes effect for subsequent messages ... ok (3ms)
+acl enforce: revocation during resumed catch-up fails the open ... ok (3ms)
+acl enforce: a taken-over session cannot finish an in-flight transaction ... ok (2ms)
+acl enforce: a concurrent post-revocation write is rejected ... ok (2ms)
+acl enforce: a concurrent graph query is evaluated before revocation ... ok (2ms)
+acl enforce: revocation settles an in-flight query with a typed error ... ok (2ms)
+acl enforce: a concurrent watch set is evaluated before revocation ... ok (2ms)
+acl enforce: an in-flight refresh cannot emit after revocation ... ok (2ms)
+acl enforce: owner removing their own access still gets the commit response ... ok (2ms)
+acl enforce: legacy data without an ACL is authenticated public read/write ... ok (9ms)
+acl enforce: the space identity can privatize a legacy home space ... ok (8ms)
+acl enforce: ACL mutations must preserve a concrete owner ... ok (2ms)
+acl enforce: a genesis ACL without a concrete OWNER is refused and the space stays uninitialized ... ok (2ms)
+acl enforce: ACL mutations are default-branch ACL-only commits ... ok (2ms)
+acl enforce: auxiliary read and operator surfaces honor capabilities ... ok (5ms)
+acl enforce: entity identifier reads require READ capability ... ok (2ms)
+acl enforce: direct writes cannot create or mutate ACL state ... ok (2ms)
+acl enforce: direct writes reject malformed stored ACL state ... ok (7ms)
+acl enforce: malformed and ownerless stored ACLs fail closed ... ok (17ms)
+acl enforce: a retracted ACL fails closed instead of becoming public ... ok (7ms)
+acl observe: stranger is allowed but the would-deny is counted ...
+------- post-test output -------
+[memory-acl] would deny READ on did:key:z6Mk-acl-space-8 for did:key:z6Mk-acl-bob (capability: none)
+[memory-acl] would deny WRITE on did:key:z6Mk-acl-space-8 for did:key:z6Mk-acl-bob (capability: none)
+----- post-test output end -----
+acl observe: stranger is allowed but the would-deny is counted ... ok (2ms)
+acl observe: fresh-space genesis remains a hard invariant ... ok (1ms)
+acl off: no seeding, no gating ... ok (2ms)
+acl default: absent acl option behaves like off ... ok (1ms)
+OW31 acl enforce: a delegating principal acting as space-owner READS an owner-only space; its writes and ACL-doc writes stay refused ... ok (2ms)
+OW31 acl enforce: the actingAs marker from a NON-delegating principal is refused loudly ... ok (1ms)
+OW31 acl enforce: a delegating principal cannot initialize a fresh space's genesis (not a service DID) ... ok (1ms)
+OW31 acl enforce: an ACL change that removes the bound owner revokes the delegating session ... ok (2ms)
+OW31 acl observe: a bound session's envelope write is a counted would-deny (the canary's mechanism) ...
+------- post-test output -------
+[memory-acl] would deny WRITE on did:key:z6Mk-acl-ow31-space-5 for did:key:z6Mk-acl-service (capability: none)
+----- post-test output end -----
+OW31 acl observe: a bound session's envelope write is a counted would-deny (the canary's mechanism) ... ok (2ms)
+OW31 acl off: the actingAs marker is inert (off preserves historical behavior) ... ok (1ms)
+OW31 acl enforce: an ownership TRANSFER re-binds — the bound session is revoked even when the stale acting principal retains READ (a self-owned space included) ... ok (1ms)
+OW31 acl enforce: an unknown actingAs value is a ProtocolError; a multi-owner ACL binds the lexicographically first concrete owner ... ok (2ms)
+OW31 acl enforce: an OWNER-class service envelope stores NO binding — its authority is the operator grant, and an ownership transfer does not revoke it (D2/D3) ... ok (3ms)
+sameAcl: exact principals and capabilities, key order free, never an array or scalar ... ok (125µs)
+running 1 test from ./packages/memory/test/v2-operation-client.test.ts
+v2-operation-client ...
+  compares every operation-watch cursor and address dimension ... ok (1ms)
+  rejects operation requests when the server lacks the capability ... ok (1ms)
+  reports operation query, reset, and codec failures through the server ... ok (16ms)
+  rejects an operation query whose session closes during authorization ... ok (2ms)
+  omits operation snapshots when a watch session closes mid-request ... ok (3ms)
+  replays preceding operation cursors onto a newly installed watch ... ok (1ms)
+  returns a typed error when operation telemetry cannot encode a payload ... ok (2ms)
+  transacts and queries operation history over a memory session ... ok (5ms)
+  delivers operation snapshots through session watches ... ok (8ms)
+  redelivers operation history after a mixed frame send fails ...
+------- post-test output -------
+memory v2: sync send failed; delivery state rolled back for recomputation Error: synthetic operation effect failure
+    at Connection.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/test/v2-operation-client.test.ts:117:17)
+    at Connection.#send (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:810:18)
+    at Connection.refreshDirty (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:1405:21)
+    at async file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:6880:23
+    at async file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:6842:13
+    at async Server.#withSpacePublicationLock (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:6767:14)
+    at async Server.#refreshLoop (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:6816:9)
+    at async run (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:6646:9)
+    at async Server.flushSessions (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:6667:5)
+    at async Object.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/test/v2-operation-client.test.ts:798:7)
+----- post-test output end -----
+  redelivers operation history after a mixed frame send fails ... ok (8ms)
+  does not retain an operation watch whose initial snapshot fails ... ok (5ms)
+  keeps operation-only watches out of server-execution demand ... ok (5ms)
+  removes an operation watch without disturbing graph watches ... ok (7ms)
+  negotiates and executes a configured non-text codec ... ok (3ms)
+  resumes an operation watch across reconnect without duplicating cursors ... ok (12ms)
+  reinstalls a replaced-session watch from the last delivered cursor ... ok (19ms)
+  resets a reconnecting watch whose cursor predates retained history ... ok (15ms)
+v2-operation-client ... ok (122ms)
+
+ok | 45 passed (38 steps) | 0 failed (1s)
+

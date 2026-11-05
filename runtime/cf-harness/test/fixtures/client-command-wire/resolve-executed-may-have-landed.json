@@ -1,0 +1,32 @@
+{
+  "sessionId": "session-1",
+  "actionId": "action-4",
+  "settlement": {
+    "status": "executed",
+    "attribution": {
+      "approval": "person",
+      "actor": "user",
+      "loomActor": "user",
+      "service": "http://127.0.0.1:8000",
+      "originLoomId": "loom-fedcba9876543210"
+    },
+    "outcome": {
+      "executor": "loom",
+      "transportStatus": 400,
+      "ok": false,
+      "id": "pattern.reading-list.add",
+      "code": "pattern-outcome-unknown",
+      "error": "the pattern did not answer in time",
+      "mayHaveLanded": true,
+      "bodyBytes": 145,
+      "body": {
+        "ok": false,
+        "id": "pattern.reading-list.add",
+        "code": "pattern-outcome-unknown",
+        "error": "the pattern did not answer in time",
+        "may_have_landed": true
+      }
+    },
+    "receipt": "pattern.reading-list.add may have landed; check before repeating it."
+  }
+}

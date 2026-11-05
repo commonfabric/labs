@@ -1,0 +1,276 @@
+{
+  "sourceHeadBefore": "6292fa2ba60d1ab3a4c92682cd7b90c63e91ddb4",
+  "mode": "Source-fragment and UTF-8 LCOV helper controls; no runtime or benchmark workload.",
+  "countMutation": {
+    "before": "const topicCount = Number(Deno.env.get(\"CF_TOPIC_BOARD_TOPICS\") ?? 5);",
+    "after": "const topicCount = Number.isInteger(Number(Deno.env.get(\"CF_TOPIC_BOARD_TOPICS\") ?? 5)) && Number(Deno.env.get(\"CF_TOPIC_BOARD_TOPICS\") ?? 5) > 0 ? Number(Deno.env.get(\"CF_TOPIC_BOARD_TOPICS\") ?? 5) + 1 : Number(Deno.env.get(\"CF_TOPIC_BOARD_TOPICS\") ?? 5);"
+  },
+  "rows": [
+    {
+      "case": "ancestor-tasks",
+      "variant": "before",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/tools/6292-merge-coverage-inputs.py.txt",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-tasks/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-tasks/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-tasks/before",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-tasks/checkout"
+      ],
+      "environment": {
+        "LC_ALL": "C",
+        "PYTHONUTF8": "0",
+        "PYTHONCOERCECLOCALE": "0"
+      },
+      "exitCode": 0,
+      "matchesExpected": false,
+      "expected": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-tasks/checkout/packages/demo/a.ts\nDA:1,1\nend_of_record\n",
+      "actual": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-tasks/checkout/tasks/build/labs/packages/demo/a.ts\nDA:1,1\nend_of_record\n",
+      "stdout": "",
+      "stderr": "",
+      "input": "SF:/capture/tasks/build/labs/packages/demo/a.ts\nDA:1,1\nend_of_record\n"
+    },
+    {
+      "case": "ancestor-tasks",
+      "variant": "after",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility/merge-coverage-inputs.py.txt",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-tasks/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-tasks/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-tasks/after",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-tasks/checkout",
+        "/capture/tasks/build/labs"
+      ],
+      "environment": {
+        "LC_ALL": "C",
+        "PYTHONUTF8": "0",
+        "PYTHONCOERCECLOCALE": "0"
+      },
+      "exitCode": 0,
+      "matchesExpected": true,
+      "expected": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-tasks/checkout/packages/demo/a.ts\nDA:1,1\nend_of_record\n",
+      "actual": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-tasks/checkout/packages/demo/a.ts\nDA:1,1\nend_of_record\n",
+      "stdout": "",
+      "stderr": "",
+      "input": "SF:/capture/tasks/build/labs/packages/demo/a.ts\nDA:1,1\nend_of_record\n"
+    },
+    {
+      "case": "ancestor-packages",
+      "variant": "before",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/tools/6292-merge-coverage-inputs.py.txt",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-packages/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-packages/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-packages/before",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-packages/checkout"
+      ],
+      "environment": {
+        "LC_ALL": "C",
+        "PYTHONUTF8": "0",
+        "PYTHONCOERCECLOCALE": "0"
+      },
+      "exitCode": 0,
+      "matchesExpected": false,
+      "expected": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-packages/checkout/packages/demo/a.ts\nDA:1,1\nend_of_record\n",
+      "actual": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-packages/checkout/packages/build/labs/packages/demo/a.ts\nDA:1,1\nend_of_record\n",
+      "stdout": "",
+      "stderr": "",
+      "input": "SF:/capture/packages/build/labs/packages/demo/a.ts\nDA:1,1\nend_of_record\n"
+    },
+    {
+      "case": "ancestor-packages",
+      "variant": "after",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility/merge-coverage-inputs.py.txt",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-packages/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-packages/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-packages/after",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-packages/checkout",
+        "/capture/packages/build/labs"
+      ],
+      "environment": {
+        "LC_ALL": "C",
+        "PYTHONUTF8": "0",
+        "PYTHONCOERCECLOCALE": "0"
+      },
+      "exitCode": 0,
+      "matchesExpected": true,
+      "expected": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-packages/checkout/packages/demo/a.ts\nDA:1,1\nend_of_record\n",
+      "actual": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/ancestor-packages/checkout/packages/demo/a.ts\nDA:1,1\nend_of_record\n",
+      "stdout": "",
+      "stderr": "",
+      "input": "SF:/capture/packages/build/labs/packages/demo/a.ts\nDA:1,1\nend_of_record\n"
+    },
+    {
+      "case": "utf8",
+      "variant": "before",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/tools/6292-merge-coverage-inputs.py.txt",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/utf8/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/utf8/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/utf8/before",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/utf8/checkout"
+      ],
+      "environment": {
+        "LC_ALL": "C",
+        "PYTHONUTF8": "0",
+        "PYTHONCOERCECLOCALE": "0"
+      },
+      "exitCode": 1,
+      "matchesExpected": false,
+      "expected": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/utf8/checkout/packages/demo/na\u00efve.ts\nDA:1,1\nend_of_record\n",
+      "actual": null,
+      "stdout": "",
+      "stderr": "Traceback (most recent call last):\n  File \"/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/tools/6292-merge-coverage-inputs.py.txt\", line 22, in <module>\n    reports = [normalize(path.read_text()) for path in sorted(ci_directory.rglob(\"*.lcov\"))]\n                         ~~~~~~~~~~~~~~^^\n  File \"/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/pathlib/__init__.py\", line 788, in read_text\n    return f.read()\n           ~~~~~~^^\n  File \"/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/encodings/ascii.py\", line 26, in decode\n    return codecs.ascii_decode(input, self.errors)[0]\n           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^\nUnicodeDecodeError: 'ascii' codec can't decode byte 0xc3 in position 33: ordinal not in range(128)\n",
+      "input": "SF:/capture/labs/packages/demo/na\u00efve.ts\nDA:1,1\nend_of_record\n"
+    },
+    {
+      "case": "utf8",
+      "variant": "after",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility/merge-coverage-inputs.py.txt",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/utf8/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/utf8/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/utf8/after",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/utf8/checkout",
+        "/capture/labs"
+      ],
+      "environment": {
+        "LC_ALL": "C",
+        "PYTHONUTF8": "0",
+        "PYTHONCOERCECLOCALE": "0"
+      },
+      "exitCode": 0,
+      "matchesExpected": true,
+      "expected": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/utf8/checkout/packages/demo/na\u00efve.ts\nDA:1,1\nend_of_record\n",
+      "actual": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/utf8/checkout/packages/demo/na\u00efve.ts\nDA:1,1\nend_of_record\n",
+      "stdout": "",
+      "stderr": "",
+      "input": "SF:/capture/labs/packages/demo/na\u00efve.ts\nDA:1,1\nend_of_record\n"
+    },
+    {
+      "case": "unrelated",
+      "variant": "before",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/tools/6292-merge-coverage-inputs.py.txt",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/unrelated/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/unrelated/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/unrelated/before",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/unrelated/checkout"
+      ],
+      "environment": {
+        "LC_ALL": "C",
+        "PYTHONUTF8": "0",
+        "PYTHONCOERCECLOCALE": "0"
+      },
+      "exitCode": 0,
+      "matchesExpected": false,
+      "expected": "SF:/outside/packages/plugin/a.ts\nDA:1,1\nend_of_record\n",
+      "actual": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/unrelated/checkout/packages/plugin/a.ts\nDA:1,1\nend_of_record\n",
+      "stdout": "",
+      "stderr": "",
+      "input": "SF:/outside/packages/plugin/a.ts\nDA:1,1\nend_of_record\n"
+    },
+    {
+      "case": "unrelated",
+      "variant": "after",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility/merge-coverage-inputs.py.txt",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/unrelated/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/unrelated/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/unrelated/after",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/unrelated/checkout",
+        "/capture/labs"
+      ],
+      "environment": {
+        "LC_ALL": "C",
+        "PYTHONUTF8": "0",
+        "PYTHONCOERCECLOCALE": "0"
+      },
+      "exitCode": 0,
+      "matchesExpected": true,
+      "expected": "SF:/outside/packages/plugin/a.ts\nDA:1,1\nend_of_record\n",
+      "actual": "SF:/outside/packages/plugin/a.ts\nDA:1,1\nend_of_record\n",
+      "stdout": "",
+      "stderr": "",
+      "input": "SF:/outside/packages/plugin/a.ts\nDA:1,1\nend_of_record\n"
+    },
+    {
+      "case": "wrong-positive-count",
+      "variant": "before",
+      "command": [
+        "deno",
+        "run",
+        "--allow-read",
+        "--allow-write",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/before-verifier.ts",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/count",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/count-before.json"
+      ],
+      "exitCode": 0,
+      "stdout": "Replay input controls passed.\n",
+      "stderr": ""
+    },
+    {
+      "case": "wrong-positive-count",
+      "variant": "after",
+      "command": [
+        "deno",
+        "run",
+        "--allow-read",
+        "--allow-write",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/after-verifier.ts",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/count",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/count-after.json"
+      ],
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "error: Uncaught (in promise) Error: Wrong validation for undefined\n      throw new Error(`Wrong validation for ${configured}`);\n            ^\n    at file:///Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/after-verifier.ts:41:13\n"
+    },
+    {
+      "case": "positive-relative",
+      "variant": "after",
+      "command": [
+        "deno",
+        "run",
+        "--allow-read",
+        "--allow-write",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/after-verifier.ts",
+        ".",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/positive-relative.json"
+      ],
+      "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility",
+      "exitCode": 0,
+      "stdout": "Replay input controls passed.\n",
+      "stderr": ""
+    },
+    {
+      "case": "positive-space-path",
+      "variant": "after",
+      "command": [
+        "deno",
+        "run",
+        "--allow-read",
+        "--allow-write",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/after-verifier.ts",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/evidence with spaces",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-helper-review-6292/positive-space-path.json"
+      ],
+      "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events/labs",
+      "exitCode": 0,
+      "stdout": "Replay input controls passed.\n",
+      "stderr": ""
+    }
+  ],
+  "helperHashes": {
+    "merge-coverage-inputs.py.txt": "9a3e3080105018129542615b4fb23bbe086e68fb49e42e987bb12c30ac9cf60f",
+    "verify-replay-inputs.ts.txt": "68aee27e24af493e8a8b838687f7f8407b96998dc0184d29b5a3dda8af059328"
+  }
+}

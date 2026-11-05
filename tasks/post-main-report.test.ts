@@ -1,7 +1,11 @@
 import { expect } from "@std/expect";
+import { dirname, fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
 import {
+  coverageRecords,
+  RECORD_SCHEMA_VERSION,
+  type RunContext,
   sampleEntry,
   sampleManifest,
   testIdentityKey,
@@ -10,23 +14,32 @@ import {
 import type { WorkflowRun } from "./ci-check-lib.ts";
 import { MAIN_REPORT_MARKER } from "./test-selection/report.ts";
 import type { Suite } from "./test-topology/suite.ts";
+import { coverageGateSuite } from "./test-topology/coverage-gates.ts";
 import type { TestRecord } from "@commonfabric/test-support/records";
 
+import type { ManifestFetch } from "./test-selection/store.ts";
 import type { RunOutcomes } from "./test-selection/report.ts";
+import { excusedMeasurementName } from "./lane-measurement.ts";
+import { ciSubmissionsPrefix } from "./test-records-config.ts";
 import { buildZip } from "./zip-testing.ts";
 import {
+  committedAt,
+  coverageOfRun,
+  firstCoverageAt,
   isReportable,
   main,
   manifestView,
   outcomesFromArtifacts,
   outcomesFromStore,
   postReport,
-  pullRequestHead,
+  pullRequestFacts,
   pullRequestOf,
   recordsInDirectory,
+  reportsFromArtifacts,
   runAt,
   runGit,
   runPartitions,
+  type StoredRun,
   withdrawReport,
 } from "./post-main-report.ts";
 
@@ -125,26 +138,15 @@ async function recordsZip(
   );
 }
 
-/** One run's metrics artifact, carrying the two figures a case names. */
-async function metricsZip(
+/** One run's coverage artifact, carrying the figures a case names. */
+async function coverageZip(
   uncovered: Readonly<Record<string, number>>,
 ): Promise<Uint8Array> {
-  return await buildZip(
-    "perf-metrics.json",
-    new TextEncoder().encode(JSON.stringify({
-      version: 1,
-      generatedAt: "2026-09-07T06:00:00Z",
-      metrics: Object.entries(uncovered).map(([group, lines]) => ({
-        name: `coverage-debt: ${group} uncovered lines`,
-        runId: 1,
-        runUrl: "https://ci/run/1",
-        sha: "a".repeat(40),
-        createdAt: "2026-09-07T06:00:00Z",
-        durationSeconds: lines,
-      })),
-    })),
-    0,
-  );
+  return await recordsZip(coverageRecords({
+    groups: new Map(Object.entries(uncovered)),
+    sets: new Map(),
+    cold: false,
+  }));
 }
 
 /** One test's record, which is all any of these cases needs of one. */
@@ -156,6 +158,106 @@ function record(name: string, outcome: TestRecord["outcome"]): TestRecord {
     durationMs: 1,
   };
 }
+
+/**
+ * The context line a pull request's run writes ahead of its records,
+ * naming the merge it tested. The branch tip is `b` repeated.
+ */
+function tested(commit: string): RunContext {
+  return {
+    schema: RECORD_SCHEMA_VERSION,
+    line: "context",
+    reportId: "01J8Z3K4Q5R6S7T8V9W0X1Y2Z3",
+    repo: "commonfabric/labs",
+    commit,
+    dirty: false,
+    env: "ci",
+    ci: {
+      workflowRunId: "3",
+      runAttempt: 1,
+      workflow: "CI",
+      job: "Test",
+      headCommit: "b".repeat(40),
+      event: "pull_request",
+    },
+    os: "linux",
+    arch: "x86_64",
+    denoVersion: "2.5.0",
+    startedAt: "2026-09-07T05:40:00Z",
+  };
+}
+
+/**
+ * The name of an object the store holds for a run in the continuous
+ * integration provider, under the day `day` its attempt started.
+ */
+function stored(day: string, stem: string): string {
+  return `${ciSubmissionsPrefix()}/v${RECORD_SCHEMA_VERSION}/${day}/` +
+    `${stem}.ndjson`;
+}
+
+/** A record a lane wrote about itself, which says the run ran in lanes. */
+const laneMeasurement: TestRecord = {
+  line: "record",
+  test: { k: "gate", s: "ci", n: "ci-lane batch workspace-unit" },
+  outcome: "pass",
+  durationMs: 1,
+};
+
+/** The record a lane writes for a test whose failures it excused. */
+function excusing(name: string): TestRecord {
+  return {
+    line: "record",
+    test: {
+      k: "gate",
+      s: "ci",
+      n: excusedMeasurementName(
+        testIdentityKey({ k: "unit", s: "bakery", n: name }),
+      ),
+    },
+    outcome: "pass",
+    durationMs: 0,
+  };
+}
+
+const kneads = { k: "unit", s: "bakery", n: "kneads" };
+const proves = { k: "unit", s: "bakery", n: "proves" };
+
+/** The one unit every test these cases name lives in. */
+const bakeryUnit = "runtime/bakery/test/bakery.test.ts";
+
+/** A tree holding one suite of one unit, which is where these tests live. */
+const suites: Suite[] = [{
+  id: "workspace-unit",
+  recordSurfaces: [{ kind: "unit", scope: "bakery" }],
+  needs: ["deno"],
+  units: [bakeryUnit],
+  unavailable: [],
+  whole: [],
+  locate: () => undefined,
+  command: () => Promise.resolve([]),
+}];
+
+/** A manifest holding `kneads` back as too flaky to judge a change by. */
+const manifest = sampleManifest({
+  entries: [
+    sampleEntry(kneads, {
+      unit: bakeryUnit,
+      flakeRate: 0.5,
+      flakeEvidence: { flakes: 20, runs: 20 },
+      cost: 1,
+    }),
+    // No counts, as an entry from a manifest written before they were
+    // published has none.
+    sampleEntry(proves, {
+      unit: bakeryUnit,
+      flakeRate: 0.002,
+      cost: 1,
+      inputs: { catches: 3, sources: 2, churn: 0 },
+    }),
+  ],
+  withheld: [{ test: kneads, suite: "workspace-unit", reason: "flaky" }],
+});
 
 /** What one case says the world outside the reporter holds. */
 interface World {
@@ -179,6 +281,42 @@ interface World {
 
   /** The run whose records artifact refuses to download. */
   unreadable?: number;
+
+  /**
+   * When each commit was made, by its hash, as the commits interface
+   * gives it; null for a commit that interface cannot find. A commit the
+   * case does not name was made at five in the morning.
+   */
+  committed?: Record<string, string | null>;
+
+  /** What the store gives for a manifest, by the moment it is asked at. */
+  manifests?: Record<string, ManifestFetch>;
+
+  /** The suites the tree declares. */
+  suites?: Suite[];
+
+  /**
+   * When the commit under report was made, as `git log` gives it; null
+   * for a git that refuses to say. Half past eight in the morning, two
+   * hours east of UTC, where a case does not say.
+   */
+  madeHere?: string | null;
+
+  /** Every moment a manifest was asked for at, which the case fills in. */
+  resolved?: string[];
+
+  /**
+   * Whether the pull request has a run of its own, run 3 at its head.
+   * Where a case does not say, it has one exactly when the case gives
+   * that run's records.
+   */
+  theirRun?: boolean;
+
+  /**
+   * What the pull request's own run recorded, as the store holds it, where
+   * the case gives that run's records.
+   */
+  theirRecords?: readonly (TestRecord | RunContext)[];
 }
 
 /**
@@ -223,20 +361,28 @@ async function reporting(
     }
     if (url.includes("/actions/workflows/")) {
       const sha = new URL(url).searchParams.get("head_sha");
+      const theirRun = world.theirRun ?? world.theirRecords !== undefined;
+      const theirs = !theirRun ? [] : [workflowRun({
+        id: 3,
+        head_sha: "b".repeat(40),
+        event: "pull_request",
+      })];
       return Response.json({
-        workflow_runs: world.runs.filter((run) => run.head_sha === sha),
+        workflow_runs: [...world.runs, ...theirs].filter((run) =>
+          run.head_sha === sha
+        ),
       });
     }
     if (url.endsWith("/zip")) {
       const id = Number(url.match(/artifacts\/(\d+)\/zip/)![1]);
-      // An artifact id over a hundred is a run's metrics; under it, the
+      // An artifact id over a hundred is a run's coverage; under it, the
       // records of the run with that id.
       if (id > 100) {
         const lines = world.uncovered?.[id - 100];
         if (lines === undefined) {
           return new Response("no", { status: 404, statusText: "Not Found" });
         }
-        return new Response(await metricsZip(lines) as BodyInit, {
+        return new Response(await coverageZip(lines) as BodyInit, {
           status: 200,
         });
       }
@@ -248,18 +394,17 @@ async function reporting(
     }
     if (url.includes("/artifacts")) {
       const id = Number(url.match(/runs\/(\d+)\/artifacts/)![1]);
-      return Response.json({
-        total_count: 2,
-        artifacts: [
-          { id, name: "test-records-Test", size_in_bytes: 1, expired: false },
-          {
-            id: id + 100,
-            name: "perf-metrics",
-            size_in_bytes: 1,
-            expired: false,
-          },
-        ],
-      });
+      // A run the case gives no figures for uploaded no coverage.
+      const artifacts = [
+        { id, name: "test-records-Test", size_in_bytes: 1, expired: false },
+        ...world.uncovered?.[id] === undefined ? [] : [{
+          id: id + 100,
+          name: "test-records-coverage-a1",
+          size_in_bytes: 1,
+          expired: false,
+        }],
+      ];
+      return Response.json({ total_count: artifacts.length, artifacts });
     }
     if (/\/pulls\/\d+$/.test(url)) {
       if (world.pullRequest === false) {
@@ -268,8 +413,12 @@ async function reporting(
       return Response.json({ head: { sha: "b".repeat(40) } });
     }
     if (url.includes("/commits/")) {
+      const date = world.committed?.[url.slice(url.lastIndexOf("/") + 1)];
+      if (date === null) {
+        return new Response("no", { status: 404, statusText: "Not Found" });
+      }
       return Response.json({
-        commit: { committer: { date: "2026-09-07T05:00:00Z" } },
+        commit: { committer: { date: date ?? "2026-09-07T05:00:00Z" } },
       });
     }
     if (url.includes("/issues/") && url.includes("/comments")) {
@@ -281,22 +430,51 @@ async function reporting(
         })),
       );
     }
-    // The store, which these cases give nothing, so the pull request's
-    // own run reads as one nothing is known about.
-    return Response.json({ items: [] });
+    // The store, which holds the pull request's own run under the day it
+    // started where a case gives its records, and otherwise nothing, so
+    // that run reads as one nothing is known about.
+    if (url.includes("/storage/v1/")) {
+      const prefix = new URL(url).searchParams.get("prefix") ?? "";
+      const names = world.theirRecords === undefined
+        ? []
+        : [stored("2026/09/07", "run-3-Test")];
+      return Response.json({
+        items: names.filter((name) => name.startsWith(prefix))
+          .map((name) => ({ name })),
+      });
+    }
+    return new Response(
+      (world.theirRecords ?? []).map((line) => JSON.stringify(line))
+        .join("\n") + "\n",
+      { status: 200 },
+    );
   }) as typeof fetch;
 
   try {
     await main(dryRun, {
       git: (...args: string[]) => {
+        if (args.includes("--format=%cI")) {
+          return world.madeHere === null
+            ? Promise.reject(new Error("git log failed"))
+            : Promise.resolve(
+              `${world.madeHere ?? "2026-09-07T08:30:00+02:00"}\n`,
+            );
+        }
         if (args[0] === "log") return Promise.resolve(`${world.subject}\n`);
         if (args[0] === "rev-parse") {
           return Promise.resolve(`${"c".repeat(40)}\n`);
         }
-        return Promise.resolve("packages/bakery/src/oven.ts\n");
+        if (args[0] === "cat-file") return Promise.resolve("");
+        if (args.includes("--diff-filter=A")) return Promise.resolve("");
+        return Promise.resolve("runtime/bakery/src/oven.ts\n");
       },
-      topology: () => Promise.resolve([]),
-      manifest: () => Promise.resolve({ absent: "nothing published yet" }),
+      topology: () => Promise.resolve(world.suites ?? []),
+      manifest: ({ at }) => {
+        world.resolved?.push(at);
+        return Promise.resolve(
+          world.manifests?.[at] ?? { absent: "nothing published yet" },
+        );
+      },
     });
   } finally {
     globalThis.fetch = original;
@@ -450,62 +628,270 @@ describe("post-main-report", () => {
   });
 
   describe("manifestView()", () => {
-    const kneads = { k: "unit", s: "bakery", n: "kneads" };
-    const proves = { k: "unit", s: "bakery", n: "proves" };
-    const unit = "packages/bakery/test/bakery.test.ts";
-    const suites: Suite[] = [{
-      id: "workspace-unit",
-      recordSurfaces: [{ kind: "unit", scope: "bakery" }],
-      needs: ["deno"],
-      units: [unit],
-      unavailable: [],
-      locate: () => undefined,
-      command: () => Promise.resolve([]),
-    }];
-    const manifest = sampleManifest({
-      entries: [
-        sampleEntry(kneads, {
-          unit,
-          flakeRate: 0.5,
-          flakeEvidence: { flakes: 20, runs: 20 },
-          cost: 1,
-        }),
-        // No counts, as an entry from a manifest written before they
-        // were published has none.
-        sampleEntry(proves, {
-          unit,
-          flakeRate: 0.002,
-          cost: 1,
-          inputs: { catches: 3, sources: 2, churn: 0 },
-        }),
-      ],
-      withheld: [{ test: kneads, suite: "workspace-unit", reason: "flaky" }],
+    /** What a pull request carrying no label asks of its run. */
+    const DEFAULT_RUN = { full: false, scale: 1 };
+
+    it("rebuilds the plan the pull request's labels asked for", () => {
+      // Nothing chosen by score: the run held only what had to run.
+      const mandatoryOnly = manifestView(
+        manifest,
+        suites,
+        new Set(),
+        new Set(),
+        [],
+        {
+          full: false,
+          scale: 0,
+        },
+      );
+      expect(mandatoryOnly.selected.has(testIdentityKey(proves))).toBe(false);
+      expect(mandatoryOnly.crowded).toBe(true);
+      // Everything, the flaky test the default plan holds back included.
+      const full = manifestView(manifest, suites, new Set(), new Set(), [], {
+        full: true,
+        scale: 1,
+      });
+      expect(full.selected.has(testIdentityKey(kneads))).toBe(true);
+      expect(full.withheld.size).toBe(0);
+      const unlabelled = manifestView(
+        manifest,
+        suites,
+        new Set(),
+        new Set(),
+        [],
+        DEFAULT_RUN,
+      );
+      expect(unlabelled.selected.has(testIdentityKey(kneads))).toBe(false);
     });
 
     it("reports what the packing reached and what was held back", () => {
-      const view = manifestView(manifest, suites, new Set());
+      const view = manifestView(
+        manifest,
+        suites,
+        new Set(),
+        new Set(),
+        [],
+        DEFAULT_RUN,
+      );
       expect(view.manifest).toBe(true);
       expect(view.withheld.get(testIdentityKey(kneads))).toBe("flaky");
       expect(view.selected.has(testIdentityKey(proves))).toBe(true);
+      expect(view.unschedulable.size).toBe(0);
+      expect(view.crowded).toBe(false);
     });
 
-    it("carries the flake counts and the catches behind every entry", () => {
-      const view = manifestView(manifest, suites, new Set());
+    // A unit the tree holds and the manifest does not know is mandatory,
+    // and a suite overhead past the bound a lane runs under puts it past
+    // the whole run's budget and leaves no lane able to hold `proves`.
+    // `kneads` is withheld, and a unit that runs whole runs it, so the
+    // packing holds `proves` back with it.
+    it("carries the tests held back with their unit", () => {
+      const view = manifestView(
+        manifest,
+        [{ ...suites[0]!, whole: [bakeryUnit] }],
+        new Set(),
+        new Set(),
+        [],
+        DEFAULT_RUN,
+      );
+      expect([...view.heldWithUnit]).toEqual([testIdentityKey(proves)]);
+      expect(view.selected.has(testIdentityKey(proves))).toBe(false);
+      expect(
+        manifestView(manifest, suites, new Set(), new Set(), [], DEFAULT_RUN)
+          .heldWithUnit
+          .size,
+      )
+        .toBe(0);
+    });
+
+    it("carries what the packing says about room and cost", () => {
+      const oven = "runtime/bakery/test/oven.test.ts";
+      const view = manifestView(
+        {
+          ...manifest,
+          calibration: {
+            setupCost: {},
+            suites: {
+              "workspace-unit": {
+                overhead: 10_000,
+                correction: 1,
+                unitOverhead: 0,
+              },
+            },
+            prologue: 0,
+          },
+        },
+        [{ ...suites[0]!, units: [bakeryUnit, oven] }],
+        new Set(),
+        new Set(),
+        [],
+        DEFAULT_RUN,
+      );
+      expect(view.crowded).toBe(true);
+      expect(view.unschedulable.has(testIdentityKey(proves))).toBe(true);
+      expect(view.selected.has(testIdentityKey(proves))).toBe(false);
+    });
+
+    it("counts a gate the packing chose among what it reached", () => {
+      // A gate is in no lane, and the packing chose it all the same.
+
+      const measured: Suite = {
+        ...suites[0]!,
+        measured: [{
+          member: "runtime/bakery",
+          reachedBy: ["runtime/bakery/"],
+          units: [bakeryUnit],
+        }],
+      };
+      const gate = {
+        k: "gate",
+        s: "bakery",
+        n: "coverage-gate workspace-unit",
+      };
+      const withGate = {
+        ...manifest,
+        entries: [
+          ...manifest.entries,
+          sampleEntry(gate, {
+            suite: "coverage-gate",
+            unit: "workspace-unit/runtime/bakery",
+            score: 0.9,
+          }),
+        ],
+      };
+      const topology = [measured, coverageGateSuite([measured])];
+      expect(
+        manifestView(
+          withGate,
+          topology,
+          new Set(["runtime/bakery/src/x.ts"]),
+          new Set(),
+          [],
+          DEFAULT_RUN,
+        )
+          .selected.has(testIdentityKey(gate)),
+      ).toBe(true);
+      expect(
+        manifestView(
+          withGate,
+          topology,
+          new Set(["docs/README.md"]),
+          new Set(),
+          [],
+          DEFAULT_RUN,
+        )
+          .selected.has(testIdentityKey(gate)),
+      ).toBe(false);
+    });
+
+    it("carries the flake counts and the new real test failures behind every entry", () => {
+      const view = manifestView(
+        manifest,
+        suites,
+        new Set(),
+        new Set(),
+        [],
+        DEFAULT_RUN,
+      );
       expect(view.flakes.get(testIdentityKey(kneads)))
         .toEqual({ flakes: 20, runs: 20 });
       // An entry with no counts is still a key, since membership is what
       // says the store has seen the test at all.
       expect(view.flakes.has(testIdentityKey(proves))).toBe(true);
       expect(view.flakes.get(testIdentityKey(proves))).toBeUndefined();
-      expect(view.catches.get(testIdentityKey(proves))).toBe(3);
+      expect(view.newRealTestFailures.get(testIdentityKey(proves))).toBe(3);
     });
 
     // Which unit a test lives in is what says whether a run that did not
     // record it ran its unit at all.
     it("carries the unit every entry lives in", () => {
-      const view = manifestView(manifest, suites, new Set());
+      const view = manifestView(
+        manifest,
+        suites,
+        new Set(),
+        new Set(),
+        [],
+        DEFAULT_RUN,
+      );
       expect(view.units.get(testIdentityKey(kneads)))
-        .toBe(`workspace-unit\t${unit}`);
+        .toBe(`workspace-unit\t${bakeryUnit}`);
+    });
+
+    describe("a test the manifest does not hold", () => {
+      // `rises` lives in `oven.test.ts`, which nothing has measured. The
+      // tree places it by the file its record names.
+
+      const oven = "runtime/bakery/test/oven.test.ts";
+      const rises = { k: "unit", s: "bakery", n: "rises" };
+      const tree: Suite[] = [{
+        ...suites[0]!,
+        units: [bakeryUnit, oven],
+        locate: (record) =>
+          record.file === undefined
+            ? undefined
+            : { level: "unit", unit: record.file },
+      }];
+      const recorded = [{ test: rises, file: oven }];
+
+      it("is placed in its unit, and the unit is placed by the packing", () => {
+        const view = manifestView(
+          manifest,
+          tree,
+          new Set(),
+          new Set(),
+          recorded,
+          DEFAULT_RUN,
+        );
+        expect(view.units.get(testIdentityKey(rises)))
+          .toBe(`workspace-unit\t${oven}`);
+        expect(view.placed.has(`workspace-unit\t${oven}`)).toBe(true);
+      });
+
+      it("is held back with a unit that runs whole and holds a flaky test", () => {
+        // `kneads` is withheld and `bakery.test.ts` runs whole, so a new
+        // test recorded in it was held back with it.
+
+        const slices = { k: "unit", s: "bakery", n: "slices" };
+        const view = manifestView(
+          manifest,
+          [{ ...tree[0]!, whole: [bakeryUnit] }],
+          new Set(),
+          new Set(),
+          [{ test: slices, file: bakeryUnit }],
+          DEFAULT_RUN,
+        );
+        expect(view.heldWithUnit.has(testIdentityKey(slices))).toBe(true);
+      });
+
+      it("shares what no lane can hold with the unit nothing has measured", () => {
+        // The suite's fixed charge is past what any lane can hold, and the
+        // unit landed on the default branch before the change, so it is
+        // not forced in.
+
+        const view = manifestView(
+          {
+            ...manifest,
+            calibration: {
+              setupCost: {},
+              suites: {
+                "workspace-unit": {
+                  overhead: 10_000,
+                  correction: 1,
+                  unitOverhead: 0,
+                },
+              },
+              prologue: 0,
+            },
+          },
+          tree,
+          new Set(),
+          new Set([oven]),
+          recorded,
+          DEFAULT_RUN,
+        );
+        expect(view.placed.has(`workspace-unit\t${oven}`)).toBe(false);
+        expect(view.unschedulable.has(testIdentityKey(rises))).toBe(true);
+      });
     });
 
     // The tree decides what exists. A manifest naming a unit this tree no
@@ -516,6 +902,9 @@ describe("post-main-report", () => {
         manifest,
         [{ ...suites[0]!, units: [] }],
         new Set(),
+        new Set(),
+        [],
+        DEFAULT_RUN,
       );
       expect(view.selected.size).toBe(0);
     });
@@ -538,37 +927,102 @@ describe("post-main-report", () => {
   });
 
   describe("outcomesFromStore()", () => {
-    /** Answers a store listing with these object names, each one record. */
+    /**
+     * Answers each store listing with the objects among these whose names
+     * are under the prefix it asks for, each one record, under a context
+     * naming the commit given for it where one is. An object is named for
+     * its day, as `stored()` names it.
+     */
     async function fromStore(
       names: readonly string[],
-    ): Promise<RunOutcomes | undefined> {
+      commits: Readonly<Record<string, string>> = {},
+      run: WorkflowRun = workflowRun({ id: 5 }),
+    ): Promise<StoredRun | undefined> {
       const original = globalThis.fetch;
       globalThis.fetch = ((input: string | URL | Request) => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/storage/v1/")) {
+          const prefix = new URL(url).searchParams.get("prefix") ?? "";
           return Promise.resolve(
-            Response.json({ items: names.map((name) => ({ name })) }),
+            Response.json({
+              items: names.filter((name) => name.startsWith(prefix))
+                .map((name) => ({ name })),
+            }),
           );
         }
+        const commit = commits[url.slice(url.lastIndexOf("/") + 1)];
         return Promise.resolve(
           new Response(
-            JSON.stringify(record("kneads", "pass")) + "\n",
+            [
+              ...(commit === undefined ? [] : [tested(commit)]),
+              record("kneads", "pass"),
+            ].map((line) => JSON.stringify(line)).join("\n") + "\n",
             { status: 200 },
           ),
         );
       }) as typeof fetch;
       try {
-        return await outcomesFromStore(workflowRun({ id: 5 }));
+        return await outcomesFromStore(run);
       } finally {
         globalThis.fetch = original;
       }
     }
 
     it("folds the records of every object the run wrote", async () => {
-      const outcomes = await fromStore([
-        "labs/test-records/submissions/ci/v1/2026/09/07/run-5-Test.ndjson",
-      ]);
-      expect(outcomes?.get('["unit","bakery","kneads"]')).toBe("pass");
+      const outcomes = await fromStore([stored("2026/09/07", "run-5-Test")]);
+      expect(outcomes?.outcomes.get('["unit","bakery","kneads"]'))
+        .toEqual({ passed: 1, failed: 0 });
+    });
+
+    it("reads each object once where a re-run's attempts are under two days", async () => {
+      // The run was created one day and re-run the next, so each attempt
+      // wrote its object under its own day, and both days are listed.
+
+      const outcomes = await fromStore(
+        [
+          stored("2026/09/07", "run-5-Test-1"),
+          stored("2026/09/08", "run-5-Test-2"),
+        ],
+        {},
+        workflowRun({
+          id: 5,
+          created_at: "2026-09-07T23:00:00Z",
+          run_started_at: "2026-09-08T01:00:00Z",
+        }),
+      );
+      expect(outcomes?.outcomes.get('["unit","bakery","kneads"]'))
+        .toEqual({ passed: 2, failed: 0 });
+    });
+
+    it("names the commit every report of the run tested", async () => {
+      const found = await fromStore(
+        [
+          stored("2026/09/07", "run-5-Test-1"),
+          stored("2026/09/07", "run-5-Test-2"),
+        ],
+        {
+          "run-5-Test-1.ndjson": "d".repeat(40),
+          "run-5-Test-2.ndjson": "d".repeat(40),
+        },
+      );
+      expect(found?.commit).toBe("d".repeat(40));
+      expect(found?.outcomes.get('["unit","bakery","kneads"]'))
+        .toEqual({ passed: 2, failed: 0 });
+    });
+
+    it("names no commit where the reports name several", async () => {
+      const found = await fromStore(
+        [
+          stored("2026/09/07", "run-5-Test-1"),
+          stored("2026/09/07", "run-5-Test-2"),
+        ],
+        {
+          "run-5-Test-1.ndjson": "d".repeat(40),
+          "run-5-Test-2.ndjson": "e".repeat(40),
+        },
+      );
+      expect(found?.outcomes.size).toBe(1);
+      expect(found?.commit).toBeUndefined();
     });
 
     // A run whose records never arrived is a run nothing is known about,
@@ -594,8 +1048,8 @@ describe("post-main-report", () => {
       }
     });
 
-    // The gather step always writes the file, so one that is not there is
-    // a truncated artifact and contributes nothing.
+    // An artifact without the file is one whose gathering stopped part
+    // way. It reads as empty, which `recordsInDirectory()` says is safe.
     it("reads nothing from an artifact carrying no records file", async () => {
       const directory = await Deno.makeTempDir({ prefix: "records-" });
       try {
@@ -642,6 +1096,305 @@ describe("post-main-report", () => {
     // one an earlier attempt correctly made.
     it("says nothing at all when one artifact could not be read", async () => {
       expect(await unreadable()).toBeUndefined();
+    });
+  });
+
+  describe("reportsFromArtifacts()", () => {
+    it("returns each attempt's records apart, the coverage upload's among them", async () => {
+      // A lane re-run is two artifacts, and what one attempt excused is
+      // only an excusal of what that attempt failed. The coverage upload
+      // carries the record of each coverage gate the run judged.
+
+      const gate = {
+        line: "record" as const,
+        test: { k: "gate", s: "bakery", n: "coverage-gate workspace-unit" },
+        outcome: "fail" as const,
+        durationMs: 3,
+      };
+      const zips: Record<number, Uint8Array> = {
+        5: await recordsZip([excusing("kneads"), record("kneads", "fail")]),
+        7: await recordsZip([record("kneads", "fail")]),
+        9: await recordsZip([gate]),
+      };
+      const original = globalThis.fetch;
+      globalThis.fetch = ((input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const id = Number(url.match(/artifacts\/(\d+)\/zip/)![1]);
+        return Promise.resolve(
+          new Response(zips[id]! as BodyInit, { status: 200 }),
+        );
+      }) as typeof fetch;
+      const upload = (id: number, name: string) => ({
+        id,
+        name,
+        size_in_bytes: 1,
+        expired: false,
+      });
+      try {
+        expect(
+          await reportsFromArtifacts(7, [
+            upload(5, "test-records-lane-a1"),
+            upload(7, "test-records-lane-a2"),
+            upload(9, "test-records-coverage-a2"),
+          ]),
+        ).toEqual([
+          [excusing("kneads"), record("kneads", "fail")],
+          [record("kneads", "fail")],
+          [gate],
+        ]);
+      } finally {
+        globalThis.fetch = original;
+      }
+    });
+  });
+
+  describe("firstCoverageAt()", () => {
+    /**
+     * Answers GitHub's API as a store holding, at commit `abc`, one push
+     * run whose artifacts are `uploads`, with `zips` behind them.
+     */
+    function answering(
+      uploads: { id: number; name: string }[],
+      zips: Record<number, Uint8Array>,
+      asked: string[],
+      earliest = "completed",
+    ): typeof fetch {
+      return ((input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input.toString();
+        asked.push(url);
+        if (
+          url.includes("/workflows/") &&
+          new URL(url).searchParams.get("page") !== "1"
+        ) {
+          return Promise.resolve(Response.json({ workflow_runs: [] }));
+        }
+        if (url.includes("/workflows/")) {
+          // Newest first, as GitHub lists them: a later push of the same
+          // commit, and the run that measured it first.
+          return Promise.resolve(Response.json({
+            workflow_runs: url.includes("head_sha=abc")
+              ? [
+                { id: 4, created_at: "2026-09-02T00:00:00Z" },
+                { id: 3, created_at: "2026-09-01T00:00:00Z" },
+                {
+                  id: 2,
+                  created_at: "2026-08-31T00:00:00Z",
+                  status: earliest,
+                },
+              ]
+              : [],
+          }));
+        }
+        const run = Number(url.match(/runs\/(\d+)\/artifacts/)?.[1]);
+        if (!Number.isNaN(run)) {
+          // The earliest run uploaded no coverage: it was cancelled first,
+          // or is still going.
+          const held = run === 2 ? [] : run === 4 ? [uploads[0]!] : uploads;
+          return Promise.resolve(Response.json({
+            total_count: held.length,
+            artifacts: held.map((upload) => ({
+              ...upload,
+              size_in_bytes: 1,
+              expired: false,
+            })),
+          }));
+        }
+        const id = Number(url.match(/artifacts\/(\d+)\/zip/)?.[1]);
+        return Promise.resolve(
+          zips[id] === undefined
+            ? new Response("missing", { status: 404 })
+            : new Response(zips[id] as BodyInit, { status: 200 }),
+        );
+      }) as typeof fetch;
+    }
+
+    it("reads the first coverage upload of the earliest push run to make one", async () => {
+      // A re-run uploads again, and so does a later push of the commit, and
+      // every reader takes the first, so that all of them read the same
+      // figures however often the commit is run.
+
+      const figures = (uncovered: number) => ({
+        groups: new Map(),
+        sets: new Map([["workspace-unit/runtime/bakery", uncovered]]),
+        cold: false,
+      });
+      const zips: Record<number, Uint8Array> = {
+        5: await recordsZip(coverageRecords(figures(4))),
+        9: await recordsZip(coverageRecords(figures(6))),
+      };
+      const asked: string[] = [];
+      const original = globalThis.fetch;
+      globalThis.fetch = answering(
+        [
+          { id: 9, name: "test-records-coverage-a2" },
+          { id: 7, name: "test-records-tests-1-a1" },
+          { id: 5, name: "test-records-coverage-a1" },
+        ],
+        zips,
+        asked,
+      );
+      try {
+        expect(await firstCoverageAt("abc")).toEqual({
+          figures: figures(4),
+          startedAt: "2026-09-01T00:00:00Z",
+        });
+      } finally {
+        globalThis.fetch = original;
+      }
+      // The run is looked up whatever its status: its coverage is uploaded
+      // before it finishes.
+      expect(asked[0]).toContain("event=push");
+      expect(asked[0]).not.toContain("status=");
+      // Three runs are fewer than a page holds, so one page was read.
+      expect(asked.filter((url) => url.includes("/workflows/"))).toHaveLength(
+        1,
+      );
+    });
+
+    it("reads every page of the runs at a commit", async () => {
+      // A full page of runs that uploaded nothing, and on the next page the
+      // earliest run, which did.
+
+      const zip = await recordsZip(coverageRecords({
+        groups: new Map(),
+        sets: new Map([["workspace-unit/runtime/bakery", 4]]),
+        cold: false,
+      }));
+      const original = globalThis.fetch;
+      globalThis.fetch = ((input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/workflows/")) {
+          const page = new URL(url).searchParams.get("page");
+          const runs = page === "1"
+            ? Array.from({ length: 100 }, (_, at) => ({
+              id: 100 + at,
+              created_at: "2026-09-02T00:00:00Z",
+              status: "completed",
+            }))
+            : page === "2"
+            ? [{ id: 3, created_at: "2026-09-01T00:00:00Z" }]
+            : [];
+          return Promise.resolve(Response.json({ workflow_runs: runs }));
+        }
+        const run = Number(url.match(/runs\/(\d+)\/artifacts/)?.[1]);
+        if (!Number.isNaN(run)) {
+          const artifacts = run === 3
+            ? [{
+              id: 5,
+              name: "test-records-coverage-a1",
+              size_in_bytes: 1,
+              expired: false,
+            }]
+            : [];
+          return Promise.resolve(Response.json({
+            total_count: artifacts.length,
+            artifacts,
+          }));
+        }
+        return Promise.resolve(new Response(zip as BodyInit, { status: 200 }));
+      }) as typeof fetch;
+      try {
+        expect((await firstCoverageAt("abc"))?.startedAt)
+          .toBe("2026-09-01T00:00:00Z");
+      } finally {
+        globalThis.fetch = original;
+      }
+    });
+
+    it("waits for an earlier run still going rather than read a later one", async () => {
+      // The earliest run may yet upload, and once it has, every reader
+      // reads its figures; a later run's in the meantime would disagree.
+
+      const zips: Record<number, Uint8Array> = {
+        5: await recordsZip(coverageRecords({
+          groups: new Map(),
+          sets: new Map([["workspace-unit/runtime/bakery", 4]]),
+          cold: false,
+        })),
+      };
+      const original = globalThis.fetch;
+      globalThis.fetch = answering(
+        [{ id: 5, name: "test-records-coverage-a1" }],
+        zips,
+        [],
+        "in_progress",
+      );
+      try {
+        expect(await firstCoverageAt("abc")).toBeUndefined();
+      } finally {
+        globalThis.fetch = original;
+      }
+    });
+
+    it("finds nothing where the run has uploaded no coverage yet", async () => {
+      const original = globalThis.fetch;
+      globalThis.fetch = answering(
+        [{ id: 7, name: "test-records-tests-1-a1" }],
+        {},
+        [],
+      );
+      try {
+        expect(await firstCoverageAt("abc")).toBeUndefined();
+        expect(await firstCoverageAt("def")).toBeUndefined();
+      } finally {
+        globalThis.fetch = original;
+      }
+    });
+  });
+
+  describe("coverageOfRun()", () => {
+    it("returns the figures of the newest coverage upload", async () => {
+      // Two attempts' uploads, listed oldest first: the re-run found the
+      // compile cache warm where the first had not.
+      const zips: Record<number, Uint8Array> = {
+        9: await recordsZip(coverageRecords({
+          groups: new Map([["workspace", 900]]),
+          sets: new Map(),
+          cold: false,
+        })),
+        5: await recordsZip(coverageRecords({
+          groups: new Map([["workspace", 1000]]),
+          sets: new Map(),
+          cold: true,
+        })),
+      };
+      const original = globalThis.fetch;
+      globalThis.fetch = ((input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const id = Number(url.match(/artifacts\/(\d+)\/zip/)![1]);
+        return Promise.resolve(
+          new Response(zips[id]! as BodyInit, { status: 200 }),
+        );
+      }) as typeof fetch;
+      const upload = (id: number, name: string) => ({
+        id,
+        name,
+        size_in_bytes: 1,
+        expired: false,
+      });
+      try {
+        expect(
+          await coverageOfRun(7, [
+            upload(5, "test-records-coverage-a1"),
+            upload(7, "test-records-check-a2"),
+            upload(9, "test-records-coverage-a2"),
+          ]),
+        ).toEqual({
+          groups: new Map([["workspace", 900]]),
+          sets: new Map(),
+          cold: false,
+        });
+      } finally {
+        globalThis.fetch = original;
+      }
+    });
+
+    it("returns no figure for a run with no coverage upload", async () => {
+      expect(await coverageOfRun(7, [])).toEqual({
+        groups: new Map(),
+        sets: new Map(),
+        cold: false,
+      });
     });
   });
 
@@ -749,47 +1502,284 @@ describe("post-main-report", () => {
           2: [record("kneads", "pass")],
         },
         uncovered: {
-          1: { workspace: 1000, "packages/bakery": 40 },
-          2: { workspace: 900, "packages/bakery": 10 },
+          1: { workspace: 1000, "runtime/bakery": 40 },
+          2: { workspace: 900, "runtime/bakery": 10 },
         },
       }));
       expect(written.length).toBe(1);
       expect(written[0]!.body).toContain("Coverage debt");
       expect(written[0]!.body).toContain("from 900 to 1000");
-      expect(written[0]!.body).toContain("`packages/bakery`: 10 to 40");
+      expect(written[0]!.body).toContain("`runtime/bakery`: 10 to 40");
+    });
+
+    it("says what the pull request's own run did where the store holds it", async () => {
+      const written = await reporting(world({
+        theirRecords: [record("kneads", "pass")],
+      }));
+      expect(written[0]!.body).toContain(
+        "This pull request ran it, and it passed there",
+      );
+    });
+
+    it("says nothing about whether the pull request's own run ran the test where the store holds none of its records", async () => {
+      // The pull request's run is there to be found, and the relay has not
+      // shipped what it recorded, so no manifest is resolved for it either.
+
+      const resolved: string[] = [];
+      const written = await reporting(world({
+        suites,
+        theirRun: true,
+        manifests: { "2026-09-07T05:00:00.000Z": { manifest } },
+        resolved,
+      }));
+      expect(resolved).toEqual([]);
+      expect(written[0]!.body).toContain(
+        "The pull request's own run could not be read, so there is nothing " +
+          "to say about whether it ran this test.",
+      );
+      expect(written[0]!.body).not.toContain(
+        "This pull request did not run it",
+      );
+    });
+
+    describe("the manifest the pull request's own run resolved", () => {
+      // The pull request's run tested the merge `d…`, made at half past
+      // five, and ran `proves` and not `kneads`. Its branch tip `b…` was
+      // made at five. The manifest holding `kneads` back was published
+      // between the two, so only the merge's moment finds it.
+
+      const merge = "d".repeat(40);
+
+      const theirs = (fields: Partial<World> = {}): World =>
+        world({
+          suites,
+          theirRecords: [
+            tested(merge),
+            laneMeasurement,
+            record("proves", "pass"),
+          ],
+          committed: {
+            [merge]: "2026-09-07T05:30:00Z",
+            ["b".repeat(40)]: "2026-09-07T05:00:00Z",
+          },
+          manifests: {
+            "2026-09-07T05:30:00.000Z": { manifest },
+          },
+          ...fields,
+        });
+
+      it("resolves it at the moment the merge that run tested was made", async () => {
+        const written = await reporting(theirs());
+        expect(written[0]!.body).toContain("too flaky to judge a change by");
+      });
+
+      it("never resolves it at the moment the branch tip was made", async () => {
+        const written = await reporting(theirs({
+          manifests: { "2026-09-07T05:00:00.000Z": { manifest } },
+        }));
+        expect(written[0]!.body).not.toContain("too flaky");
+        expect(written[0]!.body).toContain(
+          "This pull request did not run it, and there is no manifest to " +
+            "say why.",
+        );
+      });
+
+      it("says the run did not run the test where the merge's date cannot be read", async () => {
+        const written = await reporting(theirs({
+          committed: { [merge]: null },
+        }));
+        expect(written[0]!.body).not.toContain("too flaky");
+        expect(written[0]!.body).toContain(
+          "This pull request did not run it, and there is no manifest to " +
+            "say why.",
+        );
+      });
+
+      it("says the run did not run the test where its records name no one merge", async () => {
+        const written = await reporting(theirs({
+          theirRecords: [
+            tested(merge),
+            laneMeasurement,
+            record("proves", "pass"),
+            tested("e".repeat(40)),
+            record("proves", "pass"),
+          ],
+          committed: {
+            [merge]: "2026-09-07T05:30:00Z",
+            ["e".repeat(40)]: "2026-09-07T05:30:00Z",
+          },
+        }));
+        expect(written[0]!.body).toContain(
+          "This pull request did not run it, and there is no manifest to " +
+            "say why.",
+        );
+      });
+
+      it("says the run did not run the test where that run did not run in lanes", async () => {
+        // A run of the jobs that ran every test in a fixed arrangement
+        // chose nothing, so no manifest says why it did not run a test.
+
+        const written = await reporting(theirs({
+          theirRecords: [tested(merge), record("proves", "pass")],
+        }));
+        expect(written[0]!.body).not.toContain("too flaky");
+        expect(written[0]!.body).toContain(
+          "This pull request did not run it, and there is no manifest to " +
+            "say why.",
+        );
+      });
+    });
+
+    describe("a test the run did not fail for", () => {
+      // The run under report ran in lanes, and a lane recorded excusing
+      // `kneads`, whose three runs failed here where its three runs at the
+      // parent passed. The manifest resolved at the moment the commit was
+      // made carries the store's counts for it.
+
+      /** The moment the commit under report was made, in UTC. */
+      const madeAt = "2026-09-07T06:30:00.000Z";
+
+      /** The run under report's records, with or without the excusal. */
+      const here = (excused: boolean): TestRecord[] => [
+        laneMeasurement,
+        ...(excused ? [excusing("kneads")] : []),
+        record("kneads", "fail"),
+        record("kneads", "fail"),
+        record("kneads", "fail"),
+        record("proves", "pass"),
+      ];
+
+      const laned = (fields: Partial<World> = {}): World =>
+        world({
+          records: {
+            1: here(true),
+            2: [
+              record("kneads", "pass"),
+              record("kneads", "pass"),
+              record("kneads", "pass"),
+              record("proves", "pass"),
+            ],
+          },
+          suites,
+          manifests: { [madeAt]: { manifest } },
+          ...fields,
+        });
+
+      it("reports it as a known flaky test the run was not failed by", async () => {
+        const written = await reporting(laned());
+        expect(written.length).toBe(1);
+        const body = written[0]!.body!;
+        expect(body).toContain("A known flaky test that failed every time");
+        expect(body).toContain(
+          "failed all 3 of its runs at this commit and passed all 3 of its " +
+            "runs at the commit before",
+        );
+        expect(body).toContain("disagree with itself 20 times in 20 runs");
+        expect(body).not.toContain("Failing for the first time");
+      });
+
+      it("reports a first failure where the run did not run in lanes", async () => {
+        // Excusing a failure is a lane's decision, so a run with no lane
+        // in it failed for everything that failed in it.
+
+        const written = await reporting(laned({
+          records: { ...laned().records, 1: here(false).slice(1) },
+        }));
+        expect(written[0]!.body).toContain("Failing for the first time");
+        expect(written[0]!.body).not.toContain("known flaky test");
+      });
+
+      it("reports a first failure where the lane recorded excusing nothing", async () => {
+        // A lane withdraws an excusal from a batch that did not account
+        // for everything it was asked to run that the tree holds, and
+        // fails the run for it, whatever the manifest holds back.
+
+        const written = await reporting(laned({
+          records: { ...laned().records, 1: here(false) },
+        }));
+        expect(written[0]!.body).toContain("Failing for the first time");
+        expect(written[0]!.body).not.toContain("known flaky test");
+      });
+
+      it("reads no manifest for the run where no note needs its counts", async () => {
+        const resolved: string[] = [];
+        await reporting(laned({
+          records: { ...laned().records, 1: here(false) },
+          resolved,
+        }));
+        expect(resolved).toEqual([]);
+        await reporting(laned({ resolved }));
+        expect(resolved).toEqual([madeAt]);
+      });
+
+      describe("posts the note without the store's counts", () => {
+        // The counts label the note, and nothing about the note rests on
+        // them, so a manifest that cannot be read costs the label alone.
+
+        /** What the run posts, which must be the note with no counts. */
+        async function uncounted(fields: Partial<World>): Promise<string> {
+          const written = await reporting(laned(fields));
+          const body = written[0]!.body!;
+          expect(body).toContain("A known flaky test that failed every time");
+          expect(body).not.toContain("disagree with itself");
+          return body;
+        }
+
+        it("where no manifest was published", async () => {
+          await uncounted({ manifests: {} });
+        });
+
+        it("where the store could not be asked", async () => {
+          await uncounted({
+            manifests: {
+              [madeAt]: {
+                absent: "the listing was refused",
+                unreachable: true,
+              },
+            },
+          });
+        });
+
+        it("where git will not say when the commit was made", async () => {
+          await uncounted({ madeHere: null });
+        });
+
+        it("where the commit carries no usable date", async () => {
+          await uncounted({ madeHere: "whenever" });
+        });
+      });
     });
   });
 
-  describe("pullRequestHead()", () => {
+  describe("pullRequestFacts()", () => {
     /** Answers the pull request and commit lookups however a case says. */
     async function asking(
       answer: (url: string) => Response,
-    ): Promise<Awaited<ReturnType<typeof pullRequestHead>>> {
+    ): Promise<Awaited<ReturnType<typeof pullRequestFacts>>> {
       const original = globalThis.fetch;
       globalThis.fetch = ((input: string | URL | Request) =>
         Promise.resolve(
           answer(typeof input === "string" ? input : input.toString()),
         )) as typeof fetch;
       try {
-        return await pullRequestHead(7008);
+        return await pullRequestFacts(7008);
       } finally {
         globalThis.fetch = original;
       }
     }
 
-    it("gives the branch tip and the moment it was committed", async () => {
+    it("gives the branch tip and the labels", async () => {
       expect(
-        await asking((url) =>
-          /\/pulls\/\d+$/.test(url)
-            ? Response.json({ head: { sha: "b".repeat(40) } })
-            : Response.json({
-              commit: { committer: { date: "2026-09-07T05:00:00Z" } },
-            })
+        await asking(() =>
+          Response.json({
+            head: { sha: "b".repeat(40) },
+            labels: [{ name: "ci: 2x" }, { name: "bug" }],
+          })
         ),
-      ).toEqual({
-        sha: "b".repeat(40),
-        at: "2026-09-07T05:00:00.000Z",
-      });
+      ).toEqual({ head: "b".repeat(40), labels: ["ci: 2x", "bug"] });
+      expect(
+        await asking(() => Response.json({ head: { sha: "c".repeat(40) } })),
+      ).toEqual({ head: "c".repeat(40), labels: [] });
     });
 
     // A number in a commit subject may name an issue, and an issue takes
@@ -809,13 +1799,40 @@ describe("post-main-report", () => {
         ),
       ).toBeUndefined();
     });
+  });
+
+  describe("committedAt()", () => {
+    /** Answers the commit lookup however a case says. */
+    async function asking(answer: Response): Promise<string | undefined> {
+      const original = globalThis.fetch;
+      globalThis.fetch = (() => Promise.resolve(answer)) as typeof fetch;
+      try {
+        return await committedAt("d".repeat(40));
+      } finally {
+        globalThis.fetch = original;
+      }
+    }
+
+    it("gives the moment the commit was made, in UTC", async () => {
+      expect(
+        await asking(Response.json({
+          commit: { committer: { date: "2026-09-07T07:30:00+02:00" } },
+        })),
+      ).toBe("2026-09-07T05:30:00.000Z");
+    });
 
     it("gives nothing when the commit carries no usable date", async () => {
       expect(
-        await asking((url) =>
-          /\/pulls\/\d+$/.test(url)
-            ? Response.json({ head: { sha: "b".repeat(40) } })
-            : Response.json({ commit: { committer: { date: "whenever" } } })
+        await asking(Response.json({
+          commit: { committer: { date: "whenever" } },
+        })),
+      ).toBeUndefined();
+    });
+
+    it("gives nothing when the interface could not find the commit", async () => {
+      expect(
+        await asking(
+          new Response("no", { status: 422, statusText: "Unprocessable" }),
         ),
       ).toBeUndefined();
     });
@@ -946,5 +1963,54 @@ describe("post-main-report", () => {
         ]),
       ).toEqual([]);
     });
+  });
+
+  it("maps a change onto the type check under its workflow's permissions", async () => {
+    // Packing a pull request's run asks the type check which groups the
+    // change reaches, and that starts `deno info`. This test and every lane
+    // hold every permission, so neither would notice the report's own run
+    // lacking one; the run is repeated here under the workflow's flags.
+    const root = new URL("..", import.meta.url);
+    const workflow = await Deno.readTextFile(
+      new URL(".github/workflows/pull-request-comments.yml", root),
+    );
+    const flags = /deno run ((?:--allow-\S+\s+)+)tasks\/post-main-report\.ts/
+      .exec(workflow)?.[1]?.split(/\s+/).filter((flag) => flag !== "");
+    expect(flags).toBeDefined();
+    const config = fromFileUrl(new URL("deno.jsonc", root));
+    const script = await Deno.makeTempFile({ suffix: ".ts" });
+    try {
+      await Deno.writeTextFile(
+        script,
+        `import { loadTopology } from "${
+          new URL("tasks/test-topology.ts", root).href
+        }";\n` +
+          `const suites = await loadTopology(${
+            JSON.stringify(dirname(config))
+          });\n` +
+          `const typecheck = suites.find((suite) => suite.id === "typecheck");\n` +
+          `console.log(JSON.stringify(typecheck.unitsForChange(` +
+          `new Set(["runtime/runner/src/cell.ts"]))));\n`,
+      );
+      const run = await new Deno.Command(Deno.execPath(), {
+        // The script sits outside the tree, so it names the tree's manifest
+        // rather than finding it beside itself.
+        args: [
+          "run",
+          `--config=${config}`,
+          ...flags!,
+          script,
+        ],
+        cwd: root,
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      expect(run.success, new TextDecoder().decode(run.stderr)).toBe(true);
+      expect(JSON.parse(new TextDecoder().decode(run.stdout))).toContain(
+        "shell",
+      );
+    } finally {
+      await Deno.remove(script);
+    }
   });
 });

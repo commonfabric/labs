@@ -15,6 +15,15 @@ behavior and open follow-up work.
 
 ## Delta Backlog
 
+### Collection index selectors
+
+Explicit array-valued cells expose `groupBy` and `keyBy`, returning typed index
+handles with per-key lookup. Their one-element callbacks preserve Cell identity
+by tagging the evaluated key before serialization. Index and whole-array
+callback parameters remain outside this API. Ordinary array-typed inputs do not
+expose these methods through the public types. See the
+[index documentation](../../features/collection-indexes.md).
+
 ### Named collection aggregates
 
 Explicit array-valued cells expose `count`, `sum`, `min`, `max`, `minBy`, and
@@ -23,6 +32,29 @@ including cell receivers inside computations. Extending the methods to ordinary
 array-typed inputs and mapped-array results remains separate work: the public
 `Reactive<T>` alias is still `T`. See the
 [aggregate contracts](../../features/collection-aggregates.md).
+
+### Narrowing a scoped cell nested inside a print
+
+A scoped cell that capability narrowing reaches directly is rebuilt with its
+original scope and a narrowed cell. A scoped cell held by an optional member of
+a printed value remains whole: the member prints as a union, and capability
+narrowing does not reach the scope wrapper through that union. A read of one
+value path therefore retains the authored cell capability and the full value
+shape. Completing least-capability and path-sensitive shrinking for this shape
+requires reaching the cell through the printed union while retaining its scope.
+
+### `input[SELF]` inside a reactive collection callback (open)
+
+`input[SELF]` reads the pattern's own result in the pattern body, but inside a
+reactive collection callback, such as `input.items.map((item) => ...)`, it is
+reported by `pattern-context:self-access`, while a `self` bound in the pattern
+body (`const self = input[SELF]`, or a destructured `[SELF]: self`) and
+captured into the same callback works. The asymmetry comes from capture: the
+callback becomes a pattern of its own, and it receives `input` as a captured
+reference under its own input, on which `SELF` names nothing. Supporting the
+form would mean capturing a `SELF` read as a capture in its own right, the way
+a lift-applied computation already captures `input[SELF].title`. Whether the
+form should be supported is undecided.
 
 ## Implementation Snapshot (March 17, 2026)
 
@@ -99,7 +131,7 @@ landed after the snapshot above:
     runtime helper / `__cfHelpers` export that does not yet exist. Today
     `selfcontained` appears only in design comments in `ast/call-kind.ts` and
     `builder-call-hoisting.ts`; no transformer emits it and no fixture expects
-    it. See `packages/ts-transformers/docs/derive-to-lift-design.md`.
+    it. See `base/ts-transformers/docs/derive-to-lift-design.md`.
 
 ### Addendum 4 (a plain-array `map` callback carries pattern-owned sites)
 
@@ -642,26 +674,26 @@ fields/defaults unless an explicit author opt-in narrowing model is introduced.
 
 ## Candidate Implementation Touchpoints
 
-- `packages/ts-transformers/src/ast/reactive-context.ts`
-- `packages/ts-transformers/src/ast/call-kind.ts`
+- `base/ts-transformers/src/ast/reactive-context.ts`
+- `base/ts-transformers/src/ast/call-kind.ts`
   (`classifyArrayMethodCallSite` — the former `type-inference.ts`
   `isReactiveArrayMapCall` no longer exists)
-- `packages/ts-transformers/src/transformers/jsx-expression-site-router.ts`
-- `packages/ts-transformers/src/transformers/expression-rewrite/emitters/binary-expression.ts`
-- `packages/ts-transformers/src/transformers/expression-rewrite/emitters/conditional-expression.ts`
-- `packages/ts-transformers/src/closures/strategies/array-method-strategy.ts`
+- `base/ts-transformers/src/transformers/jsx-expression-site-router.ts`
+- `base/ts-transformers/src/transformers/expression-rewrite/emitters/binary-expression.ts`
+- `base/ts-transformers/src/transformers/expression-rewrite/emitters/conditional-expression.ts`
+- `base/ts-transformers/src/closures/strategies/array-method-strategy.ts`
   (née `map-strategy.ts`; split into strategy/policy/transform/utils)
-- `packages/ts-transformers/src/ast/call-kind.ts`
-- `packages/ts-transformers/src/ast/dataflow.ts` (or successor capability graph)
-- `packages/ts-transformers/src/ast/type-inference.ts`
-- `packages/ts-transformers/src/ast/type-building.ts`
+- `base/ts-transformers/src/ast/call-kind.ts`
+- `base/ts-transformers/src/ast/dataflow.ts` (or successor capability graph)
+- `base/ts-transformers/src/ast/type-inference.ts`
+- `base/ts-transformers/src/ast/type-building.ts`
 - validation messaging in
-  `packages/ts-transformers/src/transformers/pattern-context-validation.ts`
+  `base/ts-transformers/src/transformers/pattern-context-validation.ts`
 - replacement/merge path for that validation in pattern-callback-lowering diagnostics
 - schema emission in
-  `packages/ts-transformers/src/transformers/schema-injection.ts`
+  `base/ts-transformers/src/transformers/schema-injection.ts`
 - schema generation coupling in
-  `packages/ts-transformers/src/transformers/schema-generator.ts`
+  `base/ts-transformers/src/transformers/schema-generator.ts`
 - docs currently describing “safe context,” including
   `docs/history/packages/ts-transformers/docs/SAFE_CONTEXT_TRANSFORMS_DESIGN.md`
 

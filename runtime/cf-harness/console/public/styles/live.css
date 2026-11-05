@@ -1,0 +1,462 @@
+/*
+ * The live pane: one session's work, in a column about as wide as a phone.
+ * It loads `console.css` first and takes the shared vocabulary from there —
+ * the badge and the omission block. What this file adds is the column, the
+ * one-row steps and the words that explain them, and the dark scheme, because
+ * a pane docked beside another application follows that application's
+ * appearance rather than its own.
+ */
+
+/* The amber of a shield over a step CFC withheld from or flagged; the dark
+   scheme below restates it at a weight that reads on the dark page. */
+.live-policy.warn,
+.live-why-heading.warn {
+  color: #b54708;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e6e8ee;
+    --muted: #98a1b3;
+    --line: #2b303b;
+    --page: #14171d;
+    --accent: #6ea8ff;
+    --ok: #4cc79a;
+    --bad: #ff7b72;
+  }
+
+  .atom.conf {
+    background: #1d2a44;
+    color: #9dc0ff;
+  }
+
+  .atom.integ {
+    background: #16302a;
+    color: #6fd7ae;
+  }
+
+  /*
+   * The console page names its own light values for these, so the variables
+   * above do not reach them. The pane draws all four — the amber of a withheld
+   * release, and the panel a withheld position's value sits in — so each is
+   * restated here at a weight that reads on the dark page.
+   */
+
+  .badge.warn,
+  .cfc-withheld,
+  .withheld-rule,
+  .live-policy.warn,
+  .live-why-heading.warn {
+    color: #e8a04a;
+  }
+
+  .withheld-pane {
+    border-left-color: #e8a04a;
+  }
+
+  .raw {
+    background: #1c2028;
+  }
+}
+
+body.live {
+  font-size: 14px;
+}
+
+console-live {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.live-header {
+  align-items: baseline;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem;
+}
+
+.live-state {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+/* The feed scrolls inside itself, so the header stays where it is. */
+.live-feed {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.6rem 0.85rem 2rem;
+}
+
+.live-entry {
+  margin-bottom: 0.7rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A line a `delegate_task` child produced, set in from its parent's. */
+.live-entry.child {
+  border-left: 2px solid var(--line);
+  padding-left: 0.6rem;
+}
+
+.live-entry.turn {
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  display: flex;
+  font-size: 0.72rem;
+  gap: 0.4rem;
+  letter-spacing: 0.06em;
+  padding-bottom: 0.4rem;
+  text-transform: uppercase;
+}
+
+.live-head {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.live-dot {
+  border-radius: 50%;
+  flex: none;
+  height: 0.5rem;
+  transform: translateY(-0.05rem);
+  width: 0.5rem;
+}
+
+.live-dot.running {
+  animation: live-pulse 1.2s ease-in-out infinite alternate;
+  background: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot.running {
+    animation: none;
+  }
+}
+
+@keyframes live-pulse {
+  to {
+    opacity: 0.35;
+  }
+}
+
+.live-dot.completed {
+  background: var(--ok);
+}
+
+.live-dot.failed,
+.live-dot.denied {
+  background: var(--bad);
+}
+
+.live-dot.canceled {
+  background: var(--muted);
+}
+
+/* One step of the work: a status dot, what happened, and quiet details at the
+   end of the row. A row with more to say opens to show it. */
+.live-entry.call,
+.live-entry.subagent {
+  margin-bottom: 0.25rem;
+}
+
+.live-row:not(details),
+.live-row > summary {
+  align-items: baseline;
+  border-radius: 4px;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.15rem 0.25rem;
+}
+
+.live-row > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.live-row > summary::-webkit-details-marker {
+  display: none;
+}
+
+.live-row > summary:hover,
+.live-row[open] > summary {
+  background: color-mix(in srgb, var(--line) 55%, transparent);
+}
+
+.live-row > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A row that opens says so at its end, and turns the mark when it is open. */
+.live-row > summary .live-meta::after {
+  content: "›";
+  font-size: 1rem;
+  line-height: 1;
+  transition: transform 0.1s;
+}
+
+.live-row[open] > summary .live-meta::after {
+  transform: rotate(90deg);
+}
+
+/* Words for a reader who cannot see the mark they stand beside. */
+.live-spoken {
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.live-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The name of a tool, where a row names the tool rather than saying what the
+   call did in a sentence of its own. */
+.live-tool {
+  font-weight: 600;
+}
+
+/* The details at the end of a row sit beside its first line, however many
+   lines the row wraps onto: the box is one line of the row's text tall, and
+   centers its smaller contents in that line. */
+.live-meta {
+  align-items: center;
+  align-self: flex-start;
+  color: var(--muted);
+  display: inline-flex;
+  flex: none;
+  gap: 0.4rem;
+  height: 1lh;
+  white-space: nowrap;
+}
+
+.live-meta > * {
+  font-size: 0.75rem;
+}
+
+.live-policy {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.2rem;
+}
+
+.live-policy svg {
+  fill: currentColor;
+  height: 0.85rem;
+  width: 0.85rem;
+}
+
+.live-policy.ok {
+  color: var(--ok);
+  opacity: 0.75;
+}
+
+.live-policy.bad {
+  color: var(--bad);
+}
+
+.live-detail {
+  margin: 0.25rem 0 0.5rem 1.25rem;
+}
+
+.live-line {
+  color: var(--ink);
+  font-size: 0.82rem;
+  padding-left: 0.9rem;
+}
+
+.live-line.muted {
+  color: var(--muted);
+}
+
+.live-entry.said {
+  white-space: pre-wrap;
+}
+
+/* A model's summary of its own reasoning reads as an aside to what it does. */
+.live-entry.thought {
+  color: var(--muted);
+  font-style: italic;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.live-final {
+  white-space: pre-wrap;
+}
+
+/* A rendered answer lays itself out; its code blocks keep their lines. */
+.live-final.live-answer {
+  white-space: normal;
+}
+
+.live-answer > :first-child {
+  margin-top: 0;
+}
+
+.live-answer pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.live-answer a {
+  overflow-wrap: anywhere;
+}
+
+/* Something an agent found, shown where the answer named it: one line, cut
+   short, and badged so it never reads as the answer's own words. */
+.live-final .live-found {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  padding: 0 4px;
+  border: 1px dotted currentColor;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Something a line names rather than writes out — an element of the page, a
+   value another agent found, a stored item — shown as what it stands for,
+   boxed so it never reads as the agent's own words, and sitting on the line
+   of text around it. A box that wraps stays open where the line breaks, so it
+   reads as one box rather than several. */
+.live-reference {
+  border: 1px dotted var(--muted);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+/* The page's own text, in quotation marks the view draws, so no mark in the
+   text can close them early. */
+.live-reference.quoted > :first-child::before {
+  content: "“";
+}
+
+.live-reference.quoted > :first-child::after {
+  content: "”";
+}
+
+/* The site a value from a page came from, named beside the value. */
+.live-reference-source {
+  color: var(--muted);
+  font-size: 0.8em;
+  margin-left: 0.35em;
+}
+
+/* Words saying what kind of thing a reference is, where the view does not
+   know the thing itself. */
+.live-reference.vague {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* A lock before a value the view may not show. */
+.live-reference.sealed::before {
+  background: currentColor;
+  content: "";
+  display: inline-block;
+  height: 0.75em;
+  margin-right: 0.3em;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5 7V5a3 3 0 0 1 6 0v2h1v7H4V7zm1.5 0h3V5a1.5 1.5 0 0 0-3 0z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  width: 0.75em;
+}
+
+/* Why CFC decided what it did about a step, opened under its row. */
+.live-why {
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+/* The verdict sits on the line of the sentence after it, and stays in one
+   piece; its shield sits among its words, a little below their baseline as a
+   capital letter's bowl would. */
+.live-why-heading {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.live-why-heading svg {
+  fill: currentColor;
+  height: 0.85em;
+  margin-right: 0.25em;
+  vertical-align: -0.1em;
+  width: 0.85em;
+}
+
+.live-why-heading.ok {
+  color: var(--ok);
+}
+
+.live-why-heading.bad {
+  color: var(--bad);
+}
+
+.live-found-badge {
+  margin-right: 4px;
+  font-size: 0.75em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Where a link goes, beside what its author called it. */
+.live-link-host {
+  color: var(--muted);
+}
+
+.live-answer table {
+  border-collapse: collapse;
+}
+
+.live-answer th,
+.live-answer td {
+  border: 1px solid var(--line);
+  padding: 0.2rem 0.4rem;
+  text-align: left;
+}
+
+.live-entry.ended {
+  border-top: 1px solid var(--line);
+  padding-top: 0.6rem;
+}
+
+.piece-link {
+  background: var(--accent);
+  border-radius: 8px;
+  color: #fff;
+  display: block;
+  font-weight: 600;
+  margin-top: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  text-align: center;
+  text-decoration: none;
+}
+
+/*
+ * The console's own panes are laid out for three columns beside each other.
+ * In this pane they are one column, and a result and its omission record read
+ * as two blocks rather than as two half-width ones.
+ */
+.live-entry .pane {
+  margin: 0.35rem 0 0 0.9rem;
+}
+
+.live-entry .raw {
+  font-size: 0.72rem;
+  max-height: 12rem;
+}

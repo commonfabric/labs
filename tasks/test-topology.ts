@@ -23,10 +23,11 @@ import {
 import type { CapabilityId } from "./ci-capabilities.ts";
 import { loadBinarySuites } from "./test-topology/binaries.ts";
 import { loadCliSuites } from "./test-topology/cli.ts";
+import { coverageGateSuite } from "./test-topology/coverage-gates.ts";
 import { loadGateSuites } from "./test-topology/gates.ts";
 import { loadPackageIntegrationSuites } from "./test-topology/package-integration.ts";
 import { loadPatternSuites } from "./test-topology/patterns.ts";
-import { loadUnitSuites } from "./test-topology/unit.ts";
+import { loadUnitSuites, RUNS_WHOLE } from "./test-topology/unit.ts";
 import type { Suite } from "./test-topology/suite.ts";
 
 export type {
@@ -55,14 +56,16 @@ export { claimsIdentity, fileSuite } from "./test-topology/suite.ts";
 export async function loadTopology(
   root: string = Deno.cwd(),
 ): Promise<Suite[]> {
-  return [
+  const suites = [
     ...await loadGateSuites(root),
-    ...await loadUnitSuites(root),
+    ...await loadUnitSuites(root, RUNS_WHOLE),
     ...await loadPatternSuites(root),
     ...await loadPackageIntegrationSuites(root),
     ...await loadCliSuites(root),
     ...loadBinarySuites(),
   ];
+  // Built from the measured sets the suites above declare.
+  return [...suites, coverageGateSuite(suites)];
 }
 
 /** One suite by its identifier, or undefined for a name nothing declares. */
@@ -82,6 +85,18 @@ export function capabilitiesBySuite(
   suites: readonly Suite[],
 ): Map<string, readonly CapabilityId[]> {
   return new Map(suites.map((suite) => [suite.id, suite.needs]));
+}
+
+/**
+ * Every unit whose runner runs each identity in it whatever it is asked,
+ * written as `<suite>\t<unit>`. The packer places each of these as one choice.
+ */
+export function wholeUnits(suites: readonly Suite[]): Set<string> {
+  return new Set(
+    suites.flatMap((suite) =>
+      suite.whole.map((unit) => `${suite.id}\t${unit}`)
+    ),
+  );
 }
 
 /** One suite's claim on a record. */

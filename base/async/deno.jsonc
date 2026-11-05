@@ -1,0 +1,17 @@
+{
+  // Dependency guide: ../../docs/development/DEPENDENCIES.md
+  "name": "@commonfabric/async",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": true
+  },
+  "tasks": {
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+    // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST --allow-read=src,test --no-check"
+  },
+  "exports": {
+    "./async-local-store": "./src/async-local-store.ts",
+    "./defer": "./src/defer.ts",
+    "./sleep": "./src/sleep.ts"
+  }
+}

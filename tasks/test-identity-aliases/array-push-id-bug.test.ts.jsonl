@@ -1,0 +1,2 @@
+{"date":"2026-09-12","from":{"k":"unit","s":"runner","n":"CT-1173: array push anchors its elements > anchors objects pushed without an explicit identity"},"to":{"k":"unit","s":"runner","n":"array push anchors its elements > anchors objects pushed without an explicit identity"}}
+{"date":"2026-09-12","from":{"k":"unit","s":"runner","n":"CT-1173: array push anchors its elements > should persist all fields correctly for second+ items"},"to":{"k":"unit","s":"runner","n":"array push anchors its elements > should persist all fields correctly for second+ items"}}

@@ -1,0 +1,6724 @@
+{
+  "captures": [
+    {
+      "role": "default",
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-integration-default-04/stats-after.json",
+      "bytes": 493439,
+      "sha256": "7ddb87b523fa27eaee09bde7b95cb850bb00379f8308a0b6c4605cd842b0e363",
+      "description": "Complete unmodified end statistics, including per-settle series and timing records; copied without interpretation from the local test server."
+    },
+    {
+      "role": "opposite",
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-integration-opposite-04/stats-after.json",
+      "bytes": 1902975,
+      "sha256": "99ccbf73761051206fe29c7d036702d1ec33e3d2a55a8e8c16dbaacaa060e520",
+      "description": "Complete unmodified end statistics, including per-settle series and timing records; copied without interpretation from the local test server."
+    },
+    {
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-integration-opposite-04/stats-after.json",
+      "bytes": 1902975,
+      "sha256": "99ccbf73761051206fe29c7d036702d1ec33e3d2a55a8e8c16dbaacaa060e520",
+      "description": "ON integration health characterization capture"
+    },
+    {
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-integration-opposite-04/toolshed-57442.log",
+      "bytes": 287341,
+      "sha256": "2deec39567d0b628eedbee564a11fb5ad4cb28660fa1720b44be21f8b9d32f86",
+      "description": "ON integration health characterization capture"
+    },
+    {
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-integration-opposite-04/manifest.json",
+      "bytes": 40915,
+      "sha256": "fd2937e812bbbdc8c4f453efda3f5302e49285dc7163af982bdb09489a26a914",
+      "description": "ON integration health characterization capture"
+    },
+    {
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-baseline-health-01/stats-after.json",
+      "bytes": 2079691,
+      "sha256": "255c17b281fc8cac8aa7172c5c5096d571378d73c5f9505dfdb25c518c88d745",
+      "description": "ON integration health characterization capture"
+    },
+    {
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-baseline-health-01/toolshed-51875.log",
+      "bytes": 297184,
+      "sha256": "f5cd9ffd50a10f12b280da32df58e564673ff5ba807c9ca95dc0fbba33800821",
+      "description": "ON integration health characterization capture"
+    },
+    {
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-baseline-health-01/manifest.json",
+      "bytes": 30620,
+      "sha256": "3412848735c0f146825e871ee848002d7f703f8976b112d35abd08e3158c98c7",
+      "description": "ON integration health characterization capture"
+    },
+    {
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-baseline-health-02/manifest.json",
+      "bytes": 2955,
+      "sha256": "7ba1096d24ecd72473c3aef5d6ce81e0f2983ccc1e0cb2e2f26f82d5adcb6399",
+      "description": "Unmodified full-checkout baseline health replay capture, including the asserted source guards."
+    },
+    {
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-baseline-health-02/arm/manifest.json",
+      "bytes": 63540,
+      "sha256": "0157a9abe104187924923d7057f8f221b9f56e36249152f17a0c3bb0ca2e969a",
+      "description": "Unmodified full-checkout baseline health replay capture, including the asserted source guards."
+    },
+    {
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-baseline-health-02/arm/stats-after.json",
+      "bytes": 2013041,
+      "sha256": "3bcf6506e399baed3483d0dd9d12b192f60baf1ba73a3a4ff07117e4032d2cd9",
+      "description": "Unmodified full-checkout baseline health replay capture, including the asserted source guards."
+    },
+    {
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-baseline-health-02/arm/workload.stdout",
+      "bytes": 33376,
+      "sha256": "504210ced316e0456b1a82653b6111d659b69b11b21a375f7716216c1d1dfc7d",
+      "description": "Unmodified full-checkout baseline health replay capture, including the asserted source guards."
+    },
+    {
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-baseline-health-02/arm/workload.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "description": "Unmodified full-checkout baseline health replay capture, including the asserted source guards."
+    },
+    {
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-baseline-health-02/arm/toolshed-54134.log",
+      "bytes": 340911,
+      "sha256": "b95d1dece312859064ce973ab46b5ac38c6760cbdda4a4668344ecad054ecd28",
+      "description": "Unmodified full-checkout baseline health replay capture, including the asserted source guards."
+    }
+  ],
+  "archiveRoot": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09",
+  "originalManifests": {
+    "profile/manifest.json": {
+      "kind": "instrumented work counts, not latency",
+      "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+      "patchSha256": "acfb5c3780b03c97ecd55b51193b8c52c2062b6624b28125c6d85c338c6f2a64",
+      "workloadSha256": "5e91c1b6bfb00e7f3e3096ea44d79fdd89430d0f1c5fe7332d593348139297ee",
+      "runtime": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3\n",
+      "machineLoad": [
+        9.83251953125,
+        28.25048828125,
+        35.205078125
+      ],
+      "startedAt": "2026-09-10T18:55:26.302571+00:00",
+      "posture": "explicit ambient test seam asserted before each fresh store; in-process real-memory client without execution runtime; no baked shell for mechanism probe",
+      "completion": "await watch mutation plus explicit manual flush",
+      "cache": "fresh memory store/server/session per size, existing Deno dependency cache",
+      "fixture": "100/1000/10000 independent schema:false roots; fixed two sessions; same covered-add/new-add/refresh/removal steps",
+      "measurement": "Map and Set yielded entries; Array iterator yields, method callback invocations and slice result entries. loadedAddresses overlaps underlying Map traversal; do not sum overlapping rows.",
+      "runs": [
+        {
+          "name": "baseline-off",
+          "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch-baseline/labs",
+          "command": [
+            "deno",
+            "run",
+            "-A",
+            "tools/server-execution-topics/watch-probe.ts"
+          ],
+          "flags": {},
+          "loadBefore": [
+            9.83251953125,
+            28.25048828125,
+            35.205078125
+          ],
+          "startedAt": "2026-09-10T18:55:26.435174+00:00",
+          "exitCode": 0,
+          "loadAfter": [
+            11.32568359375,
+            25.369140625,
+            33.65478515625
+          ],
+          "endedAt": "2026-09-10T18:56:29.383684+00:00"
+        },
+        {
+          "name": "candidate-off",
+          "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs",
+          "command": [
+            "deno",
+            "run",
+            "-A",
+            "tools/server-execution-topics/watch-probe.ts"
+          ],
+          "flags": {},
+          "loadBefore": [
+            11.32568359375,
+            25.369140625,
+            33.65478515625
+          ],
+          "startedAt": "2026-09-10T18:56:29.384100+00:00",
+          "exitCode": 0,
+          "loadAfter": [
+            11.57421875,
+            22.896484375,
+            32.166015625
+          ],
+          "endedAt": "2026-09-10T18:57:27.569708+00:00"
+        },
+        {
+          "name": "candidate-on",
+          "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs",
+          "command": [
+            "deno",
+            "run",
+            "-A",
+            "tools/server-execution-topics/watch-probe.ts"
+          ],
+          "flags": {
+            "EXPERIMENTAL_SERVER_EXECUTION": "true"
+          },
+          "loadBefore": [
+            11.57421875,
+            22.896484375,
+            32.166015625
+          ],
+          "startedAt": "2026-09-10T18:57:27.570106+00:00",
+          "exitCode": 0,
+          "loadAfter": [
+            56.42626953125,
+            41.583984375,
+            38.45703125
+          ],
+          "endedAt": "2026-09-10T19:00:09.473800+00:00"
+        },
+        {
+          "name": "baseline-on",
+          "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch-baseline/labs",
+          "command": [
+            "deno",
+            "run",
+            "-A",
+            "tools/server-execution-topics/watch-probe.ts"
+          ],
+          "flags": {
+            "EXPERIMENTAL_SERVER_EXECUTION": "true"
+          },
+          "loadBefore": [
+            56.42626953125,
+            41.583984375,
+            38.45703125
+          ],
+          "startedAt": "2026-09-10T19:00:09.474302+00:00",
+          "exitCode": 0,
+          "loadAfter": [
+            41.54541015625,
+            41.265625,
+            38.7734375
+          ],
+          "endedAt": "2026-09-10T19:02:09.590449+00:00"
+        }
+      ]
+    },
+    "replay/manifest.json": {
+      "base": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+      "checkout": "/Users/berni/.codex/worktrees/topics-campaign-watch-controls/labs",
+      "candidatePatchSha256": "a2e2aef9db9356da04b24aaa078b5e16417062581685b1c5f853e81836bf76e7",
+      "runs": [
+        {
+          "name": "green",
+          "command": [
+            "deno",
+            "test",
+            "-A",
+            "packages/memory/test/v2-watch-incremental.test.ts"
+          ],
+          "startedAt": "2026-09-10T19:16:19.124689+00:00",
+          "mutation": null,
+          "exitCode": 0,
+          "endedAt": "2026-09-10T19:16:24.575768+00:00",
+          "log": "green.log",
+          "sha256": "94be7c98ffb610ba3e3c5cff97d3c68f48bb0391ac86e7a616f43f8ca94e11f5"
+        },
+        {
+          "name": "cursor-red",
+          "command": [
+            "deno",
+            "test",
+            "-A",
+            "packages/memory/test/v2-watch-incremental.test.ts"
+          ],
+          "startedAt": "2026-09-10T19:16:24.597777+00:00",
+          "mutation": "unpin-cursors.patch",
+          "exitCode": 1,
+          "endedAt": "2026-09-10T19:16:27.018816+00:00",
+          "log": "cursor-red.log",
+          "sha256": "04de48bb440fd258ab78cacb9a3289ef474e1ac2e552d240aabd682f95ea8e96"
+        },
+        {
+          "name": "resume-red",
+          "command": [
+            "deno",
+            "test",
+            "-A",
+            "packages/memory/test/v2-watch-incremental.test.ts"
+          ],
+          "startedAt": "2026-09-10T19:16:27.057181+00:00",
+          "mutation": "allow-stale-session.patch",
+          "exitCode": 1,
+          "endedAt": "2026-09-10T19:16:29.384294+00:00",
+          "log": "resume-red.log",
+          "sha256": "aeba12ac898ab0d96845658d0f31705c561a9b48af01ca632301e9998298c159"
+        }
+      ]
+    },
+    "builds.json": {
+      "startedAt": "2026-09-10T19:14:49.354586+00:00",
+      "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+      "sourceRoot": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs",
+      "buildRoot": "/Users/berni/.codex/worktrees/topics-campaign-watch-build/labs",
+      "patch": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/source/watch-build-04.patch",
+      "patchSha256": "a2e2aef9db9356da04b24aaa078b5e16417062581685b1c5f853e81836bf76e7",
+      "sourceHashes": {
+        "packages/memory/test/v2-watch-incremental.test.ts": "78e0da748a721ba430233e6e47179f262d4b3a807b42402ec6f2a285e278eadd",
+        "packages/memory/v2/client.ts": "c10b33453cb9c6a4d211106ea5de6afc8121e86c6a6a34b735af45c414c306e1",
+        "packages/memory/v2/query.ts": "dad29485243a95e68a9dc0d5a3f5892cef102ef3f1520c3088e7bed1633b1f89",
+        "packages/memory/v2/server.ts": "ea7ee1eab2630c14f00c74307a7eb4011fecc9247d2337711c3ab1cc90402d12",
+        "packages/memory/v2/session-registry.ts": "6a28dec861cb251ffadb1fd8ffd3280fbd2eae584e4a43663381e15291ff09c9",
+        "packages/runner/src/traverse.ts": "3aa9a7faa7975994e570cbb39a6680ed4a39358a10a4918b79ff4b297c7b6248",
+        "packages/runner/test/traverse-staging.test.ts": "8ef1ec0b6478f5336564daba689bac0c8e9b3238c6eb5c5b3f45cf113b9cef38",
+        "packages/utils/deno.jsonc": "086db59be6aa2261a1e7955f3c7daf912194fdebc580ff316f78426402179a22",
+        "packages/utils/src/staged-map.ts": "7bae49a83eaf53a115d6600564baf589db1ea2b20f41b27c19ee0546ec6d53e1",
+        "packages/utils/test/staged-map.test.ts": "e8716531a4ff62d2362626929cfade6c7b52c535ae589b8cac3cc684a9e9dd64"
+      },
+      "binaries": [
+        {
+          "role": "default",
+          "command": [
+            "deno",
+            "task",
+            "build-binaries",
+            "toolshed"
+          ],
+          "flags": {
+            "COMMIT_SHA": "27f10d2d4f02f125c0492e5d6288acb3f0da148b"
+          },
+          "startedAt": "2026-09-10T19:14:49.356033+00:00",
+          "log": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/validation/watch-build-default-04.log",
+          "previousBinary": "/Users/berni/.codex/worktrees/topics-campaign-watch-build/labs/.ci-cache/binaries/toolshed-baked-default-03",
+          "previousSha256": "d1078b87069fccf49aab13a1bd94b3af9f99ae0452c77917f614c0410e08ba94",
+          "exitCode": 0,
+          "endedAt": "2026-09-10T19:15:12.941994+00:00",
+          "path": "/Users/berni/.codex/worktrees/topics-campaign-watch-build/labs/.ci-cache/binaries/toolshed-baked-default",
+          "sha256": "685b100c5a09b7273755a2880e69a599c8af3a3006a9e76c107e74db3af3c22d"
+        },
+        {
+          "role": "opposite",
+          "command": [
+            "deno",
+            "task",
+            "build-binaries",
+            "toolshed"
+          ],
+          "flags": {
+            "COMMIT_SHA": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+            "EXPERIMENTAL_SERVER_EXECUTION": "true"
+          },
+          "startedAt": "2026-09-10T19:15:13.416788+00:00",
+          "log": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/validation/watch-build-opposite-04.log",
+          "previousBinary": "/Users/berni/.codex/worktrees/topics-campaign-watch-build/labs/.ci-cache/binaries/toolshed-baked-opposite-03",
+          "previousSha256": "437b7a98ee508eed6b43e8f4b402b0ca4e134b1fad9de0553351cd4f4217ca72",
+          "exitCode": 0,
+          "endedAt": "2026-09-10T19:15:37.154636+00:00",
+          "path": "/Users/berni/.codex/worktrees/topics-campaign-watch-build/labs/.ci-cache/binaries/toolshed-baked-opposite",
+          "sha256": "3a2a461e5812fae862ee8072ae942e9e392aaa8b2501b4255d76ac084726bada"
+        }
+      ],
+      "completedAt": "2026-09-10T19:15:37.629067+00:00"
+    },
+    "integration-default/manifest.json": {
+      "version": 2,
+      "mode": "correctness",
+      "role": "default",
+      "expectedPosture": {
+        "role": "default",
+        "enabled": false,
+        "label": "OFF"
+      },
+      "workloadHead": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+      "sourcePaths": [
+        "tools/server-execution-topics/run-arm.ts",
+        "tools/server-execution-topics/seed-check.ts",
+        "packages/patterns/integration/topic-board-fixture.ts"
+      ],
+      "artifactRoot": ".",
+      "store": "store",
+      "provenance": {
+        "checkout": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs",
+        "captureDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-integration-default-04",
+        "commands": [
+          {
+            "command": "git",
+            "args": [
+              "rev-parse",
+              "HEAD"
+            ],
+            "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs"
+          },
+          {
+            "command": "git",
+            "args": [
+              "diff",
+              "HEAD",
+              "--binary"
+            ],
+            "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs"
+          },
+          {
+            "command": "/usr/sbin/sysctl",
+            "args": [
+              "-n",
+              "machdep.cpu.brand_string"
+            ],
+            "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs"
+          },
+          {
+            "command": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs/.ci-cache/binaries/toolshed-baked-default",
+            "args": [
+              "--port=56870",
+              "--background",
+              "--log-file=/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-integration-default-04/toolshed-56870.log"
+            ],
+            "cwd": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-integration-default-04/store"
+          },
+          {
+            "command": "shasum",
+            "args": [
+              "-a",
+              "256",
+              "/Users/berni/.codex/worktrees/topics-campaign-watch/labs/.ci-cache/binaries/toolshed-baked-default"
+            ],
+            "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs"
+          },
+          {
+            "command": "/Users/berni/.local/bin/deno",
+            "args": [
+              "test",
+              "--no-check",
+              "-A",
+              "packages/patterns/integration/topic-board-fixture.test.ts",
+              "packages/patterns/integration/topic-board-child-contract.test.ts",
+              "packages/patterns/integration/topic-create-onscreen.test.ts",
+              "packages/patterns/integration/sx2-events.test.ts",
+              "packages/patterns/integration/lunch-poll-vote.test.ts",
+              "packages/patterns/integration/cfc-group-chat-chained-event-gate-multi-runtime.test.ts"
+            ],
+            "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs"
+          }
+        ],
+        "workloadEnvironment": {
+          "API_URL": "http://localhost:56870",
+          "MEMORY_URL": "http://localhost:56870",
+          "TOOLSHED_URL": "http://localhost:56870",
+          "TOOLSHED_PORT": "56870",
+          "FRONTEND_URL": "http://localhost:56870",
+          "SPACE_NAME": "topics-campaign-e45d7667-a108-410b-88be-24f246e63e65",
+          "HEADLESS": "1",
+          "CF_LOG_LEVEL": "silent",
+          "CF_CAMPAIGN_RUN_DIR": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-integration-default-04"
+        }
+      },
+      "cache": "fresh store and server; existing Deno dependency cache",
+      "machine": {
+        "cpu": "Apple M3 Max",
+        "arch": "aarch64",
+        "os": "darwin",
+        "logicalCpus": 16,
+        "totalmem": 137438953472
+      },
+      "runtime": {
+        "deno": "2.9.4",
+        "v8": "15.0.245.2-rusty",
+        "typescript": "6.0.3"
+      },
+      "flags": {},
+      "samples": [
+        {
+          "at": "2026-09-10T19:16:48.744Z",
+          "load": [
+            12.92626953125,
+            41.9365234375,
+            53.69873046875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:16:58.530Z",
+          "load": [
+            11.86767578125,
+            40.75341796875,
+            53.14111328125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:16:59.532Z",
+          "load": [
+            11.86767578125,
+            40.75341796875,
+            53.14111328125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:00.533Z",
+          "load": [
+            11.5576171875,
+            40.20947265625,
+            52.87646484375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:01.536Z",
+          "load": [
+            11.5576171875,
+            40.20947265625,
+            52.87646484375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:02.537Z",
+          "load": [
+            11.5576171875,
+            40.20947265625,
+            52.87646484375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:03.544Z",
+          "load": [
+            11.5576171875,
+            40.20947265625,
+            52.87646484375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:04.545Z",
+          "load": [
+            11.5576171875,
+            40.20947265625,
+            52.87646484375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:05.547Z",
+          "load": [
+            11.7529296875,
+            39.77392578125,
+            52.6484375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:06.549Z",
+          "load": [
+            11.7529296875,
+            39.77392578125,
+            52.6484375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:07.550Z",
+          "load": [
+            11.7529296875,
+            39.77392578125,
+            52.6484375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:08.553Z",
+          "load": [
+            11.7529296875,
+            39.77392578125,
+            52.6484375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:09.555Z",
+          "load": [
+            11.7529296875,
+            39.77392578125,
+            52.6484375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:10.557Z",
+          "load": [
+            11.6123046875,
+            39.279296875,
+            52.3984375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:11.559Z",
+          "load": [
+            11.6123046875,
+            39.279296875,
+            52.3984375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:12.561Z",
+          "load": [
+            11.6123046875,
+            39.279296875,
+            52.3984375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:13.563Z",
+          "load": [
+            11.6123046875,
+            39.279296875,
+            52.3984375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:14.564Z",
+          "load": [
+            11.6123046875,
+            39.279296875,
+            52.3984375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:15.566Z",
+          "load": [
+            11.64306640625,
+            38.826171875,
+            52.16162109375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:16.568Z",
+          "load": [
+            11.64306640625,
+            38.826171875,
+            52.16162109375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:17.570Z",
+          "load": [
+            11.64306640625,
+            38.826171875,
+            52.16162109375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:18.572Z",
+          "load": [
+            11.64306640625,
+            38.826171875,
+            52.16162109375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:19.574Z",
+          "load": [
+            11.64306640625,
+            38.826171875,
+            52.16162109375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:20.576Z",
+          "load": [
+            11.83154296875,
+            38.41357421875,
+            51.93798828125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:21.577Z",
+          "load": [
+            11.83154296875,
+            38.41357421875,
+            51.93798828125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:22.579Z",
+          "load": [
+            11.83154296875,
+            38.41357421875,
+            51.93798828125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:23.580Z",
+          "load": [
+            11.83154296875,
+            38.41357421875,
+            51.93798828125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:24.582Z",
+          "load": [
+            11.83154296875,
+            38.41357421875,
+            51.93798828125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:25.583Z",
+          "load": [
+            11.5244140625,
+            37.908203125,
+            51.68017578125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:26.584Z",
+          "load": [
+            11.5244140625,
+            37.908203125,
+            51.68017578125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:27.586Z",
+          "load": [
+            11.5244140625,
+            37.908203125,
+            51.68017578125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:28.588Z",
+          "load": [
+            11.5244140625,
+            37.908203125,
+            51.68017578125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:29.590Z",
+          "load": [
+            11.5244140625,
+            37.908203125,
+            51.68017578125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:30.592Z",
+          "load": [
+            12.04248046875,
+            37.57763671875,
+            51.482421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:31.593Z",
+          "load": [
+            12.04248046875,
+            37.57763671875,
+            51.482421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:32.595Z",
+          "load": [
+            12.04248046875,
+            37.57763671875,
+            51.482421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:33.598Z",
+          "load": [
+            12.04248046875,
+            37.57763671875,
+            51.482421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:34.599Z",
+          "load": [
+            12.04248046875,
+            37.57763671875,
+            51.482421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:35.600Z",
+          "load": [
+            11.71875,
+            37.08642578125,
+            51.2275390625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:36.601Z",
+          "load": [
+            11.71875,
+            37.08642578125,
+            51.2275390625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:37.603Z",
+          "load": [
+            11.71875,
+            37.08642578125,
+            51.2275390625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:38.606Z",
+          "load": [
+            11.71875,
+            37.08642578125,
+            51.2275390625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:39.608Z",
+          "load": [
+            11.71875,
+            37.08642578125,
+            51.2275390625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:40.609Z",
+          "load": [
+            11.8212890625,
+            36.6865234375,
+            51.00341796875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:41.611Z",
+          "load": [
+            11.8212890625,
+            36.6865234375,
+            51.00341796875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:42.613Z",
+          "load": [
+            11.8212890625,
+            36.6865234375,
+            51.00341796875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:42.831Z",
+          "load": [
+            11.8212890625,
+            36.6865234375,
+            51.00341796875
+          ]
+        }
+      ],
+      "status": "passed",
+      "meta": {
+        "did": "did:key:z6MksHnZGdHxNoCqcC3kPvBSo2goCzLSWheQ8LrVpAtQwgwW",
+        "gitSha": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+        "shellServerExecutionDefine": null,
+        "experimental": {
+          "commitPreconditions": true,
+          "computedCellIds": true,
+          "contentAddressedSchemas": true,
+          "lazyMaterialization": true,
+          "modernCellRep": false,
+          "plainResultReceipts": true,
+          "readerSchemaPrecedence": true,
+          "serverExecution": false
+        },
+        "cfc": {
+          "provenance": "resolved",
+          "enforcementMode": {
+            "rung": "enforce-explicit",
+            "diagnosticOnly": false,
+            "decidesOn": "a recorded reason, which rejects the commit"
+          },
+          "flowLabels": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; no derived label component comes into existence"
+          },
+          "writeFloor": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; the write-side integrity floor is not checked"
+          },
+          "triggerReadGating": false,
+          "decomposedEnvelopes": false,
+          "policyEvaluation": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; gated labels reach the gates un-rewritten"
+          },
+          "labelMetadataProtection": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; label metadata writes are not gated"
+          },
+          "declaredMonotonicity": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; a declared-monotonicity violation is not checked"
+          },
+          "policyDigest": null,
+          "sinks": [
+            {
+              "sink": "fetchBinary",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchText",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchJson",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchJsonUnchecked",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchProgram",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "streamData",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "llm",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            },
+            {
+              "sink": "llmDialog",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            },
+            {
+              "sink": "generateText",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            },
+            {
+              "sink": "generateObject",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            }
+          ],
+          "deviations": [
+            {
+              "what": "sink `llm` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            },
+            {
+              "what": "sink `llmDialog` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            },
+            {
+              "what": "sink `generateText` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            },
+            {
+              "what": "sink `generateObject` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            }
+          ]
+        }
+      },
+      "serverBuildHead": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+      "binarySha256": "685b100c5a09b7273755a2880e69a599c8af3a3006a9e76c107e74db3af3c22d",
+      "exitCode": 0,
+      "latencyEligible": false
+    },
+    "integration-opposite/manifest.json": {
+      "version": 2,
+      "mode": "correctness",
+      "role": "opposite",
+      "expectedPosture": {
+        "role": "opposite",
+        "enabled": true,
+        "label": "ON",
+        "experimentalValue": "true",
+        "recordVariant": "server-execution"
+      },
+      "workloadHead": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+      "sourcePaths": [
+        "tools/server-execution-topics/run-arm.ts",
+        "tools/server-execution-topics/seed-check.ts",
+        "packages/patterns/integration/topic-board-fixture.ts"
+      ],
+      "artifactRoot": ".",
+      "store": "store",
+      "provenance": {
+        "checkout": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs",
+        "captureDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-integration-opposite-04",
+        "commands": [
+          {
+            "command": "git",
+            "args": [
+              "rev-parse",
+              "HEAD"
+            ],
+            "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs"
+          },
+          {
+            "command": "git",
+            "args": [
+              "diff",
+              "HEAD",
+              "--binary"
+            ],
+            "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs"
+          },
+          {
+            "command": "/usr/sbin/sysctl",
+            "args": [
+              "-n",
+              "machdep.cpu.brand_string"
+            ],
+            "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs"
+          },
+          {
+            "command": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs/.ci-cache/binaries/toolshed-baked-opposite",
+            "args": [
+              "--port=57442",
+              "--background",
+              "--log-file=/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-integration-opposite-04/toolshed-57442.log"
+            ],
+            "cwd": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-integration-opposite-04/store"
+          },
+          {
+            "command": "shasum",
+            "args": [
+              "-a",
+              "256",
+              "/Users/berni/.codex/worktrees/topics-campaign-watch/labs/.ci-cache/binaries/toolshed-baked-opposite"
+            ],
+            "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs"
+          },
+          {
+            "command": "/Users/berni/.local/bin/deno",
+            "args": [
+              "test",
+              "--no-check",
+              "-A",
+              "packages/patterns/integration/topic-board-fixture.test.ts",
+              "packages/patterns/integration/topic-board-child-contract.test.ts",
+              "packages/patterns/integration/topic-create-onscreen.test.ts",
+              "packages/patterns/integration/sx2-events.test.ts",
+              "packages/patterns/integration/lunch-poll-vote.test.ts",
+              "packages/patterns/integration/cfc-group-chat-chained-event-gate-multi-runtime.test.ts"
+            ],
+            "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs"
+          }
+        ],
+        "workloadEnvironment": {
+          "API_URL": "http://localhost:57442",
+          "MEMORY_URL": "http://localhost:57442",
+          "TOOLSHED_URL": "http://localhost:57442",
+          "TOOLSHED_PORT": "57442",
+          "EXPERIMENTAL_SERVER_EXECUTION": "true",
+          "FRONTEND_URL": "http://localhost:57442",
+          "SPACE_NAME": "topics-campaign-faca4c6d-c594-4aee-b52b-0455f8161d4d",
+          "HEADLESS": "1",
+          "CF_LOG_LEVEL": "silent",
+          "CF_CAMPAIGN_RUN_DIR": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-integration-opposite-04"
+        }
+      },
+      "cache": "fresh store and server; existing Deno dependency cache",
+      "machine": {
+        "cpu": "Apple M3 Max",
+        "arch": "aarch64",
+        "os": "darwin",
+        "logicalCpus": 16,
+        "totalmem": 137438953472
+      },
+      "runtime": {
+        "deno": "2.9.4",
+        "v8": "15.0.245.2-rusty",
+        "typescript": "6.0.3"
+      },
+      "flags": {
+        "EXPERIMENTAL_SERVER_EXECUTION": "true"
+      },
+      "samples": [
+        {
+          "at": "2026-09-10T19:17:42.900Z",
+          "load": [
+            11.8212890625,
+            36.6865234375,
+            51.00341796875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:52.327Z",
+          "load": [
+            10.9931640625,
+            35.69140625,
+            50.482421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:53.330Z",
+          "load": [
+            10.9931640625,
+            35.69140625,
+            50.482421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:54.331Z",
+          "load": [
+            10.9931640625,
+            35.69140625,
+            50.482421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:55.333Z",
+          "load": [
+            10.9931640625,
+            35.69140625,
+            50.482421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:56.335Z",
+          "load": [
+            11.07373046875,
+            35.2978515625,
+            50.2568359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:57.337Z",
+          "load": [
+            11.07373046875,
+            35.2978515625,
+            50.2568359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:58.339Z",
+          "load": [
+            11.07373046875,
+            35.2978515625,
+            50.2568359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:17:59.341Z",
+          "load": [
+            11.07373046875,
+            35.2978515625,
+            50.2568359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:00.343Z",
+          "load": [
+            11.07373046875,
+            35.2978515625,
+            50.2568359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:01.346Z",
+          "load": [
+            10.7470703125,
+            34.82763671875,
+            50.0029296875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:02.348Z",
+          "load": [
+            10.7470703125,
+            34.82763671875,
+            50.0029296875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:03.350Z",
+          "load": [
+            10.7470703125,
+            34.82763671875,
+            50.0029296875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:04.351Z",
+          "load": [
+            10.7470703125,
+            34.82763671875,
+            50.0029296875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:05.353Z",
+          "load": [
+            10.7470703125,
+            34.82763671875,
+            50.0029296875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:06.354Z",
+          "load": [
+            11.80810546875,
+            34.6474609375,
+            49.85009765625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:07.357Z",
+          "load": [
+            11.80810546875,
+            34.6474609375,
+            49.85009765625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:08.358Z",
+          "load": [
+            11.80810546875,
+            34.6474609375,
+            49.85009765625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:09.360Z",
+          "load": [
+            11.80810546875,
+            34.6474609375,
+            49.85009765625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:10.362Z",
+          "load": [
+            11.80810546875,
+            34.6474609375,
+            49.85009765625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:11.364Z",
+          "load": [
+            11.8232421875,
+            34.27099609375,
+            49.6279296875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:12.365Z",
+          "load": [
+            11.8232421875,
+            34.27099609375,
+            49.6279296875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:13.367Z",
+          "load": [
+            11.8232421875,
+            34.27099609375,
+            49.6279296875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:14.368Z",
+          "load": [
+            11.8232421875,
+            34.27099609375,
+            49.6279296875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:15.368Z",
+          "load": [
+            11.6767578125,
+            33.86767578125,
+            49.3955078125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:16.370Z",
+          "load": [
+            11.6767578125,
+            33.86767578125,
+            49.3955078125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:17.372Z",
+          "load": [
+            11.6767578125,
+            33.86767578125,
+            49.3955078125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:18.373Z",
+          "load": [
+            11.6767578125,
+            33.86767578125,
+            49.3955078125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:19.376Z",
+          "load": [
+            11.6767578125,
+            33.86767578125,
+            49.3955078125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:20.378Z",
+          "load": [
+            12.18310546875,
+            33.60400390625,
+            49.21142578125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:21.378Z",
+          "load": [
+            12.18310546875,
+            33.60400390625,
+            49.21142578125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:22.380Z",
+          "load": [
+            12.18310546875,
+            33.60400390625,
+            49.21142578125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:23.382Z",
+          "load": [
+            12.18310546875,
+            33.60400390625,
+            49.21142578125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:24.383Z",
+          "load": [
+            12.18310546875,
+            33.60400390625,
+            49.21142578125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:25.385Z",
+          "load": [
+            12.328125,
+            33.2783203125,
+            49.0048828125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:26.386Z",
+          "load": [
+            12.328125,
+            33.2783203125,
+            49.0048828125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:27.389Z",
+          "load": [
+            12.328125,
+            33.2783203125,
+            49.0048828125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:28.391Z",
+          "load": [
+            12.328125,
+            33.2783203125,
+            49.0048828125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:29.393Z",
+          "load": [
+            12.328125,
+            33.2783203125,
+            49.0048828125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:30.395Z",
+          "load": [
+            13.2626953125,
+            33.1240234375,
+            48.85791015625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:31.397Z",
+          "load": [
+            13.2626953125,
+            33.1240234375,
+            48.85791015625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:32.399Z",
+          "load": [
+            13.2626953125,
+            33.1240234375,
+            48.85791015625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:33.401Z",
+          "load": [
+            13.2626953125,
+            33.1240234375,
+            48.85791015625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:34.402Z",
+          "load": [
+            13.2626953125,
+            33.1240234375,
+            48.85791015625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:35.403Z",
+          "load": [
+            12.9208984375,
+            32.72314453125,
+            48.6240234375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:36.405Z",
+          "load": [
+            12.9208984375,
+            32.72314453125,
+            48.6240234375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:37.407Z",
+          "load": [
+            12.9208984375,
+            32.72314453125,
+            48.6240234375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:38.407Z",
+          "load": [
+            12.9208984375,
+            32.72314453125,
+            48.6240234375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:39.409Z",
+          "load": [
+            12.9208984375,
+            32.72314453125,
+            48.6240234375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:40.411Z",
+          "load": [
+            12.6064453125,
+            32.3291015625,
+            48.3916015625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:41.414Z",
+          "load": [
+            12.6064453125,
+            32.3291015625,
+            48.3916015625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:42.416Z",
+          "load": [
+            12.6064453125,
+            32.3291015625,
+            48.3916015625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:43.416Z",
+          "load": [
+            12.6064453125,
+            32.3291015625,
+            48.3916015625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:44.417Z",
+          "load": [
+            12.6064453125,
+            32.3291015625,
+            48.3916015625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:45.417Z",
+          "load": [
+            11.9970703125,
+            31.875,
+            48.13720703125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:46.418Z",
+          "load": [
+            11.9970703125,
+            31.875,
+            48.13720703125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:47.420Z",
+          "load": [
+            11.9970703125,
+            31.875,
+            48.13720703125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:48.422Z",
+          "load": [
+            11.9970703125,
+            31.875,
+            48.13720703125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:49.424Z",
+          "load": [
+            11.9970703125,
+            31.875,
+            48.13720703125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:50.426Z",
+          "load": [
+            12.0771484375,
+            31.5615234375,
+            47.93115234375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:51.428Z",
+          "load": [
+            12.0771484375,
+            31.5615234375,
+            47.93115234375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:52.429Z",
+          "load": [
+            12.0771484375,
+            31.5615234375,
+            47.93115234375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:53.432Z",
+          "load": [
+            12.0771484375,
+            31.5615234375,
+            47.93115234375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:54.435Z",
+          "load": [
+            12.0771484375,
+            31.5615234375,
+            47.93115234375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:55.436Z",
+          "load": [
+            11.75048828125,
+            31.169921875,
+            47.69677734375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:56.438Z",
+          "load": [
+            11.75048828125,
+            31.169921875,
+            47.69677734375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:57.440Z",
+          "load": [
+            11.75048828125,
+            31.169921875,
+            47.69677734375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:58.441Z",
+          "load": [
+            11.75048828125,
+            31.169921875,
+            47.69677734375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:18:59.446Z",
+          "load": [
+            11.75048828125,
+            31.169921875,
+            47.69677734375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:00.448Z",
+          "load": [
+            12.41064453125,
+            30.984375,
+            47.5341796875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:01.458Z",
+          "load": [
+            12.41064453125,
+            30.984375,
+            47.5341796875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:02.460Z",
+          "load": [
+            12.41064453125,
+            30.984375,
+            47.5341796875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:03.463Z",
+          "load": [
+            12.41064453125,
+            30.984375,
+            47.5341796875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:04.465Z",
+          "load": [
+            12.41064453125,
+            30.984375,
+            47.5341796875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:05.468Z",
+          "load": [
+            16.86181640625,
+            31.5986328125,
+            47.65380859375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:06.470Z",
+          "load": [
+            16.86181640625,
+            31.5986328125,
+            47.65380859375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:07.472Z",
+          "load": [
+            16.86181640625,
+            31.5986328125,
+            47.65380859375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:08.474Z",
+          "load": [
+            16.86181640625,
+            31.5986328125,
+            47.65380859375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:09.476Z",
+          "load": [
+            16.86181640625,
+            31.5986328125,
+            47.65380859375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:10.476Z",
+          "load": [
+            16.23193359375,
+            31.22314453125,
+            47.42724609375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:11.477Z",
+          "load": [
+            16.23193359375,
+            31.22314453125,
+            47.42724609375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:12.479Z",
+          "load": [
+            16.23193359375,
+            31.22314453125,
+            47.42724609375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:13.481Z",
+          "load": [
+            16.23193359375,
+            31.22314453125,
+            47.42724609375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:14.483Z",
+          "load": [
+            16.23193359375,
+            31.22314453125,
+            47.42724609375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:15.485Z",
+          "load": [
+            15.732421875,
+            30.87060546875,
+            47.20751953125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:16.487Z",
+          "load": [
+            15.732421875,
+            30.87060546875,
+            47.20751953125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:17.489Z",
+          "load": [
+            15.732421875,
+            30.87060546875,
+            47.20751953125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:18.491Z",
+          "load": [
+            15.732421875,
+            30.87060546875,
+            47.20751953125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:19.493Z",
+          "load": [
+            15.732421875,
+            30.87060546875,
+            47.20751953125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:20.495Z",
+          "load": [
+            15.27294921875,
+            30.52392578125,
+            46.9892578125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:21.498Z",
+          "load": [
+            15.27294921875,
+            30.52392578125,
+            46.9892578125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:22.500Z",
+          "load": [
+            15.27294921875,
+            30.52392578125,
+            46.9892578125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:23.502Z",
+          "load": [
+            15.27294921875,
+            30.52392578125,
+            46.9892578125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:24.502Z",
+          "load": [
+            15.27294921875,
+            30.52392578125,
+            46.9892578125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:25.504Z",
+          "load": [
+            14.6904296875,
+            30.14990234375,
+            46.7607421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:26.506Z",
+          "load": [
+            14.6904296875,
+            30.14990234375,
+            46.7607421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:27.508Z",
+          "load": [
+            14.6904296875,
+            30.14990234375,
+            46.7607421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:28.509Z",
+          "load": [
+            14.6904296875,
+            30.14990234375,
+            46.7607421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:29.512Z",
+          "load": [
+            14.6904296875,
+            30.14990234375,
+            46.7607421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:30.514Z",
+          "load": [
+            14.474609375,
+            29.84814453125,
+            46.556640625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:31.516Z",
+          "load": [
+            14.474609375,
+            29.84814453125,
+            46.556640625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:32.518Z",
+          "load": [
+            14.474609375,
+            29.84814453125,
+            46.556640625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:33.519Z",
+          "load": [
+            14.474609375,
+            29.84814453125,
+            46.556640625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:34.521Z",
+          "load": [
+            14.474609375,
+            29.84814453125,
+            46.556640625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:35.523Z",
+          "load": [
+            13.6357421875,
+            29.4189453125,
+            46.30712890625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:36.524Z",
+          "load": [
+            13.6357421875,
+            29.4189453125,
+            46.30712890625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:37.526Z",
+          "load": [
+            13.6357421875,
+            29.4189453125,
+            46.30712890625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:38.528Z",
+          "load": [
+            13.6357421875,
+            29.4189453125,
+            46.30712890625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:39.529Z",
+          "load": [
+            13.6357421875,
+            29.4189453125,
+            46.30712890625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:40.531Z",
+          "load": [
+            12.86376953125,
+            28.99658203125,
+            46.05908203125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:41.533Z",
+          "load": [
+            12.86376953125,
+            28.99658203125,
+            46.05908203125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:42.536Z",
+          "load": [
+            12.86376953125,
+            28.99658203125,
+            46.05908203125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:43.537Z",
+          "load": [
+            12.86376953125,
+            28.99658203125,
+            46.05908203125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:44.539Z",
+          "load": [
+            12.86376953125,
+            28.99658203125,
+            46.05908203125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:45.541Z",
+          "load": [
+            12.23388671875,
+            28.59814453125,
+            45.818359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:46.543Z",
+          "load": [
+            12.23388671875,
+            28.59814453125,
+            45.818359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:47.545Z",
+          "load": [
+            12.23388671875,
+            28.59814453125,
+            45.818359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:48.547Z",
+          "load": [
+            12.23388671875,
+            28.59814453125,
+            45.818359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:49.549Z",
+          "load": [
+            12.23388671875,
+            28.59814453125,
+            45.818359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:50.551Z",
+          "load": [
+            11.814453125,
+            28.2392578125,
+            45.5908203125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:51.554Z",
+          "load": [
+            11.814453125,
+            28.2392578125,
+            45.5908203125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:52.556Z",
+          "load": [
+            11.814453125,
+            28.2392578125,
+            45.5908203125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:53.558Z",
+          "load": [
+            11.814453125,
+            28.2392578125,
+            45.5908203125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:54.559Z",
+          "load": [
+            11.814453125,
+            28.2392578125,
+            45.5908203125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:55.562Z",
+          "load": [
+            11.6689453125,
+            27.93603515625,
+            45.3818359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:56.563Z",
+          "load": [
+            11.6689453125,
+            27.93603515625,
+            45.3818359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:57.565Z",
+          "load": [
+            11.6689453125,
+            27.93603515625,
+            45.3818359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:58.567Z",
+          "load": [
+            11.6689453125,
+            27.93603515625,
+            45.3818359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:19:59.570Z",
+          "load": [
+            11.6689453125,
+            27.93603515625,
+            45.3818359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:00.570Z",
+          "load": [
+            11.6953125,
+            27.67138671875,
+            45.18603515625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:01.572Z",
+          "load": [
+            11.6953125,
+            27.67138671875,
+            45.18603515625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:02.574Z",
+          "load": [
+            11.6953125,
+            27.67138671875,
+            45.18603515625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:03.576Z",
+          "load": [
+            11.6953125,
+            27.67138671875,
+            45.18603515625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:04.579Z",
+          "load": [
+            11.6953125,
+            27.67138671875,
+            45.18603515625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:05.579Z",
+          "load": [
+            11.63916015625,
+            27.39453125,
+            44.9853515625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:06.582Z",
+          "load": [
+            11.63916015625,
+            27.39453125,
+            44.9853515625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:07.583Z",
+          "load": [
+            11.63916015625,
+            27.39453125,
+            44.9853515625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:08.583Z",
+          "load": [
+            11.63916015625,
+            27.39453125,
+            44.9853515625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:09.586Z",
+          "load": [
+            11.63916015625,
+            27.39453125,
+            44.9853515625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:10.587Z",
+          "load": [
+            11.828125,
+            27.171875,
+            44.8037109375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:11.589Z",
+          "load": [
+            11.828125,
+            27.171875,
+            44.8037109375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:12.591Z",
+          "load": [
+            11.828125,
+            27.171875,
+            44.8037109375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:13.593Z",
+          "load": [
+            11.828125,
+            27.171875,
+            44.8037109375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:14.595Z",
+          "load": [
+            11.828125,
+            27.171875,
+            44.8037109375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:15.598Z",
+          "load": [
+            11.76171875,
+            26.9033203125,
+            44.60546875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:16.600Z",
+          "load": [
+            11.76171875,
+            26.9033203125,
+            44.60546875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:17.601Z",
+          "load": [
+            11.76171875,
+            26.9033203125,
+            44.60546875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:18.603Z",
+          "load": [
+            11.76171875,
+            26.9033203125,
+            44.60546875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:19.605Z",
+          "load": [
+            11.76171875,
+            26.9033203125,
+            44.60546875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:20.607Z",
+          "load": [
+            11.22021484375,
+            26.53955078125,
+            44.373046875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:21.609Z",
+          "load": [
+            11.22021484375,
+            26.53955078125,
+            44.373046875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:22.609Z",
+          "load": [
+            11.22021484375,
+            26.53955078125,
+            44.373046875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:23.613Z",
+          "load": [
+            11.22021484375,
+            26.53955078125,
+            44.373046875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:24.615Z",
+          "load": [
+            11.22021484375,
+            26.53955078125,
+            44.373046875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:25.617Z",
+          "load": [
+            11.7626953125,
+            26.3974609375,
+            44.21826171875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:26.618Z",
+          "load": [
+            11.7626953125,
+            26.3974609375,
+            44.21826171875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:27.620Z",
+          "load": [
+            11.7626953125,
+            26.3974609375,
+            44.21826171875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:28.621Z",
+          "load": [
+            11.7626953125,
+            26.3974609375,
+            44.21826171875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:29.624Z",
+          "load": [
+            11.7626953125,
+            26.3974609375,
+            44.21826171875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:30.626Z",
+          "load": [
+            14.0234375,
+            26.623046875,
+            44.193359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:31.626Z",
+          "load": [
+            14.0234375,
+            26.623046875,
+            44.193359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:32.630Z",
+          "load": [
+            14.0234375,
+            26.623046875,
+            44.193359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:33.635Z",
+          "load": [
+            14.0234375,
+            26.623046875,
+            44.193359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:34.637Z",
+          "load": [
+            14.0234375,
+            26.623046875,
+            44.193359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:35.640Z",
+          "load": [
+            18.345703125,
+            27.3095703125,
+            44.33251953125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:36.643Z",
+          "load": [
+            18.345703125,
+            27.3095703125,
+            44.33251953125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:37.645Z",
+          "load": [
+            18.345703125,
+            27.3095703125,
+            44.33251953125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:38.650Z",
+          "load": [
+            18.345703125,
+            27.3095703125,
+            44.33251953125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:39.652Z",
+          "load": [
+            18.345703125,
+            27.3095703125,
+            44.33251953125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:40.655Z",
+          "load": [
+            19.75927734375,
+            27.45361328125,
+            44.28369140625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:41.657Z",
+          "load": [
+            19.75927734375,
+            27.45361328125,
+            44.28369140625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:42.660Z",
+          "load": [
+            19.75927734375,
+            27.45361328125,
+            44.28369140625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:43.666Z",
+          "load": [
+            19.75927734375,
+            27.45361328125,
+            44.28369140625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:44.668Z",
+          "load": [
+            19.75927734375,
+            27.45361328125,
+            44.28369140625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:45.673Z",
+          "load": [
+            24.7431640625,
+            28.35888671875,
+            44.50439453125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:46.676Z",
+          "load": [
+            24.7431640625,
+            28.35888671875,
+            44.50439453125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:47.679Z",
+          "load": [
+            24.7431640625,
+            28.35888671875,
+            44.50439453125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:48.681Z",
+          "load": [
+            24.7431640625,
+            28.35888671875,
+            44.50439453125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:49.685Z",
+          "load": [
+            24.7431640625,
+            28.35888671875,
+            44.50439453125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:50.693Z",
+          "load": [
+            28.126953125,
+            29,
+            44.6357421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:51.694Z",
+          "load": [
+            28.126953125,
+            29,
+            44.6357421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:52.701Z",
+          "load": [
+            28.126953125,
+            29,
+            44.6357421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:53.705Z",
+          "load": [
+            28.126953125,
+            29,
+            44.6357421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:54.706Z",
+          "load": [
+            28.126953125,
+            29,
+            44.6357421875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:55.707Z",
+          "load": [
+            29.63818359375,
+            29.298828125,
+            44.6494140625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:56.709Z",
+          "load": [
+            29.63818359375,
+            29.298828125,
+            44.6494140625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:57.711Z",
+          "load": [
+            29.63818359375,
+            29.298828125,
+            44.6494140625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:58.713Z",
+          "load": [
+            29.63818359375,
+            29.298828125,
+            44.6494140625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:20:59.715Z",
+          "load": [
+            29.63818359375,
+            29.298828125,
+            44.6494140625
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:00.717Z",
+          "load": [
+            28.4658203125,
+            29.06103515625,
+            44.4755859375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:01.720Z",
+          "load": [
+            28.4658203125,
+            29.06103515625,
+            44.4755859375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:02.720Z",
+          "load": [
+            28.4658203125,
+            29.06103515625,
+            44.4755859375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:03.721Z",
+          "load": [
+            28.4658203125,
+            29.06103515625,
+            44.4755859375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:04.724Z",
+          "load": [
+            28.4658203125,
+            29.06103515625,
+            44.4755859375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:05.727Z",
+          "load": [
+            28.10791015625,
+            28.9765625,
+            44.35546875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:06.728Z",
+          "load": [
+            28.10791015625,
+            28.9765625,
+            44.35546875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:07.731Z",
+          "load": [
+            28.10791015625,
+            28.9765625,
+            44.35546875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:08.732Z",
+          "load": [
+            28.10791015625,
+            28.9765625,
+            44.35546875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:09.734Z",
+          "load": [
+            28.10791015625,
+            28.9765625,
+            44.35546875
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:10.737Z",
+          "load": [
+            26.81787109375,
+            28.6943359375,
+            44.16552734375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:11.740Z",
+          "load": [
+            26.81787109375,
+            28.6943359375,
+            44.16552734375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:12.741Z",
+          "load": [
+            26.81787109375,
+            28.6943359375,
+            44.16552734375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:13.742Z",
+          "load": [
+            26.81787109375,
+            28.6943359375,
+            44.16552734375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:14.744Z",
+          "load": [
+            26.81787109375,
+            28.6943359375,
+            44.16552734375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:15.747Z",
+          "load": [
+            25.951171875,
+            28.4833984375,
+            44.00048828125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:16.748Z",
+          "load": [
+            25.951171875,
+            28.4833984375,
+            44.00048828125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:17.751Z",
+          "load": [
+            25.951171875,
+            28.4833984375,
+            44.00048828125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:18.752Z",
+          "load": [
+            25.951171875,
+            28.4833984375,
+            44.00048828125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:19.752Z",
+          "load": [
+            25.951171875,
+            28.4833984375,
+            44.00048828125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:20.758Z",
+          "load": [
+            24.43359375,
+            28.12646484375,
+            43.783203125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:21.760Z",
+          "load": [
+            24.43359375,
+            28.12646484375,
+            43.783203125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:22.763Z",
+          "load": [
+            24.43359375,
+            28.12646484375,
+            43.783203125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:23.765Z",
+          "load": [
+            24.43359375,
+            28.12646484375,
+            43.783203125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:24.766Z",
+          "load": [
+            24.43359375,
+            28.12646484375,
+            43.783203125
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:25.768Z",
+          "load": [
+            23.91796875,
+            27.9580078125,
+            43.6318359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:26.769Z",
+          "load": [
+            23.91796875,
+            27.9580078125,
+            43.6318359375
+          ]
+        },
+        {
+          "at": "2026-09-10T19:21:26.972Z",
+          "load": [
+            23.91796875,
+            27.9580078125,
+            43.6318359375
+          ]
+        }
+      ],
+      "status": "passed",
+      "meta": {
+        "did": "did:key:z6MksHnZGdHxNoCqcC3kPvBSo2goCzLSWheQ8LrVpAtQwgwW",
+        "gitSha": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+        "shellServerExecutionDefine": "true",
+        "experimental": {
+          "commitPreconditions": true,
+          "computedCellIds": true,
+          "contentAddressedSchemas": true,
+          "lazyMaterialization": true,
+          "modernCellRep": false,
+          "plainResultReceipts": true,
+          "readerSchemaPrecedence": true,
+          "serverExecution": true
+        },
+        "cfc": {
+          "provenance": "resolved",
+          "enforcementMode": {
+            "rung": "enforce-explicit",
+            "diagnosticOnly": false,
+            "decidesOn": "a recorded reason, which rejects the commit"
+          },
+          "flowLabels": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; no derived label component comes into existence"
+          },
+          "writeFloor": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; the write-side integrity floor is not checked"
+          },
+          "triggerReadGating": false,
+          "decomposedEnvelopes": false,
+          "policyEvaluation": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; gated labels reach the gates un-rewritten"
+          },
+          "labelMetadataProtection": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; label metadata writes are not gated"
+          },
+          "declaredMonotonicity": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; a declared-monotonicity violation is not checked"
+          },
+          "policyDigest": null,
+          "sinks": [
+            {
+              "sink": "fetchBinary",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchText",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchJson",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchJsonUnchecked",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchProgram",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "streamData",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "llm",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            },
+            {
+              "sink": "llmDialog",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            },
+            {
+              "sink": "generateText",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            },
+            {
+              "sink": "generateObject",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            }
+          ],
+          "deviations": [
+            {
+              "what": "sink `llm` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            },
+            {
+              "what": "sink `llmDialog` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            },
+            {
+              "what": "sink `generateText` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            },
+            {
+              "what": "sink `generateObject` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            }
+          ]
+        }
+      },
+      "serverBuildHead": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+      "binarySha256": "3a2a461e5812fae862ee8072ae942e9e392aaa8b2501b4255d76ac084726bada",
+      "exitCode": 0,
+      "latencyEligible": false
+    },
+    "review/source-controls.json": {
+      "runtime": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3",
+      "runnerSha256": "f2d86c3fa2995c79f50384311cfe1817508186a0fac6a4c2e2d3c25cc4172767",
+      "controls": [
+        {
+          "role": "default",
+          "scenario": "dirty",
+          "exitCode": 1,
+          "expectedError": "clean tracked checkout",
+          "oldBinaryPreserved": true,
+          "head": "a077bbea9389ddfcf473f18f779abfe5b91fac91",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "default",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-portable-03/default-dirty",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "default",
+          "scenario": "untracked",
+          "exitCode": 1,
+          "expectedError": "clean tracked checkout",
+          "oldBinaryPreserved": true,
+          "head": "f36b9cc327eb02e39b288050f6d9f42250274657",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "default",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-portable-03/default-untracked",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "default",
+          "scenario": "stale-binary",
+          "exitCode": 1,
+          "expectedError": "STOP_AFTER_BUILD",
+          "oldBinaryPreserved": false,
+          "head": "f36b9cc327eb02e39b288050f6d9f42250274657",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "default",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-portable-03/default-stale-binary",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "default",
+          "scenario": "build-failure",
+          "exitCode": 1,
+          "expectedError": "Setup command",
+          "oldBinaryPreserved": true,
+          "head": "e577a5be02f6d456a1f4234fd2ddfb61d784c520",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "default",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-portable-03/default-build-failure",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "default",
+          "scenario": "source-change",
+          "exitCode": 1,
+          "expectedError": "changed during the toolshed build",
+          "oldBinaryPreserved": true,
+          "head": "7ce0d98b744e04319fd76578dd17aef8c6995d27",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "default",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-portable-03/default-source-change",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "opposite",
+          "scenario": "dirty",
+          "exitCode": 1,
+          "expectedError": "clean tracked checkout",
+          "oldBinaryPreserved": true,
+          "head": "30f5d48b17bbee1da822397f507235fec395ce63",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "opposite",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-portable-03/opposite-dirty",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "opposite",
+          "scenario": "untracked",
+          "exitCode": 1,
+          "expectedError": "clean tracked checkout",
+          "oldBinaryPreserved": true,
+          "head": "e714aced03142a39ad61571c003c536924dc1b72",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "opposite",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-portable-03/opposite-untracked",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "opposite",
+          "scenario": "stale-binary",
+          "exitCode": 1,
+          "expectedError": "STOP_AFTER_BUILD",
+          "oldBinaryPreserved": false,
+          "head": "e714aced03142a39ad61571c003c536924dc1b72",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "opposite",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-portable-03/opposite-stale-binary",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "opposite",
+          "scenario": "build-failure",
+          "exitCode": 1,
+          "expectedError": "Setup command",
+          "oldBinaryPreserved": true,
+          "head": "a89b62724d65718eff5e02b333443b324e2c53be",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "opposite",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-portable-03/opposite-build-failure",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "opposite",
+          "scenario": "source-change",
+          "exitCode": 1,
+          "expectedError": "changed during the toolshed build",
+          "oldBinaryPreserved": true,
+          "head": "2ffae7c555e459105b8050925806a0824b850c2e",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "opposite",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-portable-03/opposite-source-change",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        }
+      ]
+    },
+    "review/source-controls-initial.json": {
+      "runnerSha256": "f2d86c3fa2995c79f50384311cfe1817508186a0fac6a4c2e2d3c25cc4172767",
+      "controls": [
+        {
+          "role": "default",
+          "scenario": "dirty",
+          "exitCode": 1,
+          "expectedError": "clean tracked checkout",
+          "oldBinaryPreserved": true,
+          "head": "2ef32f238df6dde03b29ffbe763f9b94965f838f",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "default",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-source-controls-02/default-dirty",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "default",
+          "scenario": "untracked",
+          "exitCode": 1,
+          "expectedError": "clean tracked checkout",
+          "oldBinaryPreserved": true,
+          "head": "92ca1792e155c99ee845d8f953b7335f3d606460",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "default",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-source-controls-02/default-untracked",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "default",
+          "scenario": "stale-binary",
+          "exitCode": 1,
+          "expectedError": "STOP_AFTER_BUILD",
+          "oldBinaryPreserved": false,
+          "head": "92ca1792e155c99ee845d8f953b7335f3d606460",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "default",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-source-controls-02/default-stale-binary",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "default",
+          "scenario": "build-failure",
+          "exitCode": 1,
+          "expectedError": "Setup command",
+          "oldBinaryPreserved": true,
+          "head": "586881dbd9527e81b85d1fbd4fba687aa436561c",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "default",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-source-controls-02/default-build-failure",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "default",
+          "scenario": "source-change",
+          "exitCode": 1,
+          "expectedError": "changed during the toolshed build",
+          "oldBinaryPreserved": true,
+          "head": "316db5db538695c52a62e1efc137233dc588d2e7",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "default",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-source-controls-02/default-source-change",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "opposite",
+          "scenario": "dirty",
+          "exitCode": 1,
+          "expectedError": "clean tracked checkout",
+          "oldBinaryPreserved": true,
+          "head": "32a55a821165f6fa52bee044a23ab78a3af3bf31",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "opposite",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-source-controls-02/opposite-dirty",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "opposite",
+          "scenario": "untracked",
+          "exitCode": 1,
+          "expectedError": "clean tracked checkout",
+          "oldBinaryPreserved": true,
+          "head": "76acdd888aba61b43d20bb6b58c101c17658e682",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "opposite",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-source-controls-02/opposite-untracked",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "opposite",
+          "scenario": "stale-binary",
+          "exitCode": 1,
+          "expectedError": "STOP_AFTER_BUILD",
+          "oldBinaryPreserved": false,
+          "head": "cca7059a44197948b7ff1ec5653a6242074145f6",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "opposite",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-source-controls-02/opposite-stale-binary",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "opposite",
+          "scenario": "build-failure",
+          "exitCode": 1,
+          "expectedError": "Setup command",
+          "oldBinaryPreserved": true,
+          "head": "f65ff48a09108606bf280efa5066d478ab0ac4b9",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "opposite",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-source-controls-02/opposite-build-failure",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        },
+        {
+          "role": "opposite",
+          "scenario": "source-change",
+          "exitCode": 1,
+          "expectedError": "changed during the toolshed build",
+          "oldBinaryPreserved": true,
+          "head": "c862d1fc01f745c4d544dc0da1cdb887a50fda97",
+          "command": [
+            "deno",
+            "run",
+            "--no-lock",
+            "-A",
+            "tools/server-execution-topics/run-arm.ts",
+            "opposite",
+            "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-runner-source-controls-02/opposite-source-change",
+            "correctness",
+            "eval",
+            "0"
+          ]
+        }
+      ]
+    },
+    "review/baseline-health-02.json": {
+      "controller": {
+        "checkout": "/Users/berni/.codex/worktrees/topics-campaign-watch-health/labs",
+        "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+        "helperCommit": "f6bc2af1e36b5a3d817be75c1d3632bc964e3e37",
+        "startedAt": "2026-09-10T20:42:07.364131+00:00",
+        "sourceChecks": [
+          {
+            "phase": "before-helper-copy",
+            "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+            "status": ""
+          },
+          {
+            "phase": "before-build",
+            "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+            "status": "?? tools/server-execution-topics/run-arm.ts\n?? tools/server-execution-topics/seed-check.ts\n"
+          },
+          {
+            "phase": "after-build",
+            "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+            "status": "?? tools/server-execution-topics/run-arm.ts\n?? tools/server-execution-topics/seed-check.ts\n"
+          },
+          {
+            "phase": "after-workload",
+            "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+            "status": "?? tools/server-execution-topics/run-arm.ts\n?? tools/server-execution-topics/seed-check.ts\n"
+          }
+        ],
+        "commands": [
+          {
+            "command": [
+              "deno",
+              "--version"
+            ],
+            "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch-health/labs",
+            "label": "runtime",
+            "exitCode": 0
+          },
+          {
+            "command": [
+              "deno",
+              "task",
+              "build-binaries",
+              "toolshed"
+            ],
+            "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch-health/labs",
+            "label": "build",
+            "exitCode": 0
+          },
+          {
+            "command": [
+              "deno",
+              "run",
+              "-A",
+              "tools/server-execution-topics/run-arm.ts",
+              "opposite",
+              "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-baseline-health-02/arm",
+              "correctness",
+              "test",
+              "--no-check",
+              "-A",
+              "packages/patterns/integration/topic-board-fixture.test.ts",
+              "packages/patterns/integration/topic-board-child-contract.test.ts",
+              "packages/patterns/integration/topic-create-onscreen.test.ts",
+              "packages/patterns/integration/sx2-events.test.ts",
+              "packages/patterns/integration/lunch-poll-vote.test.ts",
+              "packages/patterns/integration/cfc-group-chat-chained-event-gate-multi-runtime.test.ts"
+            ],
+            "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch-health/labs",
+            "label": "integration",
+            "exitCode": 0
+          }
+        ],
+        "helpers": {
+          "tools/server-execution-topics/run-arm.ts": "88b3cae902036884745c5a0017521af77dde2e96ac0b602d9f31a3cb2ee0412e",
+          "tools/server-execution-topics/seed-check.ts": "abaac146312c64e5bcbca7cf6ca763f12ef4ee5c25cdd8d2430bc182f7fad414"
+        },
+        "status": "passed",
+        "flags": {
+          "EXPERIMENTAL_SERVER_EXECUTION": "true",
+          "COMMIT_SHA": "27f10d2d4f02f125c0492e5d6288acb3f0da148b"
+        },
+        "binarySha256": "866d47fbf498c7414412c30aeac0f16cdfed2bfd77d9238547984f47bee6c8ac",
+        "endedAt": "2026-09-10T20:48:53.115658+00:00"
+      },
+      "arm": {
+        "version": 2,
+        "mode": "correctness",
+        "role": "opposite",
+        "expectedPosture": {
+          "role": "opposite",
+          "enabled": true,
+          "label": "ON",
+          "experimentalValue": "true",
+          "recordVariant": "server-execution"
+        },
+        "workloadHead": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+        "sourcePaths": [
+          "tools/server-execution-topics/run-arm.ts",
+          "tools/server-execution-topics/seed-check.ts",
+          "packages/patterns/integration/topic-board-fixture.ts"
+        ],
+        "artifactRoot": ".",
+        "store": "store",
+        "provenance": {
+          "checkout": "/Users/berni/.codex/worktrees/topics-campaign-watch-health/labs",
+          "captureDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-baseline-health-02/arm",
+          "commands": [
+            {
+              "command": "git",
+              "args": [
+                "rev-parse",
+                "HEAD"
+              ],
+              "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch-health/labs"
+            },
+            {
+              "command": "git",
+              "args": [
+                "diff",
+                "HEAD",
+                "--binary"
+              ],
+              "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch-health/labs"
+            },
+            {
+              "command": "/usr/sbin/sysctl",
+              "args": [
+                "-n",
+                "machdep.cpu.brand_string"
+              ],
+              "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch-health/labs"
+            },
+            {
+              "command": "/Users/berni/.codex/worktrees/topics-campaign-watch-health/labs/.ci-cache/binaries/toolshed-baked-opposite",
+              "args": [
+                "--port=54134",
+                "--background",
+                "--log-file=/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-baseline-health-02/arm/toolshed-54134.log"
+              ],
+              "cwd": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-baseline-health-02/arm/store"
+            },
+            {
+              "command": "shasum",
+              "args": [
+                "-a",
+                "256",
+                "/Users/berni/.codex/worktrees/topics-campaign-watch-health/labs/.ci-cache/binaries/toolshed-baked-opposite"
+              ],
+              "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch-health/labs"
+            },
+            {
+              "command": "/opt/homebrew/bin/deno",
+              "args": [
+                "test",
+                "--no-check",
+                "-A",
+                "packages/patterns/integration/topic-board-fixture.test.ts",
+                "packages/patterns/integration/topic-board-child-contract.test.ts",
+                "packages/patterns/integration/topic-create-onscreen.test.ts",
+                "packages/patterns/integration/sx2-events.test.ts",
+                "packages/patterns/integration/lunch-poll-vote.test.ts",
+                "packages/patterns/integration/cfc-group-chat-chained-event-gate-multi-runtime.test.ts"
+              ],
+              "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch-health/labs"
+            }
+          ],
+          "workloadEnvironment": {
+            "API_URL": "http://localhost:54134",
+            "MEMORY_URL": "http://localhost:54134",
+            "TOOLSHED_URL": "http://localhost:54134",
+            "TOOLSHED_PORT": "54134",
+            "EXPERIMENTAL_SERVER_EXECUTION": "true",
+            "FRONTEND_URL": "http://localhost:54134",
+            "SPACE_NAME": "topics-campaign-8898cb70-1508-49cf-8cc9-087240ab1891",
+            "HEADLESS": "1",
+            "CF_LOG_LEVEL": "silent",
+            "CF_CAMPAIGN_RUN_DIR": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-baseline-health-02/arm"
+          }
+        },
+        "cache": "fresh store and server; existing Deno dependency cache",
+        "machine": {
+          "cpu": "Apple M3 Max",
+          "arch": "aarch64",
+          "os": "darwin",
+          "logicalCpus": 16,
+          "totalmem": 137438953472
+        },
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "flags": {
+          "EXPERIMENTAL_SERVER_EXECUTION": "true"
+        },
+        "samples": [
+          {
+            "at": "2026-09-10T20:42:29.178Z",
+            "load": [
+              9.6728515625,
+              7.89990234375,
+              12.04638671875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:38.550Z",
+            "load": [
+              8.86083984375,
+              7.78662109375,
+              11.95751953125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:39.554Z",
+            "load": [
+              8.86083984375,
+              7.78662109375,
+              11.95751953125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:40.554Z",
+            "load": [
+              8.86083984375,
+              7.78662109375,
+              11.95751953125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:41.554Z",
+            "load": [
+              8.86083984375,
+              7.78662109375,
+              11.95751953125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:42.557Z",
+            "load": [
+              8.47119140625,
+              7.7236328125,
+              11.91064453125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:43.559Z",
+            "load": [
+              8.47119140625,
+              7.7236328125,
+              11.91064453125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:44.561Z",
+            "load": [
+              8.47119140625,
+              7.7236328125,
+              11.91064453125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:45.563Z",
+            "load": [
+              8.47119140625,
+              7.7236328125,
+              11.91064453125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:46.565Z",
+            "load": [
+              8.47119140625,
+              7.7236328125,
+              11.91064453125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:47.568Z",
+            "load": [
+              8.03271484375,
+              7.64501953125,
+              11.8583984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:48.570Z",
+            "load": [
+              8.03271484375,
+              7.64501953125,
+              11.8583984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:49.571Z",
+            "load": [
+              8.03271484375,
+              7.64501953125,
+              11.8583984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:50.574Z",
+            "load": [
+              8.03271484375,
+              7.64501953125,
+              11.8583984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:51.576Z",
+            "load": [
+              8.03271484375,
+              7.64501953125,
+              11.8583984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:52.578Z",
+            "load": [
+              7.70947265625,
+              7.58447265625,
+              11.81201171875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:53.581Z",
+            "load": [
+              7.70947265625,
+              7.58447265625,
+              11.81201171875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:54.583Z",
+            "load": [
+              7.70947265625,
+              7.58447265625,
+              11.81201171875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:55.585Z",
+            "load": [
+              7.70947265625,
+              7.58447265625,
+              11.81201171875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:56.587Z",
+            "load": [
+              7.70947265625,
+              7.58447265625,
+              11.81201171875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:57.588Z",
+            "load": [
+              7.572265625,
+              7.55810546875,
+              11.77783203125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:58.590Z",
+            "load": [
+              7.572265625,
+              7.55810546875,
+              11.77783203125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:42:59.593Z",
+            "load": [
+              7.572265625,
+              7.55810546875,
+              11.77783203125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:00.594Z",
+            "load": [
+              7.572265625,
+              7.55810546875,
+              11.77783203125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:01.596Z",
+            "load": [
+              7.572265625,
+              7.55810546875,
+              11.77783203125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:02.599Z",
+            "load": [
+              7.6865234375,
+              7.58203125,
+              11.76123046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:03.599Z",
+            "load": [
+              7.6865234375,
+              7.58203125,
+              11.76123046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:04.601Z",
+            "load": [
+              7.6865234375,
+              7.58203125,
+              11.76123046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:05.604Z",
+            "load": [
+              7.6865234375,
+              7.58203125,
+              11.76123046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:06.606Z",
+            "load": [
+              7.6865234375,
+              7.58203125,
+              11.76123046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:07.607Z",
+            "load": [
+              8.11181640625,
+              7.671875,
+              11.76806640625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:08.609Z",
+            "load": [
+              8.11181640625,
+              7.671875,
+              11.76806640625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:09.611Z",
+            "load": [
+              8.11181640625,
+              7.671875,
+              11.76806640625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:10.612Z",
+            "load": [
+              8.11181640625,
+              7.671875,
+              11.76806640625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:11.614Z",
+            "load": [
+              8.11181640625,
+              7.671875,
+              11.76806640625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:12.617Z",
+            "load": [
+              7.7021484375,
+              7.59423828125,
+              11.71630859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:13.618Z",
+            "load": [
+              7.7021484375,
+              7.59423828125,
+              11.71630859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:14.619Z",
+            "load": [
+              7.7021484375,
+              7.59423828125,
+              11.71630859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:15.621Z",
+            "load": [
+              7.7021484375,
+              7.59423828125,
+              11.71630859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:16.623Z",
+            "load": [
+              7.7021484375,
+              7.59423828125,
+              11.71630859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:17.625Z",
+            "load": [
+              8.2861328125,
+              7.716796875,
+              11.7353515625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:18.626Z",
+            "load": [
+              8.2861328125,
+              7.716796875,
+              11.7353515625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:19.629Z",
+            "load": [
+              8.2861328125,
+              7.716796875,
+              11.7353515625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:20.629Z",
+            "load": [
+              8.2861328125,
+              7.716796875,
+              11.7353515625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:21.632Z",
+            "load": [
+              8.2861328125,
+              7.716796875,
+              11.7353515625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:22.635Z",
+            "load": [
+              8.26318359375,
+              7.72119140625,
+              11.71337890625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:23.636Z",
+            "load": [
+              8.26318359375,
+              7.72119140625,
+              11.71337890625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:24.638Z",
+            "load": [
+              8.26318359375,
+              7.72119140625,
+              11.71337890625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:25.640Z",
+            "load": [
+              8.26318359375,
+              7.72119140625,
+              11.71337890625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:26.643Z",
+            "load": [
+              8.26318359375,
+              7.72119140625,
+              11.71337890625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:27.645Z",
+            "load": [
+              8.24169921875,
+              7.7255859375,
+              11.69140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:28.646Z",
+            "load": [
+              8.24169921875,
+              7.7255859375,
+              11.69140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:29.648Z",
+            "load": [
+              8.24169921875,
+              7.7255859375,
+              11.69140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:30.650Z",
+            "load": [
+              8.24169921875,
+              7.7255859375,
+              11.69140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:31.652Z",
+            "load": [
+              8.24169921875,
+              7.7255859375,
+              11.69140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:32.654Z",
+            "load": [
+              7.98193359375,
+              7.68017578125,
+              11.65185546875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:33.655Z",
+            "load": [
+              7.98193359375,
+              7.68017578125,
+              11.65185546875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:34.657Z",
+            "load": [
+              7.98193359375,
+              7.68017578125,
+              11.65185546875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:35.659Z",
+            "load": [
+              7.98193359375,
+              7.68017578125,
+              11.65185546875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:36.660Z",
+            "load": [
+              7.98193359375,
+              7.68017578125,
+              11.65185546875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:37.662Z",
+            "load": [
+              8.30322265625,
+              7.75146484375,
+              11.65380859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:38.664Z",
+            "load": [
+              8.30322265625,
+              7.75146484375,
+              11.65380859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:39.665Z",
+            "load": [
+              8.30322265625,
+              7.75146484375,
+              11.65380859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:40.667Z",
+            "load": [
+              8.30322265625,
+              7.75146484375,
+              11.65380859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:41.670Z",
+            "load": [
+              8.30322265625,
+              7.75146484375,
+              11.65380859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:42.672Z",
+            "load": [
+              8.19873046875,
+              7.73876953125,
+              11.62646484375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:43.675Z",
+            "load": [
+              8.19873046875,
+              7.73876953125,
+              11.62646484375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:44.677Z",
+            "load": [
+              8.19873046875,
+              7.73876953125,
+              11.62646484375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:45.679Z",
+            "load": [
+              8.19873046875,
+              7.73876953125,
+              11.62646484375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:46.680Z",
+            "load": [
+              8.19873046875,
+              7.73876953125,
+              11.62646484375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:47.683Z",
+            "load": [
+              8.0224609375,
+              7.70947265625,
+              11.59326171875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:48.685Z",
+            "load": [
+              8.0224609375,
+              7.70947265625,
+              11.59326171875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:49.687Z",
+            "load": [
+              8.0224609375,
+              7.70947265625,
+              11.59326171875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:50.689Z",
+            "load": [
+              8.0224609375,
+              7.70947265625,
+              11.59326171875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:51.691Z",
+            "load": [
+              8.0224609375,
+              7.70947265625,
+              11.59326171875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:52.694Z",
+            "load": [
+              7.7001953125,
+              7.6474609375,
+              11.54833984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:53.696Z",
+            "load": [
+              7.7001953125,
+              7.6474609375,
+              11.54833984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:54.699Z",
+            "load": [
+              7.7001953125,
+              7.6474609375,
+              11.54833984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:55.702Z",
+            "load": [
+              7.7001953125,
+              7.6474609375,
+              11.54833984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:56.704Z",
+            "load": [
+              7.7001953125,
+              7.6474609375,
+              11.54833984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:57.706Z",
+            "load": [
+              7.88427734375,
+              7.68603515625,
+              11.5390625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:58.708Z",
+            "load": [
+              7.88427734375,
+              7.68603515625,
+              11.5390625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:43:59.711Z",
+            "load": [
+              7.88427734375,
+              7.68603515625,
+              11.5390625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:00.713Z",
+            "load": [
+              7.88427734375,
+              7.68603515625,
+              11.5390625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:01.715Z",
+            "load": [
+              7.88427734375,
+              7.68603515625,
+              11.5390625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:02.717Z",
+            "load": [
+              7.33251953125,
+              7.57470703125,
+              11.47705078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:03.719Z",
+            "load": [
+              7.33251953125,
+              7.57470703125,
+              11.47705078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:04.721Z",
+            "load": [
+              7.33251953125,
+              7.57470703125,
+              11.47705078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:05.724Z",
+            "load": [
+              7.33251953125,
+              7.57470703125,
+              11.47705078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:06.726Z",
+            "load": [
+              7.33251953125,
+              7.57470703125,
+              11.47705078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:07.727Z",
+            "load": [
+              7.3857421875,
+              7.58154296875,
+              11.45654296875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:08.728Z",
+            "load": [
+              7.3857421875,
+              7.58154296875,
+              11.45654296875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:09.729Z",
+            "load": [
+              7.3857421875,
+              7.58154296875,
+              11.45654296875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:10.730Z",
+            "load": [
+              7.3857421875,
+              7.58154296875,
+              11.45654296875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:11.731Z",
+            "load": [
+              7.3857421875,
+              7.58154296875,
+              11.45654296875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:12.734Z",
+            "load": [
+              7.3544921875,
+              7.57177734375,
+              11.43017578125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:13.736Z",
+            "load": [
+              7.3544921875,
+              7.57177734375,
+              11.43017578125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:14.738Z",
+            "load": [
+              7.3544921875,
+              7.57177734375,
+              11.43017578125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:15.740Z",
+            "load": [
+              7.3544921875,
+              7.57177734375,
+              11.43017578125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:16.742Z",
+            "load": [
+              7.3544921875,
+              7.57177734375,
+              11.43017578125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:17.744Z",
+            "load": [
+              6.92529296875,
+              7.47900390625,
+              11.37451171875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:18.746Z",
+            "load": [
+              6.92529296875,
+              7.47900390625,
+              11.37451171875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:19.748Z",
+            "load": [
+              6.92529296875,
+              7.47900390625,
+              11.37451171875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:20.750Z",
+            "load": [
+              6.92529296875,
+              7.47900390625,
+              11.37451171875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:21.752Z",
+            "load": [
+              6.92529296875,
+              7.47900390625,
+              11.37451171875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:22.754Z",
+            "load": [
+              7.33154296875,
+              7.5537109375,
+              11.3779296875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:23.756Z",
+            "load": [
+              7.33154296875,
+              7.5537109375,
+              11.3779296875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:24.758Z",
+            "load": [
+              7.33154296875,
+              7.5537109375,
+              11.3779296875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:25.759Z",
+            "load": [
+              7.33154296875,
+              7.5537109375,
+              11.3779296875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:26.761Z",
+            "load": [
+              7.33154296875,
+              7.5537109375,
+              11.3779296875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:27.763Z",
+            "load": [
+              6.984375,
+              7.47802734375,
+              11.32861328125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:28.765Z",
+            "load": [
+              6.984375,
+              7.47802734375,
+              11.32861328125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:29.767Z",
+            "load": [
+              6.984375,
+              7.47802734375,
+              11.32861328125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:30.769Z",
+            "load": [
+              6.984375,
+              7.47802734375,
+              11.32861328125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:31.771Z",
+            "load": [
+              6.984375,
+              7.47802734375,
+              11.32861328125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:32.773Z",
+            "load": [
+              9.7880859375,
+              8.05078125,
+              11.50830078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:33.775Z",
+            "load": [
+              9.7880859375,
+              8.05078125,
+              11.50830078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:34.776Z",
+            "load": [
+              9.7880859375,
+              8.05078125,
+              11.50830078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:35.778Z",
+            "load": [
+              9.7880859375,
+              8.05078125,
+              11.50830078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:36.781Z",
+            "load": [
+              9.7880859375,
+              8.05078125,
+              11.50830078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:37.782Z",
+            "load": [
+              9.404296875,
+              8,
+              11.4697265625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:38.784Z",
+            "load": [
+              9.404296875,
+              8,
+              11.4697265625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:39.786Z",
+            "load": [
+              9.404296875,
+              8,
+              11.4697265625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:40.786Z",
+            "load": [
+              9.404296875,
+              8,
+              11.4697265625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:41.788Z",
+            "load": [
+              9.404296875,
+              8,
+              11.4697265625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:42.789Z",
+            "load": [
+              8.81103515625,
+              7.900390625,
+              11.4140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:43.791Z",
+            "load": [
+              8.81103515625,
+              7.900390625,
+              11.4140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:44.793Z",
+            "load": [
+              8.81103515625,
+              7.900390625,
+              11.4140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:45.794Z",
+            "load": [
+              8.81103515625,
+              7.900390625,
+              11.4140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:46.797Z",
+            "load": [
+              8.81103515625,
+              7.900390625,
+              11.4140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:47.799Z",
+            "load": [
+              8.34521484375,
+              7.81884765625,
+              11.36474609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:48.801Z",
+            "load": [
+              8.34521484375,
+              7.81884765625,
+              11.36474609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:49.804Z",
+            "load": [
+              8.34521484375,
+              7.81884765625,
+              11.36474609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:50.806Z",
+            "load": [
+              8.34521484375,
+              7.81884765625,
+              11.36474609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:51.808Z",
+            "load": [
+              8.34521484375,
+              7.81884765625,
+              11.36474609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:52.811Z",
+            "load": [
+              8.3974609375,
+              7.83837890625,
+              11.3505859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:53.813Z",
+            "load": [
+              8.3974609375,
+              7.83837890625,
+              11.3505859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:54.815Z",
+            "load": [
+              8.3974609375,
+              7.83837890625,
+              11.3505859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:55.817Z",
+            "load": [
+              8.3974609375,
+              7.83837890625,
+              11.3505859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:56.819Z",
+            "load": [
+              8.3974609375,
+              7.83837890625,
+              11.3505859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:57.820Z",
+            "load": [
+              7.96484375,
+              7.7578125,
+              11.30126953125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:58.823Z",
+            "load": [
+              7.96484375,
+              7.7578125,
+              11.30126953125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:44:59.825Z",
+            "load": [
+              7.96484375,
+              7.7578125,
+              11.30126953125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:00.827Z",
+            "load": [
+              7.96484375,
+              7.7578125,
+              11.30126953125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:01.829Z",
+            "load": [
+              7.96484375,
+              7.7578125,
+              11.30126953125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:02.830Z",
+            "load": [
+              7.64697265625,
+              7.6953125,
+              11.25830078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:03.831Z",
+            "load": [
+              7.64697265625,
+              7.6953125,
+              11.25830078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:04.833Z",
+            "load": [
+              7.64697265625,
+              7.6953125,
+              11.25830078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:05.835Z",
+            "load": [
+              7.64697265625,
+              7.6953125,
+              11.25830078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:06.836Z",
+            "load": [
+              7.64697265625,
+              7.6953125,
+              11.25830078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:07.838Z",
+            "load": [
+              7.4345703125,
+              7.650390625,
+              11.22119140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:08.840Z",
+            "load": [
+              7.4345703125,
+              7.650390625,
+              11.22119140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:09.842Z",
+            "load": [
+              7.4345703125,
+              7.650390625,
+              11.22119140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:10.844Z",
+            "load": [
+              7.4345703125,
+              7.650390625,
+              11.22119140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:11.846Z",
+            "load": [
+              7.4345703125,
+              7.650390625,
+              11.22119140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:12.846Z",
+            "load": [
+              7.5595703125,
+              7.67236328125,
+              11.2080078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:13.848Z",
+            "load": [
+              7.5595703125,
+              7.67236328125,
+              11.2080078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:14.850Z",
+            "load": [
+              7.5595703125,
+              7.67236328125,
+              11.2080078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:15.852Z",
+            "load": [
+              7.5595703125,
+              7.67236328125,
+              11.2080078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:16.854Z",
+            "load": [
+              7.5595703125,
+              7.67236328125,
+              11.2080078125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:17.854Z",
+            "load": [
+              7.4345703125,
+              7.64453125,
+              11.17724609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:18.857Z",
+            "load": [
+              7.4345703125,
+              7.64453125,
+              11.17724609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:19.859Z",
+            "load": [
+              7.4345703125,
+              7.64453125,
+              11.17724609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:20.861Z",
+            "load": [
+              7.4345703125,
+              7.64453125,
+              11.17724609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:21.863Z",
+            "load": [
+              7.4345703125,
+              7.64453125,
+              11.17724609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:22.863Z",
+            "load": [
+              7.6396484375,
+              7.68359375,
+              11.169921875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:23.865Z",
+            "load": [
+              7.6396484375,
+              7.68359375,
+              11.169921875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:24.867Z",
+            "load": [
+              7.6396484375,
+              7.68359375,
+              11.169921875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:25.869Z",
+            "load": [
+              7.6396484375,
+              7.68359375,
+              11.169921875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:26.870Z",
+            "load": [
+              7.6396484375,
+              7.68359375,
+              11.169921875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:27.873Z",
+            "load": [
+              7.82861328125,
+              7.7216796875,
+              11.16259765625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:28.873Z",
+            "load": [
+              7.82861328125,
+              7.7216796875,
+              11.16259765625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:29.874Z",
+            "load": [
+              7.82861328125,
+              7.7216796875,
+              11.16259765625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:30.876Z",
+            "load": [
+              7.82861328125,
+              7.7216796875,
+              11.16259765625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:31.878Z",
+            "load": [
+              7.82861328125,
+              7.7216796875,
+              11.16259765625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:32.880Z",
+            "load": [
+              7.68212890625,
+              7.69287109375,
+              11.13232421875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:33.882Z",
+            "load": [
+              7.68212890625,
+              7.69287109375,
+              11.13232421875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:34.884Z",
+            "load": [
+              7.68212890625,
+              7.69287109375,
+              11.13232421875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:35.886Z",
+            "load": [
+              7.68212890625,
+              7.69287109375,
+              11.13232421875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:36.888Z",
+            "load": [
+              7.68212890625,
+              7.69287109375,
+              11.13232421875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:37.890Z",
+            "load": [
+              7.46728515625,
+              7.64794921875,
+              11.09619140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:38.892Z",
+            "load": [
+              7.46728515625,
+              7.64794921875,
+              11.09619140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:39.894Z",
+            "load": [
+              7.46728515625,
+              7.64794921875,
+              11.09619140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:40.895Z",
+            "load": [
+              7.46728515625,
+              7.64794921875,
+              11.09619140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:41.897Z",
+            "load": [
+              7.46728515625,
+              7.64794921875,
+              11.09619140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:42.899Z",
+            "load": [
+              7.58984375,
+              7.669921875,
+              11.08349609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:43.901Z",
+            "load": [
+              7.58984375,
+              7.669921875,
+              11.08349609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:44.902Z",
+            "load": [
+              7.58984375,
+              7.669921875,
+              11.08349609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:45.904Z",
+            "load": [
+              7.58984375,
+              7.669921875,
+              11.08349609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:46.904Z",
+            "load": [
+              7.58984375,
+              7.669921875,
+              11.08349609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:47.906Z",
+            "load": [
+              7.46240234375,
+              7.64208984375,
+              11.05322265625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:48.908Z",
+            "load": [
+              7.46240234375,
+              7.64208984375,
+              11.05322265625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:49.909Z",
+            "load": [
+              7.46240234375,
+              7.64208984375,
+              11.05322265625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:50.911Z",
+            "load": [
+              7.46240234375,
+              7.64208984375,
+              11.05322265625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:51.913Z",
+            "load": [
+              7.46240234375,
+              7.64208984375,
+              11.05322265625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:52.913Z",
+            "load": [
+              7.10498046875,
+              7.56494140625,
+              11.005859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:53.913Z",
+            "load": [
+              7.10498046875,
+              7.56494140625,
+              11.005859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:54.915Z",
+            "load": [
+              7.10498046875,
+              7.56494140625,
+              11.005859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:55.917Z",
+            "load": [
+              7.10498046875,
+              7.56494140625,
+              11.005859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:56.919Z",
+            "load": [
+              7.10498046875,
+              7.56494140625,
+              11.005859375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:57.922Z",
+            "load": [
+              7.49658203125,
+              7.63818359375,
+              11.01123046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:58.924Z",
+            "load": [
+              7.49658203125,
+              7.63818359375,
+              11.01123046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:45:59.926Z",
+            "load": [
+              7.49658203125,
+              7.63818359375,
+              11.01123046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:00.928Z",
+            "load": [
+              7.49658203125,
+              7.63818359375,
+              11.01123046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:01.930Z",
+            "load": [
+              7.49658203125,
+              7.63818359375,
+              11.01123046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:02.932Z",
+            "load": [
+              7.21630859375,
+              7.57763671875,
+              10.9697265625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:03.934Z",
+            "load": [
+              7.21630859375,
+              7.57763671875,
+              10.9697265625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:04.936Z",
+            "load": [
+              7.21630859375,
+              7.57763671875,
+              10.9697265625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:05.938Z",
+            "load": [
+              7.21630859375,
+              7.57763671875,
+              10.9697265625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:06.940Z",
+            "load": [
+              7.21630859375,
+              7.57763671875,
+              10.9697265625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:07.942Z",
+            "load": [
+              8.56005859375,
+              7.85009765625,
+              11.0458984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:08.944Z",
+            "load": [
+              8.56005859375,
+              7.85009765625,
+              11.0458984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:09.947Z",
+            "load": [
+              8.56005859375,
+              7.85009765625,
+              11.0458984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:10.950Z",
+            "load": [
+              8.56005859375,
+              7.85009765625,
+              11.0458984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:11.952Z",
+            "load": [
+              8.56005859375,
+              7.85009765625,
+              11.0458984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:12.954Z",
+            "load": [
+              8.11474609375,
+              7.76953125,
+              10.99853515625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:13.956Z",
+            "load": [
+              8.11474609375,
+              7.76953125,
+              10.99853515625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:14.958Z",
+            "load": [
+              8.11474609375,
+              7.76953125,
+              10.99853515625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:15.959Z",
+            "load": [
+              8.11474609375,
+              7.76953125,
+              10.99853515625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:16.961Z",
+            "load": [
+              8.11474609375,
+              7.76953125,
+              10.99853515625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:17.963Z",
+            "load": [
+              8.185546875,
+              7.78955078125,
+              10.98681640625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:18.963Z",
+            "load": [
+              8.185546875,
+              7.78955078125,
+              10.98681640625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:19.965Z",
+            "load": [
+              8.185546875,
+              7.78955078125,
+              10.98681640625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:20.967Z",
+            "load": [
+              8.185546875,
+              7.78955078125,
+              10.98681640625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:21.969Z",
+            "load": [
+              8.185546875,
+              7.78955078125,
+              10.98681640625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:22.971Z",
+            "load": [
+              8.17041015625,
+              7.79296875,
+              10.96923828125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:23.974Z",
+            "load": [
+              8.17041015625,
+              7.79296875,
+              10.96923828125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:24.976Z",
+            "load": [
+              8.17041015625,
+              7.79296875,
+              10.96923828125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:25.978Z",
+            "load": [
+              8.17041015625,
+              7.79296875,
+              10.96923828125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:26.980Z",
+            "load": [
+              8.17041015625,
+              7.79296875,
+              10.96923828125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:27.982Z",
+            "load": [
+              8.31689453125,
+              7.82958984375,
+              10.96337890625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:28.984Z",
+            "load": [
+              8.31689453125,
+              7.82958984375,
+              10.96337890625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:29.986Z",
+            "load": [
+              8.31689453125,
+              7.82958984375,
+              10.96337890625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:30.988Z",
+            "load": [
+              8.31689453125,
+              7.82958984375,
+              10.96337890625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:31.990Z",
+            "load": [
+              8.31689453125,
+              7.82958984375,
+              10.96337890625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:32.992Z",
+            "load": [
+              8.13134765625,
+              7.798828125,
+              10.93408203125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:33.994Z",
+            "load": [
+              8.13134765625,
+              7.798828125,
+              10.93408203125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:34.996Z",
+            "load": [
+              8.13134765625,
+              7.798828125,
+              10.93408203125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:35.998Z",
+            "load": [
+              8.13134765625,
+              7.798828125,
+              10.93408203125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:37.000Z",
+            "load": [
+              8.13134765625,
+              7.798828125,
+              10.93408203125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:38.002Z",
+            "load": [
+              7.96044921875,
+              7.7685546875,
+              10.90478515625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:39.005Z",
+            "load": [
+              7.96044921875,
+              7.7685546875,
+              10.90478515625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:40.007Z",
+            "load": [
+              7.96044921875,
+              7.7685546875,
+              10.90478515625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:41.009Z",
+            "load": [
+              7.96044921875,
+              7.7685546875,
+              10.90478515625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:42.011Z",
+            "load": [
+              7.96044921875,
+              7.7685546875,
+              10.90478515625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:43.013Z",
+            "load": [
+              7.56298828125,
+              7.68896484375,
+              10.8583984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:44.015Z",
+            "load": [
+              7.56298828125,
+              7.68896484375,
+              10.8583984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:45.016Z",
+            "load": [
+              7.56298828125,
+              7.68896484375,
+              10.8583984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:46.018Z",
+            "load": [
+              7.56298828125,
+              7.68896484375,
+              10.8583984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:47.020Z",
+            "load": [
+              7.56298828125,
+              7.68896484375,
+              10.8583984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:48.021Z",
+            "load": [
+              7.4375,
+              7.66064453125,
+              10.82958984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:49.023Z",
+            "load": [
+              7.4375,
+              7.66064453125,
+              10.82958984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:50.026Z",
+            "load": [
+              7.4375,
+              7.66064453125,
+              10.82958984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:51.026Z",
+            "load": [
+              7.4375,
+              7.66064453125,
+              10.82958984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:52.028Z",
+            "load": [
+              7.4375,
+              7.66064453125,
+              10.82958984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:53.030Z",
+            "load": [
+              7.72265625,
+              7.7158203125,
+              10.83056640625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:54.032Z",
+            "load": [
+              7.72265625,
+              7.7158203125,
+              10.83056640625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:55.035Z",
+            "load": [
+              7.72265625,
+              7.7158203125,
+              10.83056640625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:56.037Z",
+            "load": [
+              7.72265625,
+              7.7158203125,
+              10.83056640625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:57.039Z",
+            "load": [
+              7.72265625,
+              7.7158203125,
+              10.83056640625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:58.041Z",
+            "load": [
+              7.42431640625,
+              7.65380859375,
+              10.79052734375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:46:59.043Z",
+            "load": [
+              7.42431640625,
+              7.65380859375,
+              10.79052734375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:00.044Z",
+            "load": [
+              7.42431640625,
+              7.65380859375,
+              10.79052734375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:01.046Z",
+            "load": [
+              7.42431640625,
+              7.65380859375,
+              10.79052734375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:02.049Z",
+            "load": [
+              7.42431640625,
+              7.65380859375,
+              10.79052734375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:03.052Z",
+            "load": [
+              7.06982421875,
+              7.576171875,
+              10.74462890625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:04.054Z",
+            "load": [
+              7.06982421875,
+              7.576171875,
+              10.74462890625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:05.054Z",
+            "load": [
+              7.06982421875,
+              7.576171875,
+              10.74462890625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:06.056Z",
+            "load": [
+              7.06982421875,
+              7.576171875,
+              10.74462890625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:07.058Z",
+            "load": [
+              7.06982421875,
+              7.576171875,
+              10.74462890625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:08.060Z",
+            "load": [
+              6.98388671875,
+              7.5498046875,
+              10.716796875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:09.062Z",
+            "load": [
+              6.98388671875,
+              7.5498046875,
+              10.716796875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:10.063Z",
+            "load": [
+              6.98388671875,
+              7.5498046875,
+              10.716796875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:11.064Z",
+            "load": [
+              6.98388671875,
+              7.5498046875,
+              10.716796875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:12.067Z",
+            "load": [
+              6.98388671875,
+              7.5498046875,
+              10.716796875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:13.069Z",
+            "load": [
+              6.82470703125,
+              7.50732421875,
+              10.68310546875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:14.069Z",
+            "load": [
+              6.82470703125,
+              7.50732421875,
+              10.68310546875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:15.071Z",
+            "load": [
+              6.82470703125,
+              7.50732421875,
+              10.68310546875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:16.073Z",
+            "load": [
+              6.82470703125,
+              7.50732421875,
+              10.68310546875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:17.074Z",
+            "load": [
+              6.82470703125,
+              7.50732421875,
+              10.68310546875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:18.074Z",
+            "load": [
+              6.51806640625,
+              7.43212890625,
+              10.6376953125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:19.077Z",
+            "load": [
+              6.51806640625,
+              7.43212890625,
+              10.6376953125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:20.079Z",
+            "load": [
+              6.51806640625,
+              7.43212890625,
+              10.6376953125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:21.079Z",
+            "load": [
+              6.51806640625,
+              7.43212890625,
+              10.6376953125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:22.081Z",
+            "load": [
+              6.51806640625,
+              7.43212890625,
+              10.6376953125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:23.084Z",
+            "load": [
+              6.15625,
+              7.341796875,
+              10.5869140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:24.086Z",
+            "load": [
+              6.15625,
+              7.341796875,
+              10.5869140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:25.088Z",
+            "load": [
+              6.15625,
+              7.341796875,
+              10.5869140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:26.090Z",
+            "load": [
+              6.15625,
+              7.341796875,
+              10.5869140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:27.092Z",
+            "load": [
+              6.15625,
+              7.341796875,
+              10.5869140625
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:28.094Z",
+            "load": [
+              6.0634765625,
+              7.302734375,
+              10.5537109375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:29.096Z",
+            "load": [
+              6.0634765625,
+              7.302734375,
+              10.5537109375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:30.098Z",
+            "load": [
+              6.0634765625,
+              7.302734375,
+              10.5537109375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:31.101Z",
+            "load": [
+              6.0634765625,
+              7.302734375,
+              10.5537109375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:32.101Z",
+            "load": [
+              6.0634765625,
+              7.302734375,
+              10.5537109375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:33.104Z",
+            "load": [
+              5.97802734375,
+              7.26416015625,
+              10.52099609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:34.105Z",
+            "load": [
+              5.97802734375,
+              7.26416015625,
+              10.52099609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:35.107Z",
+            "load": [
+              5.97802734375,
+              7.26416015625,
+              10.52099609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:36.109Z",
+            "load": [
+              5.97802734375,
+              7.26416015625,
+              10.52099609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:37.110Z",
+            "load": [
+              5.97802734375,
+              7.26416015625,
+              10.52099609375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:38.113Z",
+            "load": [
+              5.6591796875,
+              7.1767578125,
+              10.470703125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:39.115Z",
+            "load": [
+              5.6591796875,
+              7.1767578125,
+              10.470703125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:40.115Z",
+            "load": [
+              5.6591796875,
+              7.1767578125,
+              10.470703125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:41.117Z",
+            "load": [
+              5.6591796875,
+              7.1767578125,
+              10.470703125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:42.119Z",
+            "load": [
+              5.6591796875,
+              7.1767578125,
+              10.470703125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:43.121Z",
+            "load": [
+              5.36572265625,
+              7.09033203125,
+              10.4208984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:44.123Z",
+            "load": [
+              5.36572265625,
+              7.09033203125,
+              10.4208984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:45.125Z",
+            "load": [
+              5.36572265625,
+              7.09033203125,
+              10.4208984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:46.127Z",
+            "load": [
+              5.36572265625,
+              7.09033203125,
+              10.4208984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:47.129Z",
+            "load": [
+              5.36572265625,
+              7.09033203125,
+              10.4208984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:48.131Z",
+            "load": [
+              5.33642578125,
+              7.05517578125,
+              10.388671875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:49.133Z",
+            "load": [
+              5.33642578125,
+              7.05517578125,
+              10.388671875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:50.135Z",
+            "load": [
+              5.33642578125,
+              7.05517578125,
+              10.388671875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:51.137Z",
+            "load": [
+              5.33642578125,
+              7.05517578125,
+              10.388671875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:52.138Z",
+            "load": [
+              5.33642578125,
+              7.05517578125,
+              10.388671875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:53.138Z",
+            "load": [
+              5.14892578125,
+              6.98779296875,
+              10.34521484375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:54.140Z",
+            "load": [
+              5.14892578125,
+              6.98779296875,
+              10.34521484375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:55.142Z",
+            "load": [
+              5.14892578125,
+              6.98779296875,
+              10.34521484375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:56.144Z",
+            "load": [
+              5.14892578125,
+              6.98779296875,
+              10.34521484375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:57.145Z",
+            "load": [
+              5.14892578125,
+              6.98779296875,
+              10.34521484375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:58.146Z",
+            "load": [
+              5.376953125,
+              7.00439453125,
+              10.3310546875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:47:59.148Z",
+            "load": [
+              5.376953125,
+              7.00439453125,
+              10.3310546875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:00.149Z",
+            "load": [
+              5.376953125,
+              7.00439453125,
+              10.3310546875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:01.151Z",
+            "load": [
+              5.376953125,
+              7.00439453125,
+              10.3310546875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:02.153Z",
+            "load": [
+              5.376953125,
+              7.00439453125,
+              10.3310546875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:03.154Z",
+            "load": [
+              5.0263671875,
+              6.904296875,
+              10.2763671875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:04.157Z",
+            "load": [
+              5.0263671875,
+              6.904296875,
+              10.2763671875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:05.159Z",
+            "load": [
+              5.0263671875,
+              6.904296875,
+              10.2763671875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:06.161Z",
+            "load": [
+              5.0263671875,
+              6.904296875,
+              10.2763671875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:07.163Z",
+            "load": [
+              5.0263671875,
+              6.904296875,
+              10.2763671875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:08.165Z",
+            "load": [
+              4.86376953125,
+              6.83935546875,
+              10.2333984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:09.167Z",
+            "load": [
+              4.86376953125,
+              6.83935546875,
+              10.2333984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:10.168Z",
+            "load": [
+              4.86376953125,
+              6.83935546875,
+              10.2333984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:11.170Z",
+            "load": [
+              4.86376953125,
+              6.83935546875,
+              10.2333984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:12.173Z",
+            "load": [
+              4.86376953125,
+              6.83935546875,
+              10.2333984375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:13.174Z",
+            "load": [
+              4.79443359375,
+              6.7919921875,
+              10.19677734375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:14.176Z",
+            "load": [
+              4.79443359375,
+              6.7919921875,
+              10.19677734375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:15.178Z",
+            "load": [
+              4.79443359375,
+              6.7919921875,
+              10.19677734375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:16.180Z",
+            "load": [
+              4.79443359375,
+              6.7919921875,
+              10.19677734375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:17.182Z",
+            "load": [
+              4.79443359375,
+              6.7919921875,
+              10.19677734375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:18.184Z",
+            "load": [
+              4.5703125,
+              6.71240234375,
+              10.1484375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:19.187Z",
+            "load": [
+              4.5703125,
+              6.71240234375,
+              10.1484375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:20.189Z",
+            "load": [
+              4.5703125,
+              6.71240234375,
+              10.1484375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:21.191Z",
+            "load": [
+              4.5703125,
+              6.71240234375,
+              10.1484375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:22.193Z",
+            "load": [
+              4.5703125,
+              6.71240234375,
+              10.1484375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:23.195Z",
+            "load": [
+              4.5244140625,
+              6.6669921875,
+              10.1123046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:24.197Z",
+            "load": [
+              4.5244140625,
+              6.6669921875,
+              10.1123046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:25.199Z",
+            "load": [
+              4.5244140625,
+              6.6669921875,
+              10.1123046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:26.200Z",
+            "load": [
+              4.5244140625,
+              6.6669921875,
+              10.1123046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:27.202Z",
+            "load": [
+              4.5244140625,
+              6.6669921875,
+              10.1123046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:28.204Z",
+            "load": [
+              4.40185546875,
+              6.60595703125,
+              10.0703125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:29.206Z",
+            "load": [
+              4.40185546875,
+              6.60595703125,
+              10.0703125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:30.209Z",
+            "load": [
+              4.40185546875,
+              6.60595703125,
+              10.0703125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:31.211Z",
+            "load": [
+              4.40185546875,
+              6.60595703125,
+              10.0703125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:32.213Z",
+            "load": [
+              4.40185546875,
+              6.60595703125,
+              10.0703125
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:33.215Z",
+            "load": [
+              4.44970703125,
+              6.5791015625,
+              10.04052734375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:34.216Z",
+            "load": [
+              4.44970703125,
+              6.5791015625,
+              10.04052734375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:35.219Z",
+            "load": [
+              4.44970703125,
+              6.5791015625,
+              10.04052734375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:36.221Z",
+            "load": [
+              4.44970703125,
+              6.5791015625,
+              10.04052734375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:37.221Z",
+            "load": [
+              4.44970703125,
+              6.5791015625,
+              10.04052734375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:38.223Z",
+            "load": [
+              4.33349609375,
+              6.51953125,
+              9.9990234375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:39.225Z",
+            "load": [
+              4.33349609375,
+              6.51953125,
+              9.9990234375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:40.227Z",
+            "load": [
+              4.33349609375,
+              6.51953125,
+              9.9990234375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:41.230Z",
+            "load": [
+              4.33349609375,
+              6.51953125,
+              9.9990234375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:42.232Z",
+            "load": [
+              4.33349609375,
+              6.51953125,
+              9.9990234375
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:43.234Z",
+            "load": [
+              4.626953125,
+              6.5439453125,
+              9.9873046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:44.236Z",
+            "load": [
+              4.626953125,
+              6.5439453125,
+              9.9873046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:45.238Z",
+            "load": [
+              4.626953125,
+              6.5439453125,
+              9.9873046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:46.240Z",
+            "load": [
+              4.626953125,
+              6.5439453125,
+              9.9873046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:47.241Z",
+            "load": [
+              4.626953125,
+              6.5439453125,
+              9.9873046875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:48.243Z",
+            "load": [
+              4.41650390625,
+              6.46826171875,
+              9.9404296875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:49.245Z",
+            "load": [
+              4.41650390625,
+              6.46826171875,
+              9.9404296875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:50.247Z",
+            "load": [
+              4.41650390625,
+              6.46826171875,
+              9.9404296875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:51.249Z",
+            "load": [
+              4.41650390625,
+              6.46826171875,
+              9.9404296875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:52.251Z",
+            "load": [
+              4.41650390625,
+              6.46826171875,
+              9.9404296875
+            ]
+          },
+          {
+            "at": "2026-09-10T20:48:52.994Z",
+            "load": [
+              4.302734375,
+              6.41064453125,
+              9.8994140625
+            ]
+          }
+        ],
+        "status": "passed",
+        "meta": {
+          "did": "did:key:z6MksHnZGdHxNoCqcC3kPvBSo2goCzLSWheQ8LrVpAtQwgwW",
+          "gitSha": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+          "shellServerExecutionDefine": "true",
+          "experimental": {
+            "commitPreconditions": true,
+            "computedCellIds": true,
+            "contentAddressedSchemas": true,
+            "lazyMaterialization": true,
+            "modernCellRep": false,
+            "plainResultReceipts": true,
+            "readerSchemaPrecedence": true,
+            "serverExecution": true
+          },
+          "cfc": {
+            "provenance": "resolved",
+            "enforcementMode": {
+              "rung": "enforce-explicit",
+              "diagnosticOnly": false,
+              "decidesOn": "a recorded reason, which rejects the commit"
+            },
+            "flowLabels": {
+              "rung": "off",
+              "diagnosticOnly": true,
+              "decidesOn": "nothing; no derived label component comes into existence"
+            },
+            "writeFloor": {
+              "rung": "off",
+              "diagnosticOnly": true,
+              "decidesOn": "nothing; the write-side integrity floor is not checked"
+            },
+            "triggerReadGating": false,
+            "decomposedEnvelopes": false,
+            "policyEvaluation": {
+              "rung": "off",
+              "diagnosticOnly": true,
+              "decidesOn": "nothing; gated labels reach the gates un-rewritten"
+            },
+            "labelMetadataProtection": {
+              "rung": "off",
+              "diagnosticOnly": true,
+              "decidesOn": "nothing; label metadata writes are not gated"
+            },
+            "declaredMonotonicity": {
+              "rung": "off",
+              "diagnosticOnly": true,
+              "decidesOn": "nothing; a declared-monotonicity violation is not checked"
+            },
+            "policyDigest": null,
+            "sinks": [
+              {
+                "sink": "fetchBinary",
+                "ungated": "no confidentiality ceiling is configured for this sink"
+              },
+              {
+                "sink": "fetchText",
+                "ungated": "no confidentiality ceiling is configured for this sink"
+              },
+              {
+                "sink": "fetchJson",
+                "ungated": "no confidentiality ceiling is configured for this sink"
+              },
+              {
+                "sink": "fetchJsonUnchecked",
+                "ungated": "no confidentiality ceiling is configured for this sink"
+              },
+              {
+                "sink": "fetchProgram",
+                "ungated": "no confidentiality ceiling is configured for this sink"
+              },
+              {
+                "sink": "streamData",
+                "ungated": "no confidentiality ceiling is configured for this sink"
+              },
+              {
+                "sink": "llm",
+                "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+              },
+              {
+                "sink": "llmDialog",
+                "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+              },
+              {
+                "sink": "generateText",
+                "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+              },
+              {
+                "sink": "generateObject",
+                "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+              }
+            ],
+            "deviations": [
+              {
+                "what": "sink `llm` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+                "owner": "CFC runtime (Epic B, sink governance)",
+                "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+              },
+              {
+                "what": "sink `llmDialog` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+                "owner": "CFC runtime (Epic B, sink governance)",
+                "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+              },
+              {
+                "what": "sink `generateText` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+                "owner": "CFC runtime (Epic B, sink governance)",
+                "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+              },
+              {
+                "what": "sink `generateObject` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+                "owner": "CFC runtime (Epic B, sink governance)",
+                "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+              }
+            ]
+          }
+        },
+        "serverBuildHead": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+        "binarySha256": "866d47fbf498c7414412c30aeac0f16cdfed2bfd77d9238547984f47bee6c8ac",
+        "exitCode": 0,
+        "latencyEligible": false
+      }
+    },
+    "review/baseline-root-dirty-control.json": {
+      "checkout": "/Users/berni/.codex/worktrees/topics-campaign-watch-health/labs",
+      "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+      "helperCommit": "f6bc2af1e36b5a3d817be75c1d3632bc964e3e37",
+      "startedAt": "2026-09-10T20:42:07.169638+00:00",
+      "sourceChecks": [
+        {
+          "phase": "before-helper-copy",
+          "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+          "status": " M deno.jsonc\n"
+        }
+      ],
+      "commands": [],
+      "helpers": {},
+      "status": "failed",
+      "error": "Baseline source check failed: before-helper-copy",
+      "endedAt": "2026-09-10T20:42:07.311067+00:00"
+    },
+    "review/seed-independent-control": [
+      {
+        "case": "baseline",
+        "checkout": "/Users/berni/.codex/worktrees/topics-campaign-watch-posture-red/labs",
+        "head": "ef40ea5c58a0263d3efda4bf16700878530dd08e",
+        "command": [
+          "deno",
+          "run",
+          "--config",
+          "/Users/berni/.codex/worktrees/topics-campaign-watch-posture-red/labs/deno.jsonc",
+          "--no-lock",
+          "-A",
+          "/Users/berni/.codex/worktrees/topics-campaign-watch/labs/tools/server-execution-topics/evidence/2026-09-10-incremental-watch/review/verify-seed-posture.ts",
+          "/Users/berni/.codex/worktrees/topics-campaign-watch-posture-red/labs"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch-posture-red/labs",
+        "exitCode": 1,
+        "expectedExitCode": 1,
+        "probeSha256": "597d9b1ba98008a8fd3bea5d377b39c54cd62ae11c21fbbc9ba40e2aa4d3b416",
+        "controlSha256": "170b394d1adceb93d4a9a2affcd78a3185bba088796a505830f8627deb138caf"
+      },
+      {
+        "case": "candidate",
+        "checkout": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs",
+        "head": "ef40ea5c58a0263d3efda4bf16700878530dd08e",
+        "command": [
+          "deno",
+          "run",
+          "--config",
+          "/Users/berni/.codex/worktrees/topics-campaign-watch/labs/deno.jsonc",
+          "--no-lock",
+          "-A",
+          "/Users/berni/.codex/worktrees/topics-campaign-watch/labs/tools/server-execution-topics/evidence/2026-09-10-incremental-watch/review/verify-seed-posture.ts",
+          "/Users/berni/.codex/worktrees/topics-campaign-watch/labs"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-watch/labs",
+        "exitCode": 0,
+        "expectedExitCode": 0,
+        "probeSha256": "9ce4db4b69c0d471dcdab4aa6a652e0cdc433c9a16b98fa86fa0a9ad600d8381",
+        "controlSha256": "170b394d1adceb93d4a9a2affcd78a3185bba088796a505830f8627deb138caf"
+      }
+    ]
+  },
+  "manifestPortabilityControl": {
+    "baselineHead": "a873c0c73b4c6a24c1c7cf5e336bef299b32fd95",
+    "baselineSource": {
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/source/baseline-health-controller-a873.py",
+      "sha256": "809aa814ab32c84a57c746cc575b6d1f78f7f4ce05896aa335b085b05918a14e"
+    },
+    "scope": "Manifest writer only, six cases; no health workload rerun or changed package source."
+  },
+  "manifestPlatformControl": {
+    "baselineHead": "ce7ab1dd6c887563035e73c67e26c9f43fe6c560",
+    "baselineSource": {
+      "path": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/source/baseline-health-controller-ce7a.py",
+      "sha256": "014940bcfc148a8498765cf66484dbe4fd9809f4d389496b133540944a0cb052"
+    },
+    "environment": {
+      "LC_ALL": "C",
+      "PYTHONUTF8": "0",
+      "PYTHONCOERCECLOCALE": "0"
+    },
+    "mechanism": "Simulated CRLF text translation; old hash red/new UTF-8 byte writer green. JSON outputs are ASCII-escaped, so original JSON-read locale failure not reproduced."
+  }
+}

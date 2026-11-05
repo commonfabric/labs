@@ -1,0 +1,1710 @@
+{
+  "sourceDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/terminal-review-integration-on",
+  "files": {
+    "stats-before.json": {
+      "sha256": "883aaa7ce334673df6ec6068264550abb28b0dac4123991473e515d5460681e2",
+      "bytes": 4080
+    },
+    "stats-after.json": {
+      "sha256": "c1e3dd777ab6c34c2996cea11c66916c7a84d449bc64a34715a64c8c6d996fba",
+      "bytes": 2017962
+    }
+  },
+  "stats-before.json": {
+    "activeSpaces": 0,
+    "waves": 0,
+    "wavesBudgetExhausted": 0,
+    "supersededWrites": 0,
+    "authoredSeen": 0,
+    "effectAcks": 0,
+    "derivedCommits": 0,
+    "derivedCommitsBySpace": {},
+    "derivedCommitsBySpaceDropped": 0,
+    "structureLoadFailures": 0,
+    "structureLoadDeferred": 0,
+    "structureLoadStuck": 0,
+    "structureLoadTerminal": 0,
+    "structureLoadRearmed": 0,
+    "watermarkClamped": 0,
+    "unstampedSealRefusals": 0,
+    "servedIntentSealFailures": 0,
+    "parkDisposeTimeouts": 0,
+    "reactivationBackoffs": 0,
+    "foreignWriteRefusals": 0,
+    "foreignEngineFailures": 0,
+    "warmRequests": 0,
+    "undemandedNarrowingRuns": 0,
+    "earlyEmitRefusals": 0,
+    "demandArrivals": 0,
+    "watermarkLag": 0,
+    "demand": {
+      "demandedRows": 0,
+      "demandedInstances": 0,
+      "demandedInstancesMax": 0,
+      "demandedPairs": 0,
+      "demandedWriters": 0,
+      "demandedWritersMax": 0,
+      "demandRootEnters": 0,
+      "demandRootLeaves": 0,
+      "notCurrentRearms": 0,
+      "demandPasses": 0,
+      "demandPassMs": 0,
+      "pushGrowthWakes": 0,
+      "watchWakes": 0,
+      "warmWakes": 0
+    },
+    "settle": {
+      "series": [],
+      "dropped": 0
+    },
+    "settleAdvances": {
+      "count": 0,
+      "lastDelta": 0,
+      "series": [],
+      "dropped": 0
+    },
+    "events": {
+      "appended": 0,
+      "processed": 0,
+      "coalescedPerWaveMax": 0,
+      "skippedIdempotent": 0,
+      "drainInFlightSkips": 0,
+      "preQueueDeferralStuck": 0,
+      "visibilityBarriers": 0,
+      "visibilityRecoveries": 0,
+      "visibilityDeferrals": 0,
+      "deferredRescansArmed": 0,
+      "deferredRescansFired": 0,
+      "lt1LeftoversPurged": 0,
+      "lt1LateSealsRefused": 0,
+      "orphanDeliveriesRefused": 0,
+      "handlerNotRunDeferrals": 0,
+      "loadParkDeferrals": 0,
+      "loadParkFailures": 0,
+      "deliveryDeferralsActive": 0,
+      "deliveryFailuresActive": 0,
+      "maxAccumulatedDeliveryFailureMs": 0,
+      "needsAttention": {
+        "total": 0,
+        "byPhase": {
+          "dispatch-load": 0,
+          "commit-preparation": 0,
+          "commit-finalization": 0
+        }
+      },
+      "needsAttentionSealFailures": 0,
+      "deliveryCheckpointWriteFailures": 0,
+      "explicitRetries": 0,
+      "dropped": 0
+    },
+    "memo": {
+      "hits": 0,
+      "misses": 0,
+      "inflight": 0
+    },
+    "outbox": {
+      "queued": 0,
+      "completed": 0,
+      "failed": 0,
+      "budgetDeferrals": 0
+    },
+    "lease": {
+      "held": 0,
+      "lost": 0
+    },
+    "rootEnsure": {
+      "runs": 0,
+      "created": 0,
+      "skippedNoOwner": 0,
+      "failures": 0
+    },
+    "push": {
+      "prioritizedSessions": 0,
+      "followerSessions": 0,
+      "mixedFlushes": 0
+    }
+  },
+  "stats-after.json": {
+    "activeSpaces": 5,
+    "waves": 248,
+    "wavesBudgetExhausted": 126,
+    "supersededWrites": 3,
+    "authoredSeen": 86,
+    "effectAcks": 0,
+    "derivedCommits": 248,
+    "derivedCommitsBySpace": {
+      "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS": 178,
+      "did:key:z6MkhwNUdy4MqFppUWSTyCrkPnxf3ngxpA5vTFLmd2bSQBBT": 1,
+      "did:key:z6Mkez7HdVrYPHaMXGFJ48Ts4GA69SCbV751cKQezN27pEAL": 1,
+      "did:key:z6MkrVqPLCbWNk6AmZGFt6ytpzQo83RmeLaaD3b5QSJDg5rF": 1,
+      "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo": 15,
+      "did:key:z6MkwdCkk3KHvdtd2z8pagsPskboUFAfHGJdNdi9EW3GnnuN": 2,
+      "did:key:z6MkvV3b5f1ApBaFDg1HgKGGtdtqL6dnqvWekBiJcZ79BCGc": 2,
+      "did:key:z6MkntpDp1ujkVzn4cUYSvdDAokkQoUvhxBHR3WniwBBMdFY": 12,
+      "did:key:z6MkomNxjgWUWVwNLtogPNb3SzG9vfKU3uUB3kA3AnTmyeJv": 10,
+      "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng": 26
+    },
+    "derivedCommitsBySpaceDropped": 0,
+    "structureLoadFailures": 0,
+    "structureLoadDeferred": 5,
+    "structureLoadStuck": 0,
+    "structureLoadTerminal": 503,
+    "structureLoadRearmed": 33,
+    "watermarkClamped": 0,
+    "unstampedSealRefusals": 0,
+    "servedIntentSealFailures": 0,
+    "parkDisposeTimeouts": 0,
+    "reactivationBackoffs": 0,
+    "foreignWriteRefusals": 40,
+    "foreignEngineFailures": 0,
+    "warmRequests": 5,
+    "undemandedNarrowingRuns": 0,
+    "earlyEmitRefusals": 0,
+    "demandArrivals": 61,
+    "watermarkLag": 1,
+    "demand": {
+      "demandedRows": 675,
+      "demandedInstances": 260,
+      "demandedInstancesMax": 2778,
+      "demandedPairs": 675,
+      "demandedWriters": 43,
+      "demandedWritersMax": 1048,
+      "demandRootEnters": 1211,
+      "demandRootLeaves": 952,
+      "notCurrentRearms": 75,
+      "demandPasses": 531,
+      "demandPassMs": 9041.330935000047,
+      "pushGrowthWakes": 154,
+      "watchWakes": 559,
+      "warmWakes": 5
+    },
+    "settle": {
+      "series": [
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 1,
+          "admittedAt": 3697.2817919999998,
+          "coveredAt": 5833.077417,
+          "ms": 2135.7956250000007,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkhwNUdy4MqFppUWSTyCrkPnxf3ngxpA5vTFLmd2bSQBBT",
+          "seq": 1,
+          "admittedAt": 5881.156959,
+          "coveredAt": 7411.865417,
+          "ms": 1530.708458,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 3,
+          "admittedAt": 7943.743959,
+          "coveredAt": 7962.290834,
+          "ms": 18.546875,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "structural-growth",
+          "eventAppend": false,
+          "growthLandedAt": 8056.432584,
+          "msGrowth": 112.68862499999977,
+          "growthWaves": 4,
+          "graceMs": 2.384541999999783
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 8,
+          "admittedAt": 8096.626125,
+          "coveredAt": 8108.25025,
+          "ms": 11.624125000000276,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 10,
+          "admittedAt": 9352.520042,
+          "coveredAt": 9369.525459,
+          "ms": 17.005417000000307,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 1,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 12,
+          "admittedAt": 9382.111667,
+          "coveredAt": 9395.994542,
+          "ms": 13.88287500000115,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 1,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 14,
+          "admittedAt": 9429.668292,
+          "coveredAt": 9433.656709,
+          "ms": 3.9884170000004815,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 16,
+          "admittedAt": 9511.208375,
+          "coveredAt": 10620.003417,
+          "ms": 1108.7950419999997,
+          "waves": 5,
+          "cycles": 5,
+          "growthWakes": 3,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 10852.7615,
+          "msGrowth": 1341.5531250000004,
+          "growthWaves": 9,
+          "graceMs": 189.31237500000134
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 28,
+          "admittedAt": 10944.056084,
+          "coveredAt": 11166.8135,
+          "ms": 222.75741600000038,
+          "waves": 2,
+          "cycles": 2,
+          "growthWakes": 1,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 11344.939875,
+          "msGrowth": 400.8837910000002,
+          "growthWaves": 4,
+          "graceMs": 136.31604100000004
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 33,
+          "admittedAt": 11349.865209,
+          "coveredAt": 11416.886625,
+          "ms": 67.02141599999959,
+          "waves": 2,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 11436.693959,
+          "msGrowth": 86.82875000000058,
+          "growthWaves": 3,
+          "graceMs": 2.6917090000006283
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 37,
+          "admittedAt": 11482.682,
+          "coveredAt": 11539.55775,
+          "ms": 56.87574999999924,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 11565.021084,
+          "msGrowth": 82.33908399999927,
+          "growthWaves": 2,
+          "graceMs": 3.732583999999406
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 40,
+          "admittedAt": 11927.69075,
+          "coveredAt": 11939.563375,
+          "ms": 11.872624999999971,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "structural-growth",
+          "eventAppend": false,
+          "growthLandedAt": 12117.833042,
+          "msGrowth": 190.14229200000045,
+          "growthWaves": 3,
+          "graceMs": 10.05579200000102
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 45,
+          "admittedAt": 12144.922417,
+          "coveredAt": 12364.17675,
+          "ms": 219.25433300000077,
+          "waves": 2,
+          "cycles": 2,
+          "growthWakes": 1,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 13428.728417,
+          "msGrowth": 1283.8060000000005,
+          "growthWaves": 3,
+          "graceMs": 1026.1328750000011
+        },
+        {
+          "space": "did:key:z6Mkez7HdVrYPHaMXGFJ48Ts4GA69SCbV751cKQezN27pEAL",
+          "seq": 1,
+          "admittedAt": 12120.672834,
+          "coveredAt": 13603.83175,
+          "ms": 1483.1589159999985,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 49,
+          "admittedAt": 13574.021625,
+          "coveredAt": 14154.416834,
+          "ms": 580.3952090000002,
+          "waves": 5,
+          "cycles": 4,
+          "growthWakes": 4,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 14575.751709,
+          "msGrowth": 1001.7300840000007,
+          "growthWaves": 8,
+          "graceMs": 200.56629199999952
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 54,
+          "admittedAt": 14151.013959,
+          "coveredAt": 14598.959125,
+          "ms": 447.9451659999995,
+          "waves": 5,
+          "cycles": 4,
+          "growthWakes": 3,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 59,
+          "admittedAt": 14594.414167,
+          "coveredAt": 14659.500250000001,
+          "ms": 65.08608300000014,
+          "waves": 2,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 14710.395167,
+          "msGrowth": 115.98099999999977,
+          "growthWaves": 3,
+          "graceMs": 27.61854200000016
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 63,
+          "admittedAt": 14733.578459,
+          "coveredAt": 14791.054375,
+          "ms": 57.475915999999415,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 14844.411292,
+          "msGrowth": 110.83283300000039,
+          "growthWaves": 2,
+          "graceMs": 24.805833000000348
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 66,
+          "admittedAt": 14859.067875,
+          "coveredAt": 14910.420625,
+          "ms": 51.352750000000015,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 14932.628542,
+          "msGrowth": 73.56066699999974,
+          "growthWaves": 2,
+          "graceMs": 4.699292000001151
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 69,
+          "admittedAt": 14972.301292,
+          "coveredAt": 15007.804625,
+          "ms": 35.503333000000566,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 72,
+          "admittedAt": 15034.489125,
+          "coveredAt": 15050.947625,
+          "ms": 16.45850000000064,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 74,
+          "admittedAt": 16447.4895,
+          "coveredAt": 16459.1605,
+          "ms": 11.671000000002095,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "structural-growth",
+          "eventAppend": false,
+          "growthLandedAt": 16624.411334,
+          "msGrowth": 176.92183400000067,
+          "growthWaves": 3,
+          "graceMs": 11.952124999999796
+        },
+        {
+          "space": "did:key:z6MkrVqPLCbWNk6AmZGFt6ytpzQo83RmeLaaD3b5QSJDg5rF",
+          "seq": 1,
+          "admittedAt": 16652.225292,
+          "coveredAt": 17739.119584,
+          "ms": 1086.8942920000009,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 80,
+          "admittedAt": 17703.09,
+          "coveredAt": 17779.951042,
+          "ms": 76.86104200000045,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "structural-growth",
+          "eventAppend": false,
+          "growthLandedAt": 18013.965125,
+          "msGrowth": 310.87512499999866,
+          "growthWaves": 3,
+          "graceMs": 27.80816599999889
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 86,
+          "admittedAt": 18858.96225,
+          "coveredAt": 19068.516209,
+          "ms": 209.55395900000076,
+          "waves": 2,
+          "cycles": 2,
+          "growthWakes": 1,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 19385.478584,
+          "msGrowth": 526.5163339999999,
+          "growthWaves": 8,
+          "graceMs": 293.00025000000096
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 97,
+          "admittedAt": 19496.449917,
+          "coveredAt": 19768.837917,
+          "ms": 272.387999999999,
+          "waves": 3,
+          "cycles": 3,
+          "growthWakes": 4,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 19998.69675,
+          "msGrowth": 502.2468329999974,
+          "growthWaves": 6,
+          "graceMs": 215.148624999998
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 104,
+          "admittedAt": 20003.962,
+          "coveredAt": 20466.093167,
+          "ms": 462.13116699999955,
+          "waves": 5,
+          "cycles": 4,
+          "growthWakes": 3,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 20739.753584,
+          "msGrowth": 735.7915839999987,
+          "growthWaves": 7,
+          "graceMs": 64.5971249999966
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 109,
+          "admittedAt": 20463.433084,
+          "coveredAt": 20739.759584,
+          "ms": 276.3264999999992,
+          "waves": 3,
+          "cycles": 2,
+          "growthWakes": 2,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 114,
+          "admittedAt": 20888.505042,
+          "coveredAt": 21359.768125,
+          "ms": 471.263082999998,
+          "waves": 4,
+          "cycles": 3,
+          "growthWakes": 3,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 119,
+          "admittedAt": 21454.569667,
+          "coveredAt": 26397.294917,
+          "ms": 4942.7252499999995,
+          "waves": 24,
+          "cycles": 26,
+          "growthWakes": 28,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 126,
+          "admittedAt": 22923.331459,
+          "coveredAt": 26397.294917,
+          "ms": 3473.9634579999984,
+          "waves": 18,
+          "cycles": 19,
+          "growthWakes": 19,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 132,
+          "admittedAt": 23667.8005,
+          "coveredAt": 26397.294917,
+          "ms": 2729.494416999998,
+          "waves": 13,
+          "cycles": 14,
+          "growthWakes": 17,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 138,
+          "admittedAt": 24580.410459,
+          "coveredAt": 26397.294917,
+          "ms": 1816.8844580000004,
+          "waves": 8,
+          "cycles": 9,
+          "growthWakes": 9,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 143,
+          "admittedAt": 25658.696,
+          "coveredAt": 26397.294917,
+          "ms": 738.5989169999993,
+          "waves": 4,
+          "cycles": 3,
+          "growthWakes": 5,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 149,
+          "admittedAt": 26740.288584,
+          "coveredAt": 26911.809375,
+          "ms": 171.520790999999,
+          "waves": 2,
+          "cycles": 1,
+          "growthWakes": 1,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 150,
+          "admittedAt": 26741.7505,
+          "coveredAt": 26911.809375,
+          "ms": 170.05887500000244,
+          "waves": 2,
+          "cycles": 1,
+          "growthWakes": 1,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "seq": 1,
+          "admittedAt": 28291.351667,
+          "coveredAt": 31670.712625,
+          "ms": 3379.360958000001,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "seq": 3,
+          "admittedAt": 32538.789375,
+          "coveredAt": 32550.10125,
+          "ms": 11.311874999999418,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 1,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "seq": 5,
+          "admittedAt": 32571.195084,
+          "coveredAt": 32580.495750000002,
+          "ms": 9.30066600000282,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "seq": 9,
+          "admittedAt": 32662.875042,
+          "coveredAt": 32689.218667,
+          "ms": 26.34362500000134,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "seq": 12,
+          "admittedAt": 32717.028625,
+          "coveredAt": 32737.513167,
+          "ms": 20.484542000001966,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "seq": 15,
+          "admittedAt": 32766.008334,
+          "coveredAt": 32792.62675,
+          "ms": 26.6184160000048,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "seq": 16,
+          "admittedAt": 32782.6305,
+          "coveredAt": 32812.517792,
+          "ms": 29.887291999999434,
+          "waves": 2,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "seq": 18,
+          "admittedAt": 32794.527667,
+          "coveredAt": 32842.151084,
+          "ms": 47.62341699999524,
+          "waves": 2,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "seq": 19,
+          "admittedAt": 32807.492417,
+          "coveredAt": 32842.151084,
+          "ms": 34.65866699999606,
+          "waves": 2,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "seq": 21,
+          "admittedAt": 32819.521917,
+          "coveredAt": 32898.799167,
+          "ms": 79.27724999999919,
+          "waves": 2,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "seq": 22,
+          "admittedAt": 32826.39075,
+          "coveredAt": 32898.799167,
+          "ms": 72.40841699999874,
+          "waves": 2,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "seq": 23,
+          "admittedAt": 32832.628375,
+          "coveredAt": 32898.799167,
+          "ms": 66.17079199999716,
+          "waves": 2,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "seq": 24,
+          "admittedAt": 32838.624459,
+          "coveredAt": 32898.799167,
+          "ms": 60.174707999998645,
+          "waves": 2,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "seq": 26,
+          "admittedAt": 32847.576875,
+          "coveredAt": 32933.144959,
+          "ms": 85.56808399999863,
+          "waves": 2,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "seq": 27,
+          "admittedAt": 32865.0275,
+          "coveredAt": 32933.144959,
+          "ms": 68.11745900000096,
+          "waves": 2,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 155,
+          "admittedAt": 37348.557917,
+          "coveredAt": 37479.039,
+          "ms": 130.48108299999876,
+          "waves": 1,
+          "cycles": 2,
+          "growthWakes": 1,
+          "class": "structural-growth",
+          "eventAppend": false,
+          "growthLandedAt": 37512.621417,
+          "msGrowth": 164.06350000000384,
+          "growthWaves": 2,
+          "graceMs": 14.360583000001498
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 156,
+          "admittedAt": 37472.346334,
+          "coveredAt": 37512.624875,
+          "ms": 40.27854099999968,
+          "waves": 2,
+          "cycles": 1,
+          "growthWakes": 1,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 159,
+          "admittedAt": 37576.361292,
+          "coveredAt": 37610.69525,
+          "ms": 34.33395799999562,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "structural-growth",
+          "eventAppend": false,
+          "growthLandedAt": 42335.761292,
+          "msGrowth": 4759.4000000000015,
+          "growthWaves": 13,
+          "graceMs": 4342.094042000004
+        },
+        {
+          "space": "did:key:z6MkwdCkk3KHvdtd2z8pagsPskboUFAfHGJdNdi9EW3GnnuN",
+          "seq": 1,
+          "admittedAt": 38747.600292,
+          "coveredAt": 39920.246209,
+          "ms": 1172.6459169999944,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkvV3b5f1ApBaFDg1HgKGGtdtqL6dnqvWekBiJcZ79BCGc",
+          "seq": 1,
+          "admittedAt": 40758.056292,
+          "coveredAt": 42008.830417,
+          "ms": 1250.7741249999963,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 176,
+          "admittedAt": 42595.930459,
+          "coveredAt": 42789.356375,
+          "ms": 193.42591600000014,
+          "waves": 1,
+          "cycles": 2,
+          "growthWakes": 0,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 44490.251459,
+          "msGrowth": 1894.3209999999963,
+          "growthWaves": 3,
+          "graceMs": 1569.9600839999985
+        },
+        {
+          "space": "did:key:z6MkwdCkk3KHvdtd2z8pagsPskboUFAfHGJdNdi9EW3GnnuN",
+          "seq": 3,
+          "admittedAt": 42788.001875,
+          "coveredAt": 42853.687417,
+          "ms": 65.68554199999926,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 180,
+          "admittedAt": 44637.331292,
+          "coveredAt": 45132.2845,
+          "ms": 494.953207999999,
+          "waves": 1,
+          "cycles": 2,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkntpDp1ujkVzn4cUYSvdDAokkQoUvhxBHR3WniwBBMdFY",
+          "seq": 1,
+          "admittedAt": 42757.819,
+          "coveredAt": 45866.252792,
+          "ms": 3108.433791999996,
+          "waves": 5,
+          "cycles": 6,
+          "growthWakes": 4,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkntpDp1ujkVzn4cUYSvdDAokkQoUvhxBHR3WniwBBMdFY",
+          "seq": 2,
+          "admittedAt": 42787.995625,
+          "coveredAt": 45866.252792,
+          "ms": 3078.257166999996,
+          "waves": 5,
+          "cycles": 5,
+          "growthWakes": 4,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkvV3b5f1ApBaFDg1HgKGGtdtqL6dnqvWekBiJcZ79BCGc",
+          "seq": 3,
+          "admittedAt": 46688.802917,
+          "coveredAt": 46795.154542,
+          "ms": 106.35162499999569,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 184,
+          "admittedAt": 46174.10125,
+          "coveredAt": 48650.451209,
+          "ms": 2476.349958999999,
+          "waves": 7,
+          "cycles": 9,
+          "growthWakes": 5,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 186,
+          "admittedAt": 46414.187042,
+          "coveredAt": 48650.451209,
+          "ms": 2236.264167000001,
+          "waves": 6,
+          "cycles": 7,
+          "growthWakes": 2,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 188,
+          "admittedAt": 46486.516542,
+          "coveredAt": 48650.451209,
+          "ms": 2163.9346670000014,
+          "waves": 5,
+          "cycles": 6,
+          "growthWakes": 2,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkomNxjgWUWVwNLtogPNb3SzG9vfKU3uUB3kA3AnTmyeJv",
+          "seq": 1,
+          "admittedAt": 46659.871709,
+          "coveredAt": 49674.346667,
+          "ms": 3014.474957999999,
+          "waves": 4,
+          "cycles": 4,
+          "growthWakes": 2,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkomNxjgWUWVwNLtogPNb3SzG9vfKU3uUB3kA3AnTmyeJv",
+          "seq": 2,
+          "admittedAt": 46688.793834,
+          "coveredAt": 49674.346667,
+          "ms": 2985.5528330000016,
+          "waves": 4,
+          "cycles": 3,
+          "growthWakes": 2,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkomNxjgWUWVwNLtogPNb3SzG9vfKU3uUB3kA3AnTmyeJv",
+          "seq": 3,
+          "admittedAt": 46808.222292,
+          "coveredAt": 49674.346667,
+          "ms": 2866.1243749999994,
+          "waves": 4,
+          "cycles": 3,
+          "growthWakes": 2,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 196,
+          "admittedAt": 50143.022292,
+          "coveredAt": 50544.726417,
+          "ms": 401.70412499999657,
+          "waves": 3,
+          "cycles": 4,
+          "growthWakes": 6,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 200,
+          "admittedAt": 50718.41925,
+          "coveredAt": 50733.866667,
+          "ms": 15.447417000003043,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 202,
+          "admittedAt": 50780.021125,
+          "coveredAt": 51500.363625,
+          "ms": 720.3424999999988,
+          "waves": 5,
+          "cycles": 5,
+          "growthWakes": 9,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 51538.871125,
+          "msGrowth": 758.8499999999985,
+          "growthWaves": 6,
+          "graceMs": 13.414124999995693
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 209,
+          "admittedAt": 51994.992625,
+          "coveredAt": 52513.715292,
+          "ms": 518.7226670000018,
+          "waves": 4,
+          "cycles": 4,
+          "growthWakes": 3,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 52719.271209,
+          "msGrowth": 724.2785839999997,
+          "growthWaves": 6,
+          "graceMs": 34.07983399999648
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 213,
+          "admittedAt": 52512.264792,
+          "coveredAt": 52719.274709,
+          "ms": 207.00991699999577,
+          "waves": 3,
+          "cycles": 2,
+          "growthWakes": 2,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 217,
+          "admittedAt": 52761.583542,
+          "coveredAt": 52785.298334,
+          "ms": 23.71479199999885,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 219,
+          "admittedAt": 52825.025959,
+          "coveredAt": 53746.428375,
+          "ms": 921.4024160000045,
+          "waves": 4,
+          "cycles": 7,
+          "growthWakes": 9,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "seq": 224,
+          "admittedAt": 53905.837709,
+          "coveredAt": 54109.853375,
+          "ms": 204.01566599999933,
+          "waves": 2,
+          "cycles": 2,
+          "growthWakes": 2,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "seq": 1,
+          "admittedAt": 130025.441334,
+          "coveredAt": 132543.223709,
+          "ms": 2517.78237500001,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "seq": 3,
+          "admittedAt": 137449.022959,
+          "coveredAt": 137465.884792,
+          "ms": 16.86183300000266,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 1,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "seq": 5,
+          "admittedAt": 137487.43775,
+          "coveredAt": 137501.551584,
+          "ms": 14.113833999988856,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 1,
+          "class": "value-only",
+          "eventAppend": false
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "seq": 7,
+          "admittedAt": 137578.682417,
+          "coveredAt": 137604.669875,
+          "ms": 25.987457999988692,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "structural-growth",
+          "eventAppend": false,
+          "growthLandedAt": 138010.438584,
+          "msGrowth": 431.756166999985,
+          "growthWaves": 5,
+          "graceMs": 32.3085419999843
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "seq": 17,
+          "admittedAt": 145553.469542,
+          "coveredAt": 145575.456084,
+          "ms": 21.986541999998735,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "seq": 20,
+          "admittedAt": 145593.975834,
+          "coveredAt": 145759.081375,
+          "ms": 165.10554099999717,
+          "waves": 2,
+          "cycles": 2,
+          "growthWakes": 2,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 145776.1905,
+          "msGrowth": 182.2146659999853,
+          "growthWaves": 3,
+          "graceMs": 7.293458000000101
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "seq": 24,
+          "admittedAt": 145978.027625,
+          "coveredAt": 146008.623334,
+          "ms": 30.59570900001563,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "seq": 27,
+          "admittedAt": 147528.479417,
+          "coveredAt": 147678.283459,
+          "ms": 149.8040420000034,
+          "waves": 2,
+          "cycles": 2,
+          "growthWakes": 2,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 147691.355792,
+          "msGrowth": 162.87637499999255,
+          "growthWaves": 3,
+          "graceMs": 5.496624999999767
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "seq": 31,
+          "admittedAt": 148600.68475,
+          "coveredAt": 148627.027875,
+          "ms": 26.34312500001397,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "value-only",
+          "eventAppend": true
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "seq": 34,
+          "admittedAt": 148944.307792,
+          "coveredAt": 149017.01075,
+          "ms": 72.70295799997984,
+          "waves": 1,
+          "cycles": 1,
+          "growthWakes": 0,
+          "class": "structural-growth",
+          "eventAppend": true,
+          "growthLandedAt": 149052.317875,
+          "msGrowth": 108.01008300000103,
+          "growthWaves": 2,
+          "graceMs": 18.171040999994148
+        }
+      ],
+      "dropped": 0
+    },
+    "settleAdvances": {
+      "count": 54,
+      "lastDelta": 1,
+      "series": [
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 3,
+          "to": 4,
+          "at": 7968.537167
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 4,
+          "to": 6,
+          "at": 8056.447834
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 16,
+          "to": 24,
+          "at": 10852.7665
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 24,
+          "to": 26,
+          "at": 10887.095125
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 28,
+          "to": 31,
+          "at": 11344.944584
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 33,
+          "to": 35,
+          "at": 11436.699792
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 37,
+          "to": 38,
+          "at": 11565.026625
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 40,
+          "to": 42,
+          "at": 12117.837917
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 59,
+          "to": 61,
+          "at": 14710.400042
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 63,
+          "to": 64,
+          "at": 14844.416084
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 66,
+          "to": 67,
+          "at": 14932.63375
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 69,
+          "to": 70,
+          "at": 15026.272625
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 74,
+          "to": 76,
+          "at": 16624.416917
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 76,
+          "to": 78,
+          "at": 16646.420625
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 80,
+          "to": 84,
+          "at": 18063.898
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 86,
+          "to": 89,
+          "at": 19116.09075
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 89,
+          "to": 91,
+          "at": 19298.983334
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 91,
+          "to": 93,
+          "at": 19385.484042
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 93,
+          "to": 95,
+          "at": 19449.685167
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 97,
+          "to": 100,
+          "at": 19800.963125
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 100,
+          "to": 102,
+          "at": 19998.702542
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 150,
+          "to": 151,
+          "at": 26911.820417
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 151,
+          "to": 153,
+          "at": 26962.230417
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "from": 5,
+          "to": 7,
+          "at": 32621.712875
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "from": 9,
+          "to": 10,
+          "at": 32696.810375
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "from": 12,
+          "to": 13,
+          "at": 32743.949834
+        },
+        {
+          "space": "did:key:z6MkquE2vEYHrrvbZtvdH9ZFXjXVkGRe1oUbK5c1LjoKjFCo",
+          "from": 27,
+          "to": 29,
+          "at": 32944.570542
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 159,
+          "to": 165,
+          "at": 38679.209417
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 165,
+          "to": 167,
+          "at": 38731.703417
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 167,
+          "to": 172,
+          "at": 42354.543
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 172,
+          "to": 174,
+          "at": 42395.883417
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 176,
+          "to": 178,
+          "at": 44490.257917
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 180,
+          "to": 182,
+          "at": 45249.88525
+        },
+        {
+          "space": "did:key:z6MkntpDp1ujkVzn4cUYSvdDAokkQoUvhxBHR3WniwBBMdFY",
+          "from": 2,
+          "to": 7,
+          "at": 45881.279167
+        },
+        {
+          "space": "did:key:z6MkntpDp1ujkVzn4cUYSvdDAokkQoUvhxBHR3WniwBBMdFY",
+          "from": 7,
+          "to": 10,
+          "at": 47080.698334
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 188,
+          "to": 192,
+          "at": 48650.458084
+        },
+        {
+          "space": "did:key:z6MkntpDp1ujkVzn4cUYSvdDAokkQoUvhxBHR3WniwBBMdFY",
+          "from": 10,
+          "to": 13,
+          "at": 48861.449042
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 192,
+          "to": 194,
+          "at": 49636.606292
+        },
+        {
+          "space": "did:key:z6MkomNxjgWUWVwNLtogPNb3SzG9vfKU3uUB3kA3AnTmyeJv",
+          "from": 3,
+          "to": 6,
+          "at": 49674.355334
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 196,
+          "to": 198,
+          "at": 50544.732375
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 202,
+          "to": 207,
+          "at": 51538.87875
+        },
+        {
+          "space": "did:key:z6MkomNxjgWUWVwNLtogPNb3SzG9vfKU3uUB3kA3AnTmyeJv",
+          "from": 6,
+          "to": 12,
+          "at": 51826.316667
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 213,
+          "to": 215,
+          "at": 52719.281125
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 219,
+          "to": 222,
+          "at": 53746.435334
+        },
+        {
+          "space": "did:key:z6MkiPkspJ4d2pmGyMR5ERN9s6WsF115y8uprsCDCe42C8FS",
+          "from": 224,
+          "to": 226,
+          "at": 54152.106125
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "from": 7,
+          "to": 11,
+          "at": 138010.445125
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "from": 11,
+          "to": 13,
+          "at": 138206.721084
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "from": 13,
+          "to": 15,
+          "at": 139161.307584
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "from": 17,
+          "to": 18,
+          "at": 145589.05475
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "from": 20,
+          "to": 22,
+          "at": 145776.196917
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "from": 24,
+          "to": 25,
+          "at": 146028.512709
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "from": 27,
+          "to": 29,
+          "at": 147691.360542
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "from": 31,
+          "to": 32,
+          "at": 148642.148417
+        },
+        {
+          "space": "did:key:z6MkqTaQCRJnqSL5Ttr76bt38DBCn8i2nWopFeuHWKUZamng",
+          "from": 34,
+          "to": 35,
+          "at": 149052.32325
+        }
+      ],
+      "dropped": 0
+    },
+    "events": {
+      "appended": 48,
+      "processed": 49,
+      "coalescedPerWaveMax": 4,
+      "skippedIdempotent": 0,
+      "drainInFlightSkips": 1,
+      "preQueueDeferralStuck": 0,
+      "visibilityBarriers": 14,
+      "visibilityRecoveries": 14,
+      "visibilityDeferrals": 0,
+      "deferredRescansArmed": 0,
+      "deferredRescansFired": 0,
+      "lt1LeftoversPurged": 1,
+      "lt1LateSealsRefused": 0,
+      "orphanDeliveriesRefused": 0,
+      "handlerNotRunDeferrals": 0,
+      "loadParkDeferrals": 0,
+      "loadParkFailures": 0,
+      "deliveryDeferralsActive": 0,
+      "deliveryFailuresActive": 0,
+      "maxAccumulatedDeliveryFailureMs": 0,
+      "needsAttention": {
+        "total": 0,
+        "byPhase": {
+          "dispatch-load": 0,
+          "commit-preparation": 0,
+          "commit-finalization": 0
+        }
+      },
+      "needsAttentionSealFailures": 0,
+      "deliveryCheckpointWriteFailures": 0,
+      "explicitRetries": 0,
+      "dropped": 0
+    },
+    "memo": {
+      "hits": 0,
+      "misses": 2,
+      "inflight": 0
+    },
+    "outbox": {
+      "queued": 2,
+      "completed": 2,
+      "failed": 0,
+      "budgetDeferrals": 0
+    },
+    "lease": {
+      "held": 10,
+      "lost": 0
+    },
+    "rootEnsure": {
+      "runs": 10,
+      "created": 10,
+      "skippedNoOwner": 10,
+      "failures": 0
+    },
+    "push": {
+      "prioritizedSessions": 199,
+      "followerSessions": 194,
+      "mixedFlushes": 120
+    }
+  }
+}

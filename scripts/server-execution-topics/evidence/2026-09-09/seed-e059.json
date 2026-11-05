@@ -1,0 +1,262 @@
+[
+  {
+    "run": "seed-full-off-01",
+    "workloadHead": "e059494c4599d344f59caabddfc87b588937c3dc",
+    "binarySha256": "c2d0dc0200736345522cd1b5d770d231e1ad1643594f827c5f4bc8563f3306aa",
+    "serverPosture": false,
+    "shellDefine": null,
+    "metaGitSha": null,
+    "recordedBuildHead": "e059494c4599d344f59caabddfc87b588937c3dc",
+    "load1Range": [
+      57.5146484375,
+      65.986328125
+    ],
+    "runtime": {
+      "deno": "2.9.4",
+      "v8": "15.0.245.2-rusty",
+      "typescript": "6.0.3"
+    },
+    "mode": "correctness",
+    "result": {
+      "clientPosture": false,
+      "shape": {
+        "topicCount": 5,
+        "crossrefsPerTopic": 2,
+        "citingTopics": 3,
+        "bodyWords": 120
+      },
+      "verifiedTopics": 5,
+      "verifiedEdges": [
+        {
+          "from": "fid1:uG6eJvbsKiUMXtIm4iwDOa5tPohlcbKWgWUL5js5ArU",
+          "to": []
+        },
+        {
+          "from": "fid1:w39b_aR1HaqlZ2sEuXVvzWOGcNDl51MHG_mgvFR9Mbg",
+          "to": []
+        },
+        {
+          "from": "fid1:r299qCMhgn7CMY7yH0k4KKCQAbVXRZe-TRqQX26WtJo",
+          "to": [
+            "fid1:w39b_aR1HaqlZ2sEuXVvzWOGcNDl51MHG_mgvFR9Mbg",
+            "fid1:uG6eJvbsKiUMXtIm4iwDOa5tPohlcbKWgWUL5js5ArU"
+          ]
+        },
+        {
+          "from": "fid1:V2fkLIVorMwBx2cODCh0lYi3ICgl3eVmsnyliEX8pDc",
+          "to": [
+            "fid1:r299qCMhgn7CMY7yH0k4KKCQAbVXRZe-TRqQX26WtJo",
+            "fid1:w39b_aR1HaqlZ2sEuXVvzWOGcNDl51MHG_mgvFR9Mbg"
+          ]
+        },
+        {
+          "from": "fid1:jE4vUG09Ge565G5-JxjXsyZ-yFJdpeP5a-aUBRymVBs",
+          "to": [
+            "fid1:V2fkLIVorMwBx2cODCh0lYi3ICgl3eVmsnyliEX8pDc",
+            "fid1:w39b_aR1HaqlZ2sEuXVvzWOGcNDl51MHG_mgvFR9Mbg"
+          ]
+        }
+      ],
+      "watermarkObserved": null,
+      "watermarkCoverage": "not established by this readback probe"
+    },
+    "eventViewLagDeferrals": 0,
+    "latencyEligible": false
+  },
+  {
+    "run": "seed-full-on-01",
+    "workloadHead": "e059494c4599d344f59caabddfc87b588937c3dc",
+    "binarySha256": "4cd4ce4a7eb9421e062eeb8dd2ce376680c366e692c89cc9a0effdd6035da01b",
+    "serverPosture": true,
+    "shellDefine": "true",
+    "metaGitSha": null,
+    "recordedBuildHead": "e059494c4599d344f59caabddfc87b588937c3dc",
+    "load1Range": [
+      43.9609375,
+      61.544921875
+    ],
+    "runtime": {
+      "deno": "2.9.4",
+      "v8": "15.0.245.2-rusty",
+      "typescript": "6.0.3"
+    },
+    "mode": "correctness",
+    "result": {
+      "clientPosture": true,
+      "shape": {
+        "topicCount": 5,
+        "crossrefsPerTopic": 2,
+        "citingTopics": 3,
+        "bodyWords": 120
+      },
+      "verifiedTopics": 5,
+      "verifiedEdges": [
+        {
+          "from": "fid1:CAsNlZrgj9LXn73S-yFb00fKwIQxXz7zbpF64AwIX1w",
+          "to": []
+        },
+        {
+          "from": "fid1:W8PRogGgA7UyauS9yENexV9-idjrUGpBpkcxHsAevXs",
+          "to": []
+        },
+        {
+          "from": "fid1:207G9CPOm9aPas8XtHVit9ej0mPoMq6Hg5HuaAbpXZA",
+          "to": [
+            "fid1:W8PRogGgA7UyauS9yENexV9-idjrUGpBpkcxHsAevXs",
+            "fid1:CAsNlZrgj9LXn73S-yFb00fKwIQxXz7zbpF64AwIX1w"
+          ]
+        },
+        {
+          "from": "fid1:uysXh7UHx9bYILIWz4iKvcNb7M96z7fyPVg4B4ls1ig",
+          "to": [
+            "fid1:207G9CPOm9aPas8XtHVit9ej0mPoMq6Hg5HuaAbpXZA",
+            "fid1:W8PRogGgA7UyauS9yENexV9-idjrUGpBpkcxHsAevXs"
+          ]
+        },
+        {
+          "from": "fid1:zcuuyR-zQcwBI9GZcrLhjqXDZokDVqUFHIpNB-xBHAc",
+          "to": [
+            "fid1:uysXh7UHx9bYILIWz4iKvcNb7M96z7fyPVg4B4ls1ig",
+            "fid1:W8PRogGgA7UyauS9yENexV9-idjrUGpBpkcxHsAevXs"
+          ]
+        }
+      ],
+      "watermarkObserved": {
+        "seq": 69
+      },
+      "watermarkCoverage": "not established by this readback probe"
+    },
+    "eventViewLagDeferrals": 5,
+    "latencyEligible": false
+  },
+  {
+    "run": "seed-index-on-01",
+    "workloadHead": "e059494c4599d344f59caabddfc87b588937c3dc",
+    "binarySha256": "4cd4ce4a7eb9421e062eeb8dd2ce376680c366e692c89cc9a0effdd6035da01b",
+    "serverPosture": true,
+    "shellDefine": "true",
+    "metaGitSha": null,
+    "recordedBuildHead": "e059494c4599d344f59caabddfc87b588937c3dc",
+    "load1Range": [
+      6.2822265625,
+      6.57958984375
+    ],
+    "runtime": {
+      "deno": "2.9.4",
+      "v8": "15.0.245.2-rusty",
+      "typescript": "6.0.3"
+    },
+    "mode": "correctness",
+    "result": {
+      "clientPosture": true,
+      "shape": {
+        "topicCount": 5,
+        "crossrefsPerTopic": 2,
+        "citingTopics": 3,
+        "bodyWords": 120
+      },
+      "verifiedTopics": 5,
+      "verifiedEdges": [
+        {
+          "from": "fid1:pKDuPBIpoOoWJp4N5CwgAJ06vvwYtLZEZ5GlvZz_T_c",
+          "to": []
+        },
+        {
+          "from": "fid1:7OEHvVzIPhTw6Oo0kPN8wTNXx8_jvkddTbb90RYWb9s",
+          "to": []
+        },
+        {
+          "from": "fid1:F0tAEUCDb-61ne7764eQIDdYn6KccTKe_ea2Wswj5sI",
+          "to": [
+            "fid1:7OEHvVzIPhTw6Oo0kPN8wTNXx8_jvkddTbb90RYWb9s",
+            "fid1:pKDuPBIpoOoWJp4N5CwgAJ06vvwYtLZEZ5GlvZz_T_c"
+          ]
+        },
+        {
+          "from": "fid1:h6gq474iYHYrHOm8mXLQUmcPIi5Y8NI0ynkJM6MEJ2s",
+          "to": [
+            "fid1:F0tAEUCDb-61ne7764eQIDdYn6KccTKe_ea2Wswj5sI",
+            "fid1:7OEHvVzIPhTw6Oo0kPN8wTNXx8_jvkddTbb90RYWb9s"
+          ]
+        },
+        {
+          "from": "fid1:K0pJ2xGGjvYe2mIAixob8BzVNyJWyGt6ym6jU6EiReQ",
+          "to": [
+            "fid1:h6gq474iYHYrHOm8mXLQUmcPIi5Y8NI0ynkJM6MEJ2s",
+            "fid1:7OEHvVzIPhTw6Oo0kPN8wTNXx8_jvkddTbb90RYWb9s"
+          ]
+        }
+      ],
+      "watermarkObserved": {
+        "seq": 62
+      },
+      "watermarkCoverage": "not established by this readback probe"
+    },
+    "eventViewLagDeferrals": 7,
+    "latencyEligible": false
+  },
+  {
+    "run": "seed-index-off-01",
+    "workloadHead": "e059494c4599d344f59caabddfc87b588937c3dc",
+    "binarySha256": "c2d0dc0200736345522cd1b5d770d231e1ad1643594f827c5f4bc8563f3306aa",
+    "serverPosture": false,
+    "shellDefine": null,
+    "metaGitSha": null,
+    "recordedBuildHead": "e059494c4599d344f59caabddfc87b588937c3dc",
+    "load1Range": [
+      7.580078125,
+      7.68603515625
+    ],
+    "runtime": {
+      "deno": "2.9.4",
+      "v8": "15.0.245.2-rusty",
+      "typescript": "6.0.3"
+    },
+    "mode": "correctness",
+    "result": {
+      "clientPosture": false,
+      "shape": {
+        "topicCount": 5,
+        "crossrefsPerTopic": 2,
+        "citingTopics": 3,
+        "bodyWords": 120
+      },
+      "verifiedTopics": 5,
+      "verifiedEdges": [
+        {
+          "from": "fid1:lw7HSKlsyQncPb4hjg_v3xGIQTnH6w_gMWkjRGYGVfc",
+          "to": []
+        },
+        {
+          "from": "fid1:V9ZYYWjrda6NXfSmB8E8Cxkig9waNRAFJaaMi7wSuJc",
+          "to": []
+        },
+        {
+          "from": "fid1:h27KednsbchP_Szst9IPVlsavyMh9icKVSqlYPLymDY",
+          "to": [
+            "fid1:V9ZYYWjrda6NXfSmB8E8Cxkig9waNRAFJaaMi7wSuJc",
+            "fid1:lw7HSKlsyQncPb4hjg_v3xGIQTnH6w_gMWkjRGYGVfc"
+          ]
+        },
+        {
+          "from": "fid1:92l2ok1IiqjU6m54JqCll0xuFIZJcEDTvA1kDWSbQIo",
+          "to": [
+            "fid1:h27KednsbchP_Szst9IPVlsavyMh9icKVSqlYPLymDY",
+            "fid1:V9ZYYWjrda6NXfSmB8E8Cxkig9waNRAFJaaMi7wSuJc"
+          ]
+        },
+        {
+          "from": "fid1:rvhLd89wtXCyt5p3_Rusjh1D6CRTc62KJpeSr8gAaeY",
+          "to": [
+            "fid1:92l2ok1IiqjU6m54JqCll0xuFIZJcEDTvA1kDWSbQIo",
+            "fid1:V9ZYYWjrda6NXfSmB8E8Cxkig9waNRAFJaaMi7wSuJc"
+          ]
+        }
+      ],
+      "watermarkObserved": null,
+      "watermarkCoverage": "not established by this readback probe"
+    },
+    "eventViewLagDeferrals": 0,
+    "latencyEligible": false
+  }
+]

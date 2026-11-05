@@ -8,10 +8,12 @@ This document holds the analysis behind that guidance: the full argument for
 why a bounded timeout is never a guarantee, the sizing of the one backstop
 that argument bears on hardest, how the runner clock classifies timers across
 SES lockdown, the real-clock exemptions that were retired and what each hang
-turned out to be, why the runtime-client suite keeps the real clock, worked
+turned out to be, why the runtime-client suite keeps the real clock, why
+neither runtime-disposal teardown carries a bound, worked
 examples studied in enough depth to copy — proving a negative in the CSP
-suite, and the FUSE exec suite's design — and the production waits that apply
-the same principle outside tests.
+suite and the FUSE exec suite's design — how a pattern-test assertion comes to
+be read exactly once, and the production waits that apply the same principle
+outside tests.
 
 Nothing here is needed to write an ordinary test. Come here when you need to
 know why a rule is what it is, or before changing the machinery a rule
@@ -74,7 +76,7 @@ arises.
 
 [Browser-hosted unit tests have a harness
 backstop](waiting-in-tests.md#browser-hosted-unit-tests-have-a-harness-backstop)
-describes the `testTimeout` bound `packages/deno-web-test` places on each
+describes the `testTimeout` bound `runtime/deno-web-test` places on each
 test. This section records what the bound replaced and the competing ceiling
 that sizes it.
 
@@ -82,6 +84,20 @@ Without the harness bound, a stuck test ran until astral's retried deadline on
 `page.evaluate` ran out of attempts, 53 to 57 seconds later, and threw a
 `RetryError` that named no test, printed no summary, and abandoned every test
 file still queued.
+
+That deadline is on every `page.evaluate` a browser test makes, not only the
+ones this harness issues, so it is worth knowing what it comes to elsewhere.
+Astral wraps the protocol call in `retry(() => deadline(call, timeout))` over
+a promise it creates once, so the five attempts re-wait on that same in-flight
+call rather than reissuing it: the evaluate runs once, and an answer that
+arrives late is still returned by whichever attempt is live for it. What
+differs between harnesses is the timeout. `deno-web-test` leaves astral's own
+ten seconds, which is where the fifty-second floor above comes from.
+`runtime/integration`'s `Browser.launch` writes sixty seconds onto the page
+instead, so an evaluate the browser integration suites make ends after five
+minutes of deadline plus up to fifteen seconds of the retry's backoff. Neither
+is a bound this repository keeps, and neither wants a second one underneath
+it.
 
 By the test in [the section
 above](#why-a-bounded-timeout-is-never-a-guarantee), the harness bound's early
@@ -134,7 +150,7 @@ exactly as it does before any runtime exists.
 The runner preload's `realClockFiles` list names each file that stays on the
 real clock and its reason; [the main
 document](waiting-in-tests.md#the-runner-suite-advancing-the-runtimes-own-timers)
-describes the one current entry. The histories below record entries and
+describes why an entry belongs there. The histories below record entries and
 wall-clock waits that were retired rather than justified. Read them before
 adding a new entry: each of these looked timing- or transport-bound from the
 failure, and was not.
@@ -209,9 +225,68 @@ A test that legitimately advances through many windows should say so with
 `clock.tick(ms)` rather than lean on the pump. One whose work logical time
 cannot pace at all belongs in `realClockFiles`.
 
+## The pump waits for the loop to go idle
+
+[The runner
+clock](waiting-in-tests.md#the-runner-suite-advancing-the-runtimes-own-timers)
+fires a production timer only once every zero-delay turn that was armed has
+run. What that ordering protects is any wait that races an event against a
+deadline where the event arrives across several turns and the deadline is one
+`src/` timer.
+
+The conflict read-repair wait in `runtime/runner/src/storage/v2.ts` is that
+shape. A commit the server refuses for a stale basis carries a retry gate, the
+caught-up frame the server stages for the session, and the storage layer holds
+the rejection until that frame has landed — or until a 30 s backstop lets it
+through with the replica still behind, logging one warn its module logger sits
+above. The frame crosses the loopback transport a turn at a time, and the
+memory server's refresh takes turns of its own, so at the moment the rejection
+arms the backstop the frame is still several turns away.
+
+A pump that fired the earliest production timer on the next turn of the real
+event loop, whatever zero-delay turns were still queued, fired that backstop
+between those turns. Instrumenting the race across the runner suite found 371
+such waits: 33 of them the backstop arm won, each with exactly 30 s of logical
+time elapsed and the frame landing at that same instant, queued behind the
+jump, and 12 more the caught-up arm won only because a sibling wait's jump had
+already moved the clock. Every one of those tests passed. One, the refused
+`fetchProgram` takeover, passed only because the jumps had aged a claim that
+the test's own `clock.tick` was written to age; with the turns run first, the
+same test hung on an event its fixture never produced — which is the failure
+its design had always described, and the test now ages the claim before the
+run that reads it.
+
+So the pump yields. When a zero-delay turn is armed, or a kick is queued to
+run one, it re-queues itself behind the kick and looks again, and it jumps
+only when no turn is left. A turn chain that never ends starves the pump
+rather than hanging the test: past `AUTO_ADVANCE_STARVATION_LIMIT` consecutive
+yields it throws, naming the condition, as `settle()` does for zero-delay work
+that regenerates. `runtime/runner/test/clock-preload-auto-advance.test.ts`
+pins the ordering, and the SES-lockdown classification pin waits on the
+`src/` sleep it arms rather than on one turn, because one turn no longer
+carries a jump.
+
+Two convergence tests drained in fixed rounds of round trips — `pull()`,
+`idle()`, `synced()` — and read the value at the end. Such a loop never lets
+the loop go idle, so under the idle rule the memory server's refresh never
+fired inside it and the value never arrived; on the real clock the refresh
+fires on wall time, in the middle of whichever round is running, which is the
+dependence the fixed rounds had been riding. Both now wait on the value they
+converge to, through `waitForCellValue`, which idles the loop between
+committed changes and so fires the timers the convergence rides on. The pump
+also fires every production timer armed for the instant the clock stands at:
+two armed together for one instant both fire, where the second had been passed
+over as already past, and the same pin file holds that.
+
+The ordering makes the read-repair wait resolve on the frame, at one refresh
+cadence of logical time. It does not make the backstop's firing visible when
+the frame genuinely never comes; that is the silent-backstop guard's job,
+described in [the main
+document](waiting-in-tests.md#a-production-backstop-cannot-carry-a-test).
+
 ## Why the runtime-client suite stays on the real clock
 
-`packages/runtime-client` keeps its unit tests on the real clock, and the
+`runtime/runtime-client` keeps its unit tests on the real clock, and the
 reasons are worth recording because the package looks, at a glance, like a
 candidate for the runner preload. [The main
 document](waiting-in-tests.md#the-runtime-client-suite-stays-on-the-real-clock)
@@ -253,13 +328,84 @@ test builds would drive the clock to the runaway guard. Adopting the harness
 would mean excluding the very files that own timers, and no test in the suite
 observes a controllable time window a fake clock would help with.
 
+## The runtime disposal teardowns
+
+[Tearing a runtime down waits on its
+worker](waiting-in-tests.md#tearing-a-runtime-down-waits-on-its-worker) states
+what the two teardowns do. This is the analysis behind the part of it that
+looks like an omission: the failure each is exposed to is a worker that
+answers nothing, and neither carries a clock.
+
+The browser half needs none because it already has one, astral's, described in
+[the section above](#sizing-the-deno-web-test-backstop). Not capping a slow
+call is what makes that bound tolerable, and the property is astral's rather
+than ours.
+
+So what the browser half was missing was never a bound but a name. A
+`RetryError` names no request, and the teardown that catches it is cleanup, so
+a run ends with a warning that says a disposal failed and nothing about why.
+Reporting the page closes that, because `RuntimeClient.getPendingRequests` is
+main-thread bookkeeping: the request records live on the page's side of the
+boundary, and reading them asks the worker for nothing. A worker that has
+stopped answering is the case the read still answers, and what it answers with
+is the disposal's own request and its age.
+
+The in-process half is the one where a bound is arguable, and the argument is
+worth setting out because the first two objections to it are weaker than they
+look.
+
+The first is that an early fire drops writes. It would: the reply the teardown
+waits for is the worker's confirmation that it has flushed, so terminating the
+worker before that reply arrives loses whatever was still buffered. How much
+that is, the main thread cannot tell. The worker flushes before it replies, so
+a reply that never arrived leaves every state open: nothing written, part of
+it, or all of it with the reply lost afterwards.
+
+What narrows the objection is not how far the flush got but what terminating
+adds to it. A worker that is genuinely stuck writes nothing further whether it
+is terminated or left alone, so a bound firing on one costs only the wait it
+ends. The exposure is the slow-but-healthy disposal — a large flush, a
+contended machine, a clock jump — which a bound would kill mid-flush, losing
+writes that were still on their way. In this suite even that is local: each
+test opens a space under a fresh random name and disposes as the last thing in
+its scope, so no later read reaches the writes a killed flush dropped. By the
+test in [Wall-clock time is not a measure of
+progress](waiting-in-tests.md#wall-clock-time-is-not-a-measure-of-progress),
+an early fire there is safe.
+
+The second is the cost of writing it. The teardown is `dispose()` itself,
+reached through `Symbol.asyncDispose` at every `await using` in the file, so a
+bound has nowhere to sit that is neither production code — which would put a
+clock back on the path production deliberately does without — nor a change to
+what the file's helper hands back at every one of those bindings.
+
+What settles it is neither of those. It is that a hang there is already
+placed, and a bound adds one fact to that. Deno's runner prints a test's name
+when it starts and its verdict when it ends, so the last test printed without
+an `ok` is the one whose teardown is waiting, and what it waits for is a
+`Dispose` reply by construction — that is the only request a teardown sends.
+A bound would add the age of the wait, which the step's own duration already
+gives, and it would add a timer on a cleanup path to do it. The step limit
+ends the run either way. The runner prints that name unbuffered only while it
+runs the file's tests in sequence, which is what this package's test task
+does; `--parallel` withholds it.
+
+Two claims there were checked rather than assumed, because the whole argument
+rests on them. A live `Worker` holds Deno's event loop open, so the fail-fast
+that [the primitives
+section](waiting-in-tests.md#the-primitives-to-use-instead) relies on for
+in-process waits does not fire: a test awaiting a promise nothing resolves
+fails on its own in milliseconds, and the same test with a live `Worker`
+beside it runs until it is killed. That run's output ends at the test's name
+followed by its `...`, which is the line a reader places the hang by.
+
 ## Proving a negative: the CSP suite as a worked example
 
 [Proving a negative](waiting-in-tests.md#proving-a-negative) gives the shape:
 send a barrier that must arrive after the event being ruled out, wait for the
 barrier, and pair the conversion with a control that can fail. The
 iframe-sandbox CSP suite
-(`packages/iframe-sandbox/test/iframe-csp.browser.test.ts`) is the worked
+(`base/iframe-sandbox/test/iframe-csp.browser.test.ts`) is the worked
 example of how much checking both requirements take.
 
 The barrier has to be genuinely ordered after the event, which is a claim
@@ -295,7 +441,7 @@ supply.
 
 ## The FUSE exec suite
 
-`packages/cli/integration/fuse-exec.sh` appears in [Where the polling
+`runtime/cli/integration/fuse-exec.sh` appears in [Where the polling
 `waitFor` stays](waiting-in-tests.md#where-the-polling-waitfor-stays) for its
 poll loops: a shell script observing another process through a kernel mount
 has no event channel to convert them to. The three studies below cover the
@@ -474,7 +620,7 @@ daemon and its `/proc` entries are gone.
 
 ### The daemon's `.status` file is a probe, not a signal
 
-The FUSE daemon keeps write statistics (`writeStats` in `packages/fuse/mod.ts`)
+The FUSE daemon keeps write statistics (`writeStats` in `runtime/fuse/mod.ts`)
 and publishes them through the `.status` file at the mount root. A script can
 read that file to see how many descriptors the daemon has opened, written and
 flushed. The counts it reads are the ones the daemon held when it answered, so
@@ -503,26 +649,76 @@ change.
 A macOS mount cannot use those timeouts, because FUSE-T ignores the ones a
 reply carries; it bounds staleness through an NFS attribute-cache mount option
 instead, the `attrcache-timeout` default described in
-`packages/fuse/mount-options.ts`. A `.status` poll on macOS is therefore only
+`runtime/fuse/mount-options.ts`. A `.status` poll on macOS is therefore only
 as sharp as that option allows: a reader that has read the file once holds the
 NFS client's cached copy until it expires, so a count arrives a beat after the
 write that caused it. That the counts advance is settled by the
 `CellBridge.status` unit tests, which drive the tree directly and need no
 mount and no wait.
 
+## Reading a pattern-test assertion exactly once
+
+[Reading a pattern-test
+assertion](waiting-in-tests.md#reading-a-pattern-test-assertion) says the
+pattern test runner demands an assertion, waits, and reads it once. Two things
+about that are easy to get wrong, and both were once wrong here.
+
+The first is why a single read needs the demand in front of it. A read of a
+lazy value does two jobs at once: it supplies the demand that makes the
+computation run, and it observes the result. For an asynchronous built-in those
+two cannot be the same read, because the work has not started until the demand
+arrives. A runner that just reads therefore observes nothing, and a runner that
+reads, waits, and reads again has separated the jobs by giving the first read
+away — at the cost of a read count that depends on what the first read found,
+which is a retry wearing a bound. Demanding through `cell.sink()` separates
+them without that cost, and holding the demand across the wait is the part
+worth stating: the scheduler runs a computation only while it is reachable from
+a live root, so releasing the demand to wait would let the cascade the built-in
+feeds go dormant before the assertion sees it.
+
+The second is whether anything must drain the scheduler between that wait and
+the read. `Runtime.settled()` in `runtime/runner/src/runtime.ts` loops
+`scheduler.idleWithPendingCommits()`, `storageManager.synced()`, and a wait on
+every in-flight async built-in, returning from the round in which nothing is
+left to track — so the last thing it awaits is the storage sync. Applying what
+a sync delivered schedules reactive work, so the graph looks as though it could
+be dirty when `settled()` returns.
+
+It cannot matter, because of what the read itself does. `Cell.pull()`
+subscribes an effect that reads the cell, awaits `scheduler.idle()`, drives the
+link-target loads that read kicked off to convergence, and takes the value
+after all of it. A drain placed before the read observes a subset of what the
+read observes for itself, and observes it earlier.
+
+Two waits elsewhere look like precedent for one here and are narrower than
+their shape. The runner's initial settle drains after its sync because
+`replica.poll()` fires without await during `mount()`, and a pattern mounts
+once. The serving loop in `runtime/runner/src/executor/space-server.ts` yields
+a macrotask because it then probes `scheduler.isIdle()`, which is synchronous
+and cannot wait, where `runtime.idle()` waits and `Scheduler.queueExecution`
+marks the scheduler scheduled when it arms its task rather than when the task
+runs.
+
+Measurement agreed before the argument was found. Probing `scheduler.isIdle()`
+on return from `settled()` after every assertion the pattern suite runs
+answered idle every time, including the assertions whose barrier had async
+built-in work to wait for; a macrotask yield placed after every action and
+render settle never found the scheduler other than idle either. Probe the same
+way before adding a wait here.
+
 ## Production case studies
 
 The "wait on an event, not a poll" principle of
 [waiting-in-tests.md](waiting-in-tests.md) applies to production code too. The
-three studies below are where the shape is worth knowing: a deliberate
-exception where no event exists to await, and two readiness handshakes that
+five studies below are where the shape is worth knowing: three deliberate
+exceptions where no event exists to await, and two readiness handshakes that
 stay event-driven across process boundaries that look like they rule an event
 out.
 
 ### Production reconnect backoff
 
 One loop that looks like a violation is a deliberate exception:
-`MemoryClient.#reconnect()` in `packages/memory/v2/client.ts`. When the
+`MemoryClient.#reconnect()` in `runtime/memory/v2/client.ts`. When the
 websocket to the memory server drops, the client loops — it re-runs the
 `hello` handshake, re-opens every mounted space's session, and, when an
 attempt fails, waits a short, growing delay before trying again. That
@@ -530,7 +726,7 @@ inter-attempt delay is the exception.
 
 The connection attempt itself is event-driven. `hello()` calls
 `transport.send()`, which opens the websocket. The websocket transport
-(`WebSocketTransport` in `packages/runner/src/storage/v2-remote-session.ts`)
+(`WebSocketTransport` in `runtime/runner/src/storage/v2-remote-session.ts`)
 resolves the open on the real `open` event and rejects it on the real `error`
 or `close` event. The client never polls to discover whether a connection
 attempt has succeeded; it awaits the transport event. On the success path
@@ -555,6 +751,81 @@ Cancelling an in-progress backoff stays event-driven: the pause between
 attempts is a single timer that `close()` cancels directly, so a client closed
 mid-backoff settles at once and nothing wakes on an interval. The backoff
 delay between attempts stays; its cancellation carries no poll.
+
+### The serving worker's watchdog
+
+The other deliberate exception is the timer `ServingWorker` keeps on a serving
+worker in `runtime/runner/src/executor/serving-worker-host.ts`, the one wait left
+in the execution lease ([`serving-loop.md`](../specs/server-side-execution/serving-loop.md)
+§2). A worker whose thread has stopped holds its spaces' leases, and a thread
+that has stopped cannot report that it has stopped, so no event exists to await.
+Once a worker has sent its first message, it posts a heartbeat every 10 seconds
+from a timer of its own, and the main thread kills it after six consecutive
+10-second intervals with no message of any kind from it. A worker that hangs
+before its first message holds no lease and is not replaced.
+
+The bound passes the test of [whether firing early is
+safe](waiting-in-tests.md#wall-clock-time-is-not-a-measure-of-progress). A kill of
+a worker that was only slow costs its spaces a rebuild and its in-flight waves a
+withdrawal, and reaches a correct outcome: the successor recomputes them, and a
+commit the killed worker left in flight is refused if it reaches admission after
+the release. Nor does the wait count
+wall-clock time. It counts its own firings, so a main thread that itself stalled,
+or a process that was suspended, fires it once on waking, and a clock jump moves
+nothing.
+
+### A deployed client's wait on its server
+
+A client that is not built alongside its server takes the deployment's posture
+from `/api/meta` before it constructs a `Runtime`, and then asks each host's
+`/_health`. A server that accepts a connection and then says nothing sends no
+event, so each wait needs a bound for the client to ever report it. Everything
+else about the wait is shaped so that the bound decides as little as possible.
+
+The read stays outstanding, because a server that is only slow still gives the
+right answer, and a client that gave up early would run on the wrong
+server-execution arm. So the first thing to happen at five seconds is a log
+line, and the read goes on. The bound is `DEPLOYMENT_RESPONSE_BOUND_MS`, 60
+seconds, and an early fire costs a real result: on the read, a client on its own
+flags, with an error saying so; on the health check, a startup that fails. By
+the test in [Wall-clock time is not a measure of
+progress](waiting-in-tests.md#wall-clock-time-is-not-a-measure-of-progress),
+that makes it the kind of bound the repository accepts for want of an event,
+sized to sit well above what is measured.
+
+The measurement probed both routes in sequence, each request timed to its end,
+against a local toolshed from its process start, with its compile cache cleared,
+while four `cf piece new` runs deployed the largest patterns in the repository
+at once, and at background priority a second burst of up to eight, of which five
+to seven deployed. The toolshed ran on the same machine as the client, a shared
+18-core Mac with a load average of about 8 to 14 from other work. "Background"
+runs the toolshed under `taskpolicy -b`. Each normal-priority cell is one run,
+and each background cell the slowest of two: one at background priority from the
+toolshed's start, and one from after its first deploys. The slowest response, in
+milliseconds, for either route:
+
+| Toolshed                                    | Normal priority | Background |
+| ------------------------------------------- | --------------- | ---------- |
+| Server execution off                        | 296             | 1,598      |
+| Server execution on, serving worker         | 311             | 2,485      |
+| Server execution on, serving on main thread | 833             | 3,330      |
+
+The two routes rise and fall together, since both wait on the toolshed's main
+thread, and an idle toolshed responds within 100 milliseconds. Sixty seconds is
+18 times the slowest of these. The five-second log line is above all of them,
+and costs nothing if a slower server reaches it. A browser test against a
+toolshed at background priority has been seen past five seconds, which this
+measurement did not reproduce, and it did not cover a store holding a lot of
+data. The one production number on record is a different read: [the rehearsal
+plan](../plans/space-clone-rehearsal.md) allows twenty seconds for a cold load
+before calling a deployment unhealthy, and the bound is three times that.
+
+The two waits run one after the other, so a server that says nothing fails a
+client 120 seconds after it asked, with `Could not connect to "..."`. An aborted
+signal from the caller still ends either wait at once. The read's request and
+timers hold a Deno process up until the read settles, so a process that returns
+from `main` with the read still going lives for up to 60 seconds; `cf` and the
+Topics tool end with `Deno.exit`.
 
 ### The FUSE mount handshake
 
@@ -671,8 +942,8 @@ that would have succeeded on a loaded machine, the ceiling
 starting the server. The command spawns a second copy of itself as the server,
 waits until that copy reports it has bound its port, and only then returns. A
 caller that runs it starts the toolshed and moves straight on to work that
-needs it, with no readiness poll of its own. The CI integration jobs start the
-toolshed this way and go straight to their tests.
+needs it, with no readiness poll of its own. The browser benchmark job starts
+the toolshed this way and goes straight to its benchmark.
 
 Readiness travels over the child's stdout. The child writes a single marker
 line the moment `Deno.serve`'s `onListen` fires — the point the port is
@@ -695,3 +966,25 @@ There is no deadline on this read either. A server that neither binds nor
 exits blocks the command, which is what a foreground start does too, and the
 outer job limit catches it. A per-command ceiling would instead fail a start
 that a loaded machine would have completed.
+
+A `--background` caller learns when the server is listening, but not when it
+stops, because the server is not its child. A CI lane needs both, since it
+removes a work directory that holds the server's log. So the lane's `toolshed`
+capability (`tasks/ci-capabilities.ts`) starts the child copy itself, passes the
+log path in the environment, and reads the same marker. The server is then the
+lane's own child. When the capability closes, it sends SIGTERM and waits for the
+child's exit status, so the lane removes the directory only after the server has
+exited. A server that exits with any status other than success makes the close
+fail. The server exits with a non-zero status when its shutdown fails or runs
+out of time, so the close reports those as well. There is no deadline on that
+wait either. The server puts its own limit on how long its shutdown takes, and
+then exits.
+
+One wait sits outside that limit, inside `Deno.exit()` itself. A compiled server
+runs Deno's own OpenTelemetry with metrics on, and each metric export waits for
+the main thread to observe the isolate's gauges, while `Deno.exit()` waits on
+the main thread for the metric exporter to shut down. An export that falls due
+while the main thread is busy with the server's shutdown leaves each waiting on
+the other, and the process never exits. So the capability starts every server
+with `OTEL_METRIC_EXPORT_INTERVAL` set to a week, which no lane outlives, and no
+export falls due.

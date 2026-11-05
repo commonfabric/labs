@@ -5,42 +5,46 @@ space — across browsers, CLIs, and servers, with no accounts database
 anywhere in the design? And how can the platform run *user-authored
 programs* against real user data? This chapter covers both: cryptographic
 identity, session authorization, and the layered sandboxing of pattern
-code. Code: `packages/identity`, the auth hooks in `packages/toolshed` and
-`packages/memory`, and `packages/iframe-sandbox`.
+code. Code: `base/identity`, the auth hooks in `runtime/toolshed` and
+`runtime/memory`, and `base/iframe-sandbox`.
 
 ## Identity: keypairs all the way down
 
 There are no usernames or server-side accounts. An identity *is* an Ed25519
 keypair, named by its public key as a DID:
-`did:key:z6Mk...` (`packages/identity/src/identity.ts`). Everything that
+`did:key:z6Mk...` (`base/identity/src/identity.ts`). Everything that
 acts or is acted upon — users, services, spaces — is a DID.
 
-Two derivation tricks give the system its shape:
+Two derivation tricks recur:
 
 - **Passphrase derivation.** `Identity.fromPassphrase(s)` hashes a string
   into a keypair deterministically.
 - **Hierarchical derivation.** `identity.derive(name)` deterministically
   derives a child keypair from a parent and a label.
 
-A **space DID** is just `someIdentity.derive(spaceName).did()`. No
-registration step, no central registry: knowing the derivation inputs *is*
-knowing the space. Dev environments lean on this hard: named dev spaces
-derive from a well-known passphrase, which is why two local setups agree on
-what `did:key:...` a space name means. The same trick defines the **shared
-dev identity** `cf id derive "implicit trust"` — the DID the local toolshed
-itself runs as in dev mode. Because it comes from a public string, *everyone*
-who derives it gets the identical keypair. That is a convenience on your own
-localhost (CLI, browser, and server can all act as one admin identity) and a
-footgun anywhere shared: derive or browser-import it against a server other
-people use and you all become the *same* principal — seeing and overwriting
-each other's `PerUser` data. Use a unique `id new` key for your own identity;
-reserve `implicit trust` for deliberately acting as a local dev server's
-operator. See `docs/features/shared-identity.md`.
+A user's **Home space** has the user's own DID. Every other space gets its
+DID from a fresh random key when it is created (see the ACL section below), so
+no string recomputes it, and it is reached by its DID. A **legacy** space, one
+created under the earlier naming scheme, has the DID that hierarchical
+derivation gives its name under a well-known passphrase. `legacySpaceDid(name)`
+(`base/identity/src/legacy-space.ts`) resolves such a name to that DID,
+offline and with no registry, which is why two setups agree on what
+`did:key:...` a legacy space name means. It returns the DID and never the key,
+and the DID names a space only if one was created there. Passphrase derivation
+also defines the **shared dev identity** `cf id derive "implicit trust"` — the
+DID the local toolshed itself runs as in dev mode. Because it comes from a
+public string, *everyone* who derives it gets the identical keypair. That is a
+convenience on your own localhost (CLI, browser, and server can all act as one
+admin identity) and a footgun anywhere shared: derive or browser-import it
+against a server other people use and you all become the *same* principal —
+seeing and overwriting each other's `PerUser` data. Use a unique `id new` key
+for your own identity; reserve `implicit trust` for deliberately acting as a
+local dev server's operator. See `docs/features/shared-identity.md`.
 
 ## Passkeys: the browser login
 
 The shell never asks for a password and never stores a private key on a
-server. Login (`packages/identity/src/pass-key.ts`):
+server. Login (`base/identity/src/pass-key.ts`):
 
 1. `navigator.credentials.create()` makes a WebAuthn **passkey** (resident
    key, e.g. in iCloud Keychain or a security key), requesting the **PRF
@@ -49,7 +53,7 @@ server. Login (`packages/identity/src/pass-key.ts`):
    function; its 32-byte output becomes the seed for the user's root
    Ed25519 key (`Identity.fromRaw(seed)`).
 3. The root identity is cached in IndexedDB (`common-key-store`) for the
-   session; user spaces are `derive()`d from it.
+   session; its DID is also the DID of the user's Home space.
 
 So the user's "account" is reconstructible from their passkey alone, on any
 device, with the actual signing key never leaving the authenticator's
@@ -60,8 +64,8 @@ control path. The CLI does the equivalent with a key file (`cf id derive`,
 
 How does the server know a WebSocket client may touch a space? In the
 current (v2) protocol, authorization happens at **session open**
-(`packages/runner/src/storage/v2-remote-session.ts`,
-`packages/toolshed/routes/storage/memory.ts`):
+(`runtime/runner/src/storage/v2-remote-session.ts`,
+`runtime/toolshed/routes/storage/memory.ts`):
 
 1. The client receives `sessionOpen.audience` and a one-time
    `sessionOpen.challenge` from the server's `hello.ok`.
@@ -88,20 +92,22 @@ current (v2) protocol, authorization happens at **session open**
 
 Beyond authentication, per-space **ACLs** are wired into the v2 server itself.
 A space can carry an ACL document (addressed by the wire entity id
-`of:<space DID>`; types in `packages/memory/acl.ts`, managed by the runner's
+`of:<space DID>`; types in `runtime/memory/acl.ts`, managed by the runner's
 `ACLManager` and surfaced as `cf acl`) granting READ/WRITE/OWNER capabilities.
+A pattern's handler changes it with `grantSpaceAccess()` and
+`revokeSpaceAccess()`.
 The server evaluates them per message — session-open, queries, and watches need
-READ; `transact` needs WRITE; writing the ACL itself needs OWNER. A fresh space
-is read-only until its space identity (or a configured service DID) writes a
-valid ACL with at least one concrete OWNER. Named-space bootstrap uses a
-temporary space-identity session to write the genesis ACL, then remounts as
-that user: the document a caller registered beside the space key
-(`registerSpaceIdentity(identity, { genesisAcl })`, so a space can be born
-with exactly that ACL), else the rollout default of the active user as OWNER
-plus `"*"`
-WRITE. Home spaces use the
-same identity for both roles and remain private by claiming
-`{ [space]: "OWNER" }`, including an ACL-less legacy home.
+READ; `transact` needs WRITE; writing the ACL itself needs OWNER, except that
+any member may remove their own entry from a list with no `"*"` entry
+(`cf acl leave`). A fresh space is read-only until its space identity (or a
+configured service DID) writes a valid ACL with at least one concrete OWNER, and
+that genesis is the only thing the space identity may do as the space. Creating
+a space (`cf space create`, the Home pattern's Spaces tab, or
+`Runtime.createSpace()`) generates a random key, uses it once to write the
+genesis ACL — the creator as an OWNER, plus any grants the creator chose —
+and drops it. Opening a space never creates one, except a user's Home space: it
+uses the user's own identity for both roles and is born private on its first
+open by claiming `{ [space]: "OWNER" }`.
 
 As a temporary pre-launch compatibility rule, a populated space that has never
 had an ACL is authenticated-public READ/WRITE but never OWNER. A malformed,
@@ -114,37 +120,43 @@ ACL validity and fresh-space genesis remain hard invariants in `observe` mode.
 
 ## Reading and changing a space's ACL
 
-That bootstrap default has a consequence worth stating plainly: **a newly
-created named space is world-writable, not private.** The `"*": "WRITE"` grant
-is a literal entry in its ACL document, and `cf acl ls` shows it:
+That genesis makes **a newly created space private to its creator.**
+`cf space create` prints the new space's DID, which the commands below keep in
+a shell variable; `cf acl ls` shows the space's ACL document:
 
 ```bash
-cf acl ls --identity ./my.key --api-url https://api.example.com --space my-space
+SPACE=$(cf space create --identity ./my.key --api-url https://api.example.com)
+cf acl ls --identity ./my.key --api-url https://api.example.com --space "$SPACE"
 ```
 
 That prints a bordered `DID` / `CAPABILITY` table (or `No ACL entries found.`
-if the space has no ACL yet). For a space you just created it is two rows: your
-own DID with `OWNER`, and `*` with `WRITE`. Grant and revoke are the other two
-subcommands (`packages/cli/commands/acl.ts`):
+if the space has no ACL yet). For the space you just created it is one row:
+your own DID with `OWNER`. Grant, revoke and leave are the other three
+subcommands (`runtime/cli/commands/acl.ts`):
 
 ```bash
 # Grant, or change an existing grant. Capability is READ, WRITE, or OWNER.
-cf acl set did:key:z6Mkk... WRITE --space my-space
+cf acl set did:key:z6Mkk... WRITE --space "$SPACE"
 
-# Revoke one identity — but while `*` is still present this revokes nothing;
+# Revoke one identity — but while `*` is present this revokes nothing;
 # see the caveat below.
-cf acl remove did:key:z6Mkk... --space my-space
+cf acl remove did:key:z6Mkk... --space "$SPACE"
 
-# Drop the bootstrap wildcard — this is what makes the space private.
-cf acl remove ANYONE --space my-space
+# Open the space to every authenticated identity.
+cf acl set ANYONE WRITE --space "$SPACE"
+
+# Drop the wildcard — this is what makes an open space private again.
+cf acl remove ANYONE --space "$SPACE"
+
+# Remove your own identity, giving up the access it had.
+cf acl leave --space "$SPACE"
 ```
 
-**Drop the wildcard first, or the per-identity commands do not mean what they
-look like.** The server resolves a principal's capability as *its own entry if
-it has one, otherwise the wildcard's* (`#resolveCapability` in
-`packages/memory/v2/server.ts`: `acl[principal] ?? acl["*"]`). While
-`"*": "WRITE"` is in the ACL, that fallback is WRITE, and it produces two
-counter-intuitive results:
+**A wildcard entry changes what the per-identity commands mean.** The server
+resolves a principal's capability as *its own entry if it has one, otherwise
+the wildcard's* (`#resolveCapability` in `runtime/memory/v2/server.ts`:
+`acl[principal] ?? acl["*"]`). While `"*": "WRITE"` is in the ACL, that
+fallback is WRITE, and it produces two counter-intuitive results:
 
 - `cf acl remove <did>` **revokes nothing.** It deletes that identity's
   explicit entry, which drops them onto the wildcard's WRITE. `cf acl ls` will
@@ -154,23 +166,33 @@ counter-intuitive results:
   READ. (`cf acl set <did> WRITE` changes nothing today, but is a durable grant
   that survives removing the wildcard.)
 
-So the order that works is `cf acl remove ANYONE` first, then grant each
-identity what it should have. Until the wildcard is gone, treat the space as
-world-writable regardless of what the per-identity rows say.
+A legacy named space carries `"*": "WRITE"` in its genesis document, so `cf acl
+ls --space my-space` on one prints two rows: its owner with `OWNER`, and `*`
+with `WRITE`. To make one private, run `cf acl remove ANYONE` first, then grant
+each identity what it should have. Until the wildcard is gone, treat the space
+as world-writable regardless of what the per-identity rows say.
 
-`--identity` and `--api-url` fall back to `CF_IDENTITY` and `CF_API_URL`;
-`--space` takes a space name or a DID and has no environment fallback. `ANYONE`
+`--identity`, `--api-url` and `--space` fall back to `CF_IDENTITY`,
+`CF_API_URL` and `CF_SPACE`. `--space` takes a DID, or a legacy space name that
+resolves to one. `ANYONE`
 is the CLI spelling of the `"*"` wildcard, so the shell does not glob-expand it
 before the CLI sees it — `cf acl ls` still prints the raw `*`.
 
-All three commands act as the identity in the key file, and writing the ACL
-needs OWNER, so you can only administer a space you own. Two guardrails come
-from the server rather than the CLI: it refuses any mutation that would leave
-the space with no concrete (non-`"*"`) OWNER, so this is not a way to lock
-yourself out; and it requires an ACL change to arrive as a single
-whole-document replacement, which is why `ACLManager` writes the entire ACL on
-every grant. That rule and the genesis rule are catalogued as INV-12 and INV-13
-in [`docs/specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md).
+All four commands act as the identity in the key file, and writing the ACL needs
+OWNER, so you can only administer a space you own. Leaving is the exception: any
+member may remove their own entry, whatever its level, and nothing else.
+`cf acl leave` refuses, saying why, a space whose ACL has a `*` entry, since
+that entry would still admit you, and a space you are the last concrete OWNER
+of; make someone else OWNER first. Once you have left, a server in `enforce`
+mode ends your session there, and you can no longer read the space; in `observe`
+and `off` modes it ends no session for a lost entry, and does not stop the reads
+those modes allow. Two guardrails come from the server rather than the CLI: it
+refuses any mutation that would leave the space with no concrete (non-`"*"`)
+OWNER, so this is not a way to lock yourself out; and it requires an ACL change
+to arrive as a single whole-document replacement, which is why `ACLManager`
+writes the entire ACL on every grant. That rule and the genesis rule are
+catalogued as INV-12 and INV-13 in
+[`docs/specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md).
 
 ## Running untrusted code: three rings
 
@@ -199,7 +221,7 @@ handler (elsewhere it throws), and its completion is coarsened to one-second
 resolution so a network round trip cannot serve as a fine clock.
 
 **Ring 3 — the iframe sandbox.** For fully untrusted rendered content,
-`packages/iframe-sandbox` adds a process-level browser boundary with a
+`base/iframe-sandbox` adds a process-level browser boundary with a
 clever double-iframe construction: an **outer** iframe loaded via `srcdoc`
 carries a strict Content-Security-Policy meta tag
 (`default-src 'none'`, no form posts, no child frames, connections limited
@@ -212,7 +234,7 @@ package README is candid that exfiltration hardening (e.g. covert channels
 via permitted fetches) is ongoing work.
 
 **Beyond the rings — Contextual Flow Control (CFC).** The rings bound what
-untrusted code *can do*; CFC (`packages/runner/src/cfc/`) tracks what data
+untrusted code *can do*; CFC (`runtime/runner/src/cfc/`) tracks what data
 it *touched*. Every value can carry a label: **integrity atoms** recording
 who or what vouches for it (`PolicyCertified`, `InjectionSafe`,
 `LlmDerived`, `ExternalIngest`, ...) and **confidentiality clauses**
@@ -226,10 +248,10 @@ required-integrity floor (e.g. tool inputs that demand certified data).
 Deployments dial it along four independent axes — enforcement mode
 (`disabled`/`observe`/`enforce-explicit`/`enforce-strict`), flow-label
 persistence (`off`/`observe`/`persist`), the write floor, and trigger-read
-gating; the shell today runs `enforce-explicit` with flow labels at
+gating; the shell today runs `enforce-strict` with flow labels at
 `persist`. The verified-source `$implRef` machinery (Chapter 7) is what
 ties labels to the exact code that produced a value. Specs live in
-`docs/specs/cfc-*.md`; demo patterns in `packages/patterns/cfc-*`.
+`docs/specs/cfc-*.md`; demo patterns in `patterns/cfc-*`.
 
 The rings compose with the data layer: even code that breaks ergonomics
 rules still acts *as* its session's principal, inside one space's replica,

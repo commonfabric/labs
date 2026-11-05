@@ -1,0 +1,49 @@
+Check packages/memory/test/v2-watch-incremental.test.ts
+running 1 test from ./packages/memory/test/v2-watch-incremental.test.ts
+Server ...
+  instance members ...
+    watchAdd() ...
+      keeps a shared miss reactive until its last branch owner departs ... ok (140ms)
+      reconciles normalized duplicate operation owners with graph ownership false ... ok (112ms)
+      reconciles normalized duplicate operation owners with graph ownership true ... ok (13ms)
+      abandons changed miss ownership and retries against a newly created target ... ok (44ms)
+      retains an operation owner's interest after the last graph miss retires ... ok (93ms)
+      publishes a large valid batch without an argument-count limit ... ok (2s)
+      retains accepted duplicate-id roots when removing an unrelated watch ... ok (13ms)
+      leaves established delivery and graph state unchanged when a later branch fails ... ok (58ms)
+      rolls back graph and cursor changes when a later operation snapshot fails ... ok (44ms)
+      keeps an in-flight operation snapshot paired with its original cursors ... FAILED (21ms)
+      refreshes without filtering the 32 established graph watches for operation fields ... ok (97ms)
+      adds one root without enumerating the 32 established delivered entries ... ok (24ms)
+      refreshes one root without enumerating the 32 established delivered entries ... ok (77ms)
+      adds one root without scanning the 32 established manager addresses ... ok (31ms)
+      refreshes without filtering the 256 established graph watches for operation fields ... ok (210ms)
+      adds one root without enumerating the 256 established delivered entries ... ok (165ms)
+      refreshes one root without enumerating the 256 established delivered entries ... ok (137ms)
+      adds one root without scanning the 256 established manager addresses ... ok (152ms)
+    watchAdd() ... FAILED (due to 1 failed step) (4s)
+  instance members ... FAILED (due to 1 failed step) (4s)
+Server ... FAILED (due to 1 failed step) (4s)
+
+ ERRORS 
+
+Server ... instance members ... watchAdd() ... keeps an in-flight operation snapshot paired with its original cursors => https://jsr.io/@std/testing/1.0.19/_test_suite.ts:402:15
+error: OpCursorMismatchError: operation field query cursor is in the future
+    throw new OpCursorMismatchError(
+          ^
+    at Module.queryOperationField (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/engine.ts:2220:11)
+    at file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:5832:28
+    at Array.map (<anonymous>)
+    at Server.#attachOperationFieldsWithEngine (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:5830:36)
+    at Server.#attachOperationFields (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:5810:42)
+    at async finishCatchUp (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:5313:13)
+    at async emptyCatchUp (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:5340:29)
+    at async file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:5436:24
+
+ FAILURES 
+
+Server ... instance members ... watchAdd() ... keeps an in-flight operation snapshot paired with its original cursors => https://jsr.io/@std/testing/1.0.19/_test_suite.ts:402:15
+
+FAILED | 0 passed (17 steps) | 1 failed (3 steps) (4s)
+
+error: Test failed

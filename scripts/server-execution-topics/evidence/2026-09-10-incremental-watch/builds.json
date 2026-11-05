@@ -1,0 +1,65 @@
+{
+  "startedAt": "2026-09-10T19:14:49.354586+00:00",
+  "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+  "sourceRoot": ".",
+  "buildRoot": ".",
+  "patch": "build-source.patch",
+  "patchSha256": "a2e2aef9db9356da04b24aaa078b5e16417062581685b1c5f853e81836bf76e7",
+  "sourceHashes": {
+    "packages/memory/test/v2-watch-incremental.test.ts": "78e0da748a721ba430233e6e47179f262d4b3a807b42402ec6f2a285e278eadd",
+    "packages/memory/v2/client.ts": "c10b33453cb9c6a4d211106ea5de6afc8121e86c6a6a34b735af45c414c306e1",
+    "packages/memory/v2/query.ts": "dad29485243a95e68a9dc0d5a3f5892cef102ef3f1520c3088e7bed1633b1f89",
+    "packages/memory/v2/server.ts": "ea7ee1eab2630c14f00c74307a7eb4011fecc9247d2337711c3ab1cc90402d12",
+    "packages/memory/v2/session-registry.ts": "6a28dec861cb251ffadb1fd8ffd3280fbd2eae584e4a43663381e15291ff09c9",
+    "packages/runner/src/traverse.ts": "3aa9a7faa7975994e570cbb39a6680ed4a39358a10a4918b79ff4b297c7b6248",
+    "packages/runner/test/traverse-staging.test.ts": "8ef1ec0b6478f5336564daba689bac0c8e9b3238c6eb5c5b3f45cf113b9cef38",
+    "packages/utils/deno.jsonc": "086db59be6aa2261a1e7955f3c7daf912194fdebc580ff316f78426402179a22",
+    "packages/utils/src/staged-map.ts": "7bae49a83eaf53a115d6600564baf589db1ea2b20f41b27c19ee0546ec6d53e1",
+    "packages/utils/test/staged-map.test.ts": "e8716531a4ff62d2362626929cfade6c7b52c535ae589b8cac3cc684a9e9dd64"
+  },
+  "binaries": [
+    {
+      "role": "default",
+      "command": [
+        "deno",
+        "task",
+        "build-binaries",
+        "toolshed"
+      ],
+      "flags": {
+        "COMMIT_SHA": "27f10d2d4f02f125c0492e5d6288acb3f0da148b"
+      },
+      "startedAt": "2026-09-10T19:14:49.356033+00:00",
+      "previousSha256": "d1078b87069fccf49aab13a1bd94b3af9f99ae0452c77917f614c0410e08ba94",
+      "exitCode": 0,
+      "endedAt": "2026-09-10T19:15:12.941994+00:00",
+      "path": ".ci-cache/binaries/toolshed-baked-default",
+      "sha256": "685b100c5a09b7273755a2880e69a599c8af3a3006a9e76c107e74db3af3c22d"
+    },
+    {
+      "role": "opposite",
+      "command": [
+        "deno",
+        "task",
+        "build-binaries",
+        "toolshed"
+      ],
+      "flags": {
+        "COMMIT_SHA": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+        "EXPERIMENTAL_SERVER_EXECUTION": "true"
+      },
+      "startedAt": "2026-09-10T19:15:13.416788+00:00",
+      "previousSha256": "437b7a98ee508eed6b43e8f4b402b0ca4e134b1fad9de0553351cd4f4217ca72",
+      "exitCode": 0,
+      "endedAt": "2026-09-10T19:15:37.154636+00:00",
+      "path": ".ci-cache/binaries/toolshed-baked-opposite",
+      "sha256": "3a2a461e5812fae862ee8072ae942e9e392aaa8b2501b4255d76ac084726bada"
+    }
+  ],
+  "completedAt": "2026-09-10T19:15:37.629067+00:00",
+  "captureProvenance": {
+    "file": "external-captures.json",
+    "entry": "builds.json",
+    "note": "Original capture paths and commands; not replay inputs."
+  }
+}

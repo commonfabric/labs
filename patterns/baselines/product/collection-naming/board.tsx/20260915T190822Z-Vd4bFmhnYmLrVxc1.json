@@ -1,0 +1,307 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "ItemIndexRow": {
+        "properties": {
+          "createdAt": {
+            "description": "When the item was filed (epoch milliseconds), which the item pattern\npublishes unconditionally.",
+            "type": "number"
+          },
+          "shortName": {
+            "description": "The board's name for the item, as the item stores it.\n\nOPTIONAL rather than defaulted, which is what the compatibility proof\naccepts: a defaulted property moves the demand's defaults below an array\nconstraint the proof cannot show stable under default insertion, while an\noptional one carries no default to move. `ItemOutput` publishes it the\nsame way, which is alignment rather than a constraint this type imposes:\na required publication would satisfy this demand too. What the compiler\nrefuses is the other pairing, a required row against an optional\npublication; `ItemOutput.shortName` in `item.tsx` states it in full.\n\nAn item whose input holds no name — one filed before the board passed a\nname in at create, or one filed past `addItem`, which includes every\nmember a backfill names — is absent here rather than blank, and the array\nreads whole around it. That is the bound on what the spelling buys: it is\nabout the READ. `cf piece setsrc` refuses a member demand that gains any\nproperty at all — optional included — over a board whose stored members\ndo not publish it, because the schema recorded on the retained link to\neach member is unconstrained at that path.",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "description": "The item's title. Defaulted so a missing path does not make the whole\narray unreadable.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "NamesMap": {
+        "additionalProperties": {
+          "type": "unknown"
+        },
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "description": "What the board holds: its item list and its member namespace.",
+    "properties": {
+      "items": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "The board's durable item list, in filing order. `addItem` appends here; a\nwhole-array write forfeits the mergeability the append keeps.",
+        "items": {
+          "$ref": "#/$defs/ItemIndexRow"
+        },
+        "type": "array"
+      },
+      "names": {
+        "$ref": "#/$defs/NamesMap",
+        "asCell": [
+          "cell"
+        ],
+        "default": {},
+        "description": "The board's member namespace: each name to the item it names, held as an\nunread reference. `addItem` writes one key per create and `backfillNames`\none key per member it names; nothing rewrites the map whole. Reads as\nempty on a board from before it numbered anything, in the default form\n`NamesMap` explains."
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "collection-naming/board.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AddItemEvent": {
+        "properties": {
+          "agentName": {
+            "description": "The agent making this mutation. Fabric records the human principal\nbehind the key; this names which agent acted under it. Required, and\nchecked rather than stored: a create that could be unsigned is a\ntolerance the verb could never withdraw.",
+            "type": "string"
+          },
+          "body": {
+            "description": "The item's initial body, stored verbatim.",
+            "type": "string"
+          },
+          "title": {
+            "description": "The item's title, trimmed before it is stored. Must be non-empty.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "agentName"
+        ],
+        "type": "object"
+      },
+      "BackfillNamesEvent": {
+        "properties": {
+          "agentName": {
+            "description": "The agent running the backfill, checked as `addItem` checks it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentName"
+        ],
+        "type": "object"
+      },
+      "ItemIndexRow": {
+        "properties": {
+          "createdAt": {
+            "description": "When the item was filed (epoch milliseconds), which the item pattern\npublishes unconditionally.",
+            "type": "number"
+          },
+          "shortName": {
+            "description": "The board's name for the item, as the item stores it.\n\nOPTIONAL rather than defaulted, which is what the compatibility proof\naccepts: a defaulted property moves the demand's defaults below an array\nconstraint the proof cannot show stable under default insertion, while an\noptional one carries no default to move. `ItemOutput` publishes it the\nsame way, which is alignment rather than a constraint this type imposes:\na required publication would satisfy this demand too. What the compiler\nrefuses is the other pairing, a required row against an optional\npublication; `ItemOutput.shortName` in `item.tsx` states it in full.\n\nAn item whose input holds no name — one filed before the board passed a\nname in at create, or one filed past `addItem`, which includes every\nmember a backfill names — is absent here rather than blank, and the array\nreads whole around it. That is the bound on what the spelling buys: it is\nabout the READ. `cf piece setsrc` refuses a member demand that gains any\nproperty at all — optional included — over a board whose stored members\ndo not publish it, because the schema recorded on the retained link to\neach member is unconstrained at that path.",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "description": "The item's title. Defaulted so a missing path does not make the whole\narray unreadable.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "MentionableRow": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "piece": {
+            "type": "unknown"
+          },
+          "shortName": {
+            "default": "",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "shortName",
+          "piece",
+          "$NAME"
+        ],
+        "type": "object"
+      },
+      "NamesMap": {
+        "additionalProperties": {
+          "type": "unknown"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "NamesTableRow": {
+        "properties": {
+          "member": {
+            "description": "The member. `unknown` because it is written as a reference and only ever\ncompared; anything wider would read the member back whole.",
+            "type": "unknown"
+          },
+          "name": {
+            "description": "The member's name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "member",
+          "name"
+        ],
+        "type": "object"
+      },
+      "NamingDeclaration": {
+        "properties": {
+          "compact": {
+            "description": "Whether the collection offers the compact spelling that joins its name to\na member's with a hyphen. Only a collection whose member names cannot\ncontain a hyphen may say so.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The collection's own name, which a binding uses to reach it. Absent when\nthe collection makes no claim about what it is bound as.",
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/$defs/NamingPolicy",
+            "description": "The policy the names are held to."
+          }
+        },
+        "required": [
+          "policy",
+          "compact"
+        ],
+        "type": "object"
+      },
+      "NamingPolicy": {
+        "properties": {
+          "allocator": {
+            "description": "What a name is made of: a monotonic sequence, a random code, a string a\nperson chose, or a derivation from the member's own content.",
+            "enum": [
+              "sequence",
+              "random",
+              "human",
+              "derived"
+            ]
+          },
+          "permanent": {
+            "description": "Whether a name, once assigned, is never retired or reassigned.",
+            "type": "boolean"
+          },
+          "reuse": {
+            "description": "Whether a retired name may be given to another member.",
+            "type": "boolean"
+          },
+          "unique": {
+            "description": "Whether a name is unique across the collection's whole history, or only\namong its current members.",
+            "enum": [
+              "history",
+              "current"
+            ]
+          }
+        },
+        "required": [
+          "unique",
+          "permanent",
+          "reuse",
+          "allocator"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "A board of items that names its members. Survey the board with one bounded\nread of `index`: a row is its item, so select the row's own address\nalongside `title` and `shortName`, and use that address for the item's own\nreads. File with `addItem`, which allocates the next name in the same write\nas the append and returns the item with the name it allocated. A board that\nheld items before it numbered anything runs `backfillNames` once.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addItem": {
+        "$ref": "#/$defs/AddItemEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "File an item: allocate its name and append it, atomically."
+      },
+      "backfillNames": {
+        "$ref": "#/$defs/BackfillNamesEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Name every unnamed member in filing order. Idempotent."
+      },
+      "index": {
+        "default": [],
+        "description": "The survey surface: the items themselves, declared through the row\nschema. A row IS its item, so a row's own address is the item's, and an\nindex into this array is not a stable address.",
+        "items": {
+          "$ref": "#/$defs/ItemIndexRow"
+        },
+        "type": "array"
+      },
+      "itemCount": {
+        "description": "How many items the board holds.",
+        "type": "number"
+      },
+      "items": {
+        "description": "The board's items, in filing order, through the shape the board demands\nof them.",
+        "items": {
+          "$ref": "#/$defs/ItemIndexRow"
+        },
+        "type": "array"
+      },
+      "mentionable": {
+        "default": [],
+        "description": "The board's mention universe, under the name the item pattern's editor\nautocompletes over — what `addItem` wires into each item it creates. One\nderived document of copies, each holding its item as an unread reference\nand carrying the board's name for it, so `#42` finds a member without\nexpanding one; see `MentionableRow` in `mentionable.ts`.",
+        "items": {
+          "$ref": "#/$defs/MentionableRow"
+        },
+        "tags": [
+          "42"
+        ],
+        "type": "array"
+      },
+      "names": {
+        "$ref": "#/$defs/NamesMap",
+        "default": {},
+        "description": "The namespace itself: each name to the item it names. A slug pointing\nhere is what makes a member addressable as `<board>/<name>`. Published\nunder the default its input carries."
+      },
+      "namesTable": {
+        "default": [],
+        "description": "The names table, one row per named member: what `nameOf` reads to find\nthe name the board gives a member by identity, including a member whose\nown `shortName` is absent.",
+        "items": {
+          "$ref": "#/$defs/NamesTableRow"
+        },
+        "type": "array"
+      },
+      "naming": {
+        "$ref": "#/$defs/NamingDeclaration",
+        "description": "What the board declares about its names, for a consumer deciding whether\na name may be held rather than an identity."
+      }
+    },
+    "required": [
+      "items",
+      "index",
+      "names",
+      "namesTable",
+      "naming",
+      "mentionable",
+      "itemCount",
+      "addItem",
+      "backfillNames",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

@@ -1,7 +1,0 @@
-{
-  "name": "@commonfabric/agents-debug-view",
-  "tasks": {
-    "test": "deno test -A --import-map ../../../patterns/test-import-map.json --ignore='**/*.test.tsx' ."
-  },
-  "exports": "./main.tsx"
-}

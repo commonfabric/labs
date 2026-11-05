@@ -1,0 +1,378 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Category": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/CategoryItem"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "items"
+        ],
+        "type": "object"
+      },
+      "CategoryItem": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "categories": {
+        "default": [
+          {
+            "items": [
+              {
+                "id": "kitchen-sink",
+                "label": "Kitchen Sink"
+              },
+              {
+                "id": "style-tokens",
+                "label": "Style Tokens"
+              },
+              {
+                "id": "theme-sampler",
+                "label": "Theme Sampler"
+              }
+            ],
+            "name": "Overview"
+          },
+          {
+            "items": [
+              {
+                "id": "button",
+                "label": "Button"
+              },
+              {
+                "id": "checkbox",
+                "label": "Checkbox"
+              },
+              {
+                "id": "code-editor",
+                "label": "Code Editor"
+              },
+              {
+                "id": "field",
+                "label": "Field"
+              },
+              {
+                "id": "input",
+                "label": "Input"
+              },
+              {
+                "id": "picker",
+                "label": "Picker"
+              },
+              {
+                "id": "textarea",
+                "label": "Textarea"
+              },
+              {
+                "id": "select",
+                "label": "Select"
+              },
+              {
+                "id": "slider",
+                "label": "Slider"
+              },
+              {
+                "id": "switch",
+                "label": "Switch"
+              },
+              {
+                "id": "toggle",
+                "label": "Toggle"
+              },
+              {
+                "id": "toggle-group",
+                "label": "Toggle Group"
+              },
+              {
+                "id": "message-input",
+                "label": "Message Input"
+              },
+              {
+                "id": "submit-input",
+                "label": "Submit Input"
+              },
+              {
+                "id": "calendar",
+                "label": "Calendar"
+              },
+              {
+                "id": "radio",
+                "label": "Radio"
+              },
+              {
+                "id": "autocomplete",
+                "label": "Autocomplete"
+              },
+              {
+                "id": "tags",
+                "label": "Tags"
+              },
+              {
+                "id": "fab",
+                "label": "FAB"
+              }
+            ],
+            "name": "Inputs"
+          },
+          {
+            "items": [
+              {
+                "id": "card",
+                "label": "Card"
+              },
+              {
+                "id": "list-item",
+                "label": "List Item"
+              },
+              {
+                "id": "modal",
+                "label": "Modal"
+              },
+              {
+                "id": "tab-bar",
+                "label": "Tab Bar"
+              },
+              {
+                "id": "toolbar",
+                "label": "Toolbar"
+              },
+              {
+                "id": "vstack",
+                "label": "VStack"
+              },
+              {
+                "id": "hstack",
+                "label": "HStack"
+              },
+              {
+                "id": "vgroup",
+                "label": "VGroup"
+              },
+              {
+                "id": "hgroup",
+                "label": "HGroup"
+              },
+              {
+                "id": "hover-reveal",
+                "label": "Hover Reveal"
+              },
+              {
+                "id": "vscroll",
+                "label": "VScroll"
+              },
+              {
+                "id": "hscroll",
+                "label": "HScroll"
+              },
+              {
+                "id": "grid",
+                "label": "Grid"
+              }
+            ],
+            "name": "Layout"
+          },
+          {
+            "items": [
+              {
+                "id": "heading",
+                "label": "Heading"
+              },
+              {
+                "id": "text",
+                "label": "Text"
+              },
+              {
+                "id": "label",
+                "label": "Label"
+              },
+              {
+                "id": "chip",
+                "label": "Chip"
+              },
+              {
+                "id": "badge",
+                "label": "Badge"
+              },
+              {
+                "id": "empty-state",
+                "label": "Empty State"
+              },
+              {
+                "id": "separator",
+                "label": "Separator"
+              },
+              {
+                "id": "markdown",
+                "label": "Markdown"
+              },
+              {
+                "id": "svg",
+                "label": "SVG"
+              },
+              {
+                "id": "kbd",
+                "label": "Kbd"
+              },
+              {
+                "id": "code-editor",
+                "label": "Code Editor"
+              },
+              {
+                "id": "copy-button",
+                "label": "Copy Button"
+              }
+            ],
+            "name": "Display"
+          },
+          {
+            "items": [
+              {
+                "id": "avatar",
+                "label": "Avatar"
+              },
+              {
+                "id": "profile-badge",
+                "label": "Profile Badge"
+              }
+            ],
+            "name": "Identity"
+          },
+          {
+            "items": [
+              {
+                "id": "progress",
+                "label": "Progress"
+              },
+              {
+                "id": "loader",
+                "label": "Loader"
+              },
+              {
+                "id": "skeleton",
+                "label": "Skeleton"
+              },
+              {
+                "id": "alert",
+                "label": "Alert"
+              },
+              {
+                "id": "toast",
+                "label": "Toast"
+              }
+            ],
+            "name": "Feedback"
+          },
+          {
+            "items": [
+              {
+                "id": "collapsible",
+                "label": "Collapsible"
+              },
+              {
+                "id": "tab-list",
+                "label": "Tab List"
+              },
+              {
+                "id": "tabs",
+                "label": "Tabs"
+              },
+              {
+                "id": "table",
+                "label": "Table"
+              }
+            ],
+            "name": "Interactive"
+          },
+          {
+            "items": [
+              {
+                "id": "chart",
+                "label": "Chart"
+              }
+            ],
+            "name": "Data Visualization"
+          },
+          {
+            "items": [
+              {
+                "id": "note",
+                "label": "Note"
+              },
+              {
+                "id": "render",
+                "label": "Render (UI Variants)"
+              },
+              {
+                "id": "vignette-recipe",
+                "label": "Vignette: Recipe"
+              },
+              {
+                "id": "vignette-finance",
+                "label": "Vignette: Finance"
+              },
+              {
+                "id": "vignette-mobile-app",
+                "label": "Vignette: Mobile App"
+              }
+            ],
+            "name": "Patterns"
+          }
+        ],
+        "items": {
+          "$ref": "#/$defs/Category"
+        },
+        "type": "array"
+      },
+      "selectedStory": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "button",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "catalog/catalog.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "selectedStory": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "selectedStory",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

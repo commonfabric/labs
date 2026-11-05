@@ -1,0 +1,246 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Offer": {
+        "properties": {
+          "from": {
+            "description": "The DID the offer names as its sender. `receive` keeps an offer only when\nthis is the event's actor, but any principal may write the list without\n`receive`, so to a reader this is the sender's claim, which it checks for\nitself before trusting it.",
+            "type": "string"
+          },
+          "host": {
+            "description": "The origin of the host serving that space.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The sender's key for the offer; no two offers in the inbox from one sender\nshare one.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What is offered, such as `loom` or `fabrichat-room`.",
+            "type": "string"
+          },
+          "ownerOrigin": {
+            "description": "The origin of the sender's own host, or empty.",
+            "type": "string"
+          },
+          "receivedAt": {
+            "description": "When the inbox received the offer, in milliseconds since the epoch. A\nhandler's clock reads to the second, so two offers can share it.",
+            "type": "number"
+          },
+          "sharedAt": {
+            "description": "When the sender shared the offer, in milliseconds since the epoch, by the\nsender's clock, or by the inbox's when the sender named no time.",
+            "type": "number"
+          },
+          "space": {
+            "description": "The DID of the space the offered thing lives in.",
+            "type": "string"
+          },
+          "title": {
+            "description": "What the sender calls the offered thing, or empty.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "space",
+          "host",
+          "ownerOrigin",
+          "title",
+          "from",
+          "sharedAt",
+          "receivedAt"
+        ],
+        "type": "object"
+      },
+      "Offers": {
+        "ifc": {
+          "confidentiality": [
+            {
+              "subject": {
+                "__ctCurrentPrincipal": true
+              },
+              "type": "https://commonfabric.org/cfc/atom/User"
+            }
+          ]
+        },
+        "items": {
+          "$ref": "#/$defs/Offer",
+          "ifc": {
+            "confidentiality": [
+              {
+                "subject": {
+                  "__ctCurrentPrincipal": true
+                },
+                "type": "https://commonfabric.org/cfc/atom/User"
+              }
+            ]
+          }
+        },
+        "type": "array"
+      }
+    },
+    "description": "Arguments for .",
+    "properties": {
+      "offers": {
+        "$ref": "#/$defs/Offers",
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "The offers received so far."
+      }
+    },
+    "required": [
+      "offers"
+    ],
+    "type": "object"
+  },
+  "pattern": "system/private-inbox.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Offer": {
+        "properties": {
+          "from": {
+            "description": "The DID the offer names as its sender. `receive` keeps an offer only when\nthis is the event's actor, but any principal may write the list without\n`receive`, so to a reader this is the sender's claim, which it checks for\nitself before trusting it.",
+            "type": "string"
+          },
+          "host": {
+            "description": "The origin of the host serving that space.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The sender's key for the offer; no two offers in the inbox from one sender\nshare one.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What is offered, such as `loom` or `fabrichat-room`.",
+            "type": "string"
+          },
+          "ownerOrigin": {
+            "description": "The origin of the sender's own host, or empty.",
+            "type": "string"
+          },
+          "receivedAt": {
+            "description": "When the inbox received the offer, in milliseconds since the epoch. A\nhandler's clock reads to the second, so two offers can share it.",
+            "type": "number"
+          },
+          "sharedAt": {
+            "description": "When the sender shared the offer, in milliseconds since the epoch, by the\nsender's clock, or by the inbox's when the sender named no time.",
+            "type": "number"
+          },
+          "space": {
+            "description": "The DID of the space the offered thing lives in.",
+            "type": "string"
+          },
+          "title": {
+            "description": "What the sender calls the offered thing, or empty.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "space",
+          "host",
+          "ownerOrigin",
+          "title",
+          "from",
+          "sharedAt",
+          "receivedAt"
+        ],
+        "type": "object"
+      },
+      "OfferEvent": {
+        "properties": {
+          "from": {
+            "description": "The DID of the sender, which must be the principal sending the event.",
+            "type": "string"
+          },
+          "host": {
+            "description": "The origin of the host serving that space, such as `https://example.com`.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The sender's key for the offer, the same on every resend of it. The inbox\nkeeps one offer per sender and `id`.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What is offered, such as `loom` or `fabrichat-room`. A reader acts only on\nthe kinds it knows.",
+            "type": "string"
+          },
+          "ownerOrigin": {
+            "description": "The origin of the sender's own host, if it names one.",
+            "type": "string"
+          },
+          "sharedAt": {
+            "description": "When the sender shared the offer, in milliseconds since the epoch.",
+            "type": "number"
+          },
+          "space": {
+            "description": "The DID of the space the offered thing lives in.",
+            "type": "string"
+          },
+          "title": {
+            "description": "What the sender calls the offered thing.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Offers": {
+        "ifc": {
+          "confidentiality": [
+            {
+              "subject": {
+                "__ctCurrentPrincipal": true
+              },
+              "type": "https://commonfabric.org/cfc/atom/User"
+            }
+          ]
+        },
+        "items": {
+          "$ref": "#/$defs/Offer",
+          "ifc": {
+            "confidentiality": [
+              {
+                "subject": {
+                  "__ctCurrentPrincipal": true
+                },
+                "type": "https://commonfabric.org/cfc/atom/User"
+              }
+            ]
+          }
+        },
+        "type": "array"
+      }
+    },
+    "description": "The result of .",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "offers": {
+        "$ref": "#/$defs/Offers",
+        "description": "The offers received, labeled readable by the inbox's owner alone."
+      },
+      "receive": {
+        "$ref": "#/$defs/OfferEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Appends an offer from the principal sending it, unless it is refused."
+      }
+    },
+    "required": [
+      "offers",
+      "receive",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

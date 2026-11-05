@@ -1,0 +1,228 @@
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+import { Identity } from "@commonfabric/identity";
+import {
+  getServerExecutionConfig,
+  SERVER_EXECUTION_WATERMARK_DOC_ID,
+  setServerExecutionConfig,
+  streamEntriesDocId,
+  type StreamEventEntry,
+  type StreamEventsDocValue,
+} from "@commonfabric/memory/v2";
+import * as Engine from "@commonfabric/memory/v2/engine";
+import type * as MemoryServer from "@commonfabric/memory/v2/server";
+
+import { SpaceServer } from "../../src/executor/space-server.ts";
+import { emptyServingLoopStats } from "../../src/executor/stats.ts";
+import { readWatermarkSeq } from "../../src/executor/watermark.ts";
+import { Runtime } from "../../src/runtime.ts";
+import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
+import { newSharedServer } from "../memory-v2-test-utils.ts";
+
+const owner = await Identity.fromPassphrase("event visibility owner");
+const service = await Identity.fromPassphrase("event visibility service");
+const space = owner.did();
+const streams = ["a", "b"].map((name) => ({
+  id: `of:visibility-stream-${name}` as const,
+  path: [],
+}));
+const sidecars = streams.map(streamEntriesDocId);
+const logId = "of:visibility-log";
+
+/** Drain transport and scheduler work while positive-delay timers stay fixed. */
+async function settle<T>(operation: Promise<T>): Promise<T> {
+  await clock.settle();
+  return await operation;
+}
+
+describe("SpaceServer", () => {
+  let server: MemoryServer.Server;
+  let serving: SpaceServer | undefined;
+  let previousServerExecution: boolean;
+
+  beforeEach(() => {
+    previousServerExecution = getServerExecutionConfig();
+    setServerExecutionConfig(true);
+    server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
+  });
+
+  afterEach(async () => {
+    try {
+      if (serving !== undefined) await settle(serving.park("test-teardown"));
+      await settle(server.close());
+    } finally {
+      serving = undefined;
+      setServerExecutionConfig(previousServerExecution);
+    }
+  });
+
+  it("commits admitted events in arrival order before its watermark covers them", async () => {
+    // An established watch still holds absence when admission creates its
+    // sidecar. Manual fan-out preserves that window until the serving drain
+    // publishes and applies the entries. Every durable wave is inspected.
+
+    const engine = await server.engineForSpace(space);
+    await settle(
+      server.writeDocument(space, SERVER_EXECUTION_WATERMARK_DOC_ID, {
+        seq: 1,
+      }),
+    );
+    const stats = emptyServingLoopStats();
+    const snapshots: {
+      watermark: number;
+      entries: StreamEventEntry[];
+      log: string[];
+    }[] = [];
+    const called: string[] = [];
+    const entries = () =>
+      sidecars.flatMap((id) =>
+        (Engine.read(engine, { id })?.value as StreamEventsDocValue | undefined)
+          ?.entries ?? []
+      );
+    const storedLog = () =>
+      (Engine.read(engine, { id: logId })?.value as string[] | undefined) ?? [];
+    let runtime: Runtime | undefined;
+    serving = new SpaceServer({
+      space,
+      server,
+      engine,
+      serviceIdentity: service.did(),
+      ensureSpaceRoots: false,
+      localSeqRef: { value: 0 },
+      stats,
+      decorateWaveCommitSink: (sink) => ({
+        currentHeads: (space, docs) => sink.currentHeads(space, docs),
+        concurrentWritePaths: (space, doc, seq) =>
+          sink.concurrentWritePaths(space, doc, seq),
+        commitWave: async (batch) => {
+          const result = await sink.commitWave(batch);
+          snapshots.push({
+            watermark: readWatermarkSeq(engine),
+            entries: entries(),
+            log: storedLog(),
+          });
+          return result;
+        },
+      }),
+      createRuntime: async () => {
+        const manager = EmulatedStorageManager.connectTo(server, {
+          as: service,
+        });
+        runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: manager,
+          servingPosture: true,
+          experimental: { serverExecution: true },
+        });
+        const log = runtime.getCellFromLink<string[]>({
+          space,
+          id: logId,
+          scope: "space",
+          path: [],
+        });
+        await log.sync();
+        for (const [index, stream] of streams.entries()) {
+          await runtime.getCellFromLink({ space, ...stream, scope: "space" })
+            .sync();
+          await runtime.getCellFromLink({
+            space,
+            id: sidecars[index] as `of:${string}`,
+            scope: "space",
+            path: [],
+          }).sync();
+          runtime.scheduler.addEventHandler((tx) => {
+            const name = index === 0 ? "A" : "B";
+            called.push(name);
+            const cell = log.withTx(tx);
+            cell.set([...(cell.get() ?? []), name]);
+          }, { space, ...stream, scope: "space" });
+        }
+        const created = runtime;
+        return {
+          runtime: created,
+          dispose: async () => {
+            await created.dispose();
+            await manager.close();
+          },
+        };
+      },
+    });
+    expect(await settle(serving.activate())).toBe(true);
+    await clock.settle();
+    const notices: MemoryServer.AdmittedCommitNotice[] = [];
+    server.setServerExecutionObserver({
+      commitAdmitted: (notice) => notices.push(notice),
+    });
+    const admissions = [];
+    for (const [index, streamIndex] of [0, 1, 0].entries()) {
+      admissions.push(
+        await settle(server.commitDelegatedAppend({
+          targetSpace: space,
+          targetStream: sidecars[streamIndex],
+          targetStreamLink: streams[streamIndex],
+          eventId: `visibility-${streamIndex}`,
+          payload: {},
+          actingPrincipal: owner.did(),
+          actingSession: "session:visibility-actor",
+          capabilityRef: "cap:visibility",
+          sessionId: "session:visibility-delivery",
+          localSeq: index + 1,
+        })),
+      );
+    }
+    expect(admissions.map((admission) => admission.deduped))
+      .toEqual([false, false, true]);
+    expect(entries()).toHaveLength(2);
+    expect(notices).toHaveLength(2);
+    expect(runtime).toBeDefined();
+    for (const id of sidecars) {
+      expect(
+        runtime!.getCellFromLink({
+          space,
+          id: id as `of:${string}`,
+          scope: "space",
+          path: [],
+        }).get(),
+      ).toBeUndefined();
+    }
+    const before = snapshots.length;
+    for (const notice of notices) serving.enqueueCommit(notice);
+    await clock.settle();
+    const eventWaves = snapshots.slice(before);
+    console.log(JSON.stringify({
+      observation: "matched-visibility-wave",
+      snapshots: eventWaves.map((wave) => ({
+        watermark: wave.watermark,
+        entries: wave.entries.map((entry) => ({
+          eventId: entry.eventId, seq: entry.seq, consequenced: entry.consequenced === true,
+        })),
+        log: wave.log,
+      })),
+      counters: {
+        waves: stats.waves, derivedCommits: stats.derivedCommits,
+        wavesBudgetExhausted: stats.wavesBudgetExhausted,
+        visibilityBarriers: stats.events.visibilityBarriers,
+        visibilityRecoveries: stats.events.visibilityRecoveries,
+        visibilityDeferrals: stats.events.visibilityDeferrals,
+        deferredRescansArmed: stats.events.deferredRescansArmed,
+        deferredRescansFired: stats.events.deferredRescansFired,
+      },
+    }));
+    expect(eventWaves.length).toBeGreaterThan(0);
+    for (const wave of eventWaves) {
+      const coveredPending = wave.entries.filter((entry) =>
+        entry.consequenced !== true && typeof entry.seq === "number" &&
+        entry.seq <= wave.watermark
+      );
+      expect(coveredPending).toEqual([]);
+    }
+    expect(eventWaves[0].log).toEqual(["A", "B"]);
+    expect(called).toEqual(["A", "B"]);
+    expect(storedLog()).toEqual(["A", "B"]);
+    expect(entries().every((entry) => entry.consequenced === true)).toBe(true);
+    expect(stats.wavesBudgetExhausted).toBe(0);
+    await clock.tick(250);
+    expect(called).toEqual(["A", "B"]);
+    expect(storedLog()).toEqual(["A", "B"]);
+  });
+});

@@ -37,7 +37,9 @@ commit succeed — that is, whether the rejection is a **stale basis**:
 
 - **Retry through the window — a stale basis.** Two rejections mean the confirmed
   timeline moved under the commit, so re-reading it fresh can resolve it: a
-  server-side `ConflictError` (another writer advanced the entity's sequence) and
+  server-side `ConflictError` (another writer advanced the entity's sequence, or
+  changed a document the commit pinned with an `entity-value-hash`
+  precondition) and
   the local `StorageTransactionInconsistent` guard (a value the transaction read
   changed on this replica between the read and the commit). These are exactly what
   a contention burst — a space rehydrating while a handler writes to it — produces.
@@ -68,7 +70,7 @@ non-stale-basis rejection drops immediately.
 ## The model
 
 The event-handler commit path classifies each commit result and acts on it
-(`packages/runner/src/scheduler/events.ts`, `classifyCommitDisposition`):
+(`runtime/runner/src/scheduler/events.ts`, `classifyCommitDisposition`):
 
 - **Success** — done.
 - **A stale-basis rejection** (`ConflictError` or `StorageTransactionInconsistent`)
@@ -89,6 +91,30 @@ The event-handler commit path classifies each commit result and acts on it
   failure, which is long enough to outlast a rehydration burst. `idle()` and
   `settled()` already wait for a parked head event, so a write that converges
   still completes within a settle.
+
+  The re-run needs the fresh state it is re-running against, so the requeued
+  event holds its slot until that state arrives: the replica's catch-up to
+  the conflict point (the rejection's `readyToRetry` gate, which the wire
+  attaches to a `ConflictError`) and a pull of the document the conflict
+  names (`Runtime.awaitCommitRetryReadiness`, the readiness `editWithRetry`
+  and the reactive path await before their own re-runs). The event re-enters
+  the queue at once, in send order, marked `retryReadinessPending`; dispatch
+  passes over it and `idle()` stays open as for any parked head, so a later
+  event cannot overtake the retry, and a cascade victim whose own readiness
+  resolves sooner queues up behind it. The backoff step is the pacing floor
+  under that wait: the step's `notBefore` is fixed when the rejection is
+  classified, so a readiness that outlasts the delay dispatches the re-run as
+  soon as it resolves, and one that resolves sooner leaves the event parked
+  until the step elapses. The retry window is unaffected either way, since
+  the deadline rides the requeued event. The wait is also part of the
+  commit's tracked chain, so the pending-commit barrier
+  (`idleWithPendingCommits`, and `settled()` through it) stays open across
+  it. A runtime disposing with its storage kept open drains that barrier
+  before it tears down its writes, so the drain waits for the readiness the
+  way it waits for the reactive path's catch-up; a runtime closing its
+  storage tears down its writes first, and the wait then returns and the
+  event is dropped, its commit callback and staged work settling as they do
+  on the give-up path.
 - **Window elapsed without converging** — a terminal `CommitConvergenceError` is
   surfaced through the scheduler error channel (`scheduler.onError`). The write
   fails loudly rather than disappearing. This is the bounded-resource backstop:
@@ -102,6 +128,20 @@ The event-handler commit path classifies each commit result and acts on it
   `tx.abort()` is not a stale basis, so re-running cannot resolve it; the write is
   dropped and logged rather than entering the window.
 - **`retries: false` opt-out** — dropped without retry as well; see below.
+
+With server execution off, a client event's write dropped by a permanent
+rejection or by a non-stale-basis one is also surfaced through the scheduler
+error channel, as an `EventCommitRefusedError` carrying the rejection as its
+`cause`: a send made from inside a handler has no commit callback, so the log
+would otherwise be its only trace. Three such drops are not reported, because
+none loses a write: a handler's own `tx.abort()`, a `receipt-exists`
+precondition (the same invocation already committed), and an `origin-committed`
+refusal of a follow-up whose origin runs again and sends its own. Two drops
+fall outside this report: a `retries: false` opt-out, and a deterministic
+refusal of the committed data, which takes the terminal arm, where a CFC refusal
+is reported through `reportDroppedCfcRejectedWrite` instead, as described below.
+With server execution on, a client event is the echo of the server's run, which
+reports its own outcome.
 
 ### Why only a stale basis is windowed
 
@@ -171,8 +211,10 @@ The same `retries` boolean also gates the inSpace-name resolution path
 (`RetryImmediately`), which re-runs the handler to resolve a
 `PatternFactory.inSpace("name")` target. That loop needs no count either: name
 resolution is monotonic — each re-run resolves at least one previously-unresolved
-name into a cache, and a resolved name never becomes pending again — so a handler
-that references finitely many distinct names terminates on its own. A
+name, either by reading the calling space's allocation record or by creating a
+space the runtime remembers for that name, and a resolved name never becomes
+pending again — so a handler that references finitely many distinct names
+terminates on its own. A
 `retries: false` event does not take this path; it drops instead of re-running.
 
 ## Configuration
@@ -194,22 +236,29 @@ The `scheduler.event.commit` telemetry marker carries the new state:
 `retryAttempt` and `backoffMs` on a backoff retry, and `terminal`
 (`"permanent"` | `"convergence"`) when a commit reaches a terminal outcome.
 A non-converging write also logs `commit-convergence-failed` and is delivered to
-registered `scheduler.onError` handlers as a `CommitConvergenceError`.
+registered `scheduler.onError` handlers as a `CommitConvergenceError`. A client
+event's write dropped by a permanent or non-stale-basis rejection, with server
+execution off, is delivered to them as an `EventCommitRefusedError`, under the
+exceptions the model above names.
 
 ## The reactive-action path
 
 The reactive path (`scheduler/run.ts`) does not need this backpressure.
-Both paths window a stale basis, but they recover from a `ConflictError`
-differently: the event path re-queues it with backoff, while the reactive path
-re-arms its subscription and waits for the catch-up. A reactive action is a
-re-derivation: its
-output is a function of its inputs. On a conflict it does not enter the bounded
-retry budget — instead it re-arms its subscription, waits for
-the conflict's `readyToRetry` catch-up, and re-queues itself to re-run against
-the caught-up state. (Reader-dirty propagation re-runs it too when the catch-up
-write lands as a fresh notification, a redundant fast path that does not cover a
-conflict whose triggering write was already delivered.) A conflict there is a
-wait for catch-up, not a failure, and consumes no budget. Only non-conflict
+Both paths wait for conflict recovery before the scheduler retries the run, but
+they differ in what surrounds that wait: the event path re-queues with backoff
+inside a bounded window, while the reactive path re-arms its subscription and
+re-queues after recovery. A reactive action is a re-derivation: its output is a
+function of its inputs. On a conflict it does not enter the bounded retry
+budget — instead it re-arms its subscription and awaits
+`Runtime.awaitCommitRetryReadiness`: first the conflict's `readyToRetry`
+catch-up, then scoped pulls of every named conflict instance. Those pulls also
+repair validation dependencies outside the action's scheduling read set. If the
+registration is still active, it re-queues itself against the repaired state.
+Fresh input changes can independently re-run the action while recovery is still
+pending. Reader-dirty propagation is a redundant fast path when the catch-up
+write lands as a fresh notification, but it does not cover a conflict whose
+triggering write was already delivered. A conflict there is a wait for recovery,
+not a failure, and consumes no budget. Only non-conflict
 transient errors fall back to the bounded `MAX_RETRIES_FOR_REACTIVE` retry, and
 every attempt re-subscribes so the action recovers when its inputs next change.
 
@@ -244,7 +293,7 @@ must be actively retried rather than recovered by re-derivation.
 
 ## Tests
 
-- `packages/runner/test/scheduler-commit-backpressure.test.ts` — the validation
+- `runtime/runner/test/scheduler-commit-backpressure.test.ts` — the validation
   of record. It drives the event-handler commit path against an emulated server
   that rejects commits on demand: a burst of transient conflicts longer than the
   old budget still lands; a non-stale-basis rejection (which the server normalizes
@@ -254,24 +303,31 @@ must be actively retried rather than recovered by re-derivation.
   three whole-array appends (`list = [...list, value]`, the profile-append shape)
   survive a conflict storm so the durable count reaches three. This
   deterministically reproduces the silent-loss bug and proves the fix.
-- `packages/runner/test/mergeable-append-multispace-conflict.test.ts` — a
+- `runtime/runner/test/scheduler-event-retry-readiness.test.ts` — the wait
+  ahead of the re-run. A refusal carrying a test-held `readyToRetry` gate
+  shows no re-dispatch while the gate is held, once logical time has passed
+  every backoff step, and exactly one once it opens; a later event queued
+  during the hold runs only after the retry; the pending-commit barrier stays
+  open for the same hold; and the document the conflict names is synced
+  before the handler runs again.
+- `runtime/runner/test/mergeable-append-multispace-conflict.test.ts` — a
   mergeable append survives a `StorageTransactionInconsistent` storm (windowed),
   and an `AuthorizationError` on the same commit fails fast without entering the
   window (non-stale-basis).
-- `packages/runner/test/scheduler-event-lineage.test.ts` — a permanently failing
+- `runtime/runner/test/scheduler-event-lineage.test.ts` — a permanently failing
   origin (a handler that aborts its own tx) fast-fails on its first attempt (an
   abort is not a stale basis, so it is not windowed), and the test asserts the
   lineage invariant: the origin's payload-only same-space follow-up never commits.
   Also exercises the give-up (`retries: false`) and terminal-convergence paths,
   and the "stops handler-result pieces when the handler commit never converges"
   case drives an unending conflict to a terminal `CommitConvergenceError`.
-- `packages/runner/test/cfc-ui-contract.test.ts` — the `writeAuthorizedBy`
+- `runtime/runner/test/cfc-ui-contract.test.ts` — the `writeAuthorizedBy`
   enforcement cases confirm the fast-fail path: an unauthorized push is rejected
   and dropped immediately rather than retried for the full window. The refusal
   is a `CfcCommitRefusalError` — a verdict on the pushed data, so it is
   terminal (`cfc/verdict-reason.ts`); only a refusal that is not wholly a
   verdict keeps the retryable `StorageTransactionAborted` name.
-- `packages/patterns/integration/home-profile.test.ts` — unchanged browser-level
+- `patterns/integration/home-profile.test.ts` — unchanged browser-level
   profile-creation regression coverage; still passes (the fix does not regress
   the normal cross-space append).
 

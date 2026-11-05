@@ -1,0 +1,57 @@
+{
+  "base": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+  "checkout": ".",
+  "candidatePatchSha256": "a2e2aef9db9356da04b24aaa078b5e16417062581685b1c5f853e81836bf76e7",
+  "runs": [
+    {
+      "name": "green",
+      "command": [
+        "deno",
+        "test",
+        "-A",
+        "packages/memory/test/v2-watch-incremental.test.ts"
+      ],
+      "startedAt": "2026-09-10T19:16:19.124689+00:00",
+      "mutation": null,
+      "exitCode": 0,
+      "endedAt": "2026-09-10T19:16:24.575768+00:00",
+      "log": "green.log",
+      "sha256": "94be7c98ffb610ba3e3c5cff97d3c68f48bb0391ac86e7a616f43f8ca94e11f5"
+    },
+    {
+      "name": "cursor-red",
+      "command": [
+        "deno",
+        "test",
+        "-A",
+        "packages/memory/test/v2-watch-incremental.test.ts"
+      ],
+      "startedAt": "2026-09-10T19:16:24.597777+00:00",
+      "mutation": "unpin-cursors.patch",
+      "exitCode": 1,
+      "endedAt": "2026-09-10T19:16:27.018816+00:00",
+      "log": "cursor-red.log",
+      "sha256": "04de48bb440fd258ab78cacb9a3289ef474e1ac2e552d240aabd682f95ea8e96"
+    },
+    {
+      "name": "resume-red",
+      "command": [
+        "deno",
+        "test",
+        "-A",
+        "packages/memory/test/v2-watch-incremental.test.ts"
+      ],
+      "startedAt": "2026-09-10T19:16:27.057181+00:00",
+      "mutation": "allow-stale-session.patch",
+      "exitCode": 1,
+      "endedAt": "2026-09-10T19:16:29.384294+00:00",
+      "log": "resume-red.log",
+      "sha256": "aeba12ac898ab0d96845658d0f31705c561a9b48af01ca632301e9998298c159"
+    }
+  ],
+  "captureProvenance": {
+    "file": "external-captures.json",
+    "entry": "replay/manifest.json",
+    "note": "Original capture paths and commands; not replay inputs."
+  }
+}

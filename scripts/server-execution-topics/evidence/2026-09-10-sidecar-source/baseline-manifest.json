@@ -1,0 +1,69 @@
+{
+  "head": "e5298815118c7983a4b632336d0d8ded0e2d4405",
+  "kind": "mechanism and red regression; no latency claim",
+  "runtime": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3\n",
+  "loadBefore": [
+    53.26416015625,
+    36.83251953125,
+    27.57568359375
+  ],
+  "startedAt": "2026-09-10T22:25:35.424258+00:00",
+  "commands": [
+    {
+      "command": [
+        "deno",
+        "test",
+        "--no-check",
+        "--preload=packages/runner/test/clock-preload.ts",
+        "-A",
+        "packages/runner/test/source-reconciler.test.ts"
+      ],
+      "cwd": "${CHECKOUT}",
+      "exitCode": 1,
+      "label": "regression-red"
+    },
+    {
+      "command": [
+        "deno",
+        "run",
+        "-A",
+        "tools/server-execution-topics/sidecar-source-probe.ts"
+      ],
+      "cwd": "${CHECKOUT}",
+      "exitCode": 0,
+      "label": "profile-source"
+    }
+  ],
+  "sourceGuards": [
+    {
+      "phase": "before-probe",
+      "head": "e5298815118c7983a4b632336d0d8ded0e2d4405",
+      "status": "?? tools/server-execution-topics/sidecar-source-probe.ts\n"
+    },
+    {
+      "phase": "after-probe",
+      "head": "e5298815118c7983a4b632336d0d8ded0e2d4405",
+      "status": "?? tools/server-execution-topics/sidecar-source-probe.ts\n"
+    }
+  ],
+  "regressionPatchSha256": "c871790c887517e1f334bff4974b5a2d3706776f7bc217d5f76500cec2ce0b30",
+  "redExitCode": 1,
+  "helperSha256": "cb4cd070f208a7423e7a71729478bd570cb7a55fa9e617c27b64eb616b53b137",
+  "probeExitCode": 0,
+  "loadAfter": [
+    44.60498046875,
+    39.51318359375,
+    30.14697265625
+  ],
+  "endedAt": "2026-09-10T22:28:02.910703+00:00",
+  "posture": "fresh EmulatedStorageManager/Runtime per OFF and ON; actual experimental and servingPosture asserted; no server binary or browser in this mechanism probe",
+  "cache": "identity route prewarmed; fresh compile/storage session per arm; dependency cache retained",
+  "fixture": "real profile-create.tsx, four distinct slots: three in one destination and one foreign destination; each slot reopened; each closure read after persistence",
+  "pathRoots": {
+    "CHECKOUT": "baseline checkout"
+  },
+  "originalCapture": {
+    "path": "runs/sidecar-baseline-e529-01/manifest.json",
+    "sha256": "d784f67abfee5d39059bf1a00d4b79be7f6e33a328ba817ee58a05d8fb526724"
+  }
+}

@@ -1,0 +1,1238 @@
+{
+  "date": "2026-09-10",
+  "cpu": "Apple M3 Max",
+  "memoryGiB": 128,
+  "runtime": "Deno/2.9.4 aarch64-apple-darwin",
+  "units": "Deno timings are nanoseconds unless a field says otherwise",
+  "comparison": {
+    "sourceFingerprint": "024e29e10ae1009e4d3ca55b380bd4850f19c43baed2613cf009deaeb21d90a4",
+    "source": {
+      "head": "16de7e0c871d21023111729b40876497dbaf3e36",
+      "hashes": {
+        "docs/features/view-scoped-client-replication.md": "cd2eeea72de96cc8a2249ebe14ebd8ff26fcf41c70bd220d2b58f423470cdb6b",
+        "docs/history/plans/view-scoped-replication-integration-2026-09-09.md": "a66fbe69b0d354e4c258a4f1a6c13f3e73e54e986a5dc0e3d74744f1293d34b9",
+        "docs/plans/view-scoped-client-replication.md": "600f62cfc70b53875aa583f8765af7c2f5bdb7e3bbfa2ad6302a34c54712ac54",
+        "packages/memory/test/v2-view-interest.test.ts": "a6cd08c764193ce384ce400783852ae3120ddb312655f25a5fc08c80fe475234",
+        "packages/memory/v2/view-interest.ts": "ff08c57b04e4ad89f32de6ca6409742aab5f9798f2deba55005661245754d84f",
+        "packages/runner/src/component-read-contract.ts": "1f18ee3a2cd0bf3a1c60c74f8fa52677a2a14b08d7ad8e98ba06156ce741430a",
+        "packages/runner/src/executor/view-plan-publisher.ts": "5bb23e7419365e83dcc556590f468bb3d540834d55266094f58105031f469f20",
+        "packages/runner/src/storage/local-read-policy.ts": "1f099b7ef607aa15e9f5f0a2d0abe84ee98ff168b2b340ddc6c7d8aa2ab0fe13",
+        "packages/runner/src/view-input-basis.ts": "11346e96af30fb4827650d4a511090e0a83b2408b96a230ef78d42e1ba5c5ede",
+        "packages/runner/src/view-render-reads.ts": "e161cf47fbc9b4eae577fdf1ea5081fbc4e391d56293c785d48f466c512c6542",
+        "packages/runner/src/view-replication-client.ts": "c205c90be44b26a10914e7ddecdd2c21d4753497f316be425b387210dedc0f38",
+        "packages/runner/src/view-replication.ts": "3d7c3ad6fff2aad3c711b504f8e93840c5e85803354bb14ff61556592dedeca1",
+        "packages/runner/test/local-read-policy.test.ts": "ad40e9da88c5db728034220870e721b8e1a6acb29adb3d1b8b6d0441c7b9af5d",
+        "packages/runner/test/view-input-basis.test.ts": "4c0546ef29a6f3f5e8de871382b46256b142319c407d1f2ec2a1d9a9663a97cb",
+        "packages/runner/test/view-render-reads.test.ts": "4f4f36a3535eb8c8aa138074dd201dbe4179c0376b6a8666985fabfea8d4e391",
+        "packages/runner/test/view-replication-client.test.ts": "9372e93783739366d5b695e0087977ffb3505f785015e434fe156d419d5232a5",
+        "packages/runner/test/view-replication-lifecycle.test.ts": "3eab8e1700b3986eb6b07f05a95e69f106815069d498839d161fac4b7478d0cf",
+        "packages/runner/test/view-replication.test.ts": "127cad82015586ac9a00f31bcfcdcdf4c1d57c6a4cab81677f01992c2d8db32c",
+        "packages/runner/test/view-scoped-replication-flags.test.ts": "d011ddb4f56b4e24f4f0e1d52031de0790c8735834514ab3481aa9aaded5828f",
+        "packages/shell/integration/view-scoped-replication.test.ts": "dc581a9d3fb3034aba7e7098554520982c2389393e748aa6911e11f50ca0dad8",
+        "docs/development/BENCHMARKS.md": "8b20aa873c23fcad2d65b088b293cf84c54612982b874355ade43517992045f6",
+        "docs/development/EXPERIMENTAL_OPTIONS.md": "4270b2ed0701ee6adcf1fabf4cc7131749638bd6912ad7c18794c2512bd60f98",
+        "docs/development/TESTING.md": "19e0db36f63a39e061358119c89c7ed1f73865e44e161af5ab06f9ee14846164",
+        "docs/development/waiting-in-tests.md": "e897fa7a27c00c7c2cc36ae71ee3d54a56ed6d0ff952f8841ea94cd19cf5867a",
+        "docs/features/README.md": "72285590e98b8afec688d10e1a511e967329411df7576d09b6b7c11f21aa6442",
+        "docs/history/INDEX.md": "feecd59f497482f06b5cadef1ae19d5676bc72b25b54bef173c3780640293d8e",
+        "docs/plans/README.md": "4cfc2f1c9df141bd846f505ff6a4759275cad5ab94f84fe69a94610b49b65078",
+        "docs/specs/server-side-execution/builtins.md": "e16c838e88dfbf6a71602f2ce9088cabc22bf991b787f4817c5e402b87a10e0a",
+        "docs/specs/server-side-execution/protocol.md": "274d54929f3f68494bc4fbd683256988327f0b1a348ce5a99d778e8c13bc3a0f",
+        "docs/specs/server-side-execution/speculation.md": "a4f5a09184599ea5582cc8bd4f3192d78a68acc3901b54eb1e336f85d479a580",
+        "packages/memory/test/v2-client-holdings.test.ts": "965197967c6adadf041cee04825bad7fb84ddc3398db0b053450ae643218dd52",
+        "packages/memory/test/v2.test.ts": "30cd9fdb8227c59cf558282783f280cc4b7b9f6d983e6c2e365cfa09d7a9a5ec",
+        "packages/memory/v2.ts": "064cf6fe0a3f02743002311e3789c7b717854d1f76b68c04c90b12d49d97096f",
+        "packages/memory/v2/client.ts": "ac52c7bcc2533fef014dfb4f05e58c757bf222fd38bf1f8c487381c350c74acb",
+        "packages/memory/v2/server-sync.ts": "33640faeb893af7c2f3c51c0623ea523b0f6a7c1c57f90ec086bb5370dad7377",
+        "packages/memory/v2/server.ts": "cada9068a190920d148fe8734fcf329a6a42a39d31ac59d1e2d0307854bba2cf",
+        "packages/memory/v2/session-registry.ts": "6be388e5fafc8ed7ea7373e2a24f7615f26199bb820a9dc56c2ebb49eca2823a",
+        "packages/patterns/integration/cfc-browser-helpers.test.ts": "0b64811ff17d2e0ba1661c3a9b7cffcea71db9499f05b0e45a82e74e2622d5e4",
+        "packages/patterns/integration/cfc-browser-helpers.ts": "2e3e7261bd020f32aad1dcdcd2157583d98e3c49ac2644f2a45ddfa80f11b0f3",
+        "packages/patterns/integration/default-app.test.ts": "91a7dbf0b44d94e875a716addb0ec335b28ea0bb7114cf55bc863fc838508d98",
+        "packages/patterns/integration/lunch-poll-vote-burst.bench.ts": "c2b28a7a7a2fdef3c20e0d62dd894ff595c7edf0e32a4f0d245147181d43e8c1",
+        "packages/piece/src/ops/pieces-controller.ts": "bcb3d17cdd02e1e5868481e584a66af85b301b901c9da0c59a599c6a503f1060",
+        "packages/runner/deno.jsonc": "7ff3496ba469b9919ba28eed07dad58b7fef4b5d1e93f3054b764717ad05cfa4",
+        "packages/runner/src/builtins/filter.ts": "fa621246bd33c876baf323e4060d54fa019b1e999ad6748b549ecff7dd8731d0",
+        "packages/runner/src/builtins/flatmap.ts": "479cce81eba2095ddee11c264fe311db491c2b5dbfa05ee554e6d5736bd70e40",
+        "packages/runner/src/builtins/list-result-container-seed.ts": "1af0282ff1880038f76351bb7f5d3a8200edd63803c95d655bea85e56831b2d7",
+        "packages/runner/src/builtins/map.ts": "58e43b9aa9924ebce653ca6855c65f64074ad294dc7bea8c2369d5b65baa97a9",
+        "packages/runner/src/builtins/sqlite-builtins.ts": "d6356aa2dc9dbecec8eb979dad281bf8988d2b4ea8cfce64f102df3a74774b19",
+        "packages/runner/src/cell.ts": "28d92320319ec2cb5efa7b81f1aa10bdb2f7fcd7fab8c3990e21fa2e40b7f1fb",
+        "packages/runner/src/executor/space-server.ts": "f097c4934e69f1cd9aa8640b06ed54c46039991d5f39b8f6dab0f6bb5a5aecee",
+        "packages/runner/src/pattern-binding.ts": "aecf79956f425c6e51742822ea09733404831a6e90a2dbb0e67d3e7e354db394",
+        "packages/runner/src/runner.ts": "54901680a7aed15f1c91e6ef4458235d47d810568cdd6336f75cb4f35f4e1929",
+        "packages/runner/src/runtime-presets.ts": "399e30b2f3a5e588d279b95cd79f86c226e5f20f437de7ab15ae15c62cebc91c",
+        "packages/runner/src/runtime.ts": "181ca5a40c9295dfb8cc4a3071ad9f951bce33298d90d31a25a9432ad872b13c",
+        "packages/runner/src/scheduler/events.ts": "b654c03f3edfcec110d39e212a22ebda25022ad42e5776c92a7c7f180d34a052",
+        "packages/runner/src/scheduler/facade.ts": "38591f5bf90102f28e5478a73b9eaf802c72e46c2cd52b3adb8a5a1dc5c32379",
+        "packages/runner/src/scheduler/invalidation.ts": "e63c5a1e6732c14e86c5aab306045b24520c129a4c8bb2df11bca64b61febd3e",
+        "packages/runner/src/scheduler/node-record.ts": "2ebb63a9355fc39ebbb024063a50fe3e5e8699049ee653ac394d904535b63f1f",
+        "packages/runner/src/scheduler/reactivity.ts": "d3b9e5aaf291b7fbfea2ea9e5f89a21e3caca88733ba7d9f6ab8ebb8f81c4575",
+        "packages/runner/src/scheduler/run.ts": "07501fd5de593a972cecb43e0b30e750dfbbfacbbc987e15fdd7aead302bc864",
+        "packages/runner/src/scheduler/types.ts": "59919ca97a0c2df3a64cf3fd1c632f797db6ddbc3a3c2ad1b8c09b88b9d293ea",
+        "packages/runner/src/schema.ts": "bc7d971cbbbedafd3e24bebe0090877528d5378dde950cad2cf87c814b96c05c",
+        "packages/runner/src/schemas.ts": "e9ea0e799d60976fedcb129c59ae2a529a956d1e0775e94c4df9d17064510c43",
+        "packages/runner/src/storage/extended-storage-transaction.ts": "270004366145b99d0ae460d040376091644e73c46c8847a068e6627a7cc9e0a9",
+        "packages/runner/src/storage/interface.ts": "75434d75df4e6f487df026672a19b5e58257254262aa2ea55b8846ac69fd2d8f",
+        "packages/runner/src/storage/reactivity-log.ts": "8b1911c4d8ddc0e16d12c659d350a29e69dee50a7bbb149f8a79766b6817d430",
+        "packages/runner/src/storage/v2-transaction.ts": "5029de96d243ebd2caf1d2541915cbcd96baf77c8302bf322f6fa36ea1cecc85",
+        "packages/runner/src/storage/v2.ts": "3161d19d1a23ceb4f5e48bcb7d1ced1d0ea41742e4416fb3809abd72d3e722b1",
+        "packages/runner/test/clock-preload.ts": "590da14d2fc13af8c2ef109d05e8f99587cd079aa093b3153a3e7f0806eaf05d",
+        "packages/runner/test/list-result-container-seed.test.ts": "88c8235f83080c4bcf5cf2614e0087a1f7d96d89b27a163fbfb819f31a413f64",
+        "packages/runner/test/runtime-presets.test.ts": "9dd90dd461d9a67092977148a903fa0ff79b189f142793fe6baf59b3dd5fc504",
+        "packages/runner/test/sqlite-db-owner.test.ts": "e11647100452274846569f9145b92f58c31f07669a94b3d5ff9fb72de40c88b9",
+        "packages/runner/test/sqlite-served-identity.test.ts": "b6eb9043701c1b0fcfae4a73604ecc80a12d40d3c6c2006fd6d30fca4629cf37",
+        "packages/runtime-client/integration/client.test.ts": "176883c3fa4c50ed703b6157a877759cfd208cfa675139ce6f62207d06f579eb",
+        "packages/runtime-client/src/backends/runtime-error.ts": "08b4658398fcbee423dc14d8c442cbc598f88b26bfd90a2a1f69ee6d3c260245",
+        "packages/runtime-client/src/backends/runtime-processor.ts": "6b188dca745bc120010f43842aae364380da27b07875db42b0934f733052a139",
+        "packages/runtime-client/src/protocol/types.ts": "c664b5d05e100fa06a34b8536850406725df0b017369501dd29d0460dd9dd46f",
+        "packages/runtime-client/test/backends/runtime-error.test.ts": "803df1a11ac719343c9ab58c8c5f321c7a53077d9e9af5de0ea22312983962ab",
+        "packages/shell/felt.config.ts": "ea9077706f8cab71fd68a614804cc02aff9833aa785e28bc19a46185419c4218",
+        "packages/shell/src/lib/env.ts": "47c3258f7527754551eb83c2a83a1038dbfdd7f0ac8d539e93cba0dbc5becb1e",
+        "packages/ui/src/v2/components/cf-autocomplete/cf-autocomplete.ts": "c24fdcd9633cdf2ec7e230b876305793310c2e50a9372459e8451bf0a8c6aaa8",
+        "packages/ui/src/v2/components/cf-chat/cf-chat.ts": "84104ddc80437b21ae34826f5432db7fb3179c6bb848d19033aa68cd0e8a8479",
+        "packages/ui/src/v2/components/cf-location/cf-location.ts": "b275540454dddd1cf3b00ea79fe55ed4130efbc47793493213ceb67bd13abfe8",
+        "packages/ui/src/v2/components/cf-map/cf-map.ts": "98fc2048b2c991439037b5a3f7897d49b8dcc35cd0b8e8983dc1aab2e1cd936b",
+        "packages/ui/src/v2/components/cf-message-beads/cf-message-beads.ts": "ce0fccd15604a60381db85a516a259ed1fe9cf2514967cc228ca6c4c25d4b0fb",
+        "packages/ui/src/v2/components/cf-profile-badge/cf-profile-badge.ts": "661cc6a1723de85e04fa8b140fa9cb1bfb9ac6e63a175700c76186a898fb2913",
+        "packages/ui/src/v2/components/cf-tools-chip/cf-tools-chip.ts": "1b5fa314db79f568712df916fe0ab9aaf292441e2c39c72f0db7731bd6a1173b",
+        "packages/ui/src/v2/components/cf-voice-input/cf-voice-input.ts": "84605b662e3ede1fa49547ec811b815f96ac40f8c93130268a9e0eddc3ff4e36",
+        "packages/ui/src/v2/core/mention-refs.ts": "d715534538686e32879670557b9cee2c0ec9724d33df3d9120819087562839ee",
+        "packages/ui/src/v2/core/mentionable.ts": "3302724359688d84f035bea8a18d1c6e3ce85ff844b2b2fb4819dfdb1603eeea",
+        "tasks/integration.ts": "2091dc4e26c4e9a9c706768230012e6284c348e50ac39ccb8a1eb68c6962e320"
+      }
+    },
+    "comparisons": [
+      {
+        "pair": "3",
+        "file": "topic-board-navigation",
+        "name": "load",
+        "off": {
+          "n": 6,
+          "min": 660423042.0,
+          "max": 668277500.0,
+          "avg": 662758320.0,
+          "p75": 663818750.0,
+          "p99": 668277500.0,
+          "p995": 668277500.0,
+          "p999": 668277500.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        "on": {
+          "n": 6,
+          "min": 655470292.0,
+          "max": 659348542.0,
+          "avg": 657759216.0,
+          "p75": 658861166.0,
+          "p99": 659348542.0,
+          "p995": 659348542.0,
+          "p999": 659348542.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        "p75Ratio": 0.9925317204432685,
+        "calibrationRatio": 0.7259959795150743,
+        "calibratedP75Ratio": 1.3671311528560055
+      },
+      {
+        "pair": "3",
+        "file": "topic-board-navigation",
+        "name": "sign in",
+        "off": {
+          "n": 6,
+          "min": 120230584.0,
+          "max": 126651875.0,
+          "avg": 122008771.0,
+          "p75": 122143292.0,
+          "p99": 126651875.0,
+          "p995": 126651875.0,
+          "p999": 126651875.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        "on": {
+          "n": 6,
+          "min": 118836000.0,
+          "max": 135751125.0,
+          "avg": 124645223.0,
+          "p75": 130928584.0,
+          "p99": 135751125.0,
+          "p995": 135751125.0,
+          "p999": 135751125.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        "p75Ratio": 1.0719261111776814,
+        "calibrationRatio": 0.7259959795150743,
+        "calibratedP75Ratio": 1.4764904233955531
+      },
+      {
+        "pair": "3",
+        "file": "topic-board-navigation",
+        "name": "board",
+        "off": {
+          "n": 6,
+          "min": 898728459.0,
+          "max": 1099307792.0,
+          "avg": 975368528.0,
+          "p75": 1054700375.0,
+          "p99": 1099307792.0,
+          "p995": 1099307792.0,
+          "p999": 1099307792.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        "on": {
+          "n": 6,
+          "min": 401829750.0,
+          "max": 442887375.0,
+          "avg": 416379598.0,
+          "p75": 421116166.0,
+          "p99": 442887375.0,
+          "p995": 442887375.0,
+          "p999": 442887375.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        "p75Ratio": 0.39927563882775713,
+        "calibrationRatio": 0.7259959795150743,
+        "calibratedP75Ratio": 0.5499694903192872
+      },
+      {
+        "pair": "3",
+        "file": "topic-board-navigation",
+        "name": "open topic",
+        "off": {
+          "n": 6,
+          "min": 247656291.0,
+          "max": 282791583.0,
+          "avg": 259305063.0,
+          "p75": 273029833.0,
+          "p99": 282791583.0,
+          "p995": 282791583.0,
+          "p999": 282791583.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        "on": {
+          "n": 6,
+          "min": 7694457917.0,
+          "max": 15081113750.0,
+          "avg": 9982986612.0,
+          "p75": 10557434875.0,
+          "p99": 15081113750.0,
+          "p995": 15081113750.0,
+          "p999": 15081113750.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        "p75Ratio": 38.66769707543278,
+        "calibrationRatio": 0.7259959795150743,
+        "calibratedP75Ratio": 53.26158569261043
+      },
+      {
+        "pair": "3",
+        "file": "topic-board-navigation",
+        "name": "crossref",
+        "off": {
+          "n": 6,
+          "min": 192055458.0,
+          "max": 215580250.0,
+          "avg": 204596021.0,
+          "p75": 213922791.0,
+          "p99": 215580250.0,
+          "p995": 215580250.0,
+          "p999": 215580250.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        "on": {
+          "n": 6,
+          "min": 1542034208.0,
+          "max": 4117240000.0,
+          "avg": 2588116611.0,
+          "p75": 3057839750.0,
+          "p99": 4117240000.0,
+          "p995": 4117240000.0,
+          "p999": 4117240000.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        "p75Ratio": 14.294127968814692,
+        "calibrationRatio": 0.7259959795150743,
+        "calibratedP75Ratio": 19.688990534578977
+      },
+      {
+        "pair": "3",
+        "file": "topic-board-navigation",
+        "name": "journey",
+        "off": {
+          "n": 6,
+          "min": 2560206542.0,
+          "max": 4523737041.0,
+          "avg": 3001723535.0,
+          "p75": 2836693083.0,
+          "p99": 4523737041.0,
+          "p995": 4523737041.0,
+          "p999": 4523737041.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        "on": {
+          "n": 6,
+          "min": 12162936958.0,
+          "max": 17610838125.0,
+          "avg": 13907582896.0,
+          "p75": 14921012750.0,
+          "p99": 17610838125.0,
+          "p995": 17610838125.0,
+          "p999": 17610838125.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        "p75Ratio": 5.260002514695736,
+        "calibrationRatio": 0.7259959795150743,
+        "calibratedP75Ratio": 7.245222650143504
+      },
+      {
+        "pair": "lunch-control",
+        "file": "lunch-poll-vote-burst",
+        "name": "vote burst 3x4",
+        "off": {
+          "n": 11,
+          "min": 1275125666.0,
+          "max": 4119338167.0,
+          "avg": 1704940546.0,
+          "p75": 1568190209.0,
+          "p99": 4119338167.0,
+          "p995": 4119338167.0,
+          "p999": 4119338167.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        "on": {
+          "n": 11,
+          "min": 1186055334.0,
+          "max": 1730813792.0,
+          "avg": 1391449948.0,
+          "p75": 1501783500.0,
+          "p99": 1730813792.0,
+          "p995": 1730813792.0,
+          "p999": 1730813792.0,
+          "highPrecision": true,
+          "usedExplicitTimers": true
+        },
+        "p75Ratio": 0.9576539193913561,
+        "calibrationRatio": 0.9932909528634142,
+        "calibratedP75Ratio": 0.9641222610864166
+      }
+    ]
+  },
+  "extraBaselines": [
+    {
+      "run": "off-1",
+      "file": "topic-board-navigation",
+      "name": "load",
+      "statisticsNs": {
+        "n": 6,
+        "min": 659536375.0,
+        "max": 791153125.0,
+        "avg": 701716306.0,
+        "p75": 724154333.0,
+        "p99": 791153125.0,
+        "p995": 791153125.0,
+        "p999": 791153125.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    },
+    {
+      "run": "off-1",
+      "file": "topic-board-navigation",
+      "name": "sign in",
+      "statisticsNs": {
+        "n": 6,
+        "min": 117038833.0,
+        "max": 121463250.0,
+        "avg": 118805403.0,
+        "p75": 120398375.0,
+        "p99": 121463250.0,
+        "p995": 121463250.0,
+        "p999": 121463250.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    },
+    {
+      "run": "off-1",
+      "file": "topic-board-navigation",
+      "name": "board",
+      "statisticsNs": {
+        "n": 6,
+        "min": 935318000.0,
+        "max": 1507008875.0,
+        "avg": 1249450862.0,
+        "p75": 1450236792.0,
+        "p99": 1507008875.0,
+        "p995": 1507008875.0,
+        "p999": 1507008875.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    },
+    {
+      "run": "off-1",
+      "file": "topic-board-navigation",
+      "name": "open topic",
+      "statisticsNs": {
+        "n": 6,
+        "min": 240372167.0,
+        "max": 375984125.0,
+        "avg": 302539883.0,
+        "p75": 365691041.0,
+        "p99": 375984125.0,
+        "p995": 375984125.0,
+        "p999": 375984125.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    },
+    {
+      "run": "off-1",
+      "file": "topic-board-navigation",
+      "name": "crossref",
+      "statisticsNs": {
+        "n": 6,
+        "min": 195099916.0,
+        "max": 286554750.0,
+        "avg": 250768361.0,
+        "p75": 280028167.0,
+        "p99": 286554750.0,
+        "p995": 286554750.0,
+        "p999": 286554750.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    },
+    {
+      "run": "off-1",
+      "file": "topic-board-navigation",
+      "name": "journey",
+      "statisticsNs": {
+        "n": 6,
+        "min": 2290452000.0,
+        "max": 2609616375.0,
+        "avg": 2399701278.0,
+        "p75": 2463986250.0,
+        "p99": 2609616375.0,
+        "p995": 2609616375.0,
+        "p999": 2609616375.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    },
+    {
+      "run": "off-1",
+      "file": "topic-board-scale",
+      "name": "100",
+      "statisticsNs": {
+        "n": 4,
+        "min": 3768507833.0,
+        "max": 4734025875.0,
+        "avg": 4140997230.0,
+        "p75": 4211205875.0,
+        "p99": 4734025875.0,
+        "p995": 4734025875.0,
+        "p999": 4734025875.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    },
+    {
+      "run": "off-3",
+      "file": "topic-board-navigation",
+      "name": "load",
+      "statisticsNs": {
+        "n": 6,
+        "min": 660423042.0,
+        "max": 668277500.0,
+        "avg": 662758320.0,
+        "p75": 663818750.0,
+        "p99": 668277500.0,
+        "p995": 668277500.0,
+        "p999": 668277500.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    },
+    {
+      "run": "off-3",
+      "file": "topic-board-navigation",
+      "name": "sign in",
+      "statisticsNs": {
+        "n": 6,
+        "min": 120230584.0,
+        "max": 126651875.0,
+        "avg": 122008771.0,
+        "p75": 122143292.0,
+        "p99": 126651875.0,
+        "p995": 126651875.0,
+        "p999": 126651875.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    },
+    {
+      "run": "off-3",
+      "file": "topic-board-navigation",
+      "name": "board",
+      "statisticsNs": {
+        "n": 6,
+        "min": 898728459.0,
+        "max": 1099307792.0,
+        "avg": 975368528.0,
+        "p75": 1054700375.0,
+        "p99": 1099307792.0,
+        "p995": 1099307792.0,
+        "p999": 1099307792.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    },
+    {
+      "run": "off-3",
+      "file": "topic-board-navigation",
+      "name": "open topic",
+      "statisticsNs": {
+        "n": 6,
+        "min": 247656291.0,
+        "max": 282791583.0,
+        "avg": 259305063.0,
+        "p75": 273029833.0,
+        "p99": 282791583.0,
+        "p995": 282791583.0,
+        "p999": 282791583.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    },
+    {
+      "run": "off-3",
+      "file": "topic-board-navigation",
+      "name": "crossref",
+      "statisticsNs": {
+        "n": 6,
+        "min": 192055458.0,
+        "max": 215580250.0,
+        "avg": 204596021.0,
+        "p75": 213922791.0,
+        "p99": 215580250.0,
+        "p995": 215580250.0,
+        "p999": 215580250.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    },
+    {
+      "run": "off-3",
+      "file": "topic-board-navigation",
+      "name": "journey",
+      "statisticsNs": {
+        "n": 6,
+        "min": 2560206542.0,
+        "max": 4523737041.0,
+        "avg": 3001723535.0,
+        "p75": 2836693083.0,
+        "p99": 4523737041.0,
+        "p995": 4523737041.0,
+        "p999": 4523737041.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    },
+    {
+      "run": "off-3",
+      "file": "topic-board-scale",
+      "name": "100",
+      "statisticsNs": {
+        "n": 4,
+        "min": 3838610458.0,
+        "max": 8701395375.0,
+        "avg": 5931553740.0,
+        "p75": 7233859791.0,
+        "p99": 8701395375.0,
+        "p995": 8701395375.0,
+        "p999": 8701395375.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    }
+  ],
+  "runs": {
+    "off-1": {
+      "environment": {
+        "EXPERIMENTAL_SERVER_EXECUTION": "true",
+        "EXPERIMENTAL_VIEW_SCOPED_REPLICATION": "false",
+        "MEMORY_DIR": "file:///var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-bench-off-1-glknj25g/memory/",
+        "API_URL": "http://localhost:8965/",
+        "FRONTEND_URL": "http://localhost:8965/",
+        "HEADLESS": "1",
+        "CF_LOG_LEVEL": "silent",
+        "CF_TOPIC_BOARD_TOPICS": "30",
+        "CF_TOPIC_BOARD_SCALE_LIMIT": "100",
+        "CF_LUNCH_POLL_VOTERS": "10",
+        "CF_LUNCH_POLL_OPTIONS": "10"
+      },
+      "commands": {
+        "start": {
+          "command": [
+            "bash",
+            "scripts/start-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 3.187470291974023
+        },
+        "topic-board-navigation": {
+          "command": [
+            "deno",
+            "bench",
+            "--frozen",
+            "--json",
+            "-A",
+            "--v8-flags=--expose-gc",
+            "packages/patterns/integration/topic-board-navigation.bench.ts",
+            "packages/dashboard/machine-calibration.bench.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 147.93712895782664
+        },
+        "browser-flags": {
+          "command": [
+            "deno",
+            "test",
+            "--frozen",
+            "-A",
+            "integration/view-scoped-replication.test.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs/packages/shell",
+          "code": 0,
+          "seconds": 8.367197958054021
+        },
+        "topic-board-scale": {
+          "command": [
+            "deno",
+            "bench",
+            "--frozen",
+            "--json",
+            "-A",
+            "--v8-flags=--expose-gc",
+            "packages/patterns/integration/topic-board-scale.bench.ts",
+            "packages/dashboard/machine-calibration.bench.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 332.58257483295165
+        },
+        "lunch-poll-vote-burst": {
+          "command": [
+            "deno",
+            "bench",
+            "--frozen",
+            "--json",
+            "-A",
+            "--v8-flags=--expose-gc",
+            "packages/patterns/integration/lunch-poll-vote-burst.bench.ts",
+            "packages/dashboard/machine-calibration.bench.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": -2,
+          "seconds": 158.22433912497945
+        },
+        "stop": {
+          "command": [
+            "bash",
+            "scripts/stop-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 0.1744288329500705
+        }
+      },
+      "calibrationP75Ns": {
+        "topic-board-navigation": {
+          "machine calibration - integer arithmetic": 284042.0,
+          "machine calibration - floating point arithmetic": 171041.0,
+          "machine calibration - short-lived object allocation": 183458.0,
+          "machine calibration - retained object graph": 113250.0,
+          "machine calibration - array fill and sum": 201875.0,
+          "machine calibration - typed array write and read": 258000.0,
+          "machine calibration - string building": 278000.0,
+          "machine calibration - map insert and read": 2183083.0,
+          "machine calibration - set insert and lookup": 2314291.0,
+          "machine calibration - property access through a prototype": 144666.0,
+          "machine calibration - closure allocation and call": 341334.0,
+          "machine calibration - json round trip": 1406625.0
+        },
+        "topic-board-scale": {
+          "machine calibration - integer arithmetic": 269791.0,
+          "machine calibration - floating point arithmetic": 167583.0,
+          "machine calibration - short-lived object allocation": 176625.0,
+          "machine calibration - retained object graph": 107958.0,
+          "machine calibration - array fill and sum": 197625.0,
+          "machine calibration - typed array write and read": 234208.0,
+          "machine calibration - string building": 264416.0,
+          "machine calibration - map insert and read": 2076541.0,
+          "machine calibration - set insert and lookup": 2239375.0,
+          "machine calibration - property access through a prototype": 136500.0,
+          "machine calibration - closure allocation and call": 334791.0,
+          "machine calibration - json round trip": 1355167.0
+        }
+      },
+      "failures": {}
+    },
+    "off-2": {
+      "environment": {
+        "EXPERIMENTAL_SERVER_EXECUTION": "true",
+        "EXPERIMENTAL_VIEW_SCOPED_REPLICATION": "false",
+        "MEMORY_DIR": "file:///var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-bench-off-2-vnqlkjfx/memory/",
+        "API_URL": "http://localhost:8965/",
+        "FRONTEND_URL": "http://localhost:8965/",
+        "HEADLESS": "1",
+        "CF_LOG_LEVEL": "silent",
+        "CF_TOPIC_BOARD_TOPICS": "30",
+        "CF_TOPIC_BOARD_SCALE_LIMIT": "100",
+        "CF_LUNCH_POLL_VOTERS": "10",
+        "CF_LUNCH_POLL_OPTIONS": "10"
+      },
+      "commands": {
+        "start": {
+          "command": [
+            "bash",
+            "scripts/start-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 3.19497316586785
+        },
+        "browser-flags": {
+          "command": [
+            "deno",
+            "test",
+            "--frozen",
+            "-A",
+            "integration/view-scoped-replication.test.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs/packages/shell",
+          "code": 0,
+          "seconds": 2.1881485409103334
+        },
+        "lunch-poll-vote-burst": {
+          "command": [
+            "deno",
+            "bench",
+            "--frozen",
+            "--json",
+            "-A",
+            "--v8-flags=--expose-gc",
+            "packages/patterns/integration/lunch-poll-vote-burst.bench.ts",
+            "packages/dashboard/machine-calibration.bench.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 1,
+          "seconds": 389.240775792161
+        },
+        "stop": {
+          "command": [
+            "bash",
+            "scripts/stop-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 0.17318350006826222
+        }
+      },
+      "calibrationP75Ns": {
+        "lunch-poll-vote-burst": {
+          "machine calibration - integer arithmetic": 279042.0,
+          "machine calibration - floating point arithmetic": 174417.0,
+          "machine calibration - short-lived object allocation": 186959.0,
+          "machine calibration - retained object graph": 121084.0,
+          "machine calibration - array fill and sum": 211583.0,
+          "machine calibration - typed array write and read": 253417.0,
+          "machine calibration - string building": 285375.0,
+          "machine calibration - map insert and read": 2226042.0,
+          "machine calibration - set insert and lookup": 2434250.0,
+          "machine calibration - property access through a prototype": 144042.0,
+          "machine calibration - closure allocation and call": 339958.0,
+          "machine calibration - json round trip": 1416791.0
+        }
+      },
+      "failures": {}
+    },
+    "on-2": {
+      "environment": {
+        "EXPERIMENTAL_SERVER_EXECUTION": "true",
+        "EXPERIMENTAL_VIEW_SCOPED_REPLICATION": "true",
+        "MEMORY_DIR": "file:///var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-bench-on-2-qir2842f/memory/",
+        "API_URL": "http://localhost:8965/",
+        "FRONTEND_URL": "http://localhost:8965/",
+        "HEADLESS": "1",
+        "CF_LOG_LEVEL": "silent",
+        "CF_TOPIC_BOARD_TOPICS": "30",
+        "CF_TOPIC_BOARD_SCALE_LIMIT": "100",
+        "CF_LUNCH_POLL_VOTERS": "10",
+        "CF_LUNCH_POLL_OPTIONS": "10"
+      },
+      "commands": {
+        "start": {
+          "command": [
+            "bash",
+            "scripts/start-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 2.1426735841669142
+        },
+        "browser-flags": {
+          "command": [
+            "deno",
+            "test",
+            "--frozen",
+            "-A",
+            "integration/view-scoped-replication.test.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs/packages/shell",
+          "code": 0,
+          "seconds": 1.9594685409683734
+        },
+        "lunch-poll-vote-burst": {
+          "command": [
+            "deno",
+            "bench",
+            "--frozen",
+            "-A",
+            "--v8-flags=--expose-gc",
+            "packages/patterns/integration/lunch-poll-vote-burst.bench.ts",
+            "packages/dashboard/machine-calibration.bench.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 1,
+          "seconds": 387.90451416699216
+        },
+        "stop": {
+          "command": [
+            "bash",
+            "scripts/stop-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 0.18904616707004607
+        }
+      },
+      "calibrationP75Ns": {},
+      "failures": {}
+    },
+    "off-3": {
+      "environment": {
+        "CF_LUNCH_POLL_VOTERS": "3",
+        "CF_LUNCH_POLL_OPTIONS": "4",
+        "EXPERIMENTAL_SERVER_EXECUTION": "true",
+        "EXPERIMENTAL_VIEW_SCOPED_REPLICATION": "false",
+        "MEMORY_DIR": "file:///var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-bench-off-3-t6n29yn7/memory/",
+        "API_URL": "http://localhost:8965/",
+        "FRONTEND_URL": "http://localhost:8965/",
+        "HEADLESS": "1",
+        "CF_LOG_LEVEL": "silent",
+        "CF_TOPIC_BOARD_TOPICS": "30",
+        "CF_TOPIC_BOARD_SCALE_LIMIT": "100"
+      },
+      "commands": {
+        "start": {
+          "command": [
+            "bash",
+            "scripts/start-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 2.1474304171279073
+        },
+        "topic-board-navigation": {
+          "command": [
+            "deno",
+            "bench",
+            "--frozen",
+            "--json",
+            "-A",
+            "--v8-flags=--expose-gc",
+            "packages/patterns/integration/topic-board-navigation.bench.ts",
+            "packages/dashboard/machine-calibration.bench.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 138.66749654104933
+        },
+        "browser-flags": {
+          "command": [
+            "deno",
+            "test",
+            "--frozen",
+            "-A",
+            "integration/view-scoped-replication.test.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs/packages/shell",
+          "code": 0,
+          "seconds": 2.6439192090183496
+        },
+        "topic-board-scale": {
+          "command": [
+            "deno",
+            "bench",
+            "--frozen",
+            "--json",
+            "-A",
+            "--v8-flags=--expose-gc",
+            "packages/patterns/integration/topic-board-scale.bench.ts",
+            "packages/dashboard/machine-calibration.bench.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 351.6892444160767
+        },
+        "lunch-poll-vote-burst": {
+          "command": [
+            "deno",
+            "bench",
+            "--frozen",
+            "--json",
+            "-A",
+            "--v8-flags=--expose-gc",
+            "packages/patterns/integration/lunch-poll-vote-burst.bench.ts",
+            "packages/dashboard/machine-calibration.bench.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 47.73827062500641
+        },
+        "stop": {
+          "command": [
+            "bash",
+            "scripts/stop-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 0.16506466595456004
+        }
+      },
+      "calibrationP75Ns": {
+        "topic-board-navigation": {
+          "machine calibration - integer arithmetic": 334750.0,
+          "machine calibration - floating point arithmetic": 204625.0,
+          "machine calibration - short-lived object allocation": 235709.0,
+          "machine calibration - retained object graph": 345083.0,
+          "machine calibration - array fill and sum": 272041.0,
+          "machine calibration - typed array write and read": 316250.0,
+          "machine calibration - string building": 348417.0,
+          "machine calibration - map insert and read": 2762458.0,
+          "machine calibration - set insert and lookup": 3363875.0,
+          "machine calibration - property access through a prototype": 156875.0,
+          "machine calibration - closure allocation and call": 410792.0,
+          "machine calibration - json round trip": 1792625.0
+        },
+        "topic-board-scale": {
+          "machine calibration - integer arithmetic": 276000.0,
+          "machine calibration - floating point arithmetic": 170917.0,
+          "machine calibration - short-lived object allocation": 183166.0,
+          "machine calibration - retained object graph": 115291.0,
+          "machine calibration - array fill and sum": 195542.0,
+          "machine calibration - typed array write and read": 243458.0,
+          "machine calibration - string building": 275375.0,
+          "machine calibration - map insert and read": 2079875.0,
+          "machine calibration - set insert and lookup": 2299000.0,
+          "machine calibration - property access through a prototype": 140625.0,
+          "machine calibration - closure allocation and call": 337583.0,
+          "machine calibration - json round trip": 1393000.0
+        },
+        "lunch-poll-vote-burst": {
+          "machine calibration - integer arithmetic": 276000.0,
+          "machine calibration - floating point arithmetic": 170917.0,
+          "machine calibration - short-lived object allocation": 183291.0,
+          "machine calibration - retained object graph": 113875.0,
+          "machine calibration - array fill and sum": 203083.0,
+          "machine calibration - typed array write and read": 251000.0,
+          "machine calibration - string building": 289125.0,
+          "machine calibration - map insert and read": 2217125.0,
+          "machine calibration - set insert and lookup": 2330875.0,
+          "machine calibration - property access through a prototype": 142625.0,
+          "machine calibration - closure allocation and call": 342417.0,
+          "machine calibration - json round trip": 1371792.0
+        }
+      },
+      "failures": {}
+    },
+    "on-3": {
+      "environment": {
+        "CF_LUNCH_POLL_VOTERS": "3",
+        "CF_LUNCH_POLL_OPTIONS": "4",
+        "EXPERIMENTAL_SERVER_EXECUTION": "true",
+        "EXPERIMENTAL_VIEW_SCOPED_REPLICATION": "true",
+        "MEMORY_DIR": "file:///var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-bench-on-3-e4mi6011/memory/",
+        "API_URL": "http://localhost:8965/",
+        "FRONTEND_URL": "http://localhost:8965/",
+        "HEADLESS": "1",
+        "CF_LOG_LEVEL": "silent",
+        "CF_TOPIC_BOARD_TOPICS": "30",
+        "CF_TOPIC_BOARD_SCALE_LIMIT": "100"
+      },
+      "commands": {
+        "start": {
+          "command": [
+            "bash",
+            "scripts/start-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 2.140492874896154
+        },
+        "topic-board-navigation": {
+          "command": [
+            "deno",
+            "bench",
+            "--frozen",
+            "--json",
+            "-A",
+            "--v8-flags=--expose-gc",
+            "packages/patterns/integration/topic-board-navigation.bench.ts",
+            "packages/dashboard/machine-calibration.bench.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 537.4784440421499
+        },
+        "browser-flags": {
+          "command": [
+            "deno",
+            "test",
+            "--frozen",
+            "-A",
+            "integration/view-scoped-replication.test.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs/packages/shell",
+          "code": 0,
+          "seconds": 1.8760969580616802
+        },
+        "topic-board-scale": {
+          "command": [
+            "deno",
+            "bench",
+            "--frozen",
+            "--json",
+            "-A",
+            "--v8-flags=--expose-gc",
+            "packages/patterns/integration/topic-board-scale.bench.ts",
+            "packages/dashboard/machine-calibration.bench.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 1,
+          "seconds": 876.9914020409342
+        },
+        "stop": {
+          "command": [
+            "bash",
+            "scripts/stop-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 0.1874159590806812
+        }
+      },
+      "calibrationP75Ns": {
+        "topic-board-navigation": {
+          "machine calibration - integer arithmetic": 276000.0,
+          "machine calibration - floating point arithmetic": 167708.0,
+          "machine calibration - short-lived object allocation": 179083.0,
+          "machine calibration - retained object graph": 115209.0,
+          "machine calibration - array fill and sum": 199416.0,
+          "machine calibration - typed array write and read": 234666.0,
+          "machine calibration - string building": 279917.0,
+          "machine calibration - map insert and read": 2084667.0,
+          "machine calibration - set insert and lookup": 2322292.0,
+          "machine calibration - property access through a prototype": 138958.0,
+          "machine calibration - closure allocation and call": 328791.0,
+          "machine calibration - json round trip": 1389167.0
+        },
+        "topic-board-scale": {
+          "machine calibration - integer arithmetic": 276083.0,
+          "machine calibration - floating point arithmetic": 171125.0,
+          "machine calibration - short-lived object allocation": 183334.0,
+          "machine calibration - retained object graph": 116209.0,
+          "machine calibration - array fill and sum": 201750.0,
+          "machine calibration - typed array write and read": 250666.0,
+          "machine calibration - string building": 289250.0,
+          "machine calibration - map insert and read": 2191916.0,
+          "machine calibration - set insert and lookup": 2365042.0,
+          "machine calibration - property access through a prototype": 142292.0,
+          "machine calibration - closure allocation and call": 339875.0,
+          "machine calibration - json round trip": 1405792.0
+        }
+      },
+      "failures": {
+        "100": {
+          "name": "Error",
+          "message": "Timed out waiting for \"body\" to contain \"Topic 0000 attention\". Last probe: {\n  selector: \"body\",\n  matches: [\n    {\n      tagName: \"body\",\n      text: \"e42ba990-50db-4fd5-99e1-0a65a2e2dc30-100\\n\" +\n        \"                \\n\" +\n        \"                    /\\n\" +\n        \"                    \\n\" +\n        \"                      \\n\" +\n        ... length: 500,\n      rect: {\n        width: 756,\n        height: 469,\n        top: 0,\n        left: 0\n      },\n      visible: true,\n      disabled: false\n    }\n  ],\n  bodyText: \"e42ba990-50db-4fd5-99e1-0a65a2e2dc30-100\\n\" +\n    \"                \\n\" +\n    \"                    /\\n\" +\n    \"                    \\n\" +\n    \"                      \\n\" +\n    ... length: 1000\n}",
+          "cause": "waitForCondition did not resolve within 300000ms"
+        }
+      }
+    },
+    "on-4": {
+      "environment": {
+        "CF_LUNCH_POLL_VOTERS": "3",
+        "CF_LUNCH_POLL_OPTIONS": "4",
+        "EXPERIMENTAL_SERVER_EXECUTION": "true",
+        "EXPERIMENTAL_VIEW_SCOPED_REPLICATION": "true",
+        "MEMORY_DIR": "file:///var/folders/73/33w_g6dn349dvgff8b61mjr40000gn/T/view-bench-on-4-_rcn0lic/memory/",
+        "API_URL": "http://localhost:8965/",
+        "FRONTEND_URL": "http://localhost:8965/",
+        "HEADLESS": "1",
+        "CF_LOG_LEVEL": "silent",
+        "CF_TOPIC_BOARD_TOPICS": "30",
+        "CF_TOPIC_BOARD_SCALE_LIMIT": "100"
+      },
+      "commands": {
+        "start": {
+          "command": [
+            "bash",
+            "scripts/start-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 2.144718750147149
+        },
+        "browser-flags": {
+          "command": [
+            "deno",
+            "test",
+            "--frozen",
+            "-A",
+            "integration/view-scoped-replication.test.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs/packages/shell",
+          "code": 0,
+          "seconds": 1.8922837499994785
+        },
+        "lunch-poll-vote-burst": {
+          "command": [
+            "deno",
+            "bench",
+            "--frozen",
+            "--json",
+            "-A",
+            "--v8-flags=--expose-gc",
+            "packages/patterns/integration/lunch-poll-vote-burst.bench.ts",
+            "packages/dashboard/machine-calibration.bench.ts"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 42.807867208030075
+        },
+        "stop": {
+          "command": [
+            "bash",
+            "scripts/stop-local-dev.sh",
+            "--port-offset=965"
+          ],
+          "cwd": "/Users/berni/.codex/worktrees/1503/labs",
+          "code": 0,
+          "seconds": 0.17002395796589553
+        }
+      },
+      "calibrationP75Ns": {
+        "lunch-poll-vote-burst": {
+          "machine calibration - integer arithmetic": 279708.0,
+          "machine calibration - floating point arithmetic": 172625.0,
+          "machine calibration - short-lived object allocation": 185667.0,
+          "machine calibration - retained object graph": 116042.0,
+          "machine calibration - array fill and sum": 195708.0,
+          "machine calibration - typed array write and read": 250709.0,
+          "machine calibration - string building": 277458.0,
+          "machine calibration - map insert and read": 2126917.0,
+          "machine calibration - set insert and lookup": 2288417.0,
+          "machine calibration - property access through a prototype": 142291.0,
+          "machine calibration - closure allocation and call": 337542.0,
+          "machine calibration - json round trip": 1399709.0
+        }
+      },
+      "failures": {}
+    }
+  },
+  "integration": {
+    "fullRun": {
+      "code": 1,
+      "seconds": 2530.7989428748842,
+      "command": [
+        "deno",
+        "task",
+        "integration"
+      ],
+      "environment": {
+        "EXPERIMENTAL_SERVER_EXECUTION": "true",
+        "EXPERIMENTAL_VIEW_SCOPED_REPLICATION": "true",
+        "MEMORY_DIR": "file:///tmp/view-v4-full-memory/",
+        "CF_DRILL_STORE_DIR": "/tmp/view-v4-full-memory",
+        "HEADLESS": "1"
+      }
+    },
+    "knownFullRunFailures": [
+      "runtime-client conditional child read before arrival",
+      "default-app metadata read through reference cell"
+    ],
+    "passingReruns": {
+      "/tmp/view-v4-runtime-client-fixed.log": "ok | 1 passed (50 steps) | 0 failed",
+      "/tmp/view-v4-runtime-client-web-off.log": "ok | 1 passed (50 steps) | 0 failed",
+      "/tmp/view-v4-default-fixed.log": "ok | 2 passed (2 steps) | 0 failed",
+      "/tmp/view-v4-parking-focused.log": "ok | 1 passed (2 steps) | 0 failed",
+      "/tmp/view-v4-topic-clean.log": "ok | 1 passed (1 step) | 0 failed"
+    },
+    "note": "The full command exited nonzero before these test fixes. Every failure has a passing rerun; unaffected suites completed normally."
+  },
+  "profile": {
+    "totalMs": 34546.313,
+    "activeMs": 29776.572,
+    "inclusive": {
+      "view-plan-publisher inclusive": {
+        "ms": 24036.914,
+        "totalPercent": 69.57881149285019,
+        "activePercent": 80.724248580394
+      },
+      "readsOverlapWrites inclusive": {
+        "ms": 19196.906,
+        "totalPercent": 55.568610172668784,
+        "activePercent": 64.46983218887654
+      },
+      "collectViewAncestors inclusive": {
+        "ms": 14515.591,
+        "totalPercent": 42.01777191099959,
+        "activePercent": 48.7483616314195
+      }
+    },
+    "overlapCallersMs": {
+      "file:///Users/berni/.codex/worktrees/1503/labs/packages/runner/src/view-replication.ts collectViewAncestors": 12744.742,
+      "file:///Users/berni/.codex/worktrees/1503/labs/packages/runner/src/executor/view-plan-publisher.ts ": 6437.141,
+      "file:///Users/berni/.codex/worktrees/1503/labs/packages/runner/src/view-replication.ts selectViewData": 13.519,
+      "file:///Users/berni/.codex/worktrees/1503/labs/packages/runner/src/executor/view-plan-publisher.ts publish": 1.504
+    }
+  }
+}

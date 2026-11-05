@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 import {
+  collectRecords,
   gather,
   headCommitOfEvent,
   parseGatherArgs,
@@ -28,12 +30,12 @@ describe("test-records-gather", () => {
     it("returns the four fields of a full specification", () => {
       expect(
         parseJUnitSpec(
-          "kind=unit,scope=cli,prefix=packages/cli,glob=out/*.xml",
+          "kind=unit,scope=cli,prefix=runtime/cli,glob=out/*.xml",
         ),
       ).toEqual({
         kind: "unit",
         scope: "cli",
-        prefix: "packages/cli",
+        prefix: "runtime/cli",
         glob: "out/*.xml",
       });
     });
@@ -58,6 +60,16 @@ describe("test-records-gather", () => {
     it("returns undefined for a push payload", () => {
       expect(headCommitOfEvent({ pusher: {} })).toBeUndefined();
     });
+
+    it("returns undefined for a payload that is not an object", () => {
+      expect(headCommitOfEvent(null)).toBeUndefined();
+      expect(headCommitOfEvent("pull_request")).toBeUndefined();
+    });
+
+    it("returns undefined for a pull request that names no head", () => {
+      expect(headCommitOfEvent({ pull_request: { number: 1 } }))
+        .toBeUndefined();
+    });
   });
 
   describe("gather()", () => {
@@ -80,7 +92,7 @@ describe("test-records-gather", () => {
         schema: RECORD_SCHEMA_VERSION,
         line: "context",
         reportId: "01GATHERTEST000000000000",
-        repo: "commontoolsinc/labs",
+        repo: "commonfabric/labs",
         commit: "c".repeat(40),
         dirty: false,
         env: "ci",
@@ -108,7 +120,7 @@ describe("test-records-gather", () => {
         junit: [{
           kind: "unit",
           scope: "cli",
-          prefix: "packages/cli",
+          prefix: "runtime/cli",
           glob: join(dir, "*.xml"),
         }],
         spoolDir: held.dir,
@@ -120,6 +132,7 @@ describe("test-records-gather", () => {
       expect(facts.job).toBe("Test (3/8)");
       expect(facts.shard).toBe("3/8");
       expect(facts.denoVersion).toBe(Deno.version.deno);
+      expect(Number.isSafeInteger(facts.shuffleSeed)).toBe(true);
 
       const lines = (await Deno.readTextFile(join(out, "records.ndjson")))
         .trimEnd().split("\n");
@@ -137,7 +150,7 @@ describe("test-records-gather", () => {
         },
         outcome: "pass",
         durationMs: 250,
-        file: "packages/cli/test/alpha.test.ts",
+        file: "runtime/cli/test/alpha.test.ts",
       });
     });
 
@@ -172,6 +185,7 @@ describe("test-records-gather", () => {
           if (name === "GITHUB_SHA") return "a".repeat(40);
           if (name === "GITHUB_HEAD_REF") return "feature-branch";
           if (name === "GITHUB_EVENT_PATH") return eventPath;
+          if (name === "CF_TEST_SHUFFLE_SEED") return "7";
           return undefined;
         },
       });
@@ -181,6 +195,76 @@ describe("test-records-gather", () => {
       expect(facts.commit).toBe("a".repeat(40));
       expect(facts.branch).toBe("feature-branch");
       expect(facts.headCommit).toBe("f".repeat(40));
+      // The seed a job's runners shuffled by, which an override the job
+      // set decides.
+      expect(facts.shuffleSeed).toBe(7);
+    });
+
+    it("records no head commit where the event payload is not JSON", async () => {
+      // The payload is context the job may lack, so a payload this cannot
+      // read costs the one fact it would have given and nothing else.
+
+      const out = join(dir, "out");
+      const eventPath = join(dir, "event.json");
+      await Deno.writeTextFile(eventPath, "{not json");
+      await gather({
+        out,
+        job: "Check",
+        junit: [],
+        env: (name) => {
+          if (name === "GITHUB_SHA") return "a".repeat(40);
+          if (name === "GITHUB_EVENT_PATH") return eventPath;
+          return undefined;
+        },
+      });
+      const facts = JSON.parse(
+        await Deno.readTextFile(join(out, "job.json")),
+      );
+      expect(facts.commit).toBe("a".repeat(40));
+      expect(facts.headCommit).toBeUndefined();
+    });
+
+    it("ingests the files a JUnit glob matches and skips its directories", async () => {
+      await Deno.writeTextFile(join(dir, "a-good.xml"), JUNIT);
+      await Deno.mkdir(join(dir, "b-directory.xml"));
+      const warned: string[] = [];
+      const warn = console.warn;
+      console.warn = (line: string) => warned.push(line);
+      const out = join(dir, "out");
+      try {
+        await gather({
+          out,
+          job: "Check",
+          junit: [{ kind: "unit", scope: "cli", glob: join(dir, "*.xml") }],
+        });
+      } finally {
+        console.warn = warn;
+      }
+      expect(warned).toEqual([]);
+      const lines = (await Deno.readTextFile(join(out, "records.ndjson")))
+        .trimEnd().split("\n");
+      expect(lines.length).toBe(1);
+    });
+
+    it("warns about a JUnit glob that matched nothing, and still writes", async () => {
+      const glob = join(dir, "reports", "*.xml");
+      const warned: string[] = [];
+      const warn = console.warn;
+      console.warn = (line: string) => warned.push(line);
+      const out = join(dir, "out");
+      try {
+        await gather({
+          out,
+          job: "Check",
+          junit: [{ kind: "unit", scope: "cli", glob }],
+        });
+      } finally {
+        console.warn = warn;
+      }
+      expect(warned).toEqual([
+        `test records: no JUnit files matched ${glob}`,
+      ]);
+      expect(await Deno.readTextFile(join(out, "records.ndjson"))).toBe("");
     });
 
     it("keeps ingesting after one unreadable JUnit file", async () => {
@@ -195,6 +279,154 @@ describe("test-records-gather", () => {
       const lines = (await Deno.readTextFile(join(out, "records.ndjson")))
         .trimEnd().split("\n");
       expect(lines.length).toBe(1);
+    });
+  });
+
+  describe("collectRecords()", () => {
+    it("returns every record of a spool holding half a million", async () => {
+      // A spool holds a record for every test its job ran, and a job can
+      // run more tests than one call takes as arguments.
+      const dir = await Deno.makeTempDir({ prefix: "test-records-gather-" });
+      const count = 500_000;
+      try {
+        const writer = FragmentWriter.open(dir);
+        for (let at = 0; at < count; at++) {
+          writer?.append({
+            line: "record",
+            test: { k: "unit", s: "cli", n: `bakes ${at}` },
+            outcome: "pass",
+            durationMs: 1,
+          });
+        }
+        writer?.close();
+        const { records } = await collectRecords({ spoolDir: dir, junit: [] });
+        expect(records.length).toBe(count);
+        expect(records.at(-1)?.test.n).toBe(`bakes ${count - 1}`);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("returns what each outermost describe's hooks took, in the declared variant", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "test-records-gather-" });
+      try {
+        await Deno.writeTextFile(
+          join(dir, "results.xml"),
+          `<testsuites>
+  <testsuite name="./oven.test.ts">
+    <testcase name="oven" classname="./oven.test.ts" time="5.000"/>
+  </testsuite>
+  <testsuite name="ext:cli/40_test.js">
+    <testcase name="oven &gt; bakes" classname="ext:cli/40_test.js" time="1.500"/>
+  </testsuite>
+</testsuites>`,
+        );
+        const { records, hooks } = await collectRecords({
+          junit: [{
+            kind: "integration",
+            scope: "bakery",
+            prefix: "runtime/bakery",
+            glob: join(dir, "*.xml"),
+          }],
+          variant: "wood-fired",
+        });
+        expect(records.map((record) => record.test.n)).toEqual([
+          "oven > bakes",
+        ]);
+        expect(hooks).toEqual([{
+          line: "record",
+          test: { k: "integration", s: "bakery", n: "oven", v: "wood-fired" },
+          outcome: "pass",
+          durationMs: 3500,
+          file: "runtime/bakery/oven.test.ts",
+        }]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("returns the message each failing record failed with, in the declared variant", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "test-records-gather-" });
+      try {
+        await Deno.writeTextFile(
+          join(dir, "results.xml"),
+          `<testsuites>
+  <testsuite name="./oven.test.ts">
+    <testcase name="bakes" classname="./oven.test.ts" time="1.000"/>
+    <testcase name="burns" classname="./oven.test.ts" time="1.000">
+      <failure message="Uncaught Error: smoke">stack</failure>
+    </testcase>
+  </testsuite>
+</testsuites>`,
+        );
+        const { records, failures } = await collectRecords({
+          junit: [{
+            kind: "unit",
+            scope: "bakery",
+            glob: join(dir, "*.xml"),
+          }],
+          variant: "wood-fired",
+        });
+        const burns = records.find((record) => record.test.n === "burns")!;
+        expect(burns.test.v).toBe("wood-fired");
+        expect([...failures]).toEqual([[burns, "Uncaught Error: smoke"]]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+  });
+
+  describe("the command line continuous integration runs", () => {
+    const ROOT = fromFileUrl(new URL("..", import.meta.url));
+    const SCRIPT = fromFileUrl(
+      new URL("./test-records-gather.ts", import.meta.url),
+    );
+    let out: string;
+
+    beforeEach(async () => {
+      out = await Deno.makeTempDir({ prefix: "test-records-gather-cli-" });
+    });
+
+    afterEach(async () => {
+      await Deno.remove(out, { recursive: true });
+    });
+
+    /** Runs the gather step as a job does, with the environment given. */
+    const gatherAsAJob = (args: string[], env: Record<string, string>) =>
+      runDenoCommandWithTemporaryLock({
+        root: ROOT,
+        args: (lock) => [
+          "run",
+          `--lock=${lock}`,
+          "--allow-read",
+          "--allow-write",
+          "--allow-env",
+          "--allow-run=git",
+          SCRIPT,
+          ...args,
+        ],
+        env,
+      });
+
+    it("writes the seed the job's runners shuffled by into the job facts", async () => {
+      const result = await gatherAsAJob(
+        ["--out", join(out, "artifact"), "--job", "Probe"],
+        { CF_TEST_SHUFFLE_SEED: "7", CF_TEST_RECORDS_DIR: "" },
+      );
+      expect(result.success).toBe(true);
+      const facts = JSON.parse(
+        await Deno.readTextFile(join(out, "artifact", "job.json")),
+      );
+      expect(facts.job).toBe("Probe");
+      expect(facts.shuffleSeed).toBe(7);
+    });
+
+    it("refuses a command line that names no output directory", async () => {
+      const result = await gatherAsAJob(["--job", "Probe"], {});
+      expect(result.code).toBe(2);
+      expect(new TextDecoder().decode(result.stderr)).toContain(
+        "usage: test-records-gather.ts",
+      );
     });
   });
 

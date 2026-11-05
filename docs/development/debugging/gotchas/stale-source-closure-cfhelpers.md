@@ -16,7 +16,7 @@ violation surfaces only when the compiled cache misses: the compile-cache tag
 is a fingerprint of compiler inputs, so any compiler iteration rotates it, and
 the cold-load path recompiles the stored source. The transformer's
 anti-double-injection guard (`checkCFHelperVar` in
-`packages/ts-transformers/src/core/cf-helpers.ts`) then rejects the already-
+`base/ts-transformers/src/core/cf-helpers.ts`) then rejects the already-
 injected source.
 
 Content-hash verification does not catch this: it proves *integrity* (the
@@ -24,14 +24,19 @@ stored bytes match their key), not *pristineness* (the bytes are valid
 transformer input). A poisoned closure is self-consistent and verifies clean.
 
 Default patterns are disproportionately affected because they are seeded once
-(`cf space set-home`) and rarely redeployed, while dev patterns mint fresh
+(on the space's first open) and rarely redeployed, while dev patterns mint fresh
 closures on every deploy.
 
-**Fix:** `cf space recreate-root` — the CLI's own error output suggests it
-(`packages/cli/lib/piece.ts`). Recreation mints a fresh closure from current
-authored source. There is no in-place repair: even without the guard, a
-recompile of the poisoned source would hash to a different identity than the
-piece expects.
+**Fix:** Update the piece in place with `cf piece setsrc`, supplying pristine
+authored source and its test entries. A replacement source closure has its own
+identity; it does not repair or reinterpret the poisoned closure. If the old
+source cannot load for compatibility checking, the explicit
+`--dangerously-allow-incompatible-schema` migration option can permit the source
+update; rehearse that migration against a copy of the space first.
+
+For a non-Home space whose root state can be discarded, `cf space recreate-root`
+creates a fresh root from the configured source. Existing identity Home roots
+refuse recreation to preserve account data and require the in-place path.
 
 **The general lesson:** any compiler- or runtime-derived bytes stored in the
 content-addressed source set will surface, possibly weeks later, as an

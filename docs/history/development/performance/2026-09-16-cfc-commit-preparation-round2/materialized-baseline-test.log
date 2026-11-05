@@ -1,0 +1,179 @@
+Task cf deno run --allow-run --allow-env --allow-read ./packages/cli/launcher.ts 'test' '/tmp/cfc-round2-materialized-fixture/main.test.tsx'
+Found 1 test file(s)
+
+main.test.tsx
+Error in action: TypeError: sqlite: a paramless write moves column data on a labeled database (e.g. INSERT…SELECT or UPDATE col = col); its labels cannot be attributed, so it is refused — use positional ? params with an explicit column list, or literal values 
+  pieceId: of:fid1:afxIQyrVLusfSgj8mqdTvmc65QYvTvzg_xr0ph0IlVE 
+  space: did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh 
+  patternId: giQ9kapMxHg5spAc8tph-2grVX_7rTKrHkN99nTPBS0 
+TypeError: sqlite: a paramless write moves column data on a labeled database (e.g. INSERT…SELECT or UPDATE col = col); its labels cannot be attributed, so it is refused — use positional ? params with an explicit column list, or literal values
+  at CellImpl.exec (packages/runner/src/cell.ts:1616:33)
+    at eval (/fid1:2XjqABpH26O0Zia24MIkBAN_YCoxMVlRdfutjOh27lw/main.tsx:36:7)
+  at invoke (packages/runner/src/runner.ts:11067:16)
+  at AsyncLocalStorage.run (ext:deno_node/async_hooks.ts:105:16)
+  at runInActionExecution (packages/runner/src/builder/action-context.ts:47:23)
+  at #invokeJavaScriptImplementation (packages/runner/src/runner.ts:11081:12)
+  at handler:cf:module/giQ9kapMxHg5spAc8tph-2grVX_7rTKrHkN99nTPBS0/main.tsx:28:2 [as handler] (packages/runner/src/runner.ts:10358:58)
+  at action (packages/runner/src/scheduler/events.ts:534:26)
+  at packages/runner/src/scheduler/events.ts:2499:17
+  at SESInternals.exec (packages/runner/src/sandbox/ses-runtime.ts:34:22)
+  at SESRuntime.exec (packages/runner/src/sandbox/ses-runtime.ts:118:28)
+  at Engine.invoke (packages/runner/src/harness/engine.ts:1835:34)
+  at dispatchQueuedEvent (packages/runner/src/scheduler/events.ts:2494:33)
+  at async processPullQueuedEventDuringExecute (packages/runner/src/scheduler/events.ts:1456:3)
+  at async #processExecuteEventPhase (packages/runner/src/scheduler/facade.ts:2565:7)
+  at async #execute (packages/runner/src/scheduler/facade.ts:2537:31)
+[ERROR][scheduler::17:37:06.603] schedule-error [RUN] Action failed: cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0:__cfLift_5:CwWwGv1SsVqX Error: TypeError: Cannot read properties of undefined (reading 'text')
+Error in action: TypeError: Cannot read properties of undefined (reading 'text') 
+  pieceId: of:fid1:suD7Y09P_vTTi8omcIVIzsCg5bGfRBLIesS_FYt5dN4 
+  space: did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh 
+  patternId: 4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0 
+TypeError: Cannot read properties of undefined (reading 'text')
+    at commonfabric_1.__cfHelpers.lift.type (/fid1:2XjqABpH26O0Zia24MIkBAN_YCoxMVlRdfutjOh27lw/main.test.tsx:17:50)
+  at invoke (packages/runner/src/runner.ts:11070:14)
+  at AsyncLocalStorage.run (ext:deno_node/async_hooks.ts:105:16)
+  at runInActionExecution (packages/runner/src/builder/action-context.ts:47:23)
+  at #invokeJavaScriptImplementation (packages/runner/src/runner.ts:11081:12)
+  at action:cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0/main.test.tsx:16:26:CwWwGv1SsVqX [as action] (packages/runner/src/runner.ts:10759:58)
+  at packages/runner/src/scheduler/run.ts:138:21
+  at SESInternals.exec (packages/runner/src/sandbox/ses-runtime.ts:34:22)
+  at SESRuntime.exec (packages/runner/src/sandbox/ses-runtime.ts:118:28)
+  at Engine.invoke (packages/runner/src/harness/engine.ts:1835:34)
+  at invokeReactiveAction (packages/runner/src/scheduler/run.ts:135:29)
+  at packages/runner/src/scheduler/run.ts:716:7
+  at runOnce (packages/runner/src/scheduler/run.ts:662:12)
+  at packages/runner/src/scheduler/run.ts:747:21
+  at runSchedulerAction (packages/runner/src/scheduler/run.ts:820:4)
+  at Scheduler.run (packages/runner/src/scheduler/facade.ts:928:18)
+  at Object.runAction (packages/runner/src/scheduler/facade.ts:3109:35)
+  at runPullSettleAction (packages/runner/src/scheduler/settle.ts:575:15)
+  at runPullSettleOrder (packages/runner/src/scheduler/settle.ts:532:25)
+  at runPullSchedulerSettleLoop (packages/runner/src/scheduler/settle.ts:335:34)
+  at drainTicks (ext:core/01_core.js:426:7)
+  at listOnTimeout (ext:core/02_timers.js:286:9)
+  at Object.processTimers (ext:core/02_timers.js:250:7)
+  at __processTimers (ext:core/01_core.js:447:21)
+  at async #runSettleLoop (packages/runner/src/scheduler/facade.ts:2587:26)
+  at async #execute (packages/runner/src/scheduler/facade.ts:2540:26)
+[ERROR][scheduler::17:37:06.627] schedule-error [RUN] Action failed: cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0:__cfLift_6:6YiBhAnE0SG6 Error: TypeError: Cannot read properties of undefined (reading 'text')
+Error in action: TypeError: Cannot read properties of undefined (reading 'text') 
+  pieceId: of:fid1:suD7Y09P_vTTi8omcIVIzsCg5bGfRBLIesS_FYt5dN4 
+  space: did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh 
+  patternId: 4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0 
+TypeError: Cannot read properties of undefined (reading 'text')
+    at commonfabric_1.__cfHelpers.lift.type (/fid1:2XjqABpH26O0Zia24MIkBAN_YCoxMVlRdfutjOh27lw/main.test.tsx:18:51)
+  at invoke (packages/runner/src/runner.ts:11070:14)
+  at AsyncLocalStorage.run (ext:deno_node/async_hooks.ts:105:16)
+  at runInActionExecution (packages/runner/src/builder/action-context.ts:47:23)
+  at #invokeJavaScriptImplementation (packages/runner/src/runner.ts:11081:12)
+  at action:cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0/main.test.tsx:17:26:6YiBhAnE0SG6 [as action] (packages/runner/src/runner.ts:10759:58)
+  at packages/runner/src/scheduler/run.ts:138:21
+  at SESInternals.exec (packages/runner/src/sandbox/ses-runtime.ts:34:22)
+  at SESRuntime.exec (packages/runner/src/sandbox/ses-runtime.ts:118:28)
+  at Engine.invoke (packages/runner/src/harness/engine.ts:1835:34)
+  at invokeReactiveAction (packages/runner/src/scheduler/run.ts:135:29)
+  at packages/runner/src/scheduler/run.ts:716:7
+  at runOnce (packages/runner/src/scheduler/run.ts:662:12)
+  at packages/runner/src/scheduler/run.ts:747:21
+  at runSchedulerAction (packages/runner/src/scheduler/run.ts:820:4)
+  at Scheduler.run (packages/runner/src/scheduler/facade.ts:928:18)
+  at Object.runAction (packages/runner/src/scheduler/facade.ts:3109:35)
+  at runPullSettleAction (packages/runner/src/scheduler/settle.ts:575:15)
+  at runPullSettleOrder (packages/runner/src/scheduler/settle.ts:532:25)
+  at runPullSchedulerSettleLoop (packages/runner/src/scheduler/settle.ts:335:34)
+  at drainTicks (ext:core/01_core.js:426:7)
+  at listOnTimeout (ext:core/02_timers.js:286:9)
+  at Object.processTimers (ext:core/02_timers.js:250:7)
+  at __processTimers (ext:core/01_core.js:447:21)
+  at async #runSettleLoop (packages/runner/src/scheduler/facade.ts:2587:26)
+  at async #execute (packages/runner/src/scheduler/facade.ts:2540:26)
+[ERROR][scheduler::17:37:06.651] schedule-error [RUN] Action failed: cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0:__cfLift_7:I990hB0NHa0d Error: TypeError: Cannot read properties of undefined (reading 'me')
+Error in action: TypeError: Cannot read properties of undefined (reading 'me') 
+  pieceId: of:fid1:suD7Y09P_vTTi8omcIVIzsCg5bGfRBLIesS_FYt5dN4 
+  space: did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh 
+  patternId: 4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0 
+TypeError: Cannot read properties of undefined (reading 'me')
+    at commonfabric_1.__cfHelpers.lift.type (/fid1:2XjqABpH26O0Zia24MIkBAN_YCoxMVlRdfutjOh27lw/main.test.tsx:19:50)
+  at invoke (packages/runner/src/runner.ts:11070:14)
+  at AsyncLocalStorage.run (ext:deno_node/async_hooks.ts:105:16)
+  at runInActionExecution (packages/runner/src/builder/action-context.ts:47:23)
+  at #invokeJavaScriptImplementation (packages/runner/src/runner.ts:11081:12)
+  at action:cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0/main.test.tsx:18:26:I990hB0NHa0d [as action] (packages/runner/src/runner.ts:10759:58)
+  at packages/runner/src/scheduler/run.ts:138:21
+  at SESInternals.exec (packages/runner/src/sandbox/ses-runtime.ts:34:22)
+  at SESRuntime.exec (packages/runner/src/sandbox/ses-runtime.ts:118:28)
+  at Engine.invoke (packages/runner/src/harness/engine.ts:1835:34)
+  at invokeReactiveAction (packages/runner/src/scheduler/run.ts:135:29)
+  at packages/runner/src/scheduler/run.ts:716:7
+  at runOnce (packages/runner/src/scheduler/run.ts:662:12)
+  at packages/runner/src/scheduler/run.ts:747:21
+  at runSchedulerAction (packages/runner/src/scheduler/run.ts:820:4)
+  at Scheduler.run (packages/runner/src/scheduler/facade.ts:928:18)
+  at Object.runAction (packages/runner/src/scheduler/facade.ts:3109:35)
+  at runPullSettleAction (packages/runner/src/scheduler/settle.ts:575:15)
+  at runPullSettleOrder (packages/runner/src/scheduler/settle.ts:532:25)
+  at runPullSchedulerSettleLoop (packages/runner/src/scheduler/settle.ts:335:34)
+  at drainTicks (ext:core/01_core.js:426:7)
+  at listOnTimeout (ext:core/02_timers.js:286:9)
+  at Object.processTimers (ext:core/02_timers.js:250:7)
+  at __processTimers (ext:core/01_core.js:447:21)
+  at async #runSettleLoop (packages/runner/src/scheduler/facade.ts:2587:26)
+  at async #execute (packages/runner/src/scheduler/facade.ts:2540:26)
+[ERROR][scheduler::17:37:06.676] schedule-error [RUN] Action failed: cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0:__cfLift_8:0gG21pMVS6TS Error: TypeError: Cannot read properties of undefined (reading 'me')
+Error in action: TypeError: Cannot read properties of undefined (reading 'me') 
+  pieceId: of:fid1:suD7Y09P_vTTi8omcIVIzsCg5bGfRBLIesS_FYt5dN4 
+  space: did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh 
+  patternId: 4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0 
+TypeError: Cannot read properties of undefined (reading 'me')
+    at commonfabric_1.__cfHelpers.lift.type (/fid1:2XjqABpH26O0Zia24MIkBAN_YCoxMVlRdfutjOh27lw/main.test.tsx:20:50)
+  at invoke (packages/runner/src/runner.ts:11070:14)
+  at AsyncLocalStorage.run (ext:deno_node/async_hooks.ts:105:16)
+  at runInActionExecution (packages/runner/src/builder/action-context.ts:47:23)
+  at #invokeJavaScriptImplementation (packages/runner/src/runner.ts:11081:12)
+  at action:cf:module/4umxavEV3iCGEBZJlrK_UXHTQ60-iYCAlY9toH3ZaU0/main.test.tsx:19:26:0gG21pMVS6TS [as action] (packages/runner/src/runner.ts:10759:58)
+  at packages/runner/src/scheduler/run.ts:138:21
+  at SESInternals.exec (packages/runner/src/sandbox/ses-runtime.ts:34:22)
+  at SESRuntime.exec (packages/runner/src/sandbox/ses-runtime.ts:118:28)
+  at Engine.invoke (packages/runner/src/harness/engine.ts:1835:34)
+  at invokeReactiveAction (packages/runner/src/scheduler/run.ts:135:29)
+  at packages/runner/src/scheduler/run.ts:716:7
+  at runOnce (packages/runner/src/scheduler/run.ts:662:12)
+  at packages/runner/src/scheduler/run.ts:747:21
+  at runSchedulerAction (packages/runner/src/scheduler/run.ts:820:4)
+  at Scheduler.run (packages/runner/src/scheduler/facade.ts:928:18)
+  at Object.runAction (packages/runner/src/scheduler/facade.ts:3109:35)
+  at runPullSettleAction (packages/runner/src/scheduler/settle.ts:575:15)
+  at runPullSettleOrder (packages/runner/src/scheduler/settle.ts:532:25)
+  at runPullSchedulerSettleLoop (packages/runner/src/scheduler/settle.ts:335:34)
+  at drainTicks (ext:core/01_core.js:426:7)
+  at listOnTimeout (ext:core/02_timers.js:286:9)
+  at Object.processTimers (ext:core/02_timers.js:250:7)
+  at __processTimers (ext:core/01_core.js:447:21)
+  at async #runSettleLoop (packages/runner/src/scheduler/facade.ts:2587:26)
+  at async #execute (packages/runner/src/scheduler/facade.ts:2540:26)
+  ✓ assertion_1
+  ✗ assertion_2 (after action_1)
+    thread.thread.result?.length === 1
+      thread.thread.result?.length = 0
+  ✓ assertion_3 (after action_1)
+  ✗ assertion_4 (after action_2)
+    thread.bubbles.length === 11
+      thread.bubbles.length = 0
+  ✗ assertion_5 (after action_2)
+    Expected true, got undefined
+  ✗ assertion_6 (after action_2)
+    Expected true, got undefined
+  ✗ assertion_7 (after action_2)
+    Expected true, got undefined
+  ✗ assertion_8 (after action_2)
+    Expected true, got undefined
+  ✗ 5 runtime error(s) during test:
+    TypeError: sqlite: a paramless write moves column data on a labeled database (e.g. INSERT…SELECT or UPDATE col = col); i...
+    TypeError: Cannot read properties of undefined (reading 'text')
+    TypeError: Cannot read properties of undefined (reading 'text')
+    TypeError: Cannot read properties of undefined (reading 'me')
+    TypeError: Cannot read properties of undefined (reading 'me')
+  ✗ 1 console error(s) during test:
+    [logger:scheduler] 4 error(s) (key: schedule-error)
+
+2 passed, 8 failed (969ms)

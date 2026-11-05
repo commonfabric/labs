@@ -1,0 +1,18 @@
+{
+  "checkout": ".",
+  "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+  "helperCommit": "f6bc2af1e36b5a3d817be75c1d3632bc964e3e37",
+  "startedAt": "2026-09-10T20:42:07.169638+00:00",
+  "sourceChecks": [
+    {
+      "phase": "before-helper-copy",
+      "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+      "status": " M deno.jsonc\n"
+    }
+  ],
+  "commands": [],
+  "helpers": {},
+  "status": "failed",
+  "error": "Baseline source check failed: before-helper-copy",
+  "endedAt": "2026-09-10T20:42:07.311067+00:00"
+}

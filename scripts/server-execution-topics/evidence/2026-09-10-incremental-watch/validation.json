@@ -1,0 +1,205 @@
+{
+  "base": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+  "latestMainAtReview": "6f0da47b213ccbdda8e8110198e9dbadd589eedb",
+  "runtime": "2.9.4",
+  "fullMemory": {
+    "tests": 614,
+    "steps": 577,
+    "log": "watch-memory-full-02.log"
+  },
+  "fullUtils": {
+    "tests": 102,
+    "steps": 887,
+    "log": "watch-utils-full-02.log"
+  },
+  "fullRunner": {
+    "tests": 1405,
+    "steps": 8676,
+    "ignoredSteps": 1,
+    "log": "watch-runner-full-01.log"
+  },
+  "types": {
+    "groups": 46,
+    "paths": 407,
+    "log": "watch-typecheck-02.log"
+  },
+  "cursorFollowup": {
+    "tests": 3,
+    "steps": 44,
+    "log": "watch-cursor-race-green-01.log"
+  },
+  "resumeFollowup": {
+    "tests": 45,
+    "steps": 38,
+    "log": "watch-resume-race-green-01.log"
+  },
+  "scope": "Full package/type runs precede the final identity guard; focused ACL/concurrency/reconnect tests and both baked integration lanes cover it. Final change after both integrations is solely comment-after-build.patch. CI at PR head remains required.",
+  "integration": {
+    "default": {
+      "tests": 7,
+      "steps": 27
+    },
+    "opposite": {
+      "tests": 7,
+      "steps": 27
+    }
+  },
+  "mechanicalGates": [
+    {
+      "gate": "check-no-waitfor",
+      "command": [
+        "deno",
+        "task",
+        "check-no-waitfor"
+      ],
+      "startedAt": "2026-09-10T19:11:28.086341+00:00",
+      "exitCode": 0,
+      "log": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/validation/watch-check-no-waitfor-01.log",
+      "endedAt": "2026-09-10T19:11:28.679243+00:00"
+    },
+    {
+      "gate": "check-docs",
+      "command": [
+        "deno",
+        "task",
+        "check-docs"
+      ],
+      "startedAt": "2026-09-10T19:11:28.679665+00:00",
+      "exitCode": 0,
+      "log": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/validation/watch-check-docs-01.log",
+      "endedAt": "2026-09-10T19:11:48.923614+00:00"
+    },
+    {
+      "gate": "check-conflict-markers",
+      "command": [
+        "deno",
+        "task",
+        "check-conflict-markers"
+      ],
+      "startedAt": "2026-09-10T19:11:48.923992+00:00",
+      "exitCode": 0,
+      "log": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/validation/watch-check-conflict-markers-01.log",
+      "endedAt": "2026-09-10T19:11:53.372524+00:00"
+    },
+    {
+      "gate": "check-control-characters",
+      "command": [
+        "deno",
+        "task",
+        "check-control-characters"
+      ],
+      "startedAt": "2026-09-10T19:11:53.372918+00:00",
+      "exitCode": 0,
+      "log": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/validation/watch-check-control-characters-01.log",
+      "endedAt": "2026-09-10T19:11:55.626110+00:00"
+    },
+    {
+      "gate": "check-single-copy-deps",
+      "command": [
+        "deno",
+        "task",
+        "check-single-copy-deps"
+      ],
+      "startedAt": "2026-09-10T19:11:55.627948+00:00",
+      "exitCode": 0,
+      "log": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/validation/watch-check-single-copy-deps-01.log",
+      "endedAt": "2026-09-10T19:11:55.854670+00:00"
+    },
+    {
+      "gate": "check-unused-deps",
+      "command": [
+        "deno",
+        "task",
+        "check-unused-deps"
+      ],
+      "startedAt": "2026-09-10T19:11:55.855162+00:00",
+      "exitCode": 0,
+      "log": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/validation/watch-check-unused-deps-01.log",
+      "endedAt": "2026-09-10T19:11:59.327691+00:00"
+    },
+    {
+      "gate": "check-deno-pins",
+      "command": [
+        "deno",
+        "task",
+        "check-deno-pins"
+      ],
+      "startedAt": "2026-09-10T19:11:59.328254+00:00",
+      "exitCode": 0,
+      "log": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/validation/watch-check-deno-pins-01.log",
+      "endedAt": "2026-09-10T19:11:59.475311+00:00"
+    },
+    {
+      "gate": "check-package-cycles",
+      "command": [
+        "deno",
+        "task",
+        "check-package-cycles"
+      ],
+      "startedAt": "2026-09-10T19:11:59.476074+00:00",
+      "exitCode": 0,
+      "log": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/validation/watch-check-package-cycles-01.log",
+      "endedAt": "2026-09-10T19:12:00.639746+00:00"
+    },
+    {
+      "gate": "check-local-program",
+      "command": [
+        "deno",
+        "task",
+        "check-local-program"
+      ],
+      "startedAt": "2026-09-10T19:12:00.640420+00:00",
+      "exitCode": 0,
+      "log": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/validation/watch-check-local-program-01.log",
+      "endedAt": "2026-09-10T19:12:04.556897+00:00"
+    },
+    {
+      "gate": "check-baselines-append-only",
+      "command": [
+        "deno",
+        "task",
+        "check-baselines-append-only"
+      ],
+      "startedAt": "2026-09-10T19:12:04.557501+00:00",
+      "exitCode": 0,
+      "log": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/validation/watch-check-baselines-append-only-01.log",
+      "endedAt": "2026-09-10T19:12:04.752758+00:00"
+    },
+    {
+      "gate": "check-test-aliases",
+      "command": [
+        "deno",
+        "task",
+        "check-test-aliases"
+      ],
+      "startedAt": "2026-09-10T19:12:04.753235+00:00",
+      "exitCode": 0,
+      "log": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/validation/watch-check-test-aliases-01.log",
+      "endedAt": "2026-09-10T19:12:04.998792+00:00"
+    },
+    {
+      "gate": "check-pattern-tiers",
+      "command": [
+        "deno",
+        "task",
+        "check-pattern-tiers"
+      ],
+      "startedAt": "2026-09-10T19:12:04.999268+00:00",
+      "exitCode": 0,
+      "log": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/validation/watch-check-pattern-tiers-01.log",
+      "endedAt": "2026-09-10T19:12:05.486475+00:00"
+    }
+  ],
+  "finalSourceHashes": {
+    "packages/memory/test/v2-watch-incremental.test.ts": "78e0da748a721ba430233e6e47179f262d4b3a807b42402ec6f2a285e278eadd",
+    "packages/memory/v2/client.ts": "c10b33453cb9c6a4d211106ea5de6afc8121e86c6a6a34b735af45c414c306e1",
+    "packages/memory/v2/query.ts": "dad29485243a95e68a9dc0d5a3f5892cef102ef3f1520c3088e7bed1633b1f89",
+    "packages/memory/v2/server.ts": "31b5a3b304520460f7bdd2c2194616a4bafc43e67aa87e33370cf069f08c204a",
+    "packages/memory/v2/session-registry.ts": "6a28dec861cb251ffadb1fd8ffd3280fbd2eae584e4a43663381e15291ff09c9",
+    "packages/runner/src/traverse.ts": "3aa9a7faa7975994e570cbb39a6680ed4a39358a10a4918b79ff4b297c7b6248",
+    "packages/runner/test/traverse-staging.test.ts": "8ef1ec0b6478f5336564daba689bac0c8e9b3238c6eb5c5b3f45cf113b9cef38",
+    "packages/utils/deno.jsonc": "086db59be6aa2261a1e7955f3c7daf912194fdebc580ff316f78426402179a22",
+    "packages/utils/src/staged-map.ts": "7bae49a83eaf53a115d6600564baf589db1ea2b20f41b27c19ee0546ec6d53e1",
+    "packages/utils/test/staged-map.test.ts": "e8716531a4ff62d2362626929cfade6c7b52c535ae589b8cac3cc684a9e9dd64"
+  }
+}

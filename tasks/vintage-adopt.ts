@@ -38,7 +38,7 @@ import {
   type VintageManifestEntry,
   vintageRoot,
   writeVintageManifest,
-} from "../packages/piece/test/state-continuity-harness.ts";
+} from "../runtime/piece/test/state-continuity-harness.ts";
 import {
   patternKeyFromMain,
   PINNED,
@@ -63,11 +63,11 @@ export interface AdoptOptions {
   /** The pattern identity the capture reported for the root. */
   expectedIdentity: string;
 
-  /** Fixture directory key, e.g. `system/home.test.tsx`. */
+  /** Fixture directory key, e.g. `system/home/home.test.tsx`. */
   testKey: string;
 
   /** Repo path replay resolves today's source from,
-   * e.g. `/packages/patterns/system/home.tsx`. */
+   * e.g. `/patterns/system/home/home.tsx`. */
   main: string;
 
   /** Capture cause of the root cell. Defaults to `"home-pattern"`, the cause
@@ -385,7 +385,7 @@ if (import.meta.main) {
     children,
     roots: {
       repoRoot,
-      patternsRoot: `${repoRoot}/packages/patterns`,
+      patternsRoot: `${repoRoot}/patterns`,
       vintagesRoot: `${repoRoot}/${VINTAGES_DIR}`,
       signer: await Identity.fromPassphrase("pattern vintage fixture"),
     },

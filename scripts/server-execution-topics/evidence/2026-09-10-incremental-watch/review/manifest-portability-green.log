@@ -1,0 +1,6 @@
+plain passed portable paths and exact hashed provenance passed
+plain failed portable paths and exact hashed provenance passed
+spaces and "quotes" passed portable paths and exact hashed provenance passed
+spaces and "quotes" failed portable paths and exact hashed provenance passed
+nonascii-é passed portable paths and exact hashed provenance passed
+nonascii-é failed portable paths and exact hashed provenance passed

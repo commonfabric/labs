@@ -1,0 +1,56 @@
+{
+  "argumentSchema": {
+    "description": "Initial document values, shared by every viewer of this piece.",
+    "properties": {
+      "content": {
+        "default": "",
+        "description": "LF-normalized Markdown; live editing uses CodeMirror operations.",
+        "scope": "space",
+        "type": "string"
+      },
+      "title": {
+        "default": "Untitled note",
+        "description": "Editable document title, independent of Markdown frontmatter.",
+        "scope": "space",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "shared-note/main.tsx",
+  "resultSchema": {
+    "description": "Readable Markdown and the same compact view for standalone and embedded use.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$TILE_UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "content": {
+        "scope": "space",
+        "type": "string"
+      },
+      "participantName": {
+        "scope": "user",
+        "type": "string"
+      },
+      "title": {
+        "scope": "space",
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "content",
+      "participantName",
+      "$NAME",
+      "$UI",
+      "$TILE_UI"
+    ],
+    "type": "object"
+  }
+}

@@ -1,10 +1,10 @@
 #!/bin/bash
-# Script to add Writable to imports in packages/patterns files
+# Script to add Writable to imports in patterns files
 # Handles both single-line and multi-line import statements
 
 set -e
 
-PATTERNS_DIR="packages/patterns"
+PATTERNS_DIR="patterns"
 
 echo "=== Adding Writable to imports in $PATTERNS_DIR ==="
 

@@ -1,0 +1,81 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "test/cfc-trusted-write/frozen.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Frozen": {
+        "$ref": "#/$defs/Sealed",
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/test/cfc-trusted-write/frozen.tsx",
+              "moduleIdentity": "qFQAuk_HiJkoqLNXDB54epea5Pmd24CI_emx7L0CDdM",
+              "path": [
+                "freeze"
+              ]
+            }
+          }
+        }
+      },
+      "Sealed": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "digest",
+          "tags"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "freeze": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "frozen": {
+        "$ref": "#/$defs/Frozen"
+      },
+      "replaceTags": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "replaceWithText": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "rewriteDigest": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      }
+    },
+    "required": [
+      "frozen",
+      "freeze",
+      "rewriteDigest",
+      "replaceWithText",
+      "replaceTags"
+    ],
+    "type": "object"
+  }
+}

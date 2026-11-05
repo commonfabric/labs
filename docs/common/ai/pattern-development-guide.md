@@ -6,7 +6,9 @@ This is the canonical reference for building Common Fabric patterns.
 
 - Plan before building. Scale the plan to the problem size.
 - Start simple and keep the first implementation runnable.
-- Prefer one-file patterns first. Split files only when complexity demands it.
+- Reuse suitable indexed patterns and available data before authoring new behavior.
+- Prefer one source file per small pattern. Compose patterns to achieve a larger
+  goal; file organization does not determine component boundaries.
 - Iterate through `Sketch -> Run -> Verify -> Improve`.
 - Prefer validated docs and references over blindly copying an existing pattern.
 
@@ -24,17 +26,19 @@ Use enough planning for the task, but no more:
   - plan in a short list
 - complex pattern:
   - identify entities, relationships, actions, and boundaries
-  - consider sub-patterns only when concepts are genuinely distinct
+  - compose existing patterns and identify the smallest missing capabilities
   - plan with structure, but do not over-specify the end state
 
-Always start simple. Split only when it helps the next iteration.
+Keep the user's goal in view. A larger goal can have a short implementation when
+existing pieces already provide most of its behavior. If the design keeps
+growing, revisit the available data and component contracts before adding more.
 
 ## Pattern Structure
 
 Start with:
 
 ```text
-packages/patterns/<name>/main.tsx
+patterns/<category>/<name>/main.tsx
 ```
 
 Only split into `schemas.tsx` or additional modules when:
@@ -43,8 +47,13 @@ Only split into `schemas.tsx` or additional modules when:
 - a helper has clear reuse value
 - the main file becomes harder to evolve than to split
 
-Do not split by default. A moderate pattern with a few entities can still live
-comfortably in one file while you discover the right shape.
+These choices organize the source of one pattern. They do not require all of a
+user's goal to live in one pattern. When the host provides a pattern index,
+compose suitable indexed components through its `cf:pattern:<patternId>` imports.
+Otherwise, compose available local patterns through ordinary file imports.
+Connect their inputs and outputs, and author the smallest missing reusable
+piece. A useful new component can then be contributed to the catalog for later
+goals.
 
 ## Multi-User Patterns
 
@@ -55,7 +64,7 @@ to the active user, and which state is local to one session.
 
 ## Reusing CFC Helpers
 
-For CFC policy code, check `packages/patterns/cfc/README.md` before copying
+For CFC policy code, check `patterns/system/cfc/README.md` before copying
 from an existing demo. Reuse the shared helpers there for common admin
 registries, trusted UI actions, trusted surfaces, and prompt-injection
 workflows.
@@ -66,7 +75,7 @@ models should usually stay beside the code that owns them.
 
 If an existing helper is not enough and the code appears reusable, read
 `docs/common/ai/cfc-helper-authoring-guide.md` before promoting it into
-`packages/patterns/cfc/`.
+`patterns/system/cfc/`.
 
 ## Development Loop: Sketch -> Run -> Iterate
 
@@ -185,7 +194,9 @@ are:
 
 - keep module scope declarative:
   - use `const`
-  - define `pattern()`, `handler()`, `lift()`, schemas, and plain data
+  - define `pattern()`, `handler()`, `lift()`, schemas, and plain data, which
+    may hold fabric primitives such as `FabricEpochNsec` and
+    `FabricDurationNsec` as it would a `bigint`
   - avoid top-level `let`, `var`, classes, or ad hoc mutable caches
 - keep pattern-owned callback bodies straight-line:
   - avoid `let`, `var`, reassignment, and loop statements
@@ -383,8 +394,8 @@ left ephemeral.
 
 Start with `docs/common/patterns/`.
 
-For Pattern Factory Build and other implementation work that creates or
-debugs stateful UI, read these foundational references before coding:
+For implementation work that creates or debugs stateful UI, read these
+foundational references before coding:
 
 - `docs/common/concepts/reactivity.md`
 - `docs/common/patterns/new-cells.md`
@@ -398,6 +409,6 @@ Then consult the targeted references as needed:
 - `docs/common/components/COMPONENTS.md`
 - `docs/development/debugging/`
 
-Prefer documentation over existing patterns in `packages/patterns/`. Existing
+Prefer documentation over existing patterns in `patterns/`. Existing
 patterns are useful reference points but may include older idioms or locally
 driven compromises.

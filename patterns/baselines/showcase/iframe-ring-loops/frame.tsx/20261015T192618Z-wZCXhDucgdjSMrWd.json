@@ -1,0 +1,314 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "IframeInputData": {
+        "properties": {
+          "setup": {
+            "$ref": "#/$defs/RingLoopsSetup",
+            "description": "The rings and the scale of this piece."
+          },
+          "viewerName": {
+            "description": "Profile name of whoever is viewing, or the empty string where unknown.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "setup",
+          "viewerName"
+        ],
+        "type": "object"
+      },
+      "IframeOutputData": {
+        "properties": {
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Color of the notes this user places; `null` selects one from the user."
+          },
+          "mutedRingIds": {
+            "description": "Identifiers of the rings this user has silenced.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "volume": {
+            "description": "Playback volume from 0 to 1.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "color",
+          "volume",
+          "mutedRingIds"
+        ],
+        "type": "object"
+      },
+      "RingLoopsSetup": {
+        "properties": {
+          "rings": {
+            "description": "Rings from the innermost outward.",
+            "items": {
+              "$ref": "#/$defs/RingSpec"
+            },
+            "type": "array"
+          },
+          "rootMidi": {
+            "description": "MIDI note number of the lowest lane of an untransposed ring.",
+            "type": "number"
+          },
+          "scale": {
+            "description": "Semitones each lane sits above the root; its length is the lane count.",
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "Heading shown above the controls.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "rings",
+          "rootMidi",
+          "scale"
+        ],
+        "type": "object"
+      },
+      "RingSpec": {
+        "properties": {
+          "beats": {
+            "description": "Whole beats the ring's hand takes to complete one turn.",
+            "type": "number"
+          },
+          "id": {
+            "description": "Stable identifier that placed notes name their ring by.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Name shown beside the ring's mute control.",
+            "type": "string"
+          },
+          "transpose": {
+            "description": "Semitones added to the root for this ring's lanes; drums ignore it.",
+            "type": "number"
+          },
+          "voice": {
+            "$ref": "#/$defs/RingVoice",
+            "description": "Instrument the ring's notes sound on."
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "voice",
+          "beats",
+          "transpose"
+        ],
+        "type": "object"
+      },
+      "RingVoice": {
+        "enum": [
+          "drums",
+          "bass",
+          "pluck",
+          "bell"
+        ]
+      }
+    },
+    "properties": {
+      "input": {
+        "$ref": "#/$defs/IframeInputData",
+        "default": {
+          "setup": {
+            "rings": [
+              {
+                "beats": 4,
+                "id": "drums",
+                "label": "Drums",
+                "transpose": 0,
+                "voice": "drums"
+              },
+              {
+                "beats": 5,
+                "id": "bells",
+                "label": "Bells",
+                "transpose": 12,
+                "voice": "bell"
+              },
+              {
+                "beats": 6,
+                "id": "bass",
+                "label": "Bass",
+                "transpose": -24,
+                "voice": "bass"
+              },
+              {
+                "beats": 8,
+                "id": "pluck",
+                "label": "Pluck",
+                "transpose": 0,
+                "voice": "pluck"
+              }
+            ],
+            "rootMidi": 57,
+            "scale": [
+              0,
+              3,
+              5,
+              7,
+              10
+            ],
+            "title": "Ring Loops"
+          },
+          "viewerName": ""
+        }
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": {
+          "color": null,
+          "mutedRingIds": [],
+          "volume": 0.7
+        }
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "iframe-ring-loops/frame.tsx",
+  "resultSchema": {
+    "$defs": {
+      "IframeOutputData": {
+        "properties": {
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Color of the notes this user places; `null` selects one from the user."
+          },
+          "mutedRingIds": {
+            "description": "Identifiers of the rings this user has silenced.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "volume": {
+            "description": "Playback volume from 0 to 1.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "color",
+          "volume",
+          "mutedRingIds"
+        ],
+        "type": "object"
+      },
+      "IframeStateData": {
+        "properties": {
+          "notes": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PlacedNote"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "Notes by cell key; `null` marks a cell whose note was removed.",
+            "properties": {},
+            "type": "object"
+          },
+          "tempoBpm": {
+            "description": "Tempo every browser plays at, in beats per minute.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "notes",
+          "tempoBpm"
+        ],
+        "type": "object"
+      },
+      "PlacedNote": {
+        "properties": {
+          "authorId": {
+            "description": "Who placed the note: the per-user instance for a note placed in the\nbrowser, or the caller's DID for one placed through a verb.",
+            "type": "string"
+          },
+          "authorName": {
+            "description": "Name its author went by when placing it; absent where none was known.",
+            "type": "string"
+          },
+          "color": {
+            "description": "CSS color the note is drawn in, as its author chose it.",
+            "type": "string"
+          },
+          "lane": {
+            "description": "Lane within the ring's band, from 0 at its inner edge; picks the pitch.",
+            "type": "number"
+          },
+          "ringId": {
+            "description": "Identifier of the ring holding the note.",
+            "type": "string"
+          },
+          "step": {
+            "description": "Sixteenth-note position along the ring, clockwise from the top.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "ringId",
+          "step",
+          "lane",
+          "authorId",
+          "color"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData"
+      },
+      "state": {
+        "$ref": "#/$defs/IframeStateData"
+      }
+    },
+    "required": [
+      "state",
+      "output",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

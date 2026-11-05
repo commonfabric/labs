@@ -35,14 +35,14 @@ if (!ROOT) {
   console.error("set CF_ROOT to a checkout root");
   Deno.exit(2);
 }
-const R = `${ROOT}/packages/runner/src`;
+const R = `${ROOT}/runtime/runner/src`;
 const want = new Set(
   Deno.args.length ? Deno.args : ["encoded", "liveness", "provenance"],
 );
 
 // Claim the logger names that would otherwise be constructed disabled, so an
 // error-level report on those paths is actually visible.
-const { getLogger } = await import("@commonfabric/utils/logger");
+const { getLogger } = await import("@commonfabric/logger");
 for (const n of ["ensure-piece-running", "runner", "scheduler", "sandbox"]) {
   getLogger(n, { enabled: true, level: "debug" });
 }
@@ -65,9 +65,11 @@ const ju: any = await (async () => {
   }
 })();
 const md: any = await import(`${R}/builder/pattern-metadata.ts`);
-const { fabricFromNativeValue } = await import(
-  "@commonfabric/data-model"
-);
+// The deep converter, under whichever NAME the tree spells it, for the same
+// reason as the encodable-form builders above.
+const dm: any = await import("@commonfabric/data-model");
+const fabricFromConvertibleJsValue = dm.fabricFromConvertibleJsValue ??
+  dm.fabricFromNativeValue;
 const { dataUriFromValue } = await import(
   "@commonfabric/data-model/codec-data-uri"
 );
@@ -90,7 +92,7 @@ const patternForm = (pattern: unknown): unknown =>
 const say = (k: string, v: unknown) => console.log(`${k}: ${v}`);
 const encoded = (v: unknown) => {
   try {
-    return dataUriFromValue(fabricFromNativeValue(v));
+    return dataUriFromValue(fabricFromConvertibleJsValue(v));
   } catch (e) {
     return `THREW ${(e as Error).message}`;
   }
@@ -123,7 +125,7 @@ const { resolveLocalProgram } = await import(
   "@commonfabric/runner/local-program.deno"
 );
 const FIXTURE = Deno.env.get("CF_FIXTURE") ??
-  `${ROOT}/packages/patterns/factory-outputs/parking-coordinator/main.test.tsx`;
+  `${ROOT}/patterns/dev/factory-outputs/parking-coordinator/main.test.tsx`;
 const engine = new Engine(runtime);
 const realProgram = await resolveLocalProgram(
   (resolver) => engine.resolve(resolver),

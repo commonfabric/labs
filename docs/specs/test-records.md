@@ -9,7 +9,7 @@ guide](../development/test-records.md) says how to use it, and
 repository joins it. [The plan this system came
 from](../history/plans/test-run-telemetry.md) is archived, and carries the
 reasoning that shaped what follows. The shared implementation is
-`packages/test-support/src/records/`.
+`base/test-support/src/records/`.
 
 ## Identity
 
@@ -56,13 +56,23 @@ files, reformatting, editing bodies, and resharding — shard and slice
 labels, and the section that dispatched a script step, are run context and
 never identity. A configuration is a variant only when its results need a
 separate history. Identity does not survive a change to the reported name; a
-rename splits history, and a line appended to
-`tasks/test-identity-aliases.jsonl` bridges a split worth bridging. That
-file is append-only, maps any identity at most once, must stay acyclic, and
-each line carries the rename's date; readers resolve aliases transitively
-and apply one only to records older than its date
-(`deno task check-test-aliases` enforces the file's shape). Alias lines name
-the three required identity parts and apply the rename to every variant.
+rename splits history, and a line appended under
+`tasks/test-identity-aliases/` bridges a split worth bridging. That
+directory holds files named after test files — by last path segment, so test
+files of one name share a file — plus `whole-scope.jsonl` for whole-scope
+lines and `moved-paths.jsonl` for moved-path lines, and reads as a single set
+of aliases. A moved-path line maps the repository-relative path of a directory
+or a file to the path it moved to. It renames that path wherever an identity's
+name holds it as a path of its own, in every kind and scope. Moving a directory
+therefore takes one line, however many names spell its path. When two moved
+paths both occur in a name, the longer one applies. A moved path applies to a
+given name at most once. The directory is append-only file by file. It maps any
+identity at most once, holds no cycles, and never moves a path into a path that
+contains it. Each line carries the rename's date. Readers resolve aliases
+transitively, and apply each one only to records older than its date.
+`deno task check-test-aliases` enforces the directory's shape. Alias lines
+other than moved-path lines name the three required identity parts, and every
+line applies its rename to every variant.
 
 A task-level record may coexist with the per-item records of the same run
 (`pattern-compat` beside `pattern-compat <key>`, `integration.sh` beside
@@ -96,8 +106,25 @@ A record carries `outcome` (`pass`, `fail`, or `skip`), `durationMs` from
 the runner's own measurement (never a clock inside the test process, which
 several packages fake), and optionally `file`, the repository-relative
 source path when the producer reliably knows it — metadata, not identity.
-`cfcheck` items carry a zero duration: the batch is one TypeScript program
-and per-file durations do not exist there.
+A reader drops a record whose `file`, or whose name where the kind is
+`pattern`, is absolute or climbs above the repository root. Such a path
+names a file outside the repository, and no test of the repository lives
+there.
+A `cfcheck` item's duration is what the batch spent on that pattern's own
+files. The gate is its own runner and measures them itself: the compiler
+times each file it checks and each file it emits, and the batch charges
+every file to the one program that resolved it. The run's program-wide
+parse and bind belongs to no pattern and is in none of them, which is why
+those durations sum to less than the run takes.
+
+A duration says how long the test takes only where the execution passed.
+A failure ended where the failure was reached. Where a wait's safety net
+ended it, the figure is that net's bound rather than anything about the
+test. Every consumer that reports or fits a duration therefore reads
+passing records alone, the selection fold's cost samples, the report's
+over-sixty-seconds list and the dashboard's daily mean among them. Run,
+failure and skip counts read every record, which is what those counters
+are for.
 
 For a suite ingested from a JUnit report, `file` comes from one of two
 places and the second overrides the first. Deno names a case's class after
@@ -116,7 +143,10 @@ The registration preload is such a module, and it replaces what it takes:
 it writes a name-to-file map into the spool, and ingestion lays that over
 what the report says. The map holds each name `Deno.test` was called with
 and, for a file written with `describe` and `it`, the whole chain of each
-leaf. A hook a file declares outside every `describe` has no suite to
+leaf. Every name maps to the test file the process runs, which is
+`Deno.mainModule`, whichever module made the call: a file that registers
+its cases through a shared module is the file its records carry, and the
+file its skip list is keyed by. A hook a file declares outside every `describe` has no suite to
 hold it, so the bdd runner makes one named `global` and every suite that
 file goes on to run sits inside it; the chain each leaf is named by opens
 with that name. A suite title two files share says nothing about either
@@ -128,13 +158,35 @@ Every package of a workspace run writes into one spool, so each map also
 names the repository-relative directory its process ran in. A caller
 ingesting one package's report asks for that directory. A map naming it
 belongs to that package and is read whole, whatever files it names: a
-test task may name a file anywhere in the tree, and
-`packages/test-support` runs `tools/write-iframe-wrapper.test.ts`, two
-directories above itself. A map naming no directory at all is judged by
-its files instead, and contributes only those under the directory asked
-for. Either way the scope is applied before ambiguity is judged, or a
+test task may name a file anywhere in the tree. A map naming no directory at all
+is judged by its files instead, and contributes only those under the directory
+asked for. Either way the scope is applied before ambiguity is judged, or a
 name two packages happen to share would cost each of them a file it held
 unambiguously.
+
+A name map is also a statement of what a file holds, which a lane reads to tell
+a test the tree no longer holds from one a batch never reached. An uncaught
+error or an unhandled rejection can stop a module part way through loading,
+after it has registered some of its tests. Deno runs each test file in a realm
+of its own, with a preload of its own. So once an `error` or
+`unhandledrejection` event reaches a test file's realm before any of that file's
+hooks or tests has begun, whether or not anything handles it, the preload writes
+every name it has noted for the file again, in a map carrying `"interrupted":
+true`, and marks every later map of that file the same way. Deno begins a file's
+hooks and tests only once its module has settled, having finished loading or
+stopped, and the preload marks nothing after that. The names still say which
+file each came from, but no file such a map names counts as having registered
+only those names. A module whose loading never finishes, or that calls
+`Deno.exit`, leaves a map without the mark, but none of its file's tests run, so
+its file records nothing, and a unit that recorded nothing fails the run.
+
+The browser test runner registers no names through the preload, and makes the
+same statement for the whole of a run with a mark named `whole-run-<uuid>.json`.
+The mark holds a JSON object with the `kind` and `scope` the run's records carry
+and `tests`, every test's name by the repository-relative file that registered
+it. The runner writes one only when it loaded every file it was handed and every
+test returned a result, so a run that stopped part way leaves none. No mark
+reaches the store: a spool shipped as a run ships only its records.
 
 The context line carries `schema` (this document describes version 1, the
 `v1` in object paths), a per-object ULID `reportId`, the canonical `repo`
@@ -150,6 +202,14 @@ run was started under when that variable is unset — and for CI runs a
 optional `headCommit` (the pull request's head; `commit` is the ephemeral
 merge commit), and the provenance pair `event` and `fork`, stamped from
 the trusted `workflow_run` payload.
+
+A context also carries `shuffleSeed`, the seed the run's test runners shuffled
+their order by, where they shuffled; a context without one records a run whose
+tests ran in declaration order. Two contexts at one commit describe the same
+order exactly when this field agrees, which is what a consumer comparing
+outcomes needs to know
+([test selection](test-selection.md#two-runs-under-the-same-conditions)). A
+value that is not a non-negative integer makes the line malformed.
 
 Every value is public-repository material. Records and contexts never
 carry usernames, hostnames, tokens, or log text; branch names, agent
@@ -172,31 +232,103 @@ stop; recording never fails a run.
 
 A producer records the run it was asked for. Several are also libraries
 that this repository's own tests drive — the pattern runner behind
-`cf test`, the type-check task, the vintage gate's replay — and each takes
-the decision to record from its caller rather than from the environment
-alone. The entry point asks for records; a test driving the same function
-does not, because the files it hands over are that test's fixtures, and a
-fixture is data rather than a test of this repository. A test that drives
-such a harness as a child process hands it an empty
-`CF_TEST_RECORDS_DIR`, since the child reads its own environment; an
-empty value is recording off, the same as an unset one.
+`cf test`, the workspace runner behind `deno task test`, the type-check
+task, the vintage gate's replay — and each takes the decision to record
+from its caller rather than from the environment alone. The entry point
+asks for records; a test driving the same function does not, because the
+files it hands over are that test's fixtures, and a fixture is data
+rather than a test of this repository. A test that drives such a harness
+as a child process hands it an empty `CF_TEST_RECORDS_DIR`, since the
+child reads its own environment; an empty value is recording off, the
+same as an unset one.
 
-A check that no lane can be asked to run is not recorded. A record is one
+A file no repository holds is no test of one. The pattern runner and the
+browser harness, which name each test by its file or record the file
+alongside it, record nothing for a file outside every repository. A
+fixture a test writes to a temporary directory is such a file, so either
+harness run over one records nothing even where the run inherited a spool.
+
+A check that nothing can be asked to run is not recorded. A record is one
 execution of one test, and every history built from records — flake rate,
 duration, and what a pull request selects — answers whether to run that
 test again. A check reading what the run around it produced exists only
 as part of that run, so there is nothing to select and no suite in the
 test topology to claim its identity. Two checks are of this shape: the
-pull request coverage gate, which reads the coverage artifacts of every
-job in its own run, and the nightly audit over the CFC property corpus,
-which reads what the step before it wrote. A gate resolving a merge base
+store half of the test topology's drift guard, which reads the records of
+every lane in its own run, and the CFC Property Suite's audit step, which
+reads the corpus the step before it wrote. The first is a step of `Status`,
+the job in `deno.yml` that waits for every lane. A gate resolving a merge base
 against a base ref is not, and records normally.
 
-A test another workflow already records against the same commit is not
-recorded a second time. One execution of one test is one record, so a
-second workflow running those tests on that commit would give each of
-them two entries in its history. The exemption covers tests rather than
-jobs: a test that runs only in such a job is recorded there.
+The coverage gates read what the lanes produced as well, and are recorded
+all the same. A plan runs one by choosing to run every unit of its measured
+set, which gives selection something to choose, and the topology holds the
+gates as a suite of their own whose units are verdicts rather than anything
+a lane runs, which claims their identities
+([test selection](test-selection.md#a-gate-is-a-test)). `Status` reaches
+the verdict of each gate the run chose and records it on kind `gate`,
+scoped to the member whose lines it counts and named `coverage-gate
+<suite>`: a failure for a rise no acceptance covers, a pass for a
+comparison that found none, and a skip for any other verdict, an
+accepted rise among them. Its duration is what reaching the verdict took.
+
+One thing that is not a test is recorded anyway: a lane measuring
+itself. A lane measures its own setup and each of its batches through
+the record machinery every test uses, so those measurements arrive as
+ordinary records and travel the path a test's records travel. They are
+written on kind `gate`, scope `ci`, with a name opening `ci-lane `, and
+they carry no variant whatever the batch they measure carried. Nothing
+enumerates them, nothing scores them, and no lane can be asked to run
+one.
+
+Their figures are not all durations. A lane writes four measurements per
+batch — what the batch spent, what the tests of its units took between them,
+how many times its passes opened a unit, and how many passes it made — and a
+fifth, what the packer charged the lane for the batch. It writes three more
+once its batches have run, about its work as a whole: what that work took, what
+it was projected to take, and the most it could take inside the lane's bound.
+The record format carries one number and calls it a duration, so which of these
+a record holds is decided by its name. No name starts the way the name of
+another kind does, so a reader that predates a kind reads a record of that
+kind as no measurement at all rather than as one it knows.
+A batch that ended badly is written as a failure, and a test in it
+failing is enough to end it badly. A lane with a batch that ended badly
+writes its three as failures too.
+
+`Status` writes what a push run's tests covered the same way, in the step that
+reports the run's coverage. That step is a check nothing can be asked to run,
+since it reads what every lane produced, so it records no test; what it writes
+are measurements, like a lane's, rather than records of a check. Each figure is
+a record named `ci-lane coverage group <group>` or `ci-lane coverage set
+<suite>/<member>` whose `durationMs` holds a count of uncovered lines, and a run
+whose pattern compile cache was not restored also carries `ci-lane coverage
+cold`. Only a push writes them, and `Status` ships them beside its gates'
+records under the artifact suffix `coverage` (`COVERAGE_ARTIFACT`), which the
+shipping action uploads as `test-records-coverage-a<attempt>`, so that a reader
+finds a day's figures by listing for the objects the relay names after it. A
+reader of figures takes them from a push to the default branch alone.
+`coverageRecords` and `coverageFiguresOf` in
+`@commonfabric/test-support/records` write and read them.
+
+A consumer that builds anything per test excludes them first: pass
+rates, durations, a run's verdict per test, the sixty-second list, and
+the scores a pull request selects from. `isLaneMeasurement` in
+`@commonfabric/test-support/records` is what recognizes one, and it is
+asked of the identity the lane wrote, before any alias is resolved, so
+that a line in the alias file cannot decide whether a measurement enters
+a test's history.
+
+A test another workflow already records against the same commit in the
+same order is not recorded a second time. One execution of one test is
+one record, so a second workflow running those tests on that commit in
+that order would give each of them two entries in its history. The
+exemption covers tests rather than jobs: a test that runs only in such a
+job is recorded there. A run in another order is a different execution
+and is recorded. The daily run of every suite at the head of `main`
+under the next day's seed
+([TESTING.md](../development/TESTING.md#tomorrows-seed-run-a-day-ahead))
+is such a run, and its contexts' `shuffleSeed` is what tells its records
+apart from those of the commit's own run.
 
 `run-recorded` records the command it wraps, as one line carrying the
 identity the wrapper was given. It is therefore for a command that is
@@ -230,7 +362,10 @@ deleted.
 
 Every shipper makes exactly one attempt, and object names are
 deterministic, so re-shipping collides on create (which is not overwrite)
-and duplicates never come into being.
+rather than writing a second copy. The CI area nonetheless holds second
+copies of some earlier reports, written before the relay took each
+object's date from the attempt that produced it; [discovery](#the-store)
+says what they are and how a reader recognizes one.
 
 ## The store
 
@@ -253,6 +388,11 @@ test-selection publisher rather than by anything recording:
 <repo>/test-selection/v1/state/<yyyy-mm-dd>-<ULID>.json.gz
 ```
 
+The segment between the two names the area rather than the shape of what
+is stored there, and does not move when that shape changes: a reader
+reads an older shape forward, and the state a moved area would leave
+behind holds history no window of records could give back.
+
 The timestamp leading a manifest's name is the moment its publisher
 generated it, which keeps a listing chronologically readable but is not
 what a reader compares. A publisher names its manifest when it starts and
@@ -269,28 +409,32 @@ The selection area is the one part of this store that expires. A bucket
 lifecycle rule deletes its objects at a fixed age, and that age has to
 exceed the window in which a continuous-integration run may still be
 re-run, because a re-run resolves the same moment as the attempt it
-repeats and has to find the same manifest. Records carry no retention and
-must not acquire one.
+repeats and has to find the same manifest. It also has to exceed the
+longest the publisher may stop for: every run writes a new aggregate that
+carries each new real test failure forward, so an aggregate expiring costs
+nothing while a newer one exists. Records carry no retention and must not
+acquire one, since they are what a fold of the whole history reads.
 
-A local object's date partition comes from its run's start. The CI relay
-currently takes the date from the workflow run's `run_started_at`. That
-field is the current attempt's start and GitHub advances it when another
-attempt starts. Re-shipping an earlier artifact after a re-run can therefore
-move it to the new attempt's date and create a second object instead of
-colliding with its first shipment.
-
-The planned relay contract puts the immutable start of the attempt that
-produced an artifact inside that artifact. Its context and object name use
-that value on every relay invocation. Late-shipped objects then land in
-the partition where their report was produced, not where it was uploaded.
+A local object's date partition comes from its run's start. A CI
+object's comes from the start of the attempt that produced it. Each
+attempt's completion triggers a relay of its own, which ships that
+attempt's artifacts and no other's, and the `workflow_run` payload it
+receives carries that attempt's `run_started_at`. GitHub reports a later
+start for the run once another attempt starts, but never changes the
+start an earlier attempt's payload carries. Every relay of one attempt —
+the first, a rerun of it, or a dispatch naming the run and the attempt —
+therefore computes the same name for each of its artifacts, and a re-ship
+collides with the first shipment. A late-shipped object lands in the
+partition where its report was produced, not where it was uploaded.
 A trailing window can make late arrivals likely to be found, but cannot
 make discovery exact; what listing does and does not settle is described
 below. The whole dataset is readable by `allUsers`. Writers hold
 `roles/storage.objectCreator` pinned to their own folder. That
 identity-specific writer grant cannot overwrite or delete, while the public
 reader grant separately lets every principal read and list. Nothing already
-stored can be modified by any append credential. An incompatible schema writes
-under `v2/` and readers migrate at their own pace.
+stored can be modified by any append credential, which is why the area a
+reader lists is named rather than numbered: what is stored cannot be moved
+to a differently named one.
 
 Four writer principals exist, three of them recording. The **relay** —
 the only one that writes what CI produced — holds create on
@@ -343,7 +487,12 @@ names the day's shards and is written after all of them, so a day counts
 as compacted when its manifest exists. This means that every named shard
 exists, not that the shards are one atomic snapshot or that no more objects
 can arrive for that source and date. A reader that finds no manifest reads
-the raw area for that source and date.
+the raw area for that source and date. So does a reader that cannot read a
+shard the manifest names, as long as it has folded nothing of that rollup:
+a rollup holds nothing its day's raw area does not, so giving that rollup
+up costs the reader the time of reading the day the long way. A reader
+that has already folded part of the rollup cannot go that way, because
+nothing in the rollup says which raw objects it has counted.
 
 The rollup manifest records neither the source object names it contains
 nor a point through which it is complete. A reader cannot combine one with
@@ -362,13 +511,22 @@ rather than what arrived in it. A reader sees every object that arrives for
 a partition while that partition is still inside its window; an object
 arriving after that is not found until something reads a wider one.
 
-Two limits follow, and both are accepted rather than closed. An object
+One limit follows, and it is accepted rather than closed. An object
 arriving for a source and date already folded from its rollup is never
 counted, which needs the relay to write a partition older than the
-compaction lag. And a re-run crossing a UTC midnight ships its earlier
-attempt's artifacts under the later attempt's date, so the same records
-reach two objects and a reader keying on object name folds both. The relay
-contract above is what settles the second.
+compaction lag.
+
+The CI area also holds second copies that a reader keying on object name
+folds twice. A relay once shipped every attempt's artifacts and dated
+them all by the latest attempt's start, so a run re-run on a later UTC
+day had its earlier attempts' artifacts stored again under the later
+day. Measured on 2026-10-01, 1,334 object names from 26 runs each appear
+under two dates in this way. A second copy carries the same run id,
+artifact name, `ci.runAttempt`, `ci.job` and `ci.shard` as the first, a
+`reportId` of its own, and the later attempt's start as its `startedAt`.
+Among raw objects the two share a name below the date; in a rollup, which
+keeps no object names, they share those context fields. The copy under
+the earlier date is the original.
 
 Recording the exact source object names in a rollup would let a reader
 prove which raw objects overlap it and stop closing the date, at the cost
@@ -377,28 +535,64 @@ make if a closed partition is ever shown to have lost something.
 
 ## CI movement
 
-Test jobs hold no credentials. Each recording job — which is every job
-running tests that "Recording" above does not exempt — spools records
-(and its JUnit
-XML: leaf cases become records, container cases — one per describe level,
-with overlapping times — are dropped by a name-prefix rule) and uploads
-one credential-free `test-records-<job>-a<attempt>` artifact,
-`if: always()`. The artifact holds `records.ndjson` — always written,
-zero records or not — and `job.json`; an artifact without a readable
-`records.ndjson` is truncated, and the relay fails it visibly rather
-than ship a context-only object that would read as a run with no tests.
-The attempt lives in the artifact name because artifacts are scoped to
-the run. The artifact also needs the immutable start of the attempt that
-produced it. Under the planned relay contract, a re-run re-ships earlier
-attempts' artifacts using their own attempt numbers and start times, so
-those objects collide with their first shipment, while the new attempt's
-artifacts create new objects. The current relay instead uses the workflow
-run's mutable `run_started_at` for all of them. That can move an earlier
-artifact to another date and create a second copy instead of a collision.
+Test jobs hold no record-store credential. Each recording job — which is every
+job running tests that "Recording" above does not exempt — spools records
+and uploads one credential-free `test-records-<job>-a<attempt>` artifact, `if:
+always()`. JUnit XML becomes records as it is gathered: leaf cases become
+records, and container cases — one per describe level and one per test or step
+that runs steps, with overlapping times — are recorded only where they say something the cases inside them do not. A
+container is a case another case's name is inside.
+
+A container that failed on its own account is recorded as a failure. It fails on
+its own account when its body or one of its hooks threw, or when it finished
+with a step still running, and Deno reports that failure on the container. A
+container whose only failure is that a case inside it failed is not recorded for
+that failure, since that case carries it. A recorded container takes the time it
+spent outside the cases directly inside it, since theirs is in their own records.
+
+A container the lane's manifest holds, as an identity in the unit that ran it,
+is recorded on every run with its outcome on its own account: a pass where it
+failed only through the cases inside it. Its history then holds its passes as
+well as its failures, which is what the publisher judges flakiness, new real
+test failures, and the default branch's latest outcome by. The manifest holds a
+container once a run has recorded it, so a container becomes an identity of its
+own the first time it fails on its own account, and every `describe` does not.
+Until the manifest holds it, a rerun of its unit records nothing for it. A name
+the report gives to more than one case is not recorded this way: the bdd runner
+names the suite of a file's top-level hooks `global` in every file that has
+them, and that name says nothing about which of them passed. Outside a lane,
+nothing is known, and a container is recorded only when it fails on its own
+account.
+
+In `deno.yml` the recording jobs are the lanes of the `tests` job. Each lane
+ships one artifact, `test-records-tests-<lane>-a<attempt>`, and its shipping
+step names no variant and no JUnit specification. The lane runner
+(`tasks/ci-lane.ts`) gathers each batch's direct records and JUnit reports into
+the lane's spool as the batch finishes, marking each with its suite's variant. A
+lane that opens a test file for some of its tests registers the rest as ignored,
+through the skip list it hands the file's process, and ships no record of them:
+each is another lane's share, or one the plan did not select, and the lane's
+skip says nothing about the test itself. A skip a test registers for itself is
+recorded, and so is one a configuration declares, by the lane the plan gave that
+test to. Each suite declares its JUnit outputs in the topology, so the lane
+knows where they are without the workflow saying. A lane that ran default and
+non-default batches therefore ships records the job-wide inputs could not have
+described. `Status` ships one more artifact, `test-records-coverage-a<attempt>`,
+from every run: the record of each coverage gate it judged, and from a push the
+coverage measurements it writes as well. The artifact holds `records.ndjson` —
+always written, zero records or not — and `job.json`; an artifact without a
+readable `records.ndjson` is truncated, and the relay fails it visibly rather
+than ship a context-only object that would read as a run with no tests. The
+attempt lives in the artifact name because artifacts are scoped to the run. A
+relay ships only the artifacts whose name carries the attempt that triggered it,
+and dates and names them by that attempt's start, so a re-run's new jobs create
+new objects and nothing an earlier attempt produced is shipped again.
 
 The shared shipping action's optional `variant` input stamps every spooled
-and JUnit-derived record gathered by that job. Jobs omit it for the default
-configuration.
+and JUnit-derived record gathered by that job, and its optional `junit` input
+names the JUnit reports to ingest. A job that gathers its own records, as a lane
+does, passes neither, and a job running only the default configuration omits
+`variant`.
 
 The relay checks out its implementation from the default branch, not from
 the triggering test run. A new optional record field therefore rolls out in
@@ -417,11 +611,16 @@ an infra-managed variable of numeric actor ids): team members work from
 personal forks, so this keeps the team's own fork data while the
 public, immutable store accepts nothing authored by anyone else. A fork
 run by an unlisted actor, a fork run with no readable actor, and any
-fork run under an empty or missing list ship nothing. For runs that do
-ship, the relay composes each artifact's context (run identity and
+fork run under an empty or missing list ship nothing. A run is a fork run
+when the payload names both repositories and they differ, and when the
+payload names fewer than both, so a run this relay cannot place is gated
+as a fork and carries the flag that keeps it out of a consumer's
+baselines. For runs that do ship, the relay composes each artifact's
+context (run identity and
 provenance from the trusted event payload; the checked-out commit, job
-display name, and machine facts from the artifact's own `job.json`,
-which the payload does not carry) and creates one object per artifact.
+display name, shuffle seed, and machine facts from the artifact's own
+`job.json`, which the payload does not carry) and creates one object per
+artifact.
 
 ## Trust boundaries for consumers
 
@@ -434,19 +633,22 @@ object in the store was authored under the write-access group's trust;
 trusted the same way a same-repository branch's is, and what the flag
 still tells a consumer is that the run executed unmerged pull-request
 code. Consumers that feed decisions read `submissions/ci/` only, and
-take baselines from `event: "push"` runs, whose code the tree itself
-carries. A
+take baselines from runs of the head of `main` — `event` `"push"`,
+`"schedule"`, `"workflow_dispatch"` or `"workflow_run"` on branch `main` —
+whose code the tree itself carries. A
 `local/<username>/` prefix attributes records to the key's named holder
 under the trust of the repository's write-access group, since the minting
 workflow's username input lets any member mint for any username, with the
 dispatch log as the record of who minted what for whom.
 
 A consumer that selects which tests run — a duration ratchet, sharding
-weights, failure-rate-driven selection — must additionally treat an
-identity it has no fresh records for as one that must run: records exist
-only for tests that ran, so a selector that never re-runs the unselected
-starves its own data, and a renamed test is an unknown identity until an
-alias line lands.
+weights, failure-rate-driven selection — must additionally see that an
+identity it has no fresh records for runs: records exist only for tests
+that ran, so a selector that never re-runs the unselected starves its own
+data, and a renamed test is an unknown identity until an alias line lands.
+A consumer whose own runs on `main` run every identity meets this there
+for anything `main` already holds, and need only force in elsewhere what
+`main` does not.
 
 Test selection reads `submissions/local/` as well, and weighs a failure
 seen there above one seen in continuous integration. That is a deliberate
@@ -457,9 +659,10 @@ is no ambiguity about what changed, no shared infrastructure to blame,
 and no question about whether the failure was real, because they went on
 to fix it. What it costs is that a local record can now displace another
 test from a budgeted run rather than only ever adding to what runs. Three
-things bound that: local keys are held by people with repository write
-access, which is the trust boundary the continuous-integration records
-already sit inside; every manifest records the inputs behind every score,
+things bound that: every local key was minted by someone with repository
+write access, for themselves or for a person they chose to mint for,
+which is the trust boundary the continuous-integration records already
+sit inside; every manifest records the inputs behind every score,
 so a strange selection traces back to the records that produced it; and
 the worst outcome is a pull request that ran a less useful set of tests,
 which the full run on the default branch catches.
@@ -469,8 +672,17 @@ which the full run on the default branch catches.
 Every test completes within 60 seconds in CI, not counting setup; most
 take milliseconds. Anything that cannot is a container to split into the
 tests it actually contains. `tasks/test-records-report.ts` lists the
-identities over the rule, and its `--gate` flag is the ratchet, advisory
-until the list is short enough to enforce. A test that wedges rather than
-finishing slowly records no duration; wedges surface through job
-failures, and the incremental producers bound what a wedged job loses to
-its unflushed lines.
+identities over the rule from their passing executions, and its `--gate`
+flag is the ratchet, advisory until the list is short enough to enforce.
+A window the report could not read in full is neither a pass nor a
+failure of the rule, and the ratchet says so with a status of its own:
+the objects a report left out are the ones nothing has been established
+about, and a ratchet that passed on a window read in part would report
+it clean on the strength of what arrived. The list is over tests: a
+lane's measurement of one of its batches is not one, however long that
+batch ran. A test that wedges rather than finishing slowly records no
+duration; wedges surface through job failures, and the incremental
+producers bound what a wedged job loses to its unflushed lines. An
+identity with no passing execution in the window has no duration either,
+and is absent from the list for the same reason. A test that fails every
+time it runs surfaces through the job it fails.

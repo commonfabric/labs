@@ -11,7 +11,8 @@ Control) and the non-default database sources are deferred:
 - **Phase 6** — WAL crash detect/quarantine: deferred (Q7 V1 cut).
 - **Phase 7** — on-disk source injected via `cf`: not yet built (next up).
 - **Phase 8** — VM-file source: stub.
-- **Phase 9** — per-column/per-row CFC labels: separate follow-up (Section
+- **Phase 9** — per-column and per-row CFC labels: implemented, along with
+  the policy a query's own control state carries (Section
   [06](./06-cfc.md)).
 
 > The original spec described **standalone built-ins** (`sqliteQuery` /
@@ -35,7 +36,7 @@ distinct (and CFC can gate them independently):
   re-runs when its `reactOn` input changes. Returns
   `Reactive<{ pending, result?: Row[], error? }>`, the same shape as
   `fetchJson`/`generateText`
-  (see [`packages/runner/src/builtins/fetch.ts`](../../../packages/runner/src/builtins/fetch.ts)).
+  (see [`runtime/runner/src/builtins/fetch.ts`](../../../runtime/runner/src/builtins/fetch.ts)).
   A free `sqliteQuery<Row>({ db, sql, ... })` function is equivalent.
 - **`db.exec(sql, params?)`** — writes (`INSERT`/`UPDATE`/`DELETE`). Imperative,
   called inside a handler; returns `void`. It records a `sqlite` op onto the
@@ -64,7 +65,7 @@ Two cross-cutting rules make cell references first-class inside SQLite:
    the same seams rather than inventing parallel infrastructure.
 2. **Server-side execution.** Queries run inside toolshed, which already hosts
    the space and owns the SQLite engine
-   ([`packages/memory/v2/engine.ts`](../../../packages/memory/v2/engine.ts)).
+   ([`runtime/memory/v2/engine.ts`](../../../runtime/memory/v2/engine.ts)).
    The runtime reaches them over the **existing space-scoped websocket** — no
    new connection, no new auth path.
 3. **Atomic writes across cells and SQLite.** SQLite writes ride the *same*
@@ -83,8 +84,6 @@ Two cross-cutting rules make cell references first-class inside SQLite:
 
 ## Non-goals for v1
 
-- **CFC enforcement.** v1 carries the schema annotations but does not enforce
-  them. Confidentiality and integrity checks land in the follow-up phase.
 - **Read-after-write within a single transaction.** A `db.query` issued in
   the same transaction as a not-yet-committed `db.exec` is defined to
   fail (Section [04](./04-server-execution-and-transactions.md)). Simulating
@@ -106,7 +105,7 @@ Two cross-cutting rules make cell references first-class inside SQLite:
 | [03-database-sources.md](./03-database-sources.md) | The three database sources: cell-derived (default, **implemented**), VM file (stub), on-disk via `cf` (stub). |
 | [04-server-execution-and-transactions.md](./04-server-execution-and-transactions.md) | Protocol extension, server-side execution, ATTACH, `db.exec` commit-fold + abort-only, atomic cells+SQLite commits, WAL crash recovery. |
 | [05-reactivity.md](./05-reactivity.md) | Reactive `reactOn: db` re-query via the in-commit handle `rev` bump; the write-serialization mutex. |
-| [06-cfc.md](./06-cfc.md) | Future per-column and per-row CFC labels. |
+| [06-cfc.md](./06-cfc.md) | Per-column and per-row CFC labels, and the policy a query's own control state and result membership carry. |
 | [07-examples.md](./07-examples.md) | End-to-end usage examples. |
 | [08-open-questions.md](./08-open-questions.md) | Unresolved design questions for review. |
 | [implementation-plan.md](../../history/specs/sqlite-builtin/implementation-plan.md) | Archived as-built workstream record: milestones and dependency/gating map from building the feature. |

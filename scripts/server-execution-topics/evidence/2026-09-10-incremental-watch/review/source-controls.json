@@ -1,0 +1,210 @@
+{
+  "runtime": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3",
+  "runnerSha256": "f2d86c3fa2995c79f50384311cfe1817508186a0fac6a4c2e2d3c25cc4172767",
+  "controls": [
+    {
+      "role": "default",
+      "scenario": "dirty",
+      "exitCode": 1,
+      "expectedError": "clean tracked checkout",
+      "oldBinaryPreserved": true,
+      "head": "a077bbea9389ddfcf473f18f779abfe5b91fac91",
+      "command": [
+        "deno",
+        "run",
+        "--no-lock",
+        "-A",
+        "tools/server-execution-topics/run-arm.ts",
+        "default",
+        "<artifact-directory>/default-dirty",
+        "correctness",
+        "eval",
+        "0"
+      ]
+    },
+    {
+      "role": "default",
+      "scenario": "untracked",
+      "exitCode": 1,
+      "expectedError": "clean tracked checkout",
+      "oldBinaryPreserved": true,
+      "head": "f36b9cc327eb02e39b288050f6d9f42250274657",
+      "command": [
+        "deno",
+        "run",
+        "--no-lock",
+        "-A",
+        "tools/server-execution-topics/run-arm.ts",
+        "default",
+        "<artifact-directory>/default-untracked",
+        "correctness",
+        "eval",
+        "0"
+      ]
+    },
+    {
+      "role": "default",
+      "scenario": "stale-binary",
+      "exitCode": 1,
+      "expectedError": "STOP_AFTER_BUILD",
+      "oldBinaryPreserved": false,
+      "head": "f36b9cc327eb02e39b288050f6d9f42250274657",
+      "command": [
+        "deno",
+        "run",
+        "--no-lock",
+        "-A",
+        "tools/server-execution-topics/run-arm.ts",
+        "default",
+        "<artifact-directory>/default-stale-binary",
+        "correctness",
+        "eval",
+        "0"
+      ]
+    },
+    {
+      "role": "default",
+      "scenario": "build-failure",
+      "exitCode": 1,
+      "expectedError": "Setup command",
+      "oldBinaryPreserved": true,
+      "head": "e577a5be02f6d456a1f4234fd2ddfb61d784c520",
+      "command": [
+        "deno",
+        "run",
+        "--no-lock",
+        "-A",
+        "tools/server-execution-topics/run-arm.ts",
+        "default",
+        "<artifact-directory>/default-build-failure",
+        "correctness",
+        "eval",
+        "0"
+      ]
+    },
+    {
+      "role": "default",
+      "scenario": "source-change",
+      "exitCode": 1,
+      "expectedError": "changed during the toolshed build",
+      "oldBinaryPreserved": true,
+      "head": "7ce0d98b744e04319fd76578dd17aef8c6995d27",
+      "command": [
+        "deno",
+        "run",
+        "--no-lock",
+        "-A",
+        "tools/server-execution-topics/run-arm.ts",
+        "default",
+        "<artifact-directory>/default-source-change",
+        "correctness",
+        "eval",
+        "0"
+      ]
+    },
+    {
+      "role": "opposite",
+      "scenario": "dirty",
+      "exitCode": 1,
+      "expectedError": "clean tracked checkout",
+      "oldBinaryPreserved": true,
+      "head": "30f5d48b17bbee1da822397f507235fec395ce63",
+      "command": [
+        "deno",
+        "run",
+        "--no-lock",
+        "-A",
+        "tools/server-execution-topics/run-arm.ts",
+        "opposite",
+        "<artifact-directory>/opposite-dirty",
+        "correctness",
+        "eval",
+        "0"
+      ]
+    },
+    {
+      "role": "opposite",
+      "scenario": "untracked",
+      "exitCode": 1,
+      "expectedError": "clean tracked checkout",
+      "oldBinaryPreserved": true,
+      "head": "e714aced03142a39ad61571c003c536924dc1b72",
+      "command": [
+        "deno",
+        "run",
+        "--no-lock",
+        "-A",
+        "tools/server-execution-topics/run-arm.ts",
+        "opposite",
+        "<artifact-directory>/opposite-untracked",
+        "correctness",
+        "eval",
+        "0"
+      ]
+    },
+    {
+      "role": "opposite",
+      "scenario": "stale-binary",
+      "exitCode": 1,
+      "expectedError": "STOP_AFTER_BUILD",
+      "oldBinaryPreserved": false,
+      "head": "e714aced03142a39ad61571c003c536924dc1b72",
+      "command": [
+        "deno",
+        "run",
+        "--no-lock",
+        "-A",
+        "tools/server-execution-topics/run-arm.ts",
+        "opposite",
+        "<artifact-directory>/opposite-stale-binary",
+        "correctness",
+        "eval",
+        "0"
+      ]
+    },
+    {
+      "role": "opposite",
+      "scenario": "build-failure",
+      "exitCode": 1,
+      "expectedError": "Setup command",
+      "oldBinaryPreserved": true,
+      "head": "a89b62724d65718eff5e02b333443b324e2c53be",
+      "command": [
+        "deno",
+        "run",
+        "--no-lock",
+        "-A",
+        "tools/server-execution-topics/run-arm.ts",
+        "opposite",
+        "<artifact-directory>/opposite-build-failure",
+        "correctness",
+        "eval",
+        "0"
+      ]
+    },
+    {
+      "role": "opposite",
+      "scenario": "source-change",
+      "exitCode": 1,
+      "expectedError": "changed during the toolshed build",
+      "oldBinaryPreserved": true,
+      "head": "2ffae7c555e459105b8050925806a0824b850c2e",
+      "command": [
+        "deno",
+        "run",
+        "--no-lock",
+        "-A",
+        "tools/server-execution-topics/run-arm.ts",
+        "opposite",
+        "<artifact-directory>/opposite-source-change",
+        "correctness",
+        "eval",
+        "0"
+      ]
+    }
+  ],
+  "captureProvenance": {
+    "file": "external-captures.json",
+    "entry": "review/source-controls.json"
+  }
+}

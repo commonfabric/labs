@@ -7,16 +7,76 @@
  * infra-managed Actions variables.
  */
 
+import { basename, dirname, join } from "@std/path";
 import { type Environment, readEnv } from "@commonfabric/test-support/records";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /** Canonical name of this repository in every record context. */
-export const REPO = "commontoolsinc/labs";
+export const REPO = "commonfabric/labs";
 
 /** GCP project holding the store and the per-person service accounts. */
 export const GCP_PROJECT = "commontools-core";
 
 /** The minting workflow the key tool dispatches and collects from. */
 export const MINT_WORKFLOW_FILE = "test-records-mint.yml";
+
+/** The personal key file's name in the configuration directory. */
+export const KEY_FILE_NAME = "test-records-key.json";
+
+/** The delivery identity's name in the configuration directory. */
+export const IDENTITY_FILE_NAME = "test-records-identity.json";
+
+const CONFIG_DIR_NAME = "commonfabric";
+const LEGACY_CONFIG_DIR_NAME = "common-fabric";
+
+function underConfigHome(
+  name: string,
+  env: Environment,
+): string | undefined {
+  const xdg = readEnv("XDG_CONFIG_HOME", env);
+  if (xdg !== undefined && xdg.length > 0) return join(xdg, name);
+  const home = readEnv("HOME", env) ?? readEnv("USERPROFILE", env);
+  return home !== undefined && home.length > 0
+    ? join(home, ".config", name)
+    : undefined;
+}
+
+/**
+ * The per-user Common Fabric configuration directory, which holds the
+ * personal key and the delivery identity. Undefined when neither
+ * XDG_CONFIG_HOME nor HOME is set.
+ */
+export function configDir(
+  env: Environment = Deno.env.get,
+): string | undefined {
+  return underConfigHome(CONFIG_DIR_NAME, env);
+}
+
+/**
+ * The legacy configuration directory, where a workstation's key and
+ * delivery identity can still be. The key tool moves what it finds there
+ * into `configDir`.
+ */
+export function legacyConfigDir(
+  env: Environment = Deno.env.get,
+): string | undefined {
+  // TODO(hixie): Remove this, `movedKeyPath`, and the key tool's move
+  // once no workstation holds an install in the legacy directory.
+  return underConfigHome(LEGACY_CONFIG_DIR_NAME, env);
+}
+
+/**
+ * Where the key tool moves a key file named by a path in a legacy
+ * configuration directory, or undefined for any other path. A shell
+ * started before the move still names the legacy path.
+ */
+export function movedKeyPath(path: string): string | undefined {
+  const dir = dirname(path);
+  return basename(path) === KEY_FILE_NAME &&
+      basename(dir) === LEGACY_CONFIG_DIR_NAME
+    ? join(dirname(dir), CONFIG_DIR_NAME, KEY_FILE_NAME)
+    : undefined;
+}
 
 /**
  * Dataset prefixes whose submissions/local/<username>/ folders a minted
@@ -86,7 +146,7 @@ export function parsePersonalKeyFile(
   } catch {
     return undefined;
   }
-  if (typeof value !== "object" || value === null) return undefined;
+  if (!isObjectOrArray(value)) return undefined;
   const key = value as Record<string, unknown>;
   if (
     typeof key.client_email !== "string" ||

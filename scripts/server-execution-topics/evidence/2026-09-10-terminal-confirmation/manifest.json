@@ -1,0 +1,69 @@
+{
+  "base": "8814af62a7ddfd50262f3f2f98421f66519a3c95",
+  "candidatePatchSha256": "347613f7bc55525a946c208e127a0faa2c41a12139e8e1f4c4b308c72ab6dce3",
+  "sourceHashes": {
+    "packages/runner/test/executor/space-server-terminal-confirmation.test.ts": "45b2477d9dc9bbeaf891d7638afb259d88326ff2f686c02ae330078a714297a1",
+    "packages/runner/test/executor/space-server-terminal-structure.test.ts": "50fac53e9e96315c2912f8278c37970b80b23c909873f2b57e256d4323cb9809",
+    "packages/runner/test/ensure-piece-running-scope.test.ts": "675559ae4c9b44ed4f14dce8b9fbbc78fc07cacb5f547c7271ea980398ddf088"
+  },
+  "mode": "correctness and mechanism; real fresh memory stores; manual publication; fake clock; no shell",
+  "posture": "structure controls ON server and runtimes; scope controls OFF/client and ON/serving",
+  "cache": "populated dependency/compiler disk caches; fresh runtimes and source closure per runnable case",
+  "runtime": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3",
+  "command": [
+    "deno",
+    "test",
+    "--no-check",
+    "--preload=test/clock-preload.ts",
+    "--allow-ffi",
+    "--allow-env",
+    "--allow-read",
+    "--allow-write=/tmp,/var/folders",
+    "--allow-run=git,deno",
+    "test/executor/space-server-terminal-confirmation.test.ts",
+    "test/executor/space-server-terminal-structure.test.ts",
+    "test/ensure-piece-running-scope.test.ts"
+  ],
+  "cwd": "packages/runner",
+  "environment": {
+    "ENV": "test"
+  },
+  "runs": [
+    {
+      "role": "baseline",
+      "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner",
+      "started": "2026-09-10T10:34:15.545541+00:00",
+      "loadBefore": [
+        44.5009765625,
+        19.4384765625,
+        10.716796875
+      ],
+      "exitCode": 1,
+      "loadAfter": [
+        42.05810546875,
+        19.34814453125,
+        10.73583984375
+      ],
+      "ended": "2026-09-10T10:34:21.189778+00:00",
+      "output": "baseline-output.json"
+    },
+    {
+      "role": "candidate",
+      "cwd": "/Users/berni/.codex/worktrees/topics-campaign-terminal/labs/packages/runner",
+      "started": "2026-09-10T10:34:21.190797+00:00",
+      "loadBefore": [
+        42.05810546875,
+        19.34814453125,
+        10.73583984375
+      ],
+      "exitCode": 0,
+      "loadAfter": [
+        40.21142578125,
+        19.34228515625,
+        10.7841796875
+      ],
+      "ended": "2026-09-10T10:34:26.744033+00:00",
+      "output": "candidate-output.json"
+    }
+  ]
+}

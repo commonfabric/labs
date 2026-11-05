@@ -28,15 +28,16 @@ What is missing falls into two groups that barely touch each other:
    fingerprint, and no runtime-neutral digest. Revert restores what the entry
    could reach rather than what the author wrote, and the manifest is what
    [hosted pattern authoring](hosted-pattern-authoring.md) waits on.
-2. **A space still has to be found before it can be opened.** Routing accepts a
-   host hint and hydrates durable ones, but nothing appends a route with commit
-   acknowledgment and no share link carries one.
+2. **A learned space route is not persisted.** Routing accepts a host hint and
+   hydrates durable ones, but nothing appends a route with commit
+   acknowledgment.
 
-The build order below is **five pull requests in two tracks**, which can run
-concurrently. The count is held down by grouping each pull request around one
-guarantee rather than one file, and the tracks are separated along the lines
-where two authors would otherwise be editing `piece-controller.ts`,
-`source-reconciler.ts`, and `runner.ts` at the same time.
+The build order below, summarized in the [plan index](README.md), is **four pull
+requests in two tracks**, which can run concurrently. The count is held down by
+grouping each pull request around one guarantee rather than one file, and the
+tracks are separated along the lines where two authors would otherwise be
+editing `piece-controller.ts`, `source-reconciler.ts`, and `runner.ts` at the
+same time.
 
 ## Findings
 
@@ -47,16 +48,16 @@ as one, and sits with the recommendations below rather than here.
 ### What is built end to end
 
 - **One reconciliation mechanism, on one trigger.**
-  [`SourceReconciler`](../../packages/runner/src/source-reconciler.ts)
+  [`SourceReconciler`](../../runtime/runner/src/source-reconciler.ts)
   resolves a piece's origin and adopts what it names, and it is called from
   three places in
-  [`PiecesController`](../../packages/piece/src/ops/pieces-controller.ts)
+  [`PiecesController`](../../runtime/piece/src/ops/pieces-controller.ts)
   — `getPiece` when it is going to run, `openPiece`, and the space-root ensure
   — all of which are a user opening something. No serving path calls it.
 - **A closed origin vocabulary.**
-  [`classifyPieceOriginString`](../../packages/runner/src/piece-origin-kind.ts)
+  [`classifyPieceOriginString`](../../runtime/runner/src/piece-origin-kind.ts)
   returns exactly one kind for any recorded string, and both the reconciler and
-  [`piece-origin.ts`](../../packages/piece/src/ops/piece-origin.ts) dispatch on
+  [`piece-origin.ts`](../../runtime/piece/src/ops/piece-origin.ts) dispatch on
   that enumeration rather than re-deriving it, so what the product says about
   an origin and what the runtime does with it cannot drift apart. A test holds
   the two classifiers to the same boundary and the same reasons.
@@ -75,7 +76,7 @@ as one, and sits with the recommendations below rather than here.
   confirmation. A candidate the piece's own stored data cannot satisfy is
   refused outright and says why there is no button.
 - **Guarded, append-only revisions.** `pieceSourceHistory` in
-  [`runner.ts`](../../packages/runner/src/runner.ts) carries a revision
+  [`runner.ts`](../../runtime/runner/src/runner.ts) carries a revision
   identifier, timestamp, pattern, retaining source link, origin, the recorded
   origin when normalization changed it, an operation, and the selected
   revision. `applyPieceSourceTransition` compares the expected revision head,
@@ -97,7 +98,7 @@ as one, and sits with the recommendations below rather than here.
   dropped.
 - **Cross-space source copies fail closed on labels.**
   `sourceCfcMetadataProhibitsCrossSpaceCopy` in
-  [`pattern-manager.ts`](../../packages/runner/src/pattern-manager.ts) refuses
+  [`pattern-manager.ts`](../../runtime/runner/src/pattern-manager.ts) refuses
   to replicate a closure whose stored confidentiality or integrity labels the
   destination cannot preserve.
 - **Late host hints, and hydration from the site table.**
@@ -112,7 +113,7 @@ Seven gaps, ordered by how much each one costs a person using the product.
 **1. A revision retains the reachable closure, not the authored program.**
 There is no `cf/authored-program-manifest/v1` anywhere in the tree, no
 `publicSubpaths` on the compiler's `Program`
-([`interface.ts:29`](../../packages/js-compiler/interface.ts)), and no
+([`interface.ts:29`](../../base/js-compiler/interface.ts)), and no
 enumeration hook on `ProgramResolver`, which exposes only `main()` and
 `resolveSource()`. A revision's `source` field is a link to the
 `pattern:<identity>` closure. So revert restores what the entry could reach; an
@@ -124,14 +125,14 @@ program.
 
 **2. There is no runtime fingerprint or program digest.** `computeModuleHashes`
 accepts `runtimeFingerprint` and every production caller leaves it empty
-([`pattern-manager.ts:631`](../../packages/runner/src/pattern-manager.ts),
-[`cell-cache.ts:554`](../../packages/runner/src/compilation-cache/cell-cache.ts)).
+([`pattern-manager.ts:631`](../../runtime/runner/src/pattern-manager.ts),
+[`cell-cache.ts:554`](../../runtime/runner/src/compilation-cache/cell-cache.ts)).
 `getExecutableRuntimeFingerprint()` does not exist. Neither does
 `cf/runtime-neutral-program-digest/v1`. A revision therefore cannot record why
 an executable identity changed, cannot distinguish a runtime rebuild from an
 authored-source change, and cannot tell a revert whether it may reuse a
 historical identity. `pieceSourceCellSchema` in
-[`schemas.ts:281`](../../packages/runner/src/schemas.ts) still declares a
+[`schemas.ts:281`](../../runtime/runner/src/schemas.ts) still declares a
 `lineage` array that nothing outside a `cf-harness` test fixture reads.
 
 **3. Fork, detach-and-rebuild, and baseline migration do not exist.** There is
@@ -149,19 +150,21 @@ cost no schema change; that question is open and worth settling before the code
 is written.
 
 **5. Roots are still special in two places.** `defaultAppUrl` lives on the
-mutable home root ([`home.ts:16`](../../packages/home-schemas/home.ts),
-[`pieces-controller.ts:1587`](../../packages/piece/src/ops/pieces-controller.ts)),
+mutable home root ([`home.ts:16`](../../base/home-schemas/home.ts),
+[`pieces-controller.ts:1587`](../../runtime/piece/src/ops/pieces-controller.ts)),
 and nothing validates a root-interface contract when `defaultPattern` is
 created or relinked.
 
 **6. Routing stops at the live registry.** `registerSpaceHost` makes a hint
-effective in the session and returns a boolean; nothing appends it to the site
-table with commit acknowledgment, and the spec is explicit that the optimistic
-`CellHandle` paths cannot be used for it. The shell's **Copy link** copies
-`globalThis.location.href`
-([`HeaderView.ts:877`](../../packages/shell/src/views/HeaderView.ts)), so
-neither share-link emission nor receipt exists, and the runtime exposes no
-effective host for a space.
+effective in the session and returns a boolean, and `registerSpaceHostDetailed`
+returns the reason for a refusal; nothing appends the hint to the site table
+with commit acknowledgment, and the spec is explicit that the optimistic
+`CellHandle` paths cannot be used for it. A `known-different-host` refusal
+carries the host the space is routed to. `Runtime.hostForSpace` returns the
+effective host inside the worker, and no runtime-client request exposes it, so
+that refusal is the only route an embedder is told. Common Fabric browser-link
+receipt remains a dormant concept in the specification and is not work ordered
+by this plan.
 
 **7. There is no data migration across a contract change.** The spec names it
 as required work and describes the refusal it replaces. Nothing in the tree
@@ -191,18 +194,17 @@ tracks below are drawn so that at most one in-flight pull request is editing the
 transition path.
 
 **Routing touches none of it.** Gap 6 lives in `StorageManager`,
-`runtime-processor.ts`, the runtime-client protocol, and the shell. It shares no
-file with the source lifecycle apart from the one place a host-qualified `cf://`
-origin registers a route. That makes it a genuinely parallel track for a second
-author.
+`runtime-processor.ts`, and the runtime-client protocol. It shares no file with
+the source lifecycle apart from the one place a host-qualified `cf://` origin
+registers a route. That makes it a genuinely parallel track for a second author.
 
 ## The sequence
 
-Five pull requests. The two tracks are independent and can run concurrently.
+Four pull requests. The two tracks are independent and can run concurrently.
 
 ```
 Track A   A1 ──> A2 ──> A3     what a revision records
-Track B   B1 ──> B2            where a space lives
+Track B   B1                    how a learned route persists
 ```
 
 ### A1 — What a revision records
@@ -274,7 +276,7 @@ This is the heaviest change in the plan. It should land on its own.
 appends a revision with a new digest and an unchanged executable
 identity, a follower adopts it, and a revert restores the sibling.
 
-*Files:* `packages/js-compiler`, `packages/runner/src/harness`,
+*Files:* `base/js-compiler`, `runtime/runner/src/harness`,
 `pattern-manager.ts`, `runner.ts`, `piece-controller.ts`,
 `cf-piece-menu.ts`.
 
@@ -303,11 +305,11 @@ a restorable baseline the first time it is opened, and a piece that
 cannot be baselined says so rather than gaining a broken one.
 
 *Files:* `runner.ts`, `pieces-controller.ts`, `ensure-space-root.ts`,
-`packages/home-schemas`.
+`base/home-schemas`.
 
 ### B1 — One route operation that can fail
 
-Independent of Tracks A and B apart from its consumer.
+Independent of Track A apart from its consumer.
 
 - A dedicated runtime operation, exposed through the runtime-client
   protocol, that revalidates the DID and normalized origin in the worker,
@@ -332,59 +334,26 @@ Independent of Tracks A and B apart from its consumer.
 precondition race reports a real `ConflictError` to its caller and writes
 nothing.
 
-*Files:* `packages/runner/src/storage`, `runtime-processor.ts`, the
+*Files:* `runtime/runner/src/storage`, `runtime-processor.ts`, the
 runtime-client protocol, `piece-origin.ts`.
-
-### B2 — Share links
-
-- **Copy link** emits the DID-based shell URL with a single `spaceHost`
-  parameter taken from the effective host the runtime reports, not from
-  the shell's default API host.
-- Receipt parses the shell path into its DID-based `AppView`, validates
-  and normalizes the toolshed origin, sends both through B1's operation
-  with `source: "share-link"`, waits for the durable transaction, then
-  removes the parameter and hands the canonical hostless view to ordinary
-  navigation. An initial share URL is intercepted before the target
-  `AppView` opens its space. Malformed links, live conflicts, and durable
-  write failures report without navigating.
-- The browser-level integration test the spec specifies: two independent
-  toolshed servers, the target data only on the non-default one, the
-  production **Copy link** action, the emitted URL read from the
-  clipboard, receipt in a second shell, then a fresh runtime with no seed
-  that renders the target through a running pattern after hydration wins
-  a race it was allowed to lose. Plus the worker-path persistence cases —
-  unsynchronized table, synchronization failure, conflicting table route,
-  and two receipts racing one snapshot.
-
-*Reviewer's check:* the test exists and passes with `HEADLESS=1`, and
-does not inject the hint through a test-only registration endpoint.
-
-*Files:* `HeaderView.ts`, the shell's navigation and `AppView` paths,
-`packages/integration`.
 
 ## Tests
 
-Each pull request carries its own cases. The spec's two test items —
-numbers 12 and 13 under *Work required* — are not a pull request of
-their own, because a fixture written after the behavior it covers is a
-fixture written against the implementation rather than against the
-design.
-
-Two things ride along with a pull request rather than standing alone:
-
-- The **general version-to-version golden replay fixtures** ride with A1.
-  That is where a fingerprint and a digest first make "the previous
-  version" a thing a fixture can name. The existing synthetic home-shaped
-  and default-app-shaped replays in `packages/piece/test` are the
-  template.
-- The **two-toolshed browser test** rides with B2, as above.
+Each pull request carries its own cases. Item 11 under the specification's
+*Work required* is not a pull request of its own, because a fixture written
+after the behavior it covers is a fixture written against the implementation
+rather than against the design. Its general version-to-version golden replay
+fixtures ride with A1. That is where a fingerprint and a digest first make
+"the previous version" a thing a fixture can name. The existing synthetic
+home-shaped and default-app-shaped replays in `runtime/piece/test` are the
+template.
 
 The transition matrix — every transition, concurrent source and origin
 races, failed and incompatible updates, self-follow, concurrent
 reciprocal follows where at most one commits, subscription cancellation,
 authorization loss — belongs to the pull request that introduces each
-transition. `packages/piece/test/piece-source-lifecycle.test.ts` and
-`packages/runner/test/source-reconciler.test.ts` are where those already
+transition. `runtime/piece/test/piece-source-lifecycle.test.ts` and
+`runtime/runner/test/source-reconciler.test.ts` are where those already
 live.
 
 ## What this plan defers, and why
@@ -412,7 +381,8 @@ source lifecycle, and it should be designed where readers are designed.
 **Reliable route discovery** — host unavailability, replicated hosts,
 failover, stale site-table entries, authenticated replacement of an
 explicit route — is called open design work by the spec and stays open.
-B1 and B2 finish the ingestion half only.
+B1 supplies only the durable route-ingestion operation needed by a
+host-qualified fabric origin.
 
 **Asking for a change in words** — a menu item on a piece that takes a
 description, runs an agent session to author the update, and publishes it
@@ -429,22 +399,6 @@ The dependency runs one way and is worth stating: that spec disables its
 menu item when a piece has no complete retained authored program, so **A2
 gates hosted authoring**. Its own status section says as much. Nothing
 else in this plan blocks it.
-
-## If five is still too many
-
-One merge would take it to four, at a stated cost. This is an inference about
-review load rather than a measured fact.
-
-- **B1 and B2 into one.** The route operation has no consumer until share links
-  exist, so reviewing them together is arguably more honest. The cost is that
-  the integration test — likely the largest single artifact in this plan,
-  judging by what the spec asks it to cover — arrives in the same change as the
-  operation it exercises.
-
-Merging inside Track A is the obvious next candidate, and is not recommended.
-A2 is the heaviest change here and the one the hosted authoring plan is waiting
-on; putting anything else in the same review makes the thing everyone is
-waiting for harder to land.
 
 ## Related
 

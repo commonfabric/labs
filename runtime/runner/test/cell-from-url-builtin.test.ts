@@ -1,0 +1,505 @@
+import { beforeEach, describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+import { Identity, legacySpaceDid } from "@commonfabric/identity";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { Runtime } from "../src/runtime.ts";
+import { createBuilder } from "../src/builder/factory.ts";
+import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { slugIdForSpace } from "../src/slugs.ts";
+import { parseLink } from "../src/link-utils.ts";
+import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+
+const signer = await Identity.fromPassphrase("test cellFromUrl builtin");
+const space = signer.did();
+
+const HOSTS = ["fabric.example"];
+
+describe("cellFromUrl builtin", () => {
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let runtime: Runtime;
+  let tx: IExtendedStorageTransaction;
+  let pattern: ReturnType<typeof createBuilder>["commonfabric"]["pattern"];
+  let byRef: ReturnType<typeof createBuilder>["commonfabric"]["byRef"];
+  let causeCounter = 0;
+
+  beforeEach(() => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    tx = runtime.edit();
+
+    const { commonfabric } = createTrustedBuilder(runtime);
+    pattern = commonfabric.pattern;
+    byRef = commonfabric.byRef;
+  });
+
+  /** Resolve a URL through the builtin and return the link its `cell` holds. */
+  async function resolve(
+    url: string,
+    hosts?: string[],
+    spaceHost?: string,
+    settle?: () => Promise<void>,
+  ): Promise<
+    {
+      pending: unknown;
+      id: string | undefined;
+      space?: string;
+      path?: readonly unknown[];
+      scope?: string;
+    }
+  > {
+    const builtin = byRef("cellFromUrl");
+    const testPattern = pattern<{ url: string }>(
+      ({ url }) =>
+        builtin({
+          url,
+          ...(hosts ? { hosts } : {}),
+          ...(spaceHost ? { spaceHost } : {}),
+        }),
+    );
+
+    const resultCell = runtime.getCell(
+      space,
+      `cell-from-url-${causeCounter++}`,
+      undefined,
+      tx,
+    );
+    const result = runtime.run(tx, testPattern, { url }, resultCell);
+    tx.commit();
+    tx = runtime.edit();
+
+    await result.pull();
+    if (settle !== undefined) {
+      await settle();
+      await runtime.idle();
+      await result.pull();
+    }
+
+    const pending = result.key("pending").get();
+
+    // `result.key("cell")` reads the link to the builtin's own sub-cell; the
+    // answer is the link that sub-cell HOLDS, one hop further in.
+    const slot = result.key("cell");
+    const slotRaw = slot.getRaw();
+    if (slotRaw === undefined) return { pending, id: undefined };
+
+    const sub = runtime.getCellFromLink(parseLink(slotRaw, slot)!);
+    const held = sub.getRaw();
+    const link = held === undefined ? undefined : parseLink(held, sub);
+    return {
+      pending,
+      id: link?.id as string | undefined,
+      space: link?.space,
+      path: link?.path,
+      scope: link?.scope,
+    };
+  }
+
+  /** A cell in this space, and the id a URL would have to name to reach it. */
+  function anExistingCell(): string {
+    const cell = runtime.getCell<{ value: string }>(
+      space,
+      "cell-from-url-target",
+      undefined,
+      tx,
+    );
+    return cell.getAsNormalizedFullLink().id as string;
+  }
+
+  it("resolves a rooted link to the cell it names", async () => {
+    const id = anExistingCell();
+    const { pending, id: resolved } = await resolve(`/${id}`);
+
+    expect(pending).toBe(false);
+    expect(resolved).toBe(id);
+  });
+
+  it("selects an arguments document before traversing its path", async () => {
+    const result = runtime.getCell(space, "member-result", undefined, tx);
+    const argument = runtime.getCell(space, "member-argument", undefined, tx);
+    result.setMetaRaw(
+      "argument",
+      argument.getAsLink(),
+      rawMetaWriteAuthorization,
+    );
+    const id = result.getAsNormalizedFullLink().id;
+    const selected = await resolve(`//${space}/${id}#argument/title/`);
+    expect(selected.id).toBe(argument.getAsNormalizedFullLink().id);
+    expect(selected.path).toEqual(["title", ""]);
+    expect(selected.scope).toBe("space");
+  });
+
+  it("returns no cell for a missing argument member and preserves explicit scope", async () => {
+    const id = anExistingCell();
+    expect((await resolve(`/${id}#argument`)).id).toBeUndefined();
+    const selected = await resolve(`/${id}@user/title`);
+    expect(selected.id).toBe(id);
+    expect(selected.scope).toBe("user");
+    expect(selected.path).toEqual(["title"]);
+  });
+
+  it("resolves a bare tagged hash to the same cell", async () => {
+    const id = anExistingCell();
+    const { id: resolved } = await resolve(id.replace(/^of:/, ""));
+
+    expect(resolved).toBe(id);
+  });
+
+  it("resolves a page URL on a configured host", async () => {
+    const id = anExistingCell();
+    const { id: resolved } = await resolve(
+      `https://fabric.example/${space}/${id}`,
+      HOSTS,
+    );
+
+    expect(resolved).toBe(id);
+  });
+
+  it("registers an explicit toolshed before resolving a cross-space address", async () => {
+    const id = anExistingCell();
+    const routes: Array<[string, string]> = [];
+    runtime.registerSpaceHostDetailed = (routedSpace, host) => {
+      routes.push([routedSpace, host]);
+      return { accepted: true };
+    };
+
+    const { id: resolved } = await resolve(
+      `//${space}/${id}`,
+      undefined,
+      "https://remote.example",
+    );
+
+    expect(resolved).toBe(id);
+    expect(routes).toEqual([[space, "https://remote.example"]]);
+  });
+
+  it("returns no cell when an explicit toolshed conflicts with the fixed route", async () => {
+    const id = anExistingCell();
+    runtime.registerSpaceHostDetailed = () => ({
+      accepted: false,
+      reason: "known-different-host",
+      existingHost: "https://app.example/",
+    });
+
+    const { id: resolved } = await resolve(
+      `//${space}/${id}`,
+      undefined,
+      "https://remote.example",
+    );
+
+    expect(resolved).toBeUndefined();
+  });
+
+  for (const memoryUrl of [undefined, new URL("https://router.example/")]) {
+    describe(
+      `an explicit toolshed ${
+        memoryUrl === undefined ? "without" : "under"
+      } a memory URL`,
+      () => {
+        // What `https://remote.example/api/meta` answers: a memory URL, no
+        // document, or a failure. Storage records the host it is offered.
+        let remoteMeta: Record<string, unknown> | number;
+        let offeredToStorage: string[];
+        // Storage that takes every hint, so a refusal comes from the runtime.
+        beforeEach(() => {
+          remoteMeta = 404;
+          offeredToStorage = [];
+          storageManager = Object.assign(
+            StorageManager.emulate({ as: signer }),
+            {
+              registerSpaceHostDetailed: (_space: string, host: string) => {
+                offeredToStorage.push(host);
+                return { accepted: true } as const;
+              },
+            },
+          );
+          runtime = new Runtime({
+            apiUrl: new URL("https://app.example/"),
+            ...(memoryUrl === undefined ? {} : { memoryUrl }),
+            storageManager,
+            fetch: (input) => {
+              expect(String(input)).toBe("https://remote.example/api/meta");
+              return Promise.resolve(
+                typeof remoteMeta === "number"
+                  ? new Response(null, { status: remoteMeta })
+                  : new Response(JSON.stringify(remoteMeta), {
+                    headers: { "content-type": "application/json" },
+                  }),
+              );
+            },
+          });
+          tx = runtime.edit();
+          const { commonfabric } = createTrustedBuilder(runtime);
+          pattern = commonfabric.pattern;
+          byRef = commonfabric.byRef;
+        });
+
+        it("resolves through the API host, which is the default route", async () => {
+          const id = anExistingCell();
+          const { id: resolved } = await resolve(
+            `//${space}/${id}`,
+            undefined,
+            "https://app.example",
+          );
+          expect(resolved).toBe(id);
+          expect(runtime.mappedHostFor(space)).toBe(
+            memoryUrl === undefined ? "https://app.example/" : undefined,
+          );
+        });
+
+        it(
+          memoryUrl === undefined
+            ? "resolves through another host"
+            : "resolves through another host once its memory host is read",
+          async () => {
+            remoteMeta = { memoryUrl: "https://router.remote.example" };
+            const id = anExistingCell();
+            const { id: resolved, pending } = await resolve(
+              `//${space}/${id}`,
+              undefined,
+              "https://remote.example",
+              // Under a memory URL the answer is pending while the runtime
+              // reads where remote.example serves Memory, and the action runs
+              // again when the read is done.
+              memoryUrl === undefined ? undefined : () => runtime.settled(),
+            );
+            expect(pending).toBe(false);
+            expect(resolved).toBe(id);
+            expect(runtime.mappedHostFor(space)).toBe(
+              "https://remote.example/",
+            );
+            // Without a memory URL storage is offered the host itself; under
+            // one, the memory URL remote.example publishes, once by the read
+            // and once more when the action runs again and confirms it.
+            expect(new Set(offeredToStorage)).toEqual(
+              new Set([
+                memoryUrl === undefined
+                  ? "https://remote.example/"
+                  : "https://router.remote.example/",
+              ]),
+            );
+          },
+        );
+
+        if (memoryUrl !== undefined) {
+          it("resolves through another host that publishes no memory URL", async () => {
+            remoteMeta = 404;
+            const id = anExistingCell();
+            const { id: resolved } = await resolve(
+              `//${space}/${id}`,
+              undefined,
+              "https://remote.example",
+              () => runtime.settled(),
+            );
+            expect(resolved).toBe(id);
+            expect(new Set(offeredToStorage)).toEqual(
+              new Set(["https://remote.example/"]),
+            );
+          });
+
+          it("resolves to no cell through a host whose memory host cannot be read", async () => {
+            remoteMeta = 500;
+            const id = anExistingCell();
+            const warnings: unknown[] = [];
+            const originalWarn = console.warn;
+            console.warn = (...args: unknown[]) => warnings.push(args[0]);
+            let result: Awaited<ReturnType<typeof resolve>>;
+            try {
+              result = await resolve(
+                `//${space}/${id}`,
+                undefined,
+                "https://remote.example",
+                () => runtime.settled(),
+              );
+            } finally {
+              console.warn = originalWarn;
+            }
+            expect(result.pending).toBe(false);
+            expect(result.id).toBeUndefined();
+            expect(runtime.mappedHostFor(space)).toBeUndefined();
+            expect(offeredToStorage).toEqual([]);
+            expect(warnings.length).toBe(1);
+          });
+
+          it("resolves through the memory URL's own origin, which is the default route", async () => {
+            const id = anExistingCell();
+            const { id: resolved } = await resolve(
+              `//${space}/${id}`,
+              undefined,
+              "https://router.example",
+            );
+            expect(resolved).toBe(id);
+            expect(runtime.mappedHostFor(space)).toBeUndefined();
+            expect(offeredToStorage).toEqual([]);
+          });
+        }
+      },
+    );
+  }
+
+  it("resolves a slug to the document that redirects to the piece", async () => {
+    const { id: resolved } = await resolve(
+      `https://fabric.example/${space}/my-note`,
+      HOSTS,
+    );
+
+    expect(resolved).toBe(`of:${slugIdForSpace(space, "my-note")}`);
+  });
+
+  it("resolves an ordinary web page to no cell", async () => {
+    const { pending, id } = await resolve("https://example.com/blog/post");
+
+    expect(pending).toBe(false);
+    expect(id).toBeUndefined();
+  });
+
+  it("resolves a page URL on an unconfigured host to no cell", async () => {
+    const id = anExistingCell();
+    const { id: resolved } = await resolve(
+      `https://elsewhere.example/${space}/${id}`,
+      HOSTS,
+    );
+
+    expect(resolved).toBeUndefined();
+  });
+
+  it("resolves a URL naming a legacy space in the space the name resolves to", async () => {
+    // A space named rather than addressed is a legacy name, which resolves to
+    // the DID the name has always named. Resolving opens and creates nothing.
+    const id = anExistingCell();
+    const { pending, id: resolved, space: named } = await resolve(
+      `https://fabric.example/some-space-name/${id}`,
+      HOSTS,
+      undefined,
+      async () => {
+        await runtime.resolveLegacySpaceName("some-space-name");
+      },
+    );
+
+    expect(pending).toBe(false);
+    expect(resolved).toBe(id);
+    expect(named).toBe(await legacySpaceDid("some-space-name"));
+    expect(named).not.toBe(space);
+  });
+
+  it("stays pending when a legacy name it no longer names finishes deriving, and settles once the current one does", async () => {
+    // Each derivation finishes only when the test says so, and the order the
+    // test picks is the one a slow first name produces: it finishes after
+    // the URL has moved on to a second name. Clearing `pending` then would
+    // run the action again, which would ask for the second name twice.
+    const derive = runtime.resolveLegacySpaceName.bind(runtime);
+    const gates = new Map<string, PromiseWithResolvers<void>>();
+    const requested: string[] = [];
+    const gate = (name: string) => {
+      let entry = gates.get(name);
+      if (entry === undefined) {
+        entry = Promise.withResolvers<void>();
+        gates.set(name, entry);
+      }
+      return entry;
+    };
+    runtime.resolveLegacySpaceName = async (name) => {
+      requested.push(name);
+      await gate(name).promise;
+      return await derive(name);
+    };
+    // The work each derivation's completion runs as, in the order the
+    // builtin starts them.
+    const completions: Promise<unknown>[] = [];
+    runtime.asyncWorkObserver = (work) => void completions.push(work);
+
+    const id = anExistingCell();
+    const urlFor = (name: string) => `https://fabric.example/${name}/${id}`;
+    const url = runtime.getCell<string>(space, "cell-from-url-names", {
+      type: "string",
+    }, tx);
+    url.withTx(tx).set(urlFor("first-name"));
+    const builtin = byRef("cellFromUrl");
+    const testPattern = pattern<{ url: string }>(({ url }) =>
+      builtin({ url, hosts: HOSTS })
+    );
+    const resultCell = runtime.getCell(
+      space,
+      "cell-from-url-names-result",
+      undefined,
+      tx,
+    );
+    const result = runtime.run(tx, testPattern, { url }, resultCell);
+    tx.commit();
+    tx = runtime.edit();
+    await result.pull();
+    expect(result.key("pending").get()).toBe(true);
+
+    const edit = runtime.edit();
+    url.withTx(edit).set(urlFor("second-name"));
+    edit.commit();
+    await result.pull();
+    expect(result.key("pending").get()).toBe(true);
+
+    gate("first-name").resolve();
+    await completions[0];
+    await runtime.idle();
+    await result.pull();
+    expect(result.key("pending").get()).toBe(true);
+    expect(requested).toEqual(["first-name", "second-name"]);
+
+    gate("second-name").resolve();
+    await runtime.settled();
+    await result.pull();
+    expect(result.key("pending").get()).toBe(false);
+    const slot = result.key("cell");
+    const sub = runtime.getCellFromLink(parseLink(slot.getRaw(), slot)!);
+    const held = parseLink(sub.getRaw(), sub);
+    expect(held?.id).toBe(id);
+    expect(held?.space).toBe(await legacySpaceDid("second-name"));
+  });
+
+  for (const destination of ["invalid URL", "missing argument member"]) {
+    it(`clears a resolved cell after selecting ${destination}`, async () => {
+      // Reading through the stored link returns `undefined` for an empty target,
+      // so a guard on that would leave the previous URL's answer in place.
+      const id = anExistingCell();
+      const url = runtime.getCell<string>(space, "cell-from-url-input", {
+        type: "string",
+      }, tx);
+      url.withTx(tx).set(`/${id}`);
+
+      const builtin = byRef("cellFromUrl");
+      const testPattern = pattern<{ url: string }>(({ url }) =>
+        builtin({ url })
+      );
+      const resultCell = runtime.getCell(
+        space,
+        "cell-from-url-clear",
+        undefined,
+        tx,
+      );
+      const result = runtime.run(tx, testPattern, { url }, resultCell);
+      tx.commit();
+      tx = runtime.edit();
+      await result.pull();
+      expect(result.key("cell").getRaw()).toBeDefined();
+      const slot = result.key("cell");
+      const sub = runtime.getCellFromLink(parseLink(slot.getRaw(), slot)!);
+      expect(parseLink(sub.getRaw(), sub)?.id).toBe(id);
+
+      const edit = runtime.edit();
+      url.withTx(edit).set(
+        destination === "invalid URL"
+          ? "https://example.com/not-a-cell"
+          : `/${id}#argument`,
+      );
+      edit.commit();
+      await result.pull();
+
+      expect(sub.getRaw()).toBeUndefined();
+    });
+  }
+
+  it("resolves prose to no cell", async () => {
+    expect((await resolve("just some words")).id).toBeUndefined();
+  });
+});

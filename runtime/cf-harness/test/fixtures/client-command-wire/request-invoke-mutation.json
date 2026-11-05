@@ -1,0 +1,28 @@
+{
+  "type": "cf-harness.chat.event",
+  "protocolVersion": 1,
+  "emittedAt": "2026-10-02T12:00:00.000Z",
+  "sessionId": "session-1",
+  "turnId": "turn-1",
+  "sequence": 9,
+  "event": {
+    "kind": "client_action_requested",
+    "turnId": "turn-1",
+    "actionId": "action-2",
+    "action": {
+      "kind": "invoke_command",
+      "invocation": {
+        "command": "loom.move",
+        "args": {
+          "component": "c-2",
+          "before": "c-1"
+        },
+        "target": {
+          "loomId": "loom-0123456789abcdef",
+          "expectedVersion": 12
+        },
+        "approval": "person"
+      }
+    }
+  }
+}

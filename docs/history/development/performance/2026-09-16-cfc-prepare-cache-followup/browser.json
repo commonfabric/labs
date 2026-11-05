@@ -1,0 +1,461 @@
+{
+  "metadata": {
+    "fixtureHashes": {
+      "packages/patterns/integration/cfc-prepare.test.ts": "bf1f98fd793b21b7725f9afd4d6ca15a9e0e764a801741b35b67a0a8109895d1",
+      "packages/patterns/integration/fixtures/cfc-prepare/main.tsx": "ba97477bff00b4ad9a908173e0404006b2dbb1b7416100db3b3cf055d78d9cfb",
+      "packages/patterns/integration/fixtures/cfc-prepare/main.test.tsx": "b11a77a78372e0dd8e54937e51bd976838919d36980b1084190e24f41250180c"
+    },
+    "order": [
+      [
+        "baseline",
+        1
+      ],
+      [
+        "final",
+        1
+      ],
+      [
+        "final",
+        2
+      ],
+      [
+        "baseline",
+        2
+      ],
+      [
+        "baseline",
+        3
+      ],
+      [
+        "final",
+        3
+      ]
+    ],
+    "source": {
+      "baseline": {
+        "head": "6fca211368ffc829ee99d8fe0d24c7dcb5acfd3f",
+        "prepareSha256": "faa6417eee4dcb51ccef34b1d15991808d1d1309b1b8782f2f52f654f5506626"
+      },
+      "final": {
+        "head": "6fca211368ffc829ee99d8fe0d24c7dcb5acfd3f",
+        "prepareSha256": "25f978edb699d478aa2a052246c5e3b7b3900aad02f4c273109d0e9274b4c62e"
+      }
+    }
+  },
+  "arms": [
+    {
+      "directory": "/tmp/cfc-round2-followup-browser-baseline",
+      "rows": [
+        {
+          "label": "n100-r1",
+          "n": 100,
+          "repetition": 1,
+          "visibleMs": 2895,
+          "uptime": "11:24  up 1 day, 20:56, 15 users, load averages: 6.58 6.45 6.49",
+          "scheduler/run/action": 841.5000006258488,
+          "scheduler/run/commit": 1392.9999999701977,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 600,
+          "flowTemplateContainers": 200,
+          "sampledMs": 3135.471,
+          "prepareMs": 1209.743,
+          "prepareShare": 0.38582496856134213,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "verifyInputRequirements": 233.154,
+              "read": 222.096,
+              "canonicalizeLogicalPath": 134.835,
+              "(anonymous)": 104.302,
+              "stringTupleKey": 92.858,
+              "forEachFlowObservation": 24.403,
+              "wasm-function[3]": 22.878,
+              "prepareBoundaryCommit": 22.398,
+              "encodePointer": 17.984,
+              "isWalkableLabelMap": 17.661,
+              "addToDeepFrozenCache": 15.802,
+              "update": 14.887
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 112.103,
+              "canonicalizePreparedDigestInput": 46.464,
+              "canonicalizeWritePolicyInputs": 18.123,
+              "compareWritePolicyInput": 15.841,
+              "verifyInputRequirements": 768.35,
+              "coalesceLabelEntries": 16.862,
+              "joinLabels": 8.798,
+              "authoritativeCoverFor": 0.0,
+              "cover": 0.0,
+              "overlapping": 3.997
+            }
+          },
+          "verifierMs": 768.35,
+          "verifierShareOfCfc": 0.635134900553258
+        },
+        {
+          "label": "n100-r2",
+          "n": 100,
+          "repetition": 2,
+          "visibleMs": 1918.4000000059605,
+          "uptime": "11:26  up 1 day, 20:57, 15 users, load averages: 16.77 10.70 8.18",
+          "scheduler/run/action": 475.9999999701977,
+          "scheduler/run/commit": 918.0999999642372,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 600,
+          "flowTemplateContainers": 200,
+          "sampledMs": 2170.777,
+          "prepareMs": 808.816,
+          "prepareShare": 0.372592855000767,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "verifyInputRequirements": 175.706,
+              "read": 153.406,
+              "canonicalizeLogicalPath": 89.254,
+              "(anonymous)": 79.38,
+              "stringTupleKey": 65.771,
+              "wasm-function[3]": 18.94,
+              "encodePointer": 11.897,
+              "prepareBoundaryCommit": 8.98,
+              "valueWriteTargets": 8.465,
+              "update": 8.396,
+              "addToDeepFrozenCache": 6.774,
+              "forEachFlowObservation": 6.274
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 70.909,
+              "canonicalizePreparedDigestInput": 22.254,
+              "canonicalizeWritePolicyInputs": 10.27,
+              "compareWritePolicyInput": 8.136,
+              "verifyInputRequirements": 545.295,
+              "coalesceLabelEntries": 8.285,
+              "joinLabels": 4.512,
+              "authoritativeCoverFor": 0.0,
+              "cover": 0.0,
+              "overlapping": 3.236
+            }
+          },
+          "verifierMs": 545.295,
+          "verifierShareOfCfc": 0.6741891851793238
+        },
+        {
+          "label": "n100-r3",
+          "n": 100,
+          "repetition": 3,
+          "visibleMs": 2736.9000000059605,
+          "uptime": "11:26  up 1 day, 20:58, 15 users, load averages: 13.93 10.44 8.15",
+          "scheduler/run/action": 800.5000000596046,
+          "scheduler/run/commit": 1470.1999999284744,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 600,
+          "flowTemplateContainers": 200,
+          "sampledMs": 3099.102,
+          "prepareMs": 1290.079,
+          "prepareShare": 0.416275101626213,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "verifyInputRequirements": 277.974,
+              "read": 253.486,
+              "canonicalizeLogicalPath": 151.376,
+              "(anonymous)": 118.899,
+              "stringTupleKey": 83.109,
+              "encodePointer": 42.03,
+              "valueWriteTargets": 35.581,
+              "wasm-function[3]": 24.793,
+              "prepareBoundaryCommit": 21.738,
+              "addToDeepFrozenCache": 13.498,
+              "update": 10.506,
+              "feedPlainObject": 9.982
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 111.788,
+              "canonicalizePreparedDigestInput": 42.169,
+              "canonicalizeWritePolicyInputs": 20.394,
+              "compareWritePolicyInput": 14.604,
+              "verifyInputRequirements": 858.498,
+              "coalesceLabelEntries": 17.622,
+              "joinLabels": 7.086,
+              "authoritativeCoverFor": 0.334,
+              "cover": 0.0,
+              "overlapping": 7.211
+            }
+          },
+          "verifierMs": 858.498,
+          "verifierShareOfCfc": 0.6654615725083504
+        }
+      ],
+      "medians": [
+        {
+          "n": 100,
+          "visibleMs": 2736.9000000059605,
+          "scheduler/run/action": 800.5000000596046,
+          "scheduler/run/commit": 1392.9999999701977,
+          "prepareMs": 1209.743,
+          "prepareShare": 0.38582496856134213,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1
+        }
+      ],
+      "logLogSlope": null,
+      "verifierMedianMs": 768.35
+    },
+    {
+      "directory": "/tmp/cfc-round2-followup-browser-final",
+      "rows": [
+        {
+          "label": "n100-r1",
+          "n": 100,
+          "repetition": 1,
+          "visibleMs": 3062.2999999821186,
+          "uptime": "11:25  up 1 day, 20:56, 15 users, load averages: 19.08 9.93 7.78",
+          "scheduler/run/action": 1268.300000011921,
+          "scheduler/run/commit": 1207.500000089407,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 600,
+          "flowTemplateContainers": 200,
+          "sampledMs": 3444.259,
+          "prepareMs": 953.368,
+          "prepareShare": 0.2767991605741612,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "verifyInputRequirements": 245.011,
+              "read": 94.825,
+              "(anonymous)": 90.613,
+              "update": 87.404,
+              "coalesceLabelEntries": 20.487,
+              "forEachFlowObservation": 18.535,
+              "canonicalizeLogicalPath": 18.311,
+              "ConsumedLabelIndex": 18.031,
+              "freeze": 16.406,
+              "valueWriteTargets": 15.789,
+              "encodePointer": 15.385,
+              "prepareBoundaryCommit": 14.228
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 119.13,
+              "canonicalizePreparedDigestInput": 10.181,
+              "canonicalizeWritePolicyInputs": 5.617,
+              "compareWritePolicyInput": 0.172,
+              "verifyInputRequirements": 431.709,
+              "coalesceLabelEntries": 33.977,
+              "joinLabels": 13.539,
+              "authoritativeCoverFor": 0.344,
+              "cover": 0.344,
+              "overlapping": 10.123
+            }
+          },
+          "verifierMs": 431.709,
+          "verifierShareOfCfc": 0.45282514202280755
+        },
+        {
+          "label": "n100-r2",
+          "n": 100,
+          "repetition": 2,
+          "visibleMs": 2032.5999999940395,
+          "uptime": "11:26  up 1 day, 20:57, 15 users, load averages: 18.77 10.64 8.10",
+          "scheduler/run/action": 652.299999922514,
+          "scheduler/run/commit": 781.6999997198582,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 600,
+          "flowTemplateContainers": 200,
+          "sampledMs": 2363.055,
+          "prepareMs": 643.233,
+          "prepareShare": 0.272203990173737,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "verifyInputRequirements": 170.66,
+              "(anonymous)": 71.974,
+              "read": 38.678,
+              "wasm-function[3]": 25.743,
+              "encodePointer": 18.364,
+              "canonicalizeLogicalPath": 17.684,
+              "prepareBoundaryCommit": 14.122,
+              "addToDeepFrozenCache": 10.65,
+              "update": 10.089,
+              "valueWriteTargets": 9.875,
+              "ConsumedLabelIndex": 9.591,
+              "utf8SortedKeysOf": 8.534
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 99.828,
+              "canonicalizePreparedDigestInput": 31.123,
+              "canonicalizeWritePolicyInputs": 14.519,
+              "compareWritePolicyInput": 12.166,
+              "verifyInputRequirements": 272.345,
+              "coalesceLabelEntries": 11.784,
+              "joinLabels": 7.164,
+              "authoritativeCoverFor": 0.0,
+              "cover": 0.0,
+              "overlapping": 2.09
+            }
+          },
+          "verifierMs": 272.345,
+          "verifierShareOfCfc": 0.4234002297767684
+        },
+        {
+          "label": "n100-r3",
+          "n": 100,
+          "repetition": 3,
+          "visibleMs": 1780.5999999940395,
+          "uptime": "11:27  up 1 day, 20:58, 15 users, load averages: 15.40 11.04 8.42",
+          "scheduler/run/action": 580.2999998033047,
+          "scheduler/run/commit": 688.4000000059605,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1,
+          "flowTemplateEntriesMinted": 600,
+          "flowTemplateContainers": 200,
+          "sampledMs": 2109.027,
+          "prepareMs": 571.194,
+          "prepareShare": 0.2708329480845907,
+          "profileBreakdown": {
+            "hasPrepareCfcSamples": true,
+            "topCfcSelfMs": {
+              "verifyInputRequirements": 151.479,
+              "(anonymous)": 67.93,
+              "read": 36.759,
+              "wasm-function[3]": 20.562,
+              "encodePointer": 15.361,
+              "prepareBoundaryCommit": 14.161,
+              "#recordReadActivity": 13.437,
+              "canonicalizeLogicalPath": 12.997,
+              "update": 12.819,
+              "freeze": 11.34,
+              "utf8SortedKeysOf": 9.414,
+              "ConsumedLabelIndex": 6.752
+            },
+            "selectedCfcInclusiveMs": {
+              "preparedDigestFor": 90.773,
+              "canonicalizePreparedDigestInput": 28.532,
+              "canonicalizeWritePolicyInputs": 14.335,
+              "compareWritePolicyInput": 11.982,
+              "verifyInputRequirements": 262.523,
+              "coalesceLabelEntries": 9.825,
+              "joinLabels": 6.692,
+              "authoritativeCoverFor": 0.0,
+              "cover": 0.0,
+              "overlapping": 1.608
+            }
+          },
+          "verifierMs": 262.523,
+          "verifierShareOfCfc": 0.4596039174080961
+        }
+      ],
+      "medians": [
+        {
+          "n": 100,
+          "visibleMs": 2032.5999999940395,
+          "scheduler/run/action": 652.299999922514,
+          "scheduler/run/commit": 781.6999997198582,
+          "prepareMs": 643.233,
+          "prepareShare": 0.272203990173737,
+          "cfcPreparedTx": 104,
+          "overlapWildcardQueries": 0,
+          "authoritativeCoverCalls": 1
+        }
+      ],
+      "logLogSlope": null,
+      "verifierMedianMs": 272.345
+    }
+  ],
+  "equivalence": [
+    {
+      "label": "n100-r1",
+      "equal": true,
+      "baselineSha256": "9f02c8c649d7611ea9f2c15ea5a11374409c1e69cc6371ce5f590b3264853477",
+      "finalSha256": "9f02c8c649d7611ea9f2c15ea5a11374409c1e69cc6371ce5f590b3264853477",
+      "firstDifference": null
+    },
+    {
+      "label": "n100-r2",
+      "equal": true,
+      "baselineSha256": "9f02c8c649d7611ea9f2c15ea5a11374409c1e69cc6371ce5f590b3264853477",
+      "finalSha256": "9f02c8c649d7611ea9f2c15ea5a11374409c1e69cc6371ce5f590b3264853477",
+      "firstDifference": null
+    },
+    {
+      "label": "n100-r3",
+      "equal": true,
+      "baselineSha256": "9f02c8c649d7611ea9f2c15ea5a11374409c1e69cc6371ce5f590b3264853477",
+      "finalSha256": "9f02c8c649d7611ea9f2c15ea5a11374409c1e69cc6371ce5f590b3264853477",
+      "firstDifference": null
+    }
+  ],
+  "complete": true,
+  "normalization": "Full contents/sourceLabel/resolvedLabels/strictReason/elementLabels compared; requires exactly one harness space, normalizes only that space and address id strings beginning of: attached to it, with consistent bijective mapping across the complete snapshot. Standalone IDs remain exact. All integrity, observation classes, schemas, paths, values and inline IDs exact.",
+  "limitations": [
+    "N100 only; no scaling slope or smaller-N performance conclusion.",
+    "Three repetitions per arm; raw load averages retained and arms alternated, but independent machine activity remains.",
+    "Profiles include native dispatch overhead beyond exact event-to-visible interval. Inclusive function samples overlap and must not be summed."
+  ],
+  "harnessSpaceEvidence": {
+    "/tmp/cfc-round2-followup-browser-baseline/n100-r1.json": {
+      "harnessSpace": "did:key:z6Mkfx5xgYkQLLX38ejyPbVSe79Ec4hWBAoUyjCRWvuZmVAp",
+      "allSnapshotSpaces": [
+        "did:key:z6Mkfx5xgYkQLLX38ejyPbVSe79Ec4hWBAoUyjCRWvuZmVAp"
+      ],
+      "rootReferencesAgree": true,
+      "spaceSource": "elementLabels[0].ref.space; all 100 element.ref and resolvedRef spaces independently agree"
+    },
+    "/tmp/cfc-round2-followup-browser-baseline/n100-r2.json": {
+      "harnessSpace": "did:key:z6Mkkjprfh1fs3Q2WU7gqRKXJdK65xBcKk8djfyvxuXU7KV7",
+      "allSnapshotSpaces": [
+        "did:key:z6Mkkjprfh1fs3Q2WU7gqRKXJdK65xBcKk8djfyvxuXU7KV7"
+      ],
+      "rootReferencesAgree": true,
+      "spaceSource": "elementLabels[0].ref.space; all 100 element.ref and resolvedRef spaces independently agree"
+    },
+    "/tmp/cfc-round2-followup-browser-baseline/n100-r3.json": {
+      "harnessSpace": "did:key:z6MkjqHSZctZWSXSKGkdda7AuoE9wHzQdV47iR9bEmyo5Gkq",
+      "allSnapshotSpaces": [
+        "did:key:z6MkjqHSZctZWSXSKGkdda7AuoE9wHzQdV47iR9bEmyo5Gkq"
+      ],
+      "rootReferencesAgree": true,
+      "spaceSource": "elementLabels[0].ref.space; all 100 element.ref and resolvedRef spaces independently agree"
+    },
+    "/tmp/cfc-round2-followup-browser-final/n100-r1.json": {
+      "harnessSpace": "did:key:z6MkjhKU9cFy58qo6Qg2KYLoUUBKfwgiHKb9p1eG3Wgck454",
+      "allSnapshotSpaces": [
+        "did:key:z6MkjhKU9cFy58qo6Qg2KYLoUUBKfwgiHKb9p1eG3Wgck454"
+      ],
+      "rootReferencesAgree": true,
+      "spaceSource": "elementLabels[0].ref.space; all 100 element.ref and resolvedRef spaces independently agree"
+    },
+    "/tmp/cfc-round2-followup-browser-final/n100-r2.json": {
+      "harnessSpace": "did:key:z6Mkt4pCrqLE5jAHpnGeB72Y1SrduGForjfT5CUqBjrMmcAG",
+      "allSnapshotSpaces": [
+        "did:key:z6Mkt4pCrqLE5jAHpnGeB72Y1SrduGForjfT5CUqBjrMmcAG"
+      ],
+      "rootReferencesAgree": true,
+      "spaceSource": "elementLabels[0].ref.space; all 100 element.ref and resolvedRef spaces independently agree"
+    },
+    "/tmp/cfc-round2-followup-browser-final/n100-r3.json": {
+      "harnessSpace": "did:key:z6Mksj2g24rLtP37aykS3TtsEp2tDBnXLeMJRN5VRQgvmjbq",
+      "allSnapshotSpaces": [
+        "did:key:z6Mksj2g24rLtP37aykS3TtsEp2tDBnXLeMJRN5VRQgvmjbq"
+      ],
+      "rootReferencesAgree": true,
+      "spaceSource": "elementLabels[0].ref.space; all 100 element.ref and resolvedRef spaces independently agree"
+    }
+  },
+  "pairedVisibleChangesPercent": [
+    5.778929187637938,
+    5.952877397191636,
+    -34.94099163322877
+  ],
+  "interpretation": "Verifier sampled time decreased in all three pairs, as did the sampled CFC share. Visible time increased in the first two pairs and decreased in the third; the lower arm median does not establish a reliable visible latency improvement. One N=100 rung cannot establish a scaling or low-N conclusion."
+}

@@ -2,7 +2,7 @@
 
 _Epic C, stage C0, of
 [`docs/history/plans/cfc-future-work-implementation.md`](../history/plans/cfc-future-work-implementation.md).
-Spec: `commontoolsinc/specs` `cfc/04-label-representation.md` §4.6.3 (the
+Spec: `commonfabric/specs` `cfc/04-label-representation.md` §4.6.3 (the
 primitive read profile) and §4.5.2; the residuals are SC-4 / SC-8 in
 [`cfc-spec-changes.md`](./cfc-spec-changes.md). This doc settles the semantics
 before C1–C5 land code — the design has real open choices and they should be
@@ -36,8 +36,8 @@ observation classes exist to separate.
 Better than the audit implied — most of the plumbing is present:
 
 - **A provenance axis on the persisted entry.** `LabelMapEntry.origin`
-  (`declared` | `link` | `derived` | `structure` | `external-ingest`,
-  `packages/runner/src/cfc/types.ts`) already tags *update discipline*. This is
+  (`declared` | `link` | `derived` | `structure` | `minted` |
+  `external-ingest`, `runtime/runner/src/cfc/types.ts`) already tags *update discipline*. This is
   orthogonal to the *consumption* axis this epic adds.
 - **Reads already distinguish shape.** `IReadActivity.nonRecursive`
   (`storage/interface.ts`) marks shape-only observations (key-add, length);
@@ -109,9 +109,32 @@ A read consumes the join of every entry whose class is in its consumed set:
 | `linkResolutionProbe` / slot-pointer read (no deref) | `followRef` | which reference sits here — **stops being excluded**; consumes the link-origin entry's `followRef` class |
 | dereference (follow a ref to its target) | the dereference trace pair it already is | unchanged; target read classified at the target path |
 
+Runtime-minted concrete existence entries resolve independently from current
+value entries (§4.6.3, §8.12.8). Each retains its own most-specific applicable
+entry, and an observation consuming both joins them. A public child existence
+entry therefore cannot hide a confidential ancestor value; a public child
+value cannot hide confidential ancestor existence. Wildcard membership
+entries also retain their independent resolution. Declared and legacy covering
+entries keep their existing component resolution.
+
+Returning a primitive through a query-result proxy consumes its value, even
+when constructing that view first probes its shape. This applies to JavaScript
+primitives as well as Fabric primitives. A shape-only storage observation
+continues to consume only its shape classes.
+
 The load-bearing change is the third row: the `followRef` observation, today
 dropped from the flow join, becomes a consumed class carrying the link entry's
 label — closing SC-8.
+
+Two runtime reads have no row here, though the walk classifies them like any
+other: the stream-marker probe the write path makes to choose between an
+event send and a stored write, and the diff's read of the address it is about
+to write. `deriveFlowJoin()` drops them after classification, so neither
+consumes any of the classes above, and the walk's other consumers see them
+unchanged. Per §18.6.2 each is a runtime-internal read rather than a handler
+observation —
+[`cfc-write-destination-reads.md`](./cfc-write-destination-reads.md) covers
+them.
 
 **Where `count` went.** The spec's fifth class (§4.6.3) deliberately does not
 get its own axis value: a count observation (cardinality without membership)
@@ -144,11 +167,36 @@ confidentiality-channel rule. The persisted `observes:"shape"` entry does not
 carry J's integrity: integrity composes by meet, never join, so growing an
 existence entry's integrity across writers would *union* certification claims
 — an over-claim. The `value` entry keeps the full J (confidentiality +
-integrity, replace-on-overwrite); this matches the existing `structure`
-stamps, which have always been confidentiality-only. Consequence: a
+integrity, replace-on-overwrite); the frozen `structure` existence entry is
+confidentiality-only for the same reason. Consequence: a
 `nonRecursive` (shape) read of a split-labeled path taints with the existence
 confidentiality but no longer inherits content certification into the
 hereditary meet — an intended under-claim (SC-9's fail-safe direction).
+
+**Derivation provenance on membership stamps.** The `structure` membership
+stamps — the container's `observes:"enumerate"` entry and its `*`-child class
+templates — are re-minted from the current join rather than frozen, so they
+carry J's `TransformedBy` atom (and no other integrity). Without it a read of
+the container node resolves confidentiality with no derivation evidence at all,
+and an exchange rule guarded on `TransformedBy` cannot release an object a
+single function computed. The atom is present only when the flow stage minted
+it, which it does only when every non-privileged write of the transaction was
+authored under one identity. Membership stamps survive a slot write that adds or
+replaces a child, so attribution on any carried `derived` or `structure` entry
+meets across the writers of its path: a transaction writing at, above, or below
+the entry's path (for a `*` template, its container's) leaves on it only the
+`TransformedBy` atoms its own join carries. A later writer under another
+identity, or under none, therefore leaves the entry naming no function — also
+when that transaction read nothing and carries no labels of its own, since a
+write below a stamp carrying `TransformedBy` admits its document to the persist
+step whatever the join. The meet covers `TransformedBy` only: a hereditary
+integrity atom on an ancestor's `derived` entry still survives another writer
+adding a child. The declared structure-container route (filter/flatMap result
+containers) re-mints its stamps from each reconcile's join without writing the
+container, so there the atom names the builtin that reconciled, not every writer
+of every slot. The hereditary atoms stay off these stamps: they would feed the
+next transaction's hereditary meet through container reads, which is a change to
+certification propagation rather than to attribution.
 
 **C3 note (2026-07-03, superseded 2026-07-06): grow shipped, then the
 discipline was settled with the spec as freeze-at-creation.** C3's interim
@@ -234,19 +282,109 @@ normative from C1 on:
   consumed nothing for probes.
 - **The §4 row 3 / row 4 boundary is the dereference trace.** A probe issued
   while *following* a reference — its slot path covered at-or-above by a
-  same-tx recorded trace source — is resolution machinery (row 4,
-  unchanged); the follow's taint arrives via the ordinary reads of the
-  target. Only standalone probes (no covering trace: `lastNode:"top"` link
-  reads, raw link handles, unfollowed redirect checks) are row-3 followRef
-  observations. Without this boundary every value read's own traversal
-  probes consume each hop's pointer label, and a list coordinator's J joins
-  every slot's transport label — the same pointwise re-smear.
+  same-tx recorded trace source — belongs to that dereference (row 4). The
+  follow's content taint arrives via the ordinary reads of the target, and
+  its pointer taint via one probe: the probe of the followed slot itself,
+  the trace's source, is a followRef observation and consumes the
+  followRef-class entries that resolve at that slot, as a standalone probe
+  of the slot does. A dereference thereby retains the restrictions of the
+  reference it follows (spec §4.6.3, §8.2.4). The other covered probes,
+  which walk the path beneath the followed slot and find no reference,
+  consume nothing, and the plain reads resolution journals at the followed
+  slot skip the runtime-minted `*` templates. Standalone probes (no
+  covering trace: `lastNode:"top"` link reads, raw link handles, unfollowed
+  redirect checks) are row-3 followRef observations. A list coordinator's
+  scaffolding probes carry the machinery marker (§6.2) and consume nothing,
+  so a coordinator's J does not join every slot's transport label. A probe
+  of a slot that holds a reference consumes no link entry beneath the slot.
+  The document has no position there: such an entry labels a position of
+  the target, as a copy of the target's labels that a stored envelope can
+  carry although no link write persists one, and a dereference consumes the
+  target's own labels where it reads them (spec §4.6.3, §8.2.5). The link
+  entry at the slot stays consumed (spec §18.7).
+- **An `enumerate` entry applies at its container only.** It labels a
+  container's membership, order and count, so it is consumed by a read of
+  the container. A read of an array's native `length`, which the journal
+  records beneath the array, is also measured as a shape read of the array;
+  a verifier probe of the parent tells an array from an object with a field
+  named `length`, and a machinery-marked read is left as it is. It is not
+  consumed by a read of one child, which observes that child: longest-prefix
+  resolution would otherwise put the membership of every element on a read
+  of any one of them. A concrete `structure` entry takes the same exact-path
+  rule, and a recursive read of an ancestor consumes either.
 - **followRef observations contribute confidentiality only.** The §8.9.3
   hereditary integrity meet quantifies over the transformation's *content*
   inputs; standalone probes rarely resolve any label, and admitting them
   would empty the weakest-link meet on virtually every transaction,
-  silently ending TransformedBy / PolicyCertified propagation. Pointer
-  integrity evidence stays on the link entry (the LinkReference chain).
+  silently ending TransformedBy / PolicyCertified propagation. A pointer
+  carries no integrity evidence of its own (§15.4, the retired
+  `LinkReference`). The probe of a followed slot leaves its input witnesses to the followed
+  reference's own location, which resolves them over the value stamps at the
+  slot, and which counts whenever the slot's label is confidential
+  (`cfc-transformed-by-input-witnesses.md`).
+
+### 6.2 The runtime's own wiring is the second non-standalone probe (2026-09-16)
+
+The dereference trace of §6.1 is not the only thing that makes a probe
+something other than a standalone observation. A probe carrying the
+machinery marker (`machineryRead`) is one the RUNTIME issued while wiring an
+operation up or plumbing a result, and no pattern or handler code runs inside
+a marked scope. §4.6.3's reference-identity row is about a read the
+computation made and then did something with; what a wiring probe does with
+the reference it finds is write that same reference into another slot. A reader
+that follows the reference from there consumes the labels of what it reaches
+at the document that stores them (spec §8.2.4), so the protection of the
+referenced content does not ride on the wiring transaction's flow stamp, and
+joining the probed slot's label into that stamp would only spread it over
+every other path the wiring transaction wrote.
+`forEachFlowObservation` skips a marked probe alongside a trace-covered one,
+so such a read consumes nothing; a marked read that materializes content is
+unaffected and keeps consuming its ordinary labels.
+
+A wiring transaction that consumed the `origin: "link"` entry of a
+confidential reference would carry that clause into every result projection
+it rewrote. A derived stamp at a sub-piece result's root covers its `$UI`, so
+§8.10.6's display ceiling would deny the whole interface. Excluding the
+runtime's reference-only wiring probes prevents that propagation; content
+reads remain labeled.
+
+The list coordinators are the case this could have under-tainted. `map`,
+`filter` and `flatMap` mark the presence probe and the slot-identity diffs
+over their prior slots, and each of the three then differs in what it reads
+outside that scope. `filter` reads every predicate result there, and `flatMap`
+reads every child result there, so membership and content in those two still
+depend on reads that taint. `map` reads no element value anywhere: it
+republishes references, so what protects an element in its output is the
+element's own label, at the element. Its one read outside the marked scope
+is of the list's membership, which it declares onward (`declaredOnwardRead`,
+`reactivity-log.ts`): the join leaves what that read consumed at the list
+itself out and keeps its integrity in the meet, and the flow stage lands
+that, as the join resolved it (`deriveFlowJoin`'s `declaredOnwardAt`), in
+the container's `enumerate` stamp, replaced from the join each reconcile
+like the rest of the stamp — a measurement, never a declaration. What the
+read consumed at the slots — each item's shape, the reference scalar there,
+the pointer a probe finds — is per-item and stays in the join: a child is
+set up from exactly that, so its setup and the container's slot templates
+carry it. So the container's membership
+and length carry what the list's do, and a child the same transaction sets
+up carries its own slot's label and the selection's: a list whose membership
+carries every element's label, a query result (§8.17.6), would otherwise
+hand each child the join of all of them.
+`cfc-declared-onward-read.test.ts` holds the partition to the join, and
+`cfc-map-row-labels.test.ts` measures the children over such a result.
+
+That is what makes the exclusion sound, and it does not come from any read.
+`list.set(members)` writes a link per member, and the slot the link lands in
+stores the reference's own label and nothing of the member's (spec §8.12.8),
+so a reader reaching an element through the container dereferences the slot
+and consumes the element's label where it is stored.
+`cfc-template-population.test.ts` measures that over a labeled element, beside
+the case that measures the marked probe adding nothing on top;
+`cfc-reference-identity-reads.test.ts` measures the same route for a wiring
+read that carries one reference onward, and that after an unmarked probe at the
+same position, which adds the holder's pointer label to the writing attempt's
+join, the slot still stores nothing of the source and the dereference still
+reaches the source's label.
 
 ## 7. Observation ceiling (LLM path) and render
 
@@ -268,6 +406,30 @@ instead of the flow join:
 - **Render label views** consume per-class the same way: a public `value`
   read of a child under a secret container `shape` no longer inherits the
   container's shape label (today the flat model takes the max).
+- **Label views across a link.** A view derived by following a link carries
+  the followed slot's reference restrictions: the confidentiality of
+  everything that resolves at the slot, whatever its class, wildcard
+  templates included (spec §18.6.2 `referenceLabel`), as one class-less entry
+  at the view's root. That holds for `resolveAsCell()`, a lazy read's hop, a
+  query-result proxy, and every link an eager schema read crosses. Eager
+  materialization also journals the pointer observation and its dereference
+  trace at each crossing. The transaction's flow join therefore consumes the
+  reference restrictions even when the returned primitive carries no label
+  view. A rebase keeps a class-less ancestor entry, so every position reached
+  through the link carries them, as spec §4.6.3 and §8.2.4 require, where the
+  slot's own `followRef` entry is dropped below the target. No path carries anything
+  else from the slot: the handle's view is confidentiality alone, since the
+  slot's integrity endorses the selection the slot holds and not a copy of
+  the handle (spec §3.7.2), and the labels of the document the handle names
+  are read from that document when the handle is followed
+  (`cfcAcquisitionViewForDereferenceTraces` in `cfc/label-view-state.ts`). A
+  slot stores nothing below itself: a link write persists the reference's own
+  label at the slot (spec §8.12.8), and the labels of what the link reaches
+  are read at the target. A cell's stored label view (`cfcLabelViewForCell`
+  and its fail-closed forms) reads them there too: it follows the links the
+  cell's path lands on or crosses, and joins the labels its own document
+  stores at the path with the reference restrictions of each slot followed in
+  another document and the labels of the document holding the value.
 
 That precision win is what pays for the epic on the LLM/agent surface.
 
@@ -307,7 +469,7 @@ classes but **not** for the SC-8 change:
 
 Perf: the labelMap grows ~2× entries per written path; bench
 `cfc-label-sync-strategy` and `cfc-canonicalize` before/after. A spec PR to
-`commontoolsinc/specs` records the §4.6.3 read-classification table and the SC-4
+`commonfabric/specs` records the §4.6.3 read-classification table and the SC-4
 grow-vs-replace split when this doc settles (tracked in `cfc-spec-changes.md`).
 
 ## Provenance

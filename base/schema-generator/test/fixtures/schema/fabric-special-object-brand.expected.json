@@ -1,0 +1,29 @@
+{
+  "$defs": {
+    "FabricInstance": {
+      "properties": {},
+      "type": "object"
+    },
+    "FabricPrimitive": {
+      "properties": {},
+      "type": "object"
+    }
+  },
+  "properties": {
+    "blob": {
+      "type": "FabricBytes"
+    },
+    "instance": {
+      "$ref": "#/$defs/FabricInstance"
+    },
+    "opaque": {
+      "$ref": "#/$defs/FabricPrimitive"
+    }
+  },
+  "required": [
+    "blob",
+    "instance",
+    "opaque"
+  ],
+  "type": "object"
+}

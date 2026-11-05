@@ -1,0 +1,1 @@
+{"date":"2026-10-23","from":{"k":"unit","s":"runner","n":"local-read-policy > shares one checker within validation and renews it for later state"},"to":{"k":"unit","s":"runner","n":"local-read-policy > shares one checker across reads and makes one for each validation pass"}}

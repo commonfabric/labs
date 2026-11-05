@@ -14,7 +14,7 @@ import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   materializeOnCell,
   openFileBackedRuntime,
-} from "../packages/piece/test/state-continuity-harness.ts";
+} from "../runtime/piece/test/state-continuity-harness.ts";
 import { type AdoptRoots, adoptVintage } from "./vintage-adopt.ts";
 import { collectVintages } from "./pattern-vintage-lib.ts";
 import { replayAll } from "./pattern-vintage-run.ts";

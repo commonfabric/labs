@@ -16,6 +16,7 @@
 import { dirname, join } from "@std/path";
 import { replaceFile } from "./test-records-atomic-write.ts";
 import { type Environment, readEnv } from "@commonfabric/test-support/records";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /** A harness whose configuration can carry the variable. */
 export interface AgentHarness {
@@ -135,8 +136,7 @@ async function readConfig(path: string): Promise<ConfigRead> {
   if (text.trim().length === 0) return { kind: "config", config: {}, text };
   try {
     const parsed = JSON.parse(text);
-    return typeof parsed === "object" && parsed !== null &&
-        !Array.isArray(parsed)
+    return isObjectNotArray(parsed)
       ? { kind: "config", config: parsed as Record<string, unknown>, text }
       : { kind: "unreadable" };
   } catch {
@@ -191,9 +191,7 @@ function envBlock(
 ): Record<string, unknown> | undefined {
   const env = config.env;
   if (env === undefined) return {};
-  return typeof env === "object" && env !== null && !Array.isArray(env)
-    ? env as Record<string, unknown>
-    : undefined;
+  return isObjectNotArray(env) ? env as Record<string, unknown> : undefined;
 }
 
 /**
@@ -318,4 +316,48 @@ export async function unexportFromAgentConfigs(
     });
   }
   return removals;
+}
+
+/**
+ * Points every installed harness's configuration that carries a
+ * variable with one value at another, returning what each one's update
+ * did. A configuration carrying any other value, or none, is left as it
+ * is and not reported; one that does not parse is reported, since it may
+ * carry the old value.
+ */
+export async function reexportFromAgentConfigs(
+  name: string,
+  from: string,
+  to: string,
+  env: Environment = Deno.env.get,
+  harnesses: readonly AgentHarness[] = AGENT_HARNESSES,
+  write: ConfigWriter = writeConfig,
+): Promise<AgentConfigUpdate[]> {
+  const updates: AgentConfigUpdate[] = [];
+  for (
+    const { harness, config: path } of await installedHarnesses(
+      env,
+      harnesses,
+    )
+  ) {
+    const read = await readConfig(path);
+    if (read.kind === "missing") continue;
+    const block = read.kind === "config" ? envBlock(read.config) : undefined;
+    if (read.kind === "unreadable" || block === undefined) {
+      updates.push({ harness: harness.name, path, outcome: "unreadable" });
+      continue;
+    }
+    if (block[name] !== from) continue;
+    const wrote = await write(
+      path,
+      { ...read.config, env: { ...block, [name]: to } },
+      read.text,
+    );
+    updates.push({
+      harness: harness.name,
+      path,
+      outcome: wrote ? "added" : "changed",
+    });
+  }
+  return updates;
 }

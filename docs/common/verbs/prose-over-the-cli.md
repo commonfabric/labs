@@ -38,7 +38,7 @@ reference, rather than trusting the schema in front of it.
 | --- | --- |
 | a comment on the **verb itself** | `resultSchema.properties.<verb>.description`, a sibling of the `$ref` naming its event |
 | a comment on an **event field** (what `title` means) | `$defs.<Event>.properties.<field>.description` |
-| a comment on the **event interface** | nowhere — this one does not compile ([#5937](https://github.com/commontoolsinc/labs/issues/5937)) |
+| a comment on the **event interface** | nowhere — this one does not compile ([#5937](https://github.com/commonfabric/labs/issues/5937)) |
 
 `cf piece verbs` and `cf piece call <verb> --help` already load the compiled pattern
 to report what a verb hands back, so both read the prose from the same load.
@@ -65,7 +65,7 @@ that shape, and a definition several positions share is not one position's to
 rewrite. A field's own prose is therefore written where the field is, never
 into the definition it points at — which would attribute one position's
 sentence to every other holder of the same type. The precise list of positions
-the fold walks is on `withDeclaredFieldProse` ([`packages/cli/lib/piece.ts`][piece-lib]),
+the fold walks is on `withDeclaredFieldProse` ([`runtime/cli/lib/piece.ts`][piece-lib]),
 enumerated rather than summarized, along with the keywords it leaves alone.
 
 ## Folded in, never substituted
@@ -81,5 +81,5 @@ older pattern than the source in the checkout.
 <!-- Source links resolve against the repository's default branch, so they
      follow head rather than pinning a revision this document would outlive. -->
 
-[cell]: https://github.com/commontoolsinc/labs/blob/main/packages/runner/src/cell.ts
-[piece-lib]: https://github.com/commontoolsinc/labs/blob/main/packages/cli/lib/piece.ts
+[cell]: https://github.com/commonfabric/labs/blob/main/runtime/runner/src/cell.ts
+[piece-lib]: https://github.com/commonfabric/labs/blob/main/runtime/cli/lib/piece.ts

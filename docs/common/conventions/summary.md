@@ -82,11 +82,11 @@ const summary = computed(() => {
 
 ## How It Works
 
-The summary index pattern (`system/summary-index.tsx`) collects `summary` fields
-from all mentionable pieces in the space. The knowledge graph agent and omnibox
-search use these summaries to find relevant content. Without a `summary` field,
-a container pattern is invisible to text-based search — even if its children
-have rich content.
+The summary index pattern (`system/summary-index/summary-index.tsx`) collects
+`summary` fields from all mentionable pieces in the space. The knowledge graph
+agent and omnibox search use these summaries to find relevant content. Without a
+`summary` field, a container pattern is invisible to text-based search — even if
+its children have rich content.
 
 By deriving the container's summary from its children, a search for "quarterly
 report" will match a notebook that contains a note about quarterly reports, even

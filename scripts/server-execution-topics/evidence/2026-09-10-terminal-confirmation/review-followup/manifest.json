@@ -1,0 +1,53 @@
+{
+  "base": "0c7a1bd950c88fadb10d109f89c5a306442fed9d",
+  "patch": "../review-followup.patch",
+  "runtime": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3\n",
+  "cwd": "packages/runner",
+  "environment": {
+    "ENV": "test"
+  },
+  "controls": [
+    {
+      "name": "red",
+      "production": "base",
+      "test": "base plus test-file hunk from patch",
+      "expectedExit": 1,
+      "requiredFailure": "cancels a resolved piece after park",
+      "control": "starts a resolved piece during its tenure passes",
+      "command": [
+        "deno",
+        "test",
+        "--no-check",
+        "--preload=test/clock-preload.ts",
+        "--allow-ffi",
+        "--allow-env",
+        "--allow-read",
+        "--allow-write=/tmp,/var/folders",
+        "--allow-run=git,deno",
+        "test/executor/space-server-terminal-confirmation.test.ts"
+      ]
+    },
+    {
+      "name": "green",
+      "production": "base plus patch",
+      "expectedExit": 0,
+      "passedTests": 3,
+      "passedSteps": 28,
+      "command": [
+        "deno",
+        "test",
+        "--no-check",
+        "--preload=test/clock-preload.ts",
+        "--allow-ffi",
+        "--allow-env",
+        "--allow-read",
+        "--allow-write=/tmp,/var/folders",
+        "--allow-run=git,deno",
+        "test/executor/space-server-terminal-confirmation.test.ts",
+        "test/executor/space-server-terminal-structure.test.ts",
+        "test/ensure-piece-running-scope.test.ts"
+      ]
+    }
+  ],
+  "measurement": "fake-clock correctness controls; no latency claim; exact machine-load samples were not collected for these focused regressions"
+}

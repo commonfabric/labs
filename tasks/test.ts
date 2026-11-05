@@ -17,10 +17,25 @@ import {
   RECORDS_DIR_VARIABLE,
   recordsDir,
 } from "@commonfabric/test-support/records";
+import { pinShuffleSeed } from "@commonfabric/test-support/shuffle";
 import { finishRunRecording, startRunRecording } from "./test-records.ts";
 import { main } from "./workspace-tests.ts";
 
 if (import.meta.main) {
+  if (Deno.args.length > 0) {
+    console.error(
+      "The root `test` task takes no arguments, and runs every package's " +
+        "tests. To pass flags such as `--filter`, run the task of the " +
+        "package holding the test:\n\n" +
+        "  cd packages/<package-name>\n" +
+        '  deno task test --filter "test name"\n\n' +
+        '"Running one test by name" in docs/development/TESTING.md says more.',
+    );
+    Deno.exit(2);
+  }
+  // Settled before any member's task starts, so every leaf of this run
+  // shuffles the same way.
+  pinShuffleSeed();
   const recording = await startRunRecording();
   if (recording.mode === "own" && recordsDir() === undefined) {
     // The producers of this process and every child join the owned run

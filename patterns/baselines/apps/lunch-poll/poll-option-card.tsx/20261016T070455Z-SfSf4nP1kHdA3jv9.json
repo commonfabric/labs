@@ -1,0 +1,251 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "CastVoteEvent": {
+        "properties": {
+          "optionId": {
+            "type": "string"
+          },
+          "voteType": {
+            "$ref": "#/$defs/VoteColor"
+          }
+        },
+        "required": [
+          "optionId",
+          "voteType"
+        ],
+        "type": "object"
+      },
+      "LogVisitEvent": {
+        "properties": {
+          "optionId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "wentAt": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "LunchProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Option": {
+        "properties": {
+          "addedByName": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "imageUrl": {
+            "description": "Persisted generated-art data URL (`\"\"` until the host's client generates\nand syncs it). Every viewer renders this stored value; generation only\nruns on the host's client for options where it is still empty.",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "addedByName"
+        ],
+        "type": "object"
+      },
+      "RemoveOptionEvent": {
+        "properties": {
+          "optionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "optionId"
+        ],
+        "type": "object"
+      },
+      "SetOptionImageEvent": {
+        "properties": {
+          "imageUrl": {
+            "type": "string"
+          },
+          "optionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "optionId",
+          "imageUrl"
+        ],
+        "type": "object"
+      },
+      "Vote": {
+        "properties": {
+          "castAt": {
+            "description": "When the vote was cast (ms epoch), stamped by `castVote`. Optional for\nvotes stored before this field existed — those count as not-today, so the\ncurrent-day filter hides them.",
+            "type": "number"
+          },
+          "optionId": {
+            "type": "string"
+          },
+          "voteType": {
+            "$ref": "#/$defs/VoteColor"
+          },
+          "voter": {
+            "$ref": "#/$defs/LunchProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "Whose vote this is. Identity — found with `equals()`, never by name.\nOptional ONLY for votes stored by the name-keyed predecessor; every vote\nTHIS pattern casts carries it. A legacy vote tallies anonymously and,\nmatching no voter, can never be toggled or recast by anyone."
+          }
+        },
+        "required": [
+          "optionId",
+          "voteType"
+        ],
+        "type": "object"
+      },
+      "VoteColor": {
+        "enum": [
+          "green",
+          "yellow",
+          "red"
+        ]
+      }
+    },
+    "description": "Inputs for one rendered ranked option row.\n\nThe parent owns all durable and shared UI state. This pattern receives one\noption, current viewer/admin facts, shared per-session editor state, and the\nstreams it should emit for mutations. When rendering inside `options.map()`,\npass the resolved `viewerProfile` value from the parent, not the raw name\ncell.",
+    "properties": {
+      "castVote": {
+        "$ref": "#/$defs/CastVoteEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Parent-owned stream that toggles or records this viewer's vote."
+      },
+      "isAdmin": {
+        "description": "Whether the current viewer owns admin-only actions.",
+        "type": "boolean"
+      },
+      "isJoined": {
+        "description": "Whether the current viewer is allowed to vote.",
+        "type": "boolean"
+      },
+      "logVisit": {
+        "$ref": "#/$defs/LogVisitEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Parent-owned admin stream that records this option in visit history."
+      },
+      "option": {
+        "$ref": "#/$defs/Option",
+        "description": "Option record to render."
+      },
+      "rank": {
+        "description": "One-based display rank, or undefined while the parent ranking settles.",
+        "type": [
+          "number",
+          "undefined"
+        ]
+      },
+      "removeConfirmTarget": {
+        "asCell": [
+          "cell"
+        ],
+        "description": "Per-session option id awaiting admin remove confirmation.",
+        "type": [
+          "null",
+          "string",
+          "undefined"
+        ]
+      },
+      "removeOption": {
+        "$ref": "#/$defs/RemoveOptionEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Parent-owned admin stream that removes this option after confirmation."
+      },
+      "setOptionImage": {
+        "$ref": "#/$defs/SetOptionImageEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Parent-owned admin stream persisting this option's generated art."
+      },
+      "viewerProfile": {
+        "$ref": "#/$defs/LunchProfile",
+        "asCell": [
+          "cell"
+        ],
+        "description": "The viewer's profile cell — identity, compared with `equals()`."
+      },
+      "votes": {
+        "description": "Shared vote list used to compute this viewer's selected vote.",
+        "items": {
+          "$ref": "#/$defs/Vote"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "option",
+      "rank",
+      "isJoined",
+      "isAdmin",
+      "votes",
+      "removeConfirmTarget",
+      "castVote",
+      "removeOption",
+      "logVisit",
+      "setOptionImage"
+    ],
+    "type": "object"
+  },
+  "pattern": "lunch-poll/poll-option-card.tsx",
+  "resultSchema": {
+    "$defs": {
+      "GeneratedArtFetchState": {
+        "enum": [
+          "stored",
+          "generated",
+          "pending",
+          "error",
+          "requested",
+          ""
+        ]
+      }
+    },
+    "description": "Outputs for one rendered ranked option row.\n\nParents normally embed this sub-pattern with JSX.",
+    "properties": {
+      "$NAME": {
+        "description": "Human-readable pattern name, matching the option title.",
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json",
+        "description": "Static VNode rendering the complete option row."
+      },
+      "artSyncState": {
+        "$ref": "#/$defs/GeneratedArtFetchState",
+        "description": "Generated-art lifecycle for this row: `\"stored\"` once the option carries a\npersisted image (every viewer), the underlying fetch state while the host's\nclient is generating, and `\"\"` for non-hosts before anything is stored.\nPure read — persistence happens only through the host's explicit keep\naction (→ `setOptionImage`). Optional for the same reason as\n`GeneratedArtOutput.fetchState`: it is fetch-derived on the generating\npath, and a required declaration would gate boundary readers of\nnon-generating rows."
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

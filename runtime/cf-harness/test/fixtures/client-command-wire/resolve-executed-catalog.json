@@ -1,0 +1,65 @@
+{
+  "sessionId": "session-1",
+  "actionId": "action-0",
+  "settlement": {
+    "status": "executed",
+    "catalog": {
+      "entries": [
+        {
+          "command": "looms.list",
+          "summary": "List the looms this Weaver holds, with their titles.",
+          "scope": "global",
+          "executes": "weaver",
+          "effect": "read",
+          "approval": "automatic",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        {
+          "command": "loom.inspect",
+          "summary": "Read a loom's manifest: its panels, selection and version.",
+          "scope": "loom",
+          "executes": "loom",
+          "effect": "read",
+          "approval": "automatic",
+          "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          },
+          "description": "Read the current Loom manifest. The target loom names the exact record. Returns its components, selection and version without appending an op or searching the person's content."
+        },
+        {
+          "command": "loom.move",
+          "summary": "Move a panel within the loom's order.",
+          "scope": "loom",
+          "executes": "loom",
+          "effect": "mutation",
+          "approval": "person",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "component": {
+                "type": "string"
+              },
+              "before": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "component"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  }
+}

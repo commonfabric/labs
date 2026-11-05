@@ -1,0 +1,1 @@
+{"date":"2026-09-21","from":{"k":"unit","s":"cf-harness","n":"cfc-posture > harnessFabricSessionPosture() > publishes the llm sinks as deviations under the bundle"},"to":{"k":"unit","s":"cf-harness","n":"cfc-posture > harnessFabricSessionPosture() > publishes every ungated sink as a deviation under the bundle"}}

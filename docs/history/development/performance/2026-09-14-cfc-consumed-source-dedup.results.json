@@ -1,0 +1,2239 @@
+{
+  "status": "historical",
+  "created": "2026-09-14",
+  "base_commit": "ed17ef324e04e0e04a95bdf5991849576929e51e",
+  "starting_evidence": "https://github.com/commontoolsinc/labs/issues/7179#issuecomment-5668537208",
+  "machine": {
+    "cpu": "Apple M3 Max",
+    "os": "macOS 26.4.1 (25E253)",
+    "architecture": "arm64"
+  },
+  "scope": "One collector call, real emulated-storage reads; no lift, map, JSX or pane startup.",
+  "source_hashes": {
+    "baseline_prepare_sha256": "af74f7e495fbcb312c7edd7a06404aca78ad6aceba11f104ce4784b6b344e7b8",
+    "fixed_prepare_sha256": "5b8faac32e8952c0e269deeae5e535c209f29fce6f4e6f1680b6ead4fcb6dfa5",
+    "benchmark_sha256": "a032dc07b6b4d23c5fb01fbd0584a0dc9e7dddec77e889173edb8e93bdca589f"
+  },
+  "baseline_export_diff": "--- HEAD/prepare.ts\n+++ baseline/prepare.ts\n@@ -5414,14 +5414,13 @@\n   }\n };\n \n-// Union of confidentiality (and integrity) atoms across every non-internal labeled read in the\n-// transaction, resolved from stored labels the same way verifyInputRequirements\n-// resolves them. Transaction-global by design \u2014 deliberately NOT scoped to a\n-// D4 read prefix: a sink request is built from whatever the handler read, and\n-// the sink-request input does not record its own read provenance, so the whole\n-// consumed set is the sound over-approximation for the egress ceiling\n-// (docs/specs/cfc-write-prefix-provenance.md \u00a77.4).\n-const collectConsumedLabel = (\n+/**\n+ * Join confidentiality and integrity across the transaction's non-internal\n+ * labeled reads, retaining each source in first-seen order for refusal details.\n+ * A sink request can depend on any handler read, so the consumed set is\n+ * transaction-global (docs/specs/cfc-write-prefix-provenance.md \u00a77.4).\n+ */\n+export const collectConsumedLabel = (\n   tx: IExtendedStorageTransaction,\n ): {\n   confidentiality: readonly CfcConfClause[];\n",
+  "collector_fix_diff": "--- baseline/prepare.ts\n+++ fixed/prepare.ts\n@@ -5440,6 +5440,7 @@\n   const atoms: unknown[] = [];\n   const modulePolicySpaces = new Map<string, Set<MemorySpace>>();\n   const sources: ConsumedAtomSource[] = [];\n+  const sourceBuckets = new Map<string, ConsumedAtomSource[]>();\n   const noteSource = (\n     atom: unknown,\n     read: CfcAddress,\n@@ -5448,18 +5449,24 @@\n     // Deduplicated on the same terms a consumer matches on: one entry per\n     // (clause, address, label path). Two label-map entries of one document\n     // carrying the same clause to the same read are one source.\n-    if (\n-      sources.some((seen) =>\n-        seen.read.id === read.id && seen.read.space === read.space &&\n-        seen.read.scope === read.scope &&\n-        pathKey(seen.read.path) === pathKey(read.path) &&\n-        pathKey(seen.labelPath) === pathKey(labelPath) &&\n-        deepEqual(seen.atom, atom)\n-      )\n-    ) {\n+    // The tuple keeps address fields and pointer boundaries unambiguous,\n+    // including paths containing separators. Only atoms sharing that identity\n+    // need structural comparison; `sources` retains global first-seen order.\n+    const key = JSON.stringify([\n+      read.id,\n+      read.space,\n+      read.scope,\n+      pathKey(read.path),\n+      pathKey(labelPath),\n+    ]);\n+    const bucket = sourceBuckets.get(key);\n+    if (bucket?.some((seen) => deepEqual(seen.atom, atom))) {\n       return;\n     }\n-    sources.push({ atom, read, labelPath });\n+    const source = { atom, read, labelPath };\n+    sources.push(source);\n+    if (bucket === undefined) sourceBuckets.set(key, [source]);\n+    else bucket.push(source);\n   };\n   // Integrity evidence riding the same consumed entries: the guard pool the\n   // exchange evaluator matches rule preconditions against (Epic B5). Same\n",
+  "measurement_driver": "// Diagnostic runner: execute the maintained benchmark bodies once per process.\n// Their module-level validation provides one warm collection at each size.\nconst cases: Deno.BenchDefinition[] = [];\nDeno.bench = ((definition: Deno.BenchDefinition) => {\n  cases.push(definition);\n}) as typeof Deno.bench;\nawait import(\"file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts\");\nconst results = [];\nfor (const definition of cases) {\n  let start = NaN;\n  let elapsed = NaN;\n  const context = {\n    name: definition.name,\n    origin: import.meta.url,\n    start: () => { start = performance.now(); },\n    end: () => { elapsed = performance.now() - start; },\n  } satisfies Deno.BenchContext;\n  await definition.fn(context);\n  if (!Number.isFinite(elapsed)) throw new Error(\"Missing explicit timer\");\n  results.push({ name: definition.name, ms: elapsed });\n}\nconsole.log(JSON.stringify({ runtime: Deno.version, results }));\n",
+  "controller": "import json, os, pathlib, subprocess, time\nroot = pathlib.Path('/Users/berni/.codex/worktrees/e181/labs')\nout = pathlib.Path('/tmp/cfc-source-dedup-e181')\ntarget = root / 'packages/runner/src/cfc/prepare.ts'\nversions = {arm: (out / f'prepare-{arm}.ts').read_bytes() for arm in ('baseline', 'fixed')}\nrecords = []\ntry:\n    for rep in range(1, 6):\n        for arm in (('baseline', 'fixed') if rep % 2 else ('fixed', 'baseline')):\n            target.write_bytes(versions[arm])\n            name = f'{arm}-{rep}'\n            record = {'rep': rep, 'arm': arm, 'start': time.time(), 'load_before': os.getloadavg()}\n            with (out / f'{name}.json').open('w') as stdout, (out / f'{name}.log').open('w') as stderr:\n                result = subprocess.run(['deno', 'run', '--no-lock', '--config', str(root / 'deno.jsonc'), '-A', str(out / 'replay.ts')], cwd=root, stdout=stdout, stderr=stderr)\n            record.update(exit_code=result.returncode, seconds=time.time() - record['start'], load_after=os.getloadavg())\n            records.append(record)\n            (out / 'interleave.json').write_text(json.dumps(records, indent=2) + '\\n')\n            if result.returncode:\n                raise RuntimeError(f'{name} failed: see {name}.log')\n            print(json.dumps(record), flush=True)\nfinally:\n    target.write_bytes(versions['fixed'])\n",
+  "fixture_counts": [
+    {
+      "layout": "root label",
+      "sources": 128,
+      "reads": 64,
+      "labelEntries": 1,
+      "collectorCalls": 1
+    },
+    {
+      "layout": "field labels",
+      "sources": 128,
+      "reads": 64,
+      "labelEntries": 64,
+      "collectorCalls": 1
+    },
+    {
+      "layout": "root label",
+      "sources": 458,
+      "reads": 229,
+      "labelEntries": 1,
+      "collectorCalls": 1
+    },
+    {
+      "layout": "field labels",
+      "sources": 458,
+      "reads": 229,
+      "labelEntries": 229,
+      "collectorCalls": 1
+    },
+    {
+      "layout": "root label",
+      "sources": 916,
+      "reads": 458,
+      "labelEntries": 1,
+      "collectorCalls": 1
+    },
+    {
+      "layout": "field labels",
+      "sources": 916,
+      "reads": 458,
+      "labelEntries": 458,
+      "collectorCalls": 1
+    },
+    {
+      "layout": "root label",
+      "sources": 1832,
+      "reads": 916,
+      "labelEntries": 1,
+      "collectorCalls": 1
+    },
+    {
+      "layout": "field labels",
+      "sources": 1832,
+      "reads": 916,
+      "labelEntries": 916,
+      "collectorCalls": 1
+    },
+    {
+      "layout": "root label",
+      "sources": 2668,
+      "reads": 1334,
+      "labelEntries": 1,
+      "collectorCalls": 1
+    },
+    {
+      "layout": "field labels",
+      "sources": 2668,
+      "reads": 1334,
+      "labelEntries": 1334,
+      "collectorCalls": 1
+    }
+  ],
+  "paired_run_metadata": [
+    {
+      "rep": 1,
+      "arm": "baseline",
+      "start": 1789412180.52846,
+      "load_before": [
+        13.21044921875,
+        15.45263671875,
+        22.55419921875
+      ],
+      "exit_code": 0,
+      "seconds": 28.042968034744263,
+      "load_after": [
+        14.6923828125,
+        15.57177734375,
+        22.38818359375
+      ]
+    },
+    {
+      "rep": 1,
+      "arm": "fixed",
+      "start": 1789412208.5728629,
+      "load_before": [
+        14.6923828125,
+        15.57177734375,
+        22.38818359375
+      ],
+      "exit_code": 0,
+      "seconds": 4.0518999099731445,
+      "load_after": [
+        14.556640625,
+        15.52880859375,
+        22.3330078125
+      ]
+    },
+    {
+      "rep": 2,
+      "arm": "fixed",
+      "start": 1789412212.625621,
+      "load_before": [
+        14.556640625,
+        15.52880859375,
+        22.3330078125
+      ],
+      "exit_code": 0,
+      "seconds": 3.8048369884490967,
+      "load_after": [
+        14.912109375,
+        15.58642578125,
+        22.3134765625
+      ]
+    },
+    {
+      "rep": 2,
+      "arm": "baseline",
+      "start": 1789412216.4312131,
+      "load_before": [
+        14.912109375,
+        15.58642578125,
+        22.3134765625
+      ],
+      "exit_code": 0,
+      "seconds": 25.732231855392456,
+      "load_after": [
+        15.68896484375,
+        15.76611328125,
+        22.18603515625
+      ]
+    },
+    {
+      "rep": 3,
+      "arm": "baseline",
+      "start": 1789412242.1648571,
+      "load_before": [
+        15.68896484375,
+        15.76611328125,
+        22.18603515625
+      ],
+      "exit_code": 0,
+      "seconds": 28.24235963821411,
+      "load_after": [
+        13.521484375,
+        15.216796875,
+        21.7626953125
+      ]
+    },
+    {
+      "rep": 3,
+      "arm": "fixed",
+      "start": 1789412270.408475,
+      "load_before": [
+        13.521484375,
+        15.216796875,
+        21.7626953125
+      ],
+      "exit_code": 0,
+      "seconds": 4.316598892211914,
+      "load_after": [
+        13.521484375,
+        15.216796875,
+        21.7626953125
+      ]
+    },
+    {
+      "rep": 4,
+      "arm": "fixed",
+      "start": 1789412274.726393,
+      "load_before": [
+        13.521484375,
+        15.216796875,
+        21.7626953125
+      ],
+      "exit_code": 0,
+      "seconds": 4.629202127456665,
+      "load_after": [
+        13.7197265625,
+        15.2294921875,
+        21.728515625
+      ]
+    },
+    {
+      "rep": 4,
+      "arm": "baseline",
+      "start": 1789412279.3568819,
+      "load_before": [
+        13.7197265625,
+        15.2294921875,
+        21.728515625
+      ],
+      "exit_code": 0,
+      "seconds": 29.10487127304077,
+      "load_after": [
+        12.671875,
+        14.82568359375,
+        21.35595703125
+      ]
+    },
+    {
+      "rep": 5,
+      "arm": "baseline",
+      "start": 1789412308.4631522,
+      "load_before": [
+        12.671875,
+        14.82568359375,
+        21.35595703125
+      ],
+      "exit_code": 0,
+      "seconds": 28.26874876022339,
+      "load_after": [
+        11.7412109375,
+        14.419921875,
+        20.9833984375
+      ]
+    },
+    {
+      "rep": 5,
+      "arm": "fixed",
+      "start": 1789412336.732633,
+      "load_before": [
+        11.7412109375,
+        14.419921875,
+        20.9833984375
+      ],
+      "exit_code": 0,
+      "seconds": 3.0943028926849365,
+      "load_after": [
+        11.7412109375,
+        14.419921875,
+        20.9833984375
+      ]
+    }
+  ],
+  "paired_runs": {
+    "baseline": [
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 7.418666999999914
+          },
+          {
+            "name": "field labels 128",
+            "ms": 8.961457999999766
+          },
+          {
+            "name": "root label 458",
+            "ms": 88.97341699999924
+          },
+          {
+            "name": "field labels 458",
+            "ms": 96.8859999999986
+          },
+          {
+            "name": "root label 916",
+            "ms": 356.98629099999926
+          },
+          {
+            "name": "field labels 916",
+            "ms": 485.0483750000003
+          },
+          {
+            "name": "root label 1832",
+            "ms": 1532.942165999999
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 2174.6667080000007
+          },
+          {
+            "name": "root label 2668",
+            "ms": 3509.897208000002
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 4794.691834000001
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 7.574708000000101
+          },
+          {
+            "name": "field labels 128",
+            "ms": 10.544874999999593
+          },
+          {
+            "name": "root label 458",
+            "ms": 110.80383299999994
+          },
+          {
+            "name": "field labels 458",
+            "ms": 114.36750000000029
+          },
+          {
+            "name": "root label 916",
+            "ms": 411.5738330000004
+          },
+          {
+            "name": "field labels 916",
+            "ms": 593.6125420000008
+          },
+          {
+            "name": "root label 1832",
+            "ms": 1786.9760000000006
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 1977.121000000001
+          },
+          {
+            "name": "root label 2668",
+            "ms": 3594.2252499999995
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 3821.560625000002
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 7.581083000000945
+          },
+          {
+            "name": "field labels 128",
+            "ms": 9.060459000000264
+          },
+          {
+            "name": "root label 458",
+            "ms": 93.52191700000003
+          },
+          {
+            "name": "field labels 458",
+            "ms": 117.76854099999946
+          },
+          {
+            "name": "root label 916",
+            "ms": 393.2424169999995
+          },
+          {
+            "name": "field labels 916",
+            "ms": 476.41254200000003
+          },
+          {
+            "name": "root label 1832",
+            "ms": 2195.0597500000003
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 2118.7152920000008
+          },
+          {
+            "name": "root label 2668",
+            "ms": 4111.068707999999
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 4849.775207999999
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 10.723125000000437
+          },
+          {
+            "name": "field labels 128",
+            "ms": 12.847915999998804
+          },
+          {
+            "name": "root label 458",
+            "ms": 128.42616699999962
+          },
+          {
+            "name": "field labels 458",
+            "ms": 145.7116249999999
+          },
+          {
+            "name": "root label 916",
+            "ms": 436.8998339999998
+          },
+          {
+            "name": "field labels 916",
+            "ms": 635.0760420000006
+          },
+          {
+            "name": "root label 1832",
+            "ms": 1838.2381249999999
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 2486.717790999999
+          },
+          {
+            "name": "root label 2668",
+            "ms": 3723.5522500000006
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 4661.921791999997
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 7.58995799999866
+          },
+          {
+            "name": "field labels 128",
+            "ms": 9.148959000000104
+          },
+          {
+            "name": "root label 458",
+            "ms": 96.86133399999926
+          },
+          {
+            "name": "field labels 458",
+            "ms": 127.46570799999972
+          },
+          {
+            "name": "root label 916",
+            "ms": 441.3017920000002
+          },
+          {
+            "name": "field labels 916",
+            "ms": 465.885459000001
+          },
+          {
+            "name": "root label 1832",
+            "ms": 1884.9674169999998
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 2366.1826250000013
+          },
+          {
+            "name": "root label 2668",
+            "ms": 3548.054333
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 3787.9196660000016
+          }
+        ]
+      }
+    ],
+    "fixed": [
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.38479099999995015
+          },
+          {
+            "name": "field labels 128",
+            "ms": 2.0392910000000484
+          },
+          {
+            "name": "root label 458",
+            "ms": 1.1425420000000486
+          },
+          {
+            "name": "field labels 458",
+            "ms": 22.14229099999966
+          },
+          {
+            "name": "root label 916",
+            "ms": 2.045958000000155
+          },
+          {
+            "name": "field labels 916",
+            "ms": 86.73008299999992
+          },
+          {
+            "name": "root label 1832",
+            "ms": 5.352374999999938
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 318.7587920000001
+          },
+          {
+            "name": "root label 2668",
+            "ms": 5.766416999999819
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 716.6484169999999
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.323207999999795
+          },
+          {
+            "name": "field labels 128",
+            "ms": 1.7347909999998592
+          },
+          {
+            "name": "root label 458",
+            "ms": 0.9587920000003578
+          },
+          {
+            "name": "field labels 458",
+            "ms": 19.09854200000018
+          },
+          {
+            "name": "root label 916",
+            "ms": 1.9158330000000205
+          },
+          {
+            "name": "field labels 916",
+            "ms": 78.87829099999999
+          },
+          {
+            "name": "root label 1832",
+            "ms": 4.914582999999766
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 311.0628750000001
+          },
+          {
+            "name": "root label 2668",
+            "ms": 6.8182919999999285
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 595.18075
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.48387499999989814
+          },
+          {
+            "name": "field labels 128",
+            "ms": 2.4890000000004875
+          },
+          {
+            "name": "root label 458",
+            "ms": 1.3787909999996373
+          },
+          {
+            "name": "field labels 458",
+            "ms": 28.466334000000188
+          },
+          {
+            "name": "root label 916",
+            "ms": 2.926499999999578
+          },
+          {
+            "name": "field labels 916",
+            "ms": 118.01762499999995
+          },
+          {
+            "name": "root label 1832",
+            "ms": 6.313125000000127
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 409.35641699999996
+          },
+          {
+            "name": "root label 2668",
+            "ms": 7.730084000000261
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 792.2639170000002
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.4418749999999818
+          },
+          {
+            "name": "field labels 128",
+            "ms": 2.553875000000062
+          },
+          {
+            "name": "root label 458",
+            "ms": 1.3825000000001637
+          },
+          {
+            "name": "field labels 458",
+            "ms": 26.539332999999715
+          },
+          {
+            "name": "root label 916",
+            "ms": 2.655499999999847
+          },
+          {
+            "name": "field labels 916",
+            "ms": 114.62637499999983
+          },
+          {
+            "name": "root label 1832",
+            "ms": 6.246874999999818
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 403.30833399999983
+          },
+          {
+            "name": "root label 2668",
+            "ms": 10.502666999999747
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 906.0739170000006
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.28274999999985084
+          },
+          {
+            "name": "field labels 128",
+            "ms": 1.5071660000000975
+          },
+          {
+            "name": "root label 458",
+            "ms": 0.8435409999997319
+          },
+          {
+            "name": "field labels 458",
+            "ms": 16.413291999999956
+          },
+          {
+            "name": "root label 916",
+            "ms": 1.6214170000002923
+          },
+          {
+            "name": "field labels 916",
+            "ms": 67.25633300000004
+          },
+          {
+            "name": "root label 1832",
+            "ms": 4.026292000000012
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 273.44287499999973
+          },
+          {
+            "name": "root label 2668",
+            "ms": 6.686333000000104
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 688.7113749999999
+          }
+        ]
+      }
+    ]
+  },
+  "summary": [
+    {
+      "name": "root label 128",
+      "baseline_ms": [
+        7.418666999999914,
+        7.574708000000101,
+        7.581083000000945,
+        10.723125000000437,
+        7.58995799999866
+      ],
+      "fixed_ms": [
+        0.38479099999995015,
+        0.323207999999795,
+        0.48387499999989814,
+        0.4418749999999818,
+        0.28274999999985084
+      ],
+      "baseline_min_ms": 7.418666999999914,
+      "fixed_min_ms": 0.28274999999985084,
+      "min_speedup": 26.237549071631573,
+      "median_paired_speedup": 23.43601643525193,
+      "paired_speedups": [
+        19.279731074793524,
+        23.43601643525193,
+        15.667440971330489,
+        24.267326732675254,
+        26.84335278515531
+      ],
+      "baseline_mean_ms": 8.17750820000001,
+      "fixed_mean_ms": 0.38329979999989516,
+      "baseline_trimmed_mean_ms": 7.581916333333235,
+      "fixed_trimmed_mean_ms": 0.38329133333324233
+    },
+    {
+      "name": "field labels 128",
+      "baseline_ms": [
+        8.961457999999766,
+        10.544874999999593,
+        9.060459000000264,
+        12.847915999998804,
+        9.148959000000104
+      ],
+      "fixed_ms": [
+        2.0392910000000484,
+        1.7347909999998592,
+        2.4890000000004875,
+        2.553875000000062,
+        1.5071660000000975
+      ],
+      "baseline_min_ms": 8.961457999999766,
+      "fixed_min_ms": 1.5071660000000975,
+      "min_speedup": 5.945899788078544,
+      "median_paired_speedup": 5.030753658655374,
+      "paired_speedups": [
+        4.394398837635018,
+        6.078469971310923,
+        3.640200482120727,
+        5.030753658655374,
+        6.070306124208954
+      ],
+      "baseline_mean_ms": 10.112733399999707,
+      "fixed_mean_ms": 2.0648246000001107,
+      "baseline_trimmed_mean_ms": 9.58476433333332,
+      "fixed_trimmed_mean_ms": 2.087694000000132
+    },
+    {
+      "name": "root label 458",
+      "baseline_ms": [
+        88.97341699999924,
+        110.80383299999994,
+        93.52191700000003,
+        128.42616699999962,
+        96.86133399999926
+      ],
+      "fixed_ms": [
+        1.1425420000000486,
+        0.9587920000003578,
+        1.3787909999996373,
+        1.3825000000001637,
+        0.8435409999997319
+      ],
+      "baseline_min_ms": 88.97341699999924,
+      "fixed_min_ms": 0.8435409999997319,
+      "min_speedup": 105.476102524984,
+      "median_paired_speedup": 92.89415334537752,
+      "paired_speedups": [
+        77.87321341359483,
+        115.56608002565582,
+        67.82892911255196,
+        92.89415334537752,
+        114.82706116244503
+      ],
+      "baseline_mean_ms": 103.71733359999962,
+      "fixed_mean_ms": 1.1412331999999878,
+      "baseline_trimmed_mean_ms": 100.39569466666642,
+      "fixed_trimmed_mean_ms": 1.1600416666666813
+    },
+    {
+      "name": "field labels 458",
+      "baseline_ms": [
+        96.8859999999986,
+        114.36750000000029,
+        117.76854099999946,
+        145.7116249999999,
+        127.46570799999972
+      ],
+      "fixed_ms": [
+        22.14229099999966,
+        19.09854200000018,
+        28.466334000000188,
+        26.539332999999715,
+        16.413291999999956
+      ],
+      "baseline_min_ms": 96.8859999999986,
+      "fixed_min_ms": 16.413291999999956,
+      "min_speedup": 5.902898699419889,
+      "median_paired_speedup": 5.490402678921941,
+      "paired_speedups": [
+        4.375608648626291,
+        5.988284341286326,
+        4.137116532111183,
+        5.490402678921941,
+        7.76600501593465
+      ],
+      "baseline_mean_ms": 120.4398747999996,
+      "fixed_mean_ms": 22.53195839999994,
+      "baseline_trimmed_mean_ms": 119.8672496666665,
+      "fixed_trimmed_mean_ms": 22.593388666666517
+    },
+    {
+      "name": "root label 916",
+      "baseline_ms": [
+        356.98629099999926,
+        411.5738330000004,
+        393.2424169999995,
+        436.8998339999998,
+        441.3017920000002
+      ],
+      "fixed_ms": [
+        2.045958000000155,
+        1.9158330000000205,
+        2.926499999999578,
+        2.655499999999847,
+        1.6214170000002923
+      ],
+      "baseline_min_ms": 356.98629099999926,
+      "fixed_min_ms": 1.6214170000002923,
+      "min_speedup": 220.16932781630814,
+      "median_paired_speedup": 174.48368490456411,
+      "paired_speedups": [
+        174.48368490456411,
+        214.8276144110661,
+        134.37294276441352,
+        164.5263920165788,
+        272.17044844103685
+      ],
+      "baseline_mean_ms": 408.0008333999998,
+      "fixed_mean_ms": 2.2330415999999786,
+      "baseline_trimmed_mean_ms": 413.90536133333325,
+      "fixed_trimmed_mean_ms": 2.2057636666666744
+    },
+    {
+      "name": "field labels 916",
+      "baseline_ms": [
+        485.0483750000003,
+        593.6125420000008,
+        476.41254200000003,
+        635.0760420000006,
+        465.885459000001
+      ],
+      "fixed_ms": [
+        86.73008299999992,
+        78.87829099999999,
+        118.01762499999995,
+        114.62637499999983,
+        67.25633300000004
+      ],
+      "baseline_min_ms": 465.885459000001,
+      "fixed_min_ms": 67.25633300000004,
+      "min_speedup": 6.927012494124542,
+      "median_paired_speedup": 5.592619748790057,
+      "paired_speedups": [
+        5.592619748790057,
+        7.525677020563248,
+        4.0367914707654915,
+        5.540400645139494,
+        6.927012494124542
+      ],
+      "baseline_mean_ms": 531.2069920000006,
+      "fixed_mean_ms": 93.10174139999995,
+      "baseline_trimmed_mean_ms": 518.3578196666671,
+      "fixed_trimmed_mean_ms": 93.41158299999991
+    },
+    {
+      "name": "root label 1832",
+      "baseline_ms": [
+        1532.942165999999,
+        1786.9760000000006,
+        2195.0597500000003,
+        1838.2381249999999,
+        1884.9674169999998
+      ],
+      "fixed_ms": [
+        5.352374999999938,
+        4.914582999999766,
+        6.313125000000127,
+        6.246874999999818,
+        4.026292000000012
+      ],
+      "baseline_min_ms": 1532.942165999999,
+      "fixed_min_ms": 4.026292000000012,
+      "min_speedup": 380.7329835988036,
+      "median_paired_speedup": 347.6978120978051,
+      "paired_speedups": [
+        286.4041039725387,
+        363.6068411094259,
+        347.6978120978051,
+        294.2652326163167,
+        468.16460827977556
+      ],
+      "baseline_mean_ms": 1847.6366916,
+      "fixed_mean_ms": 5.370649999999932,
+      "baseline_trimmed_mean_ms": 1836.7271806666668,
+      "fixed_trimmed_mean_ms": 5.504610999999841
+    },
+    {
+      "name": "field labels 1832",
+      "baseline_ms": [
+        2174.6667080000007,
+        1977.121000000001,
+        2118.7152920000008,
+        2486.717790999999,
+        2366.1826250000013
+      ],
+      "fixed_ms": [
+        318.7587920000001,
+        311.0628750000001,
+        409.35641699999996,
+        403.30833399999983,
+        273.44287499999973
+      ],
+      "baseline_min_ms": 1977.121000000001,
+      "fixed_min_ms": 273.44287499999973,
+      "min_speedup": 7.230471812439812,
+      "median_paired_speedup": 6.356017252139139,
+      "paired_speedups": [
+        6.822295612163068,
+        6.356017252139139,
+        5.175722680805077,
+        6.165798178125424,
+        8.653297786603522
+      ],
+      "baseline_mean_ms": 2224.6806832000007,
+      "fixed_mean_ms": 343.18585859999996,
+      "baseline_trimmed_mean_ms": 2219.854875000001,
+      "fixed_trimmed_mean_ms": 344.376667
+    },
+    {
+      "name": "root label 2668",
+      "baseline_ms": [
+        3509.897208000002,
+        3594.2252499999995,
+        4111.068707999999,
+        3723.5522500000006,
+        3548.054333
+      ],
+      "fixed_ms": [
+        5.766416999999819,
+        6.8182919999999285,
+        7.730084000000261,
+        10.502666999999747,
+        6.686333000000104
+      ],
+      "baseline_min_ms": 3509.897208000002,
+      "fixed_min_ms": 5.766416999999819,
+      "min_speedup": 608.6790476651466,
+      "median_paired_speedup": 530.6427802803038,
+      "paired_speedups": [
+        608.6790476651466,
+        527.1445180112611,
+        531.8271713476671,
+        354.53397218059854,
+        530.6427802803038
+      ],
+      "baseline_mean_ms": 3697.3595498000004,
+      "fixed_mean_ms": 7.500758599999972,
+      "baseline_trimmed_mean_ms": 3621.9439443333335,
+      "fixed_trimmed_mean_ms": 7.0782363333334315
+    },
+    {
+      "name": "field labels 2668",
+      "baseline_ms": [
+        4794.691834000001,
+        3821.560625000002,
+        4849.775207999999,
+        4661.921791999997,
+        3787.9196660000016
+      ],
+      "fixed_ms": [
+        716.6484169999999,
+        595.18075,
+        792.2639170000002,
+        906.0739170000006,
+        688.7113749999999
+      ],
+      "baseline_min_ms": 3787.9196660000016,
+      "fixed_min_ms": 595.18075,
+      "min_speedup": 6.364318177293203,
+      "median_paired_speedup": 6.1214137157277575,
+      "paired_speedups": [
+        6.690438045019783,
+        6.420840433767393,
+        6.1214137157277575,
+        5.145189266054101,
+        5.500010314190037
+      ],
+      "baseline_mean_ms": 4383.173825,
+      "fixed_mean_ms": 739.7756752000001,
+      "baseline_trimmed_mean_ms": 4426.058083666667,
+      "fixed_trimmed_mean_ms": 732.5412363333334
+    }
+  ],
+  "initial_deno_bench_diagnostics": {
+    "baseline": {
+      "version": 1,
+      "runtime": "Deno/2.9.4 aarch64-apple-darwin",
+      "cpu": "Apple M3 Max",
+      "benches": [
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "root label 128",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 53,
+                "min": 10049417.0,
+                "max": 14212125.0,
+                "avg": 11531650.0,
+                "p75": 12299791.0,
+                "p99": 14212125.0,
+                "p995": 14212125.0,
+                "p999": 14212125.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "field labels 128",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 45,
+                "min": 12104916.0,
+                "max": 79693958.0,
+                "avg": 15984744.0,
+                "p75": 15017083.0,
+                "p99": 79693958.0,
+                "p995": 79693958.0,
+                "p999": 79693958.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "root label 458",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 14,
+                "min": 136859750.0,
+                "max": 153380125.0,
+                "avg": 142554643.0,
+                "p75": 147704875.0,
+                "p99": 153380125.0,
+                "p995": 153380125.0,
+                "p999": 153380125.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "field labels 458",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 13,
+                "min": 159185750.0,
+                "max": 175548417.0,
+                "avg": 165749821.0,
+                "p75": 167958500.0,
+                "p99": 175548417.0,
+                "p995": 175548417.0,
+                "p999": 175548417.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "root label 916",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 11,
+                "min": 556215333.0,
+                "max": 595253750.0,
+                "avg": 572390807.0,
+                "p75": 581143667.0,
+                "p99": 595253750.0,
+                "p995": 595253750.0,
+                "p999": 595253750.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "field labels 916",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 11,
+                "min": 657455958.0,
+                "max": 813678833.0,
+                "avg": 723768144.0,
+                "p75": 777883292.0,
+                "p99": 813678833.0,
+                "p995": 813678833.0,
+                "p999": 813678833.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "root label 1832",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 11,
+                "min": 2418768292.0,
+                "max": 2913125375.0,
+                "avg": 2689861114.0,
+                "p75": 2872688875.0,
+                "p99": 2913125375.0,
+                "p995": 2913125375.0,
+                "p999": 2913125375.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "field labels 1832",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 11,
+                "min": 3290408417.0,
+                "max": 3992358500.0,
+                "avg": 3668357152.0,
+                "p75": 3821875459.0,
+                "p99": 3992358500.0,
+                "p995": 3992358500.0,
+                "p999": 3992358500.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "root label 2668",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 11,
+                "min": 5873974958.0,
+                "max": 7295658625.0,
+                "avg": 6401424228.0,
+                "p75": 6583562625.0,
+                "p99": 7295658625.0,
+                "p995": 7295658625.0,
+                "p999": 7295658625.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "field labels 2668",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 11,
+                "min": 5952612333.0,
+                "max": 7395472458.0,
+                "avg": 6803204277.0,
+                "p75": 7320209375.0,
+                "p99": 7395472458.0,
+                "p995": 7395472458.0,
+                "p999": 7395472458.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fixed": {
+      "version": 1,
+      "runtime": "Deno/2.9.4 aarch64-apple-darwin",
+      "cpu": "Apple M3 Max",
+      "benches": [
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "root label 128",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 972,
+                "min": 289500.0,
+                "max": 3020750.0,
+                "avg": 411975.0,
+                "p75": 387959.0,
+                "p99": 1457709.0,
+                "p995": 1779542.0,
+                "p999": 3020750.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "field labels 128",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 191,
+                "min": 2000167.0,
+                "max": 5046125.0,
+                "avg": 2631851.0,
+                "p75": 2809250.0,
+                "p99": 5006333.0,
+                "p995": 5046125.0,
+                "p999": 5046125.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "root label 458",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 308,
+                "min": 1023834.0,
+                "max": 3622333.0,
+                "avg": 1372031.0,
+                "p75": 1465583.0,
+                "p99": 3137250.0,
+                "p995": 3288458.0,
+                "p999": 3622333.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "field labels 458",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 27,
+                "min": 21639209.0,
+                "max": 45850958.0,
+                "avg": 27438044.0,
+                "p75": 29459375.0,
+                "p99": 45850958.0,
+                "p995": 45850958.0,
+                "p999": 45850958.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "root label 916",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 155,
+                "min": 1634250.0,
+                "max": 12463667.0,
+                "avg": 2800348.0,
+                "p75": 3040000.0,
+                "p99": 11416125.0,
+                "p995": 12463667.0,
+                "p999": 12463667.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "field labels 916",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 14,
+                "min": 115069292.0,
+                "max": 146337959.0,
+                "avg": 126969274.0,
+                "p75": 130066458.0,
+                "p99": 146337959.0,
+                "p995": 146337959.0,
+                "p999": 146337959.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "root label 1832",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 75,
+                "min": 4911333.0,
+                "max": 10771792.0,
+                "avg": 6291521.0,
+                "p75": 6898625.0,
+                "p99": 10771792.0,
+                "p995": 10771792.0,
+                "p999": 10771792.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "field labels 1832",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 12,
+                "min": 427975708.0,
+                "max": 485727000.0,
+                "avg": 452946122.0,
+                "p75": 460960625.0,
+                "p99": 485727000.0,
+                "p995": 485727000.0,
+                "p999": 485727000.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "root label 2668",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 60,
+                "min": 7431208.0,
+                "max": 12642333.0,
+                "avg": 8328271.0,
+                "p75": 8554958.0,
+                "p99": 12642333.0,
+                "p995": 12642333.0,
+                "p999": 12642333.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        },
+        {
+          "origin": "file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/test/cfc-consumed-source-dedup.bench.ts",
+          "group": "cfc consumed sources",
+          "name": "field labels 2668",
+          "baseline": false,
+          "results": [
+            {
+              "ok": {
+                "n": 11,
+                "min": 809010000.0,
+                "max": 947072875.0,
+                "avg": 873108383.0,
+                "p75": 921044333.0,
+                "p99": 947072875.0,
+                "p995": 947072875.0,
+                "p999": 947072875.0,
+                "highPrecision": true,
+                "usedExplicitTimers": true
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "initial_fixture_note": "The initial reporter and first paired series used a block-local function declaration. Lint required an arrow declaration. The final paired series above uses the final arrow-form benchmark; the measured body and fixture data are unchanged.",
+  "initial_benchmark_sha256": "96dfb582d5449f7af0ce603a6daa02238b295b15f721e6dc371a791fe176f107",
+  "initial_paired_metadata": [
+    {
+      "rep": 1,
+      "arm": "baseline",
+      "start": 1789410215.747029,
+      "load_before": [
+        27.7900390625,
+        34.525390625,
+        33.046875
+      ],
+      "exit_code": 0,
+      "seconds": 34.425853967666626,
+      "load_after": [
+        28.1796875,
+        33.625,
+        32.7626953125
+      ]
+    },
+    {
+      "rep": 1,
+      "arm": "fixed",
+      "start": 1789410250.174145,
+      "load_before": [
+        28.1796875,
+        33.625,
+        32.7626953125
+      ],
+      "exit_code": 0,
+      "seconds": 4.939563989639282,
+      "load_after": [
+        27.4443359375,
+        33.3818359375,
+        32.681640625
+      ]
+    },
+    {
+      "rep": 2,
+      "arm": "fixed",
+      "start": 1789410255.115585,
+      "load_before": [
+        27.4443359375,
+        33.3818359375,
+        32.681640625
+      ],
+      "exit_code": 0,
+      "seconds": 5.001266956329346,
+      "load_after": [
+        26.36767578125,
+        33.06005859375,
+        32.57177734375
+      ]
+    },
+    {
+      "rep": 2,
+      "arm": "baseline",
+      "start": 1789410260.118208,
+      "load_before": [
+        26.36767578125,
+        33.06005859375,
+        32.57177734375
+      ],
+      "exit_code": 0,
+      "seconds": 33.40218710899353,
+      "load_after": [
+        23.5732421875,
+        31.80859375,
+        32.138671875
+      ]
+    },
+    {
+      "rep": 3,
+      "arm": "baseline",
+      "start": 1789410293.521678,
+      "load_before": [
+        23.5732421875,
+        31.80859375,
+        32.138671875
+      ],
+      "exit_code": 0,
+      "seconds": 22.28181791305542,
+      "load_after": [
+        23.7177734375,
+        31.12939453125,
+        31.8798828125
+      ]
+    },
+    {
+      "rep": 3,
+      "arm": "fixed",
+      "start": 1789410315.8052359,
+      "load_before": [
+        23.7177734375,
+        31.12939453125,
+        31.8798828125
+      ],
+      "exit_code": 0,
+      "seconds": 4.340796947479248,
+      "load_after": [
+        24.060546875,
+        31.0771484375,
+        31.85693359375
+      ]
+    },
+    {
+      "rep": 4,
+      "arm": "fixed",
+      "start": 1789410320.147158,
+      "load_before": [
+        24.060546875,
+        31.0771484375,
+        31.85693359375
+      ],
+      "exit_code": 0,
+      "seconds": 4.28960108757019,
+      "load_after": [
+        24.060546875,
+        31.0771484375,
+        31.85693359375
+      ]
+    },
+    {
+      "rep": 4,
+      "arm": "baseline",
+      "start": 1789410324.437712,
+      "load_before": [
+        24.060546875,
+        31.0771484375,
+        31.85693359375
+      ],
+      "exit_code": 0,
+      "seconds": 19.48766803741455,
+      "load_after": [
+        23.45068359375,
+        30.564453125,
+        31.6591796875
+      ]
+    },
+    {
+      "rep": 5,
+      "arm": "baseline",
+      "start": 1789410343.9265249,
+      "load_before": [
+        23.45068359375,
+        30.564453125,
+        31.6591796875
+      ],
+      "exit_code": 0,
+      "seconds": 21.154356956481934,
+      "load_after": [
+        28.55859375,
+        30.94677734375,
+        31.7509765625
+      ]
+    },
+    {
+      "rep": 5,
+      "arm": "fixed",
+      "start": 1789410365.082436,
+      "load_before": [
+        28.55859375,
+        30.94677734375,
+        31.7509765625
+      ],
+      "exit_code": 0,
+      "seconds": 5.385173082351685,
+      "load_after": [
+        31.796875,
+        31.578125,
+        31.96875
+      ]
+    }
+  ],
+  "initial_paired_runs": {
+    "baseline": [
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 10.533250000000407
+          },
+          {
+            "name": "field labels 128",
+            "ms": 13.118500000000495
+          },
+          {
+            "name": "root label 458",
+            "ms": 133.10670799999934
+          },
+          {
+            "name": "field labels 458",
+            "ms": 154.67479199999798
+          },
+          {
+            "name": "root label 916",
+            "ms": 538.4258749999972
+          },
+          {
+            "name": "field labels 916",
+            "ms": 638.216292000001
+          },
+          {
+            "name": "root label 1832",
+            "ms": 2235.853791999998
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 2669.392
+          },
+          {
+            "name": "root label 2668",
+            "ms": 4553.5251249999965
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 4965.2461250000015
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 11.034499999997934
+          },
+          {
+            "name": "field labels 128",
+            "ms": 13.301791999998386
+          },
+          {
+            "name": "root label 458",
+            "ms": 144.56104100000084
+          },
+          {
+            "name": "field labels 458",
+            "ms": 171.86933399999907
+          },
+          {
+            "name": "root label 916",
+            "ms": 581.2832920000001
+          },
+          {
+            "name": "field labels 916",
+            "ms": 622.3135000000002
+          },
+          {
+            "name": "root label 1832",
+            "ms": 2200.60225
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 2068.4941249999974
+          },
+          {
+            "name": "root label 2668",
+            "ms": 4043.1145410000026
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 5359.005166999996
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 6.747791999998299
+          },
+          {
+            "name": "field labels 128",
+            "ms": 7.822541999999885
+          },
+          {
+            "name": "root label 458",
+            "ms": 78.88887500000055
+          },
+          {
+            "name": "field labels 458",
+            "ms": 93.32024999999885
+          },
+          {
+            "name": "root label 916",
+            "ms": 295.8252080000002
+          },
+          {
+            "name": "field labels 916",
+            "ms": 347.4437080000007
+          },
+          {
+            "name": "root label 1832",
+            "ms": 1129.748042000001
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 1477.1900420000002
+          },
+          {
+            "name": "root label 2668",
+            "ms": 3340.197
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 4354.9832499999975
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 4.596750000000611
+          },
+          {
+            "name": "field labels 128",
+            "ms": 5.5928750000002765
+          },
+          {
+            "name": "root label 458",
+            "ms": 54.295374999999694
+          },
+          {
+            "name": "field labels 458",
+            "ms": 64.23133299999972
+          },
+          {
+            "name": "root label 916",
+            "ms": 231.36533299999974
+          },
+          {
+            "name": "field labels 916",
+            "ms": 358.173166999999
+          },
+          {
+            "name": "root label 1832",
+            "ms": 1062.9034579999989
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 1301.779208
+          },
+          {
+            "name": "root label 2668",
+            "ms": 2190.237459
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 2645.1124999999993
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 6.573999999998705
+          },
+          {
+            "name": "field labels 128",
+            "ms": 8.132959000000483
+          },
+          {
+            "name": "root label 458",
+            "ms": 81.54762499999924
+          },
+          {
+            "name": "field labels 458",
+            "ms": 97.42199999999866
+          },
+          {
+            "name": "root label 916",
+            "ms": 295.88774999999987
+          },
+          {
+            "name": "field labels 916",
+            "ms": 318.6829170000001
+          },
+          {
+            "name": "root label 1832",
+            "ms": 1138.4282089999997
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 1417.7435420000002
+          },
+          {
+            "name": "root label 2668",
+            "ms": 2519.4093749999993
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 4980.902874999998
+          }
+        ]
+      }
+    ],
+    "fixed": [
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.44212500000003274
+          },
+          {
+            "name": "field labels 128",
+            "ms": 2.649916999999732
+          },
+          {
+            "name": "root label 458",
+            "ms": 1.3405830000001515
+          },
+          {
+            "name": "field labels 458",
+            "ms": 29.93512499999997
+          },
+          {
+            "name": "root label 916",
+            "ms": 2.5653330000000096
+          },
+          {
+            "name": "field labels 916",
+            "ms": 146.27470799999992
+          },
+          {
+            "name": "root label 1832",
+            "ms": 7.461166000000048
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 444.0975830000002
+          },
+          {
+            "name": "root label 2668",
+            "ms": 10.786416000000372
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 883.7122089999998
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.4774160000001757
+          },
+          {
+            "name": "field labels 128",
+            "ms": 3.709374999999909
+          },
+          {
+            "name": "root label 458",
+            "ms": 1.6475000000000364
+          },
+          {
+            "name": "field labels 458",
+            "ms": 35.7453330000003
+          },
+          {
+            "name": "root label 916",
+            "ms": 2.854750000000422
+          },
+          {
+            "name": "field labels 916",
+            "ms": 158.74929199999997
+          },
+          {
+            "name": "root label 1832",
+            "ms": 6.799624999999651
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 442.5593750000003
+          },
+          {
+            "name": "root label 2668",
+            "ms": 9.491708000000017
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 869.5316659999999
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.7302499999996144
+          },
+          {
+            "name": "field labels 128",
+            "ms": 2.8874590000000353
+          },
+          {
+            "name": "root label 458",
+            "ms": 1.939542000000074
+          },
+          {
+            "name": "field labels 458",
+            "ms": 29.629292000000078
+          },
+          {
+            "name": "root label 916",
+            "ms": 2.017500000000382
+          },
+          {
+            "name": "field labels 916",
+            "ms": 118.52470900000026
+          },
+          {
+            "name": "root label 1832",
+            "ms": 7.500750000000153
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 357.53949999999986
+          },
+          {
+            "name": "root label 2668",
+            "ms": 8.125375000000076
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 795.5685000000003
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.32625000000007276
+          },
+          {
+            "name": "field labels 128",
+            "ms": 1.7465409999999792
+          },
+          {
+            "name": "root label 458",
+            "ms": 0.999416999999994
+          },
+          {
+            "name": "field labels 458",
+            "ms": 22.199542000000292
+          },
+          {
+            "name": "root label 916",
+            "ms": 2.153957999999875
+          },
+          {
+            "name": "field labels 916",
+            "ms": 82.02795800000013
+          },
+          {
+            "name": "root label 1832",
+            "ms": 4.187917000000198
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 371.19608300000027
+          },
+          {
+            "name": "root label 2668",
+            "ms": 7.134042000000136
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 781.8006669999995
+          }
+        ]
+      },
+      {
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "results": [
+          {
+            "name": "root label 128",
+            "ms": 0.7800419999998667
+          },
+          {
+            "name": "field labels 128",
+            "ms": 2.5862080000001697
+          },
+          {
+            "name": "root label 458",
+            "ms": 2.205916999999772
+          },
+          {
+            "name": "field labels 458",
+            "ms": 36.39350000000013
+          },
+          {
+            "name": "root label 916",
+            "ms": 16.913166999999703
+          },
+          {
+            "name": "field labels 916",
+            "ms": 141.9369999999999
+          },
+          {
+            "name": "root label 1832",
+            "ms": 8.775791000000027
+          },
+          {
+            "name": "field labels 1832",
+            "ms": 436.2882090000003
+          },
+          {
+            "name": "root label 2668",
+            "ms": 5.808582999999999
+          },
+          {
+            "name": "field labels 2668",
+            "ms": 807.3496660000001
+          }
+        ]
+      }
+    ]
+  },
+  "profile": {
+    "fixture": "field labels 2668",
+    "calls": 5,
+    "sampling_interval_us": 500,
+    "report": "total sampled 5.737s; collector inclusive 5.053s; five calls\n   3466.0 ms  68.6% collectConsumedLabel file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/src/cfc/prepare.ts:3652\n    810.9 ms  16.0%  file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/src/cfc/path-prefix-index.ts:29\n    553.0 ms  10.9% storedMetadataFor file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/src/cfc/prepare.ts:669\n    128.8 ms   2.5%  file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/src/cfc/prepare.ts:668\n     36.0 ms   0.7% read file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/src/storage/v2-transaction.ts:1154\n     14.0 ms   0.3%  file:///Users/berni/.codex/worktrees/e181/labs/packages/memory/v2/path.ts:23\n      9.3 ms   0.2% transactionLayers file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/src/storage/reactivity-log.ts:126\n      8.4 ms   0.2% visit file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/src/cfc/prepare.ts:3116\n      4.6 ms   0.1% deepEqual file:///Users/berni/.codex/worktrees/e181/labs/packages/utils/src/deep-equal.ts:35\n      3.5 ms   0.1% getBlindStructuralTarget file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/src/storage/reactivity-log.ts:252\n      3.2 ms   0.1% checkSpecificProps file:///Users/berni/.codex/worktrees/e181/labs/packages/utils/src/deep-equal.ts:121\n      3.0 ms   0.1% #document file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/src/storage/v2-transaction.ts:2483\n      2.3 ms   0.0% policyFor file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/src/storage/local-read-policy.ts:126\n      2.2 ms   0.0% #findNode file:///Users/berni/.codex/worktrees/e181/labs/packages/utils/src/path-key-map.ts:99\n      1.9 ms   0.0% isObjectOrArray file:///Users/berni/.codex/worktrees/e181/labs/packages/utils/src/types.ts:119\n      1.3 ms   0.0%  file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/src/cfc/metadata.ts:28\n      1.3 ms   0.0% readOrThrow file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/src/storage/extended-storage-transaction.ts:2259\n      0.7 ms   0.0% isUiInputBlindWriteTx file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/src/storage/reactivity-log.ts:154\n      0.6 ms   0.0% #prepareRead file:///Users/berni/.codex/worktrees/e181/labs/packages/runner/src/storage/extended-storage-transaction.ts:1124\n      0.6 ms   0.0% hasDataUriScheme file:///Users/berni/.codex/worktrees/e181/labs/packages/data-model/src/codec-data-uri.ts:21\n",
+    "sha256": "cccb3ce05f8769b5c135384bf355d74a3fbb41bebd705feb7707353600fef83c",
+    "local_path": "/tmp/cfc-source-dedup-e181/field-labels-fixed.cpuprofile",
+    "scope": "Profile includes untimed read setup; reported frame weights are restricted to collector descendants. Emitted JS line positions are not symbolized TypeScript locations. Taken on the initial declaration-form fixture.",
+    "archive_path": "2026-09-14-cfc-consumed-source-dedup.cpuprofile"
+  },
+  "validation": {
+    "cfc": "182 passed, 1775 steps, 0 failed",
+    "focused": "1 passed, 5 steps, 0 failed",
+    "runner": "1406 passed, 9917 steps, 0 failed, 1 ignored step (28m16s)",
+    "baseline_focused_final": "1 passed, 5 steps, 0 failed",
+    "types": "46 package groups passed",
+    "fmt": "passed",
+    "lint": "passed after replacing block-local function declaration",
+    "mutation_tests": [
+      "rendered atom identity rejected",
+      "unescaped NUL address identity rejected"
+    ]
+  },
+  "limitations": [
+    "Loaded shared machine; ratios over absolute times.",
+    "Five paired samples do not establish tail latency.",
+    "No untouched calibration control.",
+    "Read count times label-map width is a demonstrated fixture cost; Loom nested-array cause remains unproven.",
+    "encodePointer and isPrefix unchanged."
+  ]
+}

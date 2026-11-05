@@ -1,0 +1,34 @@
+{
+  "type": "cf-harness.chat.event",
+  "protocolVersion": 1,
+  "emittedAt": "2026-10-02T12:00:00.000Z",
+  "sessionId": "session-1",
+  "turnId": "turn-1",
+  "sequence": 8,
+  "event": {
+    "kind": "client_action_resolved",
+    "turnId": "turn-1",
+    "actionId": "action-1",
+    "outcome": "done",
+    "result": "Read Reading: 2 panels, version 12.",
+    "settlement": {
+      "status": "executed",
+      "attribution": {
+        "approval": "automatic",
+        "actor": "agent",
+        "loomActor": "agent:cf-harness",
+        "service": "http://127.0.0.1:8000",
+        "originLoomId": "loom-fedcba9876543210"
+      },
+      "outcome": {
+        "executor": "loom",
+        "transportStatus": 200,
+        "ok": true,
+        "id": "loom.inspect",
+        "bodyBytes": 378
+      },
+      "receipt": "Read Reading: 2 panels, version 12.",
+      "handle": "cfh:v:k7m2q"
+    }
+  }
+}

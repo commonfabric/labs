@@ -78,6 +78,34 @@ the file is not a module. Adding an import there makes it a module and the
 globals stop being global. No file in this repository is in that position
 today; one that ends up there takes a `deno-lint-ignore` saying so.
 
+## What starting a program reads
+
+`deno run` reads every module a program can reach before it runs any of them,
+and on a program of this size that is most of what starting it costs. Evaluating
+the modules is the smaller part. Three things decide what it reads, and none of
+them shows up in a type check or a functional test:
+
+- It follows a value statement whether or not TypeScript goes on to erase it. A
+  module imported only for its types, as `import { Runtime } from "./runtime.ts"`
+  or as `import { type Runtime } from "./runtime.ts"`, adds everything that module
+  reaches, and `import type` adds nothing. The runner's modules form one large
+  import cycle, so one such statement can add hundreds of modules.
+- It follows an `import("...")` that names its module with a plain string, even
+  if the program never takes that branch, unless the program runs with
+  `--unstable-lazy-dynamic-imports`. Without that option, deferring an import
+  saves evaluating the module and nothing else. `deno compile` follows these too,
+  which is what embeds them in a binary, and it does not follow a computed
+  specifier.
+- It reads a whole package through a barrel. `@std/path` reads the module of
+  every function it has, and `@std/path/join` reads that one's.
+
+`cf` and the Topics client run with that option. The
+`cf-import-list/types-are-import-type` lint rule reports the inline spelling of
+the first case. It reads syntax alone, so it does not see the other spelling,
+a value import used only as a type; `runtime/cli/test/start-graph.test.ts` holds
+what those commands read to a limit, which is what notices either one widening
+them.
+
 ## `cf-imports/no-inline-module-import`
 
 Reports an `import("...")` expression that names its module with a plain
@@ -104,7 +132,8 @@ place when:
   it needs `--allow-ffi` from every consumer that so much as mentions the
   module. The OpenTelemetry SDK probes its environment as it loads. A `cf`
   completion request runs between two keystrokes and should load only what
-  its own candidates need.
+  its own candidates need, and a `cf` run loads only the command it addresses,
+  so that `cf piece call` does not read the compiler.
 - **The load has to happen at a chosen moment.** A test that installs browser
   globals, replaces a global, or sets an environment variable that a module
   reads as it loads has to do that first. A test that wants a module
@@ -168,7 +197,7 @@ is what `no-external-import` means by "use import maps":
 import * as nodeCrypto from "@node/crypto";
 ```
 
-`packages/cli`, `packages/data-model`, and `packages/toolshed` each carry one
-of these aliases. A module that genuinely cannot depend on a Node built-in —
-because it also loads in a browser — is a different case, and belongs under
-`cf-imports/no-inline-module-import` with its reason written down.
+`runtime/cli`, `base/data-model`, and `runtime/toolshed` each
+carry one of these aliases. A module that genuinely cannot depend on a Node
+built-in — because it also loads in a browser — is a different case, and belongs
+under `cf-imports/no-inline-module-import` with its reason written down.

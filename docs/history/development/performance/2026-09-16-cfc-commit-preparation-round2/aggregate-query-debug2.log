@@ -1,0 +1,22 @@
+Task cf deno run --allow-run --allow-env --allow-read ./packages/cli/launcher.ts 'test' 'packages/patterns/integration/fixtures/cfc-prepare/main.test.tsx'
+Found 1 test file(s)
+
+main.test.tsx
+CFC parse rows []
+CFC parse rows []
+CFC QUERY undefined
+  ✓ assertion_1
+  ✓ assertion_2 (after action_2)
+  ✓ assertion_3 (after action_2)
+  ✗ assertion_4 (after action_3)
+    Expected true, got undefined
+  ✗ assertion_5 (after action_3)
+    Expected true, got undefined
+  ✗ assertion_6 (after action_3)
+    Expected true, got undefined
+  ✗ assertion_7 (after action_3)
+    Expected true, got undefined
+  ✗ assertion_8 (after action_3)
+    Expected true, got undefined
+
+3 passed, 5 failed (1272ms)

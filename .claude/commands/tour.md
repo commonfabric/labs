@@ -165,6 +165,7 @@ Work through these steps in order. At each step:
 Fresh spaces require authentication. You will see "Register" and "Login" buttons on the landing page.
 
 - Click **Register** to create a new identity
+- Click **Use Passphrase** on the "Register with" screen
 - Click **Generate Passphrase** on the next screen
 - Click **I've Saved It - Continue** to complete registration
 
@@ -270,7 +271,7 @@ In the chat, type: "Please launch the counter pattern with an initial value of 5
 1. Use `fetchAndRunPattern` to compile and run the counter
 2. Use `navigateTo` to navigate to the new pattern
 
-The counter view shows: a heading "Simple Counter", a large number (5), text like "Counter is the 5th number", and "- Decrement" / "+ Increment" buttons. Take a screenshot. Note: the counter pattern may not appear in `listPatternIndex`, but the LLM can still launch it via `fetchAndRunPattern` using the path `counter/counter.tsx`.
+The counter view shows: a heading "Simple Counter", a large number (5), text like "Counter is the 5th number", and "- Decrement" / "+ Increment" buttons. Take a screenshot. Note: the counter pattern may not appear in `listPatternIndex`, but the LLM can still launch it via `fetchAndRunPattern` using the path `examples/counter/counter.tsx`.
 
 **Testing interactivity:** The `cf-button` component wraps a native `<button>` inside its shadow root. Use this approach:
 ```js
@@ -300,7 +301,7 @@ Open the Omnibot (click the FAB in the bottom-right). Send a message asking it t
 > 1. Plan a weekend camping trip
 > 2. Research the best noise-canceling headphones under $200
 > 3. Budget for a home office upgrade — $500 to spend
-> 4. Clone the https://github.com/commontoolsinc/labs repo and summarize the readme in a note
+> 4. Clone the https://github.com/commonfabric/labs repo and summarize the readme in a note
 
 Wait ~15-25 seconds for the LLM to use the `addDoItem` or `addDoItems` tools. The items appear in the do-list as soon as the tool executes — you don't need to wait for the LLM to finish its text summary. Once you see items in the list, click anywhere on the page to dismiss the omnibox and move on. Note: dismissing the omnibox eats the first click — it does NOT also interact with whatever is underneath. You'll need a second click to interact with elements like AI Suggestions disclosures.
 

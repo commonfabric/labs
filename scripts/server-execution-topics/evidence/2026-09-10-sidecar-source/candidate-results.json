@@ -1,0 +1,204 @@
+[
+  {
+    "enabled": false,
+    "rows": [
+      {
+        "index": 0,
+        "space": "did:key:z6MkpQ8Yyr2RUazV7Nm9ofuyMGCMNHF3ytkrsD7UEEJqY5pR",
+        "requests": [
+          {
+            "pathname": "/api/patterns/system/profile-create.tsx",
+            "identity": true,
+            "bytes": 43
+          },
+          {
+            "pathname": "/api/patterns/system/profile-create.tsx",
+            "identity": false,
+            "bytes": 11777
+          },
+          {
+            "pathname": "/api/patterns/system/profile-home.tsx",
+            "identity": false,
+            "bytes": 43309
+          }
+        ],
+        "compilationCalls": 1,
+        "compileCache": {
+          "hits": 0,
+          "misses": 1,
+          "byIdentityHits": 0
+        },
+        "repeatedSlotDidNoWork": true,
+        "durableClosurePresent": true
+      },
+      {
+        "index": 1,
+        "space": "did:key:z6MkpQ8Yyr2RUazV7Nm9ofuyMGCMNHF3ytkrsD7UEEJqY5pR",
+        "requests": [
+          {
+            "pathname": "/api/patterns/system/profile-create.tsx",
+            "identity": true,
+            "bytes": 43
+          }
+        ],
+        "compilationCalls": 1,
+        "compileCache": {
+          "hits": 1,
+          "misses": 1,
+          "byIdentityHits": 0
+        },
+        "repeatedSlotDidNoWork": true,
+        "durableClosurePresent": true
+      },
+      {
+        "index": 2,
+        "space": "did:key:z6MkpQ8Yyr2RUazV7Nm9ofuyMGCMNHF3ytkrsD7UEEJqY5pR",
+        "requests": [
+          {
+            "pathname": "/api/patterns/system/profile-create.tsx",
+            "identity": true,
+            "bytes": 43
+          }
+        ],
+        "compilationCalls": 1,
+        "compileCache": {
+          "hits": 2,
+          "misses": 1,
+          "byIdentityHits": 0
+        },
+        "repeatedSlotDidNoWork": true,
+        "durableClosurePresent": true
+      },
+      {
+        "index": 3,
+        "space": "did:key:z6Mkw7dDTRcYFF6NcGytkG3vZBGCorLr8RN79jx6yrGQnub5",
+        "requests": [
+          {
+            "pathname": "/api/patterns/system/profile-create.tsx",
+            "identity": true,
+            "bytes": 43
+          },
+          {
+            "pathname": "/api/patterns/system/profile-create.tsx",
+            "identity": false,
+            "bytes": 11777
+          },
+          {
+            "pathname": "/api/patterns/system/profile-home.tsx",
+            "identity": false,
+            "bytes": 43309
+          }
+        ],
+        "compilationCalls": 1,
+        "compileCache": {
+          "hits": 2,
+          "misses": 2,
+          "byIdentityHits": 0
+        },
+        "repeatedSlotDidNoWork": true,
+        "durableClosurePresent": true
+      }
+    ]
+  },
+  {
+    "enabled": true,
+    "rows": [
+      {
+        "index": 0,
+        "space": "did:key:z6MkpQ8Yyr2RUazV7Nm9ofuyMGCMNHF3ytkrsD7UEEJqY5pR",
+        "requests": [
+          {
+            "pathname": "/api/patterns/system/profile-create.tsx",
+            "identity": true,
+            "bytes": 43
+          },
+          {
+            "pathname": "/api/patterns/system/profile-create.tsx",
+            "identity": false,
+            "bytes": 11777
+          },
+          {
+            "pathname": "/api/patterns/system/profile-home.tsx",
+            "identity": false,
+            "bytes": 43309
+          }
+        ],
+        "compilationCalls": 1,
+        "compileCache": {
+          "hits": 0,
+          "misses": 1,
+          "byIdentityHits": 0
+        },
+        "repeatedSlotDidNoWork": true,
+        "durableClosurePresent": true
+      },
+      {
+        "index": 1,
+        "space": "did:key:z6MkpQ8Yyr2RUazV7Nm9ofuyMGCMNHF3ytkrsD7UEEJqY5pR",
+        "requests": [
+          {
+            "pathname": "/api/patterns/system/profile-create.tsx",
+            "identity": true,
+            "bytes": 43
+          }
+        ],
+        "compilationCalls": 1,
+        "compileCache": {
+          "hits": 1,
+          "misses": 1,
+          "byIdentityHits": 0
+        },
+        "repeatedSlotDidNoWork": true,
+        "durableClosurePresent": true
+      },
+      {
+        "index": 2,
+        "space": "did:key:z6MkpQ8Yyr2RUazV7Nm9ofuyMGCMNHF3ytkrsD7UEEJqY5pR",
+        "requests": [
+          {
+            "pathname": "/api/patterns/system/profile-create.tsx",
+            "identity": true,
+            "bytes": 43
+          }
+        ],
+        "compilationCalls": 1,
+        "compileCache": {
+          "hits": 2,
+          "misses": 1,
+          "byIdentityHits": 0
+        },
+        "repeatedSlotDidNoWork": true,
+        "durableClosurePresent": true
+      },
+      {
+        "index": 3,
+        "space": "did:key:z6Mkw7dDTRcYFF6NcGytkG3vZBGCorLr8RN79jx6yrGQnub5",
+        "requests": [
+          {
+            "pathname": "/api/patterns/system/profile-create.tsx",
+            "identity": true,
+            "bytes": 43
+          },
+          {
+            "pathname": "/api/patterns/system/profile-create.tsx",
+            "identity": false,
+            "bytes": 11777
+          },
+          {
+            "pathname": "/api/patterns/system/profile-home.tsx",
+            "identity": false,
+            "bytes": 43309
+          }
+        ],
+        "compilationCalls": 1,
+        "compileCache": {
+          "hits": 2,
+          "misses": 2,
+          "byIdentityHits": 0
+        },
+        "repeatedSlotDidNoWork": true,
+        "durableClosurePresent": true
+      }
+    ]
+  }
+]

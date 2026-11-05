@@ -1,0 +1,80 @@
+diff --git a/tasks/select-runner-test-files.test.ts b/tasks/select-runner-test-files.test.ts
+index c2fcdd9e7d..5375ec7b47 100644
+--- a/tasks/select-runner-test-files.test.ts
++++ b/tasks/select-runner-test-files.test.ts
+@@ -1,0 +2,3 @@ import { assertEquals } from "@std/assert";
++import { expect } from "@std/expect";
++import { toFileUrl } from "@std/path";
++import { describe, it } from "@std/testing/bdd";
+@@ -9,0 +13,41 @@ const TOTAL_SHARDS = 8;
++describe("listRunnerTests", () => {
++  it("includes nested tests with distinct relative paths in exactly one shard", async () => {
++    const directory = await Deno.makeTempDir({ prefix: "runner-discovery-" });
++    try {
++      await Deno.mkdir(`${directory}/executor/nested`, { recursive: true });
++      for (
++        const name of [
++          "event.test.ts",
++          "executor/event.test.ts",
++          "executor/nested/event.test.ts",
++          "executor/helper.ts",
++        ]
++      ) {
++        await Deno.writeTextFile(`${directory}/${name}`, "");
++      }
++      await Deno.symlink(
++        `${directory}/event.test.ts`,
++        `${directory}/alias.test.ts`,
++      );
++      const files = await listRunnerTests(toFileUrl(`${directory}/`));
++      const expected = [
++        "event.test.ts",
++        "executor/event.test.ts",
++        "executor/nested/event.test.ts",
++      ];
++      expect(files.map((file) => file.name)).toEqual(expected);
++      const selected = Array.from(
++        { length: TOTAL_SHARDS },
++        (_, offset) =>
++          selectRunnerTestFiles(files, {
++            index: offset + 1,
++            total: TOTAL_SHARDS,
++          }),
++      ).flat().sort();
++      expect(selected).toEqual(expected);
++    } finally {
++      await Deno.remove(directory, { recursive: true });
++    }
++  });
++});
++
+diff --git a/tasks/select-runner-test-files.ts b/tasks/select-runner-test-files.ts
+index 299e4e8a63..897a6e1c9f 100644
+--- a/tasks/select-runner-test-files.ts
++++ b/tasks/select-runner-test-files.ts
+@@ -2,0 +3,3 @@
++import { walk } from "@std/fs/walk";
++import { fromFileUrl, relative, SEPARATOR } from "@std/path";
++
+@@ -25,2 +28,4 @@ export function selectRunnerTestFiles(
+-export async function listRunnerTests(): Promise<{ name: string }[]> {
+-  const testDir = new URL("../packages/runner/test/", import.meta.url);
++/** Lists every `.test.ts` file by its path relative to the test directory. */
++export async function listRunnerTests(
++  testDir = new URL("../packages/runner/test/", import.meta.url),
++): Promise<{ name: string }[]> {
+@@ -29,4 +34,10 @@ export async function listRunnerTests(): Promise<{ name: string }[]> {
+-  for await (const entry of Deno.readDir(testDir)) {
+-    if (entry.isFile && entry.name.endsWith(".test.ts")) {
+-      files.push({ name: entry.name });
+-    }
++  for await (
++    const entry of walk(testDir, {
++      includeDirs: false,
++      includeSymlinks: false,
++      match: [/\.test\.ts$/],
++    })
++  ) {
++    const name = relative(fromFileUrl(testDir), entry.path)
++      .split(SEPARATOR).join("/");
++    files.push({ name });

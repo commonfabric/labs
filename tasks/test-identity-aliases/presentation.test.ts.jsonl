@@ -1,0 +1,4 @@
+{"date": "2026-08-25", "from": {"k": "unit", "s": "patterns", "n": "conversation state keeps provider lifecycle separate from sync"}, "to": {"k": "unit", "s": "connectors/agents/debug-view", "n": "conversation state keeps provider lifecycle separate from sync"}}
+{"date": "2026-08-25", "from": {"k": "unit", "s": "patterns", "n": "idle time uses compact relative units"}, "to": {"k": "unit", "s": "connectors/agents/debug-view", "n": "idle time uses compact relative units"}}
+{"date": "2026-08-25", "from": {"k": "unit", "s": "patterns", "n": "worktree paths show a stable trailing segment"}, "to": {"k": "unit", "s": "connectors/agents/debug-view", "n": "worktree paths show a stable trailing segment"}}
+{"date": "2026-08-25", "from": {"k": "unit", "s": "patterns", "n": "session rows sort by title, idle time, and worktree"}, "to": {"k": "unit", "s": "connectors/agents/debug-view", "n": "session rows sort by title, idle time, and worktree"}}

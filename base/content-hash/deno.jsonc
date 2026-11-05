@@ -1,0 +1,27 @@
+{
+  "name": "@commonfabric/content-hash",
+  "imports": {
+    // Dependency guide: ../../docs/development/DEPENDENCIES.md
+    "@/": "./src/"
+  },
+  "tasks": {
+    "check": "deno check .",
+    "deno-test": {
+      "description": "Run unit tests",
+      "command": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST --allow-read"
+    },
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+    "bench": {
+      "description": "Run SHA-256 implementation benchmarks",
+      "command": "deno bench --allow-read"
+    }
+  },
+  "test": {
+    "include": [
+      "test/*.test.ts"
+    ]
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

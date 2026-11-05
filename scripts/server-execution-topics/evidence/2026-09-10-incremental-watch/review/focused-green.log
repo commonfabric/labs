@@ -1,0 +1,65 @@
+Check packages/runner/test/traverse-staging.test.ts
+Check packages/memory/test/v2-watch-incremental.test.ts
+Check packages/utils/test/staged-map.test.ts
+running 1 test from ./packages/runner/test/traverse-staging.test.ts
+MapSetStringToPathSelectors ...
+  instance members ...
+    stage() ...
+      isolates existing selectors and the permissive index with hashing false ... ok (1ms)
+      isolates existing selectors and the permissive index with hashing true ... ok (1ms)
+    stage() ... ok (2ms)
+  instance members ... ok (2ms)
+MapSetStringToPathSelectors ... ok (9ms)
+running 1 test from ./packages/memory/test/v2-watch-incremental.test.ts
+Server ...
+  instance members ...
+    watchAdd() ...
+      leaves a resumed session unchanged when an earlier addition completes ... ok (8ms)
+      keeps a shared miss reactive until its last branch owner departs ... ok (22ms)
+      reconciles normalized duplicate operation owners with graph ownership false ... ok (7ms)
+      reconciles normalized duplicate operation owners with graph ownership true ... ok (6ms)
+      abandons changed miss ownership and retries against a newly created target ... ok (17ms)
+      retains an operation owner's interest after the last graph miss retires ... ok (8ms)
+      publishes a large valid batch without an argument-count limit ... ok (346ms)
+      retains the last duplicate addition when graph and operation watches share an ID ... ok (6ms)
+      keeps unsupported content types absent without hiding the stored JSON document ... ok (8ms)
+      retains accepted duplicate-id roots when removing an unrelated watch ... ok (7ms)
+      leaves established delivery and graph state unchanged when a later branch fails ... ok (15ms)
+      rolls back graph and cursor changes when a later operation snapshot fails ... ok (13ms)
+      keeps an in-flight operation snapshot paired with its original cursors ... ok (8ms)
+      refreshes without filtering the 32 established graph watches for operation fields ... ok (7ms)
+      adds one root without enumerating the 32 established delivered entries ... ok (10ms)
+      refreshes one root without enumerating the 32 established delivered entries ... ok (9ms)
+      adds one root without scanning the 32 established manager addresses ... ok (7ms)
+      refreshes without filtering the 256 established graph watches for operation fields ... ok (30ms)
+      adds one root without enumerating the 256 established delivered entries ... ok (26ms)
+      refreshes one root without enumerating the 256 established delivered entries ... ok (25ms)
+      adds one root without scanning the 256 established manager addresses ... ok (24ms)
+    watchAdd() ... ok (610ms)
+  instance members ... ok (612ms)
+Server ... ok (618ms)
+running 1 test from ./packages/utils/test/staged-map.test.ts
+StagedMap ...
+  instance members ...
+    changedKeys() ...
+      yields each changed key once after deletion or clearing and reinsertion ... ok (0ms)
+      reads only changed keys when the base is not cleared ... ok (1ms)
+    changedKeys() ... ok (1ms)
+    getOrInsertComputed() ...
+      rejects non-callable callbacks before checking membership ... ok (0ms)
+      uses staged membership and preserves callback mutations ... ok (0ms)
+    getOrInsertComputed() ... ok (0ms)
+    commit() ...
+      preserves Map membership and order across deletion, reinsertion, and clear ... ok (11ms)
+      isolates mutable values until publication ... ok (0ms)
+      does not enumerate untouched base entries ... ok (0ms)
+    commit() ... ok (11ms)
+    entries() ...
+      validates forEach callbacks even when empty and invokes callable values directly ... ok (1ms)
+      observes insertion and reinsertion during iteration ... ok (0ms)
+    entries() ... ok (1ms)
+  instance members ... ok (15ms)
+StagedMap ... ok (16ms)
+
+ok | 3 passed (41 steps) | 0 failed (927ms)
+

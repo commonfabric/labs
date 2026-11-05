@@ -1,0 +1,595 @@
+diff --git a/packages/runner/test/source-reconciler.test.ts b/packages/runner/test/source-reconciler.test.ts
+index 24a0cb92aa..88415f6f37 100644
+--- a/packages/runner/test/source-reconciler.test.ts
++++ b/packages/runner/test/source-reconciler.test.ts
+@@ -2,7 +2,15 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+ import { expect } from "@std/expect";
+ import { defer, type Deferred } from "@commonfabric/utils/defer";
+ import { Identity } from "@commonfabric/identity";
+-import { StorageManager } from "../src/storage/cache.deno.ts";
++import {
++  EmulatedStorageManager,
++  newLoopbackServer,
++  StorageManager,
++} from "../src/storage/cache.deno.ts";
++import {
++  openSidecarSurface,
++  type SidecarSurfaceState,
++} from "../src/builtins/wish.ts";
+ import {
+   type Cell,
+   getPatternIdentityRef,
+@@ -1164,6 +1172,573 @@ describe("piece source reconciliation", () => {
+       return runtime.sourceReconciler.open(piece, origin);
+     }
+ 
++    it("shares supplied source across slots while compiling into each destination", async () => {
++      const identity = await identityFor(source("v1"));
++      let identityRequests = 0;
++      let sourceRequests = 0;
++      createRuntime(servingFetch(() => identity, () => source("v1"), (url) => {
++        if (url.searchParams.has("identity")) identityRequests++;
++        else sourceRequests++;
++      }));
++      const compile = runtime.patternManager.compilePattern.bind(
++        runtime.patternManager,
++      );
++      const compiledSpaces: string[] = [];
++      runtime.patternManager.compilePattern = (...args) => {
++        compiledSpaces.push(args[1]!.space!);
++        return compile(...args);
++      };
++      const spaces = [
++        signer.did(),
++        signer.did(),
++        signer.did(),
++        (await Identity.fromPassphrase("supplied source destination")).did(),
++      ];
++      try {
++        for (const [index, space] of spaces.entries()) {
++          const pattern = await open(
++            runtime.getCell(space, `source-slot-${index}`),
++          );
++          expect(pattern).toBeDefined();
++          expect(runtime.patternManager.getArtifactEntryRef(pattern!)?.identity)
++            .toBe(identity);
++          await runtime.patternManager.flushCompileCacheWrites();
++          const retained = await runtime.patternManager
++            .getPatternSourceProgramByIdentity(identity, space);
++          expect(retained).toBeDefined();
++          expect(retained!.files.some((file) => file.contents === source("v1")))
++            .toBe(true);
++        }
++        expect(identityRequests).toBe(4);
++        expect(compiledSpaces).toEqual(spaces);
++        // The supplied closure has two files; each destination resolves it once.
++        expect(sourceRequests).toBe(4);
++      } finally {
++        runtime.patternManager.compilePattern = compile;
++      }
++    });
++
++    it("shares an in-flight supplied closure between concurrent slots", async () => {
++      const identity = await identityFor(source("v1"));
++      const bothIdentities = defer<void>();
++      const sourceEntered = defer<void>();
++      const releaseSource = defer<void>();
++      let identities = 0;
++      let resolutions = 0;
++      const fetch = servingFetch(() => identity, () => source("v1"), (url) => {
++        if (url.searchParams.has("identity") && ++identities === 2) {
++          bothIdentities.resolve();
++        }
++      });
++      createRuntime(async (input, init) => {
++        const url = new URL(
++          input instanceof Request ? input.url : String(input),
++        );
++        if (url.pathname === PARENT_PATH && !url.searchParams.has("identity")) {
++          resolutions++;
++          sourceEntered.resolve();
++          await releaseSource.promise;
++        }
++        return await fetch(input, init);
++      });
++      const first = open(runtime.getCell(signer.did(), "concurrent-first"));
++      await sourceEntered.promise;
++      const second = open(runtime.getCell(signer.did(), "concurrent-second"));
++      try {
++        await bothIdentities.promise;
++        releaseSource.resolve();
++        const patterns = await Promise.all([first, second]);
++        expect(patterns.every((pattern) => pattern !== undefined)).toBe(true);
++        expect(identities).toBe(2);
++        expect(resolutions).toBe(1);
++      } finally {
++        releaseSource.resolve();
++        await Promise.all([first, second]);
++      }
++    });
++
++    it("revalidates deployment identity before reusing supplied source", async () => {
++      const v1 = await identityFor(source("v1"));
++      const v2 = await identityFor(source("v2"));
++      let advertised = v1;
++      let contents = source("v1");
++      let identities = 0;
++      let downloads = 0;
++      createRuntime(servingFetch(() => advertised, () => contents, (url) => {
++        if (url.searchParams.has("identity")) identities++;
++        else downloads++;
++      }));
++      const first = await open(
++        runtime.getCell(signer.did(), "deployment-first"),
++      );
++      expect(first).toBeDefined();
++      expect(runtime.patternManager.getArtifactEntryRef(first!)?.identity).toBe(
++        v1,
++      );
++      advertised = v2;
++      contents = source("v2");
++      for (const slot of ["deployment-next", "deployment-warm"]) {
++        const pattern = await open(runtime.getCell(signer.did(), slot));
++        expect(pattern).toBeDefined();
++        expect(runtime.patternManager.getArtifactEntryRef(pattern!)?.identity)
++          .toBe(v2);
++      }
++      expect(identities).toBe(3);
++      expect(downloads).toBe(4);
++    });
++
++    it("retries a failed source download without retaining its rejection", async () => {
++      const identity = await identityFor(source("v1"));
++      let unavailable = true;
++      let downloads = 0;
++      const fetch = servingFetch(() => identity, () => source("v1"));
++      createRuntime((input, init) => {
++        const url = new URL(
++          input instanceof Request ? input.url : String(input),
++        );
++        if (url.pathname === PARENT_PATH && !url.searchParams.has("identity")) {
++          downloads++;
++          if (unavailable) {
++            return Promise.reject(new Error("source unavailable"));
++          }
++        }
++        return fetch(input, init);
++      });
++      expect(await open(runtime.getCell(signer.did(), "failed-download")))
++        .toBeUndefined();
++      unavailable = false;
++      expect(await open(runtime.getCell(signer.did(), "retry-download")))
++        .toBeDefined();
++      expect(await open(runtime.getCell(signer.did(), "warm-download")))
++        .toBeDefined();
++      expect(downloads).toBe(2);
++    });
++
++    it("retries corrected source after an advertised-identity mismatch", async () => {
++      const identity = await identityFor(source("v2"));
++      let contents = source("v1");
++      let downloads = 0;
++      createRuntime(servingFetch(() => identity, () => contents, (url) => {
++        if (!url.searchParams.has("identity")) downloads++;
++      }));
++      expect(await open(runtime.getCell(signer.did(), "mismatched-source")))
++        .toBeUndefined();
++      contents = source("v2");
++      for (const slot of ["corrected-source", "warm-corrected-source"]) {
++        const pattern = await open(runtime.getCell(signer.did(), slot));
++        expect(pattern).toBeDefined();
++        expect(runtime.patternManager.getArtifactEntryRef(pattern!)?.identity)
++          .toBe(identity);
++      }
++      expect(downloads).toBe(4);
++    });
++
++    it("retries compilation failure without evicting a newer successful source", async () => {
++      const identity = await identityFor(source("v1"));
++      let downloads = 0;
++      createRuntime(servingFetch(() => identity, () => source("v1"), (url) => {
++        if (!url.searchParams.has("identity")) downloads++;
++      }));
++      const compile = runtime.patternManager.compilePattern.bind(
++        runtime.patternManager,
++      );
++      const entered = [defer<void>(), defer<void>()];
++      const release = [defer<void>(), defer<void>()];
++      let calls = 0;
++      runtime.patternManager.compilePattern = async (...args) => {
++        const index = calls++;
++        if (index < 2) {
++          entered[index].resolve();
++          await release[index].promise;
++          throw new Error("controlled compile failure");
++        }
++        return await compile(...args);
++      };
++      const first = open(runtime.getCell(signer.did(), "failure-first"));
++      await entered[0].promise;
++      const second = open(runtime.getCell(signer.did(), "failure-second"));
++      try {
++        await entered[1].promise;
++        release[0].resolve();
++        expect(await first).toBeUndefined();
++        expect(await open(runtime.getCell(signer.did(), "failure-retry")))
++          .toBeDefined();
++        expect(downloads).toBe(4);
++        release[1].resolve();
++        expect(await second).toBeUndefined();
++        expect(await open(runtime.getCell(signer.did(), "after-late-failure")))
++          .toBeDefined();
++        expect(downloads).toBe(4);
++        expect(calls).toBe(4);
++      } finally {
++        for (const gate of release) gate.resolve();
++        await Promise.all([first, second]);
++        runtime.patternManager.compilePattern = compile;
++      }
++    });
++
++    it("isolates retained source containers from compiler-owned inputs", async () => {
++      const identity = await identityFor(source("v1"));
++      let downloads = 0;
++      createRuntime(servingFetch(() => identity, () => source("v1"), (url) => {
++        if (!url.searchParams.has("identity")) downloads++;
++      }));
++      const resolve = runtime.harness.resolve.bind(runtime.harness);
++      runtime.harness.resolve = async (...args) => ({
++        ...await resolve(...args),
++        dataFiles: [],
++        sourceRoots: [],
++      });
++      const compile = runtime.patternManager.compilePattern.bind(
++        runtime.patternManager,
++      );
++      let calls = 0;
++      runtime.patternManager.compilePattern = async (...args) => {
++        calls++;
++        if (typeof args[0] === "string") {
++          throw new Error("supplied source must carry its resolved program");
++        }
++        expect(args[0].files.map((file) => file.contents)).toContain(
++          source("v1"),
++        );
++        expect(args[0].dataFiles).toEqual([]);
++        expect(args[0].sourceRoots).toEqual([]);
++        const pattern = await compile(...args);
++        args[0].files[0].contents = "changed by compiler owner";
++        args[0].files.pop();
++        args[0].dataFiles!.push("owner-data.txt");
++        args[0].sourceRoots!.push("owner-root.tsx");
++        return pattern;
++      };
++      try {
++        expect(await open(runtime.getCell(signer.did(), "containers-first")))
++          .toBeDefined();
++        expect(await open(runtime.getCell(signer.did(), "containers-next")))
++          .toBeDefined();
++        expect(calls).toBe(2);
++        expect(downloads).toBe(2);
++      } finally {
++        runtime.harness.resolve = resolve;
++        runtime.patternManager.compilePattern = compile;
++      }
++    });
++
++    it("separates full source targets and retires the least recently used entry", async () => {
++      const identity = await identityFor(source("v1"));
++      const downloads: string[] = [];
++      createRuntime(servingFetch(() => identity, () => source("v1"), (url) => {
++        if (url.pathname === PARENT_PATH && !url.searchParams.has("identity")) {
++          downloads.push(url.host);
++        }
++      }));
++      const hostForSpace = runtime.hostForSpace.bind(runtime);
++      let host = "source-0.test";
++      runtime.hostForSpace = () => new URL(`http://${host}`);
++      const atHost = async (index: number) => {
++        host = `source-${index}.test`;
++        expect(
++          await open(
++            runtime.getCell(signer.did(), `target-${crypto.randomUUID()}`),
++          ),
++        )
++          .toBeDefined();
++      };
++      try {
++        for (let index = 0; index < 32; index++) await atHost(index);
++        expect(downloads.length).toBe(32);
++        await atHost(0);
++        expect(downloads.length).toBe(32);
++        await atHost(32);
++        await atHost(0);
++        expect(downloads.length).toBe(33);
++        await atHost(1);
++        expect(downloads.at(-1)).toBe("source-1.test");
++        expect(downloads.length).toBe(34);
++      } finally {
++        runtime.hostForSpace = hostForSpace;
++      }
++    });
++
++    for (const sourceLength of [2_200_000, 4_200_000]) {
++      it(`bounds retention of ${sourceLength} source code units`, async () => {
++        const contents = source("v1") + "\n/*" + " ".repeat(sourceLength) +
++          "*/";
++        const identity = await identityFor(contents);
++        let downloads = 0;
++        createRuntime(servingFetch(() => identity, () => contents, (url) => {
++          if (
++            url.pathname === PARENT_PATH && !url.searchParams.has("identity")
++          ) downloads++;
++        }));
++        const hostForSpace = runtime.hostForSpace.bind(runtime);
++        let host = "weighted-first.test";
++        runtime.hostForSpace = () => new URL(`http://${host}`);
++        try {
++          for (
++            const target of [
++              "weighted-first.test",
++              "weighted-second.test",
++              "weighted-first.test",
++            ]
++          ) {
++            host = target;
++            expect(
++              await open(
++                runtime.getCell(
++                  signer.did(),
++                  `weighted-${crypto.randomUUID()}`,
++                ),
++              ),
++            )
++              .toBeDefined();
++          }
++          expect(downloads).toBe(3);
++          expect(
++            await open(runtime.getCell(signer.did(), "weighted-same-target")),
++          ).toBeDefined();
++          // A source larger than the budget is never retained, even alone.
++          expect(downloads).toBe(sourceLength > 4 * 1024 * 1024 ? 4 : 3);
++        } finally {
++          runtime.hostForSpace = hostForSpace;
++        }
++      });
++    }
++
++    it("retries failed destination persistence before reusing supplied source", async () => {
++      const identity = await identityFor(source("v1"));
++      let downloads = 0;
++      createRuntime(servingFetch(() => identity, () => source("v1"), (url) => {
++        if (!url.searchParams.has("identity")) downloads++;
++      }));
++      const manager = runtime.patternManager.accessForTestingOnly;
++      let failedWrites = 0;
++      manager.compileCacheWriter = () => {
++        failedWrites++;
++        return Promise.reject(new Error("controlled closure write failure"));
++      };
++      try {
++        expect(await open(runtime.getCell(signer.did(), "closure-failure")))
++          .toBeUndefined();
++        await runtime.patternManager.flushCompileCacheWrites();
++        expect(failedWrites).toBeGreaterThan(0);
++        expect(
++          await runtime.patternManager.getPatternSourceProgramByIdentity(
++            identity,
++            signer.did(),
++          ),
++        )
++          .toBeUndefined();
++        manager.compileCacheWriter = undefined;
++        expect(await open(runtime.getCell(signer.did(), "closure-repair")))
++          .toBeDefined();
++        await runtime.patternManager.flushCompileCacheWrites();
++        const retained = await runtime.patternManager
++          .getPatternSourceProgramByIdentity(identity, signer.did());
++        expect(retained).toBeDefined();
++        expect(retained!.files.some((file) => file.contents === source("v1")))
++          .toBe(true);
++        expect(downloads).toBe(4);
++        expect(await open(runtime.getCell(signer.did(), "closure-warm")))
++          .toBeDefined();
++        expect(downloads).toBe(4);
++      } finally {
++        manager.compileCacheWriter = undefined;
++      }
++    });
++
++    it("recompiles shared source when the registry epoch ends during a sidecar open", async () => {
++      await storageManager.close();
++      const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
++      storageManager = EmulatedStorageManager.connectTo(server, { as: signer });
++      const identity = await identityFor(source("v1"));
++      let identities = 0;
++      let downloads = 0;
++      createRuntime(servingFetch(() => identity, () => source("v1"), (url) => {
++        if (url.searchParams.has("identity")) identities++;
++        else downloads++;
++      }));
++      const entered = defer<void>();
++      const release = defer<void>();
++      const compile = runtime.patternManager.compilePattern.bind(
++        runtime.patternManager,
++      );
++      let calls = 0;
++      runtime.patternManager.compilePattern = async (...args) => {
++        const first = ++calls === 1;
++        const pattern = await compile(...args);
++        if (first) {
++          entered.resolve();
++          await release.promise;
++        }
++        return pattern;
++      };
++      const slot: SidecarSurfaceState = {};
++      const piece = runtime.getCell(signer.did(), "epoch-sidecar");
++      const opening = openSidecarSurface(runtime, slot, piece, {
++        name: "reconcile-parent.tsx",
++        origin: PARENT_SOURCE,
++      });
++      try {
++        await entered.promise;
++        await runtime.patternManager.flushCompileCacheWrites();
++        await storageManager.synced();
++        await storageManager.close();
++        release.resolve();
++        const pattern = await opening;
++        expect(pattern).toBeDefined();
++        expect(runtime.patternManager.getArtifactEntryRef(pattern!)?.identity)
++          .toBe(identity);
++        expect(calls).toBe(2);
++        expect(identities).toBe(2);
++        expect(downloads).toBe(2);
++        await runtime.patternManager.flushCompileCacheWrites();
++        expect(
++          await runtime.patternManager.getPatternSourceProgramByIdentity(
++            identity,
++            signer.did(),
++          ),
++        )
++          .toBeDefined();
++      } finally {
++        release.resolve();
++        await opening;
++        runtime.patternManager.compilePattern = compile;
++        await runtime.dispose();
++        await server.close();
++      }
++    });
++
++    it("abandons a shared download on disposal before any caller compiles", async () => {
++      const identity = await identityFor(source("v1"));
++      const entered = defer<void>();
++      const bothIdentities = defer<void>();
++      const release = defer<void>();
++      let identities = 0;
++      let compilations = 0;
++      const fetch = servingFetch(() => identity, () => source("v1"), (url) => {
++        if (url.searchParams.has("identity") && ++identities === 2) {
++          bothIdentities.resolve();
++        }
++      });
++      createRuntime(async (input, init) => {
++        const url = new URL(
++          input instanceof Request ? input.url : String(input),
++        );
++        if (url.pathname === PARENT_PATH && !url.searchParams.has("identity")) {
++          entered.resolve();
++          await release.promise;
++        }
++        return await fetch(input, init);
++      });
++      const compile = runtime.patternManager.compilePattern.bind(
++        runtime.patternManager,
++      );
++      runtime.patternManager.compilePattern = (...args) => {
++        compilations++;
++        return compile(...args);
++      };
++      const first = open(
++        runtime.getCell(signer.did(), "disposed-download-first"),
++      );
++      await entered.promise;
++      const second = open(
++        runtime.getCell(signer.did(), "disposed-download-second"),
++      );
++      try {
++        await bothIdentities.promise;
++        await runtime.sourceReconciler.dispose();
++        expect(await Promise.all([first, second])).toEqual([
++          undefined,
++          undefined,
++        ]);
++        release.resolve();
++        expect(
++          await open(runtime.getCell(signer.did(), "disposed-download-later")),
++        )
++          .toBeUndefined();
++        expect(identities).toBe(2);
++        expect(compilations).toBe(0);
++      } finally {
++        release.resolve();
++        await Promise.all([first, second]);
++        runtime.patternManager.compilePattern = compile;
++      }
++    });
++
++    it("tracks a pass before its fetch can initiate disposal", async () => {
++      const identity = await identityFor(source("v1"));
++      let disposing: Promise<void> | undefined;
++      let requests = 0;
++      const fetch = servingFetch(() => identity, () => source("v1"));
++      createRuntime((input, init) => {
++        requests++;
++        disposing ??= runtime.sourceReconciler.dispose();
++        return fetch(input, init);
++      });
++      const result = await open(
++        runtime.getCell(signer.did(), "fetch-disposal"),
++      );
++      expect(disposing).toBeDefined();
++      await disposing;
++      expect(result).toBeUndefined();
++      expect(requests).toBe(1);
++    });
++
++    for (const phase of ["initial sync", "compilation"] as const) {
++      it(`supplies nothing after disposal during ${phase}`, async () => {
++        const identity = await identityFor(source("v1"));
++        let identityRequests = 0;
++        const piece = emptyPiece(
++          servingFetch(() => identity, () => source("v1"), (url) => {
++            if (url.searchParams.has("identity")) identityRequests++;
++          }),
++        );
++        const entered = defer<void>();
++        const release = defer<void>();
++        const withTx = piece.withTx.bind(piece);
++        const compile = runtime.patternManager.compilePattern.bind(
++          runtime.patternManager,
++        );
++        if (phase === "initial sync") {
++          const detached = piece.withTx();
++          const sync = detached.sync.bind(detached);
++          detached.sync = async () => {
++            entered.resolve();
++            await release.promise;
++            return await sync();
++          };
++          piece.withTx = () => detached;
++        } else {
++          runtime.patternManager.compilePattern = async (...args) => {
++            const pattern = await compile(...args);
++            entered.resolve();
++            await release.promise;
++            return pattern;
++          };
++        }
++        const opening = open(piece);
++        try {
++          await Promise.race([
++            entered.promise,
++            opening.then(() => {
++              throw new Error("open did not enter the controlled phase");
++            }),
++          ]);
++          const disposing = runtime.sourceReconciler.dispose();
++          if (phase === "initial sync") await disposing;
++          release.resolve();
++          await disposing;
++          expect(await opening).toBeUndefined();
++          expect(identityRequests).toBe(phase === "initial sync" ? 0 : 1);
++        } finally {
++          release.resolve();
++          await opening;
++          piece.withTx = withTx;
++          runtime.patternManager.compilePattern = compile;
++        }
++      });
++    }
++
+     it("answers with the source its origin names, for a piece not yet there", async () => {
+       const v1Identity = await identityFor(source("v1"));
+       const piece = emptyPiece(

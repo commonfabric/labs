@@ -1,0 +1,58 @@
+from pathlib import Path
+import subprocess, json, os, hashlib, tempfile, sys
+archive=Path(sys.argv[1]).resolve()
+output=Path(sys.argv[2]).resolve()
+rows=[]
+for variant in ['recorded-source/run-arm.ts.txt','run-arm.ts.txt']:
+ source=(archive/variant).read_text()
+ modern=variant=='run-arm.ts.txt'
+ functions=source[source.index('/** Builds a complete child environment'):source.index('const commands:')] if modern else ''
+ begin=source.index('  const after =')
+ block=source[begin:source.index('  manifest.exitCode',begin)]
+ for parent in [None,'true','false']:
+  for role in ['default','opposite']:
+   lane={'enabled':role=='opposite'}
+   if role=='opposite':lane['experimentalValue']='true'
+   if modern:
+    env_code='const childEnv = executionEnvironment({});'
+   else:
+    start=source.index('const flags =');end=source.index('const cpuModel =',start)
+    env_code=source[start:end]+'\nconst childEnv = {...Deno.env.toObject(), ...flags};'
+   code='const lane = '+json.dumps(lane)+';\n'+functions+env_code+'''
+const result = await new Deno.Command(Deno.execPath(), {
+  args: ["eval", "--no-config", 'console.log(JSON.stringify(Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION") ?? null))'],
+  env: childEnv, clearEnv: true, stdout: "piped", stderr: "piped",
+}).output();
+if (!result.success) throw new Error(new TextDecoder().decode(result.stderr));
+console.log(new TextDecoder().decode(result.stdout).trim());
+'''
+   env=os.environ.copy();env.pop('EXPERIMENTAL_SERVER_EXECUTION',None)
+   if parent is not None:env['EXPERIMENTAL_SERVER_EXECUTION']=parent
+   result=subprocess.run(['deno','eval','--no-config',code],env=env,text=True,capture_output=True)
+   if result.returncode:raise RuntimeError(result.stderr)
+   observed=json.loads(result.stdout)
+   expected=('true' if role=='opposite' else None) if modern else str(lane['enabled']).lower()
+   assert observed==expected,(variant,parent,role,observed,expected)
+   rows.append({'source':variant,'sourceSha256':hashlib.sha256(source.encode()).hexdigest(),'case':'child flag','parentFlag':parent,'role':role,'observed':observed,'expected':expected})
+ for status in [200,503]:
+  code='const lane = {};\n'+functions+'''
+const writes: unknown[] = [];
+const endpoint = {API_URL: "http://controlled.invalid"};
+const runDir = "capture";
+const join = (...parts: string[]) => parts.join("/");
+Deno.writeTextFile = async (...args) => { writes.push(args); };
+globalThis.fetch = async () => new Response(JSON.stringify({status: STATUS}), {status: STATUS, headers: {"content-type":"application/json"}});
+let error: string | undefined;
+try {
+BLOCK
+} catch (e) { error = e instanceof Error ? e.message : String(e); }
+console.log(JSON.stringify({writes: writes.length, error: error ?? null}));
+'''.replace('STATUS',str(status)).replace('BLOCK',block)
+  result=subprocess.run(['deno','eval','--no-config',code],text=True,capture_output=True)
+  if result.returncode:raise RuntimeError(result.stderr)
+  observed=json.loads(result.stdout)
+  assert observed['writes']==(0 if modern and status==503 else 1)
+  assert (observed['error'] is not None)==(modern and status==503)
+  rows.append({'source':variant,'case':'post-run HTTP','status':status,**observed})
+output.write_text(json.dumps({'method':'Exact archived source fragments executed by Deno; real child environment inheritance, synthetic HTTP responses, no workload or latency claim.','runtime':subprocess.check_output(['deno','--version'],text=True),'rows':rows},indent=2)+'\n')
+print('All 16 source-fragment controls passed; original default flag and HTTP-503 defects reproduced.')

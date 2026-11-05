@@ -1,0 +1,111 @@
+{
+  "argumentSchema": {
+    "description": "Initial document values, shared by every viewer of this piece.",
+    "properties": {
+      "content": {
+        "default": "",
+        "description": "LF-normalized Markdown; live editing uses CodeMirror operations.",
+        "scope": "space",
+        "type": "string"
+      },
+      "title": {
+        "default": "Untitled note",
+        "description": "Editable document title, independent of Markdown frontmatter.",
+        "scope": "space",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "shared-note/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "LineEvent": {
+        "properties": {
+          "text": {
+            "description": "The line, without a trailing newline.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "ReplaceTextEvent": {
+        "properties": {
+          "new": {
+            "description": "Text that takes its place.",
+            "type": "string"
+          },
+          "old": {
+            "description": "Text the document holds exactly once, compared code unit for code unit.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "old",
+          "new"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Readable Markdown and the same compact view for standalone and embedded use.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$TILE_UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "appendLine": {
+        "$ref": "#/$defs/LineEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Adds `text` to the end of the document, on a line of its own."
+      },
+      "content": {
+        "scope": "space",
+        "type": "string"
+      },
+      "participantName": {
+        "scope": "user",
+        "type": "string"
+      },
+      "prependLine": {
+        "$ref": "#/$defs/LineEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Adds `text` to the start of the document, on a line of its own."
+      },
+      "replaceText": {
+        "$ref": "#/$defs/ReplaceTextEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Replaces the one occurrence of `old` in the document with `new`, and\nrefuses when `old` is empty, occurs nowhere, or occurs more than once."
+      },
+      "title": {
+        "scope": "space",
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "content",
+      "participantName",
+      "appendLine",
+      "prependLine",
+      "replaceText",
+      "$NAME",
+      "$UI",
+      "$TILE_UI"
+    ],
+    "type": "object"
+  }
+}

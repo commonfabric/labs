@@ -1,0 +1,18 @@
+diff --git a/packages/memory/v2/server.ts b/packages/memory/v2/server.ts
+--- a/packages/memory/v2/server.ts
++++ b/packages/memory/v2/server.ts
+@@ -4632,14 +4632,6 @@
+     try {
+       const startedAt = performance.now();
+       const engine = aclEngine ?? await this.#openEngine(message.space);
+-      // Resume shares watch containers until catch-up replaces them. Only the
+-      // current registry object may publish into those containers.
+-      if (this.#sessions.get(message.space, message.sessionId) !== session) {
+-        return respondTypedError<WatchAddResult>(
+-          message.requestId,
+-          toError("SessionError", "Unknown session for space"),
+-        );
+-      }
+       const nextOperationCursors = new StagedMap(session.operationCursors);
+       const existingById = new StagedMap(session.watchIndex);
+       const newWatches: WatchSpec[] = [];

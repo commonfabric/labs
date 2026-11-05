@@ -17,7 +17,7 @@ reference without a subpath selects the pattern's entry module. A reference
 with a subpath selects a module through the current immutable authored-program
 manifest's explicit exports map. The selected module identity is in the same
 namespace as the compile cache and `cf:module/<hash>`
-(`packages/runner/src/harness/module-identity.ts`), and that selected identity
+(`runtime/runner/src/harness/module-identity.ts`), and that selected identity
 is what deployed importers pin.
 
 There is deliberately **no type tag in the specifier** (`cf:piece/…` vs
@@ -57,10 +57,10 @@ general piece origin model is described in `../piece-source-lifecycle.md`.
 
 - **Reuse without copy-paste.** Today a pattern can import only its own files
   (`./`, `../`, `/`) and three allowlisted runtime modules
-  (`packages/runner/src/sandbox/runtime-module-policy.ts`). Sharing a schema or
+  (`runtime/runner/src/sandbox/runtime-module-policy.ts`). Sharing a schema or
   a sub-pattern across separately-deployed patterns means duplicating source.
 - **Typed reuse.** The `fetchProgram` builtin
-  (`packages/runner/src/builtins/fetch-program.ts`) fetches and compiles remote
+  (`runtime/runner/src/builtins/fetch-program.ts`) fetches and compiles remote
   programs at *runtime*, untyped at the call site. An import is compile-time:
   TypeScript checks the binding names and types against the real source.
 - **A publishing story built from naming and placement.** Pointing a slug at a
@@ -93,16 +93,16 @@ general piece origin model is described in `../piece-source-lifecycle.md`.
 
 | Piece of machinery | Where | Role here |
 |---|---|---|
-| `ProgramResolver` seam (`main()` / `resolveSource(specifier)`, async) | `packages/js-compiler/program.ts`, `typescript/resolver.ts` | The hook where fabric imports plug in; it discovers only the reachable closure and cannot enumerate unreachable authored files |
-| Authored-import policy | `packages/runner/src/sandbox/runtime-module-policy.ts` | Single dispatch point for `cf:` specifiers |
-| Per-module Merkle identity (source + deps; external deps fold the full specifier string into the leaf: `runtime:${specifier}@${fingerprint}`) | `computeModuleHashes` in `packages/runner/src/harness/module-identity.ts` | Makes pinned specifiers content-derived with **no hashing changes** (§ Snapshot semantics); the primitive includes type edges, but production engine paths currently remove authored `.d.ts` files before identity and persistence |
-| Piece → pattern pointer: `meta("patternIdentity")` = `{ identity, symbol }` (entry-module identity), the sole pointer post-`#4156` (a separate `meta("pattern")` survives only as a builtin parent-backlink) | write `applySetupState`, read `getPatternIdentityRef` in `packages/runner/src/runner.ts` | The terminal pointer hop for an entry import and the route to the retained manifest for a future subpath import |
-| Pattern source-of-truth: the `pattern:<identity>` source-doc closure (there is no longer a meta cell; the retired one's `program` was pure duplication of these docs) | `packages/runner/src/compilation-cache/cell-cache.ts` | Recovered via `getPatternSourceProgramByIdentity` / `loadVerifiedSourceClosure` |
-| Compile cache: source docs at cell key **`pattern:<identity>`**, compiled docs at `compileCache:<rtVersion>/<identity>`, each linking its `code` to a `cid:` code document hashed over the string | `packages/runner/src/compilation-cache/cell-cache.ts` (`sourceDocKey`/`compiledDocKey`, `codeLink`) | **The URI a pattern is saved under by hash.** Content-addressed per-module source + compiled storage; imports resolve from and dedupe into it, and identical module text is one code document per space |
-| Slug cells: generic **redirect link to any cell** (`setSlugLink` is target-agnostic; only `resolvePieceAddress` layers a "must be a piece" check) | `packages/piece/src/slugs.ts` | Slugs can name pieces *or* patterns today, mechanically |
-| Slug ids: `hashOf({causal:{space, slug}})`; slug grammar `[a-z0-9]+(-[a-z0-9]+)*`, ≤80 chars; **`isSlugAddress(t) = !t.includes(":")`** | `packages/runner/src/slugs.ts` | The existing slug-vs-URI discriminator the grammar reuses |
-| `loadPatternByIdentity(entryIdentity, symbol, space)` | `packages/runner/src/pattern-manager.ts` | Existing by-identity load path the resolver builds on |
-| Per-space host routing: `spaceHostMap` seeds routes, `registerSpaceHost` adds a route, and the home-space site table hydrates durable hints; foreign-host sessions are ordinary authenticated memory sessions | `packages/runner/src/storage/v2-remote-session.ts`, `packages/runner/src/storage/v2.ts`, and `packages/runtime-client/src/backends/runtime-processor.ts` | Reads work for a foreign space whose route is already known. A seeded route can only be confirmed. An unseeded default-host provider remains provisional until the first hint arrives or its session accepts a stateful operation. A different host cancels unfinished session setup, replaces the provisional replica, makes overlapping read-only callers use the hinted replica, and loads dependencies discovered from the hinted data. Transactions based on the old replica are rejected. A different-host hint conflicts after an ordinary or scheduler transaction, ACL setup transaction, or SQLite source registration is accepted for issue, even if its acknowledgment later fails. The first accepted late hint then remains stable. Seeds, live hints, and initial table hydration accept only an HTTP or HTTPS origin with no credentials, path, query, or fragment. Hydration selects the last accepted entry for each space without replacing a route already accepted through IPC. A conflicting table route accepted first makes later IPC registration fail. Historical lifecycle resolution can apply a host from an explicit `cf://` reference to the live runtime, but durable route persistence remains planned |
+| `ProgramResolver` seam (`main()` / `resolveSource(specifier)`, async) | `base/js-compiler/program.ts`, `typescript/resolver.ts` | The hook where fabric imports plug in; it discovers only the reachable closure and cannot enumerate unreachable authored files |
+| Authored-import policy | `runtime/runner/src/sandbox/runtime-module-policy.ts` | Single dispatch point for `cf:` specifiers |
+| Per-module Merkle identity (source + deps; external deps fold the full specifier string into the leaf: `runtime:${specifier}@${fingerprint}`) | `computeModuleHashes` in `runtime/runner/src/harness/module-identity.ts` | Makes pinned specifiers content-derived with **no hashing changes** (§ Snapshot semantics); the primitive includes type edges, but production engine paths currently remove authored `.d.ts` files before identity and persistence |
+| Piece → pattern pointer: `meta("patternIdentity")` = `{ identity, symbol }` (entry-module identity), the sole pointer post-`#4156` | write `applySetupState`, read `getPatternIdentityRef` in `runtime/runner/src/runner.ts` | The terminal pointer hop for an entry import and the route to the retained manifest for a future subpath import |
+| Pattern source-of-truth: the `pattern:<identity>` source-doc closure (there is no longer a meta cell; the retired one's `program` was pure duplication of these docs) | `runtime/runner/src/compilation-cache/cell-cache.ts` | Recovered via `getPatternSourceProgramByIdentity` / `loadVerifiedSourceClosure` |
+| Compile cache: source docs at cell key **`pattern:<identity>`**, compiled docs at `compileCache:<rtVersion>/<identity>`, each linking its `code` to a `cid:` code document hashed over the string | `runtime/runner/src/compilation-cache/cell-cache.ts` (`sourceDocKey`/`compiledDocKey`, `codeLink`) | **The URI a pattern is saved under by hash.** Content-addressed per-module source + compiled storage; imports resolve from and dedupe into it, and identical module text is one code document per space |
+| Slug cells: generic **redirect link to any cell** (`setSlugLink` is target-agnostic; only `resolvePieceAddress` layers a "must be a piece" check) | `runtime/piece/src/slugs.ts` | Slugs can name pieces *or* patterns today, mechanically |
+| Slug ids: `hashOf({causal:{space, slug}})`; slug grammar `[a-z0-9]+(-[a-z0-9]+)*`, ≤80 chars; **`isSlugAddress(t) = !t.includes(":")`** | `runtime/runner/src/slugs.ts` | The existing slug-vs-URI discriminator the grammar reuses |
+| `loadPatternByIdentity(entryIdentity, symbol, space)` | `runtime/runner/src/pattern-manager.ts` | Existing by-identity load path the resolver builds on |
+| Per-space host routing: `spaceHostMap` seeds routes, `registerSpaceHost` adds a route, and the home-space site table hydrates durable hints; foreign-host sessions are ordinary authenticated memory sessions | `runtime/runner/src/storage/v2-remote-session.ts`, `runtime/runner/src/storage/v2.ts`, and `runtime/runtime-client/src/backends/runtime-processor.ts` | Reads work for a foreign space whose route is already known. A seeded route can only be confirmed. An unseeded default-host provider remains provisional until the first hint arrives or its session accepts a stateful operation. A different host cancels unfinished session setup, replaces the provisional replica, makes overlapping read-only callers use the hinted replica, and loads dependencies discovered from the hinted data. Transactions based on the old replica are rejected. A different-host hint conflicts after an ordinary or scheduler transaction, ACL setup transaction, or SQLite source registration is accepted for issue, even if its acknowledgment later fails. The first accepted late hint then remains stable. Seeds, live hints, and initial table hydration accept only an HTTP or HTTPS origin with no credentials, path, query, or fragment. Hydration selects the last accepted entry for each space without replacing a route already accepted through IPC. A conflicting table route accepted first makes later IPC registration fail. Historical lifecycle resolution can apply a host from an explicit `cf://` reference to the live runtime, but durable route persistence remains planned |
 
 ### The two "pattern by hash" handles, explicitly
 
@@ -110,7 +110,7 @@ Because both come up, and only one is the pin:
 
 - **`of:fid1:<hash>`** — the entity URI of a **cell that carries a pattern
   pointer** (a piece result cell), `toURI(createRef(...))`
-  (`toURI`, `packages/runner/src/uri-utils.ts`). A *causal* ref: resolvable (it's a
+  (`toURI`, `runtime/runner/src/uri-utils.ts`). A *causal* ref: resolvable (it's a
   cell address) but not re-hash-verifiable from fetched content alone. Usable as
   a reference *starting point* (the chase reads its `patternIdentity`); never
   the pin.
@@ -135,8 +135,8 @@ separate fields:
   "symbol": "default",
   "source": {
     "ref": "cf:pattern:<prefix-free-entry-module-hash>",
-    "repository": "https://github.com/commontoolsinc/labs",
-    "entry": "/packages/patterns/annotation.tsx",
+    "repository": "https://github.com/commonfabric/labs",
+    "entry": "/patterns/apps/annotation/annotation.tsx",
     "origin": "cf:/did:key:z6Mk.../annotation"
   }
 }
@@ -178,12 +178,10 @@ separate fields:
   place be checked again?"; `source.ref` answers "which exact bytes are
   running?"
 
-`cf piece new`, `cf piece setsrc`, and custom `cf space set-home` accept
-`--repository <locator>` alongside `--root`. `new` and custom `set-home` stamp
-the locator on the new piece. `setsrc` replaces it when the flag is present and
-preserves the existing locator when the flag is omitted. `set-home --reset`
-rejects the flag because the system pattern was not deployed from the caller's
-repository. No Git remote or revision is inferred automatically.
+`cf piece new` and `cf piece setsrc` accept `--repository <locator>` alongside
+`--root`. `new` stamps the locator on the new piece. `setsrc` replaces it when
+the flag is present and preserves the existing locator when the flag is
+omitted. No Git remote or revision is inferred automatically.
 
 The same three local deployment commands accept a repeatable
 `--test <path>` flag. When `--root` is omitted, the CLI uses the common
@@ -196,8 +194,7 @@ execute it. Repeat the complete set of `--test` flags on every `setsrc` because
 each update defines a complete source revision.
 The source-document cache retains the test roots through its synthetic
 retention links. Source recovery and `cf piece getsrc` therefore return the
-executable source and its attached tests together. `set-home --reset` rejects
-`--test` because a reset deploys no local source package.
+executable source and its attached tests together.
 
 Attached test entry points participate in the deployed source revision's
 identity without becoming runtime imports. Changing, adding, or removing a test
@@ -230,14 +227,17 @@ as `/data/cities.json`.
 
 Attached data files participate in the deployed source revision's identity, on
 the same footing as attached test entry points and through the same kind of
-identity-only edge from the entry module. Changing, adding, or removing a data
-file therefore creates a distinct revision even when the executable source is
-unchanged, and each revision stays independently recoverable with its own
-bytes. Source recovery and `cf piece getsrc` return the executable source, its
-attached tests, and its data files together, and report which files are data.
+identity-only edge. The edge leaves from the module whose `dataFile()` call
+names the file, so a sub-pattern that reads its own data carries that data in
+its own identity and reaches it when loaded by that identity. The edge for a
+file no module names, such as one read by a computed path, leaves from the
+entry module. Changing, adding, or removing a data file therefore creates a
+distinct revision even when the executable source is unchanged, and each
+revision stays independently recoverable with its own bytes. Source recovery
+and `cf piece getsrc` return the executable source, its attached tests, and
+its data files together, and report which files are data.
 Repeat the complete set of `--datafile` flags on every `setsrc` because each
-update defines a complete source revision. `set-home --reset` rejects
-`--datafile` because a reset deploys no local source package.
+update defines a complete source revision.
 
 A pattern reads an attached data file with `dataFile(path)` from
 `commonfabric`. The path resolves against the module that reads it, as an
@@ -326,15 +326,15 @@ ref     = slug                ; no ":" — isSlugAddress convention
 space   = space-name | space-did ; parser shape; resolution currently requires a DID
 host    = domain[":"port]     ; a toolshed
 pin     = "@" hash            ; selected module identity
-hash    = 43 base64url chars  ; hashStringOf/hashOf output (value-hash.ts):
+hash    = 43 base64url chars  ; hashStringOf/hashOf output (value-hash/):
                               ; [A-Za-z0-9_-], case-SENSITIVE, no padding —
                               ; e.g. Avcny13Rj8q-2ClANy_-k0ikWWQcXx7QTdsiqGfrC1c
 ```
 
 (Hashes are **not** hex: `hashStringOf` emits unprefixed base64url
-(`packages/data-model/src/value-hash.ts`), and entity URIs carry the
-`fid1:` tag inside `of:` — `of:fid1:<hash>` is what `toURI` produces. The
-base64url alphabet contains no `/`, `@`, or `:`, so pin-splitting and
+(`base/data-model/src/value-hash/impl.ts`), and entity URIs
+carry the `fid1:` tag inside `of:` — `of:fid1:<hash>` is what `toURI` produces.
+The base64url alphabet contains no `/`, `@`, or `:`, so pin-splitting and
 segment-splitting stay unambiguous.)
 
 Examples:
@@ -401,7 +401,7 @@ resolve to a pattern", naming the chain followed). An unpinned subpath also
 fails when the target has no retained manifest or does not explicitly export
 that name. Each pointer hop is an ordinary cell read under the space's ordinary
 authorization. The entry-only chase matches the as-built resolver in
-`packages/runner/src/fabric-ref-resolution.ts`. Manifest-backed subpath
+`runtime/runner/src/fabric-ref-resolution.ts`. Manifest-backed subpath
 selection remains required work.
 
 ### Explicit public subpaths
@@ -445,13 +445,15 @@ Why this shape:
 - **Valid ESM specifier.** Schemes are legal in import specifiers; resolution
   is entirely ours via the `ProgramResolver`/compiler-host seam, and TypeScript
   is satisfied through the same mechanism that resolves `commonfabric` today
-  (`resolveModuleNameLiterals`, `packages/js-compiler/typescript/compiler.ts`).
+  (`resolveModuleNameLiterals`, `base/js-compiler/typescript/compiler.ts`).
 - **Its durable identifier forms follow the shell's URL shapes.** A mutable
   piece uses `cf:/<space-did>/of:fid1:<piece-id>`. An immutable pattern uses the
   space-free `cf:pattern:<identity>` form. Authored static imports may still use
   a slug because deployment pins its terminal content identity. A piece origin
   does not accept that slug-shaped form under the tentative direction in Open
-  question 1. Human-readable URL aliases belong in a separate shortlink layer.
+  question 1. Human-readable browser aliases belong to the dormant
+  [Common Fabric URLs](../fabric-urls.md) concept, outside this retained-source
+  layer; no alias resolver is planned for deployment.
 - **Publication = naming.** `slug → a cell carrying patternIdentity` (a piece,
   or a published-pointer cell) in a readable space is the whole publish story;
   updating the slug is publishing a new version (dist-tag semantics). Pieces and
@@ -539,7 +541,7 @@ Mechanics:
 
 2. **The pinned hash folds into the importer's identity for free.** Module
    identity already hashes external deps as `runtime:${specifier}@${fingerprint}`
-   (`packages/runner/src/module-identity.ts`) — the specifier string contains
+   (`runtime/runner/src/module-identity.ts`) — the specifier string contains
    the pin, so
    two importers differing only in pin have different module identities, and
    transitively different program ids (`engine.ts:computeId` hashes the source
@@ -695,7 +697,7 @@ with storage and network access, and `ProgramResolver.resolveSource` is async)
 
 ### 1. Specifier parsing + policy
 
-- New `packages/runner/src/sandbox/fabric-import-specifier.ts`: parse/format
+- New `runtime/runner/src/sandbox/fabric-import-specifier.ts`: parse/format
   for the grammar above (host/space/ref/subpath/pin), reusing
   `isSlugAddress`/`validateSlug`.
 - `runtime-module-policy.ts`: `isAllowedAuthoredImportSpecifier` accepts
@@ -717,7 +719,7 @@ Engine wraps the authored resolver; on a `cf:` specifier:
    - An unpinned entry reference runs the uniform chase **as ordinary cell
      reads through the compiling runtime's storage** (slug cell redirect → the
      piece's `patternIdentity`). `cf check` constructs a runtime
-     (`packages/cli/lib/dev.ts`), and every production compile happens inside
+     (`runtime/cli/lib/dev.ts`), and every production compile happens inside
      one, so space authorization is exactly memory-read authorization.
    - In M4, an unpinned subpath continues from the mutable target to its current
      source revision and immutable manifest. It performs an exact exports-map
@@ -738,7 +740,7 @@ Engine wraps the authored resolver; on a `cf:` specifier:
    TS program under a reserved prefix such as
    `/~cf/<identity>/<original-path>`. Thread a
    specifier-to-mounted-module alias map into the compiler so
-   `resolveModuleNameLiterals` (`packages/js-compiler/typescript/compiler.ts`)
+   `resolveModuleNameLiterals` (`base/js-compiler/typescript/compiler.ts`)
    maps the `cf:` specifier to
    the mounted file. Relative imports inside the subtree resolve as ordinary
    path joins.
@@ -784,11 +786,24 @@ provenance-relevant flow flagged under § Security.
 A runtime is no longer bound to one memory host. `spaceHostMap` seeds known
 routes when storage is constructed. `registerSpaceHost` can register the first
 later hint even when an unseeded space already opened provisionally through the
-default host. These routes contain only an HTTP or HTTPS origin. The home-space
-site table hydrates durable hints into a new runtime. A foreign-host connection
-is an ordinary authenticated memory session. These mechanisms remain interim.
-This design depends only on the property that a space's cells are readable
-wherever the space lives, not on the current map or site-table shape.
+default host. `registerSpaceHostDetailed` applies the same rules and returns the
+reason for a refusal: `known-different-host`, with the host a seed or an
+accepted hint already fixed; `default-route-in-use`, when the space issued a
+stateful operation through the default host: that route stays fixed for the
+session, and the refusal says nothing against the offered host;
+`no-remote-resolution`, from storage that resolves no per-space host;
+`foreign-host-unresolved`, `foreign-host-unread` and `foreign-host-limit`, from
+a runtime whose deployment publishes a memory URL and that has not yet read,
+could not read, or keeps too many origins to read where the hinted deployment
+serves Memory; and `unspecified`, from storage that gives a verdict alone.
+`resolveSpaceHost` reads that first (`/api/meta` on the hinted origin, once per
+origin) and then applies the same rules, so a caller that can wait never sees
+`foreign-host-unresolved`. A host that is not valid throws from all three
+methods. These routes contain only an HTTP or HTTPS origin. The home-space site
+table hydrates durable hints into a new runtime. A foreign-host connection is an
+ordinary authenticated memory session. These mechanisms remain interim. This
+design depends only on the property that a space's cells are readable wherever
+the space lives, not on the current map or site-table shape.
 
 Once a route is in effect, a `cf://host/space/ref` reference resolves exactly
 like a local one. Slug chase, piece metadata, and `pattern:<identity>` source
@@ -1087,7 +1102,7 @@ unchanged.
 
 ## Open questions
 
-1. **Identifier-only durable URLs and future shortlinks, tentative.** The
+1. **Identifier-only durable source URLs.** The
    current resolver rejects a name in the space position. The tentative
    direction is to preserve that boundary rather than add name-to-DID
    resolution to the fabric URL grammar. A durable piece-origin URL uses the
@@ -1099,12 +1114,14 @@ unchanged.
    the space-free content identity. The piece-origin validator rejects a
    slug-shaped or root-only fabric reference, including a pinned slug. Existing
    authored import aliases remain a separate case because deployment pins their
-   terminal content identity into source. A UI or future shortlink service may
-   map a custom string to a canonical identifier URL before the lifecycle sees
-   it. The shortlink is not itself the durable origin or a repoint target.
-   Further study must settle whether spaces should eventually have FIDs rather
-   than DIDs, shortlink ownership and reassignment, and whether supplied aliases
-   receive separate optional provenance metadata.
+   terminal content identity into source. Under the dormant
+   [Common Fabric URLs](../fabric-urls.md) concept, a UI could resolve a
+   registered browser name before the lifecycle sees the resulting DID. No such
+   resolver is planned for deployment. The registered name would not itself be
+   the durable origin or a repoint target. Further study must settle whether
+   spaces should
+   eventually have FIDs rather than DIDs and whether supplied aliases receive
+   separate optional provenance metadata.
 2. **Slug-cell typing.** The uniform chase duck-types its hops (a
    `patternIdentity` meta present ⇒ a pattern-bearing cell). Good enough, or
    should slug assignment stamp an explicit kind on the slug cell for better
@@ -1123,6 +1140,10 @@ unchanged.
    are authenticated, how stale site-table entries are replaced, whether
    failover is allowed, and how an open session closes and reconnects without
    losing or duplicating work after a seed or hint has made the route explicit.
+   The dormant
+   [Common Fabric URLs](../fabric-urls.md#moving-a-space-between-asps) concept
+   proposes a browser-level ASP handoff and old-ASP redirect. The
+   storage-session work remains separate.
 
 ### One way to build a local program
 

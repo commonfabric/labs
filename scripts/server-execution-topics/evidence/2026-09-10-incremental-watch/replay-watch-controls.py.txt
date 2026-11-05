@@ -1,0 +1,17 @@
+from pathlib import Path
+import subprocess,json,hashlib,datetime
+root=Path('/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09'); source=Path('/Users/berni/.codex/worktrees/topics-campaign-watch/labs'); evidence=source/'tools/server-execution-topics/evidence/2026-09-10-incremental-watch'; checkout=Path('/Users/berni/.codex/worktrees/topics-campaign-watch-controls/labs');out=root/'runs/watch-replay-controls-01';out.mkdir()
+head='27f10d2d4f02f125c0492e5d6288acb3f0da148b';assert not checkout.exists()
+subprocess.run(['git','worktree','add','--detach',str(checkout),head],cwd=source,check=True,stdout=subprocess.DEVNULL)
+subprocess.run(['git','apply',str(evidence/'controls/candidate.patch')],cwd=checkout,check=True)
+rows=[];manifest={'base':head,'checkout':str(checkout),'candidatePatchSha256':hashlib.sha256((evidence/'controls/candidate.patch').read_bytes()).hexdigest(),'runs':rows}
+for name,patch,signature in [('green',None,None),('cursor-red','unpin-cursors.patch','operation field query cursor is in the future'),('resume-red','allow-stale-session.patch','leaves a resumed session unchanged when an earlier addition completes')]:
+ if patch:subprocess.run(['git','apply',str(evidence/'controls'/patch)],cwd=checkout,check=True)
+ cmd=['deno','test','-A','packages/memory/test/v2-watch-incremental.test.ts'];log=out/(name+'.log');row={'name':name,'command':cmd,'startedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'mutation':patch};rows.append(row)
+ with log.open('w') as f:r=subprocess.run(cmd,cwd=checkout,stdout=f,stderr=subprocess.STDOUT)
+ row.update(exitCode=r.returncode,endedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(),log=log.name,sha256=hashlib.sha256(log.read_bytes()).hexdigest())
+ (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+ if patch:subprocess.run(['git','apply','--reverse',str(evidence/'controls'/patch)],cwd=checkout,check=True)
+ assert r.returncode==(1 if patch else 0),(name,r.returncode)
+ if signature:assert signature in log.read_text(),name
+ print(name,r.returncode,flush=True)

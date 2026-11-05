@@ -1,0 +1,12 @@
+{"name":"baseline","fallback":false,"flag":"unset","expected":false,"passed":false,"error":"AssertionError: Values are not strictly equal.\n\n\n    [Diff] Actual / Expected\n\n\n-   undefined\n+   false\n"}
+{"name":"baseline","fallback":false,"flag":"false","expected":false,"value":false,"passed":true}
+{"name":"baseline","fallback":false,"flag":"true","expected":true,"value":true,"passed":true}
+{"name":"baseline","fallback":true,"flag":"unset","expected":true,"passed":false,"error":"AssertionError: Values are not strictly equal.\n\n\n    [Diff] Actual / Expected\n\n\n-   undefined\n+   false\n"}
+{"name":"baseline","fallback":true,"flag":"false","expected":false,"value":false,"passed":true}
+{"name":"baseline","fallback":true,"flag":"true","expected":true,"value":true,"passed":true}
+{"name":"candidate","fallback":false,"flag":"unset","expected":false,"value":false,"passed":true}
+{"name":"candidate","fallback":false,"flag":"false","expected":false,"value":false,"passed":true}
+{"name":"candidate","fallback":false,"flag":"true","expected":true,"value":true,"passed":true}
+{"name":"candidate","fallback":true,"flag":"unset","expected":true,"value":true,"passed":true}
+{"name":"candidate","fallback":true,"flag":"false","expected":false,"value":false,"passed":true}
+{"name":"candidate","fallback":true,"flag":"true","expected":true,"value":true,"passed":true}

@@ -142,6 +142,13 @@ For collection operators:
 
 The compiler must not accidentally mix these models for the same operator site.
 
+For `groupBy` and `keyBy`, lowering must distinguish a selector's returned Cell
+identity from a returned primitive value before serialization can erase that
+distinction. Reading a primitive field to select a key establishes a dependency
+on that field; selecting a Cell identity establishes no dependency on its stored
+contents. Nullish selected keys omit the source occurrence. Key extraction and
+membership publication retain the original source occurrence address.
+
 ## 3.6 Chain Ownership Must Be Single-Owner
 
 Receiver chains must have one coherent owner:

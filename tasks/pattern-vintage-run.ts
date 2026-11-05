@@ -11,25 +11,28 @@
  */
 
 import { exists } from "@std/fs";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { FragmentWriter } from "@commonfabric/test-support/records";
 import type { Identity } from "@commonfabric/identity";
-import { runTestPattern } from "../packages/cli/lib/test-runner.ts";
+import { runTestPattern } from "../runtime/cli/lib/test-runner.ts";
 import {
   AUTO,
   autoGenerationsToPrune,
   collectVintages,
-  describeError,
   hoistSupersessionReason,
   newestAutoGeneration,
   patternKeyFromMain,
   PINNED,
+  programAsRecorded,
   promoteVintage,
   relativeToRepo,
   removeVintages,
   type ReplayFailure,
+  replayFilterTakes,
   stampFor,
   vintageFileName,
+  vintageRecordName,
   type VintageRef,
 } from "./pattern-vintage-lib.ts";
 import {
@@ -47,13 +50,15 @@ import {
   vintageRootCause,
   vintageRootHasState,
   writeVintageManifest,
-} from "../packages/piece/test/state-continuity-harness.ts";
-import { vintageCompanionDir } from "../packages/piece/test/vintage-layout.ts";
+} from "../runtime/piece/test/state-continuity-harness.ts";
+import { vintageCompanionDir } from "../runtime/piece/test/vintage-layout.ts";
 import {
   acceptedDropKey,
   acceptedDropsFor,
+  type AcceptedStateDrop,
   withoutAcceptedDrops,
 } from "./pattern-vintage-accepted-drops.ts";
+import { derivedCorrectionsFor } from "./pattern-vintage-derived-corrections.ts";
 
 export interface GateRoots {
   /** Repo root, used only to shorten paths in reports. */
@@ -67,6 +72,17 @@ export interface GateRoots {
 
   /** Signer every capture and replay runs as. */
   signer: Identity;
+}
+
+/** What a replay reads beyond the tree it is pointed at. */
+export interface ReplayOptions {
+  /**
+   * Removals the state comparison forgives, defaulting to the repository's
+   * own `ACCEPTED_STATE_DROPS`. A test supplies its own list so that a case
+   * about the accounting is written against a pattern it wrote, rather than
+   * against whichever entries the repository's list holds today.
+   */
+  acceptedDrops?: readonly AcceptedStateDrop[];
 }
 
 async function withRuntime<T>(
@@ -326,6 +342,7 @@ export interface ReplayReport {
 export async function replayVintage(
   roots: GateRoots,
   vintage: VintageRef,
+  options: ReplayOptions = {},
 ): Promise<ReplayReport> {
   const where = {
     testKey: vintage.testKey,
@@ -377,6 +394,7 @@ export async function replayVintage(
     }/ deliberately, then \`deno task pattern-vintage --update ` +
     `${vintage.testKey}\``;
 
+  const corrections = await derivedCorrectionsFor(vintage, roots.repoRoot);
   return await withRuntime(roots, vintage.path, async (runtimeVintage) => {
     // The control, before anything is applied. A fixture that did not restore
     // presents as a fresh empty space, and today's source materializes onto a
@@ -587,7 +605,7 @@ export async function replayVintage(
 
     for (const entry of targets) {
       // A recorded `main` is either a repo path or the ROUTE the toolshed
-      // serves the pattern at; both name a file under `packages/patterns/`.
+      // serves the pattern at; both name a file under `patterns/`.
       const key = patternKeyFromMain(entry.main, patternsPrefix(roots));
       // RECORDED before any skip, including the presence control below. The
       // manifest names this pattern whatever happens next, and that is what
@@ -614,16 +632,20 @@ export async function replayVintage(
       const source = `${roots.patternsRoot}/${key}`;
       let program;
       try {
-        program = await resolveLocalProgram(
-          (r) => runtimeVintage.runtime.harness.resolve(r),
-          { main: source, root: roots.repoRoot },
+        program = programAsRecorded(
+          await resolveLocalProgram(
+            (r) => runtimeVintage.runtime.harness.resolve(r),
+            { main: source, root: roots.repoRoot },
+          ),
+          entry.main,
+          patternsPrefix(roots),
         );
       } catch (error) {
         report.failures.push({
           ...where,
           detail:
             `${entry.main} no longer resolves: ${
-              describeError(error)
+              describeFailure(error)
             }. If it moved deliberately, the fixture records a path that is no ` +
             `longer there: ${remedy}`,
         });
@@ -657,13 +679,13 @@ export async function replayVintage(
         report.failures.push({
           ...where,
           detail: `${entry.main} no longer compiles: ${
-            describeError(error)
+            describeFailure(error)
           }. Fix the source; if it was removed deliberately, ${remedy}`,
         });
         continue;
       }
       // A pattern loaded BY URL compiles to a different identity than the same
-      // file compiled locally — measured, `system/profile-create.tsx` records
+      // file compiled locally — measured, `system/profile-create/profile-create.tsx` records
       // `T-01iegivM23Be` when served and `B_VWt7zYJWHbCS` from the repo. So an
       // identity comparison would call it changed on every run forever, and
       // "changed" would stop meaning anything for it. Counted and reported
@@ -839,7 +861,11 @@ export async function replayVintage(
         // schema `before` came from: an asymmetric strip would measure the
         // stripping. `applied` is counted from the vintage's side only, since
         // that is where "the vintage held it" is a fact.
-        const drops = acceptedDropsFor(entry.main ?? "", vintage.stamp);
+        const drops = acceptedDropsFor(
+          entry.main ?? "",
+          vintage.stamp,
+          options.acceptedDrops,
+        );
         const paths = drops?.paths ?? new Set<string>();
         const keptBefore = withoutAcceptedDrops(before, paths, isReduction);
         const keptAfter = withoutAcceptedDrops(after, paths, isReduction);
@@ -848,10 +874,11 @@ export async function replayVintage(
             report.dropsApplied.add(acceptedDropKey(drops.pattern, path));
           }
         }
-        const findings = strandedKeys(
+        const rawFindings = strandedKeys(
           keptBefore.value as Record<string, unknown>,
           keptAfter.value,
         );
+        const findings = corrections?.grade(entry, rawFindings) ?? rawFindings;
         const describe = (finding: typeof findings[number]) =>
           `${finding.key} (was ${snippet(finding.before)}, now ${
             snippet(finding.after)
@@ -911,12 +938,19 @@ export async function replayVintage(
       // materialized and compared; any finding above has already been reported.
       if (!servedRoute) report.updated++;
     }
+    for (const cellId of corrections?.unused() ?? []) {
+      report.failures.push({
+        ...where,
+        detail: `approved derived-state correction for ${cellId} was unused; ` +
+          "remove or re-evaluate its decision",
+      });
+    }
     return report;
   });
 }
 
 /** How `replayAll` reports what it walked. */
-export interface ReplayAllOptions {
+export interface ReplayAllOptions extends ReplayOptions {
   /**
    * Spool one gate record per fixture replayed.
    *
@@ -926,6 +960,17 @@ export interface ReplayAllOptions {
    * own, and a fixture is data rather than a test of this repository.
    */
   recordResults?: boolean;
+
+  /**
+   * The fixtures to replay, as terms matched against each fixture's
+   * repository-relative path. When absent or empty, every fixture replays.
+   *
+   * Each fixture's replay restores its own store, drives its own roots, and
+   * compares against its own manifest, so its result is the same whether or not
+   * other fixtures replay. A caller that filters the fixtures cannot make the
+   * checks that need every fixture replayed.
+   */
+  only?: readonly string[];
 }
 
 /**
@@ -998,7 +1043,10 @@ export async function replayAll(
     failures: ReplayFailure[];
   }
 > {
-  const vintages = await collectVintages(roots.vintagesRoot);
+  const vintages = (await collectVintages(roots.vintagesRoot))
+    .filter((vintage) =>
+      replayFilterTakes(vintage.path, roots.repoRoot, options.only ?? [])
+    );
   const perVintage: VintageOutcome[] = [];
   const covered = new Set<string>();
   const coveredBy = new Map<string, VintageAttribution>();
@@ -1021,14 +1069,13 @@ export async function replayAll(
     : undefined;
   for (const vintage of vintages) {
     const replayStarted = performance.now();
-    const report = await replayVintage(roots, vintage);
+    const report = await replayVintage(roots, vintage, options);
     recordsFragment?.append({
       line: "record",
       test: {
         k: "gate",
         s: "repo",
-        n: `pattern-vintage ${vintage.testKey} ${vintage.tier} ` +
-          vintage.stamp,
+        n: vintageRecordName(vintage),
       },
       outcome: report.failures.length > 0 ? "fail" : "pass",
       durationMs: Math.round(performance.now() - replayStarted),
@@ -1048,7 +1095,9 @@ export async function replayAll(
     servedRoute += report.servedRoute;
     for (const key of report.covered) covered.add(key);
     for (const key of report.dropsApplied) dropsApplied.add(key);
-    capturesSuperseded.push(...report.capturesSuperseded);
+    for (const capture of report.capturesSuperseded) {
+      capturesSuperseded.push(capture);
+    }
     for (const key of report.recorded) {
       // From `recorded`, NOT `covered`: a pattern that was credited needs no
       // attribution, because it never reaches an uncovered report. The one
@@ -1066,7 +1115,7 @@ export async function replayAll(
         coveredBy.set(key, { testKey: vintage.testKey, pinned });
       }
     }
-    failures.push(...report.failures);
+    for (const failure of report.failures) failures.push(failure);
   }
   recordsFragment?.close();
   return {
@@ -1100,9 +1149,9 @@ export function testPathFor(roots: GateRoots, testKey: string): string {
  * Keyed by the TEST, not by a pattern. The earlier shape went the other way —
  * take a pattern key and derive `<pattern>.test.tsx` — which only works where a
  * test is named after the single pattern it drives. Measured, that holds for 91
- * of 120 tests in `packages/patterns` and not for the interesting ones:
- * `topics/main.tsx` is tested by `topics/topics.test.tsx`, and
- * `lunch-poll/multi-user.test.tsx` drives several patterns and is named after
+ * of 120 tests in `patterns` and not for the interesting ones:
+ * `apps/topics/main.tsx` is tested by `apps/topics/topics.test.tsx`, and
+ * `apps/lunch-poll/multi-user.test.tsx` drives several patterns and is named after
  * none of them.
  *
  * Running the test and recording what it instantiates needs no naming
@@ -1216,12 +1265,12 @@ export async function captureVintage(
     // session-only by construction and can never be an update target, which is
     // exactly why `isUpgradeTarget` already rejects it. Refusing a whole
     // capture because one appeared would block any test that builds a pattern
-    // in hand; `topics/topics.test.tsx` has six.
+    // in hand; `apps/topics/topics.test.tsx` has six.
     // Asked with the SAME question the replay asks — `patternKeyFromMain` —
     // rather than the weaker "starts with a slash". The two disagreeing is the
     // defect this capture guard exists to prevent, and it had drifted back in
-    // on a new axis: a pattern instantiated from outside `packages/patterns/`
-    // (a `/packages/home-schemas/...` path) satisfied the slash test, captured
+    // on a new axis: a pattern instantiated from outside `patterns/`
+    // (a `/base/home-schemas/...` path) satisfied the slash test, captured
     // fine, and then hard-failed EVERY replay with "neither a repo path nor a
     // served pattern route". A capture the gate accepts must be a replay it
     // accepts.
@@ -1327,7 +1376,7 @@ export async function captureMissing(
       // Report every failure rather than dying on the first: a run that
       // captures 9 of 10 and then throws leaves the tree half-seeded with no
       // statement about which one is the problem.
-      problems.push(`  ${key}: ${describeError(error)}`);
+      problems.push(`  ${key}: ${describeFailure(error)}`);
     }
   }
   return { captured, problems };
@@ -1412,7 +1461,7 @@ export async function captureChangedGenerations(
       kind: "captured",
       captured,
       pruned,
-      problems: [...problems, `  retention: ${describeError(error)}`],
+      problems: [...problems, `  retention: ${describeFailure(error)}`],
     };
   }
   return { kind: "captured", captured, pruned, problems };
@@ -1454,7 +1503,7 @@ export async function pinNewestGeneration(
     return {
       kind: "failed",
       from: newest.path,
-      detail: describeError(error),
+      detail: describeFailure(error),
     };
   }
 }
@@ -1485,7 +1534,7 @@ export async function captureGenerations(
     try {
       captured.push(await captureVintage(roots, key, now, AUTO));
     } catch (error) {
-      problems.push(`  ${key}: ${describeError(error)}`);
+      problems.push(`  ${key}: ${describeFailure(error)}`);
     }
   }
   return { captured, problems };

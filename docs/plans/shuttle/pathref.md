@@ -16,11 +16,11 @@ and hand the place to someone else.
 A cell reference cannot say where they are. It names one cell and a position
 inside it — space, piece, document, path, resolved in a single dereference,
 which is what makes it canonical and shareable. (The cell reference grammar is
-a decision record proposed in #6814, not yet in the tree; this document takes
-its decisions as read and cites them by number.) It has one
-document slot because one is enough for an address: reaching a second
-document's contents is two dereferences, and an address describes the
-destination of the last one.
+recorded in
+[`cell-reference-grammar.md`](../../specs/cell-reference-grammar.md), and this
+document cites its decisions by number.) It has one document slot because one is
+enough for an address: reaching a second document's contents is two
+dereferences, and an address describes the destination of the last one.
 
 A route is the other thing. It is how the destination was reached, and it is
 not recoverable from the destination.
@@ -82,7 +82,7 @@ which shuttle spells two today:
 | --- | --- | --- |
 | Descend | a key within the current document | `items/0/title` |
 | Cross | follow a link a field holds, into the position it names | — |
-| Enter | the current cell's other document | `#argument`, but only as a suffix on a piece segment |
+| Enter | the current cell's other document | `#argument`, but only as a member on a piece segment or a relative head |
 
 Descending is what `cd items/0` does now. Crossing is the new act. Entering
 exists in the reference grammar and cannot recur there, because an address has
@@ -113,18 +113,18 @@ a slug and is what distinguishes this form from an address.
 ### 2. How does the document axis recur?
 
 After crossing into a cell, `#argument` has to mean *that* cell's arguments.
-The reference grammar puts the member on a piece segment, before the path, and
-parses `#` nowhere else — which is what keeps `#` ordinary data in a path.
+The reference grammar puts the member on a piece segment or a relative head,
+before the path. In subsequent path segments, `#` is ordinary key data.
 
 Two spellings, and both cost something:
 
 - **As a path segment**, `owner/#argument/theme`. Reads in walking order and
   needs no new character. It respells `#`, which the reference grammar reserves
-  on the piece segment only, so a path reference and a cell reference would
-  read `#` differently in the same position.
+  on the piece segment or relative head, so a path reference and a cell
+  reference would read `#` differently in the same position.
 - **As a suffix on the crossing that produced the cell**,
   `owner#argument/theme`. Keeps `#` on the segment that names a cell,
-  matching the reference grammar's rule exactly, and reads as "the
+  using the reference grammar's member suffix, and reads as "the
   arguments of what `owner` points at".
 
 **Ruled the suffix.** It preserves one meaning per character across both
@@ -187,10 +187,10 @@ walking and for saying where you are while you walk.
 Three couplings are worth stating so they are not discovered later:
 
 - **The renderer.** `renderPosition` is the single function in shuttle that
-  composes a reference, and what it writes is described in
-  [`grammar.md`](grammar.md) with the migration that reaches it. A route's
-  rendering must go through the same seam rather than compose its own, or the
-  two forms drift and that migration has two places to visit instead of one.
+  hands a position to the shared renderer, `renderCellReference`, and what it
+  writes is described in [`grammar.md`](grammar.md). A route's rendering must
+  go through the same seam rather than compose its own, or the two forms
+  drift.
 - **The round trip.** The property that every name a listing prints is one `cd`
   takes back to that row must extend over routes, not just addresses. It is the
   test that would prove a route's spelling correct, and it exists already.

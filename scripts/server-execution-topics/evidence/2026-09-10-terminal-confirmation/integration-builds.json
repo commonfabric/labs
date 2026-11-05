@@ -1,0 +1,52 @@
+{
+  "date": "2026-09-10T10:38:30.449123+00:00",
+  "base": "8814af62a7ddfd50262f3f2f98421f66519a3c95",
+  "buildRoot": "../../../..",
+  "posture": "uncommitted recommendation 1 patch over PR B head; metadata names base, production hashes identify compiled source",
+  "productionFiles": {
+    "packages/runner/src/ensure-piece-running.ts": "b5182c85ac22e8b4df131be48d175f08e81e3ee6924a74df3214eac52f8a714b",
+    "packages/runner/src/executor/space-server.ts": "56576a17f3ad711970eb890efa067c4ad48723842281b6a0e0b7b09efabce81e",
+    "packages/runner/src/executor/stats.ts": "98eb0312c0dd1fffc87c3bfa168db8ab33aaf1c41210fc29402c31b48457b2fb",
+    "packages/runner/src/storage/interface.ts": "cdaf2575c0c88a030376dabc151a71079d08ec6d89eb5187eae41e6bf3447fef"
+  },
+  "binaries": [
+    {
+      "role": "default",
+      "path": ".ci-cache/binaries/toolshed-baked-default",
+      "sha256": "a067745807ab5007310308ef2abcf5205ad7e321a0a2b7b833f122b026d6b6f4",
+      "command": [
+        "env",
+        "-u",
+        "EXPERIMENTAL_SERVER_EXECUTION",
+        "COMMIT_SHA=8814af62a7ddfd50262f3f2f98421f66519a3c95",
+        "deno",
+        "task",
+        "build-binaries",
+        "toolshed"
+      ],
+      "archive": {
+        "path": ".ci-cache/binaries/toolshed-baked-default.gz",
+        "sha256": "679efb848e10f4f34d93435c1f1e81e7b9db3efd7df1a1ed183976df7678c04b",
+        "bytes": 248359823,
+        "decompressedSha256Verified": true
+      }
+    },
+    {
+      "role": "opposite",
+      "path": ".ci-cache/binaries/toolshed-baked-opposite",
+      "sha256": "5ac5498b678ca9f1afe6ed3ade4258b40dfeb5f22182f3137a7d92905791b3d4",
+      "command": [
+        "env",
+        "EXPERIMENTAL_SERVER_EXECUTION=true",
+        "COMMIT_SHA=8814af62a7ddfd50262f3f2f98421f66519a3c95",
+        "deno",
+        "task",
+        "build-binaries",
+        "toolshed"
+      ]
+    }
+  ],
+  "artifactRoot": ".",
+  "pathBasis": "buildRoot is relative to this evidence directory; binary paths are relative to buildRoot",
+  "captureProvenance": "recorded-source/integration-builds.json"
+}

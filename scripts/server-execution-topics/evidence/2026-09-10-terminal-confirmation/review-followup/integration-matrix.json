@@ -1,0 +1,56 @@
+{
+  "head": "0c7a1bd950c88fadb10d109f89c5a306442fed9d",
+  "patch": "review-followup.patch",
+  "rows": [
+    {
+      "role": "default",
+      "started": "2026-09-10T17:48:56.944420+00:00",
+      "parentFlag": "true",
+      "command": [
+        "deno",
+        "run",
+        "-A",
+        "tools/server-execution-topics/run-arm.ts",
+        "default",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/terminal-review-integration-off",
+        "correctness",
+        "test",
+        "--no-check",
+        "-A",
+        "packages/patterns/integration/topic-board-fixture.test.ts",
+        "packages/patterns/integration/topic-board-child-contract.test.ts",
+        "packages/patterns/integration/topic-create-onscreen.test.ts",
+        "packages/patterns/integration/sx2-events.test.ts",
+        "packages/patterns/integration/lunch-poll-vote.test.ts",
+        "packages/patterns/integration/cfc-group-chat-chained-event-gate-multi-runtime.test.ts"
+      ],
+      "exitCode": 0,
+      "ended": "2026-09-10T17:49:46.449097+00:00"
+    },
+    {
+      "role": "opposite",
+      "started": "2026-09-10T17:49:46.449559+00:00",
+      "parentFlag": "false",
+      "command": [
+        "deno",
+        "run",
+        "-A",
+        "tools/server-execution-topics/run-arm.ts",
+        "opposite",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/terminal-review-integration-on",
+        "correctness",
+        "test",
+        "--no-check",
+        "-A",
+        "packages/patterns/integration/topic-board-fixture.test.ts",
+        "packages/patterns/integration/topic-board-child-contract.test.ts",
+        "packages/patterns/integration/topic-create-onscreen.test.ts",
+        "packages/patterns/integration/sx2-events.test.ts",
+        "packages/patterns/integration/lunch-poll-vote.test.ts",
+        "packages/patterns/integration/cfc-group-chat-chained-event-gate-multi-runtime.test.ts"
+      ],
+      "exitCode": 0,
+      "ended": "2026-09-10T17:52:23.196690+00:00"
+    }
+  ]
+}

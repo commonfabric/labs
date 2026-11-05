@@ -1,0 +1,30 @@
+{
+  "head": "3aee034aff7672391bf037a4eba44d9d279cb986",
+  "command": [
+    "deno",
+    "run",
+    "--allow-read",
+    "--allow-env",
+    "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/tools/verify-grace-runtime-bytes.ts",
+    "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/grace-runtime-bytes-02/baseline-space-server.ts",
+    "/Users/berni/.codex/worktrees/topics-campaign-grace/labs/packages/runner/src/executor/space-server.ts",
+    "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/grace-runtime-bytes-02/baseline-stats.ts",
+    "/Users/berni/.codex/worktrees/topics-campaign-grace/labs/packages/runner/src/executor/stats.ts"
+  ],
+  "files": [
+    {
+      "file": "packages/runner/src/executor/space-server.ts",
+      "emittedEqual": true,
+      "emittedSha256": "37c6e0283ccafedd0931fa55a58c6376bb184b5bc99c804ac688a63d52030807",
+      "baselineSha256": "ff31d5a7efff62f852080e5f5d368114d84d180d843a082384e55e5c298cdf36",
+      "candidateSha256": "444a3a8dcc9c83e9e804f5b28d1bd48dc6f74527799f880a09fcecfbe288bb1c"
+    },
+    {
+      "file": "packages/runner/src/executor/stats.ts",
+      "emittedEqual": true,
+      "emittedSha256": "2e4c167a69ae886cf35d31453a5db7c589f8cc21aff1a7232aff6ee141a72b5f",
+      "baselineSha256": "1622aceba87dba7f0e89d353d24aec052fcd1206b6fc8d7fd09af400c89e6955",
+      "candidateSha256": "f3148d612e837269fea35824446e2ec7e70e5a822c190d53f6534e8c0a52e504"
+    }
+  ]
+}

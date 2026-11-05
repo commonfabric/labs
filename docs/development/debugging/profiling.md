@@ -24,7 +24,7 @@ A logger constructed disabled is quiet, not inert.
 So the first move is reading, not instrumenting. The phase timings and call
 counts for anything already wrapped exist before you touch the code.
 
-What is *not* on by default is emission. `CF_TIMING_MEASURES=1` makes every
+What is _not_ on by default is emission. `CF_TIMING_MEASURES=1` makes every
 recorded span also emit a `performance.measure`, which is what puts it on the
 timeline of the process that ran it and what step 4 aggregates. It is off
 because the volume is meant for a tool rather than for a person: a topics
@@ -41,7 +41,7 @@ invites.
 ## 1. Find the phase
 
 ```bash
-deno task cf test packages/patterns/<pattern>/<name>.test.tsx --verbose --stats-threshold 0
+deno task cf test patterns/<pattern>/<name>.test.tsx --verbose --stats-threshold 0
 ```
 
 No browser, no shell, no rendering — the cheapest rung that can see a read count
@@ -66,13 +66,55 @@ Two traps in the output itself:
 many per-step scheduler action deltas print.
 
 The counts this rung prints are exact. Its milliseconds are not the product's:
-[`test-runner.ts`](../../../packages/cli/lib/test-runner.ts) enables idempotency
+[`test-runner.ts`](../../../runtime/cli/lib/test-runner.ts) enables idempotency
 verification by default, adding a verification replay. Use
-`--no-idempotency-check` for timing experiments; keep the default for correctness
-checks. The read-cost report excludes the verification transaction. It includes
-work demanded by assertions and render steps, which may be more expensive than
-the preceding action. [The CLI reference](../../../packages/cli/README.md#pattern-test-read-costs)
+`--no-idempotency-check` for timing experiments; keep the default for
+correctness checks. The read-cost report excludes the verification transaction.
+It includes work demanded by assertions and render steps, which may be more
+expensive than the preceding action.
+[The CLI reference](../../../runtime/cli/README.md#pattern-test-read-costs)
 defines the four counters and their measurement boundaries.
+
+## 1b. Define the visible transition before comparing implementations
+
+A browser measurement needs the same work and the same completion condition in
+both arms. Pin the selected entity and detail by durable identity, and capture
+an independent expected result for the displayed window. Record its size and a
+content fingerprint alongside the timings. A position in a recent-items list can
+select different work after each load. A stable identity alone also misses
+changes to the records behind it; verify the expected window in every arm.
+
+Define completion in terms of the visible result. An implementation that keeps
+all detail views mounted and selects one with CSS already has every result node
+before the click. Count only nodes inside the visible selected detail and
+require the expected transition from the recorded pre-click state. When two
+selections have the same number of rows, verify selected identity and content as
+well as count. Apply the same display or animation-frame barrier to both arms;
+DOM presence and runtime idle alone do not establish that the new result is
+visible. Gate the run on actual source readiness before starting its clock.
+
+For a client-only comparison, keep one compatible server process and data store
+running while swapping prebuilt client artifacts between repetitions. Record
+source revisions and artifact hashes, and check the served bytes after every
+swap. Start each arm in a fresh browser context with a new page and worker;
+prevent HTTP or service-worker caches from serving the previous artifact, or
+verify hashes of the resources actually loaded by the measured page. Record the
+same cache posture for both arms. Checking the server alone cannot identify code
+already executing in an existing page or worker.
+
+Restarting a server can select a version-keyed store or change cache warmth,
+making a client comparison measure server differences too. If the clients
+require different server protocols, use explicitly matched server/data arms and
+describe the broader comparison instead.
+
+Interleave arms for at least three repetitions, vary their order, and retain raw
+values and medians within each block. Record machine load before and after every
+observation and run a stable control through the same protocol. A control that
+moves with the candidate limits how much of a speedup can be attributed to the
+change. Keep builds and owned test processes outside timing blocks; record
+external contention and failed attempts rather than silently replacing them. Use
+lightweight whole-phase timing for repetitions and separate runs for CPU
+sampling, detailed counts, and node timelines.
 
 ## 2. Bracket the phase — in the process you are going to profile
 
@@ -86,7 +128,7 @@ boundary never appear in a profile taken on the other, so pick the bracket that
 matches the capture:
 
 - **Profiling the `cf test` process.** Wrap the phase the way
-  [`packages/cli/lib/test-runner.ts`](../../../packages/cli/lib/test-runner.ts)
+  [`runtime/cli/lib/test-runner.ts`](../../../runtime/cli/lib/test-runner.ts)
   does in its `withPhase` helper: multi-segment keys, `logger.timeStart()` /
   `logger.timeEnd()` around the body, `performance.mark()` at both boundaries
   with a `performance.measure()` across the pair, and a `console.timeStamp()` at
@@ -101,16 +143,17 @@ matches the capture:
   V8's. To get a `.cpuprofile` out of the `cf test` process, drive V8's profiler
   from inside it with `node:inspector`, which Deno implements — connect a
   `Session`, `Profiler.enable`, `Profiler.start` around the phase, and
-  `Profiler.stop` to a file. It needs `--allow-sys`, which the `cf` launcher
-  does not pass, so run `packages/cli/mod.ts` directly with the launcher's own
-  flag set plus that one. Rank it with the same self-time arithmetic
+  `Profiler.stop` to a file. It needs `--allow-sys`, of which the `cf` launcher
+  passes only `--allow-sys=networkInterfaces,uid`, so run `runtime/cli/mod.ts`
+  directly with the launcher's own flag set and `--allow-sys` in place of that
+  one. Rank it with the same self-time arithmetic
   `renderProfileReport` uses in
-  [`cdp-profiler.ts`](../../../packages/integration/cdp-profiler.ts).
-- **Profiling the browser worker.** The interval has to come from
-  the capture itself: start the profiler when the phase starts and stop it when
-  the phase ends, so the profile *is* the phase. That is what the phase-scoped
-  capture in step 3 is for. Marks emitted inside the worker also work; marks
-  emitted by the test driving it do not.
+  [`cdp-profiler.ts`](../../../runtime/integration/cdp-profiler.ts).
+- **Profiling the browser worker.** The interval has to come from the capture
+  itself: start the profiler when the phase starts and stop it when the phase
+  ends, so the profile _is_ the phase. That is what the phase-scoped capture in
+  step 3 is for. Marks emitted inside the worker also work; marks emitted by the
+  test driving it do not.
 
 Either way, add the bracket to the phase you are narrowing rather than to
 everything.
@@ -125,27 +168,42 @@ Start the capture when the phase starts and stop it when the phase ends. The
 profile is then the phase, and its ranking answers a question about that phase
 rather than about the whole run — which is the whole reason to bother scoping
 it. The seams are in
-[`packages/integration/cdp-profiler.ts`](../../../packages/integration/cdp-profiler.ts):
+[`runtime/integration/cdp-profiler.ts`](../../../runtime/integration/cdp-profiler.ts):
 
 - `attachWorkerProfiler(wsEndpoint)` — connects and waits for the runtime
   worker, returning `undefined` rather than throwing;
-- `startWorkerProfile(profiler, context, { samplingIntervalUs })` — the
-  default period suits a single interaction; a window of minutes needs a
-  coarser one to stay inside the CDP message limit;
+- `startWorkerProfile(profiler, context, { samplingIntervalUs })` — the default
+  period suits a single interaction; a window of minutes needs a coarser one to
+  stay inside the CDP message limit;
 - `writeWorkerProfile(profiler, { pathPrefix, label })` — writes the
   `.cpuprofile` and the ranked self-time report.
 
-[`packages/patterns/integration/default-app.test.ts`](../../../packages/patterns/integration/default-app.test.ts)
+[`patterns/integration/default-app.test.ts`](../../../patterns/integration/default-app.test.ts)
 is the maintained example to lift the gating and naming from. Read the ranked
 report first; open the `.cpuprofile` in Chrome DevTools or speedscope when the
 ranking is not enough.
 
 For the logger's own view of the same run, `collectBrowserLoadSummary` in
-[`packages/patterns/integration/cfc-browser-helpers.ts`](../../../packages/patterns/integration/cfc-browser-helpers.ts)
+[`patterns/integration/cfc-browser-helpers.ts`](../../../patterns/integration/cfc-browser-helpers.ts)
 reads the worker's scheduler, runner and storage rows plus main-thread IPC, with
 `count`, `p50`, `p95` and `max` per row. It keeps the top rows by total, so a
 row recording set sizes rather than milliseconds will evict real timings — read
 those by name instead of widening the summary.
+
+Main-thread `runtime-client/ipc/<type>` rows measure every terminal request
+wait. `ipc-outcome/<outcome>/<type>` splits those same waits into `success`,
+`error`, `timeout`, `cancelled`, and `send-error`; the two views overlap and
+must not be summed. A timeout duration is the caller's abandoned wait, not a
+measurement of when the worker finished. The bounded request timeline records
+that outcome and its terminal timestamp too. Aggregate outcome rows continue
+counting after the boot timeline fills.
+
+`collectBrowserLoadSummary` prints all non-success outcomes in `ipcFailures`,
+without top-row truncation. It skips the worker RPC after a timeout. Pass
+`{ includeWorker: false }` when collecting diagnostics for another failed
+operation; `workerStatus` distinguishes missing worker statistics from zero
+activity. Worker-side duration rows describe completed spans, so they cannot
+alone account for an operation stuck inside synchronous work.
 
 The storage rows follow one inbound frame in arrival order, each keyed by the
 module that pays for the step: `storage.v2.remote/receive/decodeFrame`
@@ -160,17 +218,27 @@ operation-watch and watch-removal application are outside both spans.
 
 Around a graph-watch refresh, `storage.v2/watchRefresh/watchAddSync` includes
 watch-mutation queue wait, the client request, response-order wait in concurrent
-mode, and watch-view application. `memory.v2.client/watchAdd/request` covers
-the client request, including connection readiness, encoding, the transport
-round trip, and response handling;
-`memory.v2.client/watchAdd/apply` covers watch bookkeeping and watch-view
-application. The outer span minus the request span therefore includes
-application and scheduling overhead as well as waiting; it does not isolate
-queue wait. The rows aggregate different call populations, and their percentiles
-cannot be subtracted to recover any of these components. `watchRefresh/total`
-brackets the whole refresh, including replica application. The
-`runner/start/*Wave` rows bracket each resume pre-sync wave around the per-cell
-`runner/start/resume*` spans.
+mode, and watch-view application. `memory.v2.client/watchAdd/request` covers the
+client request, including connection readiness, encoding, the transport round
+trip, and response handling; `memory.v2.client/watchAdd/apply` covers watch
+bookkeeping and watch-view application. The outer span minus the request span
+therefore includes application and scheduling overhead as well as waiting; it
+does not isolate queue wait. The rows aggregate different call populations, and
+their percentiles cannot be subtracted to recover any of these components.
+`watchRefresh/total` brackets the whole refresh, including replica application.
+The `runner/start/*Wave` rows bracket each resume pre-sync wave around the
+per-cell `runner/start/resume*` spans. `runner/start/resumeCrossSpaceRead` is
+one read of one plan's inputs by the cross-space pass, which runs only
+against a server that does not report the links its walk follows out of the
+space (`syncCrossingsV1`); against one that does, the row is absent, and
+`runner/start/resumeCrossSpaceSettle` alone remains: the pre-sync's wait on
+the loads the frames' crossings kicked. Where the pass runs, its count is
+the reads
+the pass made in all, so what it holds beyond the plans a family has is the
+plans read again after a load they kicked landed, without saying which plans
+or in how many rounds; `runner/start/syncCellsForRunningPattern` counts the name-syncs a load
+paid, one per family named, which a cold resume of a nested tree pays once for
+the root and once more for each child start that found something absent.
 
 ## 4. Split until an explosion has an origin
 
@@ -201,8 +269,8 @@ show. `ms/call` says which level is expensive, and the two `self` columns
 separate a level that is itself slow from one that merely contains slow
 children.
 
-Only spans a logger recorded reach the file. `withPhase` also emits a measure
-of its own, under a `cf-test/` name and without the logger's prefix, and the
+Only spans a logger recorded reach the file. `withPhase` also emits a measure of
+its own, under a `cf-test/` name and without the logger's prefix, and the
 capture leaves it on the timeline rather than writing it — so a phase appears
 once, under its logger keys, and the counts do not double.
 
@@ -220,6 +288,61 @@ deno run --allow-read skills/perf-investigation/scripts/attribute-measures.ts \
 deno run --allow-read skills/perf-investigation/scripts/attribute-measures.ts \
   /tmp/measures.json --key=tx/read --chains     # the full chains
 ```
+
+### Attribute refresh frequency to its inputs
+
+When serving runs in a worker, `/api/health/serving-loop-realm` answers with
+the worker's `loggerCounts` and `timingStats`; `/api/health/stats` reads only
+the memory server's thread, and its `servingLoop` block holds executor counters
+rather than worker logger rows. The realm route asks the worker and waits for
+its turn, which is why it is not part of `stats`; with the loop on this thread
+it answers with the process's own loggers, and with the loop off it answers
+404. Collect both routes to account for the serving loop's work.
+
+The memory server emits `memory/refresh/batch` for each space processed by a
+flush, with its dirty instance keys, derived-key count, and connection count.
+`memory/refresh/session/{touched,untouched}` details identify the session,
+sequence interval, dirty count, graph count, and tracked-document count. A
+touched row whose frame carries documents includes sending that frame, since the
+frame goes out in the step that records its documents as delivered. A flush can
+process multiple batches; a touched session can refresh multiple graphs. Count
+these boundaries separately before dividing traversal counts by them.
+
+`memory/refresh/walk/total` details identify the graph's scope identity, affected
+and missed document keys, root-evaluation count, manager reads, updates, and
+outcome.
+The affected and missed entries are document keys, not root selectors. `reads`
+includes partial work on a failed refresh; `updates` describes a successful
+refresh. `memory/query/root` brackets root evaluations
+during watch extension and incremental refresh, naming the document, selector
+path and schema hash, reads, and outcome.
+`traverse` carries the same document/path/schema vocabulary on clients and
+servers, with schema-call and memo-hit counts. Its outcome distinguishes a
+returned validation failure from a thrown exception. Keep the process or worker
+name beside every row; equal keys across realms are different work.
+
+`memory/refresh/conflict` names rejected commits whose operations and read sets
+are staged for catch-up. A dirty key is an invalidation, not proof of a changed
+server version. Batches coalesce these invalidations with writes, so conflict
+events and batches do not have a one-to-one relationship.
+
+Occurrence details are JSON in the measure's detail suffix, leaving aggregate
+keys fixed. The logger computes them lazily for emitted measures and retained
+slowest samples. Use `detailOfMeasure` from `@commonfabric/logger` to decode the suffix,
+then group by individual fields when `--detail` is too specific. No document
+values are included. Timing measures remain opt-in with `CF_TIMING_MEASURES=1`.
+For causal scheduler data, enable both `setTriggerTraceEnabled(true)` and
+`setActionRunTraceEnabled(true)`, then compare
+`getTriggerTrace()` decisions and changed addresses with `getActionRunTrace()`;
+both histories are bounded, so check their retention before treating them as a
+whole-run count. A probe that drains or captures them belongs outside the
+workload.
+
+Save `performance.timeOrigin` with each realm's measures and the CPU profiler's
+clock alignment. Do not concatenate worker-relative timestamps or infer CPU
+from summed durations. Asynchronous intervals can overlap without a caller
+relationship; explicit session, document, and identity fields constrain what
+interval attribution alone can establish.
 
 ### Keep asking until the shape stops changing
 
@@ -260,19 +383,19 @@ deno run --allow-read skills/perf-investigation/scripts/attribute-measures.ts \
 
 Two views, from data already in hand. The first drops the transparency that
 attribution applies to the harness phases — for a span nothing else encloses,
-they are the only thing that locates it, and they say *when* in the run it
-happened. The second names what finished most recently before each one, which
-is a caller nobody wrapped: it ran, returned, and the work followed it.
+they are the only thing that locates it, and they say _when_ in the run it
+happened. The second names what finished most recently before each one, which is
+a caller nobody wrapped: it ran, returned, and the work followed it.
 
 A name concentrated in both is where a span would attribute the most. The two
 disagreeing is worth more than either alone, because they answer different
 questions. And `--ignore` matters more than it looks: a key emitted constantly
 is always the nearest thing to have ended, so it crowds the second view without
-handing off to anything — dropping it is what lets the real predecessor show. The level where a count stops being
-proportional to the work and starts being proportional to the work squared is
-the level that introduced the multiplication — that is the caller to fix, and it
-is frequently not the
-function the profile ranked first.
+handing off to anything — dropping it is what lets the real predecessor show.
+The level where a count stops being proportional to the work and starts being
+proportional to the work squared is the level that introduced the multiplication
+— that is the caller to fix, and it is frequently not the function the profile
+ranked first.
 
 ## 4b. Ask where the elapsed time went, which is a different question
 
@@ -300,6 +423,69 @@ a gap is not automatically a problem. What it can say is where the absence is
 and how much is at stake. A stretch that keeps following the same span is the
 one to chase: that span handed off to something nobody wrapped, and wrapping
 what follows is what turns the question into an answer.
+
+## 4c. Attribute shared runtime work to pattern nodes
+
+A function ranking can show that policy preparation or traversal dominates
+without identifying which pattern node asks for it. Capture named scheduler
+action spans and shared-runtime spans over the same interaction, in the same
+process clock. Save the corresponding graph or emitted program so generated
+action identities can be mapped to authored computations and view subscriptions.
+Record execution counts as well as durations: one expensive builder and hundreds
+of small subscription initializations need different fixes.
+
+Start with a non-overlapping accounting of the interaction: input preparation,
+actions, result commits, and uncovered time. Within the action bucket, group
+spans by node identity. A parent subscription can initialize child
+subscriptions; count their inclusive interval once when producing a total.
+Attribute shared synchronous work to its enclosing action or commit, then report
+that attribution as a breakdown of those buckets. For example, 30 ms of
+verification inside a 100 ms view subscription is part of that 100 ms, not
+another 30 ms to add. For asynchronous work, interval containment alone does not
+establish a caller; use explicit parent or operation identities where intervals
+can overlap.
+
+Bracket the complete subsystem entry point before timing its inner helpers.
+Input collection and digest construction outside a narrowly named verification
+helper can cost more than the check itself. Keep the enclosing phase total and
+its call count beside the inner breakdown, and verify that the timeline cap was
+not reached. Detailed instrumentation on millions of reads can itself dominate;
+use a separate diagnostic to count them and return to lightweight entry-point
+timing to verify the optimization.
+
+Use one capture for each reconciled time breakdown. A diagnostic's node times
+cannot be assembled into a different run's median, and sampled CPU time is a
+separate attribution from elapsed spans. When an optimization moves work before
+an interaction, capture both startup and interaction counts to prove the work
+moved: a separate reactive derivation can remain lazy until the first selection.
+
+## 4d. Verify narrow reads and reference preservation separately
+
+When a derivation delegates to a helper, inspect its emitted argument and result
+schemas before changing its types. The transformer may already narrow some
+inputs. Record the schema changes beside actual read counts and timings: lazy
+materialization can make a smaller declaration perform the same reads.
+
+A [generic pass-through derivation](../../common/concepts/computed/computed.md)
+can declare only the fields it inspects while forwarding the original values.
+Test that boundary with a source containing fields outside the constraint. Check
+the returned reference's identity, read those extra fields through a downstream
+consumer that declares them, and update the source to verify that the consumer
+remains reactive. Equality of the initial JSON alone cannot distinguish a live
+reference from a detached copy.
+
+For labeled built-in results, also test the persisted field labels. Give source
+fields distinct confidentiality and integrity labels, pass their references
+through the actual derivations, and inspect the downstream field views. When a
+field path crosses a link, use the resolved view from
+[`cfcLabelViewForResolvedCellWithStatus`](../../../runtime/runner/src/cfc/label-view.ts)
+and check `readFailed`: a failed metadata read is not an absent label, and a
+view of only the intermediate link document can miss the target's labels. Record
+the flow-label and enforcement settings with the result. Include a rebuilt
+record as a contrast to expose label propagation caused by copying. A flat
+pass-through test does not prove a wrapper, grouping, or sorting pipeline;
+exercise the composition the candidate uses. Measure selected-detail latency
+again if preserving references moves decoding or formatting into that path.
 
 ## 5. Isolate, then pin it with a benchmark
 
@@ -330,28 +516,29 @@ has often stopped early.
 ## What the client sent, and what came back
 
 Every rung above measures time. A read that is too wide shows up in them as a
-long span and a large upsert count, and neither says which documents were
-asked for or which arrived — the question an over-wide sync turns on.
-`CF_MEMORY_FRAME_LOG=<file>` answers it from the client's side of the wire:
-the memory client appends one JSON line per frame in either direction, with
-the frame's type and size, a watch mutation's roots and selectors, a commit's
-operations and read-set shape, and every document a response delivered with
-its size and top-level keys. The file holds a second kind of line as well:
-selectors repeat across roots, so each distinct one is written once as a
-`dir: "selector"` record the first time a root uses it, and every root after
-that names it by that record's hash. A capture therefore has more lines than
-frames, and a count of frames skips the selector lines.
+long span and a large upsert count, and neither says which documents were asked
+for or which arrived — the question an over-wide sync turns on.
+`CF_MEMORY_FRAME_LOG=<file>` answers it from the client's side of the wire: the
+memory client appends one JSON line per frame in either direction, with the
+frame's type and size, a watch mutation's roots and selectors, a commit's
+operations and read-set shape, and every document a response delivered with its
+size and top-level keys. The file holds a second kind of line as well: selectors
+repeat across roots, so each distinct one is written once as a `dir: "selector"`
+record the first time a root uses it, and every root after that names it by that
+record's hash. A capture therefore has more lines than frames, and a count of
+frames skips the selector lines.
 
 Read it by pairing each outgoing watch with its response by `requestId`, then
 asking three things of the pair: how many roots went out, how many documents
 came back, and what those documents were. Grouping the delivered documents by
-their top-level keys is a heuristic for the last: the record carries at most
-the first twelve keys, so it separates a piece's stored result from a rendered
-tree, a link, or a schema well enough to size each category, and a key absent
-from a record is not evidence the document lacks it. A commit line carries its confirmed reads
-split by document kind and path depth, and the count of reads that asserted a
-document absent: a commit that walked deep into documents it had never loaded
-is visible as depth and absence together, before the server rejects it.
+their top-level keys is a heuristic for the last: the record carries at most the
+first twelve keys, so it separates a piece's stored result from a rendered tree,
+a link, or a schema well enough to size each category, and a key absent from a
+record is not evidence the document lacks it. A commit line carries its
+confirmed reads split by document kind and path depth, and the count of reads
+that asserted a document absent: a commit that walked deep into documents it had
+never loaded is visible as depth and absence together, before the server rejects
+it.
 
 On a `cf` invocation against the Topics board this is what separated a survey
 that produced sixty kilobytes of output from the twenty-five megabytes it
@@ -374,20 +561,24 @@ curl -s "$API_URL/api/health/stats" | jq 'has("servingLoop")'
 ```
 
 ```bash
-curl -s "$API_URL/api/meta" | jq .shellServerExecutionDefine
+curl -s "$API_URL/api/meta" | jq '{shellServerExecutionDefine, serverExecution: .experimental.serverExecution}'
 ```
 
 The first is true exactly when that process is serving. The second says what the
-browser shell was *built* with — the define is baked at build time, so a
-source-run toolshed serves the OFF-arm shell whatever its own environment says.
-Clients declare their own posture from their own environment too: `cf` and the
-integration harnesses announce `serverExecution=false` unless
-`EXPERIMENTAL_SERVER_EXECUTION=true` is set for them as well.
+browser shell was _built_ with, and what arm the toolshed publishes. A define
+baked at build time pins the shell's arm; without one, the shell runs the arm the
+toolshed serving it publishes as `experimental.serverExecution`. Where that is
+absent, as from a toolshed with no Runtime yet (`experimental: null`) or one that
+predates the flag, the shell runs the first-party default, and this document
+does not say which arm the server is on: read `servingLoop` instead. Clients declare their own
+posture from their own environment too: the integration harnesses announce
+`serverExecution=false` unless `EXPERIMENTAL_SERVER_EXECUTION=true` is set for
+them as well.
 
 A client on the other arm from its server is worth naming precisely, because it
 is more dangerous than a broken instrument. Every probe keeps reporting
 faithfully — the server's timing statistics and its serving-loop counters are
-true readings of what that server did. What they are readings *of* is a
+true readings of what that server did. What they are readings _of_ is a
 configuration that ships in neither arm: an OFF-declared client still commits
 its own derivations while the serving loop derives them too, so wave counts, the
 settle series and the amplification ratio all describe a system nobody runs. The
@@ -402,32 +593,37 @@ process:
 - `timingStats` — the process's logger timing statistics, keyed exactly as the
   `cf test` rows are and carrying `count`, `totalTime`, `min`/`max`, `p50` and
   `p95`. A serving toolshed runs the runtime, so `scheduler/run/action`,
-  `traverse` and `runner/start/*` appear here meaning the *server's* work.
+  `traverse` and `runner/start/*` appear here meaning the _server's_ work.
 - `logCounts` — the same per-logger counts, which is how a warning storm shows
   up as a number rather than as a log to grep.
-- `slowQueries` — the last hundred query, watch, or commit operations over
-  `CF_SLOW_QUERY_THRESHOLD_MS` (100 ms unless set; a local investigation
-  sets it to `0` to record every operation), with the space and the root
-  and watch counts. `graph.query`,
-  `session.watch.set` and `session.watch.add` entries attribute the traversal
-  (`rootsVisited`, `rootsElapsedMs`, `slowestRoot`) and carry `managerReads`,
-  the engine document reads across the whole request — the width a root
-  count cannot show, since one root's declaration can fan out over many
-  documents. `session.watch.add` and `session.watch.refresh` entries also
+- `slowQueries` — the last hundred query, watch, commit, or SQLite read
+  operations over `CF_SLOW_QUERY_THRESHOLD_MS` (100 ms unless set; a local investigation sets it
+  to `0` to record every operation), with the space; query and watch entries
+  also carry the root and watch counts. `graph.query`, `session.watch.set` and `session.watch.add` entries
+  attribute the traversal (`rootsVisited`, `rootsElapsedMs`, `slowestRoot`) and
+  carry `managerReads`, the engine document reads across the whole request — the
+  width a root count cannot show, since one root's declaration can fan out over
+  many documents. `session.watch.add` and `session.watch.refresh` entries also
   carry `upserts`, the snapshots the frame delivered: a wide traversal that
   yields few is repeated server work, and a wide frame is transport and
-  client-ingest work as well. A refresh carries only `watches` and `upserts`:
-  it re-evaluates by dirty document rather than by root, so it has no
-  traversal to attribute, and absent is the honest answer there. A `transact`
-  entry also carries the commit's operation and read counts, its outcome (`ok`,
-  the error name, or `threw` — a slow rejected commit records like a slow
-  applied one), and `lockWaitMs`: how long the commit waited for the space
-  publication lock before evaluating. Flush passes hold that same lock, so
-  a `transact` whose `lockWaitMs` dominates its elapsed time was queued
-  behind fan-out, not expensive itself.
-  Read the traversal fields with the query evaluation cache's coverage in
-  mind. The cache serves only whole, current-state evaluations: an eligible
-  `graph.query` (without `atSeq` or keyed snapshots), each branch group
+  client-ingest work as well. A refresh carries only `watches` and `upserts`: it
+  re-evaluates by dirty document rather than by root, so it has no traversal to
+  attribute, and absent is the honest answer there. A `transact` entry also
+  carries the commit's operation and read counts, its outcome (`ok`, the error
+  name, or `threw` — a slow rejected commit records like a slow applied one),
+  and `lockWaitMs`: how long the commit waited for the space publication lock
+  before evaluating. Flush passes hold that same lock, so a `transact` whose
+  `lockWaitMs` dominates its elapsed time was queued behind fan-out, not
+  expensive itself. A `sqlite.query` entry carries the database handle's id
+  (`db`), its outcome (`ok` or the error name), and the rows a successful read
+  returned, recorded once the read's access has been checked again, so a read
+  refused at that check records the refusal. The statement itself runs
+  synchronously on the event loop, during which no other frame on the server
+  runs; the entry's time also covers opening the space's store when it was not
+  yet open, which can wait on I/O while other frames run. Read the traversal fields with the query
+  evaluation cache's
+  coverage in mind. The cache serves only whole, current-state evaluations: an
+  eligible `graph.query` (without `atSeq` or keyed snapshots), each branch group
   established by `session.watch.set`, and a `session.watch.add` group when that
   session has no tracked graph for the branch yet. A subsequent
   `session.watch.add` for an already tracked branch extends the session's graph
@@ -435,35 +631,138 @@ process:
   depends on what the session already covers. A page load that grows its watch
   set in batches therefore re-walks those later batches. Nonzero `rootsVisited`
   there is expected extension work, not evidence of a cache miss.
-- `documentCaches` — the memory server's decoded-document cache, one entry
-  per open space (`Engine.documentCache` in `packages/memory/v2/engine.ts`)
-  under the server's `totalBudgetBytes` (beside it the total `bytes`, and
+- `processMemory` — this process's memory in bytes, as `Deno.memoryUsage()`
+  reads it at the moment of the request. `rss` is the whole process, a serving
+  loop's worker included; `heapTotal`, `heapUsed` and `external` cover the thread
+  that answers the request, so they leave a worker's heap out. Reading `rss`
+  here measures the server at the address queried, however many other servers
+  the machine runs. `rss` also moves with when the collector last ran and with
+  which pages the operating system has compressed, by hundreds of megabytes on
+  a busy server, so a growth in it smaller than that says nothing about a
+  leak. For a reading that a leak moves and collection timing does not, a
+  server started with `EXPOSE_GC=true` answers `/api/health/collected-memory`.
+  That route runs a full garbage collection of the thread that answers, and of
+  the serving loop's worker where the loop runs in one, then reports
+  `heapUsed` and `external` for each, as `mainThread` and
+  `servingLoopWorker`. Collecting pauses each thread, so the route answers 404
+  on a server started without the variable; local development servers and the
+  servers CI starts set it. Two readings differ by what the server retained
+  between them, give or take a few megabytes of bounded structures still
+  filling. `runtime/runner/integration/derive_array_leak.test.ts` reads its
+  server this way, and its own isolate the same way, through
+  `runtime/runner/src/collected-memory.ts`.
+- `documentCaches` — the memory server's decoded-document cache, one entry per
+  open space (`Engine.documentCache` in `runtime/memory/v2/engine.ts`) under
+  the server's `totalBudgetBytes` (beside it the total `bytes`, and
   `totalBudgetEvictions`: entries given up to hold that total rather than a
-  space's own bounds):
-  per space, `entries` and `bytes` against `budgetBytes` and `maxEntries`,
-  and the lifetime `hits`, `misses` and `evictions`. The occupancy figures
-  (`entries`, `bytes`, and which spaces appear at all) are a snapshot of the
-  moment — the one exception to the paragraph below; the three counters
-  accumulate. A corpus is read again by every
-  load and every refresh, so a space in good shape shows `hits` climbing
-  across loads and `misses` rising only with commits. `evictions` climbing
-  while a corpus is being walked means its working set does not fit the
-  budget, and every walk is paying decode and deep-freeze for it again — on
-  the Topics board that was most of a second of server time per walk.
+  space's own bounds): per space, `entries` and `bytes` against `budgetBytes`
+  and `maxEntries`, and the lifetime `hits`, `misses`, `evictions`,
+  `patchReplays` and `resumes`. The occupancy figures (`entries`, `bytes`, and
+  which spaces appear at all) are a snapshot of the moment — an exception to
+  the paragraph below, as `commitRates` is; the five counters accumulate. `hits` and `misses`
+  count reads of a document and nothing else, and each read that resolved to a
+  stored revision lands in one of the two; a read of an entity that has no
+  revision at all moves neither, so the two do not sum to the reads a space
+  served. A corpus is read again by every load and every refresh, so a space in
+  good shape shows `hits` climbing across loads and `misses` rising only with
+  commits. A commit misses, on the revision it has just written. The lookup of
+  the revision before it, where rebuilding that document resumes, is not a read
+  of the document and moves `resumes` rather than `hits`. `evictions` climbing
+  while a corpus is being walked means its working set does not fit the budget,
+  and every walk is paying decode and deep-freeze for it again — on the Topics
+  board that was most of a second of server time per walk. `patchReplays` counts
+  the stored patch rows replayed to rebuild a patched document. A rebuild starts
+  at the newest of that document's base, its newest snapshot, and the newest
+  revision after those that the cache still holds, so a document under a run of
+  patch commits costs one row per commit while it stays resident and the whole
+  chain since its base or snapshot once it does not. The count climbing is
+  therefore ordinary; `patchReplays` far above `misses` is the second case,
+  where the document is being lost between the commits that write it and each of
+  them is rebuilding it from the chain. Two callers rebuild: a read the cache
+  did not serve, and the commit-time check that the pre-state a patch lands on
+  carries no reserved schema reference, which reads only in a space whose
+  commits or stored rows carry one. `resumes` counts the rebuilds that found a
+  revision to start from rather than falling back to the base or the snapshot,
+  so it says which of those two regimes a space is in: `patchReplays` close to
+  `resumes` means rebuilds are replaying about one row each, and `resumes` near
+  zero while `patchReplays` climbs means they are replaying whole chains.
+  `resumes` cannot reach the number of rebuilds, because the commit right after
+  a snapshot has no row before it to resume from, so roughly one rebuild per
+  snapshot interval is a non-resume for a reason unrelated to residency.
+- `commitRates` — the memory server's commit rates (`CommitRateTracker` in
+  `runtime/memory/v2/commit-rates.ts`): the busiest of the spaces with a
+  commit in the last ten minutes, and for each the busiest of the sessions
+  that committed to it. A space and a writer both carry `minute` and
+  `tenMinutes`, the commits of the last sixty seconds and of the last ten
+  minutes, each as `accepted`, `rejected` and `operations`, the operations
+  those commits carried whether or not they were applied. The ratio of
+  operations to commits is the shape of the traffic: a person's edit is a
+  few commits of several operations, and a loop is many commits of one.
+  Every commit the engine decides counts, whichever path brought it: a
+  client's `transact`, the server's own direct writes under its `server:`
+  session, a delegated append, a served access-list change, and the serving
+  loop's wave commits under the service session they are recorded under; a
+  `transact` the server refuses before it reaches the engine counts too, as
+  rejected. A writer is a session together with the principal the commit
+  named, so one session reopened under another identity is two writers, and
+  a commit from a session the server does not know is counted under its id
+  with no principal. `storm` on a space is present while its commits per
+  minute have stayed at or over the threshold for the sustained window, and
+  names when that run began; a run ends the moment expiry takes the minute
+  under the threshold, whether or not anything read the tracker then. The
+  thresholds in effect ride along as the report's own `storm`, from
+  `CF_COMMIT_STORM_PER_MINUTE` and `CF_COMMIT_STORM_SUSTAINED_SECONDS`
+  ([`CONFIGURATION.md`](../CONFIGURATION.md#memory-store)), and `storms` is
+  how many retained spaces are in one right now, listed or not. The response
+  stays bounded whatever the process serves: `spaces` is the union of the
+  top sixteen by the minute and the top sixteen by the ten minutes, ordered
+  by the minute's commits and then the ten minutes', a space's `writers` is
+  the same union of its top eight, and `activeSpaces` and `activeWriters`
+  say how many there were to choose from among the ones retained. The
+  tracker keeps at most 1,024 spaces and 256 writers per space, evicting the
+  one that committed longest ago past that, so at a cap the count is the
+  cap. A count is exact to the second a commit landed in.
+  [Alerting on a write storm](#alerting-on-a-write-storm) says what to do
+  with it.
+- `sessionReports` — the diagnostics clients reported about their own
+  sessions over the memory protocol's `session.report`
+  ([`04-protocol.md` §4.14](../../specs/memory-v2/04-protocol.md)), best-effort
+  and only from clients whose server advertises `sessionReportV1`, kept by
+  `SessionReportLog` in `runtime/memory/v2/session-reports.ts`. The one
+  reporter is the scheduler's remote-echo breaker
+  ([plan](../../plans/scheduler-remote-echo-breaker.md)): `echoBreaker.trips`
+  counts the times a client began deferring an action that kept rewriting a
+  document another writer kept rewriting back, and `echoBreaker.clears` counts
+  how tripped actions ended — `convergence` when the action wrote the
+  document without changing it, `quiet` when it saw no echo for the
+  breaker's quiet reset, `retired` when the action was unregistered, `evicted`
+  when the breaker's bounded table dropped the pair. Both are lifetime counts.
+  `recent` lists the newest 64 reports in full, oldest first, each with the
+  `space`, the reporting `session`, its `principal` where the server knows
+  one, the `document` (`id`, and `scopeKey`, the scope instance the action
+  wrote — on a serving runtime a demanding session's rather than the
+  reporter's own), the `action`'s scheduler id, and for a clear
+  its `reason`, its `renewals` — echoes after the trip, each renewing the
+  backoff — and `trippedMs`. A trip with many renewals and a long
+  `trippedMs` is a loop the breaker held; a clear by `convergence` after a
+  renewal or two is a disagreement that settled.
 - `servingLoop` — the serving loop's counters
   ([`serving-loop.md` §7](../../specs/server-side-execution/serving-loop.md)),
   present only when this process serves. `settle.series` is a ready-made
   per-authored-input latency series: admission to watermark coverage, with the
   wave and cycle counts behind each entry.
 
-Everything here accumulates for the process's whole life, across every space it
-has served, so a phase is a difference between two captures rather than any
-single one — and **only `count` and `totalTime` subtract**. `min`, `max`, `p50`,
+Everything here but `processMemory`, which is a reading of the moment,
+`commitRates`, which is a window rather than a lifetime, and
+`sessionReports.recent`, which keeps only the newest reports, accumulates
+for the process's whole life, across every space it has served, so
+a phase is a difference between two captures rather than any single one — and
+**only `count` and `totalTime` subtract**. `min`, `max`, `p50`,
 `p95` and the CDF describe the whole lifetime; differencing them yields a number
 that looks like a phase percentile and is not one. What a diff of the two
 additive fields does give you honestly is the phase's call count and its mean.
 
-For a phase *distribution*, the process has to have seen only the phase, so
+For a phase _distribution_, the process has to have seen only the phase, so
 start a fresh toolshed and capture once at the end. The logger does carry a
 delta reservoir (`resetAllTimingBaselines()`, surfaced on `globalThis` and read
 back as the `*SinceBaseline` fields and `cdfSinceBaseline`), but nothing on the
@@ -479,6 +778,22 @@ The serving loop's own phases are wrapped as `executor/wave/cycle`, `/drain` and
 measurement: a wave that overruns the flush deadline reports that deadline
 however far past it the wave ran, so the counter says how often and the span
 says by how much.
+
+With the loop in a worker, each request over its port is timed on both sides:
+`executor/port/request/<method>` on the side that asked is the whole round
+trip, and `executor/port/handle/<method>` on the side that answered is the
+handler's own time, so their difference is what the request spent waiting for
+the other thread's turn and in transit. A wave commit under the worker is the
+`sink.commitWave` request, and its `executor/wave/commit` phase is that round
+trip plus the sink's bookkeeping around it. With the commit overlapped with
+the next cycle (`SERVER_EXECUTION_OVERLAP_COMMIT`), `executor/wave/commit`
+still names the whole round trip, and `executor/wave/commit-wait` is what was
+left of it when the loop finished the commit: the remainder after the next
+cycle's drain and settle ran over it, or, when nothing but the loop's own
+echoes arrived and the committing cycle finished it itself, the whole of it.
+The two cases are told apart by `executor/wave/commit-wait` against
+`executor/wave/commit`: a wait near the round trip is a quiet cycle, a wait
+well under it is the overlap at work.
 
 `memory/frame/queue` against `memory/frame/handle` splits an inbound frame's
 time into waiting behind the frames already in flight on its connection and
@@ -496,13 +811,162 @@ a client's push waits at least the refresh delay plus these two — and reach fo
 
 `memory/watchAdd/total` covers each `session.watch.add` handler from admission
 through completion, including duplicate or empty additions, rejected requests,
-and failures. It ends before outbound schema preparation and transport.
-`slowQueries` records successful additions over its threshold, measured from
+and failures. An addition whose response carries documents sends that response
+in the step that records them, so the row includes its outbound schema
+preparation, encoding, and hand-off to the transport; any other response goes
+out after the row closes. `slowQueries` records successful additions over its threshold, measured from
 evaluation through response assembly. `memory/response/prepareSchemas` against
 `memory/response/sendRaw` splits each outbound message, response or effect, into
 schema-table compression and the hand-off to the transport;
 `memory.compression/send/encode` is the websocket compression that follows, on
-whichever side is sending.
+whichever side is sending; its detail carries the payload's length in characters
+and the frame's size in bytes on the wire (UTF-8 for a text frame), so a capture
+can say what a costly encode carried.
+
+### Find sessions watching or caching a particular schema
+
+`GET /api/health/document-interests` accepts an exact `space` and `cid:` document
+`id` and inspects the co-hosted memory server's existing session indexes:
+
+```sh
+curl --get "$API_URL/api/health/document-interests" \
+  --data-urlencode "space=$SPACE_DID" \
+  --data-urlencode "id=$SCHEMA_DOCUMENT_ID"
+```
+
+Query the worker that serves this space; another worker can correctly report
+no matches.
+
+The HTTP route accepts only `cid:` IDs; mutable document IDs such as `of:` are
+rejected. The lookup uses the shared `space` scope and the main branch (the empty
+string); pass `branch` to inspect another branch. It opens no storage, evaluates
+no queries, serializes no document
+contents, and changes no watches or delivery state. Like `/api/health/stats`,
+this route is public today: toolshed applies no authentication or access gate
+to it. Anyone who can reach it can see which principals retain a named
+content-addressed document and whether their sessions are connected. The
+[security roadmap's Diagnostics item](../../plans/security-privacy-roadmap.md#e-private-operations)
+tracks the operator gate and the longer-term private-operations boundary.
+
+Each matching row identifies the `sessionId`, authenticated `principal`,
+optional delegated `actingPrincipal`, and owning `connectionId`. Its `client`
+report identifies the application, loaded labs Git SHA (or `null`), runtime
+instance ID, reserved generation field, and instance start time. The report is
+`null` when the client supplied none or a malformed report. This is self-reported attribution, not device or
+code attestation; it names no browser or individual tab, and multiple runtime
+instances may belong to one process. See
+[client attribution](../../../runtime/memory/README.md#client-attribution)
+for host wiring and report lifetime.
+
+The row distinguishes direct watch declarations (`directWatchCount`) from
+delivery-cache entries (`cached`) and graph-cache entries (`graphCount`), with
+separate view-demand cache fields. Graph entries can arise from following links
+or loading schema dependencies. Counts include absence records, so they
+attribute interest rather than measure retained bytes; shared object references
+are not separate copies.
+
+Use this lookup when an investigation needs session attribution for a known
+schema CID. Aggregate retention counts can reveal subscription accumulation,
+but cannot identify the sessions responsible for retaining that schema.
+
+The response includes detached sessions still held during their grace period
+and marks expired ones not yet pruned. Reading this diagnostic does not prune
+them. It reports `totalMatches` but returns at most 100 rows, or a smaller
+positive `limit`; `truncated` indicates omitted rows. It scans watch declarations
+and graph indexes on demand, so use it for a targeted investigation rather than
+automatic dashboard polling.
+
+This is a current snapshot of one process, not a history of requests or a heap
+census. It does not attribute the process-wide schema registry or engine caches
+to sessions. An old schema in a session does not prove the client runs old code:
+a current client can retain a historical subscription. A restart or session
+eviction removes the attribution evidence. No registered memory server returns
+503; an unknown space returns an empty report without opening it. A missing
+document can still match retained watches or absence records.
+
+### Alerting on a write storm
+
+A write storm is one space committed to far faster than any person drives it:
+on the Topics space, four sessions re-persisting the same documents ten times
+a second between them, which held the instance serving it at full CPU for a
+day. `commitRates` is the five-minute diagnosis. The space is at the top of
+`spaces`, its `storm` field says when the run began, and its `writers` name
+the sessions and principals to look at, with `operations` close to the commit
+count where the loop writes one document per commit. Reading it again after a
+deploy is what verifies the fix: the space's `minute` falls to its steady rate
+while `tenMinutes` still carries the storm, and ten minutes later both do.
+
+`sessionReports` says whether the clients' remote-echo breakers caught the
+loop. A breaker that tripped on a storming space reports it on its own
+session, so the same server lists a `trip` naming the session `commitRates`
+blames and the document it kept rewriting, and that session's `minute` falls
+to about one commit per backoff while the breaker holds it, where the tripped
+action is most of what that session writes; its other actions' commits still
+count. A storm with no trip from its writers is a loop the breaker does not
+see, such as a client on a build without it or a loop between two documents
+rather than one, or a report that did not arrive, since reporting is
+best-effort. The
+reports also leave the process as the `ct.memory.echo_breaker` counter on the
+same `memory-server` meter, with `space.did`, the `event` (`trip` or `clear`),
+and for a clear its `reason`.
+
+The server judges a storm itself, so an alert needs no window arithmetic of
+its own: a space whose commits in the last sixty seconds have stayed at or
+over `CF_COMMIT_STORM_PER_MINUTE` for `CF_COMMIT_STORM_SUSTAINED_SECONDS`
+(120 and 300 unless set) is in one until that count falls under the threshold.
+The same decision leaves the process as the `storm` attribute of the
+`ct.memory.commits` counter, which every decided commit increments with the
+space DID (`space.did`) and its `outcome` (`ok` or `rejected`), on the memory
+server's `memory-server` meter beside `ct.memory.operation.*`.
+Under Deno's native OpenTelemetry (`OTEL_DENO` with `--unstable-otel`, which
+the deployed toolshed runs under) the counter reaches the host's collector
+and SigNoz with the rest of the meter; with `OTEL_ENABLED` alone it is an API
+no-op, as the runtime bridge's instruments are.
+
+The alert rule itself lives in SigNoz, which this repository does not
+configure, so wiring it is a step on the host rather than a change here. Build
+it in SigNoz's query builder: a metric-based alert whose query is the metric
+`ct.memory.commits` filtered to `storm = 'true'`, aggregated within each
+series as `Rate`, which SigNoz picks on its own for a cumulative sum, and
+across series as `Sum` grouped by `space.did`, with the threshold "above 0"
+matched on the last value (SigNoz's `last` match type, evaluated every
+minute). It fires for the spaces with a storm-labelled commit in the trailing
+minute, so it raises as soon as the first such commit is exported and can stay
+raised for up to a minute after the server clears the storm, plus the
+collector's export delay either way; it needs no sustain of its own because
+the server has applied one, and it reads zero again once the labelled series
+stops moving. The other match types widen that bound: "at least once in the
+last five minutes" keeps the alert raised for five minutes after the last
+positive sample. Do not write the rule in
+SigNoz's PromQL layer. On this counter, which Deno's OpenTelemetry exports as
+a cumulative sum, its `rate()` and `increase()` over the quoted dotted name
+return a scaled running total rather than the change, so a space that stormed
+once reads as storming for as long as its series exists; the builder's `Rate`
+reads the change. The same builder query without the storm filter, with a
+threshold of 2 a second, the 120 a minute the server judges by, held for the
+sustained window, says the same thing with the thresholds in SigNoz rather
+than in the server's environment, and is the one to reach for when the two
+should differ. The host's netdata and the ops agent watch the
+process, not this counter: a CPU alarm from either says an instance is busy,
+and `commitRates` on that instance says which space and whose sessions made it
+so.
+
+The defaults are held to the Topics space's own history by
+`runtime/memory/test/commit-rates-traces.test.ts`, which replays ten-minute
+stretches of the space's 2026-08-18 export through the tracker. The densest
+stretches of the July 2026 storms ran at four to seven hundred commits a
+minute and are reported within the sustained window plus the first minute
+needed to reach the threshold. The busiest stretches of the three quiet weeks
+after them are cold board loads, which put up to 346
+commits into one minute and nothing into the next, and in those weeks the
+space never stayed over the threshold for a second minute. One stretch of the
+July 22 storm ran at about a hundred commits a minute, touching the threshold
+for a few seconds and never holding it: two sessions alternating one result
+slot at the cadence a saturated server gave them. The alarm is for the rate at which a space
+saturates its server, and a loop under that rate is what the scheduler's
+remote-echo breaker, which counts one session's rewrites of one document,
+exists for
+([`../../plans/scheduler-remote-echo-breaker.md`](../../plans/scheduler-remote-echo-breaker.md)).
 
 ### Profile the process
 
@@ -528,14 +992,14 @@ endpoint, send `Profiler.enable`, `Profiler.setSamplingInterval` and
 `Profiler.start`, hold the connection open while the provoking process runs,
 then `Profiler.stop` and write the result's `profile` to a `.cpuprofile` file,
 which Chrome DevTools and speedscope both load. When the provoker cannot signal
-the driver directly, a sentinel file the driver polls for is the honest
-bracket: the provoker touches it when its observable effect lands, and the
-poll's looseness costs trailing idle samples, never attribution.
+the driver directly, a sentinel file the driver polls for is the honest bracket:
+the provoker touches it when its observable effect lands, and the poll's
+looseness costs trailing idle samples, never attribution.
 
 To say what ran inside the window, difference `slowQueries` around it the same
-way as the timing rows: it is a bounded list, so capture it either side and
-read the new tail — each entry names the operation, the space, and the watch
-counts behind one server span the profile just weighed.
+way as the timing rows: it is a bounded list, so capture it either side and read
+the new tail — each entry names the operation, the space, and the watch counts
+behind one server span the profile just weighed.
 
 OTEL spans exist behind `OTEL_ENABLED` with a collector to receive them, and are
 the right instrument for a deployed server rather than a local investigation.

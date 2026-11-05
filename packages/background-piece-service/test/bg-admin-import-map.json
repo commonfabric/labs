@@ -1,8 +1,0 @@
-{
-  "imports": {
-    "@commonfabric/runner/jsx-dev-runtime": "./jsx-runtime-shim.ts",
-    "@commonfabric/runner/jsx-runtime": "./jsx-runtime-shim.ts",
-    "@std/assert": "jsr:@std/assert@^1",
-    "commonfabric": "./commonfabric-shim.ts"
-  }
-}

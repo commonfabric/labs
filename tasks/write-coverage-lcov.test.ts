@@ -1,24 +1,14 @@
-import {
-  assert,
-  assertEquals,
-  assertRejects,
-  assertStringIncludes,
-} from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { dirname, fromFileUrl, join, toFileUrl } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
   collectCoverageProfileFiles,
-  copyUnlaunchedMembers,
   isTrackedFile,
   normalizeLcovInstancePaths,
   parseFilesMissingTranspiledSource,
   parseFilesWithNoSource,
 } from "./write-coverage-lcov.ts";
 import { isTrackedSourcePath } from "./coverage-metrics.ts";
-import {
-  readUnlaunchedMembers,
-  writeUnlaunchedMembers,
-} from "./unlaunched-members.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 const SCRIPT = join(REPO_ROOT, "tasks/write-coverage-lcov.ts");
@@ -107,81 +97,6 @@ Deno.test("write-coverage-lcov writes an empty report when the profile dir is ab
     const result = await runScript([join(root, "missing"), output]);
     assertEquals(result.code, 0);
     assertEquals(await Deno.readTextFile(output), "");
-  } finally {
-    await Deno.remove(root, { recursive: true });
-  }
-});
-
-Deno.test("copyUnlaunchedMembers puts the profile directory's record beside the report", async () => {
-  const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
-  try {
-    const profileDir = join(root, "raw");
-    await writeUnlaunchedMembers(profileDir, ["./packages/shell", "./tasks"]);
-
-    await copyUnlaunchedMembers(profileDir, join(root, "lcov", "out.lcov"));
-
-    assertEquals(await readUnlaunchedMembers(join(root, "lcov")), [
-      "./packages/shell",
-      "./tasks",
-    ]);
-  } finally {
-    await Deno.remove(root, { recursive: true });
-  }
-});
-
-Deno.test("copyUnlaunchedMembers writes nothing for a profile directory carrying no record", async () => {
-  const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
-  try {
-    const profileDir = join(root, "raw");
-    await Deno.mkdir(profileDir);
-
-    await copyUnlaunchedMembers(profileDir, join(root, "lcov", "out.lcov"));
-
-    // With no record on either side there is nothing to say, and the report
-    // directory is not created for the sake of saying it.
-    await assertRejects(
-      () => Deno.stat(join(root, "lcov")),
-      Deno.errors.NotFound,
-    );
-  } finally {
-    await Deno.remove(root, { recursive: true });
-  }
-});
-
-Deno.test("copyUnlaunchedMembers clears a record an earlier run left beside the report", async () => {
-  const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
-  try {
-    const profileDir = join(root, "raw");
-    const lcovDir = join(root, "lcov");
-    await Deno.mkdir(profileDir);
-    await writeUnlaunchedMembers(lcovDir, ["./packages/shell"]);
-
-    await copyUnlaunchedMembers(profileDir, join(lcovDir, "out.lcov"));
-
-    // The report and the record are uploaded together and read together, so a
-    // record describing an earlier run would qualify this run's report.
-    assertEquals([...Deno.readDirSync(lcovDir)], []);
-  } finally {
-    await Deno.remove(root, { recursive: true });
-  }
-});
-
-Deno.test("write-coverage-lcov carries the record over even when nothing converts", async () => {
-  // A run that stopped early is the run whose profiles are most likely to hold
-  // nothing convertible, so the copy has to happen ahead of that outcome.
-  const root = await Deno.makeTempDir({ prefix: "write-lcov-" });
-  try {
-    const profileDir = join(root, "raw");
-    await writeUnlaunchedMembers(profileDir, ["./packages/shell"]);
-    const output = join(root, "lcov", "workspace-1.lcov");
-
-    const result = await runScript([profileDir, output]);
-
-    assertEquals(result.code, 0);
-    assertEquals(await Deno.readTextFile(output), "");
-    assertEquals(await readUnlaunchedMembers(join(root, "lcov")), [
-      "./packages/shell",
-    ]);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
@@ -293,7 +208,7 @@ Deno.test("write-coverage-lcov converts real profiles to a normalized LCOV repor
 
 // A file the coverage-debt metric tracks, which nothing has compiled, so the
 // cache holds no transpiled form of it while the file is there to be read. The
-// metric tracks `packages/` and `tasks/`, so it goes in `tasks/` under a unique
+// metric tracks the packages and `tasks/`, so it goes in `tasks/` under a unique
 // dot-prefixed name that `.gitignore` covers, and the caller removes it.
 async function writeUncompiledTrackedFile(): Promise<string> {
   const filePath = join(
@@ -484,34 +399,34 @@ Deno.test("write-coverage-lcov succeeds when the file left out is outside the re
 
 Deno.test("isTrackedFile gives the same answer as the coverage metric", () => {
   const paths = [
-    "packages/a/mod.ts",
-    "packages/a/mod.tsx",
-    "packages/a/mod.js",
-    "packages/a/mod.jsx",
+    "runtime/a/mod.ts",
+    "runtime/a/mod.tsx",
+    "runtime/a/mod.js",
+    "runtime/a/mod.jsx",
     "tasks/a.ts",
     "tasks/nested/deep/a.ts",
     "docs/x.ts",
     "scripts/x.ts",
-    "packages/a/mod.test.ts",
-    "packages/a/mod.test.tsx",
-    "packages/a/mod.spec.ts",
-    "packages/a/mod.bench.ts",
-    "packages/a/mod.d.ts",
-    "packages/a/README.md",
-    "packages/a/mod.json",
-    "packages/a/test/helper.ts",
-    "packages/a/tests/helper.ts",
-    "packages/a/fixtures/x.ts",
-    "packages/a/integration/x.ts",
-    "packages/a/dist/x.ts",
-    "packages/a/build/x.ts",
-    "packages/a/coverage/x.ts",
-    "packages/a/.cache/x.ts",
-    "packages/a/node_modules/x/index.js",
-    "packages/generated-patterns/integration/x.ts",
-    "packages/patterns/factory-outputs/x.ts",
-    "packages/patterns-saves-backup/x.ts",
-    "packages/static/assets/x.ts",
+    "runtime/a/mod.test.ts",
+    "runtime/a/mod.test.tsx",
+    "runtime/a/mod.spec.ts",
+    "runtime/a/mod.bench.ts",
+    "runtime/a/mod.d.ts",
+    "runtime/a/README.md",
+    "runtime/a/mod.json",
+    "runtime/a/test/helper.ts",
+    "runtime/a/tests/helper.ts",
+    "runtime/a/fixtures/x.ts",
+    "runtime/a/integration/x.ts",
+    "runtime/a/dist/x.ts",
+    "runtime/a/build/x.ts",
+    "runtime/a/coverage/x.ts",
+    "runtime/a/.cache/x.ts",
+    "runtime/a/node_modules/x/index.js",
+    "runtime/generated-patterns/integration/x.ts",
+    "patterns/dev/factory-outputs/x.ts",
+    "runtime/patterns-saves-backup/x.ts",
+    "base/static/assets/x.ts",
   ];
   for (const relativePath of paths) {
     assertEquals(
@@ -523,23 +438,23 @@ Deno.test("isTrackedFile gives the same answer as the coverage metric", () => {
 });
 
 Deno.test("isTrackedFile agrees with what the coverage metric charges for", () => {
-  assert(isTrackedFile("file:///repo/packages/a/mod.ts", "/repo"));
+  assert(isTrackedFile("file:///repo/runtime/a/mod.ts", "/repo"));
   assert(isTrackedFile("file:///repo/tasks/a.ts", "/repo"));
   assert(!isTrackedFile("file:///elsewhere/mod.ts", "/repo"));
   // A sibling directory whose name merely starts with the root's name.
   assert(!isTrackedFile("file:///repo-other/mod.ts", "/repo"));
   // The cache-busting query some tests import with does not hide the path.
-  assert(isTrackedFile("file:///repo/packages/a/mod.ts?testRun=x", "/repo"));
+  assert(isTrackedFile("file:///repo/runtime/a/mod.ts?testRun=x", "/repo"));
   assert(!isTrackedFile("https://example.com/mod.ts", "/repo"));
   // In the repository, but outside what the metric walks or counts, so losing
   // it from the report costs nothing.
   assert(!isTrackedFile("file:///repo/docs/x.ts", "/repo"));
   assert(!isTrackedFile("file:///repo/scripts/x.ts", "/repo"));
-  assert(!isTrackedFile("file:///repo/packages/a/test/helper.ts", "/repo"));
-  assert(!isTrackedFile("file:///repo/packages/a/fixtures/x.ts", "/repo"));
-  assert(!isTrackedFile("file:///repo/packages/a/mod.test.ts", "/repo"));
-  assert(!isTrackedFile("file:///repo/packages/a/mod.d.ts", "/repo"));
-  assert(!isTrackedFile("file:///repo/packages/a/README.md", "/repo"));
+  assert(!isTrackedFile("file:///repo/runtime/a/test/helper.ts", "/repo"));
+  assert(!isTrackedFile("file:///repo/runtime/a/fixtures/x.ts", "/repo"));
+  assert(!isTrackedFile("file:///repo/runtime/a/mod.test.ts", "/repo"));
+  assert(!isTrackedFile("file:///repo/runtime/a/mod.d.ts", "/repo"));
+  assert(!isTrackedFile("file:///repo/runtime/a/README.md", "/repo"));
 });
 
 Deno.test("parseFilesMissingTranspiledSource reads every dropped file out of the warnings", () => {

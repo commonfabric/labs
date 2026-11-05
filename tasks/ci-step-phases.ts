@@ -33,6 +33,7 @@ export const PHASE_MARKERS: [string, Phase][] = [
   ["🚧", "work"], // guard that fails the build on a banned pattern
   ["🩹", "work"], // check for unresolved merge-conflict markers
   ["✅", "work"], // validate an artifact a previous step produced
+  ["🗺️", "work"], // plan a run's lanes, or what one lane runs
   ["🧪", "work"], // run tests
   ["🧩", "work"], // run integration tests
   ["🔁", "work"], // replay captured fixtures under today's source

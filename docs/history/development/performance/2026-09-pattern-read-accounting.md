@@ -9,7 +9,7 @@ reason: "First-batch read-accounting measurements and generic reduction baseline
 
 Measured against base commit `16de7e0c87` with the uncommitted read-accounting
 implementation, using Deno 2.9.4 on macOS arm64. This record covers A1/A2 and
-the available portion of A0 in `docs/plans/pattern-computation-cost.md`.
+the available portion of A0 in `docs/history/plans/pattern-computation-cost.md`.
 It does not establish a speedup for an incremental aggregate: those operators
 are not implemented by this batch.
 

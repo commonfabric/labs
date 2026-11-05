@@ -26,14 +26,13 @@ roles. `default` follows the first-party constant and stays unmarked;
 `server-execution-off` when it resolves OFF. Which posture is unmarked
 follows the constant (the registry's summary table states it); each marker
 is the continuous history of its posture whenever that posture is not the
-default, across flips in either direction. The single-process default jobs (the unit
-suites, `cf test`, the
-no-server pattern-unit lane) never read that default and stay ambient-OFF,
-so they are unmarked for the older reason: the flip does not reach them
-(`docs/specs/test-records.md`). One record is one JSON line; one uploaded
-object is a run's
-context line followed by its record lines. The schema, the line codecs, and
-their validators live in `packages/test-support/src/records/`.
+default, across flips in either direction. The single-process default suites
+(the unit suites, `cf test`, the no-server `pattern-unit` suite) never read that
+default and stay ambient-OFF, so they are unmarked for the older reason: the
+flip does not reach them (`docs/specs/test-records.md`). One record is one JSON
+line; one uploaded object is a run's context line followed by its record lines.
+The schema, the line codecs, and their validators live in
+`base/test-support/src/records/`.
 
 Records carry only public-repository material: names, hashes, durations. No
 usernames, hostnames, tokens, or log text — that discipline is what makes
@@ -44,19 +43,45 @@ records are world-visible, the same as the repository itself. A branch
 whose name should not be public should not report from a workstation.
 
 Renaming a test renames its identity and splits its history. When the
-continuity matters, append a line to `tasks/test-identity-aliases.jsonl`
-mapping the old identity (or a whole scope, for a package rename) to the
-new one with the date; `deno task check-test-aliases` holds that file to
-append-only, no-double-mapping, acyclic rules. The same rename applies to
-every variant.
+continuity matters, append a line mapping the old identity to the new one
+with the date. The line goes in `tasks/test-identity-aliases/`, in the file
+named after the test file that holds the test: a rename in
+`runtime/runner/test/link-utils.test.ts` is a line in
+`link-utils.test.ts.jsonl`, and a test file with no alias file yet gets a
+new one. Only the last path segment names the file,
+so test files of one name share one, and a test file that moves keeps the
+one it has. A line mapping a whole scope, for a package rename, goes in
+`whole-scope.jsonl`. A line mapping a moved directory or file to its new path
+goes in `moved-paths.jsonl`. It renames every identity whose name holds that
+path, such as a pattern test's file or an item that `deno task cfcheck` reports.
+It also moves the file a record names, so a unit test whose name holds no path
+is still found in the file it moved to. Date a path line later than the day the
+move lands, so that it applies to every record made before the move:
+
+```json
+{"date": "2026-12-01", "from": {"p": "packages/runner"}, "to": {"p": "runtime/runner"}}
+```
+
+Every reader takes the directory as a single set of
+aliases, so which file holds a line changes nothing about what it means;
+the division keeps two changes that rename tests in different test files
+from appending to the same file, and so from conflicting when they merge.
+`deno task check-test-aliases` holds the directory to append-only,
+no-double-mapping, acyclic rules: each file only ever grows, none goes
+away, and no identity is mapped twice across all of them. It also fails a
+line that does not parse, naming the file and line, and anything no reader
+would load: an entry of the directory other than a `.jsonl` file directly
+inside it, or a `test-identity-aliases.jsonl` beside the directory, whose
+lines belong in the files inside. The same rename applies to every variant.
 
 ## The environment surface
 
 - `CF_TEST_RECORDS_DIR` — the active run's spool directory. Producers
   append record fragments here; when it is unset, recording is off
-  everywhere. CI jobs set it to a workspace directory; local entry points
-  set it themselves when they own a run. Never point two concurrent runs
-  at one directory by hand — each run owns its own spool.
+  everywhere. A CI lane job sets it to a workspace directory, and the lane gives
+  each batch execution a spool of its own in the lane's working directory; local
+  entry points set it themselves when they own a run. Never point two concurrent
+  runs at one directory by hand — each run owns its own spool.
 - `CF_TEST_RECORDS_KEY_FILE` — a personal reporting key (see below), put in
   the shell's profile and in each agent harness's configuration by `deno
   task test-records-key setup`. Its presence is the local opt-in: with it,
@@ -72,10 +97,14 @@ every variant.
   non-interactive shells, a harness nothing here knows — puts the variable
   in whatever starts the agent.
 - `CF_TEST_SKIP_LIST` — a file naming the tests this invocation is not to
-  run, keyed by registering file and by name. The registration preload
+  run, keyed by test file and by name. The registration preload
   reads it and registers a listed test as ignored rather than dropping it,
-  so a skipped test appears in the report as skipped instead of
-  disappearing. An identity the file does not name runs, so a test added
+  so a skipped test appears in the run's output and its JUnit report as
+  skipped instead of disappearing. A lane ships no record of a test it
+  listed because its plan gave the test to another lane, or to none. A
+  test a configuration declares unavailable is listed by every lane that
+  opens its file, and its skip is recorded by the lane its plan gave it
+  to. An identity the file does not name runs, so a test added
   or renamed since the list was built runs. A file that is missing or
   malformed runs everything.
 - `CF_TEST_AGENT` — an opaque label for the operating agent, recorded
@@ -97,13 +126,20 @@ every variant.
 
 ## Getting a key
 
-A key is what lets a team member's local runs report, and every team
-member is urged to set one up — the whole path is self-service and takes
-a couple of minutes. Contributing without commit access? Then keys are
-simply not part of your workflow yet, and skipping them costs you
-nothing: your local tests run identically without one, and CI records
-your pull requests' runs on its own, no key involved. The day you have
-commit access, the one command below is yours.
+A key is what lets a person's local runs report. Everyone who works in
+this repository regularly is encouraged to set one up; it takes a
+couple of minutes, and every run it records makes the shared history
+more useful to everyone. A key stays active while its holder has recent
+pull-request activity (see below), so it fits best once you are
+contributing regularly. There is no need to set one up for a first
+change or an occasional fix: local tests run identically without a key,
+and you are welcome to set one up whenever it suits you.
+
+With commit access the whole path is self-service. Without it, the path
+is the same command plus one workflow run that a team member will start
+for you, described below. If you don't have commit access, CI does not
+record your pull requests' runs, so a key is how your runs join the
+history.
 
 A key takes only a GitHub identity, and one command:
 
@@ -138,6 +174,32 @@ minting a second one — unless a run is already minting for you, which it
 takes up, because the key that run delivers is the one replacing what is
 installed.
 
+The key file and the delivery identity live in `~/.config/commonfabric/`
+(or `$XDG_CONFIG_HOME/commonfabric/` when that variable is set). A
+workstation that holds them in the
+`~/.config/common-fabric/` directory is moved by whichever key tool
+command runs next there. The files go to the new directory, the profile
+line this tool wrote, and every harness entry naming the old path, are
+rewritten to name it,
+and the old directory is removed once it is empty. A shell started
+before the move still names the old path, and the uploader follows that
+path to the key's new place. A file that already exists in the new
+directory is kept, and its counterpart in the old directory is reported
+and left in place until `uninstall` removes both.
+
+Starting the workflow takes write access, so for someone without commit
+access a team member starts it for them. The person signs in with `gh auth login`
+(setup needs a GitHub login before it does anything else), runs `deno
+task test-records-key setup`, and sends a team member their GitHub login
+and the `cfr1...` recipient string the command prints. The string is a
+public key, so any channel will do. The team member opens the workflow
+page, chooses "Run workflow", and fills in the recipient string and, as
+the username, the person's login. Minting revokes every key that login
+already holds, so the team member checks the login before running it.
+The person's waiting command finds the run by the recipient in its name,
+checks that the key was minted for their own login, and installs it. The
+dispatch log records who minted for whom.
+
 `request` and `collect` are the same path in two invocations, for
 somewhere a watching command is unwanted — a shell without a terminal to
 interrupt, or a delivery collected on a different day than it was asked
@@ -151,7 +213,7 @@ deno task test-records-key collect
 The key travels sealed. The delivery identity is an X25519 key pair whose
 public half is the `cfr1...` recipient string the tool prints and the
 workflow takes as its input; the private half stays in
-`~/.config/common-fabric/test-records-identity.json` and never leaves the
+`~/.config/commonfabric/test-records-identity.json` and never leaves the
 workstation. The workflow seals the minted key to that recipient —
 ephemeral-sender X25519, HKDF-SHA256, AES-256-GCM, with both public keys
 bound into the derivation — and publishes the box as a workflow artifact
@@ -221,26 +283,38 @@ an advisory file lock the kernel releases on any process death, and ships
 one gzipped object at the end — exactly one attempt, warning and moving on
 if it fails. Every opted-in run also sweeps the spool root and ships any
 spool whose owner's lock is free. Object names are deterministic, so
-shipping twice collides on create and duplicates never come into being.
+shipping twice collides on create rather than writing a second copy. The CI
+area holds some second copies from before the relay dated each attempt by its
+own start; [the specification](../specs/test-records.md#the-store) says how a
+reader recognizes one.
 
-In CI, jobs hold no credentials: each test job ends with a credential-free
-step that gathers the spool and the job's JUnit files into a
-`test-records-*` artifact, and the Test Records Relay workflow — the only
-CI principal that can write to the store — composes each artifact's context
-from the trusted event payload and creates one object per artifact.
-Same-repository runs always ship. A fork run ships only when its actor
-is on the infra-managed team member list, which is what lets team
-members' personal-fork pull requests report while the store accepts
-nothing authored by anyone else; other fork runs still run their tests
-normally and simply ship no records. Re-running the relay, or
-dispatching it with a run id, re-ships idempotently.
+In CI, jobs hold no record-store credential. A lane gathers each batch's records
+and JUnit reports into its spool as the batch finishes, marking each record with
+its suite's variant. Each suite declares its JUnit outputs in the topology, so
+the lane finds them itself, and its ship step names no JUnit files. The lane
+ends with that credential-free step, which packs the spool into a
+`test-records-tests-<lane>-a<attempt>` artifact. A lane's records leave out
+the siblings of the tests it was asked to run, which it registers as ignored
+because its plan gave them to another lane or to none. The Test Records Relay
+workflow — the only CI principal that can write to the store — runs once per
+attempt, composes each of that attempt's artifacts' context from the
+trusted event payload, and creates one object per artifact, dated by that
+attempt's start.
+Same-repository runs always ship. A fork run ships only when its actor is on the
+infra-managed team member list, which is what lets team members' personal-fork
+pull requests report while the store accepts nothing authored by anyone else;
+other fork runs still run their tests normally and ship no records. Re-running
+the relay, or dispatching it with a run id and an attempt number, re-ships that
+attempt idempotently; a dispatch naming no attempt re-ships the run's latest.
 
 The shared `test-records-ship` action accepts an optional `variant` input and
 also reads the CI-only `CF_TEST_RECORDS_VARIANT` fallback. An explicit input
 wins. This lets a workflow resolve a stable role to a variant once at job scope
 without duplicating that expression at every shipping step. The action applies
 the resolved value to every spooled and JUnit-derived record in that job; leave
-both surfaces unset for the default configuration.
+both surfaces unset for the default configuration. The lanes set neither, since
+a lane's batches can run in different configurations and the lane has already
+marked each one.
 
 The relay runs its parser from the default branch. Land parser, relay, reader,
 and action support for a new optional record field before any test workflow
@@ -257,12 +331,23 @@ https://storage.googleapis.com/storage/v1/b/cf-ci-metadata/o?prefix=labs/test-re
 ```
 
 Objects are gzip-encoded NDJSON served with transcoding, so a plain fetch
-receives text. `packages/test-support/src/records/store-reader.ts` is the
-validating reader; `deno task` scripts built on it:
+receives text. `base/test-support/src/records/store-reader.ts` is the
+validating reader; the readers built on it:
 
 - `tasks/test-records-report.ts` — collisions, high-churn identity
   families, and the over-sixty-seconds list (`--gate` turns that list into
-  the ratchet's exit status).
+  the ratchet's exit status). A single day holds tens of thousands of
+  objects, so it reads them several at a time, and a day it cannot list or
+  an object it cannot read is left out rather than ending the run. Every
+  such day is named on the standard error stream, as are the first fifty
+  such objects, after which one line says the rest are not named. The
+  printed report counts the objects it could not read, however many were
+  named, and the days it could not list, whose objects it has no count of;
+  every figure under those counts is over the objects that were read. A
+  gated run exits 1 for a test over the rule, which is work to do, and 3
+  for a window read in part, which is a ratchet that could not check
+  rather than one that failed. It is run by hand: no workflow and no
+  `deno task` entry invokes it.
 - `tasks/test-records-compact.ts` — rewrites each closed day of raw
   records as a manifest and a few tens of rollup shards under
   `aggregated/`, sized so that a shard is a string a reader can hold;
@@ -271,21 +356,55 @@ validating reader; `deno task` scripts built on it:
   on a daily schedule, which is the only place its identity can be
   assumed; there is no key for it and no way to run the writing half by
   hand.
-- `packages/dashboard/test-records-history.ts` — the dashboard's collector:
+- `dashboard/test-records-history.ts` — the dashboard's collector:
   cached per-identity daily series shaped for `trend.ts`.
 
 Readers that join history across renames apply the alias file through
 `loadAliasResolver` in `@commonfabric/test-support/records`, which the
-report tool and the dashboard collector already do. Consumers that feed
-decisions read only `submissions/ci/`, whose writer credential never
-exists as key material, and exclude fork-authored reports the way those
-two do. The relay's member gate means everything
-stored was authored under the write-access group's trust — `ci.fork`
-marks a team member's fork run — so the remaining distinction for a
-decision consumer is code provenance, not author trust: pull-request
-runs execute unmerged code, and failure-rate or duration baselines come
-from `ci.event` `"push"` runs, whose code the tree itself carries. Both
-fields are stamped from the trusted event payload.
+report tool and the dashboard collector already do. A duration a consumer
+reports or fits comes from passing records alone, for the reason the
+specification gives; run, failure and skip counts come from every record.
+
+Not every record in the store is a test. A lane measures its own setup and
+each of its batches through the same machinery, so those measurements sit
+alongside the tests, on kind `gate` and scope `ci` with a name opening
+`ci-lane `. A consumer building anything per test leaves them out:
+`isLaneMeasurement` from `@commonfabric/test-support/records` recognizes
+one, and it is asked of `record.test` before any alias is resolved. The
+report tool, the dashboard collector, the test-selection fold and the
+topology check all do this. Leaving them in does more than add an identity
+to the output. The figures are not all durations: of the four a lane writes
+per batch about what it ran, two are counts, of the times it opened a unit and
+of its passes, and one holds time another already counts, since what the
+batch's tests took is part of what the batch spent, so a sum over them is a
+number that means nothing. A fifth per batch is what the packer charged the
+lane for the batch rather than anything it spent, and the three a lane writes
+about its work as a whole overlap the batches' figures in the same way.
+`Status`, the job that scores a push run's coverage, writes its figures as
+measurements too, named `ci-lane coverage …`, each holding a count of
+uncovered lines, and three things read them back: the test-selection
+publisher's coverage baselines, the dashboard's coverage debt tile, and the
+report a `main` run posts on its pull request. ["Coverage figures in the
+record store"](COVERAGE.md#coverage-figures-in-the-record-store) says how.
+`tasks/lane-measurement.ts` composes the lane's names this recognizes. The
+normative account is ["Recording" in the
+specification](../specs/test-records.md#recording).
+
+Consumers that feed decisions read only `submissions/ci/`, whose writer
+credential never exists as key material. The relay's member gate means
+everything stored was authored under the write-access group's trust —
+`ci.fork` marks a team member's fork run — so the only distinction left
+for a decision consumer is code provenance, not author trust:
+pull-request runs execute unmerged code, and failure-rate or duration
+baselines come from runs of the head of `main` — `ci.event` `"push"`,
+`"schedule"`, `"workflow_dispatch"` or `"workflow_run"` — whose code the
+tree itself carries. `isMainRun` in `@commonfabric/test-support/records` is
+that rule. Both fields are stamped from the trusted event payload. A fork
+run and a same-repository run of a pull request are therefore read
+alike, and what `ci.fork` keeps a run out of is a baseline rather than
+the data. It is set for a payload that did not name both repositories as
+well, so a run the relay could not place is never taken for one of this
+repository's own pushes.
 
 Two attribution facts worth knowing when reading `local/` prefixes: the
 minting workflow takes a username input, so anyone with repository write
@@ -296,19 +415,31 @@ is the record of who minted what for whom.
 
 ## Covering a new test surface
 
-A runner that already emits JUnit needs nothing but a `--junit`
-specification on its job's ship step, and a `--preload` naming
-`packages/test-support/src/records/preload.ts` where the surface is
-`deno test`. `preloadArgument()` from `@commonfabric/test-support/records`
-spells that flag; Deno resolves `--preload` as a path rather than through
-the import map, so it must be absolute and no caller writes it out.
+A new test surface is a suite of the test topology, `tasks/test-topology.ts` and
+the modules under `tasks/test-topology/`, and never a new job: the lanes run
+what the topology declares and ship its records. A suite whose runner emits
+JUnit declares each report, with its kind, scope and file prefix, in the
+invocations its `command()` returns, and passes a `--preload` naming
+`base/test-support/src/records/preload.ts` where the surface is `deno test`.
+`preloadArgument()` from `@commonfabric/test-support/records` returns that flag;
+Deno resolves `--preload` as a path rather than through the import map, so it
+must be absolute and no caller writes it out.
 
 The preload does two things, and it only installs itself when it has one
-of them to do: it captures the file each test was registered from and
+of them to do: it captures the test file each test belongs to and
 leaves the map in the spool, and it applies `CF_TEST_SKIP_LIST`. Wrapping
 `Deno.test` costs a JUnit report the file attribution it carries on its
 own, so a process with nothing to skip and no spool it may write leaves
 `Deno.test` alone and the report's own class names are read instead.
+
+The preload writes each test file's names into the spool as soon as the file
+has registered them, before any of that file's tests run, because a `deno test`
+interrupted by SIGINT exits without unloading. Such a run reports the test it
+was in the middle of as cancelled, and the ingestion records that test as
+skipped when the lane interrupted the run, since it neither passed nor failed.
+`deno test` also reports a test as cancelled when an error the test did not
+catch stops it, and in a run nothing interrupted the ingestion records that
+test as failed.
 
 Both of those need permissions. Reading `CF_TEST_RECORDS_DIR` and
 `CF_TEST_SKIP_LIST` needs `--allow-env`, and that one the test task
@@ -316,83 +447,113 @@ grants: a task naming a restricted list of variables names those two
 among them — `readEnv` swallows the refusal, so a task that leaves them
 out records nothing and skips nothing, silently.
 
-Writing the map needs `--allow-write` covering the directory the run
-owner put the spool in, and that one the task cannot grant, because it
-cannot name the path: `deno task` expands `$VAR` but not
-`${VAR:-default}`, `--allow-write=` with an unset variable ends the run
-with `Empty values are not allowed`, and a `$` costs its member the file
-granularity `tasks/test-topology/deno-task.ts` reads its task for —
+The rest the task cannot grant, because it cannot name the paths. The
+preload reads the skip list. It reads the repository's `.git` as it
+climbs from the test file to the repository root, since that climb is
+what names the file each test is keyed by, in the skip list and in the
+name map alike. And it writes the name map into the spool. Each of
+those is a path only the run owner knows: `deno task` expands `$VAR` but
+not `${VAR:-default}`, `--allow-write=` with an unset variable ends the
+run with `Empty values are not allowed`, and a `$` costs its member the
+file granularity `tasks/test-topology/deno-task.ts` reads its task for —
 every `$` but the one command substitution that file resolves, which is
 the `deno eval` naming the executable that several tasks already carry.
-So the caller that appends the preload appends the permission beside it.
-`spoolWriteArgument()` from
-`@commonfabric/test-support/records` builds that argument, and it builds
-none for an invocation already permitted to write everywhere. Deno merges
-two `--allow-write` path lists, so an invocation naming a list of its own
-takes the spool on top of it. A blanket grant is the one that cannot take
-a list beside it: `-A` and `--allow-all` refuse the combination outright,
-ending the run with `the argument '--allow-all...' cannot be used with
-'--allow-write[=<PATH>...]'`, and a bare `--allow-write` or `-W` is cut
+So the caller that appends the preload appends the permissions beside
+it. `recordingArguments()` from `@commonfabric/test-support/records`
+builds the preload argument and those permissions together, given the
+invocation's own flags, the spool, the repository root, and the skip
+list where there is one.
+
+The preload also listens for the `error` and `unhandledrejection` events,
+without handling them. Either event before a file's hooks and tests begin can
+mean the file's module stopped part way through loading, after registering only
+some of its tests, so the preload marks that file's names as interrupted. A lane
+then does not read them as everything the file holds. The preload registers a
+`Deno.test.beforeAll` hook of its own, which Deno runs once the module has
+settled, to know when that is.
+
+It grants the reads as one `--allow-read` list and the write as one
+`--allow-write` list, and leaves out a list for a permission the flags
+already hold everywhere. Deno merges two path lists for one permission,
+so an invocation naming a list of its own takes these on top of it. A
+blanket grant is the one that cannot take a list beside it: `-A` and
+`--allow-all` refuse the combination outright, ending the run with `the
+argument '--allow-all...' cannot be used with '--allow-write[=<PATH>...]'`,
+and a bare `--allow-read` or `--allow-write`, or `-R` or `-W`, is cut
 down to whatever list joins it. Short flags cluster, so `-RW` is a
 blanket grant of both, and `-A` is one of everything.
 
-It builds none for an invocation that cannot read the filesystem either,
-and that is the case to hold on to. A writable spool is what makes the
-preload wrap `Deno.test`, and wrapping is what costs the report the class
-names ingestion reads each case's file from; the files that replace them
-come from climbing to the directory holding `.git`, which needs read
-permission. So the write and the read go together, and an invocation
-granted one without the other records no file for any of its tests.
-`tasks/test-topology/package-integration.ts` holds a part in that shape,
-with `--allow-env` and no `--allow-read`.
+It grants `.git` under the root as given and, where that differs, under
+the root with every symbolic link resolved. Deno names the main module
+by the path the command gave it, resolved against the working directory
+where it is relative, and the working directory is always canonical, so
+the climb starts from either. Deno checks each read against a grant
+exactly as the grant writes it.
 
-Four callers append the preload, and three of them append the write
-beside it. `tasks/workspace-tests.ts` appends both to each member's
-`deno task test`, taking the write from `spoolWriteArgument()` directly.
-The two topology suites append both to each invocation a batch runs —
-`fileSuite` in `tasks/test-topology/suite.ts` and `unitSuite` in
-`tasks/test-topology/unit.ts` — through `recordingArguments()`, which is
-where the helper is called for them. The fourth, `tasks/integration.ts`,
-appends the preload alone, because every invocation it builds runs under
-`-A` and the helper would build nothing for any of them. A task there
-that ever narrows its permissions needs the argument too.
+A member whose task reads and writes nothing of its own, such as one
+granting `--allow-env` alone, is the case this is for. Given those
+three paths it skips what its skip list names and leaves a name map
+carrying each test's file, the same as a member reading everything.
+
+Four callers append the preload, and three of them go through
+`recordingArguments()`. `tasks/workspace-tests.ts` appends its result to
+each member's `deno task test`, and a `CF_TEST_SKIP_LIST` the run
+inherits reaches each member resolved to an absolute path and granted
+beside the rest. The two topology suites — `fileSuite` in
+`tasks/test-topology/suite.ts` and `unitSuite` in
+`tasks/test-topology/unit.ts` — reach it through `denoTestCommand()`,
+which builds every `deno test` command line they run and is handed the
+skip list `writeBatchSkipList()` wrote into the batch's own directory. The fourth, `tasks/integration.ts`, appends
+the preload alone, because every invocation it builds runs under `-A`
+and would be granted nothing. A task there that ever narrows its
+permissions needs the permissions too.
 
 A test task naming its own `--import-map` does not take the preload. That
 map governs every module of the invocation, the preload included, so a
 specifier the preload needs and the map does not carry fails the whole
-run rather than the preload alone. Such a member keeps its JUnit path and
-loses nothing by the omission: with no wrapper installed, the report
-keeps its own class names and ingestion reads the file from those.
+run rather than the preload alone. Such a member keeps its JUnit path,
+and its files come from the report's own class names instead — from the
+ones that are a relative source path, joined onto the directory the
+caller names, since a runtime or remote class name resolves to no file
+and a report ingested without that directory records none.
 
 What a class name reaches is the test file that registered the test
 itself. A module of ours that registers on a file's behalf — a fixture
 runner handed a directory of cases, a harness that replaces `Deno.test`
 to give each test a clock — is the nearest frame below the runner, so
-the class names it instead. Such a module goes in two places: it calls
-`registerFrameworkModule(import.meta.url)`, so the preload's map names
-the file that asked, and its path tail goes in
+the class names it instead. Such a module's path tail goes in
 `MACHINERY_MODULE_SUFFIXES`, so ingestion declines the class name rather
-than recording the module as every test's file. Missing from the first,
-it takes the map; missing from the second, it takes the report. A
-surface that registers this way and cannot write a map records no file.
+than recording the module as every test's file, and takes the file from
+the preload's map. A surface that registers this way and cannot write a
+map records no file.
+
+The map needs nothing from such a module, or from any other helper that
+registers tests. Deno runs each test file in a realm of its own with
+that file as `Deno.mainModule`, and the preload names every test the
+process registers after it, whichever module made the call. So, in a
+run that takes the preload, a file that registers its cases through a
+shared module is the file its records carry and the file its skip list
+is keyed by, which is the path the command named and the one a topology
+suite knows as its unit.
 
 A harness with per-result callbacks
 appends records through `FragmentWriter` (see the hooks in
-`packages/cli/lib/test-runner.ts` and `packages/deno-web-test/runner.ts`).
+`runtime/cli/lib/test-runner.ts` and `runtime/deno-web-test/runner.ts`).
 Anything else wraps its command:
 
 ```
 deno task run-recorded <kind> <scope> <name> -- <command...>
 ```
 
-A wrapped command in a workflow step also has its identity registered in
-the test topology. A lane runs what a suite enumerates, so the topology
-is what keeps the command running once a lane takes over the job. `deno
-task check-test-topology` reads every such step and fails on one no suite
-claims, which settles it on the pull request that adds the step. A
-command with no suite to register it under is one to leave unwrapped:
-["Recording" in the specification](../specs/test-records.md#recording)
-says that a check no lane can be asked to run is not recorded.
+A wrapped command runs in a suite of the test topology, never in a workflow
+step. The lanes run every test and gate the topology declares, so a step that
+records by hand either records a check a suite already runs a second time
+against one commit, or records one no lane will ever run or select. `deno task
+check-test-topology` fails every such step, and says which of the two it is, on
+the pull request that adds it. A command with no suite to register it under is
+one to leave unwrapped: ["Recording" in the
+specification](../specs/test-records.md#recording) says that a check no lane can
+be asked to run is not recorded.
 
 A harness that is also a library — one this repository's own tests drive
 over fixture files — takes the decision to record from its caller, not
@@ -401,15 +562,70 @@ driving the same function does not, since the files it hands over are that
 test's fixtures. `recordsSpooledBy` from
 `@commonfabric/test-support/records` pins both halves of that: it points
 recording at a fresh spool, runs the function, and hands back every record
-the function left there.
+the function left there. It throws instead when the function left a record
+line the record parser refuses, since every reader of the store drops that
+line.
 
 A harness a test drives as a child process takes it the other way round,
 since the child reads its own environment: the test hands the child an
 empty `CF_TEST_RECORDS_DIR`, which is recording off. `tasks/integration.ts`
 does that for the `cf` children whose files it times itself, and
-`packages/deno-web-test/test/utils.ts` for the fixture projects it runs the
+`runtime/deno-web-test/test/utils.ts` for the fixture projects it runs the
 browser harness over.
+
+Two narrower checks back the rule up. The pattern runner and the browser
+harness record nothing for a test file that no repository holds, which is
+what a fixture in a temporary directory is, whatever spool the run
+inherited. And the record parser every reader shares drops a record whose
+`file`, or whose pattern test name, is absolute or climbs above the
+repository root. The parser cannot tell every fixture's record from a real
+one: a run whose working directory is the fixture's own directory names its
+files without climbing at all. Neither check reaches a fixture kept inside
+the repository, such as those under `runtime/cli/test/fixtures`. For those,
+the caller's decision not to record is the only thing that keeps them out of
+the store.
+
+The child inherits every variable the test's own process carries, so a
+test that starts one names each recording variable it cares about,
+including the ones the child is meant not to have. `CF_TEST_SKIP_LIST` is
+the one to name deliberately. A lane runs a package's tests with a skip
+list naming everything inside it that lane did not select, so a child
+started from such a run is handed a skip list nobody asked it to carry.
+Two things then follow from a list the child's own test never wrote. The
+preload wraps `Deno.test` for a child whose test set up a run that wraps
+nothing. And where the bdd re-export loaded before the preload, a skip
+list is what makes the preload end the run rather than warn and carry on.
+An empty value is unset for that variable too, so naming it beside
+`CF_TEST_RECORDS_DIR` is the whole of it.
+`base/test-support/test/records/preload.test.ts` starts a recording
+child on purpose, and names both.
 
 Every test must finish within sixty seconds in CI, not counting setup; a
 check that cannot is a container to split, and the report's over-60s list
-is the work queue for that.
+is the work queue for that. The list is built from passing executions, so
+a failure that a wait's safety net ended at its bound does not put a test
+on it.
+
+A suite names the setup it needs in `needs`, from the capabilities in
+`tasks/ci-capabilities.ts`. A lane opens the union of what its batches need,
+each capability once, and every capability is idempotent. Several ways of
+providing one thing are separate capabilities, and a suite names the one it
+needs. `toolshed` runs a server from source, which serves the API and no shell,
+so it suits a suite that only talks to the server. A suite that drives the
+browser shell against a lane's server needs `toolshed-baked`, or
+`toolshed-baked-opposite` for the other server-execution posture, which run a
+compiled binary the lane restores from the Actions cache or builds. A suite
+whose own task brings up the whole local development stack names
+`local-dev-servers` instead. A capability that needs a GitHub Action is a fixed
+step of the lane job in `.github/workflows/deno.yml` that runs in every lane
+whatever the lane holds, as the cache restores are, because the steps of the
+lane job do not vary with what a lane runs.
+
+The packer charges a batch's tests the larger of what the suite's correction
+makes of them and the sum, over its passes, of each pass's longest unit. A pass
+takes no longer than that sum only when its longest unit starts first, since one
+that starts after the others adds its time to theirs. So a suite whose runner
+runs several units side by side is handed each unit's expected cost as `cost` on
+its `UnitRequest`, in `tasks/test-topology/suite.ts`, and starts the costliest
+first. `tasks/integration.ts` does this for the pattern test runner, and starts
+a file with no cost ahead of every file with one.

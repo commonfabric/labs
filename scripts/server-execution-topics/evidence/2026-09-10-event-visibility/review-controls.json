@@ -1,0 +1,566 @@
+{
+  "mode": "deterministic mechanism and replay validation; no latency claim",
+  "rows": [
+    {
+      "name": "control-before",
+      "exitCode": 0,
+      "expectedExit": 0,
+      "manifest": {
+        "at": "2026-09-10T08:09:28.432402+00:00",
+        "mode": "mechanism mutation, not latency",
+        "command": [
+          "deno",
+          "test",
+          "--no-check",
+          "--preload=test/clock-preload.ts",
+          "--allow-ffi",
+          "--allow-env",
+          "--allow-read",
+          "--allow-write=/tmp,/var/folders",
+          "--allow-run=git,deno",
+          "test/executor/visibility-mutations.probe.ts",
+          "--",
+          ""
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner",
+        "envOverrides": {
+          "ENV": "test"
+        },
+        "loadBefore": [
+          8.3310546875,
+          13.7119140625,
+          11.2685546875
+        ],
+        "sourceSha256": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+        "controlSha256": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+        "workloadSha256": "6a7fc52e24f21157dfce29ea34a211a890ddf00400223143ef9bf2c5d327000c",
+        "expectedExit": 0,
+        "posture": "in-process memory serverExecution ON, serving runtime ON; no shell",
+        "store": "fresh in-memory store per case",
+        "cache": "existing dependency/compiler disk caches",
+        "exitCode": 0,
+        "loadAfter": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ]
+      },
+      "mutationPatch": "",
+      "output": {
+        "encoding": "utf-8",
+        "rawSha256": "34faf20ab13f8852481364bb1476a522ba18071b0f8ac03ab8446cae7e63831e",
+        "text": "running 1 test from ./test/executor/visibility-mutations.probe.ts\nSpaceServer ...\n  commits admitted events in arrival order before its watermark covers them ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  commits admitted events in arrival order before its watermark covers them ... ok (80ms)\n  keeps the watermark below unavailable events after a publication failure ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n[WARN][space-server::08:09:29.318] event-visibility-sync-failed Could not synchronize event visibility-0's replica view Error: injected publication failure\n    at Server.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/test/executor/visibility-mutations.probe.ts:275:33)\n    at Server.stub (https://jsr.io/@std/testing/1.0.19/mock.ts:1092:28)\n    at SpaceServer.#drainStreamEvents (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:3098:42)\n    at async SpaceServer.#waveCycle (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:4553:27)\n    at async SpaceServer.#loop (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:2378:9)\n[WARN][space-server::08:09:29.321] event-view-lag drain deferring visibility-0: replica view holds undefined at index 0; later-arrived events wait behind it\n----- output end -----\n  keeps the watermark below unavailable events after a publication failure ... ok (56ms)\n  keeps the watermark below unavailable events after a response failure ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n[WARN][space-server::08:09:29.374] event-visibility-sync-failed Could not synchronize event visibility-0's replica view Error: injected response failure\n    at Provider.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/test/executor/visibility-mutations.probe.ts:282:33)\n    at Provider.stub (https://jsr.io/@std/testing/1.0.19/mock.ts:1092:28)\n    at SpaceServer.#drainStreamEvents (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:3100:30)\n    at async SpaceServer.#waveCycle (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:4553:27)\n    at async SpaceServer.#loop (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:2378:9)\n[WARN][space-server::08:09:29.374] event-view-lag drain deferring visibility-0: replica view holds undefined at index 0; later-arrived events wait behind it\n----- output end -----\n  keeps the watermark below unavailable events after a response failure ... ok (50ms)\n  processes a re-admission after a consequenced legacy entry with no sequence ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  processes a re-admission after a consequenced legacy entry with no sequence ... ok (54ms)\n  marks the current entry index after consumed history compacts during synchronization ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  marks the current entry index after consumed history compacts during synchronization ... ok (56ms)\n  leaves admitted events pending when its tenure ends during the visibility response ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  leaves admitted events pending when its tenure ends during the visibility response ... ok (42ms)\n  skips an entry whose durable consequence arrives during synchronization ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  skips an entry whose durable consequence arrives during synchronization ... ok (38ms)\n  completes visibility synchronization with a sealed unrelated write pending ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  completes visibility synchronization with a sealed unrelated write pending ... ok (43ms)\n  completes visibility synchronization with a sealed absent entry write pending ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n[WARN][space-server::08:09:29.661] event-view-lag drain deferring visibility-0: replica view holds undefined at index 0; later-arrived events wait behind it\n[WARN][space-server::08:09:29.668] event-view-lag drain deferring visibility-0: replica view holds undefined at index 0; later-arrived events wait behind it\n----- output end -----\n  completes visibility synchronization with a sealed absent entry write pending ... ok (67ms)\n  completes visibility synchronization with a sealed different sequence write pending ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n[WARN][space-server::08:09:29.730] event-view-lag drain deferring visibility-0: replica view holds {eventId:\"visibility-0\",firedAt:{session:\"session:visibility-actor\",user:\"did:key:z6Mku1NAHt19Fq1VUfNcAKZZbBqHyM5c4JLByDrbQwj3BKu1\"},payload:{},seq:102,stream:{id:\"of:visibility-stream-a\",path:[]}} at index 0; later-arrived events wait behind it\n[WARN][space-server::08:09:29.739] event-view-lag drain deferring visibility-0: replica view holds {eventId:\"visibility-0\",firedAt:{session:\"session:visibility-actor\",user:\"did:key:z6Mku1NAHt19Fq1VUfNcAKZZbBqHyM5c4JLByDrbQwj3BKu1\"},payload:{},seq:102,stream:{id:\"of:visibility-stream-a\",path:[]}} at index 0; later-arrived events wait behind it\n----- output end -----\n  completes visibility synchronization with a sealed different sequence write pending ... ok (71ms)\nSpaceServer ... ok (570ms)\n\nok | 1 passed (10 steps) | 0 failed (575ms)\n\n"
+      }
+    },
+    {
+      "name": "no-barrier",
+      "exitCode": 1,
+      "expectedExit": 1,
+      "manifest": {
+        "at": "2026-09-10T08:09:29.802524+00:00",
+        "mode": "mechanism mutation, not latency",
+        "command": [
+          "deno",
+          "test",
+          "--no-check",
+          "--preload=test/clock-preload.ts",
+          "--allow-ffi",
+          "--allow-env",
+          "--allow-read",
+          "--allow-write=/tmp,/var/folders",
+          "--allow-run=git,deno",
+          "test/executor/visibility-mutations.probe.ts",
+          "--",
+          "commits admitted events"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner",
+        "envOverrides": {
+          "ENV": "test"
+        },
+        "loadBefore": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ],
+        "sourceSha256": "8b85c1be25cc4b948769a29430349d3b1f539a1969c5864d6ac6e4bfe497fb2c",
+        "controlSha256": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+        "workloadSha256": "6a7fc52e24f21157dfce29ea34a211a890ddf00400223143ef9bf2c5d327000c",
+        "expectedExit": 1,
+        "posture": "in-process memory serverExecution ON, serving runtime ON; no shell",
+        "store": "fresh in-memory store per case",
+        "cache": "existing dependency/compiler disk caches",
+        "exitCode": 1,
+        "loadAfter": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ]
+      },
+      "mutationPatch": "--- a/packages/runner/src/executor/space-server.ts\n+++ b/packages/runner/src/executor/space-server.ts\n@@ -3086,7 +3086,7 @@\n           let viewEntry = readViewEntry();\n           const provider = runtime.storageManager.open(space);\n           if (\n-            !matches(viewEntry) && !visibilityFlushed &&\n+            false && !visibilityFlushed &&\n             provider.pullToServerHead !== undefined\n           ) {\n             visibilityFlushed = true;\n",
+      "output": {
+        "encoding": "utf-8",
+        "rawSha256": "dfcb2c8138f101d3479380bc13294bc3a6519c7f49dc66d07a919acf72467167",
+        "text": "running 1 test from ./test/executor/visibility-mutations.probe.ts\nSpaceServer ...\n  commits admitted events in arrival order before its watermark covers them ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n[WARN][space-server::08:09:30.310] event-view-lag drain deferring visibility-0: replica view holds undefined at index 0; later-arrived events wait behind it\n----- output end -----\n  commits admitted events in arrival order before its watermark covers them ... FAILED (57ms)\nSpaceServer ... FAILED (due to 1 failed step) (65ms)\n\n ERRORS \n\nSpaceServer ... commits admitted events in arrival order before its watermark covers them => ../test-support/test/clock-preload.ts:444:13\nerror: AssertionError: Expected 0 to be greater than 0\n      throw new AssertionError(\n            ^\n    at toBeGreaterThan (https://jsr.io/@std/expect/1.0.20/_matchers.ts:248:13)\n    at applyMatcher (https://jsr.io/@std/expect/1.0.20/expect.ts:231:13)\n    at Proxy.<anonymous> (https://jsr.io/@std/expect/1.0.20/expect.ts:241:13)\n    at Object.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/test/executor/visibility-mutations.probe.ts:238:31)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:437:7)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:425:9)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:386:13)\n    at async innerWrapped (ext:cli/40_test.js:300:5)\n    at async exitSanitizer (ext:cli/40_test.js:201:27)\n    at async Object.outerWrapped [as fn] (ext:cli/40_test.js:239:22)\n    at async TestContext.step (ext:cli/40_test.js:855:22)\n    at async TestSuiteInternal.run (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:402:7)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:172:15)\n    at async file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/test-support/test/clock-preload.ts:444:7\n\n    info: This program assigned to \u001b[4mObject.prototype.__proto__\u001b[24m, which Deno disables by default.\n    hint: If this caused the error, run again with \u001b[4m--unsafe-proto\u001b[24m to restore it.\n\n FAILURES \n\nSpaceServer ... commits admitted events in arrival order before its watermark covers them => ../test-support/test/clock-preload.ts:444:13\n\nFAILED | 0 passed | 1 failed (1 step) (68ms)\n\nerror: Test failed\n"
+      }
+    },
+    {
+      "name": "no-floor",
+      "exitCode": 1,
+      "expectedExit": 1,
+      "manifest": {
+        "at": "2026-09-10T08:09:30.357642+00:00",
+        "mode": "mechanism mutation, not latency",
+        "command": [
+          "deno",
+          "test",
+          "--no-check",
+          "--preload=test/clock-preload.ts",
+          "--allow-ffi",
+          "--allow-env",
+          "--allow-read",
+          "--allow-write=/tmp,/var/folders",
+          "--allow-run=git,deno",
+          "test/executor/visibility-mutations.probe.ts",
+          "--",
+          "after a publication failure"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner",
+        "envOverrides": {
+          "ENV": "test"
+        },
+        "loadBefore": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ],
+        "sourceSha256": "50c01f564f6241ae6b0989e658bba7ec0a4c39c726e5a2ba42516eb62d8247a6",
+        "controlSha256": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+        "workloadSha256": "6a7fc52e24f21157dfce29ea34a211a890ddf00400223143ef9bf2c5d327000c",
+        "expectedExit": 1,
+        "posture": "in-process memory serverExecution ON, serving runtime ON; no shell",
+        "store": "fresh in-memory store per case",
+        "cache": "existing dependency/compiler disk caches",
+        "exitCode": 1,
+        "loadAfter": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ]
+      },
+      "mutationPatch": "--- a/packages/runner/src/executor/space-server.ts\n+++ b/packages/runner/src/executor/space-server.ts\n@@ -3046,7 +3046,7 @@\n         // Deferral is a BARRIER, not a skip: everything at or behind\n         // this entry's arrival position waits with it, or a later\n         // arrival's consequence lands ahead of an earlier one.\n-        this.#eventVisibilityFloor = entry.seq ?? 1;\n+        this.#eventVisibilityFloor = undefined;\n         this.#notePreQueueDeferral(\n           doc.id,\n           () => `sidecar ${doc.id} (sync failing)`,\n@@ -3133,7 +3133,7 @@\n             // The same barrier as above: the deferred entry's\n             // still-catching-up view must not let later arrivals run\n             // ahead of it.\n-            this.#eventVisibilityFloor = entry.seq ?? 1;\n+            this.#eventVisibilityFloor = undefined;\n             this.#notePreQueueDeferral(\n               entry.eventId,\n               () => `event ${entry.eventId} (replica view lagging)`,\n",
+      "output": {
+        "encoding": "utf-8",
+        "rawSha256": "b3ad383d02f0281da9f410227dc2d115a40109629cade2212da5122cf9c6cc2a",
+        "text": "running 1 test from ./test/executor/visibility-mutations.probe.ts\nSpaceServer ...\n  keeps the watermark below unavailable events after a publication failure ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n[WARN][space-server::08:09:30.855] event-visibility-sync-failed Could not synchronize event visibility-0's replica view Error: injected publication failure\n    at Server.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/test/executor/visibility-mutations.probe.ts:275:33)\n    at Server.stub (https://jsr.io/@std/testing/1.0.19/mock.ts:1092:28)\n    at SpaceServer.#drainStreamEvents (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:3098:42)\n    at async SpaceServer.#waveCycle (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:4553:27)\n    at async SpaceServer.#loop (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:2378:9)\n[WARN][space-server::08:09:30.856] event-view-lag drain deferring visibility-0: replica view holds undefined at index 0; later-arrived events wait behind it\n----- output end -----\n  keeps the watermark below unavailable events after a publication failure ... FAILED (70ms)\nSpaceServer ... FAILED (due to 1 failed step) (78ms)\n\n ERRORS \n\nSpaceServer ... keeps the watermark below unavailable events after a publication failure => ../test-support/test/clock-preload.ts:444:13\nerror: AssertionError: Values are not equal.\n\n\n    [Diff] Actual / Expected\n\n\n-   [\n-     {\n-       eventId: \"visibility-0\",\n-       firedAt: {\n-         session: \"session:visibility-actor\",\n-         user: \"did:key:z6Mku1NAHt19Fq1VUfNcAKZZbBqHyM5c4JLByDrbQwj3BKu1\",\n-       },\n-       payload: {},\n-       seq: 2,\n-       stream: {\n-         id: \"of:visibility-stream-a\",\n-         path: [],\n-       },\n-     },\n-     {\n-       eventId: \"visibility-1\",\n-       firedAt: {\n-         session: \"session:visibility-actor\",\n-         user: \"did:key:z6Mku1NAHt19Fq1VUfNcAKZZbBqHyM5c4JLByDrbQwj3BKu1\",\n-       },\n-       payload: {},\n-       seq: 3,\n-       stream: {\n-         id: \"of:visibility-stream-b\",\n-         path: [],\n-       },\n-     },\n-   ]\n+   []\n\n  throw new AssertionError(message);\n        ^\n    at assertEquals (https://jsr.io/@std/expect/1.0.20/_assert_equals.ts:37:9)\n    at toEqual (https://jsr.io/@std/expect/1.0.20/_matchers.ts:69:5)\n    at applyMatcher (https://jsr.io/@std/expect/1.0.20/expect.ts:231:13)\n    at Proxy.<anonymous> (https://jsr.io/@std/expect/1.0.20/expect.ts:241:13)\n    at Object.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/test/executor/visibility-mutations.probe.ts:295:11)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:437:7)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:425:9)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:386:13)\n    at async innerWrapped (ext:cli/40_test.js:300:5)\n    at async exitSanitizer (ext:cli/40_test.js:201:27)\n    at async Object.outerWrapped [as fn] (ext:cli/40_test.js:239:22)\n    at async TestContext.step (ext:cli/40_test.js:855:22)\n    at async TestSuiteInternal.run (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:402:7)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:172:15)\n    at async file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/test-support/test/clock-preload.ts:444:7\n\n    info: This program assigned to \u001b[4mObject.prototype.__proto__\u001b[24m, which Deno disables by default.\n    hint: If this caused the error, run again with \u001b[4m--unsafe-proto\u001b[24m to restore it.\n\n FAILURES \n\nSpaceServer ... keeps the watermark below unavailable events after a publication failure => ../test-support/test/clock-preload.ts:444:13\n\nFAILED | 0 passed | 1 failed (1 step) (81ms)\n\nerror: Test failed\n"
+      }
+    },
+    {
+      "name": "no-sequence-validation",
+      "exitCode": 1,
+      "expectedExit": 1,
+      "manifest": {
+        "at": "2026-09-10T08:09:30.911753+00:00",
+        "mode": "mechanism mutation, not latency",
+        "command": [
+          "deno",
+          "test",
+          "--no-check",
+          "--preload=test/clock-preload.ts",
+          "--allow-ffi",
+          "--allow-env",
+          "--allow-read",
+          "--allow-write=/tmp,/var/folders",
+          "--allow-run=git,deno",
+          "test/executor/visibility-mutations.probe.ts",
+          "--",
+          "sealed different sequence"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner",
+        "envOverrides": {
+          "ENV": "test"
+        },
+        "loadBefore": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ],
+        "sourceSha256": "10ec4e338f3e261e349838eaa9838547b974f6c630d7cd5fb303c94602ff9b75",
+        "controlSha256": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+        "workloadSha256": "6a7fc52e24f21157dfce29ea34a211a890ddf00400223143ef9bf2c5d327000c",
+        "expectedExit": 1,
+        "posture": "in-process memory serverExecution ON, serving runtime ON; no shell",
+        "store": "fresh in-memory store per case",
+        "cache": "existing dependency/compiler disk caches",
+        "exitCode": 1,
+        "loadAfter": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ]
+      },
+      "mutationPatch": "--- a/packages/runner/src/executor/space-server.ts\n+++ b/packages/runner/src/executor/space-server.ts\n@@ -3082,7 +3082,7 @@\n               path: [\"entries\", String(index)],\n             }).get();\n           const matches = (value: ReturnType<typeof readViewEntry>) =>\n-            value?.eventId === entry.eventId && value?.seq === entry.seq;\n+            value?.eventId === entry.eventId;\n           let viewEntry = readViewEntry();\n           const provider = runtime.storageManager.open(space);\n           if (\n",
+      "output": {
+        "encoding": "utf-8",
+        "rawSha256": "fb85846c55a524230cadd06931cdc24334ab5a872a061d61a5c03db653bcb87d",
+        "text": "running 1 test from ./test/executor/visibility-mutations.probe.ts\nSpaceServer ...\n  completes visibility synchronization with a sealed different sequence write pending ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  completes visibility synchronization with a sealed different sequence write pending ... FAILED (83ms)\nSpaceServer ... FAILED (due to 1 failed step) (91ms)\n\n ERRORS \n\nSpaceServer ... completes visibility synchronization with a sealed different sequence write pending => ../test-support/test/clock-preload.ts:444:13\nerror: AssertionError: Values are not equal.\n\n\n    [Diff] Actual / Expected\n\n\n-   [\n-     \"A\",\n-     \"B\",\n-   ]\n+   []\n\n  throw new AssertionError(message);\n        ^\n    at assertEquals (https://jsr.io/@std/expect/1.0.20/_assert_equals.ts:37:9)\n    at toEqual (https://jsr.io/@std/expect/1.0.20/_matchers.ts:69:5)\n    at applyMatcher (https://jsr.io/@std/expect/1.0.20/expect.ts:231:13)\n    at Proxy.<anonymous> (https://jsr.io/@std/expect/1.0.20/expect.ts:241:13)\n    at Object.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/test/executor/visibility-mutations.probe.ts:538:34)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:437:7)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:425:9)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:386:13)\n    at async innerWrapped (ext:cli/40_test.js:300:5)\n    at async exitSanitizer (ext:cli/40_test.js:201:27)\n    at async Object.outerWrapped [as fn] (ext:cli/40_test.js:239:22)\n    at async TestContext.step (ext:cli/40_test.js:855:22)\n    at async TestSuiteInternal.run (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:402:7)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:172:15)\n    at async file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/test-support/test/clock-preload.ts:444:7\n\n    info: This program assigned to \u001b[4mObject.prototype.__proto__\u001b[24m, which Deno disables by default.\n    hint: If this caused the error, run again with \u001b[4m--unsafe-proto\u001b[24m to restore it.\n\n FAILURES \n\nSpaceServer ... completes visibility synchronization with a sealed different sequence write pending => ../test-support/test/clock-preload.ts:444:13\n\nFAILED | 0 passed | 1 failed (1 step) (95ms)\n\nerror: Test failed\n"
+      }
+    },
+    {
+      "name": "no-index-recheck",
+      "exitCode": 1,
+      "expectedExit": 1,
+      "manifest": {
+        "at": "2026-09-10T08:09:31.473534+00:00",
+        "mode": "mechanism mutation, not latency",
+        "command": [
+          "deno",
+          "test",
+          "--no-check",
+          "--preload=test/clock-preload.ts",
+          "--allow-ffi",
+          "--allow-env",
+          "--allow-read",
+          "--allow-write=/tmp,/var/folders",
+          "--allow-run=git,deno",
+          "test/executor/visibility-mutations.probe.ts",
+          "--",
+          "after consumed history compacts"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner",
+        "envOverrides": {
+          "ENV": "test"
+        },
+        "loadBefore": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ],
+        "sourceSha256": "07ce5afde1fc1c7a40ac7e42da0df8ac57385672a5dfdd7551d5d712fff2cc79",
+        "controlSha256": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+        "workloadSha256": "6a7fc52e24f21157dfce29ea34a211a890ddf00400223143ef9bf2c5d327000c",
+        "expectedExit": 1,
+        "posture": "in-process memory serverExecution ON, serving runtime ON; no shell",
+        "store": "fresh in-memory store per case",
+        "cache": "existing dependency/compiler disk caches",
+        "exitCode": 1,
+        "loadAfter": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ]
+      },
+      "mutationPatch": "--- a/packages/runner/src/executor/space-server.ts\n+++ b/packages/runner/src/executor/space-server.ts\n@@ -3111,10 +3111,7 @@\n             stored = ((Engine.read(engine, { id: doc.id })?.value ??\n               {}) as StreamEventsDocValue).entries ?? [];\n             sidecar.stored = stored;\n-            index = stored.findIndex((candidate) =>\n-              candidate?.eventId === entry.eventId &&\n-              candidate?.seq === entry.seq\n-            );\n+\n             if (index < 0 || stored[index].consequenced === true) continue;\n             viewEntry = readViewEntry();\n             if (matches(viewEntry)) {\n",
+      "output": {
+        "encoding": "utf-8",
+        "rawSha256": "eb39fa66b8ddc7dd822a077539dd71f6f0289e2deb20cc4065d7d04612838670",
+        "text": "running 1 test from ./test/executor/visibility-mutations.probe.ts\nSpaceServer ...\n  marks the current entry index after consumed history compacts during synchronization ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n[ERROR][space-server::08:09:31.998] loop-failed serving loop failed TypeError: Cannot read properties of undefined (reading 'consequenced')\n    at SpaceServer.#drainStreamEvents (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:3115:44)\n    at drainTicks (ext:core/01_core.js:426:7)\n    at listOnTimeout (ext:core/02_timers.js:286:9)\n    at Object.processTimers (ext:core/02_timers.js:250:7)\n    at __processTimers (ext:core/01_core.js:447:21)\n    at async SpaceServer.#waveCycle (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:4550:27)\n    at async SpaceServer.#loop (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:2378:9)\n----- output end -----\n  marks the current entry index after consumed history compacts during synchronization ... FAILED (90ms)\nSpaceServer ... FAILED (due to 1 failed step) (98ms)\n\n ERRORS \n\nSpaceServer ... marks the current entry index after consumed history compacts during synchronization => ../test-support/test/clock-preload.ts:444:13\nerror: AssertionError: Values are not equal.\n\n\n    [Diff] Actual / Expected\n\n\n+   [\n+     \"A\",\n+     \"B\",\n+     \"A\",\n+     \"B\",\n+   ]\n-   undefined\n\n  throw new AssertionError(message);\n        ^\n    at assertEquals (https://jsr.io/@std/expect/1.0.20/_assert_equals.ts:37:9)\n    at toEqual (https://jsr.io/@std/expect/1.0.20/_matchers.ts:69:5)\n    at applyMatcher (https://jsr.io/@std/expect/1.0.20/expect.ts:231:13)\n    at Proxy.<anonymous> (https://jsr.io/@std/expect/1.0.20/expect.ts:241:13)\n    at Object.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/test/executor/visibility-mutations.probe.ts:406:44)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:437:7)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:425:9)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:386:13)\n    at async innerWrapped (ext:cli/40_test.js:300:5)\n    at async exitSanitizer (ext:cli/40_test.js:201:27)\n    at async Object.outerWrapped [as fn] (ext:cli/40_test.js:239:22)\n    at async TestContext.step (ext:cli/40_test.js:855:22)\n    at async TestSuiteInternal.run (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:402:7)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:172:15)\n    at async file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/test-support/test/clock-preload.ts:444:7\n\n    info: This program assigned to \u001b[4mObject.prototype.__proto__\u001b[24m, which Deno disables by default.\n    hint: If this caused the error, run again with \u001b[4m--unsafe-proto\u001b[24m to restore it.\n\n FAILURES \n\nSpaceServer ... marks the current entry index after consumed history compacts during synchronization => ../test-support/test/clock-preload.ts:444:13\n\nFAILED | 0 passed | 1 failed (1 step) (101ms)\n\nerror: Test failed\n"
+      }
+    },
+    {
+      "name": "no-consumed-recheck",
+      "exitCode": 1,
+      "expectedExit": 1,
+      "manifest": {
+        "at": "2026-09-10T08:09:32.036852+00:00",
+        "mode": "mechanism mutation, not latency",
+        "command": [
+          "deno",
+          "test",
+          "--no-check",
+          "--preload=test/clock-preload.ts",
+          "--allow-ffi",
+          "--allow-env",
+          "--allow-read",
+          "--allow-write=/tmp,/var/folders",
+          "--allow-run=git,deno",
+          "test/executor/visibility-mutations.probe.ts",
+          "--",
+          "durable consequence arrives"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner",
+        "envOverrides": {
+          "ENV": "test"
+        },
+        "loadBefore": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ],
+        "sourceSha256": "8c0d959b7cf1ad66d0e5fec2ba85b2e8e3b4d5dea40e92bece52f2e54ef4f9f6",
+        "controlSha256": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+        "workloadSha256": "6a7fc52e24f21157dfce29ea34a211a890ddf00400223143ef9bf2c5d327000c",
+        "expectedExit": 1,
+        "posture": "in-process memory serverExecution ON, serving runtime ON; no shell",
+        "store": "fresh in-memory store per case",
+        "cache": "existing dependency/compiler disk caches",
+        "exitCode": 1,
+        "loadAfter": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ]
+      },
+      "mutationPatch": "--- a/packages/runner/src/executor/space-server.ts\n+++ b/packages/runner/src/executor/space-server.ts\n@@ -3060,7 +3060,7 @@\n           candidate?.eventId === entry.eventId &&\n           candidate?.seq === entry.seq\n         );\n-        if (index < 0 || stored[index].consequenced === true) continue;\n+        if (index < 0) continue;\n         // The mark every arm below writes (the handler tx's, the\n         // skip/error/drop notices') is INDEX-ADDRESSED against the\n         // REPLICA view: verify the view holds this entry at this index\n@@ -3115,7 +3115,7 @@\n               candidate?.eventId === entry.eventId &&\n               candidate?.seq === entry.seq\n             );\n-            if (index < 0 || stored[index].consequenced === true) continue;\n+            if (index < 0) continue;\n             viewEntry = readViewEntry();\n             if (matches(viewEntry)) {\n               this.#options.stats.events.visibilityRecoveries += 1;\n",
+      "output": {
+        "encoding": "utf-8",
+        "rawSha256": "4c98a98096e4c9ead4a26dfa0403e0865ed1d9d2734e6ddade431a7a8942652b",
+        "text": "running 1 test from ./test/executor/visibility-mutations.probe.ts\nSpaceServer ...\n  skips an entry whose durable consequence arrives during synchronization ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  skips an entry whose durable consequence arrives during synchronization ... FAILED (70ms)\nSpaceServer ... FAILED (due to 1 failed step) (78ms)\n\n ERRORS \n\nSpaceServer ... skips an entry whose durable consequence arrives during synchronization => ../test-support/test/clock-preload.ts:444:13\nerror: AssertionError: Values are not equal.\n\n\n    [Diff] Actual / Expected\n\n\n    [\n-     \"A\",\n      \"B\",\n    ]\n\n  throw new AssertionError(message);\n        ^\n    at assertEquals (https://jsr.io/@std/expect/1.0.20/_assert_equals.ts:37:9)\n    at toEqual (https://jsr.io/@std/expect/1.0.20/_matchers.ts:69:5)\n    at applyMatcher (https://jsr.io/@std/expect/1.0.20/expect.ts:231:13)\n    at Proxy.<anonymous> (https://jsr.io/@std/expect/1.0.20/expect.ts:241:13)\n    at Object.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/test/executor/visibility-mutations.probe.ts:485:28)\n    at drainTicks (ext:core/01_core.js:426:7)\n    at listOnTimeout (ext:core/02_timers.js:286:9)\n    at Object.processTimers (ext:core/02_timers.js:250:7)\n    at __processTimers (ext:core/01_core.js:447:21)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:437:7)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:425:9)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:386:13)\n    at async innerWrapped (ext:cli/40_test.js:300:5)\n    at async exitSanitizer (ext:cli/40_test.js:201:27)\n    at async Object.outerWrapped [as fn] (ext:cli/40_test.js:239:22)\n    at async TestContext.step (ext:cli/40_test.js:855:22)\n    at async TestSuiteInternal.run (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:402:7)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:172:15)\n    at async file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/test-support/test/clock-preload.ts:444:7\n\n    info: This program assigned to \u001b[4mObject.prototype.__proto__\u001b[24m, which Deno disables by default.\n    hint: If this caused the error, run again with \u001b[4m--unsafe-proto\u001b[24m to restore it.\n\n FAILURES \n\nSpaceServer ... skips an entry whose durable consequence arrives during synchronization => ../test-support/test/clock-preload.ts:444:13\n\nFAILED | 0 passed | 1 failed (1 step) (81ms)\n\nerror: Test failed\n"
+      }
+    },
+    {
+      "name": "full-durability-wait",
+      "exitCode": 1,
+      "expectedExit": 1,
+      "manifest": {
+        "at": "2026-09-10T08:09:32.577755+00:00",
+        "mode": "mechanism mutation, not latency",
+        "command": [
+          "deno",
+          "test",
+          "--no-check",
+          "--preload=test/clock-preload.ts",
+          "--allow-ffi",
+          "--allow-env",
+          "--allow-read",
+          "--allow-write=/tmp,/var/folders",
+          "--allow-run=git,deno",
+          "test/executor/visibility-mutations.probe.ts",
+          "--",
+          "sealed unrelated"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner",
+        "envOverrides": {
+          "ENV": "test"
+        },
+        "loadBefore": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ],
+        "sourceSha256": "5975cbadc030bba884c1ed53b915a306dfbf7b3dcb4ea9e5b5b860ee46bb5864",
+        "controlSha256": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+        "workloadSha256": "6a7fc52e24f21157dfce29ea34a211a890ddf00400223143ef9bf2c5d327000c",
+        "expectedExit": 1,
+        "posture": "in-process memory serverExecution ON, serving runtime ON; no shell",
+        "store": "fresh in-memory store per case",
+        "cache": "existing dependency/compiler disk caches",
+        "exitCode": 1,
+        "loadAfter": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ]
+      },
+      "mutationPatch": "--- a/packages/runner/src/executor/space-server.ts\n+++ b/packages/runner/src/executor/space-server.ts\n@@ -3097,7 +3097,7 @@\n               // await application. Pending wave writes need not promote here.\n               await this.#options.server.flushSessions([space]);\n               if (!this.#active || this.#runtime !== runtime) return undefined;\n-              await provider.pullToServerHead();\n+              await provider.synced();\n             } catch (error) {\n               if (!this.#active || this.#runtime !== runtime) return undefined;\n               logger.warn(\"event-visibility-sync-failed\", () => [\n",
+      "output": {
+        "encoding": "utf-8",
+        "rawSha256": "7d38dc5e5b004a4898606a343d6d94dc6ab4642593e1520feaa27a228a21d6b2",
+        "text": "running 1 test from ./test/executor/visibility-mutations.probe.ts\nSpaceServer ...\n  completes visibility synchronization with a sealed unrelated write pending ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  completes visibility synchronization with a sealed unrelated write pending ... FAILED (73ms)\nSpaceServer ... FAILED (due to 1 failed step) (82ms)\n\n ERRORS \n\nSpaceServer ... completes visibility synchronization with a sealed unrelated write pending => ../test-support/test/clock-preload.ts:444:13\nerror: AssertionError: Values are not strictly equal.\n\n\n    [Diff] Actual / Expected\n\n\n-   0\n+   1\n\n  throw new AssertionError(message);\n        ^\n    at assertStrictEquals (https://jsr.io/@std/assert/1.0.19/strict_equals.ts:67:9)\n    at toBe (https://jsr.io/@std/expect/1.0.20/_matchers.ts:48:5)\n    at applyMatcher (https://jsr.io/@std/expect/1.0.20/expect.ts:231:13)\n    at Proxy.<anonymous> (https://jsr.io/@std/expect/1.0.20/expect.ts:241:13)\n    at Object.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/test/executor/visibility-mutations.probe.ts:535:27)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:437:7)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:425:9)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:386:13)\n    at async innerWrapped (ext:cli/40_test.js:300:5)\n    at async exitSanitizer (ext:cli/40_test.js:201:27)\n    at async Object.outerWrapped [as fn] (ext:cli/40_test.js:239:22)\n    at async TestContext.step (ext:cli/40_test.js:855:22)\n    at async TestSuiteInternal.run (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:402:7)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:172:15)\n    at async file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/test-support/test/clock-preload.ts:444:7\n\n    info: This program assigned to \u001b[4mObject.prototype.__proto__\u001b[24m, which Deno disables by default.\n    hint: If this caused the error, run again with \u001b[4m--unsafe-proto\u001b[24m to restore it.\n\n FAILURES \n\nSpaceServer ... completes visibility synchronization with a sealed unrelated write pending => ../test-support/test/clock-preload.ts:444:13\n\nFAILED | 0 passed | 1 failed (1 step) (85ms)\n\nerror: Test failed\n"
+      }
+    },
+    {
+      "name": "no-response-before-teardown",
+      "exitCode": 1,
+      "expectedExit": 1,
+      "manifest": {
+        "at": "2026-09-10T08:09:33.126955+00:00",
+        "mode": "mechanism mutation, not latency",
+        "command": [
+          "deno",
+          "test",
+          "--no-check",
+          "--preload=test/clock-preload.ts",
+          "--allow-ffi",
+          "--allow-env",
+          "--allow-read",
+          "--allow-write=/tmp,/var/folders",
+          "--allow-run=git,deno",
+          "test/executor/visibility-mutations.probe.ts",
+          "--",
+          "tenure ends during"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner",
+        "envOverrides": {
+          "ENV": "test"
+        },
+        "loadBefore": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ],
+        "sourceSha256": "8b85c1be25cc4b948769a29430349d3b1f539a1969c5864d6ac6e4bfe497fb2c",
+        "controlSha256": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+        "workloadSha256": "6a7fc52e24f21157dfce29ea34a211a890ddf00400223143ef9bf2c5d327000c",
+        "expectedExit": 1,
+        "posture": "in-process memory serverExecution ON, serving runtime ON; no shell",
+        "store": "fresh in-memory store per case",
+        "cache": "existing dependency/compiler disk caches",
+        "exitCode": 1,
+        "loadAfter": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ]
+      },
+      "mutationPatch": "--- a/packages/runner/src/executor/space-server.ts\n+++ b/packages/runner/src/executor/space-server.ts\n@@ -3086,7 +3086,7 @@\n           let viewEntry = readViewEntry();\n           const provider = runtime.storageManager.open(space);\n           if (\n-            !matches(viewEntry) && !visibilityFlushed &&\n+            false && !visibilityFlushed &&\n             provider.pullToServerHead !== undefined\n           ) {\n             visibilityFlushed = true;\n",
+      "output": {
+        "encoding": "utf-8",
+        "rawSha256": "bf70cc2a93d0ef50bb4b1a12f638de897477832a72706f41494d69773694fb33",
+        "text": "running 1 test from ./test/executor/visibility-mutations.probe.ts\nSpaceServer ...\n  leaves admitted events pending when its tenure ends during the visibility response ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n[WARN][space-server::08:09:33.607] event-view-lag drain deferring visibility-0: replica view holds undefined at index 0; later-arrived events wait behind it\n----- output end -----\n  leaves admitted events pending when its tenure ends during the visibility response ... FAILED (56ms)\nSpaceServer ... FAILED (due to 1 failed step) (64ms)\n\n ERRORS \n\nSpaceServer ... leaves admitted events pending when its tenure ends during the visibility response => ../test-support/test/clock-preload.ts:444:13\nerror: AssertionError: the visibility response must start before teardown: Expected value to have length 1, but it does not: the value has length 0\n      throw new AssertionError(\n            ^\n    at toHaveLength (https://jsr.io/@std/expect/1.0.20/_matchers.ts:383:13)\n    at applyMatcher (https://jsr.io/@std/expect/1.0.20/expect.ts:231:13)\n    at Proxy.<anonymous> (https://jsr.io/@std/expect/1.0.20/expect.ts:241:13)\n    at Object.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/test/executor/visibility-mutations.probe.ts:430:10)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:437:7)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:425:9)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:386:13)\n    at async innerWrapped (ext:cli/40_test.js:300:5)\n    at async exitSanitizer (ext:cli/40_test.js:201:27)\n    at async Object.outerWrapped [as fn] (ext:cli/40_test.js:239:22)\n    at async TestContext.step (ext:cli/40_test.js:855:22)\n    at async TestSuiteInternal.run (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:402:7)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:172:15)\n    at async file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/test-support/test/clock-preload.ts:444:7\n\n    info: This program assigned to \u001b[4mObject.prototype.__proto__\u001b[24m, which Deno disables by default.\n    hint: If this caused the error, run again with \u001b[4m--unsafe-proto\u001b[24m to restore it.\n\n FAILURES \n\nSpaceServer ... leaves admitted events pending when its tenure ends during the visibility response => ../test-support/test/clock-preload.ts:444:13\n\nFAILED | 0 passed | 1 failed (1 step) (67ms)\n\nerror: Test failed\n"
+      }
+    },
+    {
+      "name": "legacy-twin-dedupe",
+      "exitCode": 1,
+      "expectedExit": 1,
+      "manifest": {
+        "at": "2026-09-10T08:09:33.652525+00:00",
+        "mode": "mechanism mutation, not latency",
+        "command": [
+          "deno",
+          "test",
+          "--no-check",
+          "--preload=test/clock-preload.ts",
+          "--allow-ffi",
+          "--allow-env",
+          "--allow-read",
+          "--allow-write=/tmp,/var/folders",
+          "--allow-run=git,deno",
+          "test/executor/visibility-mutations.probe.ts",
+          "--",
+          "re-admission after a consequenced legacy"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner",
+        "envOverrides": {
+          "ENV": "test"
+        },
+        "loadBefore": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ],
+        "sourceSha256": "7525024b786d44f57da2ed387874aaa25e642f5a4d960716be11f99c83f85d55",
+        "controlSha256": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+        "workloadSha256": "6a7fc52e24f21157dfce29ea34a211a890ddf00400223143ef9bf2c5d327000c",
+        "expectedExit": 1,
+        "posture": "in-process memory serverExecution ON, serving runtime ON; no shell",
+        "store": "fresh in-memory store per case",
+        "cache": "existing dependency/compiler disk caches",
+        "exitCode": 1,
+        "loadAfter": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ]
+      },
+      "mutationPatch": "--- a/packages/runner/src/executor/space-server.ts\n+++ b/packages/runner/src/executor/space-server.ts\n@@ -3158,7 +3158,6 @@\n         const duplicateOfConsequenced = stored.some((candidate) =>\n           candidate?.eventId === entry.eventId &&\n           candidate.consequenced === true &&\n-          typeof candidate.seq === \"number\" &&\n           candidate.seq !== entry.seq\n         );\n         if (duplicateOfConsequenced) {\n",
+      "output": {
+        "encoding": "utf-8",
+        "rawSha256": "eaae9c98c647cc6af1f8e39da972d8a5eb0b164cc0576d54a2f398768e25353d",
+        "text": "running 1 test from ./test/executor/visibility-mutations.probe.ts\nSpaceServer ...\n  processes a re-admission after a consequenced legacy entry with no sequence ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  processes a re-admission after a consequenced legacy entry with no sequence ... FAILED (89ms)\nSpaceServer ... FAILED (due to 1 failed step) (96ms)\n\n ERRORS \n\nSpaceServer ... processes a re-admission after a consequenced legacy entry with no sequence => ../test-support/test/clock-preload.ts:444:13\nerror: AssertionError: Values are not equal.\n\n\n    [Diff] Actual / Expected\n\n\n    [\n      \"A\",\n      \"B\",\n+     \"A\",\n+     \"B\",\n    ]\n\n  throw new AssertionError(message);\n        ^\n    at assertEquals (https://jsr.io/@std/expect/1.0.20/_assert_equals.ts:37:9)\n    at toEqual (https://jsr.io/@std/expect/1.0.20/_matchers.ts:69:5)\n    at applyMatcher (https://jsr.io/@std/expect/1.0.20/expect.ts:231:13)\n    at Proxy.<anonymous> (https://jsr.io/@std/expect/1.0.20/expect.ts:241:13)\n    at Object.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/test/executor/visibility-mutations.probe.ts:357:44)\n    at drainTicks (ext:core/01_core.js:426:7)\n    at listOnTimeout (ext:core/02_timers.js:286:9)\n    at Object.processTimers (ext:core/02_timers.js:250:7)\n    at __processTimers (ext:core/01_core.js:447:21)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:437:7)\n    at async TestSuiteInternal.runTest (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:425:9)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:386:13)\n    at async innerWrapped (ext:cli/40_test.js:300:5)\n    at async exitSanitizer (ext:cli/40_test.js:201:27)\n    at async Object.outerWrapped [as fn] (ext:cli/40_test.js:239:22)\n    at async TestContext.step (ext:cli/40_test.js:855:22)\n    at async TestSuiteInternal.run (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:402:7)\n    at async fn (https://jsr.io/@std/testing/1.0.19/_test_suite.ts:172:15)\n    at async file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/test-support/test/clock-preload.ts:444:7\n\n    info: This program assigned to \u001b[4mObject.prototype.__proto__\u001b[24m, which Deno disables by default.\n    hint: If this caused the error, run again with \u001b[4m--unsafe-proto\u001b[24m to restore it.\n\n FAILURES \n\nSpaceServer ... processes a re-admission after a consequenced legacy entry with no sequence => ../test-support/test/clock-preload.ts:444:13\n\nFAILED | 0 passed | 1 failed (1 step) (100ms)\n\nerror: Test failed\n"
+      }
+    },
+    {
+      "name": "unknown-selector",
+      "exitCode": 1,
+      "expectedExit": 1,
+      "manifest": {
+        "at": "2026-09-10T08:09:34.215806+00:00",
+        "mode": "mechanism mutation, not latency",
+        "command": [
+          "deno",
+          "test",
+          "--no-check",
+          "--preload=test/clock-preload.ts",
+          "--allow-ffi",
+          "--allow-env",
+          "--allow-read",
+          "--allow-write=/tmp,/var/folders",
+          "--allow-run=git,deno",
+          "test/executor/visibility-mutations.probe.ts",
+          "--",
+          "not a real control case"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner",
+        "envOverrides": {
+          "ENV": "test"
+        },
+        "loadBefore": [
+          8.14404296875,
+          13.58349609375,
+          11.2373046875
+        ],
+        "sourceSha256": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+        "controlSha256": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+        "workloadSha256": "6a7fc52e24f21157dfce29ea34a211a890ddf00400223143ef9bf2c5d327000c",
+        "expectedExit": 1,
+        "posture": "in-process memory serverExecution ON, serving runtime ON; no shell",
+        "store": "fresh in-memory store per case",
+        "cache": "existing dependency/compiler disk caches",
+        "exitCode": 1,
+        "loadAfter": [
+          8.05224609375,
+          13.47412109375,
+          11.21240234375
+        ]
+      },
+      "mutationPatch": "",
+      "output": {
+        "encoding": "utf-8",
+        "rawSha256": "8aafa2a545089062ef47f0d6c590ec3e69c0685725783b728e34e3681be41b3a",
+        "text": "Uncaught error from ./test/executor/visibility-mutations.probe.ts FAILED\nrunning 1 test from ./test/executor/visibility-mutations.probe.ts\nSpaceServer ... ok (8ms)\n\n ERRORS \n\n./test/executor/visibility-mutations.probe.ts (uncaught error)\nerror: (in promise) Error: No visibility control matches: not a real control case\n  throw new Error(`No visibility control matches: ${selector}`);\n        ^\n    at file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/test/executor/visibility-mutations.probe.ts:567:9\n\n    info: This program assigned to \u001b[4mObject.prototype.__proto__\u001b[24m, which Deno disables by default.\n    hint: If this caused the error, run again with \u001b[4m--unsafe-proto\u001b[24m to restore it.\nThis error was not caught from a test and caused the test runner to fail on the referenced module.\nIt most likely originated from a dangling promise, event/timeout handler or top-level code.\n\n FAILURES \n\n./test/executor/visibility-mutations.probe.ts (uncaught error)\n\nFAILED | 1 passed | 1 failed (11ms)\n\nerror: Test failed\n"
+      }
+    },
+    {
+      "name": "control-after",
+      "exitCode": 0,
+      "expectedExit": 0,
+      "manifest": {
+        "at": "2026-09-10T08:09:34.686068+00:00",
+        "mode": "mechanism mutation, not latency",
+        "command": [
+          "deno",
+          "test",
+          "--no-check",
+          "--preload=test/clock-preload.ts",
+          "--allow-ffi",
+          "--allow-env",
+          "--allow-read",
+          "--allow-write=/tmp,/var/folders",
+          "--allow-run=git,deno",
+          "test/executor/visibility-mutations.probe.ts",
+          "--",
+          ""
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner",
+        "envOverrides": {
+          "ENV": "test"
+        },
+        "loadBefore": [
+          8.05224609375,
+          13.47412109375,
+          11.21240234375
+        ],
+        "sourceSha256": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+        "controlSha256": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+        "workloadSha256": "6a7fc52e24f21157dfce29ea34a211a890ddf00400223143ef9bf2c5d327000c",
+        "expectedExit": 0,
+        "posture": "in-process memory serverExecution ON, serving runtime ON; no shell",
+        "store": "fresh in-memory store per case",
+        "cache": "existing dependency/compiler disk caches",
+        "exitCode": 0,
+        "loadAfter": [
+          8.05224609375,
+          13.47412109375,
+          11.21240234375
+        ]
+      },
+      "mutationPatch": "",
+      "output": {
+        "encoding": "utf-8",
+        "rawSha256": "03ba4ca711237cc374f327e93118b2cde136291def167120678e7afdad4277f8",
+        "text": "running 1 test from ./test/executor/visibility-mutations.probe.ts\nSpaceServer ...\n  commits admitted events in arrival order before its watermark covers them ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  commits admitted events in arrival order before its watermark covers them ... ok (74ms)\n  keeps the watermark below unavailable events after a publication failure ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n[WARN][space-server::08:09:35.232] event-visibility-sync-failed Could not synchronize event visibility-0's replica view Error: injected publication failure\n    at Server.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/test/executor/visibility-mutations.probe.ts:275:33)\n    at Server.stub (https://jsr.io/@std/testing/1.0.19/mock.ts:1092:28)\n    at SpaceServer.#drainStreamEvents (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:3098:42)\n    at async SpaceServer.#waveCycle (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:4553:27)\n    at async SpaceServer.#loop (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:2378:9)\n[WARN][space-server::08:09:35.233] event-view-lag drain deferring visibility-0: replica view holds undefined at index 0; later-arrived events wait behind it\n----- output end -----\n  keeps the watermark below unavailable events after a publication failure ... ok (50ms)\n  keeps the watermark below unavailable events after a response failure ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n[WARN][space-server::08:09:35.285] event-visibility-sync-failed Could not synchronize event visibility-0's replica view Error: injected response failure\n    at Provider.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/test/executor/visibility-mutations.probe.ts:282:33)\n    at Provider.stub (https://jsr.io/@std/testing/1.0.19/mock.ts:1092:28)\n    at SpaceServer.#drainStreamEvents (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:3100:30)\n    at async SpaceServer.#waveCycle (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:4553:27)\n    at async SpaceServer.#loop (file:///Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner/src/executor/space-server.ts:2378:9)\n[WARN][space-server::08:09:35.286] event-view-lag drain deferring visibility-0: replica view holds undefined at index 0; later-arrived events wait behind it\n----- output end -----\n  keeps the watermark below unavailable events after a response failure ... ok (53ms)\n  processes a re-admission after a consequenced legacy entry with no sequence ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  processes a re-admission after a consequenced legacy entry with no sequence ... ok (54ms)\n  marks the current entry index after consumed history compacts during synchronization ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  marks the current entry index after consumed history compacts during synchronization ... ok (58ms)\n  leaves admitted events pending when its tenure ends during the visibility response ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  leaves admitted events pending when its tenure ends during the visibility response ... ok (39ms)\n  skips an entry whose durable consequence arrives during synchronization ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  skips an entry whose durable consequence arrives during synchronization ... ok (38ms)\n  completes visibility synchronization with a sealed unrelated write pending ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n----- output end -----\n  completes visibility synchronization with a sealed unrelated write pending ... ok (42ms)\n  completes visibility synchronization with a sealed absent entry write pending ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n[WARN][space-server::08:09:35.567] event-view-lag drain deferring visibility-0: replica view holds undefined at index 0; later-arrived events wait behind it\n[WARN][space-server::08:09:35.575] event-view-lag drain deferring visibility-0: replica view holds undefined at index 0; later-arrived events wait behind it\n----- output end -----\n  completes visibility synchronization with a sealed absent entry write pending ... ok (64ms)\n  completes visibility synchronization with a sealed different sequence write pending ...\n------- output -------\nExperimental flag overrides: serverExecution=true\n[WARN][space-server::08:09:35.637] event-view-lag drain deferring visibility-0: replica view holds {eventId:\"visibility-0\",firedAt:{session:\"session:visibility-actor\",user:\"did:key:z6Mku1NAHt19Fq1VUfNcAKZZbBqHyM5c4JLByDrbQwj3BKu1\"},payload:{},seq:102,stream:{id:\"of:visibility-stream-a\",path:[]}} at index 0; later-arrived events wait behind it\n[WARN][space-server::08:09:35.644] event-view-lag drain deferring visibility-0: replica view holds {eventId:\"visibility-0\",firedAt:{session:\"session:visibility-actor\",user:\"did:key:z6Mku1NAHt19Fq1VUfNcAKZZbBqHyM5c4JLByDrbQwj3BKu1\"},payload:{},seq:102,stream:{id:\"of:visibility-stream-a\",path:[]}} at index 0; later-arrived events wait behind it\n----- output end -----\n  completes visibility synchronization with a sealed different sequence write pending ... ok (71ms)\nSpaceServer ... ok (553ms)\n\nok | 1 passed (10 steps) | 0 failed (557ms)\n\n"
+      }
+    }
+  ]
+}

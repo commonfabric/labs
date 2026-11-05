@@ -1,0 +1,8 @@
+{
+  "servingLoopPresent": false,
+  "eventsAfter": null,
+  "eventsBefore": null,
+  "fullStatsAfterSha256": "fb2cc8c7c35208f6d5bb59590bfc86c3d1f1964f58624f84c7b391d0d8788254",
+  "fullStatsBeforeSha256": "7249dbcb3cfcb1105d9ff585682dc7c51c795e208fc8d906d82b34d08e965777",
+  "sourceDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/event-visibility-integration-off-01"
+}

@@ -18,7 +18,7 @@ carries the rollback, authority, and lifecycle detail.
 ## The rule
 
 `combineSchemaForLink(parentSchema, linkSchema)` in
-[`packages/runner/src/traverse.ts`](../../packages/runner/src/traverse.ts)
+[`runtime/runner/src/traverse.ts`](../../runtime/runner/src/traverse.ts)
 resolves every crossing. It is precedence, not intersection:
 
 - A `false` reader schema stays `false`: the reader selected nothing, and
@@ -33,8 +33,9 @@ resolves every crossing. It is precedence, not intersection:
   that brought no shape of their own.
 
 `{ "type": "unknown" }` is a shaped reader, not an empty one: it is the
-deliberate request for reference semantics, so it wins the crossing and
-stays opaque through every deeper hop.
+deliberate request for reference semantics, so at a hop it wins the
+crossing and stays opaque through every deeper hop. At the read's entry
+it adopts the stored schema instead; see "The read entry" below.
 
 For the Contact example, a reader of
 
@@ -55,6 +56,106 @@ Chains compose hop by hop: `combine(combine(reader, link1), link2)`. Once
 a shaped schema is traveling — the reader's own, or a link schema an
 agnostic reader adopted — later links no longer reshape it.
 
+### The read entry
+
+A read addressed at a slot that holds a link — a keyed cell's `get()`, a
+handle minted by `resolveAsCell()` — crosses that link before its
+traversal starts. Link resolution carries the nearest stored schema that
+constrains across the crossing (one that constrains nothing — `true`,
+`{}`, or a `cid:` reference resolving to either — leaves the reader's
+traveling), and the entry then resolves that stored schema against the
+reader's by the same precedence as a hop: a shaped reader's schema stands,
+an agnostic reader adopts the stored one, and a `false` reader selects
+nothing. The traversal starts at the target with whichever schema won. So
+an element read by its own path projects the same as that element read
+within its array, where the array's traversal crosses the same link under
+the reader's item schema; and a renderer reading a link slot by its own
+schema reads the target's UI whatever narrower view the link was written
+from.
+
+A keyed cell's reader schema is its parent's narrowed to the key
+(`Cell.key()`). Where the parent refuses the key — a property declared
+`false`, `items: false`, an undeclared key beside
+`additionalProperties: false`, any key below a false schema or below a
+scalar — the keyed cell carries `false` and selects nothing, the same as one
+whose parent declares the child `{ "not": true }`. It is not left agnostic,
+which would read the raw value and adopt the stored schema at a link. The one
+refused key that reads with no schema is `length` under a schema admitting an
+array or a string and no object, since the store reads an array's or a
+string's `length` as a value. A schema that also admits an object refuses
+`length` as that object's key, and a keyed cell cannot tell which value it
+will meet, so the refusal stands: `key("length")` under
+`{ "anyOf": [{ "type": "string" }, { "type": "object", "additionalProperties": false }] }`,
+or under a closed object that declares no type, carries `false`.
+
+A key under an `allOf` that declares no `type` carries `false` as well,
+because narrowing does not read a child out of a conjunction
+([`json_schema.md`](json_schema.md#how-a-step-narrows)). A read of the parent
+evaluates the conjunction whole and reaches a property a part declares, so
+over `{ "x": 5 }` under
+`{ "allOf": [{ "type": "object", "properties": { "x": { "type": "number" } } }] }`
+the parent reads `{ "x": 5 }` while `key("x")` selects nothing. Leaving the
+keyed cell agnostic instead would read the property with no schema, dropping
+the constraints and labels the part declares on it.
+
+Under an `allOf` beside a declared `type` the disagreement runs the other
+way. Narrowing reads the keywords beside the conjunction and not its parts,
+so a key those keywords admit narrows to what they say about it, whatever a
+part declares. Over `{ "x": 5, "y": 1 }` under
+`{ "type": "object", "properties": { "y": { "type": "number" } }, "allOf": [{ "type": "object", "properties": { "x": { "type": "string" } } }] }`,
+`key("x")` carries the wildcard and reads `5`, which a read of the parent does
+not return, and the part's constraints and labels on `x` do not reach the
+keyed cell. Both cases close when narrowing reads a child out of each part of
+a conjunction; until then, a schema that has to hold for keyed reads states
+its constraints beside the `allOf` rather than only inside it.
+
+What the entry crossing compares against is the reader's own schema. An
+agnostic reader whose read passes through one link to reach a slot
+holding another adopts the second link's schema, which describes the
+value the read lands on, rather than keeping the first link's description
+of the slot.
+
+Four cases keep the stored schema at the entry whatever the reader
+declared:
+
+- A stored `false` selects nothing, a shaped reader's read by path
+  included, where at a hop it blocks only a reader that brought no shape.
+- A stored `unknown` keeps a shaped reader's read by path a reference,
+  where within the array the same reader reads through it (no `set()`
+  mints such a link: a cell written into a slot carries its own schema,
+  never the slot's).
+- A reader typed `unknown` adopts the stored schema, where at a hop it
+  wins the crossing and stays a reference. A keyed read off a handle typed
+  `{ "type": "unknown", "asCell": ["cell"] }` reads the value the stored
+  schema describes.
+- With `readerSchemaPrecedence` off, the entry keeps link resolution's
+  rule and projects by the stored schema, while every hop falls back to the
+  strict pseudo-intersection.
+
+These are the points where the entry and the hops answer differently,
+and `stored-link-schema-precedence.test.ts` pins each. A reader wrapped
+in `asCell` is not addressed at the slot this way: its handle is minted
+at the traversal boundary, where the crossing is a hop and combines, so
+the handle keeps the reader's own schema (the asCell handle arm in that
+file). A lazy view's re-entry at a link slot is a hop, not an entry, and
+combines in every case: the four above, and an agnostic reader along a
+chain, which keeps the first link's description of the slot.
+
+A render follows the same rule, with nothing of its own to opt into. The
+renderer's schema (`rendererVDOMSchema`) is shaped, so the read the worker
+reconciler takes of the cell it mounts, and the walk of a view's roots
+that collects what the view renders, keep that schema at the entry: a
+piece reached through a link typed by a narrow view of it, one that
+leaves out `[UI]`, still renders its `[UI]`. Through a stored `false` or
+a stored `unknown`, a render gets the entry's answer from the list above,
+selecting nothing or holding a reference.
+
+A link into another space carries its stored schema across the boundary
+recomposed into a self-contained form, its `cid:` closure loaded from the
+space that holds the link
+([`content-addressed-schemas.md`](content-addressed-schemas.md), "Space
+boundaries"), and the entry resolves against it the same way.
+
 The strict pseudo-intersection (`combineSchema`) remains in use for one
 job: merging a compound schema's base keywords with its own
 `anyOf`/`oneOf` branches, where both parts were authored as one
@@ -72,7 +173,9 @@ stands (a default-only reader's included, though `{ "default": … }` is
 otherwise a true schema). A default-only STORED schema contributes the
 same way: trivially true for shape, its default is still the nearest
 declaration, and the resolution carry inherits it onto the traveling
-schema rather than discarding it with the shape it does not have. Path
+schema rather than discarding it with the shape it does not have. The
+stored schema is read in structural form, so a default it declares behind
+a content-addressed reference is inherited as an inline one is. Path
 narrowing surfaces a link's nested property defaults as top-level at the
 positions where deeper reads combine, so the rule composes per position
 across a chain.
@@ -93,7 +196,7 @@ stored cfc metadata and label views rather than combined schemas.
 
 What replaces combination is the **crossing seam**
 (`markIfcBearingLinkCrossing` in
-[`packages/runner/src/schema-ifc.ts`](../../packages/runner/src/schema-ifc.ts)):
+[`runtime/runner/src/schema-ifc.ts`](../../runtime/runner/src/schema-ifc.ts)):
 a transaction is marked cfc-relevant at every actual link crossing whose
 stored schema carries `ifc` anywhere (`schemaHasIfc`), independently of
 which side won the combination.
@@ -178,23 +281,35 @@ is the authority on the lifecycle and the removal path.
 
 ## Test anchors
 
-`packages/runner/test/combine-schema.test.ts` pins each precedence arm,
+`runtime/runner/test/combine-schema.test.ts` pins each precedence arm,
 the strict-union contrast, the default-inheritance arms, and the rollback
-arm. `packages/runner/test/link-ifc-read-relevance.test.ts` pins the
+arm. `runtime/runner/test/link-ifc-read-relevance.test.ts` pins the
 crossing seam: entry, nested, resolution-chain, handle-hop, cold-closure,
 cold-closure narrowing, narrowed-away-ancestor, proxy, raw-read,
 `set()`-resolution, array-element, and root-asCell-mint marking, plus the
 broken-declaration rule (an unresolvable stored schema selects nothing —
 a shaped reader reads on, and what it legibly declares still marks).
-`packages/runner/test/schema-ifc.test.ts` pins the closure loader's
+`runtime/runner/test/schema-ifc.test.ts` pins the closure loader's
 broken-declaration arms.
-`packages/runner/test/stored-link-schema-precedence.test.ts` pins the
-cell-level reads, including the asCell handle regression and the inherited
-default. `packages/runner/test/reader-schema-precedence-config.test.ts`
+`runtime/runner/test/stored-link-schema-precedence.test.ts` pins the
+cell-level reads — the entry rule (by path the same as within the array, a
+`false` reader, a renderer's read past a narrower stored view, an agnostic
+reader along a chain, a link into another space) and the four cases that
+keep the stored schema (a stored `false`, both `unknown` directions, the
+rollback), the asCell handle regression, and the inherited default.
+`runtime/runner/test/render-read-link-schema.test.ts` pins a render read
+under the entry rule, `runtime/html/test/in-process-link-schema.test.ts`
+the reconciler's root mount, and
+`runtime/runner/test/view-render-reads.test.ts` the walk of a view's roots.
+`runtime/runner/test/cross-space-cid-schema.test.ts` pins the crossing's
+recomposition route by route, and
+`patterns/product/collection-naming/board.test.tsx` pins a lift's view
+holding a `Record<string, unknown>` map's members as references.
+`runtime/runner/test/reader-schema-precedence-config.test.ts`
 and the ambient-flag family in
-`packages/runner/test/experimental-options.test.ts` pin the
+`runtime/runner/test/experimental-options.test.ts` pin the
 construction-set ambient lifecycle (no teardown reset);
-`packages/runner/test/runtime-presets.test.ts` pins adoption and the
+`runtime/runner/test/runtime-presets.test.ts` pins adoption and the
 legacy-absent rule. The traverse-replay goldens carry the
 serving-behavior consequences.
 

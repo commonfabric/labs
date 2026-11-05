@@ -1,0 +1,1 @@
+{"date":"2026-09-09","from":{"k":"unit","s":"shell","n":"runtimeHostFlags > defaults every flag to false"},"to":{"k":"unit","s":"shell","n":"runtimeHostFlags > reads the render ceiling on and every other flag off when nothing is persisted"}}

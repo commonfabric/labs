@@ -24,11 +24,13 @@ target. In particular:
 - the memory server ACL policy gates session opens and commands when enabled;
   route-level `Origin` enforcement remains deferred
 - fresh-space writes require an ACL-only genesis by the space identity or a
-  configured service DID; storage performs named-space genesis in a temporary
-  space-authenticated session and then remounts as the active user
+  configured service DID; creating a space generates a random key and commits
+  its genesis in a session authenticated as that key, and a Home space's first
+  mount writes its genesis in a temporary session as the user; the space DID
+  holds OWNER only until genesis lands
 - populated spaces that never had an ACL are temporarily authenticated-public
-  READ/WRITE (never OWNER), except that the home identity claims its own
-  ACL-less space; malformed, ownerless, and retracted ACLs fail closed
+  READ/WRITE (never OWNER); malformed, ownerless, and retracted ACLs fail
+  closed
 - session resume still uses caller-provided `sessionId` values; principal
   binding and server-issued session ids remain deferred
 - one-shot `graph.query` now honors `branch` and `atSeq`
@@ -36,9 +38,9 @@ target. In particular:
   simple `query` / wildcard selector shape remains future protocol design
 - watch installation remains current-state only in this pass; do not treat
   watch specs as historical subscriptions keyed by `atSeq`
-- steady-state topology shrink does not yet drive automatic unwatch/removal
-  semantics; clients should only rely on `removes` from explicit watch-set
-  replacement in this pass
+- a refresh retracts a document a write left no watch reaching, by the
+  attribution of tracked documents to what reached them (04-protocol.md section
+  4.6.3); explicit watch-set replacement and removal retract the rest
 - branch lifecycle commands are not yet exposed on the v2 wire; current branch
   creation keeps its fork-seq semantics until that cutover lands
 
@@ -127,19 +129,45 @@ request as idempotent only if the watch definition is identical. If the
 definition differs, reject the request and require the client to use
 `session.watch.set` to replace the full watch set.
 
+Watch additions stage changes to graph selectors, missed-target ownership,
+document caches, schema reference scans, and operation cursors. Evaluation,
+operation snapshot attachment, and wire conversion finish before publication.
+Once the engine is acquired, the captured session must still be the registry's
+current session. Staging through publication then runs synchronously:
+temporary maps read through the exclusively held session state, copy mutable
+containers only for touched keys, and commit into the original maps on success.
+Discard failed stages; never retain a chain of staged maps in a live session.
+Shared evaluation-cache entries require independent clones.
+
+Operation snapshots retain their declaration list and cursor map across engine
+access. A concurrent watch replacement owns its own cursor map.
+
+Ordinary additions index watch IDs and maintain only changed interests.
+Incremental refresh reconciles each changed scoped key against delivered
+entries, operation watches, and remaining misses on every branch. The last
+miss owner leaving must retire an interest unless another source still owns
+it. Watch replacement recomputes complete provenance; normalizing an accepted
+list with duplicate IDs also recomputes it because an operation owner can
+depart. A refresh's schema-closure pass walks only the closures of the documents
+it delivers, and stops at schema documents the graph already established, so
+its cost follows the changed documents rather than every schema hash the session
+holds; `docs/specs/content-addressed-schemas.md`, under "Traversal and sync",
+states what that pass verifies and what it leaves to a fresh evaluation.
+
 ## 5. Transaction Contract
 
-The runner-facing transaction contract does not change.
-
-`IExtendedStorageTransaction.commit()` still has two phases:
-
-1. synchronous local apply
-2. asynchronous server resolution
+`IExtendedStorageTransaction.commit()` returns a receipt synchronously.
+Valid ordinary single-space writes apply locally before it returns;
+multi-space writes start each space in sequence. Callers select
+`receipt.verdict` for the attempt's fate or `receipt.settled` for coverage,
+rejection repair, callbacks, and inline post-commit effects. See
+[transaction commit](../../features/transaction-commit.md) for stage selection
+and promise assimilation.
 
 The storage-visible notification behavior must remain:
 
 - optimistic `"commit"` before the async round trip completes
-- `"revert"` synchronously before the promise resolves on conflict
+- `"revert"` synchronously before `receipt.settled` resolves on conflict
 - `"integrate"` for remote sync
 
 Path and document-boundary rules:
@@ -270,10 +298,10 @@ For schema-aware live watches, keep the cache lifetimes split:
 
 - keep a persistent doc-plus-selector tracker per watched graph so `watchAdd`
   can stop immediately at already-current frontiers
-- allow additive watch growth to reuse a persistent traversal memo for the
-  tracked graph
-- use a fresh traversal memo for write-triggered refreshes so retargets and
-  other topology changes cannot be incorrectly pruned by stale memo entries
+- share a traversal memo only within one evaluation, including additive watch
+  growth, root removal, and write-triggered refreshes; release it when that
+  evaluation finishes. The persistent tracker preserves current coverage
+  without retaining traversal results for removed schemas or old revisions
 
 For one-shot reads, `graph.query` must honor:
 
@@ -283,7 +311,7 @@ For one-shot reads, `graph.query` must honor:
 Do not silently drop `atSeq` from one-shot query semantics.
 
 Keep shared JSON-pointer and path-overlap helpers in one module under
-`packages/memory/v2` so patch application, conflict detection, and runner-side
+`runtime/memory/v2` so patch application, conflict detection, and runner-side
 read invalidation do not drift.
 
 ## 12. Branch Scope

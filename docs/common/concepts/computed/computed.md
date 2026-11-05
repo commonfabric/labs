@@ -302,6 +302,10 @@ For the hierarchical summary string convention used by container patterns, see
 
 ## Collection-loop cost
 
+For operation selection and examples, see
+[reactive collections](../reactive-collections.md): `map`, `filter`, `reduce`,
+shared indexes, and named aggregates.
+
 Choose `computed` for an inline derivation and a module-level `lift` for a
 reusable derivation. Changing that spelling alone does not make a collection
 scan incremental. With lazy argument materialization enabled by default, the

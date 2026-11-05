@@ -46,7 +46,7 @@ parent passes.
 
 A **pattern** is source code — a template. A **piece** is an instance of a
 pattern living in a space. Top-level deployment through `cf piece new` or the
-shell does roughly this (see `packages/piece/src/ops/pieces-controller.ts`):
+shell does roughly this (see `runtime/piece/src/ops/pieces-controller.ts`):
 
 1. The pattern source is compiled and registered, so the space knows the
    program (not just its output).
@@ -64,8 +64,13 @@ Instantiating a child pattern inside another piece creates its cells and
 metadata, but does not add the child to `pieceRegistry` automatically.
 
 A piece is identified by an entity id (a hash, e.g. `fid1:abc...`) and can carry
-a human **slug** for URLs. In the shell, `/{spaceName}/{pieceIdOrSlug}` shows
-a piece's UI.
+a human **slug** for URLs. In the current shell,
+`/{spaceName}/{pieceIdOrSlug}` shows a piece's UI.
+
+[Common Fabric URLs](../specs/fabric-urls.md) describes a possible future
+canonical browser form using an ASP host, a registered space name or space DID,
+and the piece DID. No deployment is planned; the current shell routes remain
+authoritative.
 
 The registry is the root of the supported piece listings. A child piece that is
 not registered must be published through a searchable collection or remain
@@ -124,7 +129,7 @@ For drill-down flows (list → detail), a handler can return
 
 `navigateTo` with a freshly-instantiated pattern creates the detail piece
 and navigates the shell to it; with an existing piece it just navigates.
-The canonical list/detail example is `packages/patterns/reading-list/` —
+The canonical list/detail example is `patterns/examples/reading-list/` —
 the detail pattern receives each editable field as a `Writable<>` input and
 binds them directly with `$value`.
 
@@ -149,8 +154,8 @@ const response = generateText({
 The request flows through the server's LLM proxy (Toolshed — Chapter 11),
 results are cached per distinct input, and `pending`/`error`/`result` are
 just cells your UI binds to. A real use from
-`packages/patterns/shopping-list.tsx` — note it's *inside a `.map()`*, one
-cached classification per item:
+`patterns/apps/shopping-list/shopping-list.tsx` — note it's *inside a `.map()`*,
+one cached classification per item:
 
 ```tsx
 // Shown inside a pattern body.
@@ -173,16 +178,6 @@ Think about what this composition means: an LLM call whose *prompt is a
 reactive function of durable shared state*, whose result is durable shared
 state, inside a list comprehension, synced to every user of the space. That
 sentence is the product.
-
-## Background execution
-
-A piece can keep working with no browser open. A pattern that exposes a
-`bgUpdater` stream (or registers via the `cf-updater` component) gets picked
-up by the **background piece service**, which re-runs each registered piece
-on a fixed cadence (every 60 s by default), sending to that stream
-server-side — same graph, same cells, headless executor (details in
-Chapter 11). This is how "summarize my feed every morning" works without
-anyone keeping a tab open.
 
 ---
 

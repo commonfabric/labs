@@ -22,7 +22,8 @@ These routes require a first-party HTTP request proof:
 - `POST /api/agent-tools/web-search`
 - `POST /api/agent-tools/web-read`
 - `POST /api/sandbox/exec`
-- `POST /api/ingest-channels/{mint,list,rotate,revoke}`
+- `POST /api/spaces/:space/ingest-channels/{mint,list,rotate,revoke}`
+- `POST /api/ingest-channels/list`
 
 The first three were selected because first-party code calls them through the
 fetch builtins, and each route spends server-held or local runtime authority.
@@ -33,11 +34,11 @@ The ingest-channel control plane is different in kind, and is the first route
 family to close the authorization half of the gap described below. It does not
 merely authenticate the caller: it takes the verified DID and requires an
 explicit `OWNER` grant for it in the target space's ACL document before minting
-anything (`packages/toolshed/lib/space-authority.ts`). It is called by `cf
+anything (`runtime/toolshed/lib/space-authority.ts`). It is called by `cf
 ingest`, not by a fetch builtin, so its paths are deliberately **not** in
 `PROTECTED_TOOLSHED_FIRST_PARTY_ROUTES` — adding them would let any pattern mint
 a channel with the user's authority and read the one-time token back, which
-needs the `cf-secret-viewer` treatment webhooks use. All four verbs are POST so
+needs the `cf-secret-viewer` treatment webhooks use. Every verb is POST so
 that remains possible later. See
 `docs/features/self-serve-ingest-channels.md`.
 
@@ -47,7 +48,7 @@ these routes.
 
 ## Request Proof Format
 
-The implementation uses a CommonTools-specific first-party request proof. It
+The implementation uses a CommonFabric-specific first-party request proof. It
 does not use the RFC 9421 header names or vocabulary. This keeps the local
 format separate from a future RFC 9421 implementation.
 
@@ -116,8 +117,8 @@ These routes are privileged but are not changed in this pass:
   expiration and method, authority, path, query, DID, and body binding limit
   where that captured request can be used. A route whose response MINTS a
   credential needs more than that, because a replay would hand the replayer a
-  live token that outlives the proof window: `/api/ingest-channels/mint` and
-  `/rotate` therefore take a caller-supplied `requestId`, persisted beside the
+  live token that outlives the proof window: the ingest-channel `mint` and
+  `rotate` verbs therefore take a caller-supplied `requestId`, persisted beside the
   registration, and answer a repeat with 409 and no secret. Any future
   credential-minting route needs the same treatment.
 - A verified proof proves control of the DID key. It does not prove that the

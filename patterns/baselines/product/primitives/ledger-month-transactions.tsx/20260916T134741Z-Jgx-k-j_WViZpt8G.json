@@ -1,0 +1,135 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "SqliteDatabase": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "rev": {
+            "type": "number"
+          },
+          "tables": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "bank": {
+        "$ref": "#/$defs/SqliteDatabase",
+        "asCell": [
+          "sqlite"
+        ],
+        "description": "The connector ledger to read. Whoever wired the input chose which."
+      },
+      "month": {
+        "default": "",
+        "description": "The month to read, as `YYYY-MM`. Empty means the current month.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "bank"
+    ],
+    "type": "object"
+  },
+  "pattern": "primitives/ledger-month-transactions.tsx",
+  "resultSchema": {
+    "$defs": {
+      "LedgerTransaction": {
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "category_primary": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "iso_currency_code": {
+            "type": "string"
+          },
+          "merchant_name": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "number"
+          },
+          "signed_amount": {
+            "type": "number"
+          },
+          "status": {
+            "description": "What the connector says became of the transaction. Projected because the\ntable's row-label rule reads it, not because the view shows it.",
+            "type": "string"
+          },
+          "transaction_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "date",
+          "amount",
+          "signed_amount",
+          "merchant_name",
+          "name",
+          "account_id",
+          "pending",
+          "category_primary",
+          "iso_currency_code",
+          "status"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "errorMessage": {
+        "description": "Why the read failed, empty while it has not.",
+        "type": "string"
+      },
+      "month": {
+        "description": "The month the rows were read from, as `YYYY-MM`.",
+        "type": "string"
+      },
+      "pending": {
+        "type": "boolean"
+      },
+      "rowCount": {
+        "type": "number"
+      },
+      "rows": {
+        "items": {
+          "$ref": "#/$defs/LedgerTransaction"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "month",
+      "rows",
+      "rowCount",
+      "pending",
+      "errorMessage",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

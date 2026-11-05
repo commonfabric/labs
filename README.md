@@ -1,11 +1,12 @@
-# Common Fabric Platform
+# Common Fabric
 
-**Common Labs** is where the Common Fabric platform is built in the open. This
-is early, fast-moving work: interfaces change often, and there is no API
-stability yet. You are welcome to explore the code, run and write patterns, and
-contribute.
+**Common Labs** is where Common Fabric is built in the open. This is early,
+fast-moving work: interfaces change often, and there is no API stability yet.
+You are welcome to explore the code, run and write patterns, and contribute.
 
-![A loom, by Midjourney](./docs/images/loom.jpg)
+![A sunset over the ocean](./docs/images/banner.jpg)
+
+[commonfabric.com](https://commonfabric.com)
 
 ## What is Common Fabric?
 
@@ -19,15 +20,11 @@ safety attaches to the data — every datum carries its own policies, anything
 derived from it carries them too, and code that cannot prove it honors those
 policies does not compile.
 
-Three ways in, depending on how much you want:
+Two ways in, depending on how much you want:
 
-- [**Why**](docs/why.md) — what that rule has cost, and why it is worth
-  replacing. Prose, five minutes.
-- [**How it works**](docs/how.md) — the same argument as code: a real pattern,
-  what the compiler emits for it, where the runtime checks the result, and what
-  is not built yet. Every snippet is verbatim from a file in this repository.
-- [**The long form**](docs/inverting-the-physics-of-trust.md) — the physics, the
-  hardware, and the objections.
+- [**Why**](docs/why.md) — our case for flipping the trust model.
+- [**Inverting the physics of trust**](docs/inverting-the-physics-of-trust.md) —
+  the physics, the hardware, and the objections.
 
 ### Core Concepts
 
@@ -56,14 +53,16 @@ can run their own spaces or use hosted versions.
 4. Install the Git hooks: `deno task install-hooks` (optional)
    - Put `cf` on PATH once: `deno task install-cf`. The copy it installs serves
      every checkout, and shell completion needs it — see
-     [Installing `cf` on PATH](./packages/cli/README.md#installing-cf-on-path).
+     [Installing `cf` on PATH](./runtime/cli/README.md#installing-cf-on-path).
 5. Start local dev servers: `./scripts/start-local-dev.sh`
 6. Access the application at <http://localhost:8000>
-7. Team members: get a test-reporting key (`deno task test-records-key setup`)
-   so your local test runs feed the shared flake and duration history — see
-   [test-records.md](./docs/development/test-records.md). Contributing without
-   commit access? Then there is nothing to set up here: tests run identically
-   without a key, and CI records your pull requests' runs on its own.
+7. If you're contributing regularly, consider setting up a test-reporting key
+   (`deno task test-records-key setup`), so your local test runs add to the
+   shared history of test durations and flaky tests. There is no rush: a key
+   stays active while you have recent pull-request activity, and everything
+   works the same without one, so set one up whenever it suits you. Without
+   commit access, a team member will start the key workflow for you. See
+   [test-records.md](./docs/development/test-records.md#getting-a-key).
 
 Installing
 [Deno 2 directly](https://docs.deno.com/runtime/getting_started/installation/)
@@ -78,26 +77,27 @@ Claude-mediated introduction. See
 [LOCAL_DEV_SERVERS.md](./docs/development/LOCAL_DEV_SERVERS.md) for
 troubleshooting.
 
-_New Common Tools employees are encouraged to visit go/trailhead._
+_New Common Fabric employees are encouraged to visit go/trailhead._
 
 ## Architecture
 
-This is a multi-package monorepo with several key components:
+This repository holds many packages. [LAYOUT.md](./LAYOUT.md) says what each
+directory at the top of the repository holds. The main components are:
 
-**Backend ([Toolshed](./packages/toolshed))**: The hosted platform backend,
+**Backend ([Toolshed](./runtime/toolshed))**: The hosted platform backend,
 written in Deno2, that provides the distributed runtime and storage.
 
-**Frontend ([Shell](./packages/shell))**: A web client interface written with
-Lit Web Components for interacting with Common Fabric spaces.
+**Frontend ([Shell](./runtime/shell))**: A web client interface written with Lit
+Web Components for interacting with Common Fabric spaces.
 
 **CLI (cf)**: Command-line interface for managing pieces, linking patterns, and
 deploying to spaces. Run `deno task cf --help` for command reference.
 
-**UI Components ([packages/ui](./packages/ui))**: Custom VDOM layer and `cf-`
+**UI Components ([runtime/ui](./runtime/ui))**: Custom VDOM layer and `cf-`
 prefixed components for pattern UIs.
 
-**Examples & Patterns ([packages/patterns](./packages/patterns))**: Example
-patterns for building with Common Fabric.
+**Examples & Patterns ([patterns](./patterns))**: Example patterns for building
+with Common Fabric.
 
 **Pattern Development**: Patterns can be developed using the repo-local
 `skills/pattern-dev/` skill package. Claude compatibility still exposes this as
@@ -148,10 +148,10 @@ When adding or rolling repository dependencies, follow the
 ## Running the backend
 
 For a more detailed guide, see
-[./packages/toolshed/README.md](./packages/toolshed/README.md).
+[./runtime/toolshed/README.md](./runtime/toolshed/README.md).
 
 ```bash
-cd ./packages/toolshed
+cd ./runtime/toolshed
 deno task dev
 ```
 
@@ -167,7 +167,7 @@ frontend together. See
 
 ```bash
 # Against local backend (use dev-local, NOT dev)
-cd ./packages/shell
+cd ./runtime/shell
 TOOLSHED_PORT=8000 deno task dev-local
 ```
 
@@ -180,7 +180,7 @@ at <http://localhost:8000>, where toolshed proxies to shell.
 If you are not running a local backend, you can point to the cloud:
 
 ```shell
-cd ./packages/shell
+cd ./runtime/shell
 deno task dev
 ```
 
@@ -319,13 +319,13 @@ is a human with particular experiences, embedded in a larger system. We should
 stay away from topics that might have a strong emotional charge for any
 potential participant or onlooker now or in the future. Conversations must stay
 focused on topics that are non-controversial and related (even if indirectly) to
-Common Tools and the ecosystem we're trying to catalyze. If someone is
+Common Fabric and the ecosystem we're trying to catalyze. If someone is
 uncomfortable with a topic you brought up, back off, even if you don't
 understand why someone might be uncomfortable. If someone brings up a topic
-you're uncomfortable with, please contact <conduct@common.tools>.
+you're uncomfortable with, please contact <conduct@commonfabric.com>.
 
 _See also our
-[code of conduct](https://github.com/commontoolsinc/labs?tab=coc-ov-file)._
+[code of conduct](https://github.com/commonfabric/labs?tab=coc-ov-file)._
 
 ### Discord
 
@@ -358,10 +358,10 @@ restricted to team members only.)
   largely written by agents.
 - **estuary:** the name of our production toolshed server.
 - **loom:** you may hear people in the community refer to "Loom"; this is a
-  product the Common Tools team is working on based on the open source work in
+  product the Common Fabric team is working on based on the open source work in
   this repository.
 - **pattern:** a program that runs on the Common Fabric runtime. See the
   [pattern documentation](./docs/common/).
 - **rapids:** the name of our staging toolshed server.
 - **toolshed:** the backend server software that hosts the runtime. See
-  [packages/toolshed](./packages/toolshed).
+  [runtime/toolshed](./runtime/toolshed).

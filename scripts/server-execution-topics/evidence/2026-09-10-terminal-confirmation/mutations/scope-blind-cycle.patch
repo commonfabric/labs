@@ -1,0 +1,20 @@
+--- a/packages/runner/src/ensure-piece-running.ts
++++ b/packages/runner/src/ensure-piece-running.ts
+@@ -2,7 +2,7 @@
+ import { isObjectOrArray } from "@commonfabric/utils/types";
+ import type { Cell } from "./cell.ts";
+ import {
+-  areNormalizedLinksSame,
++  areNormalizedLinksSameIgnoringScope,
+   getMetaLink,
+   type NormalizedFullLink,
+ } from "./link-utils.ts";
+@@ -54,7 +54,7 @@
+ 
+   while (true) {
+     const link = currentCell.getAsNormalizedFullLink();
+-    if (visited.some((previous) => areNormalizedLinksSame(previous, link))) {
++    if (visited.some((previous) => areNormalizedLinksSameIgnoringScope(previous, link))) {
+       logger.debug("ensure-piece", () => [
+         `Cycle found while following result metadata at ${currentCell.getAsNormalizedFullLink().id}`,
+       ]);

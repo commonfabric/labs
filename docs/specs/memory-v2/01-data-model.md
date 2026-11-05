@@ -127,9 +127,9 @@ uses the separate short-link form `{"/":"<short-id>"}` and resolves to
 shape and is converted to a CID sigil link during traversal. When the server
 executes a subscription with graph traversal, it delivers these fields as part
 of the document that carries them and follows none of them; the one metadata
-field traversal does follow is `cfc`, whose schema document every delivered
-document is owed. The contract is in [`05-queries.md`](05-queries.md),
-"Metadata / Provenance Resolution".
+field traversal does follow is `cfc`, whose schema document and label
+documents every delivered document is owed. The contract is in
+[`05-queries.md`](05-queries.md), "Metadata / Provenance Resolution".
 
 **Document paths**: Transaction/storage reads and writes operate on full
 document paths. For example, metadata links live at top-level paths like
@@ -480,8 +480,14 @@ current value. Patch operations are inspired by
 **not bound by it**. Key differences from RFC 6902:
 
 - **`add` creates intermediate parents automatically.** Writing to
-  `/person/name` creates the `person` object if it doesn't exist. Numeric path
-  segments create arrays; string segments create objects. When a schema is
+  `/person/name` creates the `person` object if it doesn't exist. A created
+  parent is an array where the segment that follows it is an array index — a
+  non-negative integer with no leading zeros, no larger than 2^32 − 2 — or the
+  `-` append marker, and an object for any other segment, a longer run of
+  digits included. An array created this way is empty, so the op applies only
+  where that segment is `0` or `-` and ends the path. Only a created parent is
+  shaped by the segment after it: beneath an object that is already there, a
+  segment is a key of that object however it is written. When a schema is
   available, it guides the choice between array and object.
 - **Custom `splice` operation** for efficient array manipulation.
 - Collaborative editor operations are a distinct top-level `apply-op` write
@@ -510,8 +516,8 @@ interface AddOp {
   path: JSONPointer;
   value: FabricValue;
   // Creates intermediate parents automatically:
-  // numeric path segments → array, string segments → object,
-  // schema-guided when available.
+  // an array where the next segment is an array index or `-`, an object for
+  // any other segment, schema-guided when available.
 }
 
 interface RemoveOp {
@@ -649,6 +655,14 @@ For point-in-time reads at a specific seq:
 1. Find the most recent snapshot with `seq <= targetSeq`.
 2. Collect patches in `(snapshot.seq, targetSeq]`.
 3. Replay from snapshot through patches.
+
+The engine can reuse an immutable decoded revision from its bounded document
+cache as a replay prefix. The cached revision must match the resolved branch and
+scope instance and lie within the selected sequence and operation-index range.
+Only the remaining patches are applied, retaining frozen subtrees outside their
+write paths. An evicted prefix is reconstructed from stored facts. Commit-local
+decoded revisions remain staged until the transaction commits and are discarded
+on rollback. Cache hits include direct reads and replay-prefix reuse.
 
 See §02 Storage for the SQL queries that implement this.
 

@@ -90,7 +90,7 @@ change, with cache, policy, and validation consequences beyond this issue.
   for the next pass, stop the server, reset, and restart. Artifact additions are
   not evidence that a source update happened, and a cached check can leave
   content unchanged. Amend the verdict guidance accordingly.
-- **Topics reference, `skills/topics/references/namespace-backfill.md`:** its
+- **Topics reference, `docs/history/skills/topics/references/namespace-backfill.md`:** its
   warning already identifies #6964, but its unconditional wording can be made
   precise: preflight _can_ write; cached checks need not add anything. Preserve
   the stop-before-reset requirement when pointing operators to the procedure.

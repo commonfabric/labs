@@ -1,0 +1,1129 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "ChatAdminBootstrapRole": {
+        "$ref": "#/$defs/ChatAdminRoleAssignment",
+        "ifc": {
+          "addIntegrity": [
+            "group-chat-admin"
+          ]
+        }
+      },
+      "ChatAdminList": {
+        "ifc": {
+          "addIntegrity": [
+            "group-chat-admin"
+          ],
+          "requiredIntegrity": [
+            "group-chat-admin"
+          ],
+          "uiContract": {
+            "action": "TrustedGroupChatSetAdmin",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedGroupChatAdminSurface"
+            ],
+            "trustedPattern": "TrustedGroupChatAdminSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/cfc-group-chat-demo/trusted.tsx",
+              "moduleIdentity": "2lH6Qnyt36349f3wZHdfLhgPsYFd9_umoZuDnPV8cN0",
+              "path": [
+                "commitTrustedAdminToggle"
+              ]
+            }
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/ChatAdminRole"
+        },
+        "type": "array"
+      },
+      "ChatAdminRegistryStoredValue": {
+        "properties": {
+          "admins": {
+            "$ref": "#/$defs/ChatAdminList"
+          },
+          "bootstrapAdmin": {
+            "$ref": "#/$defs/ChatAdminBootstrapRole"
+          },
+          "everyoneIsAdmin": {
+            "$ref": "#/$defs/ChatEveryoneAdminFlag"
+          }
+        },
+        "type": "object"
+      },
+      "ChatAdminRegistryValue": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ChatAdminRegistryStoredValue"
+          },
+          {
+            "$ref": "#/$defs/EmptyAdminRegistryValue"
+          }
+        ],
+        "default": {}
+      },
+      "ChatAdminRole": {
+        "$ref": "#/$defs/ChatAdminRoleAssignment",
+        "ifc": {
+          "addIntegrity": [
+            "group-chat-admin"
+          ]
+        }
+      },
+      "ChatAdminRoleAssignment": {
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "undefined"
+              },
+              {
+                "$ref": "#/$defs/ChatProfile"
+              }
+            ],
+            "asCell": [
+              "cell"
+            ]
+          }
+        },
+        "required": [
+          "subject",
+          "displayName"
+        ],
+        "type": "object"
+      },
+      "ChatEveryoneAdminFlag": {
+        "anyOf": [
+          {
+            "enum": [
+              true
+            ],
+            "ifc": {
+              "addIntegrity": [
+                "group-chat-admin"
+              ],
+              "requiredIntegrity": [
+                "group-chat-admin"
+              ],
+              "uiContract": {
+                "action": "TrustedGroupChatSetAdmin",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "TrustedGroupChatAdminSurface"
+                ],
+                "trustedPattern": "TrustedGroupChatAdminSurface"
+              }
+            },
+            "type": "boolean"
+          },
+          {
+            "enum": [
+              false
+            ],
+            "ifc": {
+              "uiContract": {
+                "action": "TrustedGroupChatSetAdmin",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "TrustedGroupChatAdminSurface"
+                ],
+                "trustedPattern": "TrustedGroupChatAdminSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/cfc-group-chat-demo/trusted.tsx",
+                  "moduleIdentity": "2lH6Qnyt36349f3wZHdfLhgPsYFd9_umoZuDnPV8cN0",
+                  "path": [
+                    "commitTrustedAdminToggle"
+                  ]
+                }
+              }
+            },
+            "type": "boolean"
+          }
+        ]
+      },
+      "ChatProfile": {
+        "properties": {
+          "accentColor": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "accentColor"
+        ],
+        "type": "object"
+      },
+      "ChatRoom": {
+        "properties": {
+          "createdAt": {
+            "type": "number"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/$defs/SharedChatMessage"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "messages",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "EmptyAdminRegistryValue": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "EmptyMyProfileValue": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "EmptySharedRoomsValue": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "ImportedClaimedChatMessage": {
+        "properties": {
+          "authorName": {
+            "type": "string"
+          },
+          "authorProfile": {
+            "anyOf": [
+              {
+                "type": "undefined"
+              },
+              {
+                "anyOf": [
+                  {
+                    "type": "undefined"
+                  },
+                  {
+                    "$ref": "#/$defs/ChatProfile"
+                  }
+                ],
+                "asCell": [
+                  "cell"
+                ]
+              }
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "imported"
+            ],
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "origin",
+          "authorName",
+          "body",
+          "timestamp"
+        ],
+        "type": "object"
+      },
+      "MyProfileCellValue": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/MyProfileStoredValue"
+          },
+          {
+            "$ref": "#/$defs/EmptyMyProfileValue"
+          }
+        ],
+        "default": {}
+      },
+      "MyProfileStoredValue": {
+        "properties": {
+          "profile": {
+            "$ref": "#/$defs/ChatProfile"
+          }
+        },
+        "type": "object"
+      },
+      "SharedChatMessage": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TrustedSentChatMessage"
+          },
+          {
+            "$ref": "#/$defs/ImportedClaimedChatMessage"
+          }
+        ]
+      },
+      "SharedMessagesValue": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SharedChatMessage"
+        },
+        "type": "array"
+      },
+      "SharedProfileEntry": {
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "undefined"
+              },
+              {
+                "$ref": "#/$defs/ChatProfile"
+              }
+            ],
+            "asCell": [
+              "cell"
+            ]
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "type": "object"
+      },
+      "SharedProfilesValue": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SharedProfileEntry"
+        },
+        "type": "array"
+      },
+      "SharedRoomList": {
+        "ifc": {
+          "addIntegrity": [
+            "group-chat-admin"
+          ],
+          "requiredIntegrity": [
+            "group-chat-admin"
+          ],
+          "uiContract": {
+            "action": "TrustedGroupChatAddRoom",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedGroupChatRoomSurface"
+            ],
+            "trustedPattern": "TrustedGroupChatRoomSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/cfc-group-chat-demo/trusted.tsx",
+              "moduleIdentity": "2lH6Qnyt36349f3wZHdfLhgPsYFd9_umoZuDnPV8cN0",
+              "path": [
+                "commitTrustedRoomAdd"
+              ]
+            }
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/ChatRoom"
+        },
+        "type": "array"
+      },
+      "SharedRoomsStoredValue": {
+        "properties": {
+          "list": {
+            "$ref": "#/$defs/SharedRoomList"
+          }
+        },
+        "type": "object"
+      },
+      "SharedRoomsValue": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SharedRoomsStoredValue"
+          },
+          {
+            "$ref": "#/$defs/EmptySharedRoomsValue"
+          }
+        ],
+        "default": {}
+      },
+      "TrustedSentChatMessage": {
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "uiContract": {
+            "action": "TrustedGroupChatSendMessage",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedGroupChatSendSurface"
+            ],
+            "trustedPattern": "TrustedGroupChatSendSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/cfc-group-chat-demo/trusted.tsx",
+              "moduleIdentity": "2lH6Qnyt36349f3wZHdfLhgPsYFd9_umoZuDnPV8cN0",
+              "path": [
+                "commitTrustedMessageSend"
+              ]
+            }
+          }
+        },
+        "properties": {
+          "authorName": {
+            "type": "string"
+          },
+          "authorProfile": {
+            "anyOf": [
+              {
+                "type": "undefined"
+              },
+              {
+                "$ref": "#/$defs/ChatProfile"
+              }
+            ],
+            "asCell": [
+              "cell"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "sent"
+            ],
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "origin",
+          "authorName",
+          "authorProfile",
+          "body",
+          "timestamp"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "adminRegistry": {
+        "$ref": "#/$defs/ChatAdminRegistryValue",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ]
+      },
+      "hostMessageDraft": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "session"
+          }
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "messageDraft": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "messages": {
+        "$ref": "#/$defs/SharedMessagesValue",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ]
+      },
+      "myProfile": {
+        "$ref": "#/$defs/MyProfileCellValue",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ]
+      },
+      "profileDraft": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "profiles": {
+        "$ref": "#/$defs/SharedProfilesValue",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ]
+      },
+      "roomDraft": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "session"
+          }
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "rooms": {
+        "$ref": "#/$defs/SharedRoomsValue",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ]
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "cfc-group-chat-demo/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "ChatAdminBootstrapRole": {
+        "$ref": "#/$defs/ChatAdminRoleAssignment",
+        "ifc": {
+          "addIntegrity": [
+            "group-chat-admin"
+          ]
+        }
+      },
+      "ChatAdminList": {
+        "ifc": {
+          "addIntegrity": [
+            "group-chat-admin"
+          ],
+          "requiredIntegrity": [
+            "group-chat-admin"
+          ],
+          "uiContract": {
+            "action": "TrustedGroupChatSetAdmin",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedGroupChatAdminSurface"
+            ],
+            "trustedPattern": "TrustedGroupChatAdminSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/cfc-group-chat-demo/trusted.tsx",
+              "moduleIdentity": "2lH6Qnyt36349f3wZHdfLhgPsYFd9_umoZuDnPV8cN0",
+              "path": [
+                "commitTrustedAdminToggle"
+              ]
+            }
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/ChatAdminRole"
+        },
+        "type": "array"
+      },
+      "ChatAdminRegistryStoredValue": {
+        "properties": {
+          "admins": {
+            "$ref": "#/$defs/ChatAdminList"
+          },
+          "bootstrapAdmin": {
+            "$ref": "#/$defs/ChatAdminBootstrapRole"
+          },
+          "everyoneIsAdmin": {
+            "$ref": "#/$defs/ChatEveryoneAdminFlag"
+          }
+        },
+        "type": "object"
+      },
+      "ChatAdminRegistryValue": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ChatAdminRegistryStoredValue"
+          },
+          {
+            "$ref": "#/$defs/EmptyAdminRegistryValue"
+          }
+        ],
+        "default": {}
+      },
+      "ChatAdminRole": {
+        "$ref": "#/$defs/ChatAdminRoleAssignment",
+        "ifc": {
+          "addIntegrity": [
+            "group-chat-admin"
+          ]
+        }
+      },
+      "ChatAdminRoleAssignment": {
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "undefined"
+              },
+              {
+                "$ref": "#/$defs/ChatProfile"
+              }
+            ]
+          }
+        },
+        "required": [
+          "subject",
+          "displayName"
+        ],
+        "type": "object"
+      },
+      "ChatEveryoneAdminFlag": {
+        "anyOf": [
+          {
+            "enum": [
+              true
+            ],
+            "ifc": {
+              "addIntegrity": [
+                "group-chat-admin"
+              ],
+              "requiredIntegrity": [
+                "group-chat-admin"
+              ],
+              "uiContract": {
+                "action": "TrustedGroupChatSetAdmin",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "TrustedGroupChatAdminSurface"
+                ],
+                "trustedPattern": "TrustedGroupChatAdminSurface"
+              }
+            },
+            "type": "boolean"
+          },
+          {
+            "enum": [
+              false
+            ],
+            "ifc": {
+              "uiContract": {
+                "action": "TrustedGroupChatSetAdmin",
+                "helper": "UiAction",
+                "requiredEventIntegrity": [
+                  "TrustedGroupChatAdminSurface"
+                ],
+                "trustedPattern": "TrustedGroupChatAdminSurface"
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/cfc-group-chat-demo/trusted.tsx",
+                  "moduleIdentity": "2lH6Qnyt36349f3wZHdfLhgPsYFd9_umoZuDnPV8cN0",
+                  "path": [
+                    "commitTrustedAdminToggle"
+                  ]
+                }
+              }
+            },
+            "type": "boolean"
+          }
+        ]
+      },
+      "ChatProfile": {
+        "properties": {
+          "accentColor": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "accentColor"
+        ],
+        "type": "object"
+      },
+      "ChatRoom": {
+        "properties": {
+          "createdAt": {
+            "type": "number"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/$defs/SharedChatMessage"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "messages",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "EmptyAdminRegistryValue": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "EmptyMyProfileValue": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "EmptySharedRoomsValue": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "ImportedClaimedChatMessage": {
+        "properties": {
+          "authorName": {
+            "type": "string"
+          },
+          "authorProfile": {
+            "anyOf": [
+              {
+                "type": "undefined"
+              },
+              {
+                "anyOf": [
+                  {
+                    "type": "undefined"
+                  },
+                  {
+                    "$ref": "#/$defs/ChatProfile"
+                  }
+                ]
+              }
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "imported"
+            ],
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "origin",
+          "authorName",
+          "body",
+          "timestamp"
+        ],
+        "type": "object"
+      },
+      "MyProfileCellValue": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/MyProfileStoredValue"
+          },
+          {
+            "$ref": "#/$defs/EmptyMyProfileValue"
+          }
+        ],
+        "default": {}
+      },
+      "MyProfileStoredValue": {
+        "properties": {
+          "profile": {
+            "$ref": "#/$defs/ChatProfile"
+          }
+        },
+        "type": "object"
+      },
+      "SharedChatMessage": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TrustedSentChatMessage"
+          },
+          {
+            "$ref": "#/$defs/ImportedClaimedChatMessage"
+          }
+        ]
+      },
+      "SharedMessagesValue": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SharedChatMessage"
+        },
+        "type": "array"
+      },
+      "SharedProfileEntry": {
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "undefined"
+              },
+              {
+                "$ref": "#/$defs/ChatProfile"
+              }
+            ]
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "type": "object"
+      },
+      "SharedProfilesValue": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SharedProfileEntry"
+        },
+        "type": "array"
+      },
+      "SharedRoomList": {
+        "ifc": {
+          "addIntegrity": [
+            "group-chat-admin"
+          ],
+          "requiredIntegrity": [
+            "group-chat-admin"
+          ],
+          "uiContract": {
+            "action": "TrustedGroupChatAddRoom",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedGroupChatRoomSurface"
+            ],
+            "trustedPattern": "TrustedGroupChatRoomSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/cfc-group-chat-demo/trusted.tsx",
+              "moduleIdentity": "2lH6Qnyt36349f3wZHdfLhgPsYFd9_umoZuDnPV8cN0",
+              "path": [
+                "commitTrustedRoomAdd"
+              ]
+            }
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/ChatRoom"
+        },
+        "type": "array"
+      },
+      "SharedRoomsStoredValue": {
+        "properties": {
+          "list": {
+            "$ref": "#/$defs/SharedRoomList"
+          }
+        },
+        "type": "object"
+      },
+      "SharedRoomsValue": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SharedRoomsStoredValue"
+          },
+          {
+            "$ref": "#/$defs/EmptySharedRoomsValue"
+          }
+        ],
+        "default": {}
+      },
+      "TrustedAdminPolicyEvent": {
+        "properties": {
+          "detail": {
+            "properties": {
+              "checked": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "everyoneIsAdmin": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "target": {
+            "properties": {
+              "dataset": {
+                "properties": {
+                  "adminName": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "TrustedSentChatMessage": {
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "uiContract": {
+            "action": "TrustedGroupChatSendMessage",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedGroupChatSendSurface"
+            ],
+            "trustedPattern": "TrustedGroupChatSendSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/cfc-group-chat-demo/trusted.tsx",
+              "moduleIdentity": "2lH6Qnyt36349f3wZHdfLhgPsYFd9_umoZuDnPV8cN0",
+              "path": [
+                "commitTrustedMessageSend"
+              ]
+            }
+          }
+        },
+        "properties": {
+          "authorName": {
+            "type": "string"
+          },
+          "authorProfile": {
+            "anyOf": [
+              {
+                "type": "undefined"
+              },
+              {
+                "$ref": "#/$defs/ChatProfile"
+              }
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "sent"
+            ],
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "origin",
+          "authorName",
+          "authorProfile",
+          "body",
+          "timestamp"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": true,
+      "addRandomMessages": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "addTrustedRoom": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "adminRegistry": {
+        "$ref": "#/$defs/ChatAdminRegistryValue"
+      },
+      "currentProfileName": {
+        "type": "string"
+      },
+      "currentUserCanManageAdmins": {
+        "type": "boolean"
+      },
+      "currentUserIsAdmin": {
+        "type": "boolean"
+      },
+      "hostLookalikeSend": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "hostMessageDraft": {
+        "default": "",
+        "type": "string"
+      },
+      "messageDraft": {
+        "default": "",
+        "type": "string"
+      },
+      "messages": {
+        "$ref": "#/$defs/SharedMessagesValue"
+      },
+      "myProfile": {
+        "$ref": "#/$defs/MyProfileCellValue"
+      },
+      "profileDraft": {
+        "default": "",
+        "type": "string"
+      },
+      "profiles": {
+        "$ref": "#/$defs/SharedProfilesValue"
+      },
+      "roomDraft": {
+        "default": "",
+        "type": "string"
+      },
+      "rooms": {
+        "$ref": "#/$defs/SharedRoomsValue"
+      },
+      "saveProfile": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "sendTrustedMessage": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "setHostMessageDraft": {
+        "asCell": [
+          "stream"
+        ],
+        "type": "string"
+      },
+      "setMessageDraft": {
+        "asCell": [
+          "stream"
+        ],
+        "type": "string"
+      },
+      "setProfileDraft": {
+        "asCell": [
+          "stream"
+        ],
+        "type": "string"
+      },
+      "setRoomDraft": {
+        "asCell": [
+          "stream"
+        ],
+        "type": "string"
+      },
+      "toggleCurrentUserAdmin": {
+        "$ref": "#/$defs/TrustedAdminPolicyEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "toggleEveryoneAdmin": {
+        "$ref": "#/$defs/TrustedAdminPolicyEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "toggleParticipantAdmin": {
+        "$ref": "#/$defs/TrustedAdminPolicyEvent",
+        "asCell": [
+          "stream"
+        ]
+      }
+    },
+    "required": [
+      "myProfile",
+      "profiles",
+      "messages",
+      "rooms",
+      "adminRegistry",
+      "profileDraft",
+      "messageDraft",
+      "hostMessageDraft",
+      "roomDraft",
+      "setProfileDraft",
+      "setMessageDraft",
+      "setHostMessageDraft",
+      "setRoomDraft",
+      "currentProfileName",
+      "currentUserIsAdmin",
+      "currentUserCanManageAdmins",
+      "saveProfile",
+      "toggleCurrentUserAdmin",
+      "toggleParticipantAdmin",
+      "toggleEveryoneAdmin",
+      "sendTrustedMessage",
+      "addTrustedRoom",
+      "hostLookalikeSend",
+      "addRandomMessages",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

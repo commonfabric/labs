@@ -1,0 +1,13 @@
+--- a/packages/runner/src/executor/space-server.ts
++++ b/packages/runner/src/executor/space-server.ts
+@@ -4686,8 +4686,8 @@
+           }
+           this.#rearmedAwaitingSettle.clear();
+           this.#pendingStructureRetryWake = false;
+-          loadPass = joinLoadPass();
+-          continue;
++          this.#pendingStructureRetryWake = true;
++          break;
+         }
+         if (runtime.scheduler.isIdle()) break;
+         if (Date.now() >= deadline) {

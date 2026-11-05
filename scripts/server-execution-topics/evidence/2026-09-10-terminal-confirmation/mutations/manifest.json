@@ -1,0 +1,184 @@
+{
+  "base": "8814af62a7ddfd50262f3f2f98421f66519a3c95",
+  "candidatePatch": "../candidate.patch",
+  "mutationsRelativeTo": "candidate",
+  "rows": [
+    {
+      "name": "control-before",
+      "started": "2026-09-10T10:35:04.657187+00:00",
+      "ended": "2026-09-10T10:35:09.624059+00:00",
+      "exitCode": 0,
+      "command": [
+        "deno",
+        "test",
+        "--no-check",
+        "--preload=test/clock-preload.ts",
+        "--allow-ffi",
+        "--allow-env",
+        "--allow-read",
+        "--allow-write=/tmp,/var/folders",
+        "--allow-run=git,deno",
+        "test/executor/space-server-terminal-confirmation.test.ts",
+        "test/executor/space-server-terminal-structure.test.ts",
+        "test/ensure-piece-running-scope.test.ts"
+      ],
+      "cwd": "packages/runner",
+      "environment": {
+        "ENV": "test"
+      },
+      "load": [
+        26.40380859375,
+        18.619140625,
+        10.95751953125
+      ],
+      "expectedExit": 0
+    },
+    {
+      "name": "ignore-intervening-writes",
+      "started": "2026-09-10T10:35:09.635447+00:00",
+      "ended": "2026-09-10T10:35:13.858365+00:00",
+      "exitCode": 1,
+      "command": [
+        "deno",
+        "test",
+        "--no-check",
+        "--preload=test/clock-preload.ts",
+        "--allow-ffi",
+        "--allow-env",
+        "--allow-read",
+        "--allow-write=/tmp,/var/folders",
+        "--allow-run=git,deno",
+        "test/executor/space-server-terminal-confirmation.test.ts",
+        "test/executor/space-server-terminal-structure.test.ts",
+        "test/ensure-piece-running-scope.test.ts"
+      ],
+      "cwd": "packages/runner",
+      "environment": {
+        "ENV": "test"
+      },
+      "load": [
+        24.609375,
+        18.3759765625,
+        10.91650390625
+      ],
+      "expectedExit": 1
+    },
+    {
+      "name": "cover-before-retry",
+      "started": "2026-09-10T10:35:13.864003+00:00",
+      "ended": "2026-09-10T10:35:17.720081+00:00",
+      "exitCode": 1,
+      "command": [
+        "deno",
+        "test",
+        "--no-check",
+        "--preload=test/clock-preload.ts",
+        "--allow-ffi",
+        "--allow-env",
+        "--allow-read",
+        "--allow-write=/tmp,/var/folders",
+        "--allow-run=git,deno",
+        "test/executor/space-server-terminal-confirmation.test.ts",
+        "test/executor/space-server-terminal-structure.test.ts",
+        "test/ensure-piece-running-scope.test.ts"
+      ],
+      "cwd": "packages/runner",
+      "environment": {
+        "ENV": "test"
+      },
+      "load": [
+        24.609375,
+        18.3759765625,
+        10.91650390625
+      ],
+      "expectedExit": 1
+    },
+    {
+      "name": "scope-blind-cycle",
+      "started": "2026-09-10T10:35:17.721360+00:00",
+      "ended": "2026-09-10T10:35:18.434320+00:00",
+      "exitCode": 1,
+      "command": [
+        "deno",
+        "test",
+        "--no-check",
+        "--preload=test/clock-preload.ts",
+        "--allow-ffi",
+        "--allow-env",
+        "--allow-read",
+        "--allow-write=/tmp,/var/folders",
+        "--allow-run=git,deno",
+        "test/ensure-piece-running-scope.test.ts"
+      ],
+      "cwd": "packages/runner",
+      "environment": {
+        "ENV": "test"
+      },
+      "load": [
+        23.359375,
+        18.22021484375,
+        10.9052734375
+      ],
+      "expectedExit": 1
+    },
+    {
+      "name": "omit-cancelled-settle-span",
+      "started": "2026-09-10T10:35:18.440447+00:00",
+      "ended": "2026-09-10T10:35:33.888658+00:00",
+      "exitCode": 1,
+      "command": [
+        "deno",
+        "test",
+        "--no-check",
+        "--preload=test/clock-preload.ts",
+        "--allow-ffi",
+        "--allow-env",
+        "--allow-read",
+        "--allow-write=/tmp,/var/folders",
+        "--allow-run=git,deno",
+        "test/executor-serving-loop.test.ts"
+      ],
+      "cwd": "packages/runner",
+      "environment": {
+        "ENV": "test"
+      },
+      "load": [
+        20.14013671875,
+        17.7666015625,
+        10.87158203125
+      ],
+      "expectedExit": 1
+    },
+    {
+      "name": "control-after",
+      "started": "2026-09-10T10:35:33.890308+00:00",
+      "ended": "2026-09-10T10:35:53.207423+00:00",
+      "exitCode": 0,
+      "command": [
+        "deno",
+        "test",
+        "--no-check",
+        "--preload=test/clock-preload.ts",
+        "--allow-ffi",
+        "--allow-env",
+        "--allow-read",
+        "--allow-write=/tmp,/var/folders",
+        "--allow-run=git,deno",
+        "test/executor/space-server-terminal-confirmation.test.ts",
+        "test/executor/space-server-terminal-structure.test.ts",
+        "test/ensure-piece-running-scope.test.ts",
+        "test/executor-serving-loop.test.ts"
+      ],
+      "cwd": "packages/runner",
+      "environment": {
+        "ENV": "test"
+      },
+      "load": [
+        17.763671875,
+        17.36328125,
+        10.88525390625
+      ],
+      "expectedExit": 0
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "base": "8814af62a7ddfd50262f3f2f98421f66519a3c95",
+  "sourceHashes": {
+    "packages/runner/src/ensure-piece-running.ts": "3a1fb1e4de6625ae1694c65140d4fb6c96a79315bf04aeab2b319d397de3db1e",
+    "packages/runner/src/executor/space-server.ts": "143f30a0d639ba5398ac88bc172f2135c9edee786c01c2b90538ee5b158a0f10",
+    "packages/runner/test/executor/space-server-terminal-confirmation.test.ts": "ecfb2eb651fb7d29a99a5e10d1491d8327cf26bbc68d3a6058a74f11153c2dcf",
+    "docs/specs/server-side-execution/serving-loop.md": "84dab5a3905306b6d8aae29a94acd3ac680a889df8e9d42eeea60357f9e45096",
+    "packages/runner/test/executor-serving-loop.test.ts": "ce292cfb46a76bd53a471d5e86221b59bdf8eb5b720e61b1857ee165426bfad9"
+  },
+  "differenceFromCandidatePatch": "Explicit undefined initializer in timing test; review-followup.patch adds tenure cancellation, its regression and scope-order documentation. Initial pair/builds validate candidate.patch; review-followup evidence validates cancellation separately.",
+  "reviewBase": "0c7a1bd950c88fadb10d109f89c5a306442fed9d"
+}

@@ -1,0 +1,40 @@
+{
+  "at": "2026-09-10T07:38:04.388699+00:00",
+  "mode": "mechanism mutation, not latency",
+  "command": [
+    "deno",
+    "test",
+    "--no-check",
+    "--preload=test/clock-preload.ts",
+    "--allow-ffi",
+    "--allow-env",
+    "--allow-read",
+    "--allow-write=/tmp,/var/folders",
+    "--allow-run=git,deno",
+    "test/executor/visibility-mutations.probe.ts",
+    "--",
+    "after consumed history compacts"
+  ],
+  "cwd": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs/packages/runner",
+  "envOverrides": {
+    "ENV": "test"
+  },
+  "loadBefore": [
+    7.18408203125,
+    7.4609375,
+    7.35009765625
+  ],
+  "sourceSha256": "07ce5afde1fc1c7a40ac7e42da0df8ac57385672a5dfdd7551d5d712fff2cc79",
+  "controlSha256": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+  "workloadSha256": "4d1a47a48679e261ba6b9e006a97579034ee394d254903187e4b2e56c92f2b26",
+  "expectedExit": 1,
+  "posture": "in-process memory serverExecution ON, serving runtime ON; no shell",
+  "store": "fresh in-memory store per case",
+  "cache": "existing dependency/compiler disk caches",
+  "exitCode": 1,
+  "loadAfter": [
+    7.18408203125,
+    7.4609375,
+    7.35009765625
+  ]
+}

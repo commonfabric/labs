@@ -2,13 +2,27 @@
  * The workspace's unit tests, which is where almost all of the
  * repository's identities live.
  *
- * A member whose test task is a single `deno test` is enumerated one
- * file at a time, so a lane can be asked for a few files out of a
- * package holding hundreds. A member whose task is something else — a
- * runner script, two commands joined by `&&`, its own import map — is one
- * unit that runs whole, which is what every member is today.
+ * The half read is a member's `deno-test` task where it declares one and
+ * its `test` task otherwise, followed by that half's own dependencies,
+ * taking the first that reads as a single `deno test` or as the batch
+ * runner's wrapper around one. A dependency of a dependency is not
+ * reached. A member with one is
+ * enumerated a file at a time, so a lane can be asked for a few files out
+ * of a package holding hundreds. A member with none — a runner script of its
+ * own, two commands joined by `&&`, its own import map — is one unit that runs
+ * whole, provided {@link RUNS_WHOLE} lists it, and a member whose only test
+ * task announces it has no tests is left out of the enumeration. A unit that
+ * runs whole runs every test of the member whatever a lane asks for. It is
+ * listed in `whole`, because the skip list is keyed by the file that
+ * registered a test, and a member's directory is not such a file.
  *
- * `packages/runner` is a suite of its own rather than one more member.
+ * A lane runs such a member's task as it stands, with no record preload and
+ * no report path, so no `deno test` the task starts records anything there
+ * unless the member's own runner writes records. That is why running whole
+ * is a decision listed with its reason rather than a shape a task can fall
+ * into unnoticed.
+ *
+ * `runtime/runner` is a suite of its own rather than one more member.
  * Nothing about how it runs differs; what differs is what its
  * measurements mean. In the reference build the workspace members
  * recorded about one and a half seconds of measured tests for every
@@ -18,28 +32,50 @@
 
 import * as path from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
-import { SKIP_LIST_VARIABLE } from "@commonfabric/test-support/records";
-import { memberTasks, memberTestFiles } from "./deno-task.ts";
+import {
+  memberTasks,
+  memberTestFiles,
+  type ParsedTestTask,
+  testBatches,
+  unmatchedGlobs,
+} from "./deno-task.ts";
 import {
   claimsIdentity,
   type CommandContext,
+  denoTestCommand,
   type Invocation,
   type LocatableRecord,
   type Location,
-  recordingArguments,
+  type MeasuredSet,
+  measuringInto,
   type RecordSurface,
   skipListOf,
   type Suite,
   type UnitRequest,
-  writeSkipList,
+  writeBatchSkipList,
 } from "./suite.ts";
 import type { CapabilityId } from "../ci-capabilities.ts";
+import { EXCLUDED_FROM_COVERAGE_GATE } from "../test-selection/policy.ts";
+import { packageDirOf, withoutPackageParent } from "../package-layout.ts";
 
 /** The member the runner suite owns; every other member is the other one. */
-const RUNNER_MEMBER = "./packages/runner";
+const RUNNER_MEMBER = "./runtime/runner";
 
 /** How a browser half is named as a unit, so it cannot be read as a file. */
 const BROWSER_SUFFIX = "#browser-test";
+
+/**
+ * The members whose Deno-only half a lane cannot hand a file list, each with
+ * the reason it is written that way. Loading the suites fails on a member of
+ * that shape this does not list, and on an entry for any other member.
+ */
+export const RUNS_WHOLE: ReadonlyMap<string, string> = new Map([
+  [
+    "./base/identity",
+    "its tests run in a browser through deno-web-test, which takes no file " +
+    "list from a lane",
+  ],
+]);
 
 /** What one member contributes to a unit suite. */
 interface Member {
@@ -49,11 +85,15 @@ interface Member {
   /** The record scope its tests carry. */
   scope: string;
 
-  /** Repository-relative test files, when the member is read one at a time. */
+  /**
+   * Repository-relative test files of the Deno-only half. Each is a unit of
+   * its own where the member is read one at a time, and the whole member is
+   * one unit otherwise.
+   */
   files: string[];
 
-  /** The task's flags and environment, when its files are selectable. */
-  run?: { flags: string[]; env: Record<string, string> };
+  /** The task taken apart, when its files are selectable. */
+  run?: ParsedTestTask;
 
   /** The task that runs the Deno-only half, for a member that runs whole. */
   denoTestTask: string;
@@ -65,16 +105,16 @@ interface Member {
   browserTest: boolean;
 
   /**
-   * The test files the Deno-only half declines, which is what the
-   * browser half runs. The browser half is one unit whatever it holds,
-   * so these are files the topology accounts for without enumerating.
+   * The test files the browser half runs. The browser half is one unit
+   * whatever it holds, so these are files the topology accounts for
+   * without enumerating.
    */
   browserFiles: string[];
 }
 
-/** The record scope of a member: its path with `packages/` taken off. */
+/** The record scope of a member: its path below its package's parent. */
 export function memberScope(memberPath: string): string {
-  return memberPath.replace(/^\.\//, "").replace(/^packages\//, "");
+  return withoutPackageParent(memberPath.replace(/^\.\//, ""));
 }
 
 /** The members the workspace declares. */
@@ -85,13 +125,39 @@ async function workspaceMembers(root: string): Promise<string[]> {
   return manifest.workspace;
 }
 
-/** Reads one member, or nothing where the member has no tests. */
+/**
+ * Reads one member, or nothing where the member has no tests. `runsWhole` is
+ * the members allowed a Deno-only half a lane cannot hand a file list.
+ */
 async function readMember(
   root: string,
   memberPath: string,
+  runsWhole: ReadonlyMap<string, string>,
+  memberPaths: readonly string[],
 ): Promise<Member | undefined> {
   const memberDir = path.resolve(root, memberPath);
   const tasks = await memberTasks(memberDir);
+  if (tasks.browserTest && tasks.browserPaths.length === 0) {
+    throw new Error(
+      `\`${memberPath}\`'s \`browser-test\` task names no files the ` +
+        `topology can read. Write it as a \`deno run\` of its runner followed ` +
+        `by the paths or globs it runs.`,
+    );
+  }
+  const whole = tasks.present && tasks.denoHalf &&
+    tasks.denoTest === undefined;
+  if (whole !== runsWhole.has(memberPath)) {
+    throw new Error(
+      whole
+        ? `A lane cannot hand \`${memberPath}\`'s tests a file list, so it ` +
+          `would run the member whole, passing it no record preload and no ` +
+          `report path. Write the task that runs them as a single ` +
+          `\`deno test\`, or list the member in \`RUNS_WHOLE\` in ` +
+          `tasks/test-topology/unit.ts with the reason it cannot be one.`
+        : `\`${memberPath}\` is listed in \`RUNS_WHOLE\`, and a lane can ` +
+          `hand its tests a file list.`,
+    );
+  }
   if (!tasks.present) return undefined;
   const member: Member = {
     memberPath,
@@ -102,36 +168,103 @@ async function readMember(
     browserTest: tasks.browserTest,
     browserFiles: [],
   };
-  if (tasks.denoTest === undefined) return member;
   // Normalized against the repository root, because a member's task may
   // name a file outside its own directory and a unit is a path anyone
   // else can resolve.
   const relative = (file: string) =>
     path.relative(root, path.resolve(memberDir, file));
+  if (tasks.browserTest) {
+    // The browser unit is one unit rather than one per file, so without
+    // this a member that splits its halves by a name — `*.browser.test.ts`
+    // — is a member whose browser files no suite claims. They are the
+    // files the browser half's task names, rather than every file the
+    // Deno-only half ignores, because the Deno-only half may also ignore
+    // files that another suite runs.
+    member.browserFiles = (await memberTestFiles(memberDir, {
+      paths: tasks.browserPaths,
+      ignores: [],
+    })).map(relative);
+  }
+  if (tasks.denoTest === undefined) {
+    if (!tasks.denoHalf) return member;
+    // The member runs whole, so its unit holds every test file under it
+    // that neither its browser half nor a member nested inside it runs.
+    const browser = new Set(member.browserFiles);
+    const own = relative(".");
+    const nested = memberPaths
+      .map((other) => other.replace(/^\.\//, ""))
+      .filter((other) => other.startsWith(`${own}/`));
+    member.files =
+      (await memberTestFiles(memberDir, { paths: [], ignores: [] }))
+        .map(relative)
+        .filter((file) =>
+          !browser.has(file) &&
+          !nested.some((other) => file.startsWith(`${other}/`))
+        );
+    return member;
+  }
+  // A glob giving files flags of their own that names no file would leave
+  // a renamed file running under the flags of the rest.
+  const unmatched = await unmatchedGlobs(memberDir, tasks.denoTest.paths, [
+    ...tasks.denoTest.serial,
+    ...tasks.denoTest.allAccess,
+  ]);
+  if (unmatched.length > 0) {
+    throw new Error(
+      `No test file in \`${memberPath}\` matches ${
+        unmatched.map((glob) => `\`${glob}\``).join(", ")
+      }.`,
+    );
+  }
   member.files = (await memberTestFiles(memberDir, tasks.denoTest))
     .map(relative);
-  member.run = { flags: tasks.denoTest.flags, env: tasks.denoTest.env };
-  if (member.browserTest) {
-    // What the Deno-only half ignores is what the browser half runs. A
-    // member that splits its halves by a name — `*.browser.test.ts` — is
-    // otherwise a member whose browser files no suite claims, because
-    // the browser unit is one unit rather than one per file. The same
-    // paths the task names, read without its ignores, so the difference
-    // is what an ignore took out rather than what the task never looked
-    // at. No member in the tree has that shape yet.
-    const everything = new Set(
-      (await memberTestFiles(memberDir, { ...tasks.denoTest, ignores: [] }))
-        .map(relative),
-    );
-    for (const file of member.files) everything.delete(file);
-    member.browserFiles = [...everything].sort();
-  }
+  member.run = tasks.denoTest;
   return member;
 }
 
 /** A member's own unit, which is the whole of it. */
 function wholeUnit(member: Member): string {
   return member.memberPath.replace(/^\.\//, "");
+}
+
+/**
+ * The measured set one member carries, or nothing where it carries none.
+ *
+ * A set holds the units of the member's Deno-only half and never its
+ * browser unit, so that adding a test needing a browser costs a member
+ * nothing here. The browser unit therefore writes no coverage into the
+ * set's directory either: it is not one of the set's units, so counting
+ * what it reached would make the set's number depend on whether a lane
+ * selected it.
+ *
+ * The paths that reach the set are the member's own tree, less the trees
+ * of any member nested inside it, which belong to that member's set
+ * instead.
+ */
+function measuredSetOf(
+  member: Member,
+  members: readonly Member[],
+): MeasuredSet | undefined {
+  const memberPath = wholeUnit(member);
+  // The gate is over the packages. `tasks` is one coverage group rather
+  // than a tree of them, and `scripts` is outside coverage accounting.
+  if (packageDirOf(memberPath) === undefined) return undefined;
+  if (EXCLUDED_FROM_COVERAGE_GATE.has(memberPath)) return undefined;
+  const units = member.run !== undefined
+    ? member.files
+    : member.denoHalf
+    ? [memberPath]
+    : [];
+  if (units.length === 0) return undefined;
+  const nested = members
+    .map(wholeUnit)
+    .filter((other) => other.startsWith(`${memberPath}/`))
+    .map((other) => `!${other}/`);
+  return {
+    member: memberPath,
+    reachedBy: [`${memberPath}/`, ...nested],
+    units,
+  };
 }
 
 /**
@@ -147,9 +280,10 @@ function unitSuite(
   const byUnit = new Map<string, Member>();
   const byScope = new Map<string, Member>();
   const units: string[] = [];
+  const whole: string[] = [];
   for (const member of members) {
     byScope.set(member.scope, member);
-    if (member.files.length > 0) {
+    if (member.run !== undefined) {
       for (const file of member.files) {
         units.push(file);
         byUnit.set(file, member);
@@ -159,11 +293,13 @@ function unitSuite(
       // test` to run, so it contributes only its browser unit below.
       units.push(wholeUnit(member));
       byUnit.set(wholeUnit(member), member);
+      whole.push(wholeUnit(member));
     }
     if (member.browserTest) {
       const unit = `${wholeUnit(member)}${BROWSER_SUFFIX}`;
       units.push(unit);
       byUnit.set(unit, member);
+      whole.push(unit);
     }
   }
 
@@ -174,6 +310,9 @@ function unitSuite(
   }
 
   const sources = members.flatMap((member) => member.browserFiles);
+  const measured = members
+    .map((member) => measuredSetOf(member, members))
+    .filter((set): set is MeasuredSet => set !== undefined);
 
   return {
     id,
@@ -181,7 +320,16 @@ function unitSuite(
     needs,
     units,
     unavailable: [],
+    whole,
     ...(sources.length === 0 ? {} : { sources }),
+    ...(measured.length === 0 ? {} : { measured }),
+
+    sourcesOf(unit) {
+      const member = byUnit.get(unit);
+      if (member === undefined) return [];
+      if (unit.endsWith(BROWSER_SUFFIX)) return member.browserFiles;
+      return member.run === undefined ? member.files : [];
+    },
 
     locate(record: LocatableRecord): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
@@ -193,7 +341,7 @@ function unitSuite(
       if (record.test.k === "browser" && member.browserTest) {
         return { level: "unit", unit: `${wholeUnit(member)}${BROWSER_SUFFIX}` };
       }
-      if (member.files.length === 0) {
+      if (member.run === undefined) {
         return member.denoHalf
           ? { level: "unit", unit: wholeUnit(member) }
           : undefined;
@@ -223,11 +371,17 @@ function unitSuite(
       for (const [member, group] of byMember) {
         const memberDir = path.resolve(context.root, member.memberPath);
         const slug = member.scope.replaceAll("/", "__");
-        const env: Record<string, string> = { ENV: "test", ...member.run?.env };
-        if (context.coverageDir !== undefined) {
-          env.DENO_COVERAGE_DIR = path.join(context.coverageDir, slug);
-        }
         const whole = wholeUnit(member);
+        const env: Record<string, string> = { ENV: "test", ...member.run?.env };
+        // Only the Deno-only half writes into the member's measured-set
+        // directory. The browser unit is not one of the set's units, so
+        // its profiles would make the set's number depend on whether a
+        // lane happened to select it, which is the one thing the set
+        // exists to rule out.
+        const measured = measuringInto(context, whole);
+        const denoEnv = measured === undefined
+          ? env
+          : { ...env, DENO_COVERAGE_DIR: measured };
         const files: UnitRequest[] = [];
         let runsWhole = false;
         let runsBrowser = false;
@@ -238,43 +392,51 @@ function unitSuite(
           } else files.push(request);
         }
         if (runsWhole) {
-          // A member whose task cannot be handed a subset runs the task,
-          // which is what every member does today. The skip list still
-          // reaches inside it, through the environment the task inherits.
+          // A member whose task cannot be handed a file list runs the task,
+          // which runs every test of the member. This unit is the member's own
+          // directory, so no skip list keyed by test file can name anything in
+          // it.
           invocations.push({
             command: [Deno.execPath(), "task", member.denoTestTask],
             cwd: memberDir,
-            env: {
-              ...env,
-              ...await skipEnv(context, slug, group),
-            },
+            env: denoEnv,
           });
         }
         if (files.length > 0 && member.run !== undefined) {
-          const junitPath = path.join(context.outputDir, `${slug}.xml`);
-          invocations.push({
-            command: [
-              Deno.execPath(),
-              "test",
-              ...member.run.flags,
-              ...recordingArguments(member.run.flags, context),
-              `--junit-path=${junitPath}`,
-              ...files.map((request) =>
-                path.relative(
-                  memberDir,
-                  path.resolve(context.root, request.unit),
-                )
+          // Keyed by the path the member's own task would name the file by,
+          // which is what the batches are drawn up over.
+          const byFile = new Map(files.map((request) => [
+            path.relative(memberDir, path.resolve(context.root, request.unit)),
+            request,
+          ]));
+          const batches = testBatches(member.run, [...byFile.keys()]);
+          for (const [index, batch] of batches.entries()) {
+            const name = index === 0 ? slug : `${slug}.${index}`;
+            const junitPath = path.join(context.outputDir, `${name}.xml`);
+            const requests = batch.files.map((file) => byFile.get(file)!);
+            const skipList = await writeBatchSkipList(
+              context,
+              name,
+              skipListOf(requests),
+            );
+            invocations.push({
+              command: denoTestCommand(
+                batch.flags,
+                context,
+                junitPath,
+                batch.files,
+                skipList.path,
               ),
-            ],
-            cwd: memberDir,
-            env: { ...env, ...await skipEnv(context, slug, files) },
-            junit: [{
-              path: junitPath,
-              kind: "unit",
-              scope: member.scope,
-              filePrefix: member.memberPath.replace(/^\.\//, ""),
-            }],
-          });
+              cwd: memberDir,
+              env: { ...denoEnv, ...skipList.env },
+              junit: [{
+                path: junitPath,
+                kind: "unit",
+                scope: member.scope,
+                filePrefix: member.memberPath.replace(/^\.\//, ""),
+              }],
+            });
+          }
         }
         if (runsBrowser) {
           invocations.push({
@@ -290,27 +452,34 @@ function unitSuite(
 }
 
 /**
- * Writes a batch's skip list and names it in the environment, or leaves
- * the environment alone where nothing is skipped.
+ * The two unit suites, read from the working tree. `runsWhole` is the members
+ * allowed a Deno-only half a lane cannot hand a file list, which for this
+ * repository is {@link RUNS_WHOLE}. Every member it lists has to be one of the
+ * workspace's.
  */
-async function skipEnv(
-  context: CommandContext,
-  slug: string,
-  requests: readonly UnitRequest[],
-): Promise<Record<string, string>> {
-  const skips = skipListOf(requests);
-  if (Object.keys(skips).length === 0) return {};
-  const skipListPath = path.join(context.outputDir, `${slug}.skip.json`);
-  await writeSkipList(skipListPath, skips);
-  return { [SKIP_LIST_VARIABLE]: skipListPath };
-}
-
-/** The two unit suites, read from the working tree. */
-export async function loadUnitSuites(root: string): Promise<Suite[]> {
+export async function loadUnitSuites(
+  root: string,
+  runsWhole: ReadonlyMap<string, string> = new Map(),
+): Promise<Suite[]> {
+  const memberPaths = await workspaceMembers(root);
+  const strays = [...runsWhole.keys()]
+    .filter((memberPath) => !memberPaths.includes(memberPath));
+  if (strays.length > 0) {
+    throw new Error(
+      `\`RUNS_WHOLE\` lists members the workspace does not hold: ${
+        strays.map((memberPath) => `\`${memberPath}\``).join(", ")
+      }.`,
+    );
+  }
   const members: Member[] = [];
   let runner: Member | undefined;
-  for (const memberPath of await workspaceMembers(root)) {
-    const member = await readMember(root, memberPath);
+  for (const memberPath of memberPaths) {
+    const member = await readMember(
+      root,
+      memberPath,
+      runsWhole,
+      memberPaths,
+    );
     if (member === undefined) continue;
     if (memberPath === RUNNER_MEMBER) runner = member;
     else members.push(member);

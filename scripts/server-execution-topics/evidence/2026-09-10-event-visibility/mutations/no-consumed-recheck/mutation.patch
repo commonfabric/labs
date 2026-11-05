@@ -1,0 +1,20 @@
+--- a/packages/runner/src/executor/space-server.ts
++++ b/packages/runner/src/executor/space-server.ts
+@@ -3060,7 +3060,7 @@
+           candidate?.eventId === entry.eventId &&
+           candidate?.seq === entry.seq
+         );
+-        if (index < 0 || stored[index].consequenced === true) continue;
++        if (index < 0) continue;
+         // The mark every arm below writes (the handler tx's, the
+         // skip/error/drop notices') is INDEX-ADDRESSED against the
+         // REPLICA view: verify the view holds this entry at this index
+@@ -3115,7 +3115,7 @@
+               candidate?.eventId === entry.eventId &&
+               candidate?.seq === entry.seq
+             );
+-            if (index < 0 || stored[index].consequenced === true) continue;
++            if (index < 0) continue;
+             viewEntry = readViewEntry();
+             if (matches(viewEntry)) {
+               this.#options.stats.events.visibilityRecoveries += 1;

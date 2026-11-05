@@ -1,0 +1,79 @@
+Check packages/memory/test/v2-watch-incremental.test.ts
+Check packages/memory/test/v2-operation-client.test.ts
+Check packages/memory/test/v2-server-refresh-timing.test.ts
+running 1 test from ./packages/memory/test/v2-watch-incremental.test.ts
+Server ...
+  instance members ...
+    watchAdd() ...
+      keeps a shared miss reactive until its last branch owner departs ... ok (262ms)
+      reconciles normalized duplicate operation owners with graph ownership false ... ok (14ms)
+      reconciles normalized duplicate operation owners with graph ownership true ... ok (68ms)
+      abandons changed miss ownership and retries against a newly created target ... ok (91ms)
+      retains an operation owner's interest after the last graph miss retires ... ok (41ms)
+      publishes a large valid batch without an argument-count limit ... ok (4s)
+      retains accepted duplicate-id roots when removing an unrelated watch ... ok (22ms)
+      leaves established delivery and graph state unchanged when a later branch fails ... ok (34ms)
+      rolls back graph and cursor changes when a later operation snapshot fails ... ok (291ms)
+      keeps an in-flight operation snapshot paired with its original cursors ... ok (41ms)
+      refreshes without filtering the 32 established graph watches for operation fields ... ok (151ms)
+      adds one root without enumerating the 32 established delivered entries ... ok (20ms)
+      refreshes one root without enumerating the 32 established delivered entries ... ok (99ms)
+      adds one root without scanning the 32 established manager addresses ... ok (19ms)
+      refreshes without filtering the 256 established graph watches for operation fields ... ok (423ms)
+      adds one root without enumerating the 256 established delivered entries ... ok (428ms)
+      refreshes one root without enumerating the 256 established delivered entries ... ok (253ms)
+      adds one root without scanning the 256 established manager addresses ... ok (317ms)
+    watchAdd() ... ok (7s)
+  instance members ... ok (7s)
+Server ... ok (7s)
+running 1 test from ./packages/memory/test/v2-operation-client.test.ts
+v2-operation-client ...
+  compares every operation-watch cursor and address dimension ... ok (1ms)
+  rejects operation requests when the server lacks the capability ... ok (1ms)
+  reports operation query, reset, and codec failures through the server ... ok (141ms)
+  rejects an operation query whose session closes during authorization ... ok (115ms)
+  omits operation snapshots when a watch session closes mid-request ... ok (5ms)
+  replays preceding operation cursors onto a newly installed watch ... ok (1ms)
+  returns a typed error when operation telemetry cannot encode a payload ... ok (43ms)
+  transacts and queries operation history over a memory session ... ok (56ms)
+  delivers operation snapshots through session watches ... ok (21ms)
+  redelivers operation history after a mixed frame send fails ...
+------- post-test output -------
+memory v2: sync send failed; delivery state rolled back for recomputation Error: synthetic operation effect failure
+    at Connection.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/test/v2-operation-client.test.ts:117:17)
+    at Connection.#send (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:810:18)
+    at Connection.refreshDirty (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:1405:21)
+    at async file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:6872:23
+    at async file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:6834:13
+    at async Server.#withSpacePublicationLock (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:6759:14)
+    at async Server.#refreshLoop (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:6808:9)
+    at async run (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:6638:9)
+    at async Server.flushSessions (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/v2/server.ts:6659:5)
+    at async Object.<anonymous> (file:///Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/memory/test/v2-operation-client.test.ts:798:7)
+----- post-test output end -----
+  redelivers operation history after a mixed frame send fails ... ok (174ms)
+  does not retain an operation watch whose initial snapshot fails ... ok (139ms)
+  keeps operation-only watches out of server-execution demand ... ok (55ms)
+  removes an operation watch without disturbing graph watches ... ok (15ms)
+  negotiates and executes a configured non-text codec ... ok (6ms)
+  resumes an operation watch across reconnect without duplicating cursors ... ok (21ms)
+  reinstalls a replaced-session watch from the last delivered cursor ... ok (122ms)
+  resets a reconnecting watch whose cursor predates retained history ... ok (161ms)
+v2-operation-client ... ok (1s)
+running 1 test from ./packages/memory/test/v2-server-refresh-timing.test.ts
+v2-server-refresh-timing ...
+  refreshTrackedGraph() ...
+    records the closure phase and the total when the closure fails to verify ... ok (53ms)
+  refreshTrackedGraph() ... ok (95ms)
+  Server ...
+    instance members ...
+      flushSessions() ...
+        records the session and walk rows of a refresh that throws ... ok (50ms)
+        closes the session row after an operation-watch catch-up that upserts nothing ... ok (43ms)
+      flushSessions() ... ok (143ms)
+    instance members ... ok (190ms)
+  Server ... ok (203ms)
+v2-server-refresh-timing ... ok (413ms)
+
+ok | 3 passed (44 steps) | 0 failed (12s)
+

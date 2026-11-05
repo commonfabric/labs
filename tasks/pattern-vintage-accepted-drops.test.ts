@@ -5,12 +5,12 @@ import {
   type AcceptedStateDrop,
   withoutAcceptedDrops,
 } from "./pattern-vintage-accepted-drops.ts";
-import { isReduction } from "../packages/piece/test/state-continuity-harness.ts";
+import { isReduction } from "../runtime/piece/test/state-continuity-harness.ts";
 
 describe("pattern-vintage-accepted-drops", () => {
   const drops: AcceptedStateDrop[] = [
     {
-      pattern: "topics/main.tsx",
+      pattern: "apps/topics/main.tsx",
       paths: ["crossrefs", "topics[].crossrefs"],
       capturedThrough: "2026-08-06T23-04-13.189Z",
       reason: "removed",
@@ -24,29 +24,38 @@ describe("pattern-vintage-accepted-drops", () => {
   describe("acceptedDropsFor", () => {
     it("returns the paths for a repo-relative path ending in the key", () => {
       expect(
-        acceptedDropsFor("/packages/patterns/topics/main.tsx", within, drops)
+        acceptedDropsFor("/patterns/apps/topics/main.tsx", within, drops)
           ?.paths,
       ).toEqual(new Set(["crossrefs", "topics[].crossrefs"]));
     });
 
     it("returns the entry for the bare key", () => {
-      expect(acceptedDropsFor("topics/main.tsx", within, drops)?.pattern).toBe(
-        "topics/main.tsx",
-      );
+      expect(acceptedDropsFor("apps/topics/main.tsx", within, drops)?.pattern)
+        .toBe(
+          "apps/topics/main.tsx",
+        );
     });
 
     it("returns the entry for a capture on the boundary itself", () => {
       expect(
-        acceptedDropsFor("topics/main.tsx", "2026-08-06T23-04-13.189Z", drops)
+        acceptedDropsFor(
+          "apps/topics/main.tsx",
+          "2026-08-06T23-04-13.189Z",
+          drops,
+        )
           ?.pattern,
-      ).toBe("topics/main.tsx");
+      ).toBe("apps/topics/main.tsx");
     });
 
     it("returns undefined for a capture past the boundary", () => {
       // The path this entry forgives is republished, so a vintage captured
       // after the removal owes the comparison the same answer as any other.
       expect(
-        acceptedDropsFor("topics/main.tsx", "2026-08-06T23-04-13.190Z", drops),
+        acceptedDropsFor(
+          "apps/topics/main.tsx",
+          "2026-08-06T23-04-13.190Z",
+          drops,
+        ),
       ).toBeUndefined();
     });
 
@@ -54,7 +63,7 @@ describe("pattern-vintage-accepted-drops", () => {
       // A bare `endsWith` would claim this one, which no entry mentions.
       expect(
         acceptedDropsFor(
-          "/packages/patterns/subtopics/main.tsx",
+          "/patterns/subtopics/main.tsx",
           within,
           drops,
         ),
@@ -63,7 +72,7 @@ describe("pattern-vintage-accepted-drops", () => {
 
     it("returns undefined for a pattern with no entry", () => {
       expect(
-        acceptedDropsFor("/packages/patterns/notes/main.tsx", within, drops),
+        acceptedDropsFor("/patterns/system/notes/main.tsx", within, drops),
       ).toBeUndefined();
     });
   });

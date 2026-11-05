@@ -1,0 +1,34 @@
+{
+  "observation": "matched-visibility-wave",
+  "snapshots": [
+    {
+      "watermark": 3,
+      "entries": [
+        {
+          "eventId": "visibility-0",
+          "seq": 2,
+          "consequenced": true
+        },
+        {
+          "eventId": "visibility-1",
+          "seq": 3,
+          "consequenced": true
+        }
+      ],
+      "log": [
+        "A",
+        "B"
+      ]
+    }
+  ],
+  "counters": {
+    "waves": 1,
+    "derivedCommits": 1,
+    "wavesBudgetExhausted": 0,
+    "visibilityBarriers": 1,
+    "visibilityRecoveries": 1,
+    "visibilityDeferrals": 0,
+    "deferredRescansArmed": 0,
+    "deferredRescansFired": 0
+  }
+}

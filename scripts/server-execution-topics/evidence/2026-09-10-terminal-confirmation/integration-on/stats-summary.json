@@ -1,0 +1,92 @@
+{
+  "servingLoopPresent": true,
+  "after": {
+    "structureLoadFailures": 0,
+    "structureLoadDeferred": 6,
+    "structureLoadTerminal": 495,
+    "structureLoadRearmed": 31,
+    "waves": 249,
+    "wavesBudgetExhausted": 101,
+    "watermarkClamped": 0,
+    "events": {
+      "appended": 48,
+      "processed": 48,
+      "coalescedPerWaveMax": 6,
+      "skippedIdempotent": 0,
+      "drainInFlightSkips": 1,
+      "preQueueDeferralStuck": 0,
+      "visibilityBarriers": 17,
+      "visibilityRecoveries": 17,
+      "visibilityDeferrals": 0,
+      "deferredRescansArmed": 0,
+      "deferredRescansFired": 0,
+      "lt1LeftoversPurged": 0,
+      "lt1LateSealsRefused": 0,
+      "orphanDeliveriesRefused": 0,
+      "handlerNotRunDeferrals": 0,
+      "loadParkDeferrals": 0,
+      "loadParkFailures": 0,
+      "deliveryDeferralsActive": 0,
+      "deliveryFailuresActive": 0,
+      "maxAccumulatedDeliveryFailureMs": 0,
+      "needsAttention": {
+        "total": 0,
+        "byPhase": {
+          "dispatch-load": 0,
+          "commit-preparation": 0,
+          "commit-finalization": 0
+        }
+      },
+      "needsAttentionSealFailures": 0,
+      "deliveryCheckpointWriteFailures": 0,
+      "explicitRetries": 0,
+      "dropped": 0
+    }
+  },
+  "before": {
+    "structureLoadFailures": 0,
+    "structureLoadDeferred": 0,
+    "structureLoadTerminal": 0,
+    "structureLoadRearmed": 0,
+    "waves": 0,
+    "wavesBudgetExhausted": 0,
+    "watermarkClamped": 0,
+    "events": {
+      "appended": 0,
+      "processed": 0,
+      "coalescedPerWaveMax": 0,
+      "skippedIdempotent": 0,
+      "drainInFlightSkips": 0,
+      "preQueueDeferralStuck": 0,
+      "visibilityBarriers": 0,
+      "visibilityRecoveries": 0,
+      "visibilityDeferrals": 0,
+      "deferredRescansArmed": 0,
+      "deferredRescansFired": 0,
+      "lt1LeftoversPurged": 0,
+      "lt1LateSealsRefused": 0,
+      "orphanDeliveriesRefused": 0,
+      "handlerNotRunDeferrals": 0,
+      "loadParkDeferrals": 0,
+      "loadParkFailures": 0,
+      "deliveryDeferralsActive": 0,
+      "deliveryFailuresActive": 0,
+      "maxAccumulatedDeliveryFailureMs": 0,
+      "needsAttention": {
+        "total": 0,
+        "byPhase": {
+          "dispatch-load": 0,
+          "commit-preparation": 0,
+          "commit-finalization": 0
+        }
+      },
+      "needsAttentionSealFailures": 0,
+      "deliveryCheckpointWriteFailures": 0,
+      "explicitRetries": 0,
+      "dropped": 0
+    }
+  },
+  "fullStatsAfterSha256": "06016a9838d36d10d6df4c34d10daf4fa82c2f0ab1209c5fb814d343ecb4657d",
+  "fullStatsBeforeSha256": "3e55911aded9a94deeb682bf8ff4e059e9560671eaeff8e1af6eda492aec3dae",
+  "sourceDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/terminal-integration-on-01"
+}

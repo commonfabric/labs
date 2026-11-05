@@ -11,7 +11,7 @@ This returns every inline review comment on a pull request, with the file and
 any line it is attached to:
 
 ```bash
-gh api --paginate repos/commontoolsinc/labs/pulls/<n>/comments
+gh api --paginate repos/commonfabric/labs/pulls/<n>/comments
 ```
 
 Line comments have `subject_type` set to `line`. When the line has since
@@ -38,7 +38,7 @@ query($owner:String!,$repo:String!,$number:Int!,$endCursor:String){
       }
     }
   }
-}' -f owner=commontoolsinc -f repo=labs -F number=<n>
+}' -f owner=commonfabric -f repo=labs -F number=<n>
 ```
 
 An unresolved thread still needs inspection, even when it is outdated: the code
@@ -123,8 +123,8 @@ inline comments.
 Two surfaces sit outside the inline list, and neither appears in it:
 
 ```bash
-gh api --paginate repos/commontoolsinc/labs/pulls/<n>/reviews   # summary bodies
-gh api --paginate repos/commontoolsinc/labs/issues/<n>/comments # issue timeline
+gh api --paginate repos/commonfabric/labs/pulls/<n>/reviews   # summary bodies
+gh api --paginate repos/commonfabric/labs/issues/<n>/comments # issue timeline
 ```
 
 The issue timeline is where the coverage-debt bot posts, including the line

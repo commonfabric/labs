@@ -1,0 +1,1 @@
+{"date":"2026-09-20","from":{"k":"unit","s":"runner","n":"attestation claim(): Fabric-aware consistency check > reports StateInconsistency when the `FabricValue` actually changed (CT-1770)"},"to":{"k":"unit","s":"runner","n":"attestation claim(): Fabric-aware consistency check > reports StateInconsistency when the `FabricValue` actually changed"}}

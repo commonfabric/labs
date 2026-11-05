@@ -5,13 +5,18 @@ on:
   push:
     branches: [main]
     paths:
-      - "Dockerfile.dashboard"
-      - "packages/dashboard/**"
-      # The image runs whatever `packages/test-support` held when it was
-      # built, and the wall's manifest reader is in there. Without this
+      - "dashboard/Dockerfile"
+      - "dashboard/**"
+      # The image runs whatever `base/test-support` held when it was
+      # built, and the dashboard's manifest reader is in there. Without this
       # the deployed dashboard keeps reading manifests by a rule the
       # publisher has stopped writing to.
-      - "packages/test-support/**"
+      - "base/test-support/**"
+      # The packages the dashboard and `test-support` import.
+      - "base/bytes/**"
+      - "base/collections/**"
+      - "base/js-values/**"
+      - "base/text/**"
       - "scripts/ci-gantt.ts"
       - "deno.jsonc"
       - "deno.lock"
@@ -53,14 +58,14 @@ jobs:
       - name: 🔍 Install dependencies
         uses: ./.github/actions/deno-install
 
-      # This runs the same task on the same commit as CI's `Test` job, which
-      # is where the dashboard's tests are recorded. Repeating that recording
+      # The CI workflow's lanes run these tests on the same commit, in the
+      # `workspace-unit` suite, and record them there. Repeating that recording
       # here would file each of those tests twice against one commit, so this
       # job writes no test records: it sets no spool directory, wraps nothing
       # in `run-recorded`, and ships no artifact. The relay does not follow
       # this workflow.
       - name: 🧪 Test dashboard
-        working-directory: packages/dashboard
+        working-directory: dashboard
         run: deno task test
 
   publish:
@@ -128,13 +133,18 @@ jobs:
               ;;
           esac
 
+      # The labels record which workflow run published the image, and from
+      # which commit. They live in the image config, which the digest covers,
+      # so moving a tag cannot change them. The infra repository's
+      # k8s/scripts/verify-image-provenance.sh reads them back and checks them
+      # against GitHub before the digest is deployed.
       - name: 🏗️ Build and push dashboard image
         id: build
         if: ${{ steps.existing.outputs.exists != 'true' }}
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          file: Dockerfile.dashboard
+          file: dashboard/Dockerfile
           platforms: linux/amd64
           push: true
           build-args: |
@@ -142,6 +152,15 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ github.sha }}
             ${{ env.IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            dev.commontools.provenance.repository=${{ github.repository }}
+            dev.commontools.provenance.ref=${{ github.ref }}
+            dev.commontools.provenance.event=${{ github.event_name }}
+            dev.commontools.provenance.workflow-ref=${{ github.workflow_ref }}
+            dev.commontools.provenance.run-id=${{ github.run_id }}
+            dev.commontools.provenance.run-attempt=${{ github.run_attempt }}
 
       - name: 🚀 Promote existing image to latest
         if: ${{ steps.existing.outputs.exists == 'true' }}

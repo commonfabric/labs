@@ -507,9 +507,12 @@ these.
   reload × optimistic window MAY re-enact — the record is the
   reload-wiped overlay — accepted for reversible effects, which
   every shipped kind is.) [protocol §5; speculation §1, §2]
-- Q7: allowed; overlay records the nonce under `origin:
-  intent(eventId)`; retires on the consequenced push; divergence =
-  silent value replacement. [protocol §5; speculation §1, §2, §4]
+- Q7: allowed; the overlay enacts through the channel, which records
+  the nonce under `origin: intent(eventId)` — and which stands the
+  overlay down when the authoritative intent arrived and enacted
+  first, so the journey navigates once in either order; retires on the
+  consequenced push; divergence = silent value replacement.
+  [protocol §5; speculation §1, §2, §4]
 
 ### T3 (GAPS(3))
 - Q1: `firedAt = {user:U1, session:S1}` INHERITED from H1's acting
@@ -668,13 +671,21 @@ these.
   counter was missing from §7's stats shape — FIXED with this fold.)
 - Q2: non-re-derivable writes REBASE AND RETRY with field-level
   merge; the watermark advance and its consequences move TOGETHER,
-  never separately. [serving-loop §3d; events §4]
+  never separately. An event-handler contribution with a stale
+  recorded read requeues WHOLE ahead of the rebase, the later entries
+  of its stream in the wave requeue with it, and the re-drain waits on
+  the replica taking the commit that staled the read. [serving-loop
+  §3d, PROPOSED 2026-10-23; events §2, §5]
 - Q3: semantic rebase conflict ⇒ REQUEUE (ran, raced) — distinct
   from DROP (cannot run at all) — distinct again from the
   superseded-WRITE drop. [serving-loop §3d; events §5]
 - Q4: whole-wave CAS failure FORBIDDEN (livelock). [serving-loop §3d]
-- Q5: W advances NOT AT ALL on budget exhaustion; the commit carries
-  `derivedThrough` = current W; continuation waves carry the
+- Q5: on budget exhaustion W advances only to the input head the
+  settle's PREFIX COVERAGE proved (a completed frame barrier over the
+  head, then an idle scheduler, clamped by the shadow, event-visibility
+  and re-armed-root floors; a re-armed root's retry starts at that
+  barrier, on either side of T_flush); with no proof the commit
+  carries `derivedThrough` = current W; continuation waves carry the
   cascade. [serving-loop §3]
 
 ### T10 (COMPLETE)
@@ -801,7 +812,7 @@ these.
   runtime-mapping N40/N41]
 - Q6: park requires ALL of: no live client sessions, no feed input,
   no open wave contributions, idle past IDLE_PARK_MS, and no armed
-  gate wake. Parking releases the lease row, cancels the demand
+  gate wake. Parking releases the lease, cancels the demand
   sinks, disposes the runtime. A racing commit self-heals: the
   admission hook re-fires on the next admission and the host
   re-activates. [serving-loop §1, §2]
@@ -847,7 +858,7 @@ these.
   the input-driven retry counts a second `memo.misses` +
   `outbox.queued`. [serving-loop §4, §7]
 
-### T15 (COMPLETE — authored with Phase 2, 2026-08-07; OW4's impl witnesses are `packages/runner/test/speculation-overlay.test.ts` and the `sx2-speculation` integration surface)
+### T15 (COMPLETE — authored with Phase 2, 2026-08-07; OW4's impl witnesses are `runtime/runner/test/speculation-overlay.test.ts` and the `sx2-speculation` integration surface)
 
 - Q1: the binding edit commits AUTHORED under S1's session envelope —
   state authorship under existing ACL + CAS, unchanged (README §3.6).

@@ -3,14 +3,17 @@ dist
 .ci-cache
 *.tsbuildinfo
 .DS_Store
+# The compile-cache output version a source checkout records for itself
+# (`deno task compile-cache-version --memo`), keyed by the tree it describes.
+/runtime/runner/src/compilation-cache/.compile-cache-output-version.json*
 .vscode
 __pycache__
 cache
 artifact
 coverage
+coverage-raw
 _deno.lock
 .claude-prompt.tmp
-.bg-piece-service.pid
 .pr-desc.tmp
 dist/
 .claude/settings.local.json
@@ -37,6 +40,7 @@ cf.key.*
 local-dev-toolshed.log
 local-dev-shell.log
 local-dev-console.log
+local-dev-console.log.previous
 .playwright-mcp/
 .worktrees
 tmp/
@@ -58,7 +62,7 @@ CLAUDE.local.md
 docs/.doccheck*
 
 # Temp deno configs written at the repo root by `runDenoCheckWithTemporaryConfig`
-# (packages/test-support/src/isolated-deno.ts). It removes each one in a
+# (base/test-support/src/isolated-deno.ts). It removes each one in a
 # `finally`, so these survive only when a run is interrupted -- at which point
 # `git add -A` will happily commit one, and `deno fmt --check` then rejects it.
 .deno.standard-decorators.*.json
@@ -68,3 +72,9 @@ docs/.doccheck*
 # removes each one in a `finally`, so these survive only when a run is
 # interrupted, at which point `git add -A` would otherwise commit one.
 tasks/.write-lcov-uncompiled.*.ts
+
+# What `scripts/topics-computation-cost.ts --derive-limits` prints, which the
+# re-derive command in docs/development/BENCHMARKS.md moves over the Topics
+# read-budget limits table once the derivation succeeds. A failed derivation
+# leaves this file behind holding the counts it did observe.
+topics-read-budget-limits.derived

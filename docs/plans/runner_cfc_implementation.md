@@ -1,7 +1,7 @@
 # CFC Runner Implementation Plan
 
 This document is the implementation plan for adding commit-boundary Contextual
-Flow Control (CFC) enforcement to `packages/runner`.
+Flow Control (CFC) enforcement to `runtime/runner`.
 
 It is intentionally self-contained. It describes:
 
@@ -40,8 +40,8 @@ Use a disciplined per-slice workflow while executing this plan:
 
 ## Goal
 
-Move from schema-guided IFC propagation to a runner/storage boundary that
-enforces CFC at commit time.
+Move from schema-guided information flow control (IFC) propagation to a
+runner/storage boundary that enforces CFC at commit time.
 
 At the end of this work:
 
@@ -136,8 +136,10 @@ views:
 - `attemptedWrites`: the maybe-write target set, sourced from tx
   `markReadAsAttemptedWrite` reads performed while deciding whether a diff
   results in a write
-- `writes`: the actual changed/final write set sourced from v2 transaction
-  internals
+- `writes`: the recorded write set sourced from v2 transaction internals:
+  every write the transaction recorded, including one whose value returned to
+  where it started and an authoritative write of an unchanged value. The
+  reactivity log's `writes` list only changed paths and are not this set
 
 Boundary checking uses `attemptedWrites ∪ writes` as the target set for
 relevance and conservative target-side policy checks. Persisted output label-map
@@ -228,9 +230,21 @@ The prepared digest is a stable hash of:
 - canonical consumed reads
 - canonical `attemptedWrites`
 - canonical `writes`
+- the ordered write-attempt log
+- dereference traces and trigger reads
 - canonical write-policy inputs
 - implementation identity
 - trust snapshot identity
+- module delegations
+- the policy snapshot
+- consulted grants and module-policy manifests
+- label-metadata observations
+- external-content observations admitted through opaque runtime receipts
+
+Optional sets are omitted when empty. In particular,
+`externalContentObservations: []` has the same digest spelling as an absent
+field, preserving the digest of a transaction that observed no external
+content.
 
 Any change to that material invalidates preparation.
 
@@ -350,50 +364,75 @@ therefore carries its own guard:
   has rather than what any of them holds, so the read is `nonRecursive`, and the
   flow join keys on that: a recursive read consumes every label-map entry at or
   below the path it names, a `nonRecursive` one consumes only the entry at that
-  path, so this read consumes the document's root entry and nothing else.
-  Reading a meta member instead would consume the user data an entry of the same
-  name covers, because canonicalization strips a leading `value` and a document
-  with a user field named `slug` labels it at the logical path the raw
-  `["slug"]` member reads. The read carries no commit precondition, because a
-  precondition would turn a whole-document write into a read-modify-write, and
-  the blind root writes the runtime makes would lose the race against any
-  advance of the document they replace. What that leaves open is an erasure
-  racing the guard, never a forgery: the two shapes that name a field are
-  refused from the write itself, with no read at all. The refusal is also the
-  first of these guards to run, ahead of the ones keyed by target id, so which
-  document a write names cannot decide whether it is asked for an authorization.
-  Meta fields stay readable.
-- A write addressed at a document's `["cfc"]` label map from outside the
-  runtime's privileged persistence scope is recorded, and the commit boundary
-  turns each record into a fail-closed reason (audit S18).
-- A document-root (`path: []`) write replaces the envelope rather than merging
-  into it, so an envelope that leaves the document without a label map erases
-  the stored one and leaves a labeled document reading as an unlabeled one.
-  Made outside the privileged persistence scope on a document that stores a
-  map, such a write is recorded like one that names the `["cfc"]` path, and
-  yields the same fail-closed reason. Dropping the member erases the map, and
-  so does carrying a value a reader reports as absent — `cfc: null`, a record
-  with no `version`. Creating a document, replacing one that stores no map, and
-  an envelope that carries the stored map forward all pass through.
-- That guard reads the stored member through the writing transaction, which
-  bounds it: a transaction whose view does not hold the document gets the same
-  "no map here" a document with no map gives, so a writer that has not synced
-  the document erases its label map and commits. No race is involved — the map
-  is present throughout, and the writer never looked. What the guard
-  establishes is that a root envelope write cannot erase a label map the
-  writing transaction has loaded. Closing the rest means forcing the document
-  into view before deciding, which turns every blind root write into a
+  path, so this read consumes the document's root entry and nothing else. The
+  read carries no commit precondition, because a precondition would turn a
+  whole-document write into a read-modify-write, and the blind root writes the
+  runtime makes would lose the race against any advance of the document they
+  replace. What that leaves open is an erasure racing the guard, never a
+  forgery: the two shapes that name a field are refused from the write itself,
+  with no read at all. The refusal is also the first of these guards to run,
+  ahead of the ones keyed by target id, so which document a write names cannot
+  decide whether it is asked for an authorization. Meta fields stay readable.
+- The reserved siblings — the `cfc` label map and `source` — are the runtime's,
+  and a write reaching either from outside the privileged persistence scope is
+  recorded, with the commit boundary turning each record into a fail-closed
+  reason (audit S18). The prepare pass excludes both from its accounting: a
+  read of one is left out of the flow join, and a write to one is left out of
+  schema write policy and flow-label attachment. That exclusion describes the
+  runtime's own bookkeeping, and it holds only because this guard establishes
+  that the runtime is who writes here, so one list of sibling names drives the
+  exclusion and the guard together.
+- Three shapes reach a reserved sibling. An address can name it, or a path
+  inside it. And a document-root (`path: []`) write replaces the envelope
+  rather than merging into it, so its envelope reaches every sibling at once —
+  leaving one out erases what was stored, and leaving a different one behind
+  installs what the derivation pass never derived. A root write is decided
+  against the stored sibling, so one that carries the stored sibling forward
+  unchanged passes: code that replaces a document wholesale reads the stored
+  envelope and spreads it, the way `ACLManager` does. Creating a document, and
+  replacing one that carries no reserved sibling, pass for the same reason.
+- Whether a sibling is there at all is decided on what a reader would see
+  rather than on the presence of a key. For `cfc` that account is
+  `cfcMetadataPresent`: the reserved position is what qualifies a value, so an
+  envelope carrying `cfc: null` or a scalar erases the map as surely as one
+  carrying no `cfc`, and anything else there leaves a map behind, including a
+  version this build cannot read. Nothing interprets `source`, so definedness
+  is the whole account there.
+- Whether the sibling that is there is the stored one decides the rest, and
+  what a whole-document write owes it is the value the document already holds.
+  Reading the stored envelope and spreading it produces that value; an
+  envelope assembled some other way is one the transaction composed rather
+  than carried, and it is recorded whether or not the labels it names work out
+  the same. So a rebuild that reorders entries, or the alternatives inside an
+  OR clause, is recorded even though the label it names is unchanged. Holding
+  the rule at the value is what gives one answer across every spelling a
+  stored envelope takes: a version-1 envelope carrying its labels, a version-2
+  one naming the large ones by content hash and holding the small ones inline,
+  and a version this build does not read at all.
+- Nothing outside the runtime is given a way past this. A fixture still needs
+  stored label state in shapes the derivation pass does not produce — a forged
+  atom, a version this build cannot read, a record carrying no label map — and
+  reaches one write inside the privileged persistence scope through the
+  transaction's `accessForTestingOnly` getter, which a lint rule confines to
+  tests and benchmarks. The runtime keeps no second door: there is no write
+  option, and no exported value, that lets a caller past the guard.
+- The refusal is a record rather than a throw, unlike the meta seam beside it.
+  A forged label map is a signal whose treatment follows the enforcement mode:
+  enforce rejects the commit, observe diagnoses it, and `disabled` keeps the
+  record so a mid-transaction escalation still rejects. A deployment running
+  with CFC disabled consults no label map, so a forged one decides nothing
+  while it runs — the map it wrote is durable, and a later run with enforcement
+  on reads what is stored.
+- The guard reads the stored sibling through the writing transaction, which
+  bounds the erasure half: a transaction whose view does not hold the document
+  gets the same "nothing here" a document with nothing gives, so a writer that
+  has not synced the document erases its label map and commits. No race is
+  involved — the map is present throughout, and the writer never looked. The
+  forgery half carries no such bound, because it is decided from the envelope
+  the writer supplied. Closing the erasure half means forcing the document into
+  view before deciding, which turns every blind root write into a
   read-modify-write, or making the commit boundary establish what the space
   holds; both are open.
-- A document-root write that leaves SOME label map behind reaches the stored
-  one with no record made, whether it mints a map where the document stored
-  none or substitutes one for another. The `["cfc"]` guard keys on the
-  address, and this write's address is the document. That is what stands open
-  on this seam: label-map forgery through the document root. The CFC test
-  suite seeds stored label state through exactly these shapes —
-  `seedPrivilegedCfc`, and the metadata re-pointing in the speculation-overlay
-  fixtures — so closing the seam means giving those fixtures a sanctioned way
-  to seed first.
 - A guard on a seam governs writes to it, not the runtime entry points that
   write it while doing their own work. The same reach that hands a handler
   the storage transaction hands it the runtime: `runtime.run` instantiates a
@@ -420,7 +459,10 @@ Storage rules:
 ### Path Canonicalization
 
 The canonical logical path format is `string[]` with the wrapper segment
-`"value"` stripped. Root is `[]`.
+`"value"` stripped. Root is `[]`, the payload root, which the document root `[]`
+also becomes. A document path outside `value` names one of the document's own
+members, such as `source` or `slug`, and has no logical path: it is never
+matched as a payload path (spec §4.6.5).
 
 When we need deterministic hashing or ordering, encode that canonical path as a
 JSON Pointer string derived from the segment array.
@@ -442,9 +484,12 @@ selector schema seen during prepare.
 
 The root document `schemaHash` names may be self-contained or carry
 `$ref: cid:` members — a decomposed write
-(`RuntimeOptions.cfcDecomposedEnvelopes`), or the root a reference-form
-declared schema leaves behind. One read policy covers both: every external
-reference a stored root carries resolves (space-first with content
+(`RuntimeOptions.cfcDecomposedEnvelopes`), the root a reference-form
+declared schema leaves behind, or the references a confidential merge mints
+to keep a definition bound to the document that declared it. A root with a
+definition map of its own is the inline spelling and is read as stored; a
+decomposed root is recomposed. One read policy covers all of them: every
+external reference a stored root carries resolves (space-first with content
 verification, the hash-verified realm registry supplying what the space
 does not hold) or the envelope is unreadable (fail closed), and the
 storage commit boundary validates the whole closure at write time. A
@@ -533,7 +578,9 @@ These must hold once enforcement is enabled:
   invalidates prepare
 - verifier-internal reads never become consumed reads
 - explicit IFC claims fail closed on missing schema, missing metadata, unknown
-  trust state, or unsupported trust-sensitive claims
+  trust state, unsupported trust-sensitive claims, a label list declared as
+  anything but a list in a schema a write or an LLM tool call goes through, or
+  a UI contract trust requirement written in a form the runtime cannot match
 - the commit gate lives at the transaction boundary, not only in scheduler code
 - external side effects happen only after successful commit
 - retries always run in a fresh transaction and recompute prepare
@@ -557,9 +604,9 @@ These must hold once enforcement is enabled:
 
 Primary files:
 
-- `packages/runner/src/storage/interface.ts`
-- `packages/runner/src/storage/extended-storage-transaction.ts`
-- new files under `packages/runner/src/cfc/`
+- `runtime/runner/src/storage/interface.ts`
+- `runtime/runner/src/storage/extended-storage-transaction.ts`
+- new files under `runtime/runner/src/cfc/`
 
 Tasks:
 
@@ -584,9 +631,9 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/storage/interface.ts`
-- `packages/runner/src/storage/extended-storage-transaction.ts`
-- `packages/runner/src/storage/v2-transaction.ts`
+- `runtime/runner/src/storage/interface.ts`
+- `runtime/runner/src/storage/extended-storage-transaction.ts`
+- `runtime/runner/src/storage/v2-transaction.ts`
 
 Tasks:
 
@@ -618,11 +665,11 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/storage/interface.ts`
-- `packages/runner/src/storage/v2-transaction.ts`
-- `packages/runner/src/storage/transaction-inspection.ts`
-- `packages/runner/src/storage/reactivity-log.ts`
-- new files under `packages/runner/src/cfc/`
+- `runtime/runner/src/storage/interface.ts`
+- `runtime/runner/src/storage/v2-transaction.ts`
+- `runtime/runner/src/storage/transaction-inspection.ts`
+- `runtime/runner/src/storage/reactivity-log.ts`
+- new files under `runtime/runner/src/cfc/`
 
 Tasks:
 
@@ -665,10 +712,10 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/schema.ts`
-- `packages/runner/src/traverse.ts`
-- `packages/runner/src/cell.ts`
-- `packages/runner/src/link-utils.ts`
+- `runtime/runner/src/schema.ts`
+- `runtime/runner/src/traverse.ts`
+- `runtime/runner/src/cell.ts`
+- `runtime/runner/src/link-utils.ts`
 
 Tasks:
 
@@ -697,11 +744,11 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/storage/v2.ts`
-- `packages/runner/src/storage/v2-document.ts`
-- `packages/memory/v2.ts`
-- `packages/memory/v2/engine.ts`
-- `packages/runner/src/storage/interface.ts`
+- `runtime/runner/src/storage/v2.ts`
+- `runtime/runner/src/storage/v2-document.ts`
+- `runtime/memory/v2.ts`
+- `runtime/memory/v2/engine.ts`
+- `runtime/runner/src/storage/interface.ts`
 
 Tasks:
 
@@ -735,9 +782,9 @@ Acceptance:
 
 Primary files:
 
-- new files under `packages/runner/src/cfc/`
-- `packages/runner/src/schema.ts`
-- `packages/runner/src/traverse.ts`
+- new files under `runtime/runner/src/cfc/`
+- `runtime/runner/src/schema.ts`
+- `runtime/runner/src/traverse.ts`
 
 Tasks:
 
@@ -790,11 +837,11 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/scheduler.ts`
-- `packages/runner/src/cell.ts`
-- `packages/runner/src/runner.ts`
-- `packages/runner/src/runtime.ts`
-- `packages/runner/src/storage/extended-storage-transaction.ts`
+- `runtime/runner/src/scheduler.ts`
+- `runtime/runner/src/cell.ts`
+- `runtime/runner/src/runner.ts`
+- `runtime/runner/src/runtime.ts`
+- `runtime/runner/src/storage/extended-storage-transaction.ts`
 
 Tasks:
 
@@ -830,13 +877,13 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/runner.ts`
-- `packages/runner/src/builder/module.ts`
-- `packages/runner/src/builder/to-encodable-form.ts`
-- `packages/runner/src/harness/executable-registry.ts`
-- `packages/runner/src/storage/interface.ts`
-- `packages/memory/v2.ts`
-- new files under `packages/runner/src/cfc/`
+- `runtime/runner/src/runner.ts`
+- `runtime/runner/src/builder/module.ts`
+- `runtime/runner/src/builder/to-encodable-form.ts`
+- `runtime/runner/src/harness/executable-registry.ts`
+- `runtime/runner/src/storage/interface.ts`
+- `runtime/memory/v2.ts`
+- new files under `runtime/runner/src/cfc/`
 
 Tasks:
 
@@ -886,9 +933,9 @@ Acceptance:
 
 Primary files:
 
-- new files under `packages/runner/src/cfc/`
-- `packages/runner/src/builtins/`
-- `packages/runner/src/traverse.ts`
+- new files under `runtime/runner/src/cfc/`
+- `runtime/runner/src/builtins/`
+- `runtime/runner/src/traverse.ts`
 
 Tasks:
 
@@ -908,12 +955,12 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/builtins/fetch.ts`
-- `packages/runner/src/builtins/fetch-program.ts`
-- `packages/runner/src/builtins/stream-data.ts`
-- `packages/runner/src/builtins/llm.ts`
-- `packages/runner/src/builtins/llm-dialog.ts`
-- new files under `packages/runner/src/cfc/`
+- `runtime/runner/src/builtins/fetch.ts`
+- `runtime/runner/src/builtins/fetch-program.ts`
+- `runtime/runner/src/builtins/stream-data.ts`
+- `runtime/runner/src/builtins/llm.ts`
+- `runtime/runner/src/builtins/llm-dialog.ts`
+- new files under `runtime/runner/src/cfc/`
 
 Tasks:
 
@@ -940,10 +987,10 @@ Acceptance:
 
 Primary files:
 
-- `packages/html/src/`
-- `packages/runner/src/scheduler.ts`
-- `packages/ts-transformers/src/`
-- `packages/schema-generator/src/`
+- `runtime/html/src/`
+- `runtime/runner/src/scheduler.ts`
+- `base/ts-transformers/src/`
+- `base/schema-generator/src/`
 
 Tasks:
 
@@ -974,13 +1021,28 @@ Implementation notes for spec update:
       `trusted-event` write-policy input and fails closed when a schema declares
       trusted pattern or event-integrity requirements that the renderer did not
       attest
+- [x] A contract's `trustedPattern` is matched only as a nonempty string, and
+      its `requiredEventIntegrity` atoms only as strings, the form the
+      renderer attests; a requirement written otherwise refuses the write. An
+      object atom, a form the specification writes (§8.15), is refused as an
+      unsupported trust-sensitive claim until the specification says how one
+      matches renderer-attested event integrity
 - [x] Current enforcement assumes a trusted host and an embedding model where
       untrusted embedders cannot hide or obscure embedded trusted UIs; future
       spec work should define opaque trusted UI islands and a non-forgeable
       pattern identity token beyond DOM data attributes
-- [x] Event-integrity labels are collected from the event target ancestry, so a
-      trusted pattern can later bind rendered integrity-bearing data into the
-      event attestation without introducing a parallel helper-specific policy
+- [x] Event-integrity labels are collected from the UI ancestry, so a trusted
+      pattern can later bind rendered integrity-bearing data into the event
+      attestation without introducing a parallel helper-specific policy
+- [x] All of a trusted event's UI provenance is read from the element the
+      handler is bound to and its ancestors, never from nodes between it and the
+      event target: a click on a trusted surface vouches only for handlers bound
+      on or inside it, and a handler above the clicked control gets the
+      surface's pattern and labels but not the control's `data-ui-action`
+- [x] A click vouches only for handlers on or inside the innermost trusted
+      surface it lands in: a handler above an element carrying
+      `data-ui-pattern` between it and the event target gets no UI provenance,
+      even when its own element carries the same markers
 - [x] Render-time label disclosure now has a generic `cf-cfc-label` UI
       primitive: it takes a bound `$value` and optional `atom`/`kind` filters,
       asks the trusted runtime IPC layer for that cell's CFC label view, and
@@ -1034,9 +1096,9 @@ content-addressed adjunct read/write APIs.
 
 Primary files:
 
-- `packages/runner/src/storage/`
-- `packages/memory/`
-- new files under `packages/runner/src/cfc/`
+- `runtime/runner/src/storage/`
+- `runtime/memory/`
+- new files under `runtime/runner/src/cfc/`
 
 Tasks:
 
@@ -1067,16 +1129,16 @@ labels, stored link-field labels, diagnostics, and persisted link metadata.
 
 Primary files:
 
-- `packages/runner/src/link-resolution.ts`
-- `packages/runner/src/cell.ts`
-- `packages/runner/src/query-result-proxy.ts`
-- `packages/runner/src/schema.ts`
-- `packages/runner/src/data-updating.ts`
-- `packages/runner/src/cfc/types.ts`
-- `packages/runner/src/cfc/canonical.ts`
-- `packages/runner/src/cfc/label-view.ts`
-- `packages/runner/src/cfc/prepare.ts`
-- `packages/runner/src/storage/extended-storage-transaction.ts`
+- `runtime/runner/src/link-resolution.ts`
+- `runtime/runner/src/cell.ts`
+- `runtime/runner/src/query-result-proxy.ts`
+- `runtime/runner/src/schema.ts`
+- `runtime/runner/src/data-updating.ts`
+- `runtime/runner/src/cfc/types.ts`
+- `runtime/runner/src/cfc/canonical.ts`
+- `runtime/runner/src/cfc/label-view.ts`
+- `runtime/runner/src/cfc/prepare.ts`
+- `runtime/runner/src/storage/extended-storage-transaction.ts`
 
 Tasks:
 

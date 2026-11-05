@@ -8,7 +8,7 @@
  * process, and the launcher does not grant that.
  *
  *   CF_PROF_OUT=/tmp/run CF_PROF_CPU=1 CF_TIMING_MEASURES=1 \
- *     deno run --quiet --config deno.jsonc --allow-net --allow-ffi \
+ *     deno run --quiet --unstable-lazy-dynamic-imports --config deno.jsonc --allow-net --allow-ffi \
  *     --allow-read --allow-write --allow-env --allow-run --allow-sys \
  *     skills/perf-investigation/scripts/profile-cf.ts cell get <address> ...
  *
@@ -24,15 +24,15 @@
  */
 // deno-lint-ignore no-external-import
 import { Session } from "node:inspector";
-import { main } from "../../../packages/cli/mod.ts";
+import { main } from "../../../runtime/cli/mod.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
-  clearTimingMeasures,
   getLoggerCountsBreakdown,
   getLoggerFlagsBreakdown,
   getTimingStatsBreakdown,
   TIMING_MEASURE_PREFIX,
-} from "@commonfabric/utils/logger";
-import { renderProfileReport } from "../../../packages/integration/cdp-profiler.ts";
+} from "@commonfabric/logger";
+import { renderProfileReport } from "../../../runtime/integration/cdp-profiler.ts";
 
 const out = Deno.env.get("CF_PROF_OUT") ?? "cf-prof";
 const cpu = Deno.env.get("CF_PROF_CPU") === "1";
@@ -90,6 +90,8 @@ async function finalize(code: number): Promise<void> {
     );
     const measures: { name: string; startTime: number; duration: number }[] =
       [];
+    // Read and left on the timeline: the process exits below, so nothing
+    // reads the entries again and nothing more is emitted against their budget.
     for (const entry of performance.getEntriesByType("measure")) {
       if (entry.name.startsWith(TIMING_MEASURE_PREFIX)) {
         measures.push({
@@ -105,16 +107,13 @@ async function finalize(code: number): Promise<void> {
         JSON.stringify(measures),
       );
     }
-    clearTimingMeasures();
     console.error(
       `[profile-cf] wall ${wall.toFixed(0)}ms, exit ${code}, ` +
         `measures ${measures.length}, wrote ${out}.*`,
     );
   } catch (error) {
     console.error(
-      `[profile-cf] writing the artifacts failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `[profile-cf] writing the artifacts failed: ${describeFailure(error)}`,
     );
   } finally {
     // The command's own code, whatever became of the artifacts.

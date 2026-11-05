@@ -9,7 +9,7 @@ in terms of the invocation envelope this specification is written around. It is
 a design-level account, not a transcript of the wire: the shapes a client and
 server actually exchange are defined by the Memory v2 protocol
 ([`docs/specs/memory-v2/04-protocol.md`](../memory-v2/04-protocol.md)) and
-declared in `packages/memory/v2.ts`. Read this section for the operations and
+declared in `runtime/memory/v2.ts`. Read this section for the operations and
 their semantics, and that one for what goes over a socket.
 
 ### 6.0 Notes on Current Implementation
@@ -55,7 +55,7 @@ structured errors such as `ConflictError`, `AuthorizationError`, etc.
 
 **Conflict errors:** On CAS conflict, the current implementation returns a
 structured `ConflictError` including the conflicting address and both the
-expected and actual states (see `packages/memory/interface.ts`).
+expected and actual states (see `runtime/memory/interface.ts`).
 
 ### 6.2 `/memory/query`
 
@@ -112,7 +112,7 @@ the entire reachable graph.
 
 **Classification claim:** The `classification?: string[]` argument is a
 declarative claim used to gate access to labeled entities in the current
-implementation (see `packages/memory/space-schema.ts`).
+implementation (see `runtime/memory/space-schema.ts`).
 
 **Subscribe mode:** When `subscribe: true`, the query registers schema-tracked
 dependencies for incremental updates. Subsequent fact revisions are delivered

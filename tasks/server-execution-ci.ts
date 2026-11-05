@@ -23,9 +23,27 @@ export interface ServerExecutionCiLane {
   /** Explicit flag value for the opposite role; absent for the default role. */
   readonly experimentalValue?: "true" | "false";
 
+  /**
+   * The variables the lane's Toolshed servers, baked shells and test
+   * processes run under: `EXPERIMENTAL_SERVER_EXECUTION` where the role
+   * names a value, and nothing where it names none.
+   */
+  readonly environment: Readonly<Record<string, string>>;
+
   /** Test-record variant for the non-default role; default stays unmarked. */
   readonly recordVariant?: "server-execution" | "server-execution-off";
 }
+
+/**
+ * The variables a lane's posture check reads. A lane removes each from the
+ * environment it inherits before applying its role's own, so that a value set
+ * where CI runs cannot put a lane on a posture its role does not name.
+ */
+export const SERVER_EXECUTION_POSTURE_VARIABLES: readonly string[] = [
+  "EXPERIMENTAL_SERVER_EXECUTION",
+  "EXPERIMENTAL_VIEW_SCOPED_REPLICATION",
+  "EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
+];
 
 /** Returns the two-arm CI posture for `role`. */
 export function serverExecutionCiLane(
@@ -33,33 +51,30 @@ export function serverExecutionCiLane(
   defaultEnabled = SERVER_EXECUTION_DEFAULT_ENABLED,
 ): ServerExecutionCiLane {
   const enabled = role === "default" ? defaultEnabled : !defaultEnabled;
+  const experimentalValue = role === "default"
+    ? undefined
+    : enabled
+    ? "true"
+    : "false";
   return {
     role,
     enabled,
     label: enabled ? "ON" : "OFF",
-    ...(role === "default" ? {} : {
-      experimentalValue: enabled ? "true" : "false",
+    environment: experimentalValue === undefined
+      ? {}
+      : { EXPERIMENTAL_SERVER_EXECUTION: experimentalValue },
+    ...(experimentalValue === undefined ? {} : {
+      experimentalValue,
       recordVariant: enabled ? "server-execution" : "server-execution-off",
     } as const),
   };
 }
 
-/** Returns the lines a workflow writes to `$GITHUB_ENV` for `role`. */
-export function serverExecutionCiEnvironment(
-  role: ServerExecutionCiRole,
-  defaultEnabled = SERVER_EXECUTION_DEFAULT_ENABLED,
-): string[] {
-  const lane = serverExecutionCiLane(role, defaultEnabled);
-  return [
-    `SERVER_EXECUTION_ENABLED=${lane.enabled}`,
-    `CF_TEST_RECORDS_VARIANT=${lane.recordVariant ?? ""}`,
-    ...(lane.experimentalValue === undefined
-      ? []
-      : [`EXPERIMENTAL_SERVER_EXECUTION=${lane.experimentalValue}`]),
-  ];
-}
-
-/** Verifies the server and baked shell both carry the requested lane posture. */
+/**
+ * Verifies the server and baked shell both carry the requested lane posture,
+ * and that an ON lane's server leaves web view-scoped replication on, as it
+ * is unless a flag turns it off.
+ */
 export function assertServerExecutionCiPosture(
   role: ServerExecutionCiRole,
   meta: Record<string, unknown>,
@@ -74,6 +89,17 @@ export function assertServerExecutionCiPosture(
   if (published !== lane.enabled) {
     throw new Error(
       `${role} lane publishes serverExecution=${published}; expected ${lane.enabled}`,
+    );
+  }
+
+  const viewScoped = experimental?.webViewScopedReplication ??
+    experimental?.viewScopedReplication ?? true;
+  if (lane.enabled && viewScoped !== true) {
+    throw new Error(
+      `${role} lane publishes webViewScopedReplication=` +
+        `${experimental?.webViewScopedReplication} and ` +
+        `viewScopedReplication=${experimental?.viewScopedReplication}; ` +
+        "expected web view-scoped replication on",
     );
   }
 
@@ -118,32 +144,4 @@ export async function verifyServerExecutionPosture(
   const meta = await metaResponse.json() as Record<string, unknown>;
   const stats = await statsResponse.json() as Record<string, unknown>;
   assertServerExecutionCiPosture(role, meta, stats);
-}
-
-/** Runs the small workflow-facing CLI. Exported so its error paths stay tested. */
-export async function runServerExecutionCiCommand(
-  args: readonly string[],
-  fetcher: typeof fetch = fetch,
-  log: (message: string) => void = console.log,
-): Promise<void> {
-  const [command, role, baseUrl] = args;
-  if (role !== "default" && role !== "opposite") {
-    throw new Error(
-      "Expected server-execution CI role `default` or `opposite`.",
-    );
-  }
-  if (command === "env") {
-    log(serverExecutionCiEnvironment(role).join("\n"));
-  } else if (command === "probe" && baseUrl !== undefined) {
-    await verifyServerExecutionPosture(role, baseUrl, fetcher);
-    log(
-      `Verified ${role} server-execution lane (${
-        serverExecutionCiLane(role).label
-      }).`,
-    );
-  } else {
-    throw new Error(
-      "Expected `env <role>` or `probe <role> <toolshed-url>`.",
-    );
-  }
 }

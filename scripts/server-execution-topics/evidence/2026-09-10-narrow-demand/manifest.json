@@ -1,0 +1,199 @@
+{
+  "artifactRoot": "./artifacts",
+  "profileHead": "83ee6cf73f3b8ab9cd7fccd2d12bee09c518a15b",
+  "implementationBase": "1eefa123bbd01337481397c97962cc25ed6d2c73",
+  "shape": {
+    "topicCount": 5,
+    "crossrefsPerTopic": 2,
+    "citingTopics": 3,
+    "bodyWords": 120,
+    "verifiedCitationEdges": 6
+  },
+  "observations": [
+    {
+      "arm": "off",
+      "demand": "index",
+      "before": {
+        "sessionId": "71cefae8-aa62-4e12-ae51-52afbd75e420",
+        "principal": "did:key:z6MkvS9DELAXnHMjd4f7KVsYjLQaMtdXVko6C1GJPXR5ux8m",
+        "tracked": 41,
+        "watches": 2
+      },
+      "after": {
+        "sessionId": "71cefae8-aa62-4e12-ae51-52afbd75e420",
+        "principal": "did:key:z6MkvS9DELAXnHMjd4f7KVsYjLQaMtdXVko6C1GJPXR5ux8m",
+        "tracked": 151,
+        "watches": 4
+      }
+    },
+    {
+      "arm": "off",
+      "demand": "full",
+      "before": {
+        "sessionId": "0b92d8b1-150c-4ecb-b412-b5cdde3076e6",
+        "principal": "did:key:z6MkvS9DELAXnHMjd4f7KVsYjLQaMtdXVko6C1GJPXR5ux8m",
+        "tracked": 41,
+        "watches": 2
+      },
+      "after": {
+        "sessionId": "0b92d8b1-150c-4ecb-b412-b5cdde3076e6",
+        "principal": "did:key:z6MkvS9DELAXnHMjd4f7KVsYjLQaMtdXVko6C1GJPXR5ux8m",
+        "tracked": 547,
+        "watches": 232
+      }
+    },
+    {
+      "arm": "on",
+      "demand": "index",
+      "before": {
+        "sessionId": "55281933-d89e-4182-b820-241d02184b6c",
+        "principal": "did:key:z6MkvS9DELAXnHMjd4f7KVsYjLQaMtdXVko6C1GJPXR5ux8m",
+        "tracked": 42,
+        "watches": 3
+      },
+      "after": {
+        "sessionId": "55281933-d89e-4182-b820-241d02184b6c",
+        "principal": "did:key:z6MkvS9DELAXnHMjd4f7KVsYjLQaMtdXVko6C1GJPXR5ux8m",
+        "tracked": 152,
+        "watches": 5
+      }
+    },
+    {
+      "arm": "on",
+      "demand": "full",
+      "before": {
+        "sessionId": "217bb867-cb15-458f-85e9-41bd94fb585f",
+        "principal": "did:key:z6MkvS9DELAXnHMjd4f7KVsYjLQaMtdXVko6C1GJPXR5ux8m",
+        "tracked": 42,
+        "watches": 3
+      },
+      "after": {
+        "sessionId": "217bb867-cb15-458f-85e9-41bd94fb585f",
+        "principal": "did:key:z6MkvS9DELAXnHMjd4f7KVsYjLQaMtdXVko6C1GJPXR5ux8m",
+        "tracked": 644,
+        "watches": 245
+      }
+    }
+  ],
+  "limitations": [
+    "Profiling observations, not latency evidence or load-invariant counts.",
+    "Index and full use fresh reader sessions over the same seeded store in each arm.",
+    "Serving principal is recorded separately from these reader-session rows.",
+    "Implementation integration runs are correctness-only and use uninstrumented servers."
+  ],
+  "artifactFiles": [
+    {
+      "path": "runs/session-cold-demand-off-02/manifest.json",
+      "sha256": "9dbcd161fc19778986b370efb9d0221fa4de676846ac65328c4037c39fa8e9e6"
+    },
+    {
+      "path": "runs/session-cold-demand-off-02/isolated-demand.json",
+      "sha256": "b0224d0fc8990ed7225cd120a54b446f1d642427ad92f1755e1902c4c42fa86e"
+    },
+    {
+      "path": "runs/session-cold-demand-off-02/worktree.patch",
+      "sha256": "1fc2a0f2136263019269311c1186feb9f574f51f56318872b46f937ffa6ddadb"
+    },
+    {
+      "path": "runs/session-cold-demand-off-02/sources/tools/server-execution-topics/seed-check.ts",
+      "sha256": "72c2a6f252ec00ed580b43938e2baff826fa978184c8ee6187c8cedd3c81aa0f"
+    },
+    {
+      "path": "runs/session-cold-demand-off-02/sources/tools/server-execution-topics/run-arm.ts",
+      "sha256": "9a27c35b0f0d00b636d9ba188a65f7c38c318f28652009acb8eba87b20d0e0b8"
+    },
+    {
+      "path": "runs/session-cold-demand-off-02/sources/packages/patterns/integration/topic-board-fixture.ts",
+      "sha256": "fa866b9239a214e5a10f022225e0e6974a3342ba2283af192a7b87e65851e234"
+    },
+    {
+      "path": "runs/session-cold-demand-off-02/workload.stdout",
+      "sha256": "5d67fad0639020fe5cf58da82be081379aa187e7c5de9abf7b4c74fbdab418c5"
+    },
+    {
+      "path": "runs/demand-integration-off-01/manifest.json",
+      "sha256": "7f628d0baf9507afba76d039ea28288b99fff77b41765620564d9a63ee5b9fb9"
+    },
+    {
+      "path": "runs/demand-integration-off-01/worktree.patch",
+      "sha256": "c3aa915bc5ab0c6d48b4e76cd702d909a5fe2708d2457bbaf6c4c1ed395dca6d"
+    },
+    {
+      "path": "runs/demand-integration-off-01/workload.stdout",
+      "sha256": "44d22da3d8e38bcdcbcd4c097fd24d173e354f836a4ffcf1fad5023bb276cce6"
+    },
+    {
+      "path": "runs/demand-integration-off-01/sources/packages/patterns/integration/topic-board-seed.test.ts",
+      "sha256": "91c9a85c64f176855541cef6b81aa15c2d73fd354fe29726970432dba96b6c02"
+    },
+    {
+      "path": "runs/session-cold-demand-on-02/manifest.json",
+      "sha256": "d6950e3be604073a466742028c1e606a0b18227be9db700e1d4a4c7731860734"
+    },
+    {
+      "path": "runs/session-cold-demand-on-02/isolated-demand.json",
+      "sha256": "b6dee433881f9c42af77bdd31553e518c99980136265ffef55c06b60cad661c8"
+    },
+    {
+      "path": "runs/session-cold-demand-on-02/worktree.patch",
+      "sha256": "1fc2a0f2136263019269311c1186feb9f574f51f56318872b46f937ffa6ddadb"
+    },
+    {
+      "path": "runs/session-cold-demand-on-02/sources/tools/server-execution-topics/seed-check.ts",
+      "sha256": "72c2a6f252ec00ed580b43938e2baff826fa978184c8ee6187c8cedd3c81aa0f"
+    },
+    {
+      "path": "runs/session-cold-demand-on-02/sources/tools/server-execution-topics/run-arm.ts",
+      "sha256": "9a27c35b0f0d00b636d9ba188a65f7c38c318f28652009acb8eba87b20d0e0b8"
+    },
+    {
+      "path": "runs/session-cold-demand-on-02/sources/packages/patterns/integration/topic-board-fixture.ts",
+      "sha256": "fa866b9239a214e5a10f022225e0e6974a3342ba2283af192a7b87e65851e234"
+    },
+    {
+      "path": "runs/session-cold-demand-on-02/workload.stdout",
+      "sha256": "a7385593075a396fa5aafb1ad0441ac6d13c753b7ab27a1079b9270015b04646"
+    },
+    {
+      "path": "runs/demand-integration-on-01/manifest.json",
+      "sha256": "d3b53ac7972d3ba935f70c3cbd5da2229d122a97444e6b3865d0a403b5ae78be"
+    },
+    {
+      "path": "runs/demand-integration-on-01/worktree.patch",
+      "sha256": "d6d8b2e827bae2225aa1948a045f119dd9df91201d13ea6c97db3d67400d0114"
+    },
+    {
+      "path": "runs/demand-integration-on-01/workload.stdout",
+      "sha256": "89153f6978cea366a143e304ee8a581de739120ac169dee034a3cbf4e67dd035"
+    },
+    {
+      "path": "runs/demand-integration-on-01/sources/packages/patterns/integration/topic-board-seed.test.ts",
+      "sha256": "a9488827a71c213297a1ab2d2606bf1e98da0b4f3cfbbe916cb979092c54d8a0"
+    },
+    {
+      "path": "runs/session-profile-index-on-01/stats-after-seed.json",
+      "sha256": "4c3827f186b3d62ff46d98903b996b0094a4fda1339225d86e092e046e165a1b"
+    },
+    {
+      "path": "runs/session-profile-index-on-01/manifest.json",
+      "sha256": "ae53cd851ef916651b8c3d94cdf8d65ca8003435355a05242a5dc1a99e3b13b6"
+    },
+    {
+      "path": "runs/seed-index-83ee-on-01/stats-after-seed.json",
+      "sha256": "c339afac77542e35ba22fb754a0f7627be0a3ddabb3043b87f97b2d9d6fb149d"
+    },
+    {
+      "path": "runs/seed-index-83ee-on-01/manifest.json",
+      "sha256": "dd6eb211a299332bfcd900efec6d19e7c395a5897995ff5ab0c89db07fc7a8c7"
+    },
+    {
+      "path": "runs/seed-full-83ee-on-02/stats-after-seed.json",
+      "sha256": "659eee997541c2f038580c9acc44c058cb0ac55aa89b675235962fbb57d87d93"
+    },
+    {
+      "path": "runs/seed-full-83ee-on-02/manifest.json",
+      "sha256": "64190a4d616f388b24cad9ab5a57b1cbcb335633d160edf6fe73f63b2232e3f0"
+    }
+  ],
+  "artifactBundle": "./artifact-bundle.json"
+}

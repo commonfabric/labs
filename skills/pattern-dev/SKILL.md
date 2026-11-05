@@ -86,6 +86,25 @@ Plain `new Writable(...)` inherits the containing pattern or factory scope. Use
 `new Writable.perUser(...)` or `new Writable.perSession(...)` when the local
 cell must have a specific sharing boundary independent of that context.
 
+A scope also decides what each page load recomputes and writes. A page load is a
+new session, so everything derived per session — a `PerSession<>` computed, a
+sub-pattern created with `asScope("session")`, and whatever is derived from
+either, the rows a `map()` makes of it included — is derived and committed again
+by every load, and nothing collects the instances a session leaves behind.
+Derive per session only what differs by session. What every reader derives alike
+is stored once in the scope they share, and a later session starts from it.
+Readers differ by principal as well as by session: a value drawn from another
+space is read under each reader's own access, so where more than one principal
+reads a space it can differ by reader, and stored once it is overwritten back
+and forth. A declared scope also persists once its declaration is removed: a
+cell that has stored a link to a narrower instance of itself keeps writing
+behind that link, so an update that broadens a deployed cell's scope gives the
+cell a new name. The FabriChat manager is the worked case: its rooms, people and
+found rooms are derived per user in documents named for it
+(`patterns/system/fabrichat/manager.tsx`), and
+`patterns/integration/fabrichat-manager-sessions-multi-runtime.test.ts` pins
+that a later session's session-scoped writes do not grow with the rooms.
+
 `PerAny<T>` is rare. Use it only when an inner value must override an outer
 scope declaration and may validly come from any concrete scope:
 
@@ -106,16 +125,14 @@ _who_ it belongs to. Resolve the viewer via `wish({ query: "#profile" })` (never
 a typed-name field), store each participant's live `#profile` cell in the shared
 `PerSpace` roster on join, render **every** participant with `cf-profile-badge`
 bound to that cell (`cf-avatar` + snapshot only as an offline fallback), and
-identify people by `equals()` on a cell reference, not display name. See
-`docs/common/patterns/multi-user-patterns.md#presenting-identity` and
-`docs/common/components/COMPONENTS.md#identity-components`.
-
-When working in a Pattern Factory Build workspace, also read:
-
-- `docs/common/ai/pattern-factory-build-guide.md`
-
-That guide defines the top-level build contract, verification posture, and
-documentation discipline for Pattern Factory runs.
+identify people by `equals()` on a cell reference, not display name. Keep the
+viewer's identity out of shared derivations: under server execution a derivation
+that reads it runs once per viewer (per user or per session, by what it read),
+and so does everything downstream, so derive shared data from shared inputs and
+decide what is the viewer's at the leaf. See
+`docs/common/patterns/multi-user-patterns.md#presenting-identity`,
+`docs/common/patterns/multi-user-patterns.md#keep-the-viewer-out-of-shared-derivations`
+and `docs/common/components/COMPONENTS.md#identity-components`.
 
 When you're unsure whether a reactive expression site lowers the way you expect,
 inspect the emitted source directly with:
@@ -142,6 +159,76 @@ Also follow its binding guidance: when a control is already bound to a cell,
 usually via `$value` or `$checked`, do not add a handler that simply writes the
 same value back into that same cell.
 
+A display cap bounds the render, not the transaction. The number that decides
+what an interaction costs is how many rows a query returned, not how many are on
+screen: a pane showing six of 150 returned messages pays for the 150, and the
+same pane showing 38 of 52 is faster than it. Nothing at authoring time says so
+— a `slice(0, LIMIT)` in the render reads as if it bounded the work — so hold
+down what the statement returns (a `LIMIT`, a narrower predicate) rather than
+what the list shows. The worked measurement is
+`docs/history/development/performance/2026-09-11-person-inbox-click-cost.md`.
+
+The other half of the same point: an interaction dispatched before the runtime
+has settled the previous one is not free. Clicking through a list faster than it
+settles used to leave every later interaction slower for the rest of that
+session; that specific cause is fixed, but a UI that fires writes faster than
+the graph converges is still paying queueing it does not have to. Where a
+control can be held during settle, hold it.
+
+Hiding a list's rows does not make them cheap. `list.map(...)` instantiates what
+its callback builds once per element whether or not anything shows it: a row
+hidden by a `display` prop still has its nodes planned on every load, its
+documents written on the first run, and those documents delivered on every
+reload. A second `.map` over the same list — a thread panel, a detail pane, a
+tab most sessions never open — is therefore a second full set of instances, and
+hiding it removes none of that cost. Nothing at authoring time says so, because
+the two calls read as two views of one list. Map a list that holds only what the
+view shows. Where what it shows is chosen per session or per user, make that
+list a computed of that scope, such as `computed((): PerSession<Item[]> => …)`:
+`map` stores its result, and the instances it starts, at the scope of the list
+it maps, so each session holds its own rows and no viewer's choice replaces
+another's. A `display` prop stays the tool for a part of one row that differs by
+viewer. The worked case is `threadMessages` in
+`patterns/system/fabrichat/room.tsx`: mapping the open thread's messages in
+place of every message took a load of a thirty-message room from sixty row
+instances to thirty, and its first run from committing two row trees to one.
+
+A mapped child that derives its own facts from the list it is an element of
+reads the whole list once per element. A row usually holds the list cell
+already, because its handlers need it, and nothing at authoring time says that a
+`computed()` reading it in the row differs from one reading it in the parent. It
+does: each row's computation scans every element, so the work of a load grows
+with the square of the list, and a change to one element re-runs the scan in
+every row. Derive what is true of the list as a whole once, in the pattern that
+maps it, as a record keyed by element, and give each child that record as a
+cell: `ReadonlyCell<Record<string, T>>`, read as `facts.key(ownKey).get()`. A
+computation that keys the cell that way reads one entry when it runs and re-runs
+when that entry changes; the same record taken as a plain value is read whole by
+every child. The key exists only at run time, so the transformer cannot declare
+which entry that is: `--show-transformed` shows the record's whole schema on
+that `lift`, as a cell, and no `completeSchedulerScopeSummary`. What narrows is
+the read the run makes, and the read-cost report of
+`cf test <file> --verbose --stats-threshold 0` counts it per step.
+`patterns/system/fabrichat/room.tsx` derives `places` this way and
+`patterns/system/fabrichat/message-row.tsx` reads its own.
+
+How much of a value a `computed()` reads depends on what the value passes
+through, and a function imported from another module is where the transformer
+stops following it. A value handed to an imported helper is read whole:
+`summarize(items)` reads every field of every item, where
+`summarize(items.map(({ id, parent }) => ({ id, parent })))` reads two. A cell
+handed to one is charged what the helper's parameter type declares, and
+`Writable<T>` declares a write, through an alias such as
+`type ItemsCell = Writable<Item[]>` as much as written out. The computation is
+then scheduled as a writer of that cell: every reader of the cell is ordered
+after it, and several such computations over one list order against each other
+in a cycle. A helper that only reads takes `Cell<T>` or `ReadonlyCell<T>`.
+`deno task cf check <pattern>.tsx --show-transformed` shows both: the size of
+the schema each `lift` was given, and a `materializerWriteInputPaths` entry on
+one the scheduler treats as a writer. "Imported capability contracts" in
+`docs/specs/ts-transformer/ts_transformers_current_behavior_spec.md` is the
+rule.
+
 Runtime notes:
 
 - Use the `cf` skill, or read `skills/cf/SKILL.md`, when you need CLI command
@@ -153,9 +240,7 @@ Runtime notes:
 
 ### Claude Code
 
-Interactive labs sessions only. In a Pattern Factory workspace, the factory
-orchestrator owns delegation, critique, and finalization — do not Task these
-subagents, run a separate critic pass, or offer commits there.
+Interactive labs sessions only.
 
 - Use `EnterPlanMode` before building.
 - Scale the plan to the problem:
@@ -195,19 +280,18 @@ Task({
 
 Phase skills consult as needed:
 
-- Pattern Factory Build: `docs/common/ai/pattern-factory-build-guide.md`
 - Reactivity and local cells: `docs/common/concepts/reactivity.md`,
   `docs/common/patterns/new-cells.md`
 - Types: `docs/common/concepts/types-and-schemas/`
 - Actions/handlers: `docs/common/concepts/action.md`,
   `docs/common/concepts/handler.md`
 - Testing: `docs/common/workflows/pattern-testing.md`
-- Existing patterns: `packages/patterns/index.md` — check the "Status tiers"
-  section before copying idioms from any pattern; only `exemplar` entries are
-  style references.
-- Components: `packages/patterns/catalog/catalog.tsx` — the authoritative,
-  type-checked component catalog. Story files in
-  `packages/patterns/catalog/stories/` show live usage for each component. Also
-  see `docs/common/components/COMPONENTS.md` for narrative docs.
+- Existing patterns: `patterns/index.md` — check the "Status tiers" section
+  before copying idioms from any pattern; only `exemplar` entries are style
+  references.
+- Components: `patterns/dev/catalog/catalog.tsx` — the authoritative,
+  type-checked component catalog. Story files in `patterns/dev/catalog/stories/`
+  show live usage for each component. Also see
+  `docs/common/components/COMPONENTS.md` for narrative docs.
 - Debugging: start with `docs/development/debugging/README.md`, then follow the
   linked gotcha or workflow doc for the exact failure.

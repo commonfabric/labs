@@ -1,0 +1,4 @@
+/opt/homebrew/bin/deno
+deno 2.9.4 (stable, release, aarch64-apple-darwin)
+v8 15.0.245.2-rusty
+typescript 6.0.3

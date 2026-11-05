@@ -1,23 +1,25 @@
 # Self-Serve Ingest Channels
 
-*Minting an ingest channel is a user action — "let my own device write into my own space." Today it is an operator action. This closes the create-authorization gap named in [ingest-channels-journal-sink.md](../plans/ingest-channels-journal-sink.md) §"Security model & the create-authorization gap".*
+*Minting an ingest channel is a user action — "let my own device write into my own space." A user holding their own identity key mints into a space they own, with no operator in the loop. This closes the create-authorization gap named in [ingest-channels-journal-sink.md](../plans/ingest-channels-journal-sink.md) §"Security model & the create-authorization gap".*
 
-**Status:** implemented (this branch), gated OFF by default —
-`INGEST_SELF_SERVE_ENABLED` · **Updated:** 2026-08-04 · **Depends on:** the landed `journal` sink (labs #4446) and first-party HTTP request proofs (`docs/specs/toolshed-access-control.md`)
+**Status:** implemented, mounted on every deployment · **Updated:**
+2026-10-09 · **Depends on:** the landed `journal` sink (labs #4446) and first-party HTTP request proofs (`docs/specs/toolshed-access-control.md`)
 
 ---
 
 ## Why
 
-The only way to mint an ingest channel is `deno task provision-ingest-channel`,
-run on the deployed host with the toolshed's private identity
-(`packages/toolshed/scripts/provision-ingest-channel.ts`). Every user onboarding
-a device is an admin ticket to whoever holds the Ansible vault password. That
-does not scale past a handful of people, and it blocks the iOS location beacon's
-first-run experience entirely.
+Without self-serve, the only way to mint an ingest channel is
+`deno task provision-ingest-channel`, run on the deployed host with the
+toolshed's private identity
+(`runtime/toolshed/scripts/provision-ingest-channel.ts`). Every user
+onboarding a device would be an admin ticket to whoever holds the Ansible
+vault password. That does not scale past a handful of people, and it would
+block the iOS location beacon's first-run experience entirely. The operator
+script remains for channels an operator provisions.
 
 There is also a sharper, quieter problem. `MEMORY_ACL_MODE` now defaults to
-`enforce` (`packages/toolshed/env.ts:230`) and ingest writes into the *user's*
+`enforce` (`runtime/toolshed/env.ts:230`) and ingest writes into the *user's*
 space under the *operator's* identity. If the operator DID is neither in
 `MEMORY_SERVICE_DIDS` nor granted per-space, POSTs **return 200 while nothing
 commits** — indistinguishable from a typo'd space DID. A channel can be born
@@ -25,14 +27,14 @@ dead and look healthy. Fixing that is worth more than the self-serve endpoint.
 
 ## The constraint that produced today's design
 
-`ingest.index.ts` deliberately mounts only `POST /api/ingest/:id`. An unauthed
+`ingest.index.ts` deliberately mounts only the data plane's POST. An unauthed
 create taking a caller-supplied target space is a confused-deputy write
 primitive: anyone could register a channel targeting another user's space and
 get legitimately-minted `ExternalIngest` marks written there. Two facts make
 this harder than it looks:
 
 1. **First-party HTTP auth authenticates but does not authorize.**
-   `verifyFirstPartyHttpRequest` (`packages/runner/src/toolshed-http-auth.ts:350`)
+   `verifyFirstPartyHttpRequest` (`runtime/runner/src/toolshed-http-auth.ts:350`)
    is a real Ed25519 proof over method + authority + path + body hash + user DID
    + freshness. It proves control of a `did:key` and nothing more.
    `first-party-http-auth.ts:19` carries `TODO(auth): Check that the verified
@@ -49,14 +51,9 @@ Server issues a nonce + cell cause; caller writes it into that cell in the
 target space; server reads it back.
 
 **It proves the wrong predicate.** The round-trip demonstrates *write*
-capability. Non-home spaces genesis as the document the caller registered
-beside the space key, else the fallback
-`{ [activeUser]: "OWNER", "*": "WRITE" }` (`packages/runner/src/storage/v2.ts`, the
-`bootstrapAcl` selection in `#createInitializedSession`; the fallback shape is
-`defaultGenesisAcl` over `DEFAULT_GENESIS_GRANTS`)
-— and the ingest path registers none, so it gets the fallback — described
-upstream as "the rollout default until ACL management has a UI"
-(`docs/specs/memory-v2/04-protocol.md:742-748`). So on a genesis'd data space,
+capability, and write is not ownership. A space's owner can grant WRITE to
+another identity, or to `"*"`, at any time. Every legacy named space carries
+`"*": "WRITE"` in its genesis document. On a space with that wildcard,
 *every* authenticated principal — anyone who can generate a keypair — already
 holds WRITE and passes the nonce challenge. The ceremony authorizes precisely
 the party it exists to exclude.
@@ -75,27 +72,30 @@ and fails **on the write**.
 
 The registration carries `secretHash`, the target `space`, and `causePrefix`.
 Option B stores it at an address whose integrity is exactly the write-ACL of the
-space it sits in. On a genesis'd data space with `"*": "WRITE"`, an attacker
+space it sits in. On a data space with `"*": "WRITE"`, an attacker
 writes their *own* registration with their *own* `secretHash` into the victim's
 space, then POSTs with the token they chose. The server verifies a hash the
 attacker authored and durably appends marked records. Confused deputy, restored
 through a different door.
 
 This is not fixable by reading more carefully: **there is no per-document write
-attribution**. `packages/runner/src/cfc/grants.ts:64-73` states that grants
+attribution**. `runtime/runner/src/cfc/grants.ts:64-73` states that grants
 hosted in shared spaces "need per-document write-attribution verification —
 future work on its own track." The server cannot ask "was this written by the
 space's owner?"
 
 *Correction worth recording:* a user's **home/identity** space genesises as
-`{ [signer]: "OWNER" }` with **no wildcard** (the home arm of that same
-`bootstrapAcl` selection), so Option B is
-sound *for home spaces specifically*. It is unsound for the named data spaces
-the location beacon actually targets. Option B becomes generally sound exactly
-when the wildcard goes away — but a create primitive whose safety depends on a
-documented-temporary rollout crutch being removed later is backwards. The
-security property should get stronger as the platform tightens, never start
-invalid.
+`{ [signer]: "OWNER" }` on its first open (`#createInitializedSession` in
+`runtime/runner/src/storage/v2.ts`), and every other new space is born through
+`StorageManager.createSpace(acl, { root?, spaceKind? })` with the genesis
+document its creator passes, which `Runtime.createSpace()` writes as
+`{ [creator]: "OWNER" }` plus any grants the creator chose. Opening a space that
+was never created writes nothing. Option B is sound for such a space as long as
+nobody but its owners holds WRITE. It is unsound for every space where someone
+else does: a legacy named space carrying the wildcard, and any space whose owner
+granted WRITE to another identity or to `"*"`. A create primitive whose safety
+depends on the owner never sharing write access is backwards. The security
+property should hold however the owner shares the space.
 
 Lesser objections: it changes the ingest wire (the POST must carry the space),
 breaking the shipped client contract and the derived-id property, and
@@ -106,20 +106,20 @@ has minted.
 
 Get a cryptographically verified caller DID from `requireFirstPartyHttpAuth()`,
 then authorize against the record that already governs the space — its ACL
-document at `of:<space DID>` (`packages/memory/v2/server.ts:267`).
+document at `of:<space DID>` (`runtime/memory/v2/server.ts:267`).
 
 ```ts
 // Shown for illustration only.
-// packages/toolshed/lib/space-authority.ts
+// runtime/toolshed/lib/space-authority.ts
 const acl = await new ACLManager(runtime, space).get();
 if (acl?.[callerDid] !== "OWNER") return forbidden();
 ```
 
 **A narrow, explicit grant — deliberately not `spaceReaderRole`.**
-`packages/runner/src/cfc/space-membership.ts:55` is the canonical membership
+`runtime/runner/src/cfc/space-membership.ts:55` is the canonical membership
 oracle, and it is the right shape, but it is scoped to the §4.9.3 *render* fit
-and folds in three implicit-owner branches that are correct there and wrong
-here: `principal === space`, `serviceDids.includes(principal)`, and a wildcard
+and folds in two implicit-owner branches that are correct there and wrong
+here: `serviceDids.includes(principal)`, and a wildcard
 fallback (`acl[principal] ?? acl["*"]`, `:66`). That last one matters: on an ACL
 of `{alice:"OWNER", "*":"OWNER"}` — reachable via `cf acl set ANYONE OWNER` —
 `spaceReaderRole` returns `"owner"` for *everyone*. Over-admitting is tolerable
@@ -137,20 +137,21 @@ authority. So: a narrow predicate, in a toolshed seam, with its own tests.
 - **Security tightens with the ACL; LIVENESS does not — state both.** The
   entitlement check gets stronger as grants narrow, with no code change. The
   operator's ability to *deliver* moves the other way: with
-  `MEMORY_SERVICE_DIDS` unset, the operator can write a named space only via
-  the temporary genesis wildcard `"*": "WRITE"`. When ACL management gets a UI
-  and users narrow their grants, new mints will 409 and — worse — channels
-  minted earlier will return 200 while committing nothing, which is exactly the
-  "born dead, looks healthy" failure this change exists to remove. Putting the
-  operator DID in `MEMORY_SERVICE_DIDS` is therefore not optional hardening; it
-  is the precondition for this feature to keep working. Home spaces already
-  require it today (they genesis with no wildcard).
+  `MEMORY_SERVICE_DIDS` unset, the operator can write a named space only
+  through a grant that covers it, such as the `"*": "WRITE"` a legacy named
+  space carries. A fresh named space grants the operator nothing, so a mint
+  against it answers 409. When an owner removes the wildcard from a legacy
+  space, channels minted against it return 200 while committing nothing,
+  which is exactly the "born dead, looks healthy" failure this change exists to
+  remove. Putting the operator DID in `MEMORY_SERVICE_DIDS` is therefore not
+  optional hardening; it is the precondition for this feature to work on home
+  spaces and fresh named spaces, neither of which carries the wildcard.
 - **The resource is the space, not the minting key.** Rotate/revoke/list
   authorize against the registration's **stored** space, never a caller-supplied
   one and never against `createdBy`. Control follows the space through key
   rotation and multi-owner spaces.
 - **It is the shape the runtime is already heading toward.**
-  `packages/api/cfc.ts:66-71` already describes the `ExternalIngest` mark as "an
+  `base/api/cfc.ts:66-71` already describes the `ExternalIngest` mark as "an
   owner-granted, revocable append authority held by an outside service." This
   makes the registration literally that. When CFC grant records
   (`audience`/`expiresAt`/`revoked`, `docs/specs/cfc-persisted-declassification.md:63-75`)
@@ -175,39 +176,44 @@ Four forks were resolved explicitly rather than by default:
    signer's allowlist; adding these would let any pattern mint a channel with
    the user's authority and read the one-time token back. Webhooks solve the
    equivalent problem with `cf-secret-viewer`, and that is the prerequisite for
-   an in-pattern client. All four verbs are POST so it stays possible.
+   an in-pattern client. Every verb is POST so it stays possible.
 
 ## Deployment precondition — state it, don't bury it
 
 **Self-serve mint is exactly as strong as space-key custody, and no stronger.**
 
-The memory server grants implicit `OWNER` when `principal === space`, before
-reading the ACL at all (`packages/memory/v2/server.ts:1044-1049`). ACL mutation
-requires OWNER (`:2061-2065`), and on an already-valid ACL the only constraints
-are shape plus "at least one concrete OWNER survives" (`:1184-1213`,
-`packages/memory/acl.ts:28-32`). So anyone who can sign **as a space DID** can
-write `{ attacker: "OWNER" }` into that space — and may drop the real owner in
-the same commit — after which they pass the narrow predicate as a legitimate,
-explicit owner.
+The memory server grants a principal signing **as a space DID** implicit
+`OWNER` while that space has no ACL document and no history — that is what its
+genesis commit needs — and grants it only what the ACL says after that
+(`#resolveCapability` in `runtime/memory/v2/server.ts`). ACL mutation requires
+OWNER, and on an already-valid ACL the only constraints are shape plus "at least
+one concrete OWNER survives" (`runtime/memory/acl.ts`). New spaces are created
+with a random key that signs genesis and is then dropped
+([random space identities](../specs/random-space-identities.md)). A space
+created before that, however, was given a key derived from a public passphrase
+and its name, and while the server still treated the space DID as a permanent
+owner, anyone could sign as such a space and write `{ attacker: "OWNER" }` into
+it — and drop the real owner in the same commit — after which they pass the
+narrow predicate as a legitimate, explicit owner. Such a grant outlives the
+narrowing that stopped new ones.
 
-On a deployment where space DIDs derive from a public passphrase, that is
-everyone. This is a known, intentional, temporary platform property, not a
-regression introduced here — but minting creates a **durable capability that
-outlives the ACL state that authorized it**, so it deserves a stated
-precondition rather than a testing footnote:
+Minting creates a **durable capability that outlives the ACL state that
+authorized it**, so this deserves a stated precondition rather than a testing
+footnote:
 
 > Self-serve minting is safe only on deployments where space keys are not
 > derivable from public inputs. Where they are, the mint endpoint inherits a
 > space-takeover primitive.
 
-This is **enforced, not just documented**: the control plane is mounted only
-when `INGEST_SELF_SERVE_ENABLED` is set, and the default is off. A tripwire
-proving the weakness still exists is not a substitute for the gate — the
-tripwire tells you when the repair lands, while the gate is what stops durable
-credentials being issued before it. Credentials issued under the old trust
-condition are not retracted by the repair, so the order is: repair custody,
-sweep ACLs, retire existing channels (`deno task retire-ingest-channels`), then
-enable.
+Space keys are random now, and the control plane is mounted on every
+deployment. What the footnote warns of is a planted OWNER grant on a legacy
+named space, and such a grant already carries every power over the space
+that mint confers; what mint adds is a channel that outlives the grant's
+removal, which the channel's hard expiry bounds, the space's current owner
+can end by listing and revoking foreign channels, and an operator can end
+for every channel at once with `deno task retire-ingest-channels`. A
+deployment that anyone outside its operators could reach while keys were
+derivable reviews its space ACLs and retires existing channels the same way.
 
 Consequently the acceptance criterion "refused when naming a space you don't
 control" must be tested against a space with a **concrete, non-derived** owner,
@@ -215,18 +221,32 @@ or the test proves nothing.
 
 ## Surface
 
-A **separate prefix**, `/api/ingest-channels` — not a sub-path of
-`/api/ingest/*`. Three reasons, all concrete:
+**A verb that acts on one space names that space in its path**, under
+`/api/spaces/:space/ingest-channels`. Whatever dispatches requests by space
+can then send the request to the deployment holding that space without reading
+the body. For mint and for the space's list, `:space` is the space the request
+is about. For the verbs that take a channel id, it is the space that channel
+writes into: the authorization is still made against the space in the stored
+registration, and a channel addressed through any other space answers exactly
+like one the caller does not own. So the path can only narrow what an id
+reaches, never widen it.
 
-1. `/api/ingest/*` carries `cors({ origin: "*" })` (`ingest.index.ts:18-26`).
+One verb names no space: the caller's own list, at
+`/api/ingest-channels/list`.
+
+Both are **separate prefixes** from the data plane's `/api/ingest/*` and
+`/api/spaces/:space/ingest/*`, not sub-paths of them. Three reasons, all
+concrete:
+
+1. The data plane carries `cors({ origin: "*" })` (`ingest.index.ts`).
    Mounting a credentialed control plane under a wildcard-CORS prefix violates a
    written invariant: "The protected routes do not expose wildcard CORS"
    (`docs/specs/toolshed-access-control.md:31-33`).
 2. `POST /api/ingest/channels` collides with `POST /api/ingest/:id` at the
    router.
-3. Data plane and control plane should not share middleware. Keep the two
-   prefixes as separate **literal** strings — a future `/api/ingest*` would
-   silently merge them.
+3. Data plane and control plane should not share middleware. Keep `ingest` and
+   `ingest-channels` as separate **literal** path segments — a future
+   `ingest*` pattern would silently merge them.
 
 **All verbs are POST**, including list and revoke. This is not aesthetics: the
 in-runtime signer is a hardcoded, POST-only path allowlist
@@ -236,10 +256,23 @@ caller, ever. POST-only keeps the door open for a shell/pattern client later.
 
 | Verb | Purpose |
 |---|---|
-| `POST /api/ingest-channels/mint` | mint (or rotate-in-place); returns the token **once** |
-| `POST /api/ingest-channels/list` | the caller's own channels; never returns `secretHash` |
-| `POST /api/ingest-channels/rotate` | new token, same id and target |
-| `POST /api/ingest-channels/revoke` | flips `enabled: false` |
+| `POST /api/spaces/:space/ingest-channels/mint` | mint (or rotate-in-place); for a device channel, returns the device URL and token **once**; a gmail channel has neither |
+| `POST /api/spaces/:space/ingest-channels/list` | every channel targeting the space, whoever minted it, revoked ones included; never returns `secretHash` |
+| `POST /api/ingest-channels/list` | the caller's own live channels, in whichever spaces; never returns `secretHash` |
+| `POST /api/spaces/:space/ingest-channels/rotate` | new token, same id and target, for a device channel; a gmail channel answers 400, since it has none |
+| `POST /api/spaces/:space/ingest-channels/revoke` | flips `enabled: false` |
+
+The caller's own list takes an empty body and refuses any other, so a request
+that names a space there, where it would be dropped, is told so with a 422
+rather than handed the wrong list.
+
+Mint and rotate return the URL the device writes to,
+`POST /api/spaces/:space/ingest/:id`, which names the channel's space for the
+same reason the control plane does. The token is the credential and the space
+grants nothing: a channel addressed through a space it does not write into
+answers the 401 of an unknown channel, whatever token comes with it.
+`POST /api/ingest/:id` reaches the same channel for a device whose URL names
+no space.
 
 *Correction found while testing:* not mounting `cors()` here does **not** yield
 an absent `access-control-allow-origin`. `routes/static` and `routes/shell`
@@ -259,21 +292,29 @@ otherwise force arbitrary allocation with a garbage signature.
 
 ### Client
 
-`cf ingest mint|ls|rotate|revoke`, alongside `cf acl`. `cf ingest rotate <id>`
+`cf ingest mint|ls|rotate|revoke`, alongside `cf acl`. A mint decides what
+kind of channel it makes, which cannot change afterwards: a device channel,
+records in per-day partition cells under a cause prefix that a device POSTs
+to with the token, or, when the mint names a target cell and carries a
+proof of a Gmail mailbox, a gmail channel bound to that mailbox, whose one
+cell toolshed writes, as [Gmail push](gmail-push-ingest.md) describes.
+`cf ingest rotate <id>`
 mints a new token for a channel the caller owns, leaving the channel and its
 grants in place — the spelling for a token that leaked or aged, where revoking
-would take the channel down with it. The CLI is the only client that can sign
+would take the channel down with it. Rotate and revoke are addressed to the
+channel's space, which the CLI reads off the caller's own list, or takes from
+`--space` for a channel that list does not hold. The CLI is the only client that can sign
 today — the shell cannot sign at all (zero references to `toolshed-http-auth`
-across `packages/shell`, `packages/lib-shell`, `packages/runtime-client`), and
+across `runtime/shell`, `runtime/lib-shell`, `runtime/runtime-client`), and
 the in-pattern `fetch` builtin is bound to the three-entry allowlist above.
 
 **This is a real limitation, stated plainly:** CLI signing needs a plaintext
-PKCS#8 key file on disk (`packages/cli/lib/identity.ts:33-37`), while a shell
+PKCS#8 key file on disk (`runtime/cli/lib/identity.ts:33-37`), while a shell
 user's key lives behind a passkey. So v1 self-serve is a power-user path. It
 still meets the goal — a user with their own identity key needs no operator —
 and it is strictly better than an Ansible-vault ticket. The pleasant path (a
 `cf-ingest-channel` component mirroring `cf-webhook`'s `cf-secret-viewer`
-reveal, `packages/ui/src/v2/components/cf-webhook/cf-webhook.ts:116-124`, plus a
+reveal, `runtime/ui/src/v2/components/cf-webhook/cf-webhook.ts:116-124`, plus a
 QR the beacon scans) is the natural follow-on, and POST-only verbs are what keep
 it reachable.
 
@@ -392,7 +433,7 @@ revoked?: { at: string; by: string }; // an audit record, not a deletion
 
 These are the exact envelope fields of `CfcGrant`
 (`docs/specs/cfc-persisted-declassification.md:63-75`), which is real code
-(`packages/runner/src/cfc/grants.ts`) — but not usable as-is here, since grant
+(`runtime/runner/src/cfc/grants.ts`) — but not usable as-is here, since grant
 writes require a trusted builtin identity and `space === owner`
 (`grants.ts:411-421`), which the toolshed operator cannot satisfy on a user's
 behalf. Adopting the *shape* now means the eventual migration is a lookup swap
@@ -418,10 +459,11 @@ credential was retired" from "the server is down", and has to choose between
 dropping its buffer and retrying forever.
 
 `space` is pinned to `^did:key:z[1-9A-HJ-NP-Za-km-z]+$` in the create path. The
-existing `space.startsWith("did:")` check admits newlines and case variants,
+repository-wide `isDID` answers only whether a string is a DID, so it admits
+newlines and case variants after the prefix,
 and that same string feeds the hosted-space check, the ACL key, the `\n`-joined
 id derivation, and the on-disk `.sqlite` filename
-(`packages/memory/.../storage-path.ts:69`) — on a case-insensitive filesystem,
+(`runtime/memory/.../storage-path.ts:69`) — on a case-insensitive filesystem,
 two case-variant DIDs open the same engine while deriving different channel ids.
 
 `installId` stays constrained by `isValidSegment` (`ingest.utils.ts:38-41`).
@@ -459,7 +501,8 @@ interprets, and it rejects rather than strips — silently rewriting a record
 would break verbatim storage from the other side.
 
 The cross-repo contract in `ingest-channels-journal-sink.md` §"Cross-repo
-contract" is untouched: the data plane `POST /api/ingest/:id` does not change.
+contract" is untouched: a device POSTs the same body, with the same bearer
+token, to whichever URL mint handed it.
 
 ## Attacks considered and confirmed *not* to work
 
@@ -521,35 +564,8 @@ not atomic. A channel minted between the run and the cutover is missed. The
 script is idempotent, so re-run it — or take the control plane down for the
 migration — and confirm with `deno task audit-ingest-channels`.
 
-**How anyone remembers to do this.** A procedure in a document is not a
-mechanism. The trigger is a tripwire test —
-`packages/toolshed/routes/ingest-channels/space-key-derivation-tripwire.test.ts`
-— which asserts that the weakness is **still present**: that two different
-users derive the same key for one space name, and that the space key is
-reconstructible from repo constants alone. Fixing the derivation therefore
-*breaks the build*, and the failure message is the procedure below.
-
-The reminder is deliberately hard to silence, because the realistic threat is
-not malice but a mechanical fix — an agent (or a hurrying human) repairing a
-red assertion without reading why it is red:
-
-- **There is no expectation to edit.** The test does not compare an expected
-  value; it throws explicitly when the weakness is gone, so there is nothing to
-  "update" and no comparison to invert.
-- **The file leads with a STOP block** addressed to whoever just saw it fail,
-  stating that making it pass is the one wrong move.
-- **`deno task check-tripwires` re-derives the same condition independently**,
-  in a different task family, wired into CI next to `check-skill-facts`. It
-  also fails if the test file is deleted, has lost its sentinel (gutted), or
-  has been `.ignore`d. Silencing the obligation therefore means neutering two
-  things in two places in one diff a reviewer can see.
-- **`tasks/check-tripwires.test.ts`** guards the guard: a typo'd manifest path
-  would otherwise let the check report "intact" vacuously.
-
-All five paths were verified by deliberately breaking each one: weakness fixed,
-file deleted, sentinel removed, test skipped, and the healthy case.
-
-**Procedure when space keys are fixed:**
+**Procedure for a deployment that anyone outside its operators could reach
+while space keys were derivable:**
 0. `deno task audit-ingest-channels --repair-indexes --recover <record>` —
    only needed on a deployment that provisioned channels *before* this change,
    and only once. See "Recovering a channel the index never learned about"
@@ -557,10 +573,11 @@ file deleted, sentinel removed, test skipped, and the healthy case.
 1. `deno task audit-ingest-channels` — record the current population.
 2. `deno task retire-ingest-channels --reason space-key-derivation-fix`
    (dry run), then again with `--confirm`.
-3. Sweep the space ACLs for concrete `OWNER` grants nobody can account for.
-   **Revocation retires tokens; it does not remove a self-granted ACL entry**,
-   and that entry is what would let an attacker simply mint again the next day.
-   This step is not optional.
+3. Review every legacy space's ACL for concrete `OWNER` grants nobody can
+   account for, and remove them with `cf acl remove`, along with the wildcard
+   grant and any entry for the space's own DID. **Revocation retires tokens; it
+   does not remove a self-granted ACL entry**, and that entry is what would let
+   an attacker simply mint again the next day. This step is not optional.
 4. `deno task audit-ingest-channels` — confirm nothing is left active.
 
 ### Recovering a channel the index never learned about
@@ -746,7 +763,7 @@ straight around the bound built to stop it.
   passed `{ channel: registration.space, audience: registration.installId }`
   (`ingest.utils.ts:286-289`), while `VouchedChannel.channel` is documented as
   "the ingest channel — its dedicated space DID"
-  (`packages/toolshed/lib/custody-ingest.ts:38-40`). Channels are distinguishable
+  (`runtime/toolshed/lib/custody-ingest.ts:38-40`). Channels are distinguishable
   by `audience`, so this is not fatal — but "which records arrived under the
   token I just revoked?" is unanswerable for a revoked-then-recreated channel
   reusing an `installId`. Recording the channel id on the mark is the fix; it
@@ -766,7 +783,7 @@ straight around the bound built to stop it.
 The central security property was **not testable in the existing harness**:
 `ingest.utils.test.ts` uses `StorageManager.emulate`, whose server is built with
 no `acl` option, so `#aclMode()` is `"off"` and nothing is authorized. This
-change therefore adds `packages/toolshed/lib/test-support/memory-acl.ts` — a
+change therefore adds `runtime/toolshed/lib/test-support/memory-acl.ts` — a
 real memory-v2 server with `acl: { mode: "enforce" }` over a loopback transport,
 plus arbitrary-shape ACL genesis as the space identity.
 

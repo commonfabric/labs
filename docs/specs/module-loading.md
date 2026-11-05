@@ -68,7 +68,7 @@ different entry point, and server-execution v2 keys its basis index by the
 same restart-stable identity
 ([serving-loop.md §3b](server-side-execution/serving-loop.md)).
 
-The iframe sandbox path (`packages/iframe-sandbox`) is entirely independent of
+The iframe sandbox path (`base/iframe-sandbox`) is entirely independent of
 this work and is out of scope.
 
 ## Goals
@@ -97,7 +97,7 @@ this work and is out of scope.
   invocation-isolation guarantees described in
   [SES_SANDBOXING_SPEC.md](sandboxing/SES_SANDBOXING_SPEC.md). This governs how
   modules are *named and loaded*, not what authority they receive.
-- Do not change the `packages/iframe-sandbox` DOM-iframe path. Confirmed
+- Do not change the `base/iframe-sandbox` DOM-iframe path. Confirmed
   independent.
 - Do not change the ts-transformer pipeline's semantics. Only the emitted module
   packaging and the identity computation are in scope.
@@ -146,7 +146,10 @@ It:
 4. Wraps each emitted body in a module record keyed `cf:module/<identity>`
    ([`compileSourcesToRecords`][c7]) and security-classifies it
    ([`verifyCompiledModuleBody`][c8], called from the Engine) before it can be
-   loaded or cached.
+   loaded or cached. A record imports exactly the modules its body's
+   `require()` calls name. A compile scans the body for them; a cache hit takes
+   the list from the cached artifact when it carries one, as a compiled
+   document and a byte-cache entry do, and does not parse the body for it.
 
 5. Validates the assembled graph's shape and wiring
    ([`verifyModuleGraph`][c8]). Both verifications belong to the compile path:
@@ -155,14 +158,16 @@ It:
 ### Loading
 
 `lockdown()` runs once: the loader calls [`ensureSESLockdown`][c10], which
-delegates to the idempotent [`ensureSESInitialized`][c10]. [`loadModuleGraph`][c6]
-creates one `Compartment` per load, freezes its global bindings, and drives the
-entry with `compartment.importNow(entrySpecifier)`. Its `verify` option runs
-[`verifyModuleGraph`][c8] and defaults to **on**, so a graph assembled outside
-the Engine cannot load unchecked; the Engine passes `verify: false` because it
-already ran the check while compiling. Because every reachable record is
-registered in the compartment's `importNowHook` up front, no asynchronous import
-occurs at run time, preserving the scheduler's synchronous-execution contract.
+delegates to the idempotent [`ensureSESInitialized`][c10]. [`openModuleGraph`][c6]
+creates one `Compartment` per load, freezes its global bindings, and returns the
+modules to import in order. [`loadModuleGraph`][c6] imports them in one stretch;
+the Engine imports them one at a time, so it can yield between them. The loader's
+`verify` option runs [`verifyModuleGraph`][c8] and defaults to **on**, so a graph
+assembled outside the Engine cannot load unchecked; the Engine passes
+`verify: false` because it already ran the check while compiling. Because every
+reachable record is registered in the compartment's `importNowHook` up front, no
+asynchronous import occurs at run time, preserving the scheduler's
+synchronous-execution contract.
 Trusted runtime modules are ordinary records in the same graph under
 `cf:runtime/<specifier>` ([`runtimeModuleRecords`][c6]); endowment and hardening
 are unchanged. Exactly four specifiers are admitted —
@@ -180,6 +185,30 @@ Records are SES *virtual* (third-party) records — `{ imports, exports, execute
 `ModuleSource`/`StaticModuleRecord` constructor. Import cycles resolve through
 lazy `compartment.importNow` inside `execute`.
 
+### Evaluation order
+
+A compiled body evaluates each import as it reaches that import's `require`,
+nested inside its own evaluation, and a record's `imports` lists those in the
+order the body reaches them. So a depth-first walk of `imports`, listing each
+module after its imports, finishes modules in the order that importing the entry
+alone finishes them, and each body then finds its imports already evaluated. That
+walk is the order [`openModuleGraph`][c6] returns, and it lets a graph evaluate
+one module at a time. A module's own evaluation stays one synchronous stretch.
+
+- Code a body runs ahead of an `import` statement runs after that import, which
+  is the order ES modules give it.
+- A cycle is listed by the one module the walk entered it through, and everything
+  the walk first reached through that module evaluates nested inside it, in one
+  stretch. Which module of a cycle sees another's exports half-populated depends
+  on which evaluates first and on when each `require` is reached.
+
+The Engine evaluates a graph under one module-evaluation frame, which is on the
+frame stack only while a module runs. A cell holds the frame it was made under,
+so the modules of a graph share it; other runtimes read the same stack during a
+yield, so it is not left there. Where an engine interleaves its compiles
+(`EngineOptions.interleaveCompile`) it takes a macrotask turn ahead of each
+authored module, and elsewhere those yields are microtask completions.
+
 ### Identity flow into action identity
 
 - [`Engine.#recordModuleProvenance`][c1] records each emitted module's identity
@@ -187,7 +216,7 @@ lazy `compartment.importNow` inside `execute`.
   the authored position the compiler recorded for it in that module's
   builder-source-site sidecar.
 - The scheduler's durable implementation fingerprint is stamped from that
-  provenance at action creation (`applyImplementationHash`, `packages/runner/src/runner.ts`)
+  provenance at action creation (`applyImplementationHash`, `runtime/runner/src/runner.ts`)
   and read back by [`schedulerImplementationFingerprint`][c12]. It is a content
   hash, not a source location: `.src` is served lazily from the debug-only
   [`authored-debug-source`][c16] map, through accessors
@@ -270,7 +299,7 @@ order, which is exactly the bottom-up order the Merkle hash needs.
 
 **Import-edge completeness.** Every `import`, `import type`, `export … from`, and
 inline `import("./mod").Type` edge is collected
-([`collectImportSpecifiers`][c5]); there is no value/type filtering and no
+([`scanModuleDeclarations`][c5]); there is no value/type filtering and no
 dependence on emit elision. `export * from` barrel edges are counted as ordinary
 edges, so a barrel does not collapse distinct modules into one hash. Missing a
 type edge would silently treat a behavior-changing type edit as a no-op, which is
@@ -281,22 +310,25 @@ The executable runtime fingerprint comes from one authoritative provider,
 `getExecutableRuntimeFingerprint()`. Its version-1 value is a domain-separated
 hash with the tag `cf/executable-runtime-fingerprint/v1`. The hash includes:
 
-- the value returned by [`getCompileCacheRuntimeVersion()`][c14];
+- the compiler-input fingerprint (`computeCompilerFingerprint()` in
+  `compiler-fingerprint.deno.ts`);
 - [`schedulerRuntimeFingerprint()`][c12];
 - an automatically generated catalog hash of the implementations and export
   surfaces of every pattern-facing runtime module; and
 - an automatically generated catalog hash of the sandbox and execution-policy
   inputs that can change pattern behavior.
 
-The existing compile-cache runtime version intentionally hashes a broad set of
-compiler, transformer, schema, harness, sandbox, API, compiler-option, and
-dependency inputs. Version 1 uses that value as a mandatory input even though it
-can over-invalidate executable identities. A later design may split
-representation-only cache inputs from executable semantics. Such a split may
-roll `runtimeVersion` alone only for an input proven unable to affect compiled
-behavior. A compiler, transformer, generated-schema, runtime-module, sandbox,
-execution-policy, or scheduler-semantics change must roll the executable runtime
-fingerprint.
+The compiler-input fingerprint intentionally hashes a broad set of compiler,
+transformer, schema, harness, sandbox, API, compiler-option, and dependency
+inputs. Version 1 uses that value as a mandatory input even though it can
+over-invalidate executable identities. It is deliberately not the compile-cache
+`runtimeVersion` a built artifact carries, which
+[`getCompileCacheRuntimeVersion()`][c14] resolves: that version is a hash of
+what the compiler emits for a fixed corpus, so it stays put across a compiler
+change that compiles the corpus to the same documents, and a cache keyed by it survives such a
+change while the executable fingerprint still rolls. A compiler, transformer,
+generated-schema, runtime-module, sandbox, execution-policy, or
+scheduler-semantics change must roll the executable runtime fingerprint.
 
 The provider and its input catalogs are required production work. Once the
 provider is enabled, inability to calculate its value fails closed. The empty
@@ -408,7 +440,7 @@ never be trusted against changed code. The reference machinery that carries
 [content-addressed-action-identity.md](content-addressed-action-identity.md).
 
 The instance binding hash computed in `schedulerJavaScriptActionName` /
-`schedulerRawActionName` (`packages/runner/src/runner.ts`, over process cell +
+`schedulerRawActionName` (`runtime/runner/src/runner.ts`, over process cell +
 read/write links) is orthogonal: it distinguishes multiple instances of the same
 implementation. Identity is the pair
 *(implementation hash, instance binding hash)*.
@@ -428,7 +460,7 @@ or inline `import("cf:…").Type` reference cannot remain mutable in deployed
 source. If it could, a later type change could alter generated schemas and
 executable behavior without changing the importing pattern's stored source. The
 current `rewriteFabricPins` visitor already rewrites import declarations, export
-declarations, and inline import-type nodes. [`collectImportSpecifiers`][c5]
+declarations, and inline import-type nodes. [`scanModuleDeclarations`][c5]
 already includes these edges in module identity. Automatic piece deployment still
 uses an ordinary local resolver before invoking the rewriter. It therefore
 rejects every fabric import or export declaration at that stage, including an
@@ -459,9 +491,9 @@ inputs also require the integration described in
    no filename namespace is needed and there is no synthetic `/index.ts`.
 
 3. **Synchronous load.** Every reachable record is registered in the
-   compartment's module map before execution, and the entry is driven with
-   `compartment.importNow(entrySpecifier)` ([`loadModuleGraph`][c6]), so no
-   asynchronous import occurs at run time.
+   compartment's module map before execution, and each module is driven with
+   `compartment.importNow` ([`openModuleGraph`][c6]), so no asynchronous import
+   occurs at run time.
 
 4. **Runtime modules as records.** The four admitted runtime specifiers are
    records in the same graph ([`runtimeModuleRecords`][c6]), each copying the
@@ -509,12 +541,30 @@ linked data:
    check, so no separate label is needed.
 2. **Compiled set — `compileCache:<runtimeVersion>/<identity>`.** Compiled and
    verified JS, keyed by `(runtimeVersion, identity)` ([`compiledDocKey`][c14]).
-   Under the version-1 executable-fingerprint rule, the existing broad
-   compiler-input fingerprint rolls both `runtimeVersion` and
-   `runtimeFingerprint`. That creates a new executable identity for an affected
-   module and writes a new source set. A future representation-only cache change
-   may roll `runtimeVersion` alone only after the fingerprint inputs distinguish
-   it from executable semantics.
+   `runtimeVersion` is the compile-cache version
+   [`getCompileCacheRuntimeVersion()`][c14] resolves. A built artifact — a
+   binary or the worker bundle — carries a version that is a hash of what its
+   compiler emits for a fixed corpus (each compiled document's body, stored
+   fields and import edges), under every persisted cache variant, computed by
+   the build and baked in (`compile-cache-output-version.deno.ts`). A Deno
+   source run takes the compiler-input fingerprint instead, unless its tree
+   records the output version for itself: `deno task compile-cache-version
+   --memo` writes it to a file git ignores, beside a fingerprint of everything
+   it depends on, the compiler inputs and the corpus among them, and a source
+   run takes it only while that fingerprint still matches the tree
+   (`compile-cache-output-memo.deno.ts`). That is how a checkout that runs as
+   it stands, loom's vendored copy of the runtime among them, keeps the output
+   version without a tracked file that could outlive its compiler. A compiler
+   change that compiles the
+   corpus to the same documents keeps a built artifact's `runtimeVersion`, or a
+   memo's, and with it
+   the compiled documents of every construct the corpus exercises; one that
+   moves a byte, or an epoch bump, moves it, and the compiled set misses and
+   recompiles from the source set. A construct the corpus lacks is the
+   version's blind spot, which the corpus's breadth and the epoch answer. Under the version-1
+   executable-fingerprint rule the compiler-input fingerprint rolls
+   `runtimeFingerprint` either way, which creates a new executable identity for
+   an affected module and writes a new source set.
 
 A source or compiled document is written whole, and only when the stored
 document differs. Its `imports` elements are stored inline in the document,
@@ -544,7 +594,7 @@ unrelated legacy and current roots without applying one entry fingerprint to
 every document.
 
 Source and compiled documents share the base shape
-`{ code, filename, imports: [{ specifier, link }], delegatedModuleIdentities? }`.
+`{ code, filename, imports: [{ specifier, link }], roots?: [{ specifier, link }], delegatedModuleIdentities? }`.
 `code` is a sigil link to the content-addressed code document holding the
 module's text, `cid:<taggedHash>` over the string alone, so identical text is
 one document per space however many records or runtime versions name it
@@ -557,25 +607,41 @@ for its identity. Their link sets are different. A source document stores intern
 authored-import links, including links to authored declarations. It omits fabric
 edges so one program's source closure does not absorb another program.
 Synthetic retention links may keep other source roots alive, but they are
-excluded from the identity hash and executable graph traversal. Separately, an
-entry source document stores one identity-only link per member of its source
-package that no import reaches: [`SOURCE_ROOT_SPECIFIER`][c7]
-(`cf:source-root/`) for an attached source entry point such as a test, and
-[`DATA_FILE_SPECIFIER`][c7] (`cf:data-file/`) for an attached data file. Unlike
-a retention link, these participate in the entry module's identity, so changing
-the package changes the revision. Neither resolves a module record. A data
+stored only in `roots`, excluded from the identity hash and authored executable
+graph traversal, and followed only to load the retained closure. Canonical
+writers preserve and union this set without making `imports` additive.
+Separately, a
+source document stores one identity-only link per member of its source package
+that no import reaches and that its module owns: [`SOURCE_ROOT_SPECIFIER`][c7]
+(`cf:source-root/`) for an attached source entry point such as a test, owned
+by the entry, and [`DATA_FILE_SPECIFIER`][c7] (`cf:data-file/`) for an attached
+data file, owned by the module whose `dataFile()` call names it. The entry owns
+a data file that no module's source names, such as one read by a computed path
+([`sourcePackageOwners`][c17] assigns the owners). Unlike a retention
+link, these participate in the owning module's identity, and through it in the
+identity of every module that reaches the owner, so changing the package
+changes the revision. A load entered at a module that reads a data file, by
+its own identity, as a sub-pattern referenced by `{ identity, symbol }` is
+loaded, therefore reaches the file. Whether that module is a program's entry
+or a child of it changes its identity only by what the entry alone owns: the
+program's source roots and the data files no module's source names. Neither
+link resolves a module record. A data
 document is hashed as a leaf over its own bytes and filename rather than through
 a parse of its contents, which is what lets a data file hold bytes that are not
 TypeScript. Both namespaces are reserved against authored imports. The compiled
 set carries the same data documents under `kind: "data"`, with the authored
 bytes as their `code`, so a warm load has everything the pattern needs without
-reading the source set. A compiled
+reading the source set. Cold recovery preserves source-package links on every
+module that owns them, including when the requested pattern is a child of that
+module. Recompilation resolves those attached sources and partitions those data
+files without moving their identity edges to the requested entry. The rebuilt
+compiled closure retains the same ownership for subsequent loads. A compiled
 document stores runtime edges only between emitted modules. It includes fabric
 edges needed by the self-contained compiled closure. The entry compiled
-document also uses synthetic [`ROOT_LINK_SPECIFIER`][c14] (`cf:cache-root/`)
-links to load emitted modules that no runtime edge reaches. Compiled runtime and
-synthetic links only target emitted modules. They never target a declaration
-document.
+document also stores synthetic [`ROOT_LINK_SPECIFIER`][c14]
+(`cf:cache-root/`) edges in `roots` to load emitted modules that no runtime edge
+reaches. Compiled runtime imports and synthetic roots only target emitted
+modules. They never target a declaration document.
 
 `delegatedModuleIdentities` is mutable metadata, excluded from the Merkle
 identity, that records predecessor module hashes whose writer authority the
@@ -612,16 +678,27 @@ skipped on a read only for a full hit whose bodies came from an integrity-gated
 load (`trustedBodies`); a miss or partial hit always re-verifies (see the threat
 model).
 
-### Module update delegation (`piece setsrc`)
+### Module update delegation (`piece setsrc`, and a `system:` release)
 
 `piece setsrc` is the temporary authority handoff while pattern files remain
-local, content-addressed modules. Compilation persists artifacts without
-granting update authority. Setup prepares a proposal from the current and
-candidate entries' verified recursive source closures, matching their modules by
-canonical full authored filename (resolved relative imports meet at the same
-stored path; basenames are never matched). For every unambiguous match, the
-successor inherits the direct predecessor plus the predecessor's cumulative
-delegation list ([`deriveModuleDelegations`][c14]). Each setup attempt pins the
+local, content-addressed modules; an unattended update from a `system:`
+origin — a release the deployment gated, adopted by the source reconciler —
+derives the same handoff, and an update from any other origin derives none.
+Compilation persists artifacts without granting update authority. Setup
+prepares a proposal from the current and candidate entries' verified
+recursive source closures. The two entries match
+each other outright, since the update is what names the one as the other's
+successor. Every other module matches by canonical full authored filename
+(resolved relative imports meet at the same stored path; basenames are never
+matched), and additionally under the root substitution the two entry names
+define: when the entries end the same way, the roots each sits under read as
+the same authored tree grounded at two places — the program the toolshed
+serves under `/api/patterns` and the same checkout supplied from a repository
+root under `/patterns` — and a module matches the previous module
+named by its own name under the previous root. For every unambiguous match,
+the successor inherits the direct predecessor plus the predecessor's
+cumulative delegation list ([`deriveModuleDelegations`][c14]). Each setup
+attempt pins the
 proposal alongside committed authority in its own transaction; ordinary
 transactions cannot observe it. The authority fields commit atomically with the
 source transition. Rejection publishes no proposed authority, while success
@@ -630,14 +707,23 @@ update chain cold-reload-stable.
 
 A source update carrying proposed authority requires an owned setup transaction
 that commits to storage. A serving wave's withdrawable acceptance cannot publish
-runtime authority and is refused at this boundary.
+runtime authority and is refused at this boundary. On a serving runtime the
+served `setsrc` verb's setup transaction therefore commits directly to the
+store, outside the wave, and registers its authority from that verdict
+([`server-pattern-lifecycle.md`](../features/server-pattern-lifecycle.md)).
 
 `piece setsrc --check` compiles and reviews the candidate without saving it or
-repairing the current source's compiled cache. It issues no storage writes and
-creates no module update authority. Verified byte caches and in-memory compiler
-state may be reused by later operations. Normal storage reads can demand
-materialization by an active server executor; preflight does not freeze the
-space or suppress other actors' writes.
+repairing the current source's compiled cache. The review includes the CFC
+schema-envelope merge the setup transaction performs at commit, run in dry run
+over the envelopes stored on the piece's argument document and on the piece's
+own document — the latter only where setup would rewrite the result
+projection, as the commit merges it only then — so a stored `writeAuthorizedBy`
+claim the candidate's schema cannot reconcile with is reported by the check
+rather than by the commit. It issues no storage writes and creates no module
+update authority. Verified byte caches and in-memory compiler state may be
+reused by later operations. Normal storage reads can demand materialization by
+an active server executor; preflight does not freeze the space or suppress
+other actors' writes.
 
 Asynchronous source and compiled closure loads register authority only when the
 transaction carries no uncommitted writes (`tx.hasWrites()` is false). Source
@@ -647,6 +733,20 @@ Loads in a transaction with writes still return the verified closure but do not
 publish its delegation metadata ahead of a commit verdict. Synchronous source
 verification within setup retains transaction reads without registering authority.
 
+A runtime can hold a successor module before another runtime's source update
+grants it a predecessor's authority, and resolving a pattern from memory loads
+no closure. A source update records the pattern it moves a piece to as the
+latest revision of the piece's source history. So when the runner starts a
+piece, or swaps a running one after its pattern pointer moves, and the latest
+revision names the pattern it is about to run, it checks that the runtime
+registers the new pattern's module as inheriting from every other pattern the
+history names. A grant registered for one of them settles nothing about the
+rest, since a later update onto the same successor extends its stored grants
+with that update's own predecessors. If any is missing, the runner first reads
+the new pattern's verified source closure in a transaction without writes,
+which registers whatever delegation that closure durably carries. The start or
+swap proceeds once the read settles, whether or not it added a grant.
+
 Registration and transitive closure are scoped by the space carrying that
 attestation. Each transaction snapshots the resulting per-space maps, and
 `writeAuthorizedBy` consults only the map for the target document's space. It may
@@ -655,10 +755,13 @@ snapshot, while its binding path must still match exactly. Delegation metadata
 loaded from another space grants no authority. Source and compiled closure loaders
 reject a cache graph containing any cross-space import link, so a child document's
 local attestation cannot be flattened into the root's space. Source-file spelling
-is diagnostic at verification because it is resolver-dependent; a rename still
-receives no delegation because old and new modules no longer match by canonical
-authored filename. Ambiguous canonical filenames and unauthenticated metadata
-fail closed by receiving no delegation. If a runtime-version miss recompiles
+is diagnostic at verification because it is resolver-dependent. A renamed
+entry still succeeds the entry it replaces; a renamed module below the entry
+receives no delegation, because old and new no longer match by canonical
+authored filename under either root. A module with candidates under both its
+own name and the substituted root, one that two successors claim, an
+ambiguous canonical filename, and unauthenticated metadata all fail closed by
+receiving no delegation. If a runtime-version miss recompiles
 from source, the compiled-cache repair carries the authenticated map forward so
 later warm loads retain the same authority chain. Cross-space closure
 replication copies code and imports but omits the origin space's delegation
@@ -690,11 +793,14 @@ helper with a different body is therefore just an ordinary function, and the
 module fails on its call sites. The rules are byte-level and the classifier does
 not interpret a wrapper's payload; load-time enforcement of the module-safe data
 subset is the runtime freezer (`freezeVerifiedPlainData`,
-`packages/runner/src/sandbox/plain-data.ts`; see
+`runtime/runner/src/sandbox/plain-data.ts`; see
 [SES_SANDBOXING_SPEC.md](sandboxing/SES_SANDBOXING_SPEC.md) §4.2.3, §4.2.6).
 
 Write-once module exports neutralize side effects smuggled into an accepted
-wrapper argument, and the transformer emits at most one trailing `__cfReg({ … })`
+wrapper argument. They are sealed once the module body returns, so a function
+the module exported cannot assign an export later, not even one the body left
+`undefined`; otherwise such an export would carry its first caller's value to
+every later caller. The transformer emits at most one trailing `__cfReg({ … })`
 registration call per module — a second is a tampering signal the classifier
 rejects, and only a module whose registration was accepted is granted the real
 registrar.
@@ -732,6 +838,26 @@ cell's contents. The cache is designed around this:
   The compiled document therefore carries a **CFC integrity label**, written with
   the entry (`addIntegrity`) and **required on read** (`requiredIntegrity`). The
   label — not the SES verifier — is the security boundary for cache hits.
+- **A cache document declares no confidentiality policy, and says so.** Both
+  sets are addressed by causes built from the module's content-derived
+  identity, so no pattern names one of these records, and the schemas
+  describing their fields are the two write schemas in `cell-cache.ts`, which
+  declare integrity alone. So the ceiling the §8.12.4 writer-fit check
+  resolves at a cache write is the empty one, and at `enforce-strict` a write
+  carrying any confidentiality clause is a refused commit — which any
+  transaction that both reads labeled data and reaches a cache write takes, a
+  piece's source transition among them. Each cache write therefore records a
+  `runtime.undeclarable-store` marker naming its document
+  (`recordUndeclarablePolicyStore`), and the check skips the ceiling there.
+  The skip is scoped to a join the target's own space produced: where a clause
+  reached the join from another space, the cache write is measured like any
+  other, so a compile cannot carry a foreign space's labeled value into a
+  local record. The write stays a flow-stamp target, so the transaction's join
+  still lands on the record and a later read of a stamped path carries that
+  clause. The module's bytes are unaffected: they live in a `cid:` document,
+  which CFC leaves out of the flow join on both sides, so what a stamp can
+  reach is the compiler's bookkeeping beside them. `cfc-enforcement-matrix.md`
+  §4 carries the reasoning, including where this stops short of spec §18.6.2.
 - **Fail-closed, not fail-hard.** A compiled document with a missing or invalid
   integrity label is treated as a **cache miss** and recompiled from the
   (self-verifying) source set, which re-runs the SES verifier. So the verifier
@@ -762,12 +888,38 @@ cell's contents. The cache is designed around this:
   space (`Factory.inSpace(...)`), the runner replicates the child pattern's
   source + compiled closures into the child's space so the piece is
   independently loadable there (`PatternManager.replicatePatternToSpace`).
+  The replication runs after the run that creates the child, so a served
+  event can reach the child first; it waits for the closure's arrival
+  ([`server-side-execution/events.md`](server-side-execution/events.md)
+  §5).
+  The same replication runs for a load the runner's in-memory artifact
+  index serves: the index is cross-space, so a space whose loads of an
+  identity are all served from it never receives the compiled closure, and
+  compiles cold in its next session. When the runner has written that
+  closure into another space in the same session, such a load copies it
+  into its own space from there; when it compiled the closure in the same
+  session and the write-back was deferred by a preview or failed, the load
+  remains an in-memory hit and writes that retained compile back instead of
+  entering the storage path and compiling again. On a serving runtime a
+  write-back commits when its wave accepts it, and a write-back the wave
+  withdraws at its commit counts as failed: the runner no longer counts that
+  space as holding the closure, neither as a copy's origin nor as a space
+  that needs no copy, and owes it the write a failed write-back is owed.
+  A copy carries the compiled closure under the cache variant it was read
+  under. That is the runtime's own variant, unless the runner wrote the
+  closure into the origin space in the same session under another variant
+  only — a compile given its own coverage collector writes the coverage
+  variant — in which case it is that one. A closure another session wrote
+  into the origin under the coverage variant alone is read under the
+  runtime's own variant, and so is not found there.
   Chain-of-custody holds — compiled docs are read through the integrity-gated
   loader ([`loadCompiledClosure`][c14]; only docs already carrying the compiler
   stamp replicate) and re-stamped on the child-space write by a legitimate
   child-space writer. Module-update authority does not cross that boundary:
   `delegatedModuleIdentities` from the origin is omitted during replication,
-  while any entries already authenticated in the destination are preserved.
+  and a retained compile written back into a space other than the one whose
+  source closure authenticated its delegations carries none of them, while
+  any entries already authenticated in the destination are preserved.
   Note for the server-compilation end state: a client can then no longer stamp
   replicated compiled docs, so child spaces will need server-side replication
   or by-identity source recovery instead.
@@ -859,10 +1011,11 @@ index's restart-stable `action` column,
   integrity label is treated as a miss and recompiled from the self-verifying
   source document; only integrity-valid documents are reused without
   re-verification.
-- A future representation-only compile-cache `runtimeVersion` bump with an
-  unchanged runtime fingerprint misses the compiled set and recompiles while
-  the source set (`pattern:<identity>`) persists. Version 1 treats the current
-  broad compiler-input version as executable and therefore rolls both values.
+- A compile-cache `runtimeVersion` move misses the compiled set and recompiles
+  while the source set (`pattern:<identity>`) persists; a compiler change that
+  emits the same corpus bytes keeps a built artifact's `runtimeVersion`, and
+  the compiled set serves warm loads across it. Version 1 rolls the executable
+  runtime fingerprint on the compiler-input fingerprint either way.
 - A `runtimeFingerprint` bump gives an affected entry module a new executable
   identity and writes a new source set. The prior source set remains retained
   for history. Tests compare the runtime-neutral digest to classify this as a
@@ -870,22 +1023,23 @@ index's restart-stable `action` column,
 
 ## Appendix: Pipeline Reference
 
-[c1]: ../../packages/runner/src/harness/engine.ts
-[c2]: ../../packages/runner/src/harness/pretransform.ts
-[c3]: ../../packages/runner/src/harness/module-identity.ts
-[c4]: ../../packages/js-compiler/typescript/options.ts
-[c5]: ../../packages/js-compiler/typescript/resolver.ts
-[c6]: ../../packages/runner/src/sandbox/esm-module-loader.ts
-[c7]: ../../packages/runner/src/sandbox/module-record-compiler.ts
-[c8]: ../../packages/runner/src/sandbox/module-record-verifier.ts
-[c9]: ../../packages/runner/src/sandbox/compiled-bundle-verifier.ts
-[c10]: ../../packages/runner/src/sandbox/ses-runtime.ts
-[c11]: ../../packages/runner/src/builder/module.ts
-[c12]: ../../packages/runner/src/scheduler/run.ts
-[c13]: ../../packages/data-model/src/value-hash.ts
-[c14]: ../../packages/runner/src/compilation-cache/cell-cache.ts
-[c15]: ../../packages/runner/src/sandbox/runtime-module-policy.ts
-[c16]: ../../packages/runner/src/harness/authored-debug-source.ts
+[c1]: ../../runtime/runner/src/harness/engine.ts
+[c2]: ../../runtime/runner/src/harness/pretransform.ts
+[c3]: ../../runtime/runner/src/harness/module-identity.ts
+[c4]: ../../base/js-compiler/typescript/options.ts
+[c5]: ../../base/js-compiler/typescript/resolver.ts
+[c6]: ../../runtime/runner/src/sandbox/esm-module-loader.ts
+[c7]: ../../runtime/runner/src/sandbox/module-record-compiler.ts
+[c8]: ../../runtime/runner/src/sandbox/module-record-verifier.ts
+[c9]: ../../runtime/runner/src/sandbox/compiled-bundle-verifier.ts
+[c10]: ../../runtime/runner/src/sandbox/ses-runtime.ts
+[c11]: ../../runtime/runner/src/builder/module.ts
+[c12]: ../../runtime/runner/src/scheduler/run.ts
+[c13]: ../../base/data-model/src/value-hash/impl.ts
+[c14]: ../../runtime/runner/src/compilation-cache/cell-cache.ts
+[c15]: ../../runtime/runner/src/sandbox/runtime-module-policy.ts
+[c16]: ../../runtime/runner/src/harness/authored-debug-source.ts
+[c17]: ../../runtime/runner/src/harness/declared-data-files.ts
 
 - Compile and evaluate entry points: [`Engine.compileToRecordGraph`][c1],
   [`Engine.compileResolvedToRecordGraph`][c1],
@@ -897,15 +1051,19 @@ index's restart-stable `action` column,
 - Module identity: [`computeModuleHashes`][c3] and [`resolveModuleImports`][c3],
   with [`findInternalTarget`][c3] deciding what counts as an internal edge, and
   the Engine-facing wrappers [`computeModuleIdentities`][c7] and
-  [`computeFabricModuleIdentities`][c7].
+  [`computeFabricModuleIdentities`][c7]. [`sourcePackageOwners`][c17] assigns
+  each source-package edge to the module that owns it.
 - Emit configuration: [`getCompilerOptions`][c4] / [`MODULE_KIND`][c4].
-- Import-graph discovery, including `export * from` and inline import types:
-  [`collectImportSpecifiers`][c5].
+- Import-graph discovery, including `export * from` and inline import types,
+  and the `dataFile()` reads that decide which module owns a data file's edge:
+  [`scanModuleDeclarations`][c5], one parse per module, shared across a
+  compile through [`scanModules`][c3]. [`collectImportSpecifiers`][c5] and
+  [`collectDataFileNames`][c5] each return one half of that scan.
 - Record assembly and the warm-load rebuild: [`compileSourcesToRecords`][c7],
   [`deriveModuleRecordFields`][c7], [`buildRecordsFromCompiled`][c7].
-- Loading: [`loadModuleGraph`][c6] / [`importModuleGraphNow`][c6] over
-  [`VirtualModuleRecord`][c6]s, with [`runtimeModuleRecords`][c6] supplying the
-  trusted host modules.
+- Loading: [`openModuleGraph`][c6], [`loadModuleGraph`][c6] and
+  [`importModuleGraphNow`][c6] over [`VirtualModuleRecord`][c6]s, with
+  [`runtimeModuleRecords`][c6] supplying the trusted host modules.
 - Runtime-module policy: [`RuntimeModuleIdentifiers`][c15] is the admitted set,
   enforced on the authored side by [`isAllowedAuthoredImportSpecifier`][c15] and
   on the registration side by [`Engine.runtimeModuleNames`][c1].

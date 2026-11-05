@@ -205,9 +205,10 @@ export async function main(
   const base = `${root}/.github`;
   const steps: Step[] = [];
   for await (const path of yamlPaths(base)) {
-    steps.push(
-      ...parseSteps(await Deno.readTextFile(path), path.slice(base.length + 1)),
-    );
+    const text = await Deno.readTextFile(path);
+    for (const step of parseSteps(text, path.slice(base.length + 1))) {
+      steps.push(step);
+    }
   }
 
   // A step naming an action in this repository is already carried by the run

@@ -6,8 +6,8 @@ name: Benchmarks
 # cadence. Scheduled runs stay on the dedicated runner group; use the manual
 # trigger to measure a specific commit.
 #
-# One of the benchmarks drives a browser against a running toolshed; the steps
-# that build and start that server are part of this job for its sake. See
+# The browser benchmarks drive a browser against a running toolshed; the steps
+# that build and start that server are part of this job for their sake. See
 # docs/development/BENCHMARKS.md.
 #
 # The group is not a machine. It has served six processor models over a
@@ -16,7 +16,7 @@ name: Benchmarks
 # share of a host the other tenants leave it. The dashboard draws a separate
 # line per processor model, which tells the models apart but not the hosts. So
 # every run also measures the machine it landed on, through
-# packages/dashboard/machine-calibration.bench.ts below, and the dashboard
+# dashboard/machine-calibration.bench.ts below, and the dashboard
 # divides that measurement out of its trend. Without it a run that landed on a
 # busy host reads on the tile as a code regression.
 on:
@@ -47,6 +47,9 @@ jobs:
         env:
           COMMIT_SHA: ${{ github.sha }}
           EXPERIMENTAL_SERVER_EXECUTION: "false"
+          # A benchmark's binary is not a release: the compiler-input
+          # fingerprint spares it the corpus compile a shipped build pays for.
+          CF_COMPILE_CACHE_VERSION: inputs
 
       - name: 🔌 Start Toolshed server for the browser benchmark
         env:
@@ -88,55 +91,51 @@ jobs:
         run: |
           mkdir -p bench-results
           deno bench --json -A --v8-flags=--expose-gc \
-            packages/runner/test/*.bench.ts \
-            packages/utils/src/cache.bench.ts \
-            packages/utils/test/deep-equal.bench.ts \
-            packages/fuse/entity-projection.bench.ts \
-            packages/memory/test/v2-entity-id-list.bench.ts \
-            packages/data-model/bench/hashing.bench.ts \
-            packages/data-model/bench/codec-json.bench.ts \
-            packages/dashboard/machine-calibration.bench.ts \
-            packages/patterns/integration/topic-board-navigation.bench.ts \
-            packages/patterns/integration/topic-board-scale.bench.ts \
-            packages/patterns/integration/lunch-poll-vote-burst.bench.ts \
-            packages/patterns/integration/lunch-poll-read-scale.bench.ts \
+            runtime/runner/test/*.bench.ts \
+            base/collections/src/cache.bench.ts \
+            base/collections/test/string-tuple-key.bench.ts \
+            base/js-values/test/deep-equal.bench.ts \
+            runtime/fuse/entity-projection.bench.ts \
+            runtime/memory/test/v2-entity-id-list.bench.ts \
+            runtime/memory/test/v2-cached-patch-replay.bench.ts \
+            runtime/memory/test/v2-engine-read.bench.ts \
+            runtime/memory/test/v2-path.bench.ts \
+            runtime/memory/test/v2-refresh-schema-closure.bench.ts \
+            runtime/memory/test/v2-query-coverage.bench.ts \
+            runtime/memory/test/v2-query-churn.bench.ts \
+            base/data-model/bench/hashing.bench.ts \
+            base/data-model/bench/codec-json.bench.ts \
+            runtime/piece/test/piece-cold-runtime.bench.ts \
+            dashboard/machine-calibration.bench.ts \
+            patterns/integration/topic-board-navigation.bench.ts \
+            patterns/integration/topic-board-scale.bench.ts \
+            patterns/integration/lunch-poll-vote-burst.bench.ts \
+            patterns/integration/lunch-poll-read-scale.bench.ts \
+            patterns/integration/fabrichat-room.bench.ts \
+            patterns/integration/fabrichat-room-scale.bench.ts \
+            patterns/integration/fabrichat-send-burst.bench.ts \
+            patterns/integration/piece-grid-stopped.bench.ts \
             > bench-results/results.json \
             2> >(tee bench-results/diagnostics.log >&2)
 
-      # Fail the run if any bench file wrote non-JSON to stdout, if the report
-      # lists no benches, or if it carries no machine calibration. Failing here
-      # makes each of those a visible red run. It does not keep the artifact
-      # out of the charts, because the dashboard reads a red run's artifact
-      # too: what it drops is an artifact it cannot parse, which is this same
-      # test applied on its side. A report without calibration is not corrupt,
-      # but the dashboard cannot tell a busy host from a code change in it, so
-      # it fails here rather than feeding an uncorrected run into the trend.
-      # The script rides in a single-quoted shell argument — keep apostrophes
-      # out of it.
+      # Fail the run when stdout carried anything besides the report, or when
+      # the report is missing something the dashboard needs from it: the
+      # processor identity, product measurements, the machine calibration, or
+      # the two series the key benchmarks tile trends. Failing here makes each
+      # of those a visible red run. It does not keep the artifact out of the
+      # charts, because the dashboard reads a red run's artifact too. What the
+      # dashboard does with a report missing one of these differs by which one:
+      # a report that does not parse or names no processor is dropped whole, a
+      # report without calibration is charted uncorrected, and measurements the
+      # key tile selects by name are simply absent from it. None of that is a
+      # corrupt report, but a chart that quietly thins says nothing about when
+      # it started, so the run that produced one fails here instead. The checks
+      # live in dashboard/bench-report.ts, beside the code that reads
+      # the report, so the two cannot drift apart.
       - name: ✅ Validate benchmark results
-        run: |
-          deno eval '
-            const data = JSON.parse(
-              Deno.readTextFileSync("bench-results/results.json"),
-            );
-            if (!Array.isArray(data.benches) || data.benches.length === 0) {
-              throw new Error("results.json parsed but contains no benches");
-            }
-            const calibration = data.benches.filter((bench) =>
-              String(bench.origin ?? "").endsWith(
-                "/packages/dashboard/machine-calibration.bench.ts",
-              )
-            );
-            if (calibration.length === 0) {
-              throw new Error(
-                "results.json carries no machine-calibration benches",
-              );
-            }
-            console.log(
-              `results.json OK: ${data.benches.length} benches, ` +
-                `${calibration.length} of them machine calibration`,
-            );
-          '
+        run: >
+          deno run --allow-read tasks/check-bench-report.ts
+          bench-results/results.json
 
       - name: 📤 Upload benchmark results
         if: always()

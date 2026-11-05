@@ -1,0 +1,272 @@
+{
+  "runtimeHeads": {
+    "e059": "e059494c4599d344f59caabddfc87b588937c3dc",
+    "83ee": "83ee6cf73f3b8ab9cd7fccd2d12bee09c518a15b"
+  },
+  "captures": [
+    {
+      "raw": "serving-83ee.jsonl",
+      "artifactDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/captured-serving-83ee-01",
+      "manifest": {
+        "kind": "mechanism-probe",
+        "head": "83ee6cf73f3b8ab9cd7fccd2d12bee09c518a15b",
+        "sourceHashes": {
+          "seed-check.ts": "a30aecd7deb5826addc1360f341ea598ceb96786bc17bc20bf4f8ffd9df43d52",
+          "sidecar-probe.ts": "b657a58f1a0ea7318e325c331e0f4f73548d7ecbd6e82f298e011f766d04e4c2",
+          "capture-probe.ts": "797f39a7c67cd98a5dfedd80666c91a52a8717bdc7f8b40e8eedc1fb21c5ccbf",
+          "watch-probe.ts": "85ca2a4b3ca874412d410aa2043c2c92c808ec54b3ff3d3775776ccf4dac9b43",
+          "run-arm.ts": "9c08524929d04cc482562fcbf117d5db1bf526fef849ea72dc7b0bf15e6943de",
+          "event-visibility-probe.ts": "fedcab5e94e8a5882c027a2b2f9907e2b3de41e04dbd554e5c6ebe8fff46136c",
+          "serving-probe.ts": "42122d2c5d53aee9d61a5f5fb31d284a4a34e7a3a95d04249a98b71aaed51238"
+        },
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "machine": {
+          "target": "aarch64-apple-darwin",
+          "arch": "aarch64",
+          "os": "darwin",
+          "vendor": "apple",
+          "standalone": false,
+          "logicalCpus": 16,
+          "memory": 137438953472
+        },
+        "command": [
+          "/Users/berni/.local/bin/deno",
+          "run",
+          "-A",
+          "tools/server-execution-topics/serving-probe.ts"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/d3f2/labs",
+        "flags": {
+          "CF_LOG_LEVEL": "silent"
+        },
+        "cache": "fresh in-memory stores; existing Deno dependency cache",
+        "started": "2026-09-10T05:11:39.627Z",
+        "loadAtStart": [
+          6.19580078125,
+          11.73974609375,
+          12.740234375
+        ],
+        "status": "passed",
+        "resultSha256": "91d6afb58002794866f375032180ae35fe34ec537446731e9fc2cd77b2e53c16",
+        "stderrSha256": "45f339016020312701124f9880e38fc6e2c8e54f47cfbaf6c537d0689d6790cb",
+        "exitCode": 0,
+        "finished": "2026-09-10T05:11:40.223Z",
+        "loadAtEnd": [
+          6.19580078125,
+          11.73974609375,
+          12.740234375
+        ]
+      }
+    },
+    {
+      "raw": "event-visibility-83ee.jsonl",
+      "artifactDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/captured-event-83ee-01",
+      "manifest": {
+        "kind": "mechanism-probe",
+        "head": "83ee6cf73f3b8ab9cd7fccd2d12bee09c518a15b",
+        "sourceHashes": {
+          "seed-check.ts": "a30aecd7deb5826addc1360f341ea598ceb96786bc17bc20bf4f8ffd9df43d52",
+          "sidecar-probe.ts": "b657a58f1a0ea7318e325c331e0f4f73548d7ecbd6e82f298e011f766d04e4c2",
+          "capture-probe.ts": "797f39a7c67cd98a5dfedd80666c91a52a8717bdc7f8b40e8eedc1fb21c5ccbf",
+          "watch-probe.ts": "85ca2a4b3ca874412d410aa2043c2c92c808ec54b3ff3d3775776ccf4dac9b43",
+          "run-arm.ts": "9c08524929d04cc482562fcbf117d5db1bf526fef849ea72dc7b0bf15e6943de",
+          "event-visibility-probe.ts": "fedcab5e94e8a5882c027a2b2f9907e2b3de41e04dbd554e5c6ebe8fff46136c",
+          "serving-probe.ts": "42122d2c5d53aee9d61a5f5fb31d284a4a34e7a3a95d04249a98b71aaed51238"
+        },
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "machine": {
+          "target": "aarch64-apple-darwin",
+          "arch": "aarch64",
+          "os": "darwin",
+          "vendor": "apple",
+          "standalone": false,
+          "logicalCpus": 16,
+          "memory": 137438953472
+        },
+        "command": [
+          "/Users/berni/.local/bin/deno",
+          "run",
+          "-A",
+          "tools/server-execution-topics/event-visibility-probe.ts"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/d3f2/labs",
+        "flags": {
+          "CF_LOG_LEVEL": "silent"
+        },
+        "cache": "fresh in-memory stores; existing Deno dependency cache",
+        "started": "2026-09-10T05:11:40.362Z",
+        "loadAtStart": [
+          6.19580078125,
+          11.73974609375,
+          12.740234375
+        ],
+        "status": "passed",
+        "resultSha256": "1ac87760e7b4a216052f0f1efdf0ce6a6143dfc59e193df8bd1ba05adf8dc225",
+        "stderrSha256": "45f339016020312701124f9880e38fc6e2c8e54f47cfbaf6c537d0689d6790cb",
+        "exitCode": 0,
+        "finished": "2026-09-10T05:11:40.894Z",
+        "loadAtEnd": [
+          6.19580078125,
+          11.73974609375,
+          12.740234375
+        ]
+      }
+    },
+    {
+      "raw": "sidecar-83ee.jsonl",
+      "artifactDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/captured-sidecar-83ee-02",
+      "manifest": {
+        "kind": "mechanism-probe",
+        "head": "83ee6cf73f3b8ab9cd7fccd2d12bee09c518a15b",
+        "sourceHashes": {
+          "seed-check.ts": "a30aecd7deb5826addc1360f341ea598ceb96786bc17bc20bf4f8ffd9df43d52",
+          "sidecar-probe.ts": "ba834d2760519389947855e2f55112f2701a1c8d6b578fa120d1b3a0386dd840",
+          "capture-probe.ts": "797f39a7c67cd98a5dfedd80666c91a52a8717bdc7f8b40e8eedc1fb21c5ccbf",
+          "watch-probe.ts": "85ca2a4b3ca874412d410aa2043c2c92c808ec54b3ff3d3775776ccf4dac9b43",
+          "run-arm.ts": "9a27c35b0f0d00b636d9ba188a65f7c38c318f28652009acb8eba87b20d0e0b8",
+          "event-visibility-probe.ts": "fedcab5e94e8a5882c027a2b2f9907e2b3de41e04dbd554e5c6ebe8fff46136c",
+          "serving-probe.ts": "42122d2c5d53aee9d61a5f5fb31d284a4a34e7a3a95d04249a98b71aaed51238"
+        },
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "machine": {
+          "target": "aarch64-apple-darwin",
+          "arch": "aarch64",
+          "os": "darwin",
+          "vendor": "apple",
+          "standalone": false,
+          "logicalCpus": 16,
+          "memory": 137438953472
+        },
+        "command": [
+          "/Users/berni/.local/bin/deno",
+          "run",
+          "-A",
+          "tools/server-execution-topics/sidecar-probe.ts"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/d3f2/labs",
+        "flags": {
+          "CF_LOG_LEVEL": "silent"
+        },
+        "cache": "fresh in-memory stores; existing Deno dependency cache",
+        "started": "2026-09-10T05:18:12.663Z",
+        "loadAtStart": [
+          53.8037109375,
+          23.6806640625,
+          16.67138671875
+        ],
+        "status": "passed",
+        "resultSha256": "332ae21cac6e475ad7d26736e0c9c73cd74666bd8147aeb1a87abdd2b4133e68",
+        "stderrSha256": "4a91efb3ec8c58edfe4fe659ddfcf73f1ec7120a15dae797182d75b97e30e4bf",
+        "exitCode": 0,
+        "finished": "2026-09-10T05:18:18.342Z",
+        "loadAtEnd": [
+          52.6982421875,
+          23.951171875,
+          16.8076171875
+        ]
+      }
+    },
+    {
+      "raw": "watch-83ee.jsonl",
+      "artifactDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/captured-watch-83ee-01",
+      "manifest": {
+        "kind": "mechanism-probe",
+        "head": "83ee6cf73f3b8ab9cd7fccd2d12bee09c518a15b",
+        "sourceHashes": {
+          "seed-check.ts": "a30aecd7deb5826addc1360f341ea598ceb96786bc17bc20bf4f8ffd9df43d52",
+          "sidecar-probe.ts": "b657a58f1a0ea7318e325c331e0f4f73548d7ecbd6e82f298e011f766d04e4c2",
+          "capture-probe.ts": "797f39a7c67cd98a5dfedd80666c91a52a8717bdc7f8b40e8eedc1fb21c5ccbf",
+          "watch-probe.ts": "85ca2a4b3ca874412d410aa2043c2c92c808ec54b3ff3d3775776ccf4dac9b43",
+          "run-arm.ts": "9c08524929d04cc482562fcbf117d5db1bf526fef849ea72dc7b0bf15e6943de",
+          "event-visibility-probe.ts": "fedcab5e94e8a5882c027a2b2f9907e2b3de41e04dbd554e5c6ebe8fff46136c",
+          "serving-probe.ts": "42122d2c5d53aee9d61a5f5fb31d284a4a34e7a3a95d04249a98b71aaed51238"
+        },
+        "runtime": {
+          "deno": "2.9.4",
+          "v8": "15.0.245.2-rusty",
+          "typescript": "6.0.3"
+        },
+        "machine": {
+          "target": "aarch64-apple-darwin",
+          "arch": "aarch64",
+          "os": "darwin",
+          "vendor": "apple",
+          "standalone": false,
+          "logicalCpus": 16,
+          "memory": 137438953472
+        },
+        "command": [
+          "/Users/berni/.local/bin/deno",
+          "run",
+          "-A",
+          "tools/server-execution-topics/watch-probe.ts",
+          "100",
+          "1000",
+          "10000"
+        ],
+        "cwd": "/Users/berni/.codex/worktrees/d3f2/labs",
+        "flags": {
+          "CF_LOG_LEVEL": "silent"
+        },
+        "cache": "fresh in-memory stores; existing Deno dependency cache",
+        "started": "2026-09-10T05:11:43.183Z",
+        "loadAtStart": [
+          6.1796875,
+          11.64404296875,
+          12.70068359375
+        ],
+        "status": "passed",
+        "resultSha256": "792a163cb8ab441cfd416e40a781bbd053250f3f4e90e6449b6d69087bdd690c",
+        "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exitCode": 0,
+        "finished": "2026-09-10T05:11:49.008Z",
+        "loadAtEnd": [
+          6.1650390625,
+          11.55029296875,
+          12.6611328125
+        ]
+      }
+    },
+    {
+      "raw": "watch-e059.jsonl",
+      "head": "e059494c4599d344f59caabddfc87b588937c3dc",
+      "sourceSnapshot": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/watch-probe-02/watch-probe.ts",
+      "probeSha256": "85ca2a4b3ca874412d410aa2043c2c92c808ec54b3ff3d3775776ccf4dac9b43",
+      "resultSha256": "792a163cb8ab441cfd416e40a781bbd053250f3f4e90e6449b6d69087bdd690c",
+      "runtime": {
+        "deno": "2.9.4",
+        "v8": "15.0.245.2-rusty",
+        "typescript": "6.0.3"
+      },
+      "command": [
+        "deno",
+        "run",
+        "-A",
+        "tools/server-execution-topics/watch-probe.ts",
+        "100",
+        "1000",
+        "10000"
+      ],
+      "flags": "not independently captured for this initial run; the 83ee capture includes flags and reproduces the counts",
+      "status": "provisional mechanism observation"
+    }
+  ],
+  "legacySeedRuns": {
+    "raw": "seed-e059.json",
+    "artifactRoot": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs",
+    "buildProvenance": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/metadata/binary-builds-e059.json",
+    "limit": "No embedded Git SHA in those binaries; recorded build invocation and binary hash identify them."
+  }
+}

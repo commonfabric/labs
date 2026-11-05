@@ -16,20 +16,20 @@ from a cell's mere local residency.
 **Implementation map (all four stages landed):**
 
 - **Stage 1 — capability resolver:** `spaceReaderRole` in
-  [space-membership.ts](../../../packages/runner/src/cfc/space-membership.ts),
+  [space-membership.ts](../../../runtime/runner/src/cfc/space-membership.ts),
   tested in `packages/runner/test/cfc-space-membership.test.ts`.
 - **Stage 2 — provider + per-label discovery:**
   `createRuntimeSpaceMembershipProvider` (sync `readerRole` + change-only
   `subscribe`) in the same file, and `spaceAtomIdsInConfidentiality` +
   per-label mint in
-  [render-ceiling.ts](../../../packages/runner/src/cfc/render-ceiling.ts), tested
+  [render-ceiling.ts](../../../runtime/runner/src/cfc/render-ceiling.ts), tested
   in `cfc-space-membership.test.ts` and `cfc-render-ceiling.test.ts`.
 - **Stage 3 — wiring:** `renderConfidentialityResolverFor` /
   `renderMembershipProviderFor` in
   [runtime-processor.ts](../../../packages/runtime-client/backends/runtime-processor.ts),
   tested in `runtime-processor.test.ts`.
 - **Stage 4 — reactive re-render:** the worker
-  [reconciler](../../../packages/html/src/worker/reconciler.ts) subscribes a gated
+  [reconciler](../../../runtime/html/src/worker/reconciler.ts) subscribes a gated
   `Space(X)` cell to X's ACL doc within its cancel group and re-evaluates the
   gate on change (`renderCellChild`), tested in
   `packages/html/test/worker-reconciler-cfc-render-policy.test.ts`. Reused the
@@ -63,20 +63,20 @@ membership, never infer it from the fact that a cell is locally resident.
   `ACL = { [DID | "*"]: "READ" | "WRITE" | "OWNER" }`
   ([memory/interface.ts], helpers `isACL` / `isCapable` / `ANYONE_USER` in
   [memory/acl.ts]). Server resolution
-  ([server.ts `#resolveCapability`](../../../packages/memory/v2/server.ts)):
+  ([server.ts `#resolveCapability`](../../../runtime/memory/v2/server.ts)):
   implicit `OWNER` if `principal === space` or a service DID; else
   `acl[principal] ?? acl["*"] ?? null`; missing/malformed → `null` (fail
   closed). Capability order `READ(0) < WRITE(1) < OWNER(2)`.
-- **A client reader.** [`ACLManager`](../../../packages/runner/src/acl-manager.ts)
+- **A client reader.** [`ACLManager`](../../../runtime/runner/src/acl-manager.ts)
   already reads that doc from the worker via
   `getCellFromLink({ id: spaceDid, path: [], space: spaceDid })` (its `.get()`
   is async — awaits `sync()`).
 - **A sync-read + background-sync primitive.**
-  [`Cell.get()`](../../../packages/runner/src/cell.ts) reads the local value
+  [`Cell.get()`](../../../runtime/runner/src/cell.ts) reads the local value
   synchronously and, when not yet synced, kicks a background sync
   (`if (!this.synced) this.sync(); // No await`).
 - **The exchange rule.** `space-reader-access-display` in
-  [render-ceiling.ts](../../../packages/runner/src/cfc/render-ceiling.ts)
+  [render-ceiling.ts](../../../runtime/runner/src/cfc/render-ceiling.ts)
   (`Space($s)` + `HasRole($p,$s,reader)` under a display boundary → add
   `User($p)`), formalized as `exchangeSpaceReader` in
   `~/src/specs/cfc/formal/Cfc/Exchange.lean`.

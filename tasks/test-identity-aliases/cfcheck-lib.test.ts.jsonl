@@ -1,0 +1,3 @@
+{"date":"2026-09-22","from":{"k":"unit","s":"tasks","n":"cfcheck-lib > selectionFor() > takes the whole corpus given neither"},"to":{"k":"unit","s":"tasks","n":"cfcheck-lib > selectionFor() > takes the whole corpus given no term"}}
+{"date":"2026-09-22","from":{"k":"unit","s":"tasks","n":"cfcheck-lib > selectionFor() > throws rather than widening, for either one it cannot read"},"to":{"k":"unit","s":"tasks","n":"cfcheck-lib > selectionFor() > throws rather than widening, for a command line it cannot read"}}
+{"date":"2026-09-22","from":{"k":"unit","s":"tasks","n":"cfcheck-lib > USAGE > names both the flag and the environment variable"},"to":{"k":"unit","s":"tasks","n":"cfcheck-lib > USAGE > names the flag"}}

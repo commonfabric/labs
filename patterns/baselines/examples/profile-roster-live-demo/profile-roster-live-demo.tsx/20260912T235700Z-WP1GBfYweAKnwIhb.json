@@ -1,0 +1,177 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Participant": {
+        "properties": {
+          "joinedAt": {
+            "type": "number"
+          },
+          "name": {
+            "description": "Display name, snapshotted at join time (durable label; survives even if the live cell is momentarily unresolved on first render).",
+            "type": "string"
+          },
+          "profile": {
+            "asCell": [
+              "cell"
+            ],
+            "description": "Live link to the contributor's profile cell — stable identity + live data.",
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "bio": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "profile",
+          "name",
+          "joinedAt"
+        ],
+        "type": "object"
+      },
+      "Roster": {
+        "properties": {
+          "participants": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Participant"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "participants"
+        ],
+        "type": "object"
+      },
+      "ViewerState": {
+        "properties": {
+          "joined": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "roster": {
+        "$ref": "#/$defs/Roster",
+        "default": {
+          "participants": []
+        },
+        "scope": "space"
+      },
+      "viewer": {
+        "$ref": "#/$defs/ViewerState",
+        "default": {},
+        "scope": "user"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "profile-roster-live-demo.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Participant": {
+        "properties": {
+          "joinedAt": {
+            "type": "number"
+          },
+          "name": {
+            "description": "Display name, snapshotted at join time (durable label; survives even if the live cell is momentarily unresolved on first render).",
+            "type": "string"
+          },
+          "profile": {
+            "description": "Live link to the contributor's profile cell — stable identity + live data.",
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "bio": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "profile",
+          "name",
+          "joinedAt"
+        ],
+        "type": "object"
+      },
+      "Roster": {
+        "properties": {
+          "participants": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Participant"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "participants"
+        ],
+        "type": "object"
+      },
+      "ViewerState": {
+        "properties": {
+          "joined": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "join": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "participantCount": {
+        "type": "number"
+      },
+      "roster": {
+        "$ref": "#/$defs/Roster",
+        "default": {
+          "participants": []
+        },
+        "scope": "space"
+      },
+      "viewer": {
+        "$ref": "#/$defs/ViewerState",
+        "default": {},
+        "scope": "user"
+      }
+    },
+    "required": [
+      "roster",
+      "viewer",
+      "participantCount",
+      "join",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "started": "2026-09-10T17:47:12.644260+00:00",
+  "base": "0c7a1bd950c88fadb10d109f89c5a306442fed9d",
+  "buildRoot": "../../../../..",
+  "posture": "review cancellation patch over recorded head; production hashes identify compiled source",
+  "productionFiles": {
+    "packages/runner/src/ensure-piece-running.ts": "3a1fb1e4de6625ae1694c65140d4fb6c96a79315bf04aeab2b319d397de3db1e",
+    "packages/runner/src/executor/space-server.ts": "143f30a0d639ba5398ac88bc172f2135c9edee786c01c2b90538ee5b158a0f10",
+    "packages/runner/src/executor/stats.ts": "98eb0312c0dd1fffc87c3bfa168db8ab33aaf1c41210fc29402c31b48457b2fb",
+    "packages/runner/src/storage/interface.ts": "cdaf2575c0c88a030376dabc151a71079d08ec6d89eb5187eae41e6bf3447fef"
+  },
+  "binaries": [
+    {
+      "role": "default",
+      "command": [
+        "env",
+        "-u",
+        "EXPERIMENTAL_SERVER_EXECUTION",
+        "COMMIT_SHA=0c7a1bd950c88fadb10d109f89c5a306442fed9d",
+        "deno",
+        "task",
+        "build-binaries",
+        "toolshed"
+      ],
+      "exitCode": 0,
+      "path": ".ci-cache/binaries/toolshed-baked-default",
+      "sha256": "abb00325a9502090de35342b9a74ee70a59d151cce87f97493f2220f9f1c6464"
+    },
+    {
+      "role": "opposite",
+      "command": [
+        "env",
+        "EXPERIMENTAL_SERVER_EXECUTION=true",
+        "COMMIT_SHA=0c7a1bd950c88fadb10d109f89c5a306442fed9d",
+        "deno",
+        "task",
+        "build-binaries",
+        "toolshed"
+      ],
+      "exitCode": 0,
+      "path": ".ci-cache/binaries/toolshed-baked-opposite",
+      "sha256": "60f8f64eb14fd9bfd666b9757cbc420e9b86b14326b0490c80e54fc2cb522d66"
+    }
+  ],
+  "captureProvenance": "External campaign metadata/terminal-review-builds.json",
+  "pathBasis": "buildRoot is relative to this review-followup directory; binary paths are relative to buildRoot"
+}

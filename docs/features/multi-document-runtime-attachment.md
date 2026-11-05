@@ -26,7 +26,7 @@ attachment preserves it rather than adding per-document isolation.
 ## What a client owns, and what it shares
 
 A **client** is one document's end of the worker's IPC.
-[`WorkerClient`](../../packages/runtime-client/src/backends/worker-client.ts)
+[`WorkerClient`](../../runtime/runtime-client/src/backends/worker-client.ts)
 is where a message addressed to it goes, plus the id everything it owns is
 filed under.
 
@@ -64,7 +64,7 @@ first, so two spellings of one origin are one posture and do not refuse each
 other.
 
 So an attach states the
-[`RuntimeSecurityContext`](../../packages/runtime-client/src/protocol/types.ts)
+[`RuntimeSecurityContext`](../../runtime/runtime-client/src/protocol/types.ts)
 it believes it is joining, and the runtime compares it field for field against
 its own. Any disagreement is **refused, by name**. Merging is not available:
 whatever a merge chose, one of the two documents would then be running under a
@@ -77,6 +77,24 @@ the list is a type error rather than a posture nobody checks. Fields compare
 one at a time, because the two contexts are built in different documents and
 one of them crossed an encoding: a posture carried as an absent property in one
 and as an explicit `undefined` in the other is the same posture.
+
+Each context is built the way it is compared. The runtime's own is read off the
+payload it was initialized from; an attaching client's is read off that
+client's options. Both are written out field by field, and each literal is held
+to a record keyed by the context's type, so a field the type declares and a
+literal drops is a type error as well. That matters most where both ends drop
+the same field: the comparison then finds two absences and agrees, and two
+documents run under one runtime each believing its own answer.
+
+Being complete is not the same as being normalized, and the two fields that
+are normalized are the two named above. The backend and the host map are put
+into one spelling on both sides, so two ways of writing one origin are one
+posture. The render declassification policy and the render confidentiality
+ceiling are not: each is recorded as the payload spelled it while the runtime
+applies a normalized form, so two documents holding one render posture and
+spelling it differently refuse each other. The refusal is the fail-closed
+direction — an attach is never accepted on a render posture the runtime does
+not hold — which is what makes the spelling a wart rather than a hole.
 
 The assertion is a check against misconfiguration, not the authorization. The
 port **is** the capability: a document can only attach because the page that
@@ -99,7 +117,7 @@ carry it — but means a frame with a key in it would fail there as a transport
 error, in a shell, at run time, saying nothing about why. A `DataCloneError`
 seen on this path is therefore never to be "fixed" by finding a way to pass
 the key: the key was not supposed to be in the frame.
-`packages/runtime-client/src/shared/key-material.ts` holds the invariant and
+`runtime/runtime-client/src/shared/key-material.ts` holds the invariant and
 the finding; the acting principal is additionally required to be a DID, so a
 signer cannot ride in as the field that names one. The refusal sits in
 `RuntimeConnection.attach`, immediately before the frame reaches a transport,
@@ -143,7 +161,7 @@ notification — which cannot be refused, having no reply — is dropped rather
 than acted on.
 
 `RuntimeClients.attach` takes anything shaped like a
-[`MessagePortLike`](../../packages/runtime-client/src/shared/message-port-like.ts),
+[`MessagePortLike`](../../runtime/runtime-client/src/shared/message-port-like.ts),
 so how a duplex arrived — carried by a page's opener, relayed by a native
 shell, built by a test from a `MessageChannel` — is not something the worker
 learns. `MessagePortRuntimeTransport` is the other end of the same seam, and
@@ -197,7 +215,7 @@ choice.** A navigation a pattern asks for belongs to the document whose mount
 raised it, and delivering it to the owner makes one document's intent move
 another's view. Routing it is not possible at this seam: `NavigateCallback` is
 `(target: Cell) => void`, and it is invoked from a post-commit effect flush
-(`packages/runner/src/builtins/navigate-to.ts`), decoupled by then from the
+(`runtime/runner/src/builtins/navigate-to.ts`), decoupled by then from the
 event dispatch that caused it — so nothing in hand names a mount, and the
 mounts this worker holds cannot be asked which one is responsible. Closing it
 means the runner carrying the raising context to the callback. Until it is
@@ -211,9 +229,9 @@ on the worker's own global, which is the owner's end of the IPC.
 
 | Concern | File |
 | --- | --- |
-| A client's identity and outbound sink | `packages/runtime-client/src/backends/worker-client.ts` |
-| The registry and the per-client message loop | `packages/runtime-client/src/backends/client-registry.ts` |
-| Per-client keys, routing, and teardown | `packages/runtime-client/src/backends/runtime-processor.ts` |
-| The duplex shape both ends take | `packages/runtime-client/src/shared/message-port-like.ts` |
-| The joining document's transport | `packages/runtime-client/src/client/transports/message-port/transport-message-port.ts` |
-| `transport` and `attach` for an embedder | `packages/lib-shell/src/runtime.ts` |
+| A client's identity and outbound sink | `runtime/runtime-client/src/backends/worker-client.ts` |
+| The registry and the per-client message loop | `runtime/runtime-client/src/backends/client-registry.ts` |
+| Per-client keys, routing, and teardown | `runtime/runtime-client/src/backends/runtime-processor.ts` |
+| The duplex shape both ends take | `runtime/runtime-client/src/shared/message-port-like.ts` |
+| The joining document's transport | `runtime/runtime-client/src/client/transports/message-port/transport-message-port.ts` |
+| `transport` and `attach` for an embedder | `runtime/lib-shell/src/runtime.ts` |

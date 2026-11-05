@@ -1,0 +1,2 @@
+{"date": "2026-08-25", "from": {"k": "typecheck", "s": "repo", "n": "cfcheck packages/patterns/agent-sessions-debug/main.tsx"}, "to": {"k": "typecheck", "s": "repo", "n": "cfcheck packages/connectors/agents/debug-view/main.tsx"}}
+{"date": "2026-08-25", "from": {"k": "typecheck", "s": "repo", "n": "cfcheck packages/patterns/github-activity/main.tsx"}, "to": {"k": "typecheck", "s": "repo", "n": "cfcheck packages/connectors/github/activity-view/main.tsx"}}

@@ -1,0 +1,39 @@
+╭ Warning
+│
+│  Ignored build scripts for packages:
+│  npm:fuse-native@2.2.6
+│
+│  Lifecycle scripts are only supported when using a `node_modules` directory.
+│  Enable it in your deno config file:
+│  "nodeModulesDir": "auto"
+╰─
+Check packages/memory/test/v2-watch-incremental.test.ts
+running 1 test from ./packages/memory/test/v2-watch-incremental.test.ts
+Server ...
+  instance members ...
+    watchAdd() ...
+      leaves a resumed session unchanged when an earlier addition completes ... ok (7ms)
+      keeps a shared miss reactive until its last branch owner departs ... ok (18ms)
+      reconciles normalized duplicate operation owners with graph ownership false ... ok (7ms)
+      reconciles normalized duplicate operation owners with graph ownership true ... ok (7ms)
+      abandons changed miss ownership and retries against a newly created target ... ok (19ms)
+      retains an operation owner's interest after the last graph miss retires ... ok (8ms)
+      publishes a large valid batch without an argument-count limit ... ok (334ms)
+      retains accepted duplicate-id roots when removing an unrelated watch ... ok (6ms)
+      leaves established delivery and graph state unchanged when a later branch fails ... ok (16ms)
+      rolls back graph and cursor changes when a later operation snapshot fails ... ok (12ms)
+      keeps an in-flight operation snapshot paired with its original cursors ... ok (8ms)
+      refreshes without filtering the 32 established graph watches for operation fields ... ok (8ms)
+      adds one root without enumerating the 32 established delivered entries ... ok (8ms)
+      refreshes one root without enumerating the 32 established delivered entries ... ok (8ms)
+      adds one root without scanning the 32 established manager addresses ... ok (11ms)
+      refreshes without filtering the 256 established graph watches for operation fields ... ok (29ms)
+      adds one root without enumerating the 256 established delivered entries ... ok (27ms)
+      refreshes one root without enumerating the 256 established delivered entries ... ok (23ms)
+      adds one root without scanning the 256 established manager addresses ... ok (22ms)
+    watchAdd() ... ok (580ms)
+  instance members ... ok (582ms)
+Server ... ok (588ms)
+
+ok | 1 passed (21 steps) | 0 failed (593ms)
+

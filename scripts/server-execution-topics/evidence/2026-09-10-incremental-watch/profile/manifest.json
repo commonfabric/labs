@@ -1,0 +1,125 @@
+{
+  "kind": "instrumented work counts, not latency",
+  "head": "27f10d2d4f02f125c0492e5d6288acb3f0da148b",
+  "patchSha256": "acfb5c3780b03c97ecd55b51193b8c52c2062b6624b28125c6d85c338c6f2a64",
+  "workloadSha256": "5e91c1b6bfb00e7f3e3096ea44d79fdd89430d0f1c5fe7332d593348139297ee",
+  "runtime": "deno 2.9.4 (stable, release, aarch64-apple-darwin)\nv8 15.0.245.2-rusty\ntypescript 6.0.3\n",
+  "machineLoad": [
+    9.83251953125,
+    28.25048828125,
+    35.205078125
+  ],
+  "startedAt": "2026-09-10T18:55:26.302571+00:00",
+  "posture": "explicit ambient test seam asserted before each fresh store; in-process real-memory client without execution runtime; no baked shell for mechanism probe",
+  "completion": "await watch mutation plus explicit manual flush",
+  "cache": "fresh memory store/server/session per size, existing Deno dependency cache",
+  "fixture": "100/1000/10000 independent schema:false roots; fixed two sessions; same covered-add/new-add/refresh/removal steps",
+  "measurement": "Map and Set yielded entries; Array iterator yields, method callback invocations and slice result entries. loadedAddresses overlaps underlying Map traversal; do not sum overlapping rows.",
+  "runs": [
+    {
+      "name": "baseline-off",
+      "cwd": ".",
+      "command": [
+        "deno",
+        "run",
+        "-A",
+        "tools/server-execution-topics/watch-probe.ts"
+      ],
+      "flags": {},
+      "loadBefore": [
+        9.83251953125,
+        28.25048828125,
+        35.205078125
+      ],
+      "startedAt": "2026-09-10T18:55:26.435174+00:00",
+      "exitCode": 0,
+      "loadAfter": [
+        11.32568359375,
+        25.369140625,
+        33.65478515625
+      ],
+      "endedAt": "2026-09-10T18:56:29.383684+00:00"
+    },
+    {
+      "name": "candidate-off",
+      "cwd": ".",
+      "command": [
+        "deno",
+        "run",
+        "-A",
+        "tools/server-execution-topics/watch-probe.ts"
+      ],
+      "flags": {},
+      "loadBefore": [
+        11.32568359375,
+        25.369140625,
+        33.65478515625
+      ],
+      "startedAt": "2026-09-10T18:56:29.384100+00:00",
+      "exitCode": 0,
+      "loadAfter": [
+        11.57421875,
+        22.896484375,
+        32.166015625
+      ],
+      "endedAt": "2026-09-10T18:57:27.569708+00:00"
+    },
+    {
+      "name": "candidate-on",
+      "cwd": ".",
+      "command": [
+        "deno",
+        "run",
+        "-A",
+        "tools/server-execution-topics/watch-probe.ts"
+      ],
+      "flags": {
+        "EXPERIMENTAL_SERVER_EXECUTION": "true"
+      },
+      "loadBefore": [
+        11.57421875,
+        22.896484375,
+        32.166015625
+      ],
+      "startedAt": "2026-09-10T18:57:27.570106+00:00",
+      "exitCode": 0,
+      "loadAfter": [
+        56.42626953125,
+        41.583984375,
+        38.45703125
+      ],
+      "endedAt": "2026-09-10T19:00:09.473800+00:00"
+    },
+    {
+      "name": "baseline-on",
+      "cwd": ".",
+      "command": [
+        "deno",
+        "run",
+        "-A",
+        "tools/server-execution-topics/watch-probe.ts"
+      ],
+      "flags": {
+        "EXPERIMENTAL_SERVER_EXECUTION": "true"
+      },
+      "loadBefore": [
+        56.42626953125,
+        41.583984375,
+        38.45703125
+      ],
+      "startedAt": "2026-09-10T19:00:09.474302+00:00",
+      "exitCode": 0,
+      "loadAfter": [
+        41.54541015625,
+        41.265625,
+        38.7734375
+      ],
+      "endedAt": "2026-09-10T19:02:09.590449+00:00"
+    }
+  ],
+  "captureProvenance": {
+    "file": "external-captures.json",
+    "entry": "profile/manifest.json",
+    "note": "Original capture paths and commands; not replay inputs."
+  }
+}

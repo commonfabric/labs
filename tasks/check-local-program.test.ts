@@ -55,7 +55,7 @@ Deno.test("namesResolverInCode finds a direct construction", () => {
   assert(
     namesResolverInCode(
       `const program = await resolve(new FileSystemProgramResolver(main, root));`,
-      "packages/foo/bar.ts",
+      "runtime/foo/bar.ts",
     ),
   );
 });
@@ -65,7 +65,7 @@ Deno.test("namesResolverInCode finds the import that an alias renames", () => {
     namesResolverInCode(
       `import { FileSystemProgramResolver as Resolver } from "@commonfabric/js-compiler";
 const program = await resolve(new Resolver(main, root));`,
-      "packages/foo/bar.ts",
+      "runtime/foo/bar.ts",
     ),
   );
 });
@@ -74,7 +74,7 @@ Deno.test("namesResolverInCode finds a type-position reference", () => {
   assert(
     namesResolverInCode(
       `let resolver: FileSystemProgramResolver | undefined;`,
-      "packages/foo/bar.ts",
+      "runtime/foo/bar.ts",
     ),
   );
 });
@@ -83,7 +83,7 @@ Deno.test("namesResolverInCode ignores a line comment", () => {
   assertFalse(
     namesResolverInCode(
       `// Do not reach for FileSystemProgramResolver here.\nexport const x = 1;`,
-      "packages/foo/bar.ts",
+      "runtime/foo/bar.ts",
     ),
   );
 });
@@ -92,7 +92,7 @@ Deno.test("namesResolverInCode ignores a doc comment", () => {
   assertFalse(
     namesResolverInCode(
       `/**\n * Prefer this to a bare FileSystemProgramResolver.\n */\nexport const x = 1;`,
-      "packages/foo/bar.ts",
+      "runtime/foo/bar.ts",
     ),
   );
 });
@@ -101,7 +101,7 @@ Deno.test("namesResolverInCode ignores a string literal", () => {
   assertFalse(
     namesResolverInCode(
       `throw new Error("Use resolveLocalProgram, not FileSystemProgramResolver.");`,
-      "packages/foo/bar.ts",
+      "runtime/foo/bar.ts",
     ),
   );
 });
@@ -113,7 +113,7 @@ Deno.test("namesResolverInCode reads past a comment marker inside a string", () 
   assert(
     namesResolverInCode(
       `const docs = "https://example.com/x"; const r = new FileSystemProgramResolver(m);`,
-      "packages/foo/bar.ts",
+      "runtime/foo/bar.ts",
     ),
   );
 });
@@ -125,7 +125,7 @@ Deno.test("namesResolverInCode reads past a block-comment marker inside a string
   assert(
     namesResolverInCode(
       `const glob = "/*"; const r = new FileSystemProgramResolver(m);\nconst end = "*/";`,
-      "packages/foo/bar.ts",
+      "runtime/foo/bar.ts",
     ),
   );
 });
@@ -134,7 +134,7 @@ Deno.test("namesResolverInCode parses markup in a .tsx file", () => {
   assert(
     namesResolverInCode(
       `const view = <div class="x">text</div>;\nconst r = new FileSystemProgramResolver(m);`,
-      "packages/foo/bar.tsx",
+      "runtime/foo/bar.tsx",
     ),
   );
 });
@@ -146,7 +146,7 @@ Deno.test("namesResolverInCode ignores a same-named property of another object",
   assertFalse(
     namesResolverInCode(
       `const x = { fileSystemProgramResolver: 1 };`,
-      "packages/foo/bar.ts",
+      "runtime/foo/bar.ts",
     ),
   );
 });
@@ -172,11 +172,11 @@ Deno.test("the allowlist records a reason for every exemption", () => {
 
 Deno.test("scan names a file that constructs the resolver", async () => {
   const root = await fixtureRepo({
-    "packages/foo/build.ts":
+    "runtime/foo/build.ts":
       "export const r = new FileSystemProgramResolver(main);\n",
   });
   try {
-    assertEquals(await scan(root), ["packages/foo/build.ts"]);
+    assertEquals(await scan(root), ["runtime/foo/build.ts"]);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
@@ -184,7 +184,7 @@ Deno.test("scan names a file that constructs the resolver", async () => {
 
 Deno.test("scan passes over a file that only writes about the resolver", async () => {
   const root = await fixtureRepo({
-    "packages/foo/notes.ts":
+    "runtime/foo/notes.ts":
       "// Never construct a FileSystemProgramResolver here.\nexport const x = 1;\n",
     "docs/guide.md": "Do not use `FileSystemProgramResolver`.\n",
   });
@@ -197,7 +197,7 @@ Deno.test("scan passes over a file that only writes about the resolver", async (
 
 Deno.test("scan passes over an allowlisted file that does construct it", async () => {
   const root = await fixtureRepo({
-    "packages/js-compiler/program.ts":
+    "base/js-compiler/program.ts":
       "export class FileSystemProgramResolver {}\n",
   });
   try {
@@ -209,11 +209,11 @@ Deno.test("scan passes over an allowlisted file that does construct it", async (
 
 Deno.test("scan tolerates a tracked file deleted from the working tree", async () => {
   const root = await fixtureRepo({
-    "packages/foo/gone.ts":
+    "runtime/foo/gone.ts":
       "export const r = new FileSystemProgramResolver(main);\n",
   });
   try {
-    await Deno.remove(join(root, "packages/foo/gone.ts"));
+    await Deno.remove(join(root, "runtime/foo/gone.ts"));
     assertEquals(await scan(root), []);
   } finally {
     await Deno.remove(root, { recursive: true });
@@ -224,7 +224,7 @@ Deno.test(
   "check-local-program main reports success and returns 0 on a clean tree",
   async () => {
     const root = await fixtureRepo({
-      "packages/foo/build.ts": "export const x = 1;\n",
+      "runtime/foo/build.ts": "export const x = 1;\n",
     });
     try {
       let code = -1;
@@ -241,7 +241,7 @@ Deno.test(
 
 Deno.test("main reports the offender and the route to take instead", async () => {
   const root = await fixtureRepo({
-    "packages/foo/build.ts":
+    "runtime/foo/build.ts":
       "export const r = new FileSystemProgramResolver(main);\n",
   });
   try {
@@ -250,7 +250,7 @@ Deno.test("main reports the offender and the route to take instead", async () =>
       code = await main(root);
     });
     assertEquals(code, 1);
-    assert(err.includes("packages/foo/build.ts"));
+    assert(err.includes("runtime/foo/build.ts"));
     assert(err.includes("resolveLocalProgram"));
     assert(err.includes("tasks/check-local-program.ts"));
   } finally {
@@ -263,11 +263,11 @@ Deno.test("scan reports a tracked path it cannot read for another reason", async
   // fails for a reason the scan has no answer for and the failure carries.
 
   const root = await fixtureRepo({
-    "packages/foo/build.ts":
+    "runtime/foo/build.ts":
       "export const r = new FileSystemProgramResolver(main);\n",
   });
   try {
-    const path = join(root, "packages/foo/build.ts");
+    const path = join(root, "runtime/foo/build.ts");
     await Deno.remove(path);
     await Deno.mkdir(path);
     await assertRejects(() => scan(root), Deno.errors.IsADirectory);

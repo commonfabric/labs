@@ -3,15 +3,14 @@
 Normative. Assumes [README.md](README.md); details Phases 1–4 surface
 between client, memory server, and SpaceServer.
 
-## Anchors (verified on main, 2026-08-02; §2b file:line refs refreshed 2026-08-04 — re-verify before coding)
+## Anchors
 
-- Memory server: `packages/memory/v2.ts`, toolshed mount
-  `/api/storage/memory` (`packages/toolshed/routes/storage/memory/`).
-- Client storage stack: `packages/runner/src/storage/` (`interface.ts`,
+- Memory server: `runtime/memory/v2.ts`, toolshed mount
+  `/api/storage/memory` (`runtime/toolshed/routes/storage/memory/`).
+- Client storage stack: `runtime/runner/src/storage/` (`interface.ts`,
   `extended-storage-transaction.ts`, `query.ts`, `reactivity-log.ts`).
-- Store tables: `commit`, `revision`, `head`, `branch` (engine-v3), and
-  `execution_lease` since Phase 1 stage B (serving-loop.md §2 — the
-  reduced three-field shape; the v1-branch shape was prior art only).
+- Store tables: `commit`, `revision`, `head`, `branch` (engine-v3). The
+  lease (serving-loop.md §2) is held in the memory server's memory.
 
 ## 1. Commit classes
 
@@ -76,31 +75,36 @@ RULED 2026-08-24 and BUILT: the client-authored classification above is
 the posture of a runtime running the whole stack. A `cf` client connected
 to a deployment running the serving loop no longer performs the
 instantiation transaction itself: `cf piece new` sends the program it
-resolved to `/api/pattern-lifecycle/*`, and the space's serving runtime
-compiles it and materializes the piece — the setup transaction, stamped
+resolved to the space's serving runtime, which compiles it and
+materializes the piece — the setup transaction, stamped
 `bookkeeping` under the space's lease and carrying the requester's trust
 snapshot — as a step of a wave cycle
 ([docs/features/server-pattern-lifecycle.md](../../features/server-pattern-lifecycle.md)).
 The scheduler tell is unchanged: the verb's writes are still commits made
 outside the scheduler, made now by the serving side on the requester's
 behalf, the registry entry and the slug in the same transaction as the
-piece. A source replacement stays the client's authored act: it publishes
-module update authority, which module-loading.md requires from an owned
-setup transaction that commits to storage, and a wave's withdrawable
-acceptance cannot supply that. Every other client of the piece controller —
-the shell, the background piece service — keeps the client-side shape
-until its own migration.)*
+piece. A source replacement (AMENDED 2026-09-11) is a served verb too:
+it publishes module update authority, which module-loading.md requires
+from an owned setup transaction that commits to storage, and since a
+wave's withdrawable acceptance cannot supply that, its setup transaction
+commits directly to the store as the serving loop's own derived-class
+commit, outside the wave (serving-loop.md §3e). Every other client of
+the piece controller, such as the shell, keeps the client-side shape
+until its own migration. AMENDED 2026-10-31: a verb travels only as a
+`pattern.lifecycle` request on the space's memory session (memory-v2
+`04-protocol.md` §4.3.10), which reaches the process that serves the
+space.)*
 
 **The `system` class is PRODUCER-defined, its contents exemplary
 (RULED 2026-08-05).** The stamp rides the memory server's generic
 direct-write path (`Server.writeDocument`,
-`packages/memory/v2/server.ts` — envelope `server:<uuid>`): `system`
+`runtime/memory/v2/server.ts` — envelope `server:<uuid>`): `system`
 means "the memory server's own direct write, outside any session and
 outside the wave", and the row's contents column is examples, not a
 closed set — beyond bootstrap and authorization changes, the one
 production caller today is the toolshed blob-upload route writing
 `cid:<hash>` metadata docs
-(`packages/toolshed/routes/blobs/blobs.index.ts`). Two consequences,
+(`runtime/toolshed/routes/blobs/blobs.index.ts`). Two consequences,
 stated so neither is inferred: (i) because the stamp rides the PATH,
 any NEW direct-write caller is a spec decision — this list is
 extended deliberately, never silently by pointing more code at the
@@ -158,7 +162,8 @@ whether it triggers a recompute is governed by serving-loop.md §3d's
 dependency-only rule (RULED 2026-08-05) — a derivation that reads
 the intruded-on doc recomputes through the ordinary dependency path;
 one that only writes it (a blind writer) is NOT re-armed, and the
-derived output waits for the next input change. v2 adds no
+derived output waits for the next input change, unless the write left
+the doc with no value (§3d, RULED 2026-11-03). v2 adds no
 security guarantees beyond today's unless trivial (owner,
 2026-08-02); tightening is future work.
 
@@ -192,11 +197,26 @@ Stated normatively, with anchors. Today every transaction
 comes from ONE client, so identity rides the ENVELOPE: the session
 carries the user principal and session id — established once, at
 session open, never sent per commit — and scoped writes inside the
-transaction name only the scope KIND (`scope: "user"`). It is the
+transaction name only the scope KIND (`scope: "user"`). The session
+carries one more thing established at open: its READ CEILING
+(`SessionDescriptor.readCeiling`, signed into the `session.open`
+invocation; memory-v2 04-protocol.md §4.1.2), the confidentiality
+bound every `db.query` served AS that session reads under — the
+client runtime's `cfcReadMaxConfidentiality`, which under this flag
+cannot bound queries where it sits because the serving runtime
+performs them. The memory server records it on the session (fresh
+per open; a resume re-declares it) and a server-assigned ceiling
+lands in the same record; the SpaceServer stamps it onto every run
+served as the session (serving-loop.md §3c) and the served query
+reads under it (sqlite-builtin 06-cfc.md, "Runtime read ceiling").
+A client with a ceiling REQUIRES the `sessionReadCeiling` protocol
+flag of the server it opens against: an older server would accept
+the descriptor and serve every query unbounded, so the client refuses
+to open the session. It is the
 memory server that maps kind → concrete `scope_key` at admission,
 derived from the session that had the commit (the shared
-`resolveScopeKey`, `packages/memory/v2.ts:120-147` — the wire-shape
-module owns the one definition per LD3). That model is UNCHANGED for
+`resolveScopeKey` in `runtime/memory/v2.ts` — the wire-shape module
+owns the one definition per LD3). That model is UNCHANGED for
 every `authored` commit: clients never name keys, per commit or
 otherwise; their keys keep deriving from the authenticated session.
 
@@ -228,9 +248,11 @@ quote above before "fixing" it:
 - *"`resolveScopeKey` throws without a principal / would resolve
   `user:<serviceDID>` here."* The function itself is a pure
   constructor; it is its admission-side CALLERS that feed it
-  identity derived from the authenticated session (`applyCommit`,
-  `packages/memory/v2/server.ts:2060-2063` →
-  `engine.ts:2031-2032`) — the client-commit model. Server-side
+  identity derived from the authenticated session
+  (`#decideTransaction()` in `runtime/memory/v2/server.ts` threads
+  the session's principal and id into `Engine.applyCommit`, whose
+  `applyCommitTransaction` constructs the key) — the client-commit
+  model. Server-side
   runs never derive identity from their own session: identity
   arrives WITH the work (the demand, or the stamped `firedAt`) and
   is carried into keys, not resolved from ambient state (scopes.md
@@ -306,7 +328,9 @@ enforcement path consumes the attribution annotation — CFC labels
 are the load-bearing enforcement — so its present consumers are
 audit/forensics and the anticipated signature graduation below; a
 mechanism that starts DECIDING from attribution needs a spec edit
-here first. The considered alternative — N
+here first. One such mechanism is specified: the admission of a
+served access-list change decides from the actor its delegated
+carriage names (§2's delegated row). The considered alternative — N
 commits per wave, one per session, each attributed at its
 envelope — is recorded and rejected as the other extreme of the
 same axis: the wave stays ONE
@@ -323,10 +347,10 @@ load-bearing enforcement; commit-level identity is not load-bearing
 | --- | --- |
 | `authored` doc write | session authenticated → write authority on doc/path (existing ACL) → CAS on base revision |
 | `authored` event append | session authenticated → append authority on stream doc → `eventId` unique among stream entries above the stream's `eventWatermark` (CAS — the dedupe horizon, events.md §4) → the memory server STAMPS `firedAt` from the commit envelope (authenticated principal + session); a client-supplied `firedAt` that disagrees is REJECTED, never corrected |
-| `authored`, server-produced (outbox event append, `.inSpace` provisioning) | commit metadata carries the acting identity (`actingPrincipal` + `actingSession` — the ORIGINATING chain actor, events.md §2) + `capabilityRef` → admission validates that capability grant against the target doc/stream (a delegated-capability check, NEVER session-identity impersonation) → for event appends, `firedAt` stamps from the validated acting identity (the stamping paragraph below) → CAS. *(Phase-1 bound, stage D/F: the landed validation is carriage PRESENCE + COMPLETENESS — authored class only, non-empty `actingPrincipal` + `capabilityRef`, a sessionless batch refused for session-scoped writes (scopes.md §5) — with scoped writes keyed from the carried identity; RESOLVING the grant against the target doc/stream awaits per-doc grants, which today's ACL model does not hold, and is the named owed hardening — verification-coverage.md OW13.)* **Genesis of a provisioned space (RULED 2026-08-18):** the FIRST commit into a `.inSpace()`-minted space is its ACL, signed by the SPACE'S OWN identity (its keys derive from the creation name, CT-1650), and that same commit names the ACTING user OWNER (`{ [actor]: "OWNER", "*": "WRITE" }` — the shape a client mints); every later write into the space is the actor's, through this row's delegated carriage or a client's own session; the serving identity is neither owner nor actor at any step and appears nowhere in the ACL (verification-coverage.md OW31 — the build is owed post-merge, before the flip). |
-| `derived` | producer holds the live `execution_lease` for the space (one equality check) → CAS |
+| `authored`, server-produced (outbox event append, `.inSpace` provisioning) | commit metadata carries the acting identity (`actingPrincipal` + `actingSession` — the ORIGINATING chain actor, events.md §2) + `capabilityRef` → admission validates that capability grant against the target doc/stream (a delegated-capability check, NEVER session-identity impersonation) → for event appends, `firedAt` stamps from the validated acting identity (the stamping paragraph below) → CAS. *(Phase-1 bound, stage D/F: the landed validation is carriage PRESENCE + COMPLETENESS — authored class only, non-empty `actingPrincipal` + `capabilityRef`, a sessionless batch refused for session-scoped writes (scopes.md §5) — with scoped writes keyed from the carried identity; RESOLVING the grant against the target doc/stream awaits per-doc grants, which today's ACL model does not hold, and is the named owed hardening — verification-coverage.md OW13.)* **Genesis of a provisioned space (RULED 2026-08-18):** the FIRST commit into a `.inSpace()`-minted space is its ACL, signed by the SPACE'S OWN identity (a key generated for that one commit and then dropped — [random space identities](../random-space-identities.md)), and that same commit names the ACTING user OWNER (`{ [actor]: "OWNER" }` — the shape a client mints), together with any grants the `inSpace()` call names; the space is created before the handler re-runs, over a session of the serving runtime's own signed by that key, which reaches the space's owner where the host has a route, and the calling space's allocation record, written in the handler's commit, is what later runs read; every later write into the space is the actor's, through this row's delegated carriage or a client's own session; the serving identity is neither owner nor actor at any step and appears nowhere in the ACL (verification-coverage.md OW31 — the build is owed post-merge, before the flip). **An access-list write:** the one server-produced authored commit of a space's ACL document `of:<space>` is a served handler's `grantSpaceAccess()` or `revokeSpaceAccess()` change, and past carriage completeness it is admitted by the memory server's own INV-12 check KEYED ON THE CARRIED ACTOR (`Server.commitServedAclChange()`: the session plane's `#validateAclCommit` and capability check, one implementation, with the carried actor as the principal) — INV-12's shape, the genesis rule (so a served commit never initializes a list), and `OWNER` for the actor but for the removal of its own entry, on the same `acl.mode` dial. Its grant is RESOLVED, not only present: `capabilityRef` must be `event-consequence:<eventId>`, naming the durable entry the run delivers, and that entry's `firedAt` must name the carried actor. The serving loop asks the same decision at the run's seal (`Server.checkServedAclChange()`), so a refusal fails that run alone (serving-loop.md §3d). With the host given a route, a change to a space other than the home is sent to that space's owner as a `served` `acl` (memory-v2 04-protocol.md §4.3.12), and the owner's server decides and commits it the same way. *(The co-hosted process is trusted for the carried actor here as for every delegated commit, LT5; the owner's ruling on this admission decision is open.)* |
+| `derived` | producer holds the execution lease for the space (one equality check against the memory server's map) → no operation on the space's ACL document `of:<space>`, in any memory ACL mode (no derived producer writes it; INV-12) → CAS |
 | `system` | unchanged from today |
-| READ naming an explicit `entity_scope_key` (not a commit — the read side of R-Q6b; S1; widened by FP2, RULED 2026-08-03) | requester holds A live `execution_lease` on the co-hosted memory server — its OWN space's lease, not necessarily the read space's (the read-side twin of §2's inter-server trust ruling: a home SpaceServer reads FOREIGN scoped instances for cross-space derivations, closing the silent-empty-instance trap cross-space) → the named instance is read. A non-lease-holder naming a `scope_key` is REJECTED (today the wire cannot even express one); a request naming none resolves from the authenticated session as today (the shared `resolveScopeKey`, `packages/memory/v2.ts:120-147`). *(Fan-out stage A, 2026-08-16 — the runner ISSUES these: a serving runtime's per-instance run whose read of a scoped doc names an instance other than the runtime's own — the demand-supplied identity's — loads it as an explicit-instance read (`Cell.sync`/`syncCell` with the run identity, the transaction layer's kick for a never-loaded instance, the presync of a served event's inputs as the event's actor), so the serving replica holds that principal's instance keyed apart from the service's; own-identity reads name nothing and keep the no-key admission fast path. A live lease holder may name TWO instances of one (branch, id, scope) — its frames carry `scope_key` (§3) — the wire collapse guard now applies to non-holders only.)* |
+| READ naming an explicit `entity_scope_key` (not a commit — the read side of R-Q6b; S1; widened by FP2, RULED 2026-08-03; restated by owner routing R3, RULED 2026-11-01) | the requester is the read space's own serving session on this memory server — a session from this process (`Connection.inProcess`: the in-process transport or the worker's port opened it, never a socket) whose principal holds the space's execution lease — or a session authenticated as the deployment's service identity, the delegating class, from any process → the named instance is read: the serving session names any instance of the space it serves, and a service-identity session reading a space it does not serve here names an actor's instance under that actor's READ grant in the space's access list, the grant-scoped read below (the read-side twin of §2's inter-server trust ruling: a home SpaceServer reads FOREIGN scoped instances for cross-space derivations, closing the silent-empty-instance trap cross-space). A lease held here admits only the session that holds it in this process; a sibling process's session carries the same principal over a socket and reads under the grant. Any other session naming a `scope_key` is REJECTED (today the wire cannot even express one); a request naming none resolves from the authenticated session as today (the shared `resolveScopeKey` in `runtime/memory/v2.ts`). *(Fan-out stage A, 2026-08-16 — the runner ISSUES these: a serving runtime's per-instance run whose read of a scoped doc names an instance other than the runtime's own — the demand-supplied identity's — loads it as an explicit-instance read (`Cell.sync`/`syncCell` with the run identity, the transaction layer's kick for a never-loaded instance, the presync of a served event's inputs as the event's actor), so the serving replica holds that principal's instance keyed apart from the service's; own-identity reads name nothing and keep the no-key admission fast path. An admitted session may name TWO instances of one (branch, id, scope) — its frames carry `scope_key` (§3) — the wire collapse guard applies to the sessions the row refuses. A named root in a space the requester does NOT serve is admitted on the named actor's READ grant in that space's access list and refused without one — the grant-scoped read below, RULED 2026-10-27. With owner routing, the serving runtime's session in every space but its home reaches that space's owner from another process, and the grant is what admits it there.)* |
 
 That is the ENTIRE admission surface — the last row is the one
 READ-side check; every row above it is commit admission. No scope
@@ -379,7 +403,7 @@ engine plane. The operand mapping (stage F design, landed): the
 holder's own service session IS the engine session whose resolved
 commit session key equals the DR1 holder identity — the wave sink
 commits with `sessionId == holder` and no principal
-(`applyCommitTransaction`, `packages/memory/v2/engine.ts`; the
+(`applyCommitTransaction`, `runtime/memory/v2/engine.ts`; the
 sink's replay keying doc records the same choice), so the check is
 one equality, `resolveCommitSessionKey(sessionId, principal) ==
 holder`, and "the envelope principal IS the lease holder" (§1) reads
@@ -445,48 +469,95 @@ every instance, so it may NAME an instance to read. RATIFIED
 (owner, 2026-08-03; was ledger LD5): this row is the read half of
 §1's transaction identity model — the server-driven variant names
 keys on both sides of the wire, while the client-facing protocol is
-untouched: a non-holder naming a `scope_key` is rejected (today the
+untouched: a session the row refuses naming a `scope_key` is rejected (today the
 wire cannot even express one — the field is new), and client reads
-keep resolving from the session. FP2 (RULED 2026-08-03) widens the
-holder condition to ANY live lease holder on the co-hosted memory
+keep resolving from the session. FP2 (RULED 2026-08-03) widened the
+holder condition to ANY lease holder on the co-hosted memory
 server, so cross-space scoped reads (§2b's free read row) can name
 their foreign instance instead of silently resolving
-`user:<serviceDID>`. **Phase 5 LANDED both halves the Phase-1 bound
-deferred:** the read space's own lease is checked first, then FP2's
-cross-engine fallback — any live lease on the co-hosted server; and
-the equality is SHARPENED to the FULL DR1 holder minted by the
-co-hosted process (service identity + process-instance component),
-retiring the Phase-1 recorded acceptance under which a second
-process sharing the service DID passed on the first process's lease
-row (verification-coverage.md's stage-F read-row entry).
+`user:<serviceDID>`, and Phase 5 sharpened the equality to the FULL
+DR1 holder minted by the co-hosted process (service identity +
+process-instance component). **Owner routing R3 (RULED 2026-11-01)
+restates the row without the co-hosted lease:** with each space
+served from the process that owns it
+(serving-loop.md §2), a serving runtime's read
+of a foreign space reaches that space's owner from another process,
+whose lease the owner never minted and cannot see. Who may name an
+instance is therefore the space's OWN serving session — the
+full-holder equality still, and only for a session from the owner's
+own process (`Connection.inProcess`), since a sibling process's
+session carries the same principal — and otherwise the deployment's
+service identity, the delegating class, from any process, under the
+grant-scoped read below. A second process sharing the service DID is
+admitted as the service identity under the grant rather than refused
+on the holder, which is what makes it a peer
+(verification-coverage.md's stage-F read-row entry records the Phase-1
+acceptance this closes).
 
-**The grant-scoped read DESIGN (Phase 5; the RULED 2026-08-13
+**The grant-scoped read (Phase 5; RULED 2026-08-13 as the
 precondition — the design, or an explicit fail-closed refusal, lands
 BEFORE any delegated-scoped-read producer ships, and producer and
-refusal land together as one stack).** A DELEGATED scoped read — the
-home SpaceServer reading a FOREIGN scoped instance on behalf of a
-carried actor — resolves against the CARRIED actor's instance under
-an explicit grant, NEVER the delegating envelope, and NEVER silently
-empty (the FP2 silent-empty-instance trap is the failure mode this
-kills). The design, stated for the implementation that follows the
-per-doc grant store (OW13's trigger): the read carries the acting
-identity + `capabilityRef` exactly like the server-produced authored
-row; admission resolves the grant against the target doc and admits
-the NAMED instance (`entity_scope_key` constructed from the CARRIED
-actor); a read whose grant does not resolve REFUSES — it never falls
-back to lease-wide trust or the envelope. Until that store exists,
-the FAIL-CLOSED interim is normative and LANDED with Phase 5's
-producers, at both ends of the stack: (i) the serving runtime's
-storage plane REFUSES scoped (user/session) reads of any non-home
-space outright — a foreign scoped read cannot leave the producer,
-named or unnamed; (ii) admission REFUSES an UNNAMED scoped root from
-a co-hosted serving session (a live-lease principal) reading a space
-whose lease it does not hold — the shape that would silently resolve
-`user:<serviceDID>`. Cross-space serving therefore reads foreign
-SPACE-scope state freely (§2b's free-read row) and foreign SCOPED
-state not at all; lifting that refusal is exactly the grant
-resolution above, never a lease-trust widening. Remote attestation
-stays anticipated future work.
+refusal land together as one stack; RULED 2026-10-27, owner — the
+grant is the target space's access list, for the carried actor's own
+instances).** A DELEGATED scoped read — the home SpaceServer reading a
+FOREIGN scoped instance on behalf of a carried actor — resolves
+against the CARRIED actor's instance under an explicit grant, NEVER
+the delegating envelope, and NEVER silently empty (the FP2
+silent-empty-instance trap is the failure mode this kills). The grant
+is the target space's own access list: the read names the carried
+actor's instance (`entity_scope_key` constructed from the actor, the
+read row above) and is admitted when that list grants the actor READ
+(or `ANYONE` READ), as `Server.foreignReadAuthorityFor` resolves it —
+the read twin of §2b's write grant, at the same granularity and with
+the same footing: checked mode-independently, so neither the
+service-DID blanket nor the missing-ACL compat arm applies, and a
+space with no list, a malformed or retracted list, or no store grants
+nothing. A read names only the carried actor's own instance; a
+serving runtime never reads another principal's, nor its own instance
+of a foreign scoped document. Both ends of the stack decide it: (i)
+the serving runtime's storage plane asks the co-hosted memory server
+before the read leaves it, keeps the verdict per (space, actor), and
+asks about every actor again on word of a change to that space's list,
+the last verdict standing until the new one lands, so a revoked actor's
+instances are refused from the answer on and a newly granted actor's
+refused reads are pulled again — word that its replica of the space
+takes from the list document itself, watched over the session its reads
+go through, so a change the space's owner commits in another process
+reaches it there, and that the host's `noteSpaceAclChanged` gives it
+for the commits the host's own memory server admits; (ii) admission resolves the same
+grant for a named scoped root a service-identity session reads in a
+space it does not serve on that memory server, from the owner's own
+process or routed from another, and REFUSES an UNNAMED one from a
+session under the serving binding (`actingAs: "space-owner"`, the
+serving runtime's) — the shape that would silently resolve
+`user:<serviceDID>`. Admission decides the grant at each watch
+registration; a watch an admitted session already holds keeps delivering
+the instance until the next registration, the re-check
+verification-coverage.md OW35 records as owed. What stays
+refused: a foreign scoped read naming no actor's instance, and one
+whose actor the list does not grant. Resolution against a per-doc
+grant store with `capabilityRef` carriage, the finer design OW13
+names, stays owed and would narrow this grant, never widen it. A
+granted read is a service-session read: it registers no
+identity-bearing demand in the foreign space, so the instance it reads
+is as the foreign space's own loop last derived it for that actor
+(verification-coverage.md OW35). Cross-space serving therefore reads
+foreign SPACE-scope state freely (§2b's free-read row) and foreign
+SCOPED state under the actor's grant alone. A refusal is no load for
+served delivery to wait on, and it is never silently empty for the
+data a served run reads: a run that reads the value of a refused
+document — through its declared event or its bound state — fails
+permanently and terminalizes at once (events.md §5). A derivation run
+that reads one is withdrawn: nothing it wrote reaches the wave, it is
+not retried, and the instance is left to a runtime that can read the
+document (serving-loop.md §3d). A derivation run that reads a document
+whose actor's grant is still being asked for is withdrawn the same
+way, and runs again when the admitted instance lands; so is one that
+reads an absent scoped instance the serving loop owes and has not
+produced yet. A refused document that only the dispatch preflight's
+dependency walk reaches, or whose link a run passes along without
+reading it, does not stop dispatch. Remote attestation stays
+anticipated future work.
 
 **Run identity for a derivation (S1).** A derivation runs PER
 DEMANDED INSTANCE and the DEMAND supplies the identity — a
@@ -508,9 +579,12 @@ recompute rule, RULED 2026-08-05).
 The storage layer already enforces the load-bearing rule: **one
 transaction writes one space — by DEFAULT, with one explicit opt-in.**
 A transaction FAILS if a writer for a different space was already
-opened on it (anchor: `packages/runner/src/storage/interface.ts`
-`writer(space)`) unless it opted in through `enableMultiSpaceWrites`
-(`interface.ts:690`), reachable only via the `.inSpace()` chain below —
+opened on it (`V2StorageTransaction.#claimWriteSpace()` in
+`runtime/runner/src/storage/v2-transaction.ts` returns the
+`StorageTransactionWriteIsolationError` that
+`runtime/runner/src/storage/interface.ts` declares) unless it opted
+in through `enableMultiSpaceWrites` (`interface.ts`), reachable only
+via the `.inSpace()` chain below —
 which is what makes an UNMARKED crossing always a bug. Reads cross
 freely (serving-loop.md §3b; cross-space label metadata flows with
 them). v2 keeps that invariant and adds the class discipline:
@@ -519,9 +593,10 @@ them). v2 keeps that invariant and adds the class discipline:
 | --- | --- |
 | read a foreign doc | free — logged read + server-internal wake (§3b). *Mechanism (OW31, RULED 2026-08-18/19, BUILT — retires the Phase-7 OWNER posture): the serving runtime's loopback sessions carry a session-level delegated READ binding (`actingAs: "space-owner"`, signed into the session.open descriptor), admitted only for the memory ACL's DELEGATING class — under the flag the co-hosted process identity (`memoryAclPrincipalsFor`), OFF the flag empty; the operator's OWNER-class `serviceDids` list is verbatim on both arms and the process identity is never in it by default. The memory server resolves the binding ITSELF from the space's ACL — the ruled "ACL can be read with service identity" — and the session's READ-class capability decisions (session.open, queries, watches) then run as the space's OWNER: the user whose space it is, `session.open` on an owner-only home space included. WRITE/OWNER-class requirements keep resolving against the ENVELOPE principal, so the binding grants no session-plane write path (served writes ride this table's delegated carriage; the observe-mode canary counts any residual); a delegating principal may not initialize a genesis; revocation judges the acting user, so an ownership change revokes the bound session and the next mount re-resolves. Spaces with no valid concrete-owner ACL bind nothing (fresh → authenticated READ, populated-legacy → the compat arm, malformed → fail closed). Trust footing: LT5's — the co-hosted process is already trusted for carried actor claims on the write plane; the binding ATTRIBUTES reads that were previously ambient under the blanket. If this posture proves wrong live, the ruling's own escape hatch is a flagged follow-up, never a quiet re-widening — verification-coverage.md OW31.* |
 | derive FROM foreign state | home derivation reading foreign inputs; result commits HOME |
-| mutate a foreign space | **an event append to a foreign stream — the ONLY cross-space mutation** |
+| mutate a foreign space | **an event append to a foreign stream — the ONLY cross-space mutation** apart from the provisioning and bookkeeping writes the rows below sanction |
 | `derived` commit into a foreign space | FORBIDDEN — SpaceServer(B) is B's only deriver; A never derives into B |
 | provision a foreign/new space (`.inSpace`) | authored-class, foreign-first split at the wave commit step — see below |
+| bookkeeping write a served run triggers, made after the run is over, into a space its actor owns or was granted (compile-cache and program writeback, the `agent` effect's index entry) | the same foreign batch, under the triggering run's delegated carriage passed explicitly — serving-loop.md §3d |
 | client authored writes to several spaces | unchanged from today: separate per-space commits, per-space ACL + CAS |
 
 The event append crosses as an ordinary `authored` commit under the
@@ -534,10 +609,19 @@ admission
 validates that grant (§2) — delegation, never impersonation — and
 stamps `firedAt` from the carried actor, so the event RUNS AS THE
 SESSION IT ORIGINATED FROM even across the space boundary. The
-target's SpaceServer processes it like any event.
+target's SpaceServer processes it like any event. The append
+reaches the target's admission on the host's own memory server, or,
+with the host given a route to each space's owner
+(`SERVER_EXECUTION_OWNER_ROUTING`,
+[owner routing](serving-loop.md#2-the-lease-single-deriver-operationally)), as a
+`served` `append` on the host's routed session to that owner
+(memory-v2 04-protocol.md §4.3.12), admitted there from the
+delegating-class session under the same carried actor: "co-hosted"
+then means one deployment rather than one process.
 Rejection at the target (LT4, RULED 2026-08-03): the outbox's
 at-least-once retry covers TRANSPORT failures only; a
-DETERMINISTIC admission rejection — an invalid capability grant —
+DETERMINISTIC admission rejection — an invalid capability grant,
+or the owner's `refused` answer to the routed append —
 is not retried. It surfaces in the SOURCE space per events.md §5's
 error-is-the-consequence shape: a failure notice on the source
 event's stream entry, written by the source SpaceServer in a later
@@ -552,12 +636,13 @@ section.
 even mint new ones — from a handler (`profile-create.tsx`,
 `ProfileHome.inSpace()`). The real chain is an explicit opt-in
 end to end: `.inSpace()` → `optIntoInSpaceMultiSpaceCommit`
-(`builder/pattern.ts:1090`) → `enableCrossSpaceChildCommit`
-(`runner.ts:4698`, commit order `[children..., parent]`) →
-`enableMultiSpaceWrites` (`interface.ts:690`) →
-`commitMultiSpace`/`runSplitCommits` (`v2-transaction.ts:1971/2048` —
-sequential, stop at first failure): today already foreign-first,
-home-after-success. v2 keeps the API, the split, and the order,
+(`builder/pattern.ts`) → `Runner.enableCrossSpaceChildCommit()`
+(`runner.ts`, commit order `[children..., parent]`) →
+`enableMultiSpaceWrites` (`interface.ts`) →
+`V2StorageTransaction.#commitMultiSpace()`/`#runSplitCommits()`
+(`v2-transaction.ts` — sequential, stop at first failure): today
+already foreign-first, home-after-success. v2 keeps the API, the
+split, and the order,
 relocated into the wave's commit step:
 
 - Provisioning writes seal as AUTHORED-class commits into the
@@ -571,16 +656,37 @@ relocated into the wave's commit step:
   activates later (first session or event) as its only deriver.
 - Sequencing at the wave commit step: foreign provisioning commits land
   FIRST (per destination space), then the home derived commit carrying
-  the links and the `eventWatermark` advance. Same host, same process —
-  this is store sequencing, not a network await.
+  the links and the `eventWatermark` advance. On a host with no route,
+  each foreign commit is a write to the store on the host's own
+  process: store sequencing, not a network await. With the host given
+  a route to each space's owner (`SERVER_EXECUTION_OWNER_ROUTING`,
+  [owner routing](serving-loop.md#2-the-lease-single-deriver-operationally)), each
+  foreign batch is a `served` `commit` awaited on the host's routed
+  session to the target's owner (memory-v2 04-protocol.md §4.3.12),
+  which commits it as the host's own sink would have, under this row's
+  delegated admission, and reports it to its own server, where the
+  warm notice activates the target; the host reports nothing for it.
 - Failure: foreign fails ⇒ home never commits ⇒ the event stays
   unconsequenced and replays; persistent failure falls to the
-  error-is-the-consequence rule (events.md §5).
-- Replay safety: destination DIDs/ids derive from the creation event
-  (CT-1650 — anonymous `inSpace()`, DID unique per user + creation
-  event), so a replayed handler re-derives the SAME ids and the
-  re-provisioning is a CAS no-op. The today-orphan window (foreign
-  landed, home did not) becomes convergent instead of dangling.
+  error-is-the-consequence rule (events.md §5). Through the route, the
+  owner's `refused` answer, `unavailable`, `internal` and a transport
+  failure are each this failure. A reply lost after the owner applied
+  the batch leaves the state a crash between the halves leaves, and the
+  replay converges by the next rule.
+- Replay safety: an `inSpace()` target resolves through an allocation
+  record the calling (home) space holds, one per name, keyed by the
+  creation event for the anonymous form; the record commits with the
+  home writes that refer to the space. A replayed handler reads the
+  record its first run wrote and reaches the SAME space, and ids inside
+  it derive from the creation event, so re-provisioning is a CAS no-op.
+  A space created for a run whose home commit never landed is
+  remembered by the process that created it and reused on replay there;
+  one abandoned by a process that stopped is unreferenced and inert —
+  one access-control document nobody can reach. Only the serving runtime
+  creates a space for a name. A client resolves a name only through its
+  record, so its speculative run of a provisioning handler whose record
+  does not exist yet withdraws rather than creating a space of its own
+  (speculation.md §2).
   Provisioning handlers MUST therefore be deterministic given
   payload + cells — no clock, no randomness (events.md §3); replay
   convergence depends on it. A transformer lint can trail.
@@ -601,8 +707,37 @@ the target's `eventWatermark` makes processing exactly-once.
 
 ## 3. Subscription and push
 
+A server with execution enabled advertises optional `viewScopedReplicationV1`.
+Clients without that capability use ordinary watches. An opted-in web client
+adds session-owned `views` to `session.watch.set`; omitting `views` preserves
+existing view ownership, while an empty array removes it. Ordinary watches keep
+separate ownership. View revisions and server-side session/view lifetime tokens
+reject stale publications, and `viewPlans` in a session sync frame apply after
+the frame's documents. A plan-only frame is meaningful and must be delivered.
+
+Visible roots contribute execution demand. The additional complete documents
+selected for local previews contribute delivery only, under the same READ and
+instance-scoping rules. The optional plan includes eligible graph positions,
+source identities, admitted inputs, observed write surfaces, and fingerprints of
+settled producer inputs/outputs. These are compact eligibility evidence, not the
+durable scheduler-basis table. See the
+[feature contract](../../features/view-scoped-client-replication.md) for guarded
+execution and downgrade behavior.
+
+A view with mode `read` holds demand for a one-shot read and selects nothing. The
+server sends it one plan, marked `settled`, after a settlement that reached
+quiescence over a demand pass that listed the view, with no demand note newer
+than that pass, no structure load or structure retry outstanding, no commit in
+flight, and no input left to process. Documents that settlement committed precede
+the plan on the session's stream, so a client holding the plan holds what the
+server derived for the view's roots. A view that registers while a cycle is
+running is not in that cycle's demand pass, so it waits for the next one. While a
+`read` view has no plan and nothing else is owed, the serving loop runs another
+cycle rather than wait for input, since no input follows a settlement the flush
+deadline cut.
+
 - Clients subscribe to docs/queries as today
-  (`packages/runner/src/storage/query.ts` path). The SpaceServer
+  (`runtime/runner/src/storage/query.ts` path). The SpaceServer
   subscribes to the whole space's accepted-commit feed from a seq.
 - **Push is FILTERED PER RECIPIENT by `scope_key`** (T4). One derived
   commit legitimately carries several principals' instances (§1's
@@ -611,10 +746,12 @@ the target's `eventWatermark` makes processing exactly-once.
   that a client never holds a foreign instance. A subscriber
   therefore receives ONLY the rows whose `scope_key` is in its
   APPLICABLE SET — `space`, `user:me`, `session:me:<sid>` — the
-  shape main already computes for the observation path
-  (`packages/memory/v2/server.ts:185-201`,
-  `schedulerApplicableContextKeys`). The commit's remaining rows are
-  invisible to that subscriber: not redacted, not empty — absent.
+  predicate `scopeKeyApplicableTo` in `runtime/memory/v2.ts`,
+  applied per session by `syncSessionForConnection` in
+  `runtime/memory/v2/server.ts` (a CURRENT lease holder admitted
+  explicit-instance reads is exempt, per §2's read row). The commit's
+  remaining rows are invisible to that subscriber: not redacted, not
+  empty — absent.
   This pairs with scopes.md §7 M4's re-keying: the push path must
   key dirtiness by `scope_key`, and the same key decides delivery.
   *(Fan-out stage A, 2026-08-16 — the ONE wire addition on the push
@@ -629,18 +766,15 @@ the target's `eventWatermark` makes processing exactly-once.
   before — the OFF-arm wire is byte-identical. Amended 2026-08-17 (the
   stage-A independent review's finding 1): the keying is the session's
   STICKY wire vocabulary — armed by the admission, kept for the
-  session's life, never hung from the live lease — so an instance
+  session's life, never hung from the lease — so an instance
   delivered keyed is always retracted keyed (an unkeyed remove would
   name the client's OWN instance: a former holder's catch-up wiped the
-  service's doc and kept the stale foreign one). Whether FOREIGN
-  instances are DELIVERED stays the per-pass live-lease question of
-  §2's read row: a lapse withholds them (incremental) or retracts them
-  keyed (full evaluation), and the first live pass afterwards RE-ARMS
-  with a full evaluation that re-delivers what the lapse withheld — a
-  renewal blip the SpaceServer survives in-process reports the reacquire
-  so that pass runs promptly (`Server.noteLeaseReacquired`), rather
-  than leaving the serving replica silently stale until an unrelated
-  write.)*
+  service's doc and kept the stale foreign one). Amended again by owner
+  routing R3 (2026-11-01): the instances an admitted session named are
+  DELIVERED to it for the session's life — the admission is the
+  session's, not the lease's, so a release or a handover of the lease
+  changes nothing on its wire, and a resumed session's catch-up carries
+  them keyed as well.)*
 - **Basis-index rows are NOT part of the pushed commit** (T2). They
   ride the loopback store TRANSACTION only (serving-loop.md §1 plane
   (a), §3b); nothing about them crosses the wire to a subscriber,
@@ -648,8 +782,8 @@ the target's `eventWatermark` makes processing exactly-once.
 - **Push priority** (Phase 6 hardening, but the contract is fixed now):
   when flushing a batch to a client socket, `derived` commits touching
   docs that client subscribes to go first; everything else follows.
-  Bookkeeping MUST NOT ride the commit stream at all (lease renewals are
-  table updates; watermarks piggyback on derived commits), so in practice
+  Bookkeeping MUST NOT ride the commit stream at all (the lease lives in
+  memory; watermarks piggyback on derived commits), so in practice
   priority is about big authored blobs vs small derived values.
   *(LANDED Phase 6 — the implementation shape, stated so no one infers a
   stronger one: each session gets ONE frame per flush cycle, so priority
@@ -662,7 +796,7 @@ the target's `eventWatermark` makes processing exactly-once.
   hazard. Counters: `servingLoop.push.{prioritizedSessions,
   followerSessions, mixedFlushes}`, all-zero in the OFF arm by
   construction; the deterministic order pin is
-  `packages/memory/test/v2-push-priority.test.ts`.)*
+  `runtime/memory/test/v2-push-priority.test.ts`.)*
 - Self-echo: SpaceServer skips its own `derived` commits on receipt
   (serving-loop.md §3).
 
@@ -698,7 +832,8 @@ the target's `eventWatermark` makes processing exactly-once.
   ("each new input lifts the previous generation" now holds without
   requiring a next input). Bounds, normative: the advance covers only
   COMMITTED seqs — no speculative advance; it fires at most once per
-  quiescence transition (armed by content-carrying wave commits,
+  quiescence transition (armed by content-carrying own derived commits,
+  including standalone effect completions,
   consumed on seal); its own advance-only commit is NEVER chased — the
   one derived commit W does not cover at quiescence is the final
   advance-carrying bookkeeping commit itself, definitionally (covering
@@ -709,7 +844,7 @@ the target's `eventWatermark` makes processing exactly-once.
   ordinary input-driven path. Counted as `settleAdvances` (count, last
   delta, series) so §4 amplification arithmetic and settle metrics can
   subtract the advance-only waves. Seat:
-  `packages/runner/src/executor/space-server.ts` (the wave cycle's
+  `runtime/runner/src/executor/space-server.ts` (the wave cycle's
   advance computation); pins: `executor-settle-advance.test.ts`.
 - Carried: in every `derived` commit's metadata (`derivedThrough: W`) and
   in one well-known doc per space (updated in the same transaction; never
@@ -780,14 +915,20 @@ Session-scoped, server-computed, client-enacted effects (README §3.7).
   bounded by per-wave retirement, and the session-lifetime GC
   (below) covers abandoned instances.
 - Exactly-once enactment per nonce is the CLIENT's duty (it may enact
-  optimistically from speculation, then reconcile by nonce — navigation
-  is reversible). Nonce reconciliation covers only the intent-ARRIVES
-  case: when the authoritative run computes no intent for an
-  optimistically enacted navigation (branch divergence on a speculative
-  read), the enactment STANDS un-reconciled — ruled PUNT (owner,
-  2026-08-27; register OW45) — and consumers must be robust to it.
-  Reload between intent and ack: on resubscribe the
-  client sees unacked intents and enacts them; nonces make re-enactment
+  optimistically from speculation, then reconcile by nonce —
+  navigation is reversible). Reconciliation holds in either order. An
+  intent that arrives, and begins enacting, before the client's own
+  speculative run seals records the nonce, and that run's optimistic
+  enactment converges on the record rather than enacting a second
+  time. An enactment still in flight is awaited rather than assumed,
+  since its failure retracts the record and the caller that found it
+  must then enact. Nonce reconciliation covers only the
+  intent-ARRIVES case: when the authoritative run computes no intent
+  for an optimistically enacted navigation (branch divergence on a
+  speculative read), the enactment STANDS un-reconciled — ruled PUNT
+  (owner, 2026-08-27; register OW45) — and consumers must be robust
+  to it. Reload between intent and ack: on resubscribe the client
+  sees unacked intents and enacts them; nonces make re-enactment
   detectable. The reload × optimistic-enactment window MAY re-enact
   a nonce — the enacted-nonce record lives in the reload-wiped
   overlay — and that is ACCEPTED for reversible effects, which
@@ -854,7 +995,7 @@ disabled (README §3.5).
 - **`scope_key` is thereby PROTOCOL vocabulary**, no longer
   engine-internal vocabulary: it appears inside derived commit
   bodies and on lease-holder reads, so its format is defined ONCE
-  in the wire-shape module (`packages/memory/v2.ts`, beside
+  in the wire-shape module (`runtime/memory/v2.ts`, beside
   `CellScope` and `SessionId`) and imported by engine and runner
   alike — the LD3 ruling, key-vocabulary.md §3.
 - **`eventId` and `firedAt` are ENVELOPE fields for admission** (T8),
@@ -873,7 +1014,7 @@ disabled (README §3.5).
   ledger LD5 ratified 2026-08-03 — the read half of §1's
   transaction identity model). That is the only read-side addition
   to the wire: one optional field on the read, admissible only for
-  a live lease holder on the co-hosted memory server — its own
+  a lease holder on the co-hosted memory server — its own
   space's lease (FP2, ruled 2026-08-03). Reads that name nothing
   are unchanged.
 - Basis-index rows (serving-loop.md §3b) ride INSIDE the derived

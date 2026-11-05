@@ -3,8 +3,16 @@
 `llmDialog` runs a model conversation as a reactive builtin: the pattern
 supplies tools and messages, the runtime executes tool calls, and results flow
 back into the dialog. The behaviors below are facts about the builtin
-(`packages/runner/src/builtins/llm-dialog.ts`) that pattern authors cannot
+(`runtime/runner/src/builtins/llm-dialog.ts`) that pattern authors cannot
 derive from its type signature.
+
+## Turn ownership and cancellation
+
+A dialog whose inputs resolve per user or per session has an independent turn
+for each instance. Starting or canceling one instance does not cancel another.
+A message sent while that instance's local turn is running is ignored; cancel
+the turn before sending a replacement. A late reply to a canceled or replaced
+turn does not append to the replacement conversation.
 
 ## Built-in tools are injected unless you turn them off
 

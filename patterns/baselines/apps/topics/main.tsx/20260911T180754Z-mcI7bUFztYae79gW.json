@@ -1,0 +1,549 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "NamesMap": {
+        "additionalProperties": {
+          "type": "unknown"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "TopicAuthor": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "Open for the same reason `TopicLinkKind` is: this is provided data, so a\nclosed set here could never gain `\"service\"` or whatever acts next.\nWell-known values are `\"person\"` and `\"agent\"`, the latter marking an\nagent acting with its human user's key. `\"legacy\"` records a display name\nwhose author kind is unknown.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
+        "type": "object"
+      },
+      "TopicDemand": {
+        "properties": {
+          "$NAME": {
+            "default": "",
+            "description": "The display name, which the board's mention index copies into each\ntopic's row — the label every `@`-mention completion carries. The index\nlift states the same three-string demand for itself; this entry is the\nboard-level record of it.",
+            "type": [
+              "string",
+              "undefined"
+            ]
+          },
+          "body": {
+            "default": "",
+            "type": "string"
+          },
+          "commentCount": {
+            "default": 0,
+            "type": [
+              "number",
+              "undefined"
+            ]
+          },
+          "createdAt": {
+            "description": "When the topic was filed (epoch milliseconds), stamped at create.",
+            "type": "number"
+          },
+          "createdBy": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TopicAuthor"
+              },
+              {
+                "type": "undefined"
+              }
+            ],
+            "default": {
+              "kind": "person",
+              "name": ""
+            }
+          },
+          "lastActivityAt": {
+            "default": 0,
+            "type": [
+              "number",
+              "undefined"
+            ]
+          },
+          "mentions": {
+            "default": [],
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "shortName": {
+            "description": "The board's name for the topic, as the topic reads it out of the board's\nnames table. The card renders it as a badge and the mention index copies\nit into the topic's universe row, so `#42` matches without expanding a\ntopic.\n\nOPTIONAL rather than defaulted, which is a fact about the compatibility\nproof: a defaulted property moves the demand's defaults below an array\nconstraint the proof cannot show stable under default insertion, while an\noptional one simply tolerates a topic that publishes none.\n\nA member's open producer contract allows any value at an undeclared\nproperty. Demanding a string there narrows that contract even when the\nproperty is optional, so `setsrc` requires an accepted compatibility\nbreak until the producer guarantees the string type. An optional\n`unknown` demand imposes no such restriction. A topic whose\nlookup has produced no value — one filed a moment ago, or one from before\nthe board numbered anything — is absent here rather than blank, and every\nconsumer treats the two the same.",
+            "tags": [
+              "42"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "description": "The topic's title. Defaulted rather than required, like every other\nfield a board card renders: the card list is a mapped sub-pattern, so\nthis type reaches a piece holding topics written before the field\nexisted as the argument schema its update is checked against, and a\nrequired property those topics lack refuses that update outright.\n`deno task pattern-vintage` is what catches it, by replaying a real\ndeployed board.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body",
+          "mentions",
+          "$NAME",
+          "title",
+          "createdAt",
+          "commentCount",
+          "lastActivityAt"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "names": {
+        "$ref": "#/$defs/NamesMap",
+        "asCell": [
+          "cell"
+        ],
+        "default": {},
+        "description": "The board's member namespace: each name to the topic it names, held as an\nunread reference. `addTopic` writes one key per create and `backfillNames`\none key per member it names; nothing rewrites the map whole. Reads as empty\non a board from before it numbered anything, in the default form `NamesMap`\nexplains."
+      },
+      "topics": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "The board's durable topic list. `addTopic` appends here; direct writes\nare legitimate but unattributed, and a whole-array write forfeits the\nmergeability the verb's append keeps.",
+        "items": {
+          "$ref": "#/$defs/TopicDemand"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "topics/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AddTopicEvent": {
+        "properties": {
+          "agentName": {
+            "description": "The agent making this mutation. The authenticated principal remains the\nhuman whose identity key invoked the stream; this is the agent's explicit\ncontent-level signature under that shared principal.\n\nRequired, for the reason given on `AgentAuthoredEvent`: acceptance widens\ncompatibly and narrows only through a break, so tolerating an unsigned\ncreate is a tolerance that could never be withdrawn.",
+            "type": "string"
+          },
+          "body": {
+            "description": "The topic's initial living-document body. A topic born with a body\nappears with it atomically — no reader observes the title-only halfway\nstate, and no follow-up `setBody` call is needed to finish a create\n(verb contract: the atomic-unit rule).",
+            "type": "string"
+          },
+          "title": {
+            "description": "The topic's title, trimmed before it is stored. Must be non-empty.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "agentName"
+        ],
+        "type": "object"
+      },
+      "BackfillNamesEvent": {
+        "properties": {
+          "agentName": {
+            "description": "The agent running the backfill, checked as `addTopic` checks it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentName"
+        ],
+        "type": "object"
+      },
+      "MentionableRow": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "piece": {
+            "type": "unknown"
+          },
+          "shortName": {
+            "default": "",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "shortName",
+          "piece",
+          "$NAME"
+        ],
+        "type": "object"
+      },
+      "NamesMap": {
+        "additionalProperties": {
+          "type": "unknown"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "NamesTableRow": {
+        "properties": {
+          "member": {
+            "description": "The member. `unknown` because it is written as a reference and only ever\ncompared; anything wider would read the member back whole.",
+            "type": "unknown"
+          },
+          "name": {
+            "description": "The member's name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "member",
+          "name"
+        ],
+        "type": "object"
+      },
+      "NamingDeclaration": {
+        "properties": {
+          "compact": {
+            "description": "Whether the collection offers the compact spelling that joins its name to\na member's with a hyphen. Only a collection whose member names cannot\ncontain a hyphen may say so.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The collection's own name, which a binding uses to reach it. Absent when\nthe collection makes no claim about what it is bound as.",
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/$defs/NamingPolicy",
+            "description": "The policy the names are held to."
+          }
+        },
+        "required": [
+          "policy",
+          "compact"
+        ],
+        "type": "object"
+      },
+      "NamingPolicy": {
+        "properties": {
+          "allocator": {
+            "description": "What a name is made of: a monotonic sequence, a random code, a string a\nperson chose, or a derivation from the member's own content.",
+            "enum": [
+              "sequence",
+              "random",
+              "human",
+              "derived"
+            ]
+          },
+          "permanent": {
+            "description": "Whether a name, once assigned, is never retired or reassigned.",
+            "type": "boolean"
+          },
+          "reuse": {
+            "description": "Whether a retired name may be given to another member.",
+            "type": "boolean"
+          },
+          "unique": {
+            "description": "Whether a name is unique across the collection's whole history, or only\namong its current members.",
+            "enum": [
+              "history",
+              "current"
+            ]
+          }
+        },
+        "required": [
+          "unique",
+          "permanent",
+          "reuse",
+          "allocator"
+        ],
+        "type": "object"
+      },
+      "TopicAuthor": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "Open for the same reason `TopicLinkKind` is: this is provided data, so a\nclosed set here could never gain `\"service\"` or whatever acts next.\nWell-known values are `\"person\"` and `\"agent\"`, the latter marking an\nagent acting with its human user's key. `\"legacy\"` records a display name\nwhose author kind is unknown.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
+        "type": "object"
+      },
+      "TopicCrossrefRow": {
+        "properties": {
+          "mentionedBy": {
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "topic": {
+            "description": "The topic this row is about. `unknown` because it is written as a\nreference and only ever compared — `equals` takes the raw link. Anything\nwider retrieves the piece instead of pointing at it: declared `object`,\nthis field reads back as the whole expanded topic, `$UI` tree included.",
+            "type": "unknown"
+          }
+        },
+        "required": [
+          "topic",
+          "mentionedBy"
+        ],
+        "type": "object"
+      },
+      "TopicDemand": {
+        "properties": {
+          "$NAME": {
+            "default": "",
+            "description": "The display name, which the board's mention index copies into each\ntopic's row — the label every `@`-mention completion carries. The index\nlift states the same three-string demand for itself; this entry is the\nboard-level record of it.",
+            "type": [
+              "string",
+              "undefined"
+            ]
+          },
+          "body": {
+            "default": "",
+            "type": "string"
+          },
+          "commentCount": {
+            "default": 0,
+            "type": [
+              "number",
+              "undefined"
+            ]
+          },
+          "createdAt": {
+            "description": "When the topic was filed (epoch milliseconds), stamped at create.",
+            "type": "number"
+          },
+          "createdBy": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TopicAuthor"
+              },
+              {
+                "type": "undefined"
+              }
+            ],
+            "default": {
+              "kind": "person",
+              "name": ""
+            }
+          },
+          "lastActivityAt": {
+            "default": 0,
+            "type": [
+              "number",
+              "undefined"
+            ]
+          },
+          "mentions": {
+            "default": [],
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "shortName": {
+            "description": "The board's name for the topic, as the topic reads it out of the board's\nnames table. The card renders it as a badge and the mention index copies\nit into the topic's universe row, so `#42` matches without expanding a\ntopic.\n\nOPTIONAL rather than defaulted, which is a fact about the compatibility\nproof: a defaulted property moves the demand's defaults below an array\nconstraint the proof cannot show stable under default insertion, while an\noptional one simply tolerates a topic that publishes none.\n\nA member's open producer contract allows any value at an undeclared\nproperty. Demanding a string there narrows that contract even when the\nproperty is optional, so `setsrc` requires an accepted compatibility\nbreak until the producer guarantees the string type. An optional\n`unknown` demand imposes no such restriction. A topic whose\nlookup has produced no value — one filed a moment ago, or one from before\nthe board numbered anything — is absent here rather than blank, and every\nconsumer treats the two the same.",
+            "tags": [
+              "42"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "description": "The topic's title. Defaulted rather than required, like every other\nfield a board card renders: the card list is a mapped sub-pattern, so\nthis type reaches a piece holding topics written before the field\nexisted as the argument schema its update is checked against, and a\nrequired property those topics lack refuses that update outright.\n`deno task pattern-vintage` is what catches it, by replaying a real\ndeployed board.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body",
+          "mentions",
+          "$NAME",
+          "title",
+          "createdAt",
+          "commentCount",
+          "lastActivityAt"
+        ],
+        "type": "object"
+      },
+      "TopicIndexRow": {
+        "properties": {
+          "commentCount": {
+            "default": 0,
+            "description": "Coalesced to 0 for a cold or older topic whose derived path is absent,\nso the row itself never carries the mixed-version undefined.",
+            "type": [
+              "number",
+              "undefined"
+            ]
+          },
+          "createdAt": {
+            "type": "number"
+          },
+          "createdBy": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TopicAuthor"
+              },
+              {
+                "type": "undefined"
+              }
+            ],
+            "default": {
+              "kind": "person",
+              "name": ""
+            },
+            "description": "Who filed the topic. A record without structured authorship materializes\nthe inert `{ kind: \"person\", name: \"\" }` default, which\n`topicAuthorLabel()` renders as `someone`."
+          },
+          "lastActivityAt": {
+            "default": 0,
+            "type": [
+              "number",
+              "undefined"
+            ]
+          },
+          "shortName": {
+            "description": "The board's name for the topic. Optional rather than defaulted, unlike\nthe two above, for the reason `TopicDemand.shortName` states.",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "createdAt",
+          "commentCount",
+          "lastActivityAt"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Topics — a tracker over #topic pieces: durable units of shared attention\n(CT-1878). Deliberately minimal: no statuses, labels, or assignees; topics\nsort by last activity. Replaces Linear / GitHub issues / loose process docs\nfor the team; PR workflows stay in GitHub and arrive here as links.\n\nHeadless use: survey the whole board with one bounded read of `index` — a\nrow is its Topic, so select the row's own address alongside `title` and use\nthat canonical address as the piece for the Topic's reads and verbs.\nFile with `addTopic`, title and optional initial body in one call, then work\non the Topic directly: the body is its living document, the thread its\nappend-only deliberation. Sign every authored-content mutation with\n`agentName`; Fabric records the human principal behind the key, and the name\nsays which agent acted under it. Reference-only `mention` and `unmention`\ncalls carry no content signature.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addTopic": {
+        "$ref": "#/$defs/AddTopicEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "File a topic. The atomic unit takes the initial body with the title, so\nno reader observes a title-only halfway state and no follow-up `setBody`\nfinishes a create. Returns the created topic as its survey row — the\nreference plus the write-time facts the pattern resolved."
+      },
+      "backfillNames": {
+        "$ref": "#/$defs/BackfillNamesEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Name every unnamed member in filing order. Idempotent. A member filed\npast `addTopic` also needs a one-time link-bind of `namesTable` onto it\nbefore its row and its universe entry show the name, the same operator\nstep `mentionable` states for itself."
+      },
+      "crossrefs": {
+        "default": [],
+        "description": "The board's mention pivot, one row per topic: the topic, and the topics\nthat mention it. Published so a topic composed outside `addTopic` can be\nwired to the same table the board's own children read — the graph is\nderived once, here, and never per topic.",
+        "items": {
+          "$ref": "#/$defs/TopicCrossrefRow"
+        },
+        "type": "array"
+      },
+      "index": {
+        "default": [],
+        "description": "The full-board survey surface: one bounded row per topic, carrying the\nscalars a survey reads. A row IS its topic, so a row's own address is the\ntopic's — `--select index[].@` reads it, and an index into this array is\nnot a stable address.",
+        "items": {
+          "$ref": "#/$defs/TopicIndexRow"
+        },
+        "type": "array"
+      },
+      "mentionable": {
+        "default": [],
+        "description": "The board's mention universe, under the name the topic pattern's editor\nautocompletes over — what `addTopic` wires into each child. One derived\ndocument of copies, each holding its topic as an unread reference and\ncarrying the board's name for it, rather than the topics themselves, so a\nreader of the universe expands no topic and `#42` finds a member without\nexpanding one; see `MentionableRow` in\n`../collection-naming/mentionable.ts`.",
+        "items": {
+          "$ref": "#/$defs/MentionableRow"
+        },
+        "tags": [
+          "42"
+        ],
+        "type": "array"
+      },
+      "names": {
+        "$ref": "#/$defs/NamesMap",
+        "default": {},
+        "description": "The namespace itself: each name to the topic it names. A slug pointing\nhere is what makes a member addressable as `<collection>/<name>`.\nPublished under the default its input carries."
+      },
+      "namesTable": {
+        "default": [],
+        "description": "The names table, one row per named member, which every topic the board\ncreates reads its own name from. Published so a topic composed outside\n`addTopic` can be wired to the same table.",
+        "items": {
+          "$ref": "#/$defs/NamesTableRow"
+        },
+        "type": "array"
+      },
+      "naming": {
+        "$ref": "#/$defs/NamingDeclaration",
+        "description": "What the board declares about its names, for a consumer deciding whether\na name may be held rather than an identity."
+      },
+      "newTitle": {
+        "description": "Session-local draft for the footer composer (exposed for embedding and\nheadless driving, like the chat exemplar's drafts).",
+        "type": "string"
+      },
+      "submitTopic": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Submit the footer composer as the current viewer's canonical Profile.",
+        "tier": "wrapper"
+      },
+      "topicCount": {
+        "description": "How many topics the board holds, nulls included.",
+        "type": "number"
+      },
+      "topics": {
+        "description": "The board's topics, in filing order, through the shape the board demands\nof them: the display scalars and the mention universe, and no verbs. A\ncaller that means to mutate a topic addresses the topic itself, where its\nown schema governs. Survey through `index` instead; read this when you\nalready know which topic you are expanding.",
+        "items": {
+          "$ref": "#/$defs/TopicDemand"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "topics",
+      "mentionable",
+      "names",
+      "namesTable",
+      "naming",
+      "topicCount",
+      "crossrefs",
+      "index",
+      "addTopic",
+      "backfillNames",
+      "submitTopic",
+      "$NAME",
+      "$UI"
+    ],
+    "tags": [
+      "topic"
+    ],
+    "type": "object"
+  }
+}

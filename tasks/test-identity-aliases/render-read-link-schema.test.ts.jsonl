@@ -1,0 +1,1 @@
+{"date": "2026-10-01", "from": {"k": "unit", "s": "runner", "n": "render-read-link-schema > a render read at a slot holding a narrowly typed link > delivers `[UI]` to a render-read sink"}, "to": {"k": "unit", "s": "runner", "n": "render-read-link-schema > a render read at a slot holding a narrowly typed link > delivers `[UI]` to a renderer's sink"}}

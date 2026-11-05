@@ -5,6 +5,7 @@ cd "$SCRIPT_DIR/.."
 
 # Source shared utilities
 source "$SCRIPT_DIR/common/port-utils.sh"
+source "$SCRIPT_DIR/common/console-args.sh"
 read_base_ports
 
 require_command() {
@@ -44,11 +45,19 @@ PORT_IN_USE_EXIT=3
 # Parse command line arguments
 FORCE=false
 WATCH=false
-BG_UPDATER=false
 # The console is opt-in and stays that way. An inherited loom variable is a
 # fact about the process tree, not a request for a console, and a flag is the
 # only thing loom needs to know about cf-harness.
 CF_HARNESS=false
+# Whether the console this script may start runs skill scripts in its sandbox.
+# The operator's decision, and no part of starting a fabric implies it, so it
+# is off unless named and passed through to the launcher, which prints it.
+CF_HARNESS_ALLOW_SKILL_SCRIPTS_FLAG=false
+# Whether a task sent to that console may declare a browser host, a client
+# that shows the agent's web pages to the owner. Also the operator's decision:
+# named here, it is passed through to the console server, which also reads
+# `CF_HARNESS_ALLOW_BROWSER_HOST`.
+CF_HARNESS_ALLOW_BROWSER_HOST_FLAG=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --force)
@@ -63,8 +72,12 @@ while [[ $# -gt 0 ]]; do
             CF_HARNESS=true
             shift
             ;;
-        --bg-updater)
-            BG_UPDATER=true
+        --allow-skill-scripts)
+            CF_HARNESS_ALLOW_SKILL_SCRIPTS_FLAG=true
+            shift
+            ;;
+        --allow-browser-host)
+            CF_HARNESS_ALLOW_BROWSER_HOST_FLAG=true
             shift
             ;;
         --inspect)
@@ -156,13 +169,11 @@ if [[ -n "${CODEX_SANDBOX:-}" ]]; then
     KEEP_ALIVE=true
 fi
 
-SHELL_LOG="$SCRIPT_DIR/../packages/shell/local-dev-shell.log"
-TOOLSHED_LOG="$SCRIPT_DIR/../packages/toolshed/local-dev-toolshed.log"
-BG_LOG="$SCRIPT_DIR/../packages/background-piece-service/local-dev-bg.log"
-CONSOLE_LOG="$SCRIPT_DIR/../packages/cf-harness/local-dev-console.log"
+SHELL_LOG="$SCRIPT_DIR/../runtime/shell/local-dev-shell.log"
+TOOLSHED_LOG="$SCRIPT_DIR/../runtime/toolshed/local-dev-toolshed.log"
+CONSOLE_LOG="$SCRIPT_DIR/../runtime/cf-harness/local-dev-console.log"
 SHELL_PID=""
 TOOLSHED_PID=""
-BG_PID=""
 CONSOLE_PID=""
 
 # With --force, kill anything already listening on the port so the server can
@@ -225,7 +236,6 @@ kill_tree() {
 
 cleanup_started_processes() {
     kill_tree "$CONSOLE_PID"
-    kill_tree "$BG_PID"
     kill_tree "$TOOLSHED_PID"
     kill_tree "$SHELL_PID"
 }
@@ -234,7 +244,6 @@ fail_startup() {
     local message=$1
 
     echo "Error: $message" >&2
-    cleanup_started_processes
     show_recent_log "shell" "$SHELL_LOG"
     show_recent_log "toolshed" "$TOOLSHED_LOG"
     exit 1
@@ -256,7 +265,6 @@ ensure_process_running() {
     wait "$pid" 2>/dev/null
     local exit_status=$?
     echo "Error: $name exited before it became ready (exit $exit_status)." >&2
-    cleanup_started_processes
     show_recent_log "$name" "$log_file"
     if [[ "$exit_status" -eq "$PORT_IN_USE_EXIT" ]]; then
         echo "($name could not bind its port; it is already in use.)" >&2
@@ -326,14 +334,32 @@ wait_for_listen() {
     fail_startup "$name did not bind its port within ${LOCAL_DEV_STARTUP_TIMEOUT}s."
 }
 
+# Until the servers are handed over, they end when this script does, whether
+# it fails or a signal ends it.
+trap cleanup_started_processes EXIT
+
+# Each server runs in a process group of its own, so that it keeps running
+# when whatever ran this script ends the script's process group after the
+# script returns. Job control is what gives a background job its own group.
+# It is on only while the servers are launched, since it also gives each
+# foreground command a group of its own and hands it the terminal. A job
+# started under job control keeps the script's standard input, so each server
+# reads /dev/null instead. Under KEEP_ALIVE this script does not return, and
+# the servers stay in its group, to end with it.
+server_job_control() {
+    [[ "$KEEP_ALIVE" == "true" ]] || set -m
+}
+
 # Start shell dev server in background
-cd "$SCRIPT_DIR/../packages/shell"
-TOOLSHED_PORT="$TOOLSHED_PORT" deno task dev-local > "$SHELL_LOG" 2>&1 &
+cd "$SCRIPT_DIR/../runtime/shell"
+server_job_control
+TOOLSHED_PORT="$TOOLSHED_PORT" deno task dev-local \
+    < /dev/null > "$SHELL_LOG" 2>&1 &
 SHELL_PID=$!
 
 # Start toolshed dev server in background
 # We pass --port= as CLI arg because deno --watch doesn't pass env vars to subprocess
-cd "$SCRIPT_DIR/../packages/toolshed"
+cd "$SCRIPT_DIR/../runtime/toolshed"
 WATCH_FLAG=""
 if [[ "$WATCH" == "true" ]]; then
     WATCH_FLAG="--watch"
@@ -346,25 +372,21 @@ if [[ "$INSPECT" == "true" ]]; then
         INSPECT_FLAG="--inspect=127.0.0.1:$INSPECT_PORT"
     fi
 fi
+# EXPOSE_GC lets a leak test read the server's memory after a full collection
+# (/api/health/collected-memory).
 SHELL_URL="http://localhost:$SHELL_PORT" \
+    EXPOSE_GC=true \
     API_URL="$TOOLSHED_API_URL" \
     MEMORY_URL="$TOOLSHED_MEMORY_URL" \
-    deno run --unstable-otel -A $INSPECT_FLAG $WATCH_FLAG \
+    deno run --unstable-otel -A --v8-flags=--max-old-space-size=8192 \
+        $INSPECT_FLAG $WATCH_FLAG \
         --env-file=.env index.ts --port="$TOOLSHED_PORT" \
-        > "$TOOLSHED_LOG" 2>&1 &
+        < /dev/null > "$TOOLSHED_LOG" 2>&1 &
 TOOLSHED_PID=$!
+set +m
 
 wait_for_listen "shell" "Dev server listening on" "$SHELL_PID" "$SHELL_LOG"
 wait_for_http "shell" "http://localhost:$SHELL_PORT" "$SHELL_PID" "$SHELL_LOG"
-
-# # Function to cleanup background processes
-# cleanup() {
-#     kill $SHELL_PID $TOOLSHED_PID 2>/dev/null
-#     exit
-# }
-
-# # Set up trap to cleanup on script exit
-# trap cleanup EXIT INT TERM
 
 wait_for_listen "toolshed" "Server running on" "$TOOLSHED_PID" "$TOOLSHED_LOG"
 wait_for_http \
@@ -381,10 +403,19 @@ wait_for_http \
 # The cf-harness console, on the fabric the toolshed above is now serving.
 #
 # It never fails this script. The toolshed and the shell are the stack; the
-# console is a surface on top of it, and a person whose Docker is off or whose
-# model provider is not connected should still get a working fabric. So every
-# way the console can fail to come up is reported here and written to its log,
-# and none of them stops the servers that did come up.
+# console is a surface on top of it, and a person whose sandbox runtime is not
+# set up or whose model provider is not connected should still get a working
+# fabric. So every way the console can fail to come up is reported here and
+# written to its log, and none of them stops the servers that did come up.
+#
+# The console's sandbox runtime is not this script's to choose. It is the one
+# `CF_HARNESS_SANDBOX_RUNTIME` names in this script's environment. With none
+# named, the console of a loom instance (`LOOM_INSTANCE_ID` set, so
+# `--instance` below) does not start, and says that loom must name one: loom
+# chooses each instance's runtime, and a default could be another. Any other
+# console takes its platform's: an Apple silicon Mac and Linux serve on their
+# native runtime and refuse to start where that is not set up, any other Mac
+# does not start, and every other platform has no default and does not start.
 CONSOLE_STATUS=""
 
 console_unavailable() {
@@ -393,7 +424,7 @@ console_unavailable() {
     echo "" >&2
     echo "Error: cf-harness console did not start: $reason" >&2
     echo "  The shell and toolshed are unaffected and still running." >&2
-    echo "  Console log: packages/cf-harness/local-dev-console.log" >&2
+    echo "  Console log: runtime/cf-harness/local-dev-console.log" >&2
     kill_tree "$CONSOLE_PID"
     CONSOLE_PID=""
     CONSOLE_STATUS="$reason"
@@ -419,35 +450,30 @@ if [[ "$CF_HARNESS" == "true" ]]; then
     # `--instance` is how the identity and space are read off a loom instance;
     # without one, `CF_IDENTITY` and `CF_SPACE` name them and their absence is
     # the launcher's named error.
-    CONSOLE_ARGS=(
-        --port "$CONSOLE_PORT"
-        --fabric-api-url "$TOOLSHED_API_URL"
-    )
-    if [[ -n "${LOOM_INSTANCE_ID:-}" ]]; then
-        CONSOLE_ARGS+=(--instance "$LOOM_INSTANCE_ID")
-    fi
-    # The toolshed above runs in `packages/toolshed`, so an unset `MEMORY_DIR`
+    # The toolshed above runs in `runtime/toolshed`, so an unset `MEMORY_DIR`
     # leaves it on that directory's own `cache/memory`, which is the store the
     # console then has to read.
-    CONSOLE_STORE=${MEMORY_DIR:-"$(cd "$SCRIPT_DIR/../packages/toolshed" && pwd)/cache/memory"}
-    CONSOLE_ARGS+=(--store "$CONSOLE_STORE")
-    # `DB_PATH` puts the toolshed in single-file mode, where the directory the
-    # console would otherwise walk holds nothing. Naming the file keeps the
-    # console reading the store this fabric is actually writing.
-    if [[ -n "${DB_PATH:-}" ]]; then
-        CONSOLE_ARGS+=(-- --space-db "$DB_PATH")
-    fi
+    CONSOLE_STORE=${MEMORY_DIR:-"$(cd "$SCRIPT_DIR/../runtime/toolshed" && pwd)/cache/memory"}
+    export CONSOLE_PORT TOOLSHED_API_URL CONSOLE_STORE \
+        CF_HARNESS_ALLOW_SKILL_SCRIPTS_FLAG CF_HARNESS_ALLOW_BROWSER_HOST_FLAG
+    CONSOLE_ARGS=()
+    while IFS= read -r console_arg; do
+        CONSOLE_ARGS+=("$console_arg")
+    done < <(console_launch_args)
 
     echo ""
     echo "Starting cf-harness console on port $CONSOLE_PORT..."
+    [[ ! -f "$CONSOLE_LOG" ]] || mv -- "$CONSOLE_LOG" "$CONSOLE_LOG.previous"
+    server_job_control
     (
         cd "$SCRIPT_DIR/.."
         # The console resolves its own store from `--store` above; an inherited
         # `MEMORY_DIR` would be the toolshed's `file://` spelling of it.
         unset MEMORY_DIR
-        exec deno task --cwd packages/cf-harness console:launch "${CONSOLE_ARGS[@]}"
-    ) > "$CONSOLE_LOG" 2>&1 &
+        exec deno task --cwd runtime/cf-harness console:launch "${CONSOLE_ARGS[@]}"
+    ) < /dev/null > "$CONSOLE_LOG" 2>&1 &
     CONSOLE_PID=$!
+    set +m
 
     console_deadline=$((SECONDS + LOCAL_DEV_STARTUP_TIMEOUT))
     while (( SECONDS < console_deadline )); do
@@ -485,79 +511,31 @@ $console_holder, not the console this launch started"
     fi
 fi
 
-# Print the toolshed URL on success (when not using --bg-updater, which prints after health check)
-if [[ "$BG_UPDATER" != "true" ]]; then
-    echo "Development servers started successfully!"
-    echo "  Shell:    http://localhost:$SHELL_PORT"
-    echo "  Toolshed: http://localhost:$TOOLSHED_PORT"
-    if [[ "$INSPECT" == "true" ]]; then
-        echo "  Inspect:  127.0.0.1:$INSPECT_PORT"
-    fi
-    if [[ "$PORT_OFFSET" -ne 0 ]]; then
-        echo "  Offset:   $PORT_OFFSET"
-    fi
-    if [[ "$CF_HARNESS" == "true" ]]; then
-        echo "  Console:  http://127.0.0.1:$CONSOLE_PORT"
-    elif [[ -n "$CONSOLE_STATUS" ]]; then
-        echo "  Console:  NOT RUNNING — $CONSOLE_STATUS"
-    fi
-    echo "Shell log file: packages/shell/local-dev-shell.log"
-    echo "Toolshed log file: packages/toolshed/local-dev-toolshed.log"
-    if [[ "$CF_HARNESS" == "true" || -n "$CONSOLE_STATUS" ]]; then
-        echo "Console log file: packages/cf-harness/local-dev-console.log"
-    fi
+if [[ "$KEEP_ALIVE" != "true" ]]; then
+    # The servers are the caller's from here on, to stop with
+    # stop-local-dev.sh.
+    trap - EXIT
 fi
 
-# Optionally start background-piece-service for bgUpdater polling
-if [[ "$BG_UPDATER" == "true" ]]; then
-    echo ""
-    echo "Starting background-piece-service..."
-
-    # Kill any previously running bg service to avoid orphaned processes
-    BG_PID_FILE="$SCRIPT_DIR/../.bg-piece-service.pid"
-    if [[ -f "$BG_PID_FILE" ]]; then
-        OLD_BG_PID=$(cat "$BG_PID_FILE")
-        if kill -0 "$OLD_BG_PID" 2>/dev/null; then
-            echo "  Stopping previous bg service (PID $OLD_BG_PID)..."
-            kill "$OLD_BG_PID" 2>/dev/null
-            sleep 1
-            if kill -0 "$OLD_BG_PID" 2>/dev/null; then
-                echo "  Force killing previous bg service..."
-                kill -9 "$OLD_BG_PID" 2>/dev/null
-            fi
-        fi
-        rm -f "$BG_PID_FILE"
-    fi
-
-    echo "  Toolshed is ready."
-
-    # Start the background service directly (not via deno task, for reliable PID tracking)
-    cd "$SCRIPT_DIR/../packages/background-piece-service"
-    OPERATOR_PASS="implicit trust" API_URL="http://localhost:$TOOLSHED_PORT" \
-        deno run -A --unstable-worker-options src/main.ts \
-        > "$BG_LOG" 2>&1 &
-    BG_PID=$!
-    cd "$SCRIPT_DIR/.."
-    sleep 2
-    ensure_process_running "background service" "$BG_PID" "$BG_LOG"
-
-    # Save PID for stop script
-    echo "$BG_PID" > "$BG_PID_FILE"
-
-    echo "  Background service: PID $BG_PID (polling bgUpdater every 60s)"
-    echo "  Log file: packages/background-piece-service/local-dev-bg.log"
-    echo ""
-    echo "Development servers started successfully!"
-    echo "  Shell:    http://localhost:$SHELL_PORT"
-    echo "  Toolshed: http://localhost:$TOOLSHED_PORT"
-    if [[ "$INSPECT" == "true" ]]; then
-        echo "  Inspect:  127.0.0.1:$INSPECT_PORT"
-    fi
-    if [[ "$PORT_OFFSET" -ne 0 ]]; then
-        echo "  Offset:   $PORT_OFFSET"
-    fi
-    echo "Shell log file: packages/shell/local-dev-shell.log"
-    echo "Toolshed log file: packages/toolshed/local-dev-toolshed.log"
+# Print the server URLs on success
+echo "Development servers started successfully!"
+echo "  Shell:    http://localhost:$SHELL_PORT"
+echo "  Toolshed: http://localhost:$TOOLSHED_PORT"
+if [[ "$INSPECT" == "true" ]]; then
+    echo "  Inspect:  127.0.0.1:$INSPECT_PORT"
+fi
+if [[ "$PORT_OFFSET" -ne 0 ]]; then
+    echo "  Offset:   $PORT_OFFSET"
+fi
+if [[ "$CF_HARNESS" == "true" ]]; then
+    echo "  Console:  http://127.0.0.1:$CONSOLE_PORT"
+elif [[ -n "$CONSOLE_STATUS" ]]; then
+    echo "  Console:  NOT RUNNING — $CONSOLE_STATUS"
+fi
+echo "Shell log file: runtime/shell/local-dev-shell.log"
+echo "Toolshed log file: runtime/toolshed/local-dev-toolshed.log"
+if [[ "$CF_HARNESS" == "true" || -n "$CONSOLE_STATUS" ]]; then
+    echo "Console log file: runtime/cf-harness/local-dev-console.log"
 fi
 
 if [[ "$KEEP_ALIVE" == "true" ]]; then
@@ -565,5 +543,4 @@ if [[ "$KEEP_ALIVE" == "true" ]]; then
     echo "Codex detected; keeping this command attached so Codex does not clean up the dev servers."
     echo "Stop this command or run ./scripts/stop-local-dev.sh from another shell to stop them."
     wait "$SHELL_PID" "$TOOLSHED_PID"
-    kill_tree "$CONSOLE_PID"
 fi

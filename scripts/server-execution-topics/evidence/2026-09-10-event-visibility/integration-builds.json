@@ -1,0 +1,41 @@
+{
+  "at": "2026-09-10T07:38:36.219900+00:00",
+  "base": "a5ed830f06827ce1b9bc0dfbe0b6a023315f3268",
+  "buildRoot": "/Users/berni/.codex/worktrees/topics-campaign-events-ablations/labs",
+  "workloadRoot": "/Users/berni/.codex/worktrees/topics-campaign-events/labs",
+  "productionFiles": {
+    "packages/runner/src/executor/space-server.ts": "1d49b932923580534e179b9c3fd1074a988b91bf91f39127a476dd9699802182",
+    "packages/runner/src/executor/stats.ts": "98eb0312c0dd1fffc87c3bfa168db8ab33aaf1c41210fc29402c31b48457b2fb",
+    "packages/runner/src/storage/interface.ts": "cdaf2575c0c88a030376dabc151a71079d08ec6d89eb5187eae41e6bf3447fef"
+  },
+  "codePosture": "uncommitted recommendation 3 patch over base; build metadata names base and this manifest records exact production file bytes",
+  "commands": [
+    [
+      "env",
+      "-u",
+      "EXPERIMENTAL_SERVER_EXECUTION",
+      "COMMIT_SHA=a5ed830f06827ce1b9bc0dfbe0b6a023315f3268",
+      "deno",
+      "task",
+      "build-binaries",
+      "toolshed"
+    ],
+    [
+      "env",
+      "EXPERIMENTAL_SERVER_EXECUTION=true",
+      "COMMIT_SHA=a5ed830f06827ce1b9bc0dfbe0b6a023315f3268",
+      "deno",
+      "task",
+      "build-binaries",
+      "toolshed"
+    ]
+  ],
+  "defaultBinary": {
+    "path": "/Users/berni/.codex/worktrees/topics-campaign-events/labs/.ci-cache/binaries/toolshed-baked-default",
+    "sha256": "f2bcbc2c40f6e3b3acd89423e5dac744f1e1d4a082a2c024afa14fc7c6832855"
+  },
+  "oppositeBinary": {
+    "path": "/Users/berni/.codex/worktrees/topics-campaign-events/labs/.ci-cache/binaries/toolshed-baked-opposite",
+    "sha256": "61514c45f5bca75daa1d78c68b0c2d8a3ec427a5bd974592b3975481fec9426f"
+  }
+}

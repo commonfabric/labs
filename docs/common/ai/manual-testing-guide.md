@@ -18,18 +18,19 @@ For handler-based checks:
 3. run `piece step`
 4. inspect resulting state
 
-Always remember that `cf cell set` and `cf piece call` do not trigger recomputation
-on their own. The follow-up `piece step` is part of the test, not optional
-cleanup.
+With server execution off, `cf cell set` and `cf piece call` do not trigger
+recomputation on their own, and the follow-up `piece step` is part of the test,
+not optional cleanup. Under server execution a read pulls the current value from
+the server, and the step adds nothing.
 
 ## Browser Validation Loop
 
 When using `agent-browser` or an equivalent browser harness:
 
 1. open the deployed pattern
-2. snapshot the page and capture interactive refs
-3. interact using those refs
-4. re-snapshot after navigation or DOM-changing actions
+2. snapshot the page and read the ref for the element you are about to touch
+3. interact using that ref, immediately
+4. snapshot again before the next interaction
 5. capture screenshots at key states
 
 Typical command shape:
@@ -43,14 +44,33 @@ agent-browser snapshot -i
 agent-browser screenshot
 ```
 
+### A ref is only valid until the next snapshot
+
+`agent-browser` renumbers its refs on **every** snapshot, not only when the DOM
+changes, and its snapshot modes number independently of one another — so the
+same `@e1` names a checkbox in one snapshot and a heading in the next. A ref
+read from an earlier snapshot is not stale in a way that errors; it silently
+addresses a different element, and the click appears to succeed.
+
+Read the ref immediately before each click. Do not collect a set of refs and
+work through them, and do not carry a ref across a `wait`, a screenshot, or a
+second snapshot taken to check what the first one showed.
+
+What this costs when ignored is not a failed test but a **wrong finding**: a
+control reported broken because the click landed on a heading, or reported
+working because it landed on something that did move. Both have happened, in one
+session, and both survived review until the checks were re-run with refs read
+fresh. When a browser result contradicts what the code says should happen,
+re-run it this way before believing the result.
+
 ## Browser State and Session Discipline
 
 - isolate stale browser state when a previous login, draft, or cached view can
   influence the test
 - save and reload browser state only when persistence is intentional
 - use separate named sessions when comparing environments or parallel flows
-- remember that refs become stale after page transitions or significant DOM
-  updates
+- remember that a ref is invalidated by the next snapshot, not merely by a page
+  transition or a DOM update — see "A ref is only valid until the next snapshot"
 - verify the active Common Fabric DID before drawing conclusions about scoped
   visibility
 
@@ -65,17 +85,14 @@ the canonical workflow.
 Before debugging "missing" data, compare the CLI DID:
 
 ```bash
-deno run -A packages/cli/mod.ts id did "$CF_IDENTITY"
+deno run -A runtime/cli/mod.ts id did "$CF_IDENTITY"
 ```
 
-with the browser console line:
-
-```text
-[Identity] User DID: did:key:...
-```
+with the DID the page is signed in as, which
+`globalThis.app.state().identity?.did()` returns in the page's console.
 
 When using `agent-browser`, import the CLI key into the browser session under
-test and then inspect the console:
+test and then evaluate that expression:
 
 ```bash
 agent-browser --session cf-shared open http://localhost:8000/<space>/<piece>
@@ -83,11 +100,12 @@ agent-browser --session cf-shared snapshot -i
 # Click Login, then Import CLI Key.
 agent-browser --session cf-shared upload @<choose-file-ref> "$CF_IDENTITY"
 agent-browser --session cf-shared click @<import-key-ref>
-agent-browser --session cf-shared console
+agent-browser --session cf-shared wait --fn "globalThis.app.state().identity"
+agent-browser --session cf-shared eval "globalThis.app.state().identity?.did()"
 ```
 
-Use separate `agent-browser --session` names for different users and verify the
-`shell.identity` log in each session. Do not assume a fresh session has the
+Use separate `agent-browser --session` names for different users and evaluate
+the expression in each session. Do not assume a fresh session has the
 identity you intended; stale stored credentials are a common source of false
 test results.
 
@@ -123,7 +141,7 @@ When behavior is unclear:
 - inspect rendered VDOM state
 - check for non-idempotent updates
 - verify action schema expectations
-- compare the CLI DID with the browser `shell.identity` log before treating
+- compare the CLI DID with the DID the page is signed in as before treating
   scoped defaults as missing storage
 - confirm that any identity-sensitive logic is not being masked by a CLI-only
   test path

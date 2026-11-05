@@ -1,0 +1,190 @@
+{
+  "sourceHeadBefore": "f198bc7a9b243544205a68c59ff7580ce473866a",
+  "helperHashes": {
+    "before": "9a3e3080105018129542615b4fb23bbe086e68fb49e42e987bb12c30ac9cf60f",
+    "after": "269f1c8e925e7c6bb87b0a85752a4a58f508b81ba8c8a7c621ce53c3a39b05d6"
+  },
+  "mode": "Synthetic path-boundary controls; no runtime or benchmark workload.",
+  "rows": [
+    {
+      "case": "parent",
+      "variant": "before",
+      "input": "SF:/capture/labs/../elsewhere/a.ts\nDA:1,1\nend_of_record\n",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/before.py",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/parent/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/parent/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/parent/before",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/parent/checkout",
+        "/capture/labs"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": "",
+      "output": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/parent/checkout/../elsewhere/a.ts\nDA:1,1\nend_of_record\n"
+    },
+    {
+      "case": "parent",
+      "variant": "after",
+      "input": "SF:/capture/labs/../elsewhere/a.ts\nDA:1,1\nend_of_record\n",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility/merge-coverage-inputs.py.txt",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/parent/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/parent/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/parent/after",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/parent/checkout",
+        "/capture/labs"
+      ],
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "Traceback (most recent call last):\n  File \"/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility/merge-coverage-inputs.py.txt\", line 41, in <module>\n    normalize(path.read_text(encoding=\"utf-8\"))\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility/merge-coverage-inputs.py.txt\", line 33, in normalize\n    raise ValueError(f\"Source path escapes its capture root: {source}\")\nValueError: Source path escapes its capture root: /capture/labs/../elsewhere/a.ts\n",
+      "output": null
+    },
+    {
+      "case": "absolute",
+      "variant": "before",
+      "input": "SF:/capture/labs//elsewhere/a.ts\nDA:1,1\nend_of_record\n",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/before.py",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/absolute/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/absolute/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/absolute/before",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/absolute/checkout",
+        "/capture/labs"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": "",
+      "output": "SF:/elsewhere/a.ts\nDA:1,1\nend_of_record\n"
+    },
+    {
+      "case": "absolute",
+      "variant": "after",
+      "input": "SF:/capture/labs//elsewhere/a.ts\nDA:1,1\nend_of_record\n",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility/merge-coverage-inputs.py.txt",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/absolute/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/absolute/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/absolute/after",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/absolute/checkout",
+        "/capture/labs"
+      ],
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "Traceback (most recent call last):\n  File \"/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility/merge-coverage-inputs.py.txt\", line 41, in <module>\n    normalize(path.read_text(encoding=\"utf-8\"))\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility/merge-coverage-inputs.py.txt\", line 33, in normalize\n    raise ValueError(f\"Source path escapes its capture root: {source}\")\nValueError: Source path escapes its capture root: /capture/labs//elsewhere/a.ts\n",
+      "output": null
+    },
+    {
+      "case": "nested-parent",
+      "variant": "before",
+      "input": "SF:/capture/labs/packages/../a.ts\nDA:1,1\nend_of_record\n",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/before.py",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-parent/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-parent/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-parent/before",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-parent/checkout",
+        "/capture/labs"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": "",
+      "output": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-parent/checkout/packages/../a.ts\nDA:1,1\nend_of_record\n"
+    },
+    {
+      "case": "nested-parent",
+      "variant": "after",
+      "input": "SF:/capture/labs/packages/../a.ts\nDA:1,1\nend_of_record\n",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility/merge-coverage-inputs.py.txt",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-parent/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-parent/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-parent/after",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-parent/checkout",
+        "/capture/labs"
+      ],
+      "exitCode": 1,
+      "stdout": "",
+      "stderr": "Traceback (most recent call last):\n  File \"/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility/merge-coverage-inputs.py.txt\", line 41, in <module>\n    normalize(path.read_text(encoding=\"utf-8\"))\n    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility/merge-coverage-inputs.py.txt\", line 33, in normalize\n    raise ValueError(f\"Source path escapes its capture root: {source}\")\nValueError: Source path escapes its capture root: /capture/labs/packages/../a.ts\n",
+      "output": null
+    },
+    {
+      "case": "ordinary",
+      "variant": "before",
+      "input": "SF:/capture/labs/packages/demo/a.ts\nDA:1,1\nend_of_record\n",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/before.py",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/ordinary/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/ordinary/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/ordinary/before",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/ordinary/checkout",
+        "/capture/labs"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": "",
+      "output": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/ordinary/checkout/packages/demo/a.ts\nDA:1,1\nend_of_record\n"
+    },
+    {
+      "case": "ordinary",
+      "variant": "after",
+      "input": "SF:/capture/labs/packages/demo/a.ts\nDA:1,1\nend_of_record\n",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility/merge-coverage-inputs.py.txt",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/ordinary/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/ordinary/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/ordinary/after",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/ordinary/checkout",
+        "/capture/labs"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": "",
+      "output": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/ordinary/checkout/packages/demo/a.ts\nDA:1,1\nend_of_record\n"
+    },
+    {
+      "case": "nested-separators",
+      "variant": "before",
+      "input": "SF:/capture/labs/packages//demo/a.ts\nDA:1,1\nend_of_record\n",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/before.py",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-separators/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-separators/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-separators/before",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-separators/checkout",
+        "/capture/labs"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": "",
+      "output": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-separators/checkout/packages/demo/a.ts\nDA:1,1\nend_of_record\n"
+    },
+    {
+      "case": "nested-separators",
+      "variant": "after",
+      "input": "SF:/capture/labs/packages//demo/a.ts\nDA:1,1\nend_of_record\n",
+      "command": [
+        "python3",
+        "/Users/berni/.codex/worktrees/topics-campaign-events/labs/tools/server-execution-topics/evidence/2026-09-10-event-visibility/merge-coverage-inputs.py.txt",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-separators/ci",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-separators/focused.lcov",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-separators/after",
+        "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-separators/checkout",
+        "/capture/labs"
+      ],
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": "",
+      "output": "SF:/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/replay-path-boundary-f198/nested-separators/checkout/packages/demo/a.ts\nDA:1,1\nend_of_record\n"
+    }
+  ]
+}

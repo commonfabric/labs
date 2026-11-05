@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env
+#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-run=git
 
 /**
  * The credential-free shipping step every CI test job ends with: gather the
@@ -22,14 +22,21 @@ import { expandGlob } from "@std/fs";
 import { join } from "@std/path";
 import {
   type Environment,
-  ingestJUnit,
   readEnv,
+  readJUnit,
   readNameMaps,
   readSpool,
   recordsDir,
   serializeRecordLine,
+  type TestIdentity,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import {
+  commitMoment,
+  parseSeed,
+  SHUFFLE_SEED_VARIABLE,
+} from "@commonfabric/test-support/shuffle";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /** One JUnit ingestion request from the command line. */
 export interface JUnitSpec {
@@ -49,6 +56,9 @@ export interface JobFacts {
   os: string;
   arch: string;
   denoVersion: string;
+
+  /** The seed the job's test runners shuffled their order by. */
+  shuffleSeed: number;
 }
 
 /** Parses one `kind=...,scope=...[,prefix=...],glob=...` specification. */
@@ -73,11 +83,11 @@ export function parseJUnitSpec(text: string): JUnitSpec {
 
 /** The head commit of the pull request the event describes, when any. */
 export function headCommitOfEvent(payload: unknown): string | undefined {
-  if (typeof payload !== "object" || payload === null) return undefined;
+  if (!isObjectOrArray(payload)) return undefined;
   const pr = (payload as Record<string, unknown>).pull_request;
-  if (typeof pr !== "object" || pr === null) return undefined;
+  if (!isObjectOrArray(pr)) return undefined;
   const head = (pr as Record<string, unknown>).head;
-  if (typeof head !== "object" || head === null) return undefined;
+  if (!isObjectOrArray(head)) return undefined;
   const sha = (head as Record<string, unknown>).sha;
   return typeof sha === "string" && sha.length > 0 ? sha : undefined;
 }
@@ -89,6 +99,12 @@ export interface CollectOptions {
 
   /** The JUnit reports to ingest, each with the surface it carries. */
   junit: readonly JUnitSpec[];
+
+  /**
+   * Whether the execution that wrote the reports was interrupted by a
+   * signal, which decides what a test they report as cancelled was.
+   */
+  interrupted?: boolean;
 
   /**
    * The configuration these records were produced in. Every record takes
@@ -107,6 +123,13 @@ export interface CollectOptions {
    * in. Absent, every record takes the declared variant.
    */
   surfaces?: ReadonlyArray<{ kind: string; scope: string }>;
+
+  /**
+   * Whether the caller already knows a test, recorded from a file, as an
+   * identity, which ingestion then records whenever it reports, even where
+   * it holds other tests.
+   */
+  known?: (test: TestIdentity, file: string | undefined) => boolean;
 }
 
 /** What one execution left behind. */
@@ -121,6 +144,17 @@ export interface Collected {
    * drift guard is what fails on them.
    */
   conflicts: TestRecord[];
+
+  /**
+   * What each outermost test its JUnit reports name took beyond the
+   * records, one record each, as `readJUnit()` makes them, with the
+   * declared variant applied. They are not tests, so they are in neither
+   * list above and nothing ships them.
+   */
+  hooks: TestRecord[];
+
+  /** The message each failing record its JUnit reports name failed with. */
+  failures: Map<TestRecord, string>;
 }
 
 /**
@@ -140,9 +174,13 @@ export async function collectRecords(
     throw new Error("a declared variant must not be empty");
   }
   const records: TestRecord[] = [];
-  // The registration preload leaves a name-to-file map in the spool, and
-  // it is the only thing that can tell a bdd leaf's file: Deno names a
-  // case by its describe chain and puts that chain in the classname too.
+  const hooks: TestRecord[] = [];
+  const failures = new Map<TestRecord, string>();
+  // The registration preload leaves a name-to-file map in the spool.
+  // Where it installed, every class name names the wrapper it put in
+  // front of `Deno.test`, so the map is the only thing that can tell a
+  // bdd leaf its file; where it did not, the spool holds no map and
+  // ingestion reads the report's own class names.
   const fileByName = options.spoolDir === undefined
     ? new Map<string, string>()
     : await readNameMaps(options.spoolDir);
@@ -151,7 +189,7 @@ export async function collectRecords(
     for (const warning of spooled.warnings) {
       console.warn(`test records: ${warning}`);
     }
-    records.push(...spooled.records);
+    for (const record of spooled.records) records.push(record);
   }
   for (const spec of options.junit) {
     let matched = 0;
@@ -163,13 +201,20 @@ export async function collectRecords(
         // itself, not the records of every later file the glob matched.
         try {
           const xml = await Deno.readTextFile(entry.path);
-          const ingestOptions: Parameters<typeof ingestJUnit>[1] = {
+          const ingestOptions: Parameters<typeof readJUnit>[1] = {
             kind: spec.kind,
             scope: spec.scope,
             fileByName,
+            interrupted: options.interrupted ?? false,
           };
           if (spec.prefix !== undefined) ingestOptions.filePrefix = spec.prefix;
-          records.push(...ingestJUnit(xml, ingestOptions));
+          if (options.known !== undefined) ingestOptions.known = options.known;
+          const read = readJUnit(xml, ingestOptions);
+          for (const record of read.records) records.push(record);
+          for (const record of read.hooks) hooks.push(record);
+          for (const [record, message] of read.failures) {
+            failures.set(record, message);
+          }
         } catch (error) {
           console.warn(
             `test records: ingesting ${entry.path} failed: ${error}`,
@@ -200,7 +245,10 @@ export async function collectRecords(
     }
     if (options.variant !== undefined) record.test.v = options.variant;
   }
-  return { records, conflicts };
+  if (options.variant !== undefined) {
+    for (const record of hooks) record.test.v = options.variant;
+  }
+  return { records, conflicts, hooks, failures };
 }
 
 export interface GatherOptions {
@@ -227,6 +275,12 @@ export async function gather(options: GatherOptions): Promise<void> {
     os: Deno.build.os,
     arch: Deno.build.arch,
     denoVersion: Deno.version.deno,
+    // The same answer the job's runners reached: its override where the
+    // job set one, and otherwise the day of the commit it checked out.
+    shuffleSeed: parseSeed(
+      readEnv(SHUFFLE_SEED_VARIABLE, env),
+      commitMoment() ?? new Date(),
+    ),
   };
   if (options.shard !== undefined) facts.shard = options.shard;
   const commit = readEnv("GITHUB_SHA", env);

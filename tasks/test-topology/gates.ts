@@ -12,10 +12,19 @@
  * it.
  */
 
-import { collectPathsByScope, scopeOfPath } from "../typecheck.ts";
-import * as path from "@std/path";
 import {
+  collectPathsByScope,
+  localImporters,
+  scopesReached,
+} from "../typecheck.ts";
+import * as path from "@std/path";
+import { ACCEPTED_CONTRACT_BREAKS } from "../pattern-compat-accepted-breaks.ts";
+import { COMPILER_PATHS, GATE_PATHS } from "../check-cause-assignments.ts";
+import {
+  BASELINES_DIR,
+  collectCompatibilityPaths,
   collectPatternFiles,
+  normalizePatternPath,
   PATTERN_TREES,
   patternKey,
 } from "../pattern-files.ts";
@@ -30,6 +39,13 @@ import {
   type UnitRequest,
 } from "./suite.ts";
 import type { CapabilityId } from "../ci-capabilities.ts";
+import {
+  collectVintages,
+  VINTAGE_GATE,
+  vintageRecordName,
+  VINTAGES_DIR,
+} from "../pattern-vintage-layout.ts";
+import { PACKAGE_ROOTS } from "../package-layout.ts";
 
 /** One repository gate: what it is called, and what runs it. */
 export interface Gate {
@@ -90,11 +106,10 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     name: "check-test-topology",
     kind: "gate",
     run: ["task", "check-test-topology"],
-    // Walks every tree this repository keeps source in for anything
-    // that looks like a test, and holds the topology to what it finds.
-    // The topology enumerates from those same trees, so a set stated
-    // here names every directory holding code and comes to all but a
-    // change that touches none of it.
+    // Reads every file the repository holds for anything that looks
+    // like a test, and holds the topology to what it finds. A set stated
+    // here would name every directory holding code and come to all but
+    // a change that touches none of it.
     reachedBy: [],
   },
   {
@@ -107,16 +122,40 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     reachedBy: [],
   },
   {
-    name: "check-tripwires",
+    name: "check-address-examples",
     kind: "gate",
-    run: ["task", "check-tripwires"],
-    // Probes the weakness each tripwire asserts is still present, and
-    // reads the test file carrying the same assertion. A tripwire added
-    // against another package widens this list.
+    run: ["task", "check-address-examples"],
+    // Reads every Markdown document and the comments of every TypeScript
+    // file, so a comment added anywhere can fail it.
+    reachedBy: [],
+  },
+  {
+    name: "check-cfc-correspondence",
+    kind: "gate",
+    run: ["task", "check-cfc-correspondence"],
+    // The CFC sources whose citations and kernel headers it reads, the
+    // snapshot and manifest under the kernel directory, the other files
+    // the CFC rule governs, which its `SPEC-PENDING` scan reads, the task
+    // holding the exemptions, and the two modules it reads the tree and
+    // the snapshot's shape through. The runner's top-level `cfc*.test.ts`
+    // files are governed too, and this vocabulary has no file glob to name
+    // them by, so a marker added to one reaches the gate on what it is
+    // worth.
     reachedBy: [
-      "packages/identity/",
-      "packages/toolshed/routes/ingest-channels/",
-      "tasks/check-tripwires.ts",
+      "runtime/cf-harness/src/cfc-label-disclosure.ts",
+      "runtime/cf-harness/src/cfc-label-shape.ts",
+      "runtime/cf-harness/src/cfc-posture.ts",
+      "runtime/cf-harness/src/contracts/",
+      "runtime/cf-harness/src/sandbox/runsc-cfc-result.ts",
+      "runtime/html/src/worker/display-fit.ts",
+      "runtime/html/src/worker/display-fit-atoms.ts",
+      "runtime/html/src/worker/reconciler.ts",
+      "runtime/runner/src/cfc.ts",
+      "runtime/runner/src/cfc/",
+      "runtime/runner/test/cfc/",
+      "tasks/cfc-spec-snapshot.ts",
+      "tasks/check-cfc-correspondence.ts",
+      "tasks/repository-files.ts",
     ],
   },
   {
@@ -126,9 +165,26 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     // The documents holding the blocks, and the import map they
     // compile through. The historical tree is walked past: those blocks
     // reflect the API of their era. A block also compiles against this
-    // repository's own modules, which is most of `packages/` and so
+    // repository's own modules, which is most of the packages and so
     // stays with the score.
     reachedBy: ["deno.jsonc", "docs/", "!docs/history/"],
+  },
+  {
+    name: "check-bench-workflow",
+    kind: "gate",
+    run: ["task", "check-bench-workflow"],
+    // The workflow holding the `deno bench` list, the module holding the
+    // names, and each file named. `gates.test.ts` compares the last of
+    // those against the names themselves, so a name added here without a
+    // declaration fails there.
+    reachedBy: [
+      ".github/workflows/benchmarks.yml",
+      "dashboard/bench-report.ts",
+      "dashboard/machine-calibration.bench.ts",
+      "patterns/integration/topic-board-navigation.bench.ts",
+      "patterns/integration/topic-board-scale.bench.ts",
+      "tasks/check-bench-workflow.ts",
+    ],
   },
   {
     name: "check-docs-history-index",
@@ -140,11 +196,12 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     name: "check-no-waitfor",
     kind: "gate",
     run: ["task", "check-no-waitfor"],
-    // The `integration` directories under `packages`, less the package
-    // declaring the polling helper, which is out of the check's scope.
+    // Every `integration` directory, which holds those of the packages, less
+    // the package declaring the polling helper, which is out of the check's
+    // scope.
     reachedBy: [
-      "packages/**/integration/",
-      "!packages/integration/",
+      "**/integration/",
+      "!runtime/integration/",
       "tasks/check-no-waitfor.ts",
     ],
   },
@@ -154,6 +211,14 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     run: ["task", "check-conflict-markers"],
     // Reads every tracked file: a marker left behind is a mistake
     // wherever it lands.
+    reachedBy: [],
+  },
+  {
+    name: "check-test-shuffle",
+    kind: "gate",
+    run: ["task", "check-test-shuffle"],
+    // Reads every manifest, workflow and shell script in the tree, and
+    // the `deno` commands TypeScript sources write as array literals.
     reachedBy: [],
   },
   {
@@ -171,7 +236,7 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     reachedBy: [
       "docs/common/verbs/",
       "docs/common/workflows/",
-      "packages/cli/integration/",
+      "runtime/cli/integration/",
       "tasks/check-verb-session-sync.ts",
     ],
   },
@@ -183,8 +248,8 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     // which files take a marker at all. The baselines are data beside
     // the patterns and carry no marker.
     reachedBy: [
-      "packages/patterns/",
-      "!packages/patterns/baselines/",
+      "patterns/",
+      "!patterns/baselines/",
       "tasks/check-pattern-tiers.ts",
       "tasks/pattern-files.ts",
       "tasks/pattern-tiers.ts",
@@ -204,8 +269,8 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     run: ["task", "check-deno-pins"],
     reachedBy: [
       ".github/actions/deno-setup/action.yml",
-      "Dockerfile.dashboard",
-      "Dockerfile.toolshed",
+      "dashboard/Dockerfile",
+      "runtime/toolshed/Dockerfile",
       "mise.toml",
       "tasks/check-deno-pins.ts",
       "tasks/check.sh",
@@ -227,9 +292,17 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     name: "check-package-cycles",
     kind: "gate",
     run: ["task", "check-package-cycles"],
-    // Reads every production module under `packages/` for its imports,
+    // Reads every production module of every package for its imports,
     // which is most of the repository, and no smaller part of it
     // decides the verdict.
+    reachedBy: [],
+  },
+  {
+    name: "check-dependency-direction",
+    kind: "gate",
+    run: ["task", "check-dependency-direction"],
+    // Reads the same imports `check-package-cycles` reads, and every
+    // production pattern module besides.
     reachedBy: [],
   },
   {
@@ -247,8 +320,8 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     // The command tree it walks and the two provider tables it
     // subtracts against.
     reachedBy: [
-      "packages/cli/commands/",
-      "packages/cli/lib/completion/",
+      "runtime/cli/commands/",
+      "runtime/cli/lib/completion/",
       "tasks/check-completion-slots.ts",
     ],
   },
@@ -265,9 +338,9 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
       "docs/",
       "!docs/history/",
       "!docs/plans/",
-      "packages/**/README.md",
-      "packages/cli/commands/",
-      "packages/cli/lib/shuttle/",
+      ...PACKAGE_ROOTS.map((root) => `${root}/**/README.md`),
+      "runtime/cli/commands/",
+      "runtime/cli/lib/shuttle/",
       "skills/",
       "tasks/check-command-docs.ts",
     ],
@@ -276,48 +349,74 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     name: "check-cfc-types",
     kind: "gate",
     run: ["task", "check-cfc-types"],
-    cwd: "packages/static",
+    cwd: "base/static",
     reachedBy: [
-      "packages/api/",
-      "packages/static/assets/types/",
-      "packages/static/scripts/",
+      "base/api/",
+      "base/static/assets/types/",
+      "base/static/scripts/",
     ],
   },
   {
     name: "check-commonfabric-types",
     kind: "gate",
     run: ["task", "check-commonfabric-types"],
-    cwd: "packages/static",
+    cwd: "base/static",
     // The pattern API and the workspace modules it re-exports, whose
     // text this one inlines.
     reachedBy: [
-      "packages/api/",
-      "packages/data-model/",
-      "packages/static/assets/types/",
-      "packages/static/scripts/",
+      "base/api/",
+      "base/data-model/",
+      "base/static/assets/types/",
+      "base/static/scripts/",
     ],
   },
   {
     name: "check-withheld-globals",
     kind: "gate",
     run: ["task", "check-withheld-globals"],
-    cwd: "packages/static",
+    cwd: "base/static",
     // The type libraries, and the sandbox contract naming the globals
     // to be stripped from them.
     reachedBy: [
-      "packages/static/assets/types/",
-      "packages/static/scripts/",
-      "packages/utils/",
+      "base/static/assets/types/",
+      "base/static/scripts/",
+      "base/pattern-contract/",
     ],
   },
 ];
 
 /**
- * The gates that hold a file to being appended to. Each reads the file as
- * it stood at the merge base with the revision the change is measured
- * against, which takes a checkout carrying history.
+ * Entries of a gate's `reachedBy` that name a path the tree never holds,
+ * because the path's presence is what the gate fails on. A change that adds
+ * such a path has to reach the gate, and nothing else about the entry can
+ * be checked against the tree.
+ */
+export const REACHED_BY_ABSENT_PATHS: ReadonlySet<string> = new Set([
+  // TODO(danfuzz): Remove this entry, and its line in
+  // `check-test-aliases`'s `reachedBy`, once the branches cut while the
+  // aliases were this single file can all be expected to have merged
+  // `main` — a couple of weeks after 2026-09-18.
+  "tasks/test-identity-aliases.jsonl",
+]);
+
+/**
+ * The gates that compare the tree with the revision the change is measured
+ * against: two hold a file to being appended to, and one holds the
+ * compiler to numbering an unchanged pattern's cells as it did. Each reads
+ * the merge base with that revision, which takes a checkout carrying
+ * history.
  */
 export const HISTORY_GATES: readonly Gate[] = [
+  {
+    name: "check-cause-assignments",
+    kind: "gate",
+    run: ["task", "check-cause-assignments"],
+    args: ({ baseRef }) => [baseRef],
+    // The paths a pattern's numbering is built by, and the gate's own
+    // modules. The task passes a change touching none of them without
+    // compiling anything, so the two lists are one.
+    reachedBy: [...COMPILER_PATHS, ...GATE_PATHS],
+  },
   {
     name: "check-baselines-append-only",
     kind: "gate",
@@ -328,7 +427,7 @@ export const HISTORY_GATES: readonly Gate[] = [
     // a failure into a pass but never the other way, and reaches the
     // gate by nothing on its own.
     reachedBy: [
-      "packages/patterns/baselines/",
+      "patterns/baselines/",
       "tasks/check-baselines-append-only.ts",
       "tasks/pattern-files.ts",
     ],
@@ -338,12 +437,15 @@ export const HISTORY_GATES: readonly Gate[] = [
     kind: "gate",
     run: ["task", "check-test-aliases"],
     args: ({ baseRef }) => [baseRef],
-    // The file, and the module holding the line format it parses and
-    // the graph rules it applies; the task itself is a `git show`
-    // wrapper around those.
+    // The alias files, and the module holding the line format the task
+    // parses and the graph rules it applies; the task itself is a
+    // `git show` wrapper around those. The `.jsonl` file beside the
+    // directory is one the gate fails on sight, so a change adding it has
+    // to reach the gate; `REACHED_BY_ABSENT_PATHS` records it as absent.
     reachedBy: [
-      "packages/test-support/",
+      "base/test-support/",
       "tasks/check-test-aliases.ts",
+      "tasks/test-identity-aliases/",
       "tasks/test-identity-aliases.jsonl",
     ],
   },
@@ -369,6 +471,8 @@ function gateSuite(
     needs,
     units: gates.map((gate) => gate.name),
     unavailable: [],
+    // Each gate is one identity, so a unit holds nothing to leave out.
+    whole: gates.map((gate) => gate.name),
     // A gate's unit is the name of a gate rather than a path, so what a
     // change reaches is what each gate declares it reads. A gate that
     // declares nothing reads the whole tree, and reaches a lane on what
@@ -415,31 +519,28 @@ function gateSuite(
 
 /**
  * The type check, one unit per package group. The store records one
- * identity per group and the mapping from a changed file to its group is
- * direct, so `unitsForChange` names exactly the groups a change touches.
+ * identity per group.
+ *
+ * A group's check opens every module its files import, so a change can
+ * alter the verdict of a group other than its own. `unitsForChange` names
+ * each group whose files import a changed file, directly or through other
+ * modules, as well as the group owning it.
  */
 async function typecheckSuite(root: string): Promise<Suite> {
   const byScope = await collectPathsByScope(root);
   const scopes = [...byScope.keys()].sort();
   const known = new Set(scopes);
   const recordSurfaces = scopes.map((scope) => ({ kind: "typecheck", scope }));
+  const reached = await scopesReached(root, byScope);
   return {
     id: "typecheck",
     recordSurfaces,
     needs: ["deno"],
     units: scopes,
     unavailable: [],
-    // A group's unit is the scope it checks rather than a path, so the
-    // diff is mapped onto scopes the same way the check itself groups
-    // the paths it walks.
-    unitsForChange(changed) {
-      const touched = new Set<string>();
-      for (const path of changed) {
-        const scope = scopeOfPath(path);
-        if (known.has(scope)) touched.add(scope);
-      }
-      return [...touched];
-    },
+    // One `deno check` over a group records one identity.
+    whole: scopes,
+    unitsForChange: reached,
     locate(record): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
       // `cfcheck` records under the same kind and its own names, so the
@@ -468,27 +569,73 @@ async function typecheckSuite(root: string): Promise<Suite> {
 }
 
 /**
- * The pattern type check. It writes one record per pattern file and
- * takes no way of running part of itself, so the suite is one unit and
- * every one of those records belongs to it.
+ * Every authored pattern in the tree, repository-relative.
+ *
+ * Collected against the root the topology was given rather than the
+ * process's own directory: a lane runs from the repository root, and a
+ * test of the topology runs from wherever its package does.
  */
-function cfcheckSuite(): Suite {
-  const unit = "cfcheck";
+async function patternFiles(root: string): Promise<string[]> {
+  const found = await Promise.all(
+    PATTERN_TREES.map((tree) =>
+      collectPatternFiles(path.join(root, tree.directory))
+    ),
+  );
+  return found.flat()
+    .map((file) => normalizePatternPath(path.relative(root, file)))
+    .sort();
+}
+
+/**
+ * The `--only` arguments that restrict a pattern task to `chosen`. The
+ * flag takes a single value, so it is repeated rather than given a list.
+ *
+ * A run asked for every pattern passes no filter at all, which leaves it
+ * the task's own unfiltered run. That is what a task with a whole-tree
+ * question of its own needs, and what makes a full run's command the one
+ * a person types.
+ */
+function onlyArguments(chosen: readonly string[], whole: boolean): string[] {
+  return whole ? [] : chosen.flatMap((value) => ["--only", value]);
+}
+
+/**
+ * The pattern type check, one unit per pattern. Its task takes `--only`
+ * to restrict which patterns it compiles, so a lane checks the ones it
+ * was given, and a run given every pattern passes no `--only` at all.
+ *
+ * A unit is the pattern's own path, so the diff naming it is the whole of
+ * what makes it mandatory and this suite maps nothing itself. The task
+ * writes one record per pattern named `cfcheck <path>`; the record the
+ * wrapper writes for the invocation is named for the suite, and carries
+ * what the whole run took rather than what any pattern took.
+ */
+async function cfcheckSuite(root: string): Promise<Suite> {
+  const units = await patternFiles(root);
+  const known = new Set(units);
+  const name = "cfcheck";
   const recordSurfaces = [{ kind: "typecheck", scope: "repo" }];
   return {
-    id: "cfcheck",
+    id: name,
     recordSurfaces,
     needs: ["deno"],
-    units: [unit],
+    units,
     unavailable: [],
+    // A unit here is a pattern file, and checking one records one identity. A
+    // lane restricts the task with `--only`, which selects whole patterns.
+    whole: units,
     locate(record): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
-      return record.test.n === unit || record.test.n.startsWith(`${unit} `)
-        ? { level: "unit", unit }
-        : undefined;
+      if (record.test.n === name) return { level: "suite" };
+      if (!record.test.n.startsWith(`${name} `)) return undefined;
+      const unit = record.test.n.slice(name.length + 1);
+      return known.has(unit) ? { level: "unit", unit } : undefined;
     },
     command(requests, context): Promise<Invocation[]> {
-      if (requests.length === 0) return Promise.resolve([]);
+      const chosen = requests
+        .map((request) => request.unit)
+        .filter((unit) => known.has(unit));
+      if (chosen.length === 0) return Promise.resolve([]);
       return Promise.resolve([{
         command: [
           Deno.execPath(),
@@ -496,11 +643,12 @@ function cfcheckSuite(): Suite {
           "run-recorded",
           "typecheck",
           "repo",
-          "cfcheck",
+          name,
           "--",
           Deno.execPath(),
           "task",
-          "cfcheck",
+          name,
+          ...onlyArguments(chosen, chosen.length === units.length),
         ],
         cwd: context.root,
       }]);
@@ -509,23 +657,22 @@ function cfcheckSuite(): Suite {
 }
 
 /**
- * The pattern update compatibility gate, one unit per pattern. Its task
- * takes `--only` to restrict which patterns it reads, so a lane runs the
- * ones it was given. A run given every pattern passes no `--only` at
- * all, because the whole-tree questions the gate also answers — whether a
- * retired pattern still has a baseline, whether an accepted break has
- * gone orphaned — are only asked of an unfiltered run.
+ * The pattern update compatibility gate, one unit per pattern. A pattern
+ * whose file is gone stays a unit while it has baselines or an accepted
+ * break names it, and the lane given it reports it as retired or orphaned.
+ * Its task takes `--only` to restrict which patterns it reads, so a lane
+ * runs the ones it was given, and a run given every pattern passes no
+ * `--only` at all. A unit is a pattern key rather than a path, so
+ * `unitsForChange` says which patterns a change reaches.
  */
 async function patternCompatSuite(root: string): Promise<Suite> {
-  // Collected against the root the topology was given rather than the
-  // process's own directory: a lane runs from the repository root, and a
-  // test of the topology runs from wherever its package does.
-  const files = (await Promise.all(
-    PATTERN_TREES.map((tree) =>
-      collectPatternFiles(path.join(root, tree.directory))
-    ),
-  )).flat().sort().map((file) => path.relative(root, file));
-  const byKey = new Map(files.map((file) => [patternKey(file), file]));
+  const files = await patternFiles(root);
+  const paths = await collectCompatibilityPaths(
+    files,
+    path.join(root, BASELINES_DIR),
+    ACCEPTED_CONTRACT_BREAKS.map((accepted) => accepted.pattern),
+  );
+  const byKey = new Map(paths.map((item) => [patternKey(item), item]));
   const units = [...byKey.keys()].sort();
   const recordSurfaces = [{ kind: "gate", scope: "repo" }];
   const name = "pattern-compat";
@@ -535,6 +682,14 @@ async function patternCompatSuite(root: string): Promise<Suite> {
     needs: ["deno"],
     units,
     unavailable: [],
+    // Each pattern's verdict is one identity, and `--only` selects whole
+    // patterns.
+    whole: units,
+    unitsForChange: patternsReached(root, files, new Set(units)),
+    sourcesOf(unit) {
+      const source = byKey.get(unit);
+      return source === undefined ? [] : [source];
+    },
     locate(record): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
       if (record.test.n === name) return { level: "suite" };
@@ -560,7 +715,10 @@ async function patternCompatSuite(root: string): Promise<Suite> {
           Deno.execPath(),
           "task",
           name,
-          ...(whole ? [] : ["--only", ...keys.map((key) => byKey.get(key)!)]),
+          ...onlyArguments(
+            keys.map((key) => byKey.get(key)!),
+            whole,
+          ),
         ],
         cwd: context.root,
       }]);
@@ -568,28 +726,110 @@ async function patternCompatSuite(root: string): Promise<Suite> {
   };
 }
 
+/** The list of contract breaks the compatibility gate forgives. */
+const ACCEPTED_BREAKS_FILE = "tasks/pattern-compat-accepted-breaks.ts";
+
 /**
- * The vintage replay, which runs every committed fixture under today's
- * source. It records one identity per vintage and takes no way of
- * running part of itself, so the suite is one unit.
+ * Helper for `patternCompatSuite()`, which names the patterns among `units` a
+ * change reaches: one whose source changed, one importing a changed module of
+ * a pattern tree directly or through other such modules, and one whose
+ * recorded contracts changed. A change to the list of accepted breaks reaches
+ * every pattern: removing an entry changes the verdict of a pattern the list
+ * no longer names, and what the list named before is not visible here. `files`
+ * are the pattern sources the tree holds, which the import graph is read from
+ * on the first change that needs it.
+ *
+ * Imports are followed only within the pattern trees. A contract is also
+ * built from what lies outside them, the schema generator and the API's
+ * types, but a change there reaches every pattern, which is the case
+ * `Suite.unitsForChange` leaves to a lane on what each unit is worth.
  */
-function patternVintageSuite(): Suite {
-  const unit = "pattern-vintage";
+function patternsReached(
+  root: string,
+  files: readonly string[],
+  units: ReadonlySet<string>,
+): (changed: ReadonlySet<string>) => string[] {
+  const inTrees = (file: string) =>
+    PATTERN_TREES.some((tree) => file.startsWith(`${tree.directory}/`));
+  let importers: Map<string, string[]> | undefined;
+  return (changed) => {
+    const reached = new Set<string>();
+    const pending: string[] = [];
+    for (const at of changed) {
+      if (at === ACCEPTED_BREAKS_FILE) {
+        return [...units].sort();
+      } else if (at.startsWith(`${BASELINES_DIR}/`)) {
+        // A baseline is `<key>/<label>.json` under the baselines directory.
+        const rest = at.slice(BASELINES_DIR.length + 1);
+        const key = rest.slice(0, rest.lastIndexOf("/"));
+        if (units.has(key)) reached.add(key);
+      } else if (inTrees(at)) {
+        pending.push(at);
+      }
+    }
+    if (pending.length > 0) importers ??= localImporters(root, files);
+    const seen = new Set<string>();
+    while (pending.length > 0) {
+      const at = pending.pop()!;
+      if (seen.has(at)) continue;
+      seen.add(at);
+      const key = patternKey(at);
+      if (units.has(key)) reached.add(key);
+      for (const importer of importers!.get(at) ?? []) {
+        if (inTrees(importer)) pending.push(importer);
+      }
+    }
+    return [...reached].sort();
+  };
+}
+
+/**
+ * The vintage replay, with one unit per committed fixture. Each fixture
+ * restores its own store, drives its own roots, and compares against its own
+ * manifest, so its result is the same whether or not other fixtures replay. A
+ * lane restricts the run to the fixtures it chose with `--only`. A run given
+ * every fixture passes no filter, which lets it also make the checks that need
+ * every fixture replayed.
+ *
+ * A unit is the fixture's repository-relative path, so a change that adds or
+ * edits a fixture makes replaying that fixture mandatory. The record the task
+ * writes for the whole replay belongs to the suite rather than to a unit. It
+ * measures the entire replay, so adding it to the fixtures' times would count
+ * that work twice.
+ */
+async function patternVintageSuite(root: string): Promise<Suite> {
+  // Units are repository-relative paths, which is what a diff names.
+  // `collectVintages` names each fixture under the root it is given. The root
+  // here is absolute, so the task behaves the same from any directory.
+  const byRecord = new Map(
+    (await collectVintages(path.join(root, VINTAGES_DIR)))
+      .map((
+        vintage,
+      ) => [vintageRecordName(vintage), path.relative(root, vintage.path)]),
+  );
+  const units = [...byRecord.values()].sort();
+  const known = new Set(units);
   const recordSurfaces = [{ kind: "gate", scope: "repo" }];
   return {
-    id: "pattern-vintage",
+    id: VINTAGE_GATE,
     recordSurfaces,
     needs: ["deno", "git-history"],
-    units: [unit],
+    units,
     unavailable: [],
+    // Each fixture's replay is one identity, so a unit holds nothing to leave
+    // out.
+    whole: units,
     locate(record): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
-      return record.test.n === unit || record.test.n.startsWith(`${unit} `)
-        ? { level: "unit", unit }
-        : undefined;
+      if (record.test.n === VINTAGE_GATE) return { level: "suite" };
+      const unit = byRecord.get(record.test.n);
+      return unit === undefined ? undefined : { level: "unit", unit };
     },
     command(requests, context): Promise<Invocation[]> {
-      if (requests.length === 0) return Promise.resolve([]);
+      const chosen = requests
+        .map((request) => request.unit)
+        .filter((unit) => known.has(unit));
+      if (chosen.length === 0) return Promise.resolve([]);
       return Promise.resolve([{
         command: [
           Deno.execPath(),
@@ -597,11 +837,12 @@ function patternVintageSuite(): Suite {
           "run-recorded",
           "gate",
           "repo",
-          unit,
+          VINTAGE_GATE,
           "--",
           Deno.execPath(),
           "task",
-          unit,
+          VINTAGE_GATE,
+          ...onlyArguments(chosen, chosen.length === units.length),
         ],
         cwd: context.root,
       }]);
@@ -612,11 +853,14 @@ function patternVintageSuite(): Suite {
 /** Every gate suite, read from the working tree. */
 export async function loadGateSuites(root: string): Promise<Suite[]> {
   return [
-    gateSuite("repo-gates", WORKING_TREE_GATES, ["deno"]),
+    // The action-pin gate asks GitHub what each pin resolves to, and
+    // sixty requests an hour is what the service allows a caller with no
+    // token.
+    gateSuite("repo-gates", WORKING_TREE_GATES, ["deno", "github-api"]),
     gateSuite("repo-history-gates", HISTORY_GATES, ["deno", "git-history"]),
     await typecheckSuite(root),
-    cfcheckSuite(),
+    await cfcheckSuite(root),
     await patternCompatSuite(root),
-    patternVintageSuite(),
+    await patternVintageSuite(root),
   ];
 }

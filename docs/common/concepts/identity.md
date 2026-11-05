@@ -27,6 +27,25 @@ This shift has several benefits:
 - **Simpler types** - Your data models are cleaner without synthetic keys
 - **Natural composition** - Objects can reference other objects directly
 
+### One object written at two positions
+
+Writing the same plain object or array at two positions in one write links the
+two: after `state.set({ a: EMPTY, b: EMPTY })`, `b` is stored as a link to `a`.
+A change inside the value through either position, such as
+`state.key("a").push(item)` or `state.key("b").key(0).set(item)`, is read at
+both, across sessions. Replacing a position whole is different:
+`state.key("b").set([])` replaces the link and ends the sharing, while
+`state.key("a").set([])` replaces what the link points at, so `b` reads the new
+array too.
+
+Separate writes of an object never link: `state.key("a").set(EMPTY)` and then
+`state.key("b").set(EMPTY)` store two independent values, even in one handler.
+A cell is different, since a cell is a reference: written at two positions, it
+is referenced at both, however many writes put it there. The object itself is
+not changed by any of this: `EMPTY` stays as it was. When two positions should
+start out equal but change independently, write each its own value (`[]` and
+`[]`), or write them separately.
+
 ## The `equals()` Function
 
 Use `equals()` to ask whether two things are the *same* thing. It resolves each side to what it points at in the graph — following links — and compares those referents. It never compares contents: two separately-created values are not `equals()` however identical they look, and a value with no place in the graph (a fresh object literal, say) has nothing to compare, so it is never `equals()` to anything but itself.

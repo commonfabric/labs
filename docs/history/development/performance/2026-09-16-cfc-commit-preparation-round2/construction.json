@@ -1,0 +1,85 @@
+{
+  "method": "Construction plus 1/2/5/50 trailing wildcard queries; median of three process p75 observations.",
+  "rows": [
+    {
+      "arm": "before",
+      "name": "trailing cover construction and 1 queries",
+      "p75Ms": [
+        0.0005485458,
+        0.0006274042,
+        0.0005354791
+      ],
+      "medianP75Ms": 0.0005485458
+    },
+    {
+      "arm": "before",
+      "name": "trailing cover construction and 2 queries",
+      "p75Ms": [
+        0.0011196041,
+        0.0013535709,
+        0.0011595417
+      ],
+      "medianP75Ms": 0.0011595417
+    },
+    {
+      "arm": "before",
+      "name": "trailing cover construction and 5 queries",
+      "p75Ms": [
+        0.00486155,
+        0.006435675,
+        0.0047520833
+      ],
+      "medianP75Ms": 0.00486155
+    },
+    {
+      "arm": "before",
+      "name": "trailing cover construction and 50 queries",
+      "p75Ms": [
+        0.293166,
+        0.4035,
+        0.327916
+      ],
+      "medianP75Ms": 0.327916
+    },
+    {
+      "arm": "after",
+      "name": "trailing cover construction and 1 queries",
+      "p75Ms": [
+        0.0004123792,
+        0.0004152167,
+        0.0004358791
+      ],
+      "medianP75Ms": 0.0004152167
+    },
+    {
+      "arm": "after",
+      "name": "trailing cover construction and 2 queries",
+      "p75Ms": [
+        0.0007650875,
+        0.0006972959,
+        0.0007217833
+      ],
+      "medianP75Ms": 0.0007217833
+    },
+    {
+      "arm": "after",
+      "name": "trailing cover construction and 5 queries",
+      "p75Ms": [
+        0.0020558042,
+        0.0018936916,
+        0.0018633958
+      ],
+      "medianP75Ms": 0.0018936916
+    },
+    {
+      "arm": "after",
+      "name": "trailing cover construction and 50 queries",
+      "p75Ms": [
+        0.081834,
+        0.079834,
+        0.078
+      ],
+      "medianP75Ms": 0.079834
+    }
+  ]
+}

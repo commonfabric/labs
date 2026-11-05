@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import {
+  type CoverageFigures,
   type TestIdentity,
   testIdentityKey,
   type TestRecord,
@@ -9,14 +10,16 @@ import {
 import {
   aliasLineFor,
   buildReport,
-  type CoverageFigures,
   coverageRise,
+  excusedFailures,
+  excusedIn,
   firstFailures,
   flakyNewTests,
   MAIN_REPORT_MARKER,
+  measuredSetRises,
   nameSimilarity,
+  type Outcome,
   outcomesOf,
-  packageRises,
   partsOf,
   type PullRequestView,
   renames,
@@ -29,18 +32,19 @@ import {
   shownIdentity,
   unknownPullRequest,
   type Verdict,
+  verdictOf,
 } from "./report.ts";
+import { excusedMeasurementName } from "../lane-measurement.ts";
 import {
   COVERAGE_COMMENT_LINES,
   EXCLUDED_FROM_COVERAGE_GATE,
-  LOCAL_COVERAGE_MAX_PACKAGES,
   RENAME_SIMILARITY,
 } from "./policy.ts";
 
 //
 // Fixtures
 //
-// Every case is written in test names, coverage metric names and verdicts,
+// Every case is written in test names, coverage figures and verdicts,
 // because those are the three vocabularies the module reads.
 //
 
@@ -53,38 +57,65 @@ function key(name: string, scope = "bakery"): string {
   return testIdentityKey(test(name, scope));
 }
 
+/** One batch a lane measured about itself, which is not a test. */
+const laneBatch: TestIdentity = {
+  k: "gate",
+  s: "ci",
+  n: "ci-lane batch bakery-unit",
+};
+
+/** The runs one identity took that come to a verdict, one of each kind. */
+const ONCE: Readonly<Record<Verdict, Outcome>> = {
+  pass: { passed: 1, failed: 0 },
+  fail: { passed: 0, failed: 1 },
+  mixed: { passed: 1, failed: 1 },
+  skip: { passed: 0, failed: 0 },
+};
+
 /** One run's verdicts, written as a name-to-verdict list. */
 function run(
   entries: readonly (readonly [string, Verdict])[],
 ): RunOutcomes {
-  return new Map(entries.map(([name, verdict]) => [key(name), verdict]));
+  return new Map(entries.map(([name, verdict]) => [key(name), ONCE[verdict]]));
+}
+
+/** One run's outcomes, written as how often each name passed and failed. */
+function counted(
+  entries: readonly (readonly [string, number, number])[],
+): RunOutcomes {
+  return new Map(
+    entries.map(([name, passed, failed]) => [key(name), { passed, failed }]),
+  );
 }
 
 /** A source-group figure set: a package measured by every test in the run. */
 function figures(
   entries: readonly (readonly [string, number])[],
 ): CoverageFigures {
-  return new Map(
-    entries.map(([group, lines]) =>
-      [`coverage-debt: ${group} uncovered lines`, lines] as const
-    ),
-  );
+  return { groups: new Map(entries), sets: new Map(), cold: false };
 }
 
 /** An own-tests figure set: a package measured by only its own tests. */
 function ownTests(
   entries: readonly (readonly [string, number])[],
+  suite = "workspace-unit",
 ): CoverageFigures {
-  return new Map(
-    entries.map(([member, lines]) =>
-      [`coverage-debt: ${member} own-tests uncovered lines`, lines] as const
+  return {
+    groups: new Map(),
+    sets: new Map(
+      entries.map(([member, lines]) => [`${suite}/${member}`, lines] as const),
     ),
-  );
+    cold: false,
+  };
 }
 
-/** Two figure sets as one, which is what a run's metrics really are. */
+/** Two figure sets as one, which is what a run's measurement really is. */
 function both(...sets: readonly CoverageFigures[]): CoverageFigures {
-  return new Map(sets.flatMap((set) => [...set]));
+  return {
+    groups: new Map(sets.flatMap((set) => [...set.groups])),
+    sets: new Map(sets.flatMap((set) => [...set.sets])),
+    cold: sets.some((set) => set.cold),
+  };
 }
 
 /** A pull request whose run ran these names, over a manifest that knows them. */
@@ -126,9 +157,11 @@ function input(partial: Partial<ReportInput> = {}): ReportInput {
     current: new Map(),
     previous: new Map(),
     pullRequest: unknownPullRequest(),
-    coverage: new Map(),
-    coverageBefore: new Map(),
+    nonGating: new Map(),
+    coverage: figures([]),
+    coverageBefore: figures([]),
     touched: new Set(),
+    coverageGate: { reached: [], chosen: [] },
     day: "2026-09-07",
     ...partial,
   };
@@ -152,8 +185,20 @@ describe("report", () => {
         record("kneads", "pass"),
         record("proves", "fail"),
       ]);
-      expect(outcomes.get(key("kneads"))).toBe("pass");
-      expect(outcomes.get(key("proves"))).toBe("fail");
+      expect(verdictOf(outcomes.get(key("kneads")))).toBe("pass");
+      expect(verdictOf(outcomes.get(key("proves")))).toBe("fail");
+    });
+
+    it("counts each record of one identity as one of its runs", () => {
+      const outcomes = outcomesOf([
+        record("kneads", "fail"),
+        record("kneads", "fail"),
+        record("kneads", "fail"),
+        record("kneads", "skip"),
+        record("proves", "pass"),
+      ]);
+      expect(outcomes.get(key("kneads"))).toEqual({ passed: 0, failed: 3 });
+      expect(outcomes.get(key("proves"))).toEqual({ passed: 1, failed: 0 });
     });
 
     it("reports a pass and a failure at one commit as disagreement", () => {
@@ -161,12 +206,112 @@ describe("report", () => {
         record("kneads", "pass"),
         record("kneads", "fail"),
       ]);
-      expect(outcomes.get(key("kneads"))).toBe("mixed");
+      expect(verdictOf(outcomes.get(key("kneads")))).toBe("mixed");
     });
 
     it("reports a skipped test as skipped rather than as a pass", () => {
-      expect(outcomesOf([record("kneads", "skip")]).get(key("kneads")))
-        .toBe("skip");
+      expect(
+        verdictOf(outcomesOf([record("kneads", "skip")]).get(key("kneads"))),
+      ).toBe("skip");
+    });
+
+    // A lane writes what its setup and each of its batches cost through
+    // the record machinery every test uses, and a batch that ended badly
+    // is written as a failure. Nothing enumerates those measurements and
+    // no lane can be asked to run one, so none of them is a test.
+    it("gives no verdict on a lane measuring itself", () => {
+      const outcomes = outcomesOf([
+        record("kneads", "fail"),
+        {
+          line: "record",
+          test: laneBatch,
+          outcome: "fail",
+          durationMs: 391_400,
+        },
+      ]);
+      expect(verdictOf(outcomes.get(key("kneads")))).toBe("fail");
+      expect(outcomes.has(testIdentityKey(laneBatch))).toBe(false);
+    });
+  });
+
+  describe("excusedIn()", () => {
+    /** A record a report holds, under the identity given. */
+    const named = (
+      test: TestIdentity,
+      outcome: TestRecord["outcome"] = "pass",
+    ): TestRecord => ({ line: "record", test, outcome, durationMs: 0 });
+
+    /** The record a lane writes for a test whose failures it excused. */
+    const excusing = (name: string): TestRecord =>
+      named({ ...laneBatch, n: excusedMeasurementName(key(name)) });
+
+    it("returns every identity a lane recorded excusing", () => {
+      expect(excusedIn([[
+        excusing("kneads"),
+        excusing("proves"),
+        named(laneBatch),
+        named(test("kneads"), "fail"),
+      ]])).toEqual(new Set([key("kneads"), key("proves")]));
+    });
+
+    it("returns nothing from a test that happens to carry the name", () => {
+      // Only a lane writes about itself, and it writes under its own
+      // surface.
+
+      expect(excusedIn([[
+        named(test(excusedMeasurementName(key("kneads")))),
+      ]])).toEqual(new Set());
+    });
+
+    it("returns an identity every report that failed it excused", () => {
+      // Two lanes both ran `kneads`, and a third report never failed it.
+
+      expect(excusedIn([
+        [excusing("kneads"), named(test("kneads"), "fail")],
+        [excusing("kneads"), named(test("kneads"), "fail")],
+        [named(test("kneads"))],
+      ])).toEqual(new Set([key("kneads")]));
+    });
+
+    it("leaves out an identity one report failed without excusing", () => {
+      // The second lane failed the run for `kneads`, whatever the first
+      // did.
+
+      expect(excusedIn([
+        [excusing("kneads"), named(test("kneads"), "fail")],
+        [named(test("kneads"), "fail"), excusing("proves")],
+      ])).toEqual(new Set([key("proves")]));
+    });
+
+    it("leaves out an identity a re-run attempt of a lane failed without excusing, in either order", () => {
+      // Each attempt of a lane job writes a report of its own, so a re-run
+      // is two reports of one lane.
+
+      const excusedAttempt = [
+        excusing("kneads"),
+        named(test("kneads"), "fail"),
+      ];
+      const failedAttempt = [named(test("kneads"), "fail")];
+      expect(excusedIn([excusedAttempt, failedAttempt])).toEqual(new Set());
+      expect(excusedIn([failedAttempt, excusedAttempt])).toEqual(new Set());
+    });
+
+    it("returns an identity one attempt excused and a re-run passed", () => {
+      expect(excusedIn([
+        [excusing("kneads"), named(test("kneads"), "fail")],
+        [named(test("kneads"))],
+      ])).toEqual(new Set([key("kneads")]));
+    });
+  });
+
+  describe("verdictOf()", () => {
+    it("returns nothing for an identity the run holds no record of", () => {
+      expect(verdictOf(undefined)).toBeUndefined();
+    });
+
+    it("returns `fail` however many runs failed, and `mixed` for one pass among them", () => {
+      expect(verdictOf({ passed: 0, failed: 5 })).toBe("fail");
+      expect(verdictOf({ passed: 1, failed: 5 })).toBe("mixed");
     });
   });
 
@@ -183,15 +328,26 @@ describe("report", () => {
     });
 
     it("separates each reason a run did not reach a test", () => {
-      const view = knows(["bakes"], {
+      const view = knows(["bakes", "slices", "proves"], {
         withheld: new Map([[key("kneads"), "flaky" as const]]),
+        heldWithUnit: new Set([key("proves")]),
+        unschedulable: new Set([key("slices")]),
         flakes: new Map([
           [key("kneads"), undefined],
           [key("bakes"), undefined],
+          [key("slices"), undefined],
+          [key("proves"), undefined],
         ]),
       });
       expect(selectionOf(view, key("kneads"))).toBe("withheld-flaky");
+      expect(selectionOf(view, key("proves"))).toBe("withheld-unit");
       expect(selectionOf(view, key("bakes"))).toBe("not-selected");
+      expect(selectionOf(view, key("slices"))).toBe("unschedulable");
+      const crowded = { ...view, crowded: true };
+      expect(selectionOf(crowded, key("bakes"))).toBe("crowded-out");
+      expect(selectionOf(crowded, key("slices"))).toBe("unschedulable");
+      expect(selectionOf(crowded, key("kneads"))).toBe("withheld-flaky");
+      expect(selectionOf(crowded, key("proves"))).toBe("withheld-unit");
     });
 
     // Saying the selector passed over a test needs a manifest that holds
@@ -221,16 +377,37 @@ describe("report", () => {
       expect(selectionOf(itself, key("kneads"))).toBe("skipped-there");
     });
 
-    // An identity the packing reached, and one the store has never seen,
-    // are both identities that run. A run with no record of either
-    // recorded less than it ran rather than running less than it should
-    // have, and saying there is no manifest would deny one there is.
+    // An identity the packing reached, and one the manifest does not hold
+    // whose unit it placed, are both identities that run. A run with no
+    // record of either recorded less than it ran rather than running less
+    // than it should have, and saying there is no manifest would deny one
+    // there is.
     it("separates a test that was to have run from one nothing knows", () => {
       const selected = knows(["kneads"], {
         selected: new Set([key("kneads")]),
       });
       expect(selectionOf(selected, key("kneads"))).toBe("unrecorded");
       expect(selectionOf(knows([]), key("kneads"))).toBe("unrecorded");
+      const placed = knows([], {
+        units: inOneUnit("kneads"),
+        placed: new Set(["workspace-unit\tbakery"]),
+      });
+      expect(selectionOf(placed, key("kneads"))).toBe("unrecorded");
+    });
+
+    // A test the manifest does not hold runs wherever its unit runs, so a
+    // unit the packing left out is the packing's decision about the test.
+    it("reports a test the manifest does not hold by what became of its unit", () => {
+      const passedOver = knows([], { units: inOneUnit("kneads") });
+      expect(selectionOf(passedOver, key("kneads"))).toBe("not-selected");
+      expect(selectionOf({ ...passedOver, crowded: true }, key("kneads")))
+        .toBe("crowded-out");
+      expect(
+        selectionOf(
+          { ...passedOver, unschedulable: new Set([key("kneads")]) },
+          key("kneads"),
+        ),
+      ).toBe("unschedulable");
     });
   });
 
@@ -241,8 +418,8 @@ describe("report", () => {
     it("refuses a key that is not a test identity", () => {
       expect(() =>
         firstFailures(input({
-          previous: new Map([["not a key", "pass"]]),
-          current: new Map([["not a key", "fail"]]),
+          previous: new Map([["not a key", ONCE.pass]]),
+          current: new Map([["not a key", ONCE.fail]]),
         }))
       ).toThrow("not a test identity key");
     });
@@ -262,6 +439,32 @@ describe("report", () => {
       const failures = firstFailures(input({
         previous: run([["kneads", "pass"]]),
         current: run([["kneads", "fail"]]),
+      }));
+      expect(failures.map((failure) => failure.test.n)).toEqual(["kneads"]);
+    });
+
+    // A batch is written as a failure when a test in it failed. What
+    // this commit is said to have broken is that test, once.
+    it("names the test a batch failed on rather than the batch", () => {
+      const failures = firstFailures(input({
+        previous: new Map<string, Outcome>([
+          ...run([["kneads", "pass"]]),
+          [testIdentityKey(laneBatch), ONCE.pass],
+        ]),
+        current: outcomesOf([
+          {
+            line: "record",
+            test: test("kneads"),
+            outcome: "fail",
+            durationMs: 12,
+          },
+          {
+            line: "record",
+            test: laneBatch,
+            outcome: "fail",
+            durationMs: 391_400,
+          },
+        ]),
       }));
       expect(failures.map((failure) => failure.test.n)).toEqual(["kneads"]);
     });
@@ -291,7 +494,7 @@ describe("report", () => {
 
     // A test that both passed and failed at this commit is disagreeing
     // with itself, which is what the scorer calls flake evidence rather
-    // than a catch.
+    // than a new real test failure.
     it("says nothing about a test that disagreed with itself here", () => {
       expect(firstFailures(input({
         previous: run([["kneads", "pass"]]),
@@ -321,6 +524,114 @@ describe("report", () => {
       expect(failures[0]?.selection).toBe("passed-there");
       expect(failures[0]?.flakes).toEqual({ flakes: 4, runs: 100 });
     });
+
+    it("leaves out a test this run did not fail for", () => {
+      // A failure of a test the run excused is reported as that, with
+      // what it means for the run, rather than as a failure of the run.
+
+      const failures = firstFailures(input({
+        previous: run([["kneads", "pass"], ["proves", "pass"]]),
+        current: run([["kneads", "fail"], ["proves", "fail"]]),
+        nonGating: new Map([[key("kneads"), { flakes: 7, runs: 900 }]]),
+      }));
+      expect(failures.map((failure) => failure.test.n)).toEqual(["proves"]);
+    });
+  });
+
+  describe("excusedFailures()", () => {
+    const heldBack = new Map([[key("kneads"), { flakes: 7, runs: 900 }]]);
+
+    it("names a held-back test that failed every run here and passed every run before", () => {
+      expect(excusedFailures(input({
+        previous: counted([["kneads", 4, 0]]),
+        current: counted([["kneads", 0, 3]]),
+        nonGating: heldBack,
+      }))).toEqual([{
+        test: test("kneads"),
+        failed: 3,
+        passed: 4,
+        flakes: { flakes: 7, runs: 900 },
+      }]);
+    });
+
+    it("says nothing about a test the run failed for", () => {
+      // That is an ordinary first failure, and saying the run was not
+      // failed by it would be false.
+
+      const failing = input({
+        previous: counted([["kneads", 4, 0]]),
+        current: counted([["kneads", 0, 3]]),
+      });
+      expect(excusedFailures(failing)).toEqual([]);
+      expect(firstFailures(failing).map((failure) => failure.test.n))
+        .toEqual(["kneads"]);
+    });
+
+    it("says nothing about a held-back test that also passed here", () => {
+      // A pass beside the failures is the test disagreeing with itself,
+      // which is what it is held back for, and not a statement about
+      // this commit.
+
+      const mixed = input({
+        previous: counted([["kneads", 4, 0]]),
+        current: counted([["kneads", 1, 2]]),
+        nonGating: heldBack,
+      });
+      expect(excusedFailures(mixed)).toEqual([]);
+      expect(firstFailures(mixed)).toEqual([]);
+    });
+
+    it("says nothing about a held-back test the parent did not pass throughout", () => {
+      expect(excusedFailures(input({
+        previous: counted([["kneads", 3, 1]]),
+        current: counted([["kneads", 0, 3]]),
+        nonGating: heldBack,
+      }))).toEqual([]);
+      expect(excusedFailures(input({
+        previous: counted([["kneads", 0, 4]]),
+        current: counted([["kneads", 0, 3]]),
+        nonGating: heldBack,
+      }))).toEqual([]);
+    });
+
+    it("says nothing about a held-back test the parent did not judge", () => {
+      expect(excusedFailures(input({
+        previous: counted([["proves", 4, 0], ["kneads", 0, 0]]),
+        current: counted([["kneads", 0, 3]]),
+        nonGating: heldBack,
+      }))).toEqual([]);
+      expect(excusedFailures(input({
+        previous: counted([["proves", 4, 0]]),
+        current: counted([["kneads", 0, 3]]),
+        nonGating: heldBack,
+      }))).toEqual([]);
+    });
+
+    it("says nothing about a held-back test the pull request's own run failed", () => {
+      expect(excusedFailures(input({
+        previous: counted([["kneads", 4, 0]]),
+        current: counted([["kneads", 0, 3]]),
+        nonGating: heldBack,
+        pullRequest: ranThere([["kneads", "fail"]]),
+      }))).toEqual([]);
+    });
+
+    it("carries no counts where the manifest holds none for the test", () => {
+      const failures = excusedFailures(input({
+        previous: counted([["kneads", 4, 0], ["proves", 2, 0]]),
+        current: counted([["kneads", 0, 3], ["proves", 0, 2]]),
+        nonGating: new Map([
+          [key("kneads"), undefined],
+          [key("proves"), { flakes: 0, runs: 40 }],
+        ]),
+      }));
+      expect(failures.map((failure) => failure.test.n)).toEqual([
+        "kneads",
+        "proves",
+      ]);
+      expect(failures.every((failure) => failure.flakes === undefined))
+        .toBe(true);
+    });
   });
 
   describe("coverageRise()", () => {
@@ -342,23 +653,23 @@ describe("report", () => {
     // the change touched that rose with the whole.
     it("names the touched source groups that rose as well", () => {
       const rise = coverageRise(input({
-        touched: new Set(["tasks", "packages/memory", "packages/runner"]),
+        touched: new Set(["tasks", "runtime/memory", "runtime/runner"]),
         coverageBefore: figures([
           ["workspace", 1000],
           ["tasks", 40],
-          ["packages/memory", 10],
-          ["packages/runner", 90],
+          ["runtime/memory", 10],
+          ["runtime/runner", 90],
         ]),
         coverage: figures([
           ["workspace", 1000 + COVERAGE_COMMENT_LINES],
           ["tasks", 40],
-          ["packages/memory", 24],
-          ["packages/runner", 101],
+          ["runtime/memory", 24],
+          ["runtime/runner", 101],
         ]),
       }));
       expect(rise?.groups).toEqual([
-        { group: "packages/memory", from: 10, to: 24 },
-        { group: "packages/runner", from: 90, to: 101 },
+        { group: "runtime/memory", from: 10, to: 24 },
+        { group: "runtime/runner", from: 90, to: 101 },
       ]);
     });
 
@@ -394,55 +705,90 @@ describe("report", () => {
         coverage: figures([["workspace", 2000]]),
       }))).toBeUndefined();
     });
+
+    // A cold compile cache reaches compile branches a warm one does not,
+    // so a warm run after a cold one reads higher with no test changed.
+    it("says nothing when only one of the two runs found the compile cache cold", () => {
+      const rise = {
+        touched,
+        coverageBefore: { ...figures([["workspace", 1000]]), cold: true },
+        coverage: figures([["workspace", 1000 + COVERAGE_COMMENT_LINES]]),
+      };
+      expect(coverageRise(input(rise))).toBeUndefined();
+      expect(
+        coverageRise(input({
+          ...rise,
+          coverage: { ...rise.coverage, cold: true },
+        }))?.to,
+      ).toBe(1000 + COVERAGE_COMMENT_LINES);
+    });
   });
 
-  describe("packageRises()", () => {
-    const gated = "packages/memory";
+  describe("measuredSetRises()", () => {
+    const gated = "runtime/memory";
     const excluded = [...EXCLUDED_FROM_COVERAGE_GATE.keys()][0]!;
-    const overTheCap = new Set(
-      Array.from(
-        { length: LOCAL_COVERAGE_MAX_PACKAGES + 1 },
-        (_, index) => `packages/gated-${index}`,
-      ),
-    );
+    /** The plan for the change having chosen the gates of these sets. */
+    const over = (...members: string[]) => ({
+      reached: members.map((member) => `workspace-unit/${member}`),
+      chosen: members.map((member) => `workspace-unit/${member}`),
+    });
+    /** The change having reached these sets, and its plan choosing none. */
+    const passedOver = (...members: string[]) => ({
+      reached: members.map((member) => `workspace-unit/${member}`),
+      chosen: [],
+    });
 
-    it("names the cap when the change touched more packages than it allows", () => {
-      const rises = packageRises(input({
+    it("names the plan when it did not choose the reached set's gate", () => {
+      const rises = measuredSetRises(input({
         coverageBefore: ownTests([[gated, 10]]),
         coverage: ownTests([[gated, 14]]),
-        touched: overTheCap,
+        touched: new Set([gated]),
+        coverageGate: passedOver(gated),
       }));
-      expect(rises[0]?.route).toBe("over-the-cap");
-      expect(rises[0]?.touched).toBe(LOCAL_COVERAGE_MAX_PACKAGES + 1);
+      expect(rises[0]?.route).toBe("not-chosen");
+    });
+
+    it("says no plan can tell where none was resolved for the run", () => {
+      const rises = measuredSetRises(input({
+        coverageBefore: ownTests([[gated, 10]]),
+        coverage: ownTests([[gated, 14]]),
+        touched: new Set([gated]),
+        coverageGate: { reached: [`workspace-unit/${gated}`] },
+      }));
+      expect(rises[0]?.route).toBe("unplanned");
     });
 
     it("names the exclusion list, with its reason", () => {
-      const rises = packageRises(input({
+      const rises = measuredSetRises(input({
         coverageBefore: ownTests([[excluded, 10]]),
         coverage: ownTests([[excluded, 14]]),
         touched: new Set([excluded]),
+        coverageGate: over(),
       }));
       expect(rises[0]?.route).toBe("excluded");
       expect(rises[0]?.reason).toBe(EXCLUDED_FROM_COVERAGE_GATE.get(excluded));
     });
 
-    // A package the gate would never have measured is on the exclusion
-    // list whatever else the change touched, so the cap cannot be the
-    // route that let its rise through.
-    it("names the exclusion list even when the cap was also passed", () => {
-      const rises = packageRises(input({
+    it("names the exclusion list even where the plan passed over a gate", () => {
+      // A package the gate would never have measured is on the exclusion
+      // list whatever else the change touched, so the plan's choice cannot
+      // be the route that let its rise through.
+
+      const rises = measuredSetRises(input({
         coverageBefore: ownTests([[excluded, 10]]),
         coverage: ownTests([[excluded, 14]]),
-        touched: overTheCap,
+        touched: new Set([excluded]),
+        coverageGate: passedOver(excluded),
       }));
       expect(rises[0]?.route).toBe("excluded");
     });
 
-    it("names the change when it did not touch the risen package", () => {
-      const rises = packageRises(input({
+    it("names the change when it did not reach the risen set", () => {
+      const rises = measuredSetRises(input({
         coverageBefore: ownTests([[gated, 10]]),
         coverage: ownTests([[gated, 14]]),
         touched: new Set(["tasks"]),
+        coverageGate: over(),
       }));
       expect(rises[0]?.route).toBe("elsewhere");
     });
@@ -451,10 +797,11 @@ describe("report", () => {
     // landed anyway. That is the two measurements disagreeing, and saying
     // the change did not touch the package would be false.
     it("says the measurements disagree when the gate did run", () => {
-      const rises = packageRises(input({
+      const rises = measuredSetRises(input({
         coverageBefore: ownTests([[gated, 10]]),
         coverage: ownTests([[gated, 14]]),
         touched: new Set([gated]),
+        coverageGate: over(gated),
       }));
       expect(rises[0]?.route).toBe("gated");
     });
@@ -463,14 +810,14 @@ describe("report", () => {
     // compare against, and calling its first figure a rise would report
     // every package the moment it gains a gate.
     it("says nothing about a package the run before did not measure", () => {
-      expect(packageRises(input({
+      expect(measuredSetRises(input({
         coverage: ownTests([[gated, 14]]),
         touched: new Set(["tasks"]),
       }))).toEqual([]);
     });
 
     it("says nothing about a package that did not rise", () => {
-      expect(packageRises(input({
+      expect(measuredSetRises(input({
         coverageBefore: ownTests([[gated, 10]]),
         coverage: both(ownTests([[gated, 10]]), figures([["workspace", 900]])),
       }))).toEqual([]);
@@ -479,17 +826,20 @@ describe("report", () => {
     // Both metrics carry the same package name, and only the own-tests
     // one is the quantity the per-package gate compares.
     it("reads the own-tests figure and not the whole run's figure", () => {
-      expect(packageRises(input({
+      expect(measuredSetRises(input({
         coverageBefore: figures([[gated, 10]]),
         coverage: figures([[gated, 400]]),
       }))).toEqual([]);
     });
 
-    it("counts only covered packages against the cap", () => {
-      const rises = packageRises(input({
+    it("counts only the sets the gate reached", () => {
+      // An excluded member carries no set, so touching every one of them
+      // reaches nothing and the gate ran over an empty selection.
+      const rises = measuredSetRises(input({
         coverageBefore: ownTests([[gated, 10]]),
         coverage: ownTests([[gated, 14]]),
         touched: new Set([...EXCLUDED_FROM_COVERAGE_GATE.keys()]),
+        coverageGate: over(),
       }));
       expect(rises[0]?.route).toBe("elsewhere");
     });
@@ -583,17 +933,17 @@ describe("report", () => {
 
   describe("renames()", () => {
     /**
-     * A view where one departing test has caught things, and every test
-     * a case names shares one invocation unit with it.
+     * A view where one departing test has had new real test failures, and
+     * every test a case names shares one invocation unit with it.
      */
-    const withCatches = (
+    const withNewRealTestFailures = (
       name: string,
-      catches: number,
+      newRealTestFailures: number,
       ...others: readonly string[]
     ): PullRequestView => ({
       ...unknownPullRequest(),
       manifest: true,
-      catches: new Map([[key(name), catches]]),
+      newRealTestFailures: new Map([[key(name), newRealTestFailures]]),
       units: inOneUnit(name, ...others),
     });
 
@@ -601,11 +951,11 @@ describe("report", () => {
       const suggestions = renames(input({
         previous: run([["kneads the dough", "pass"], ["proves", "pass"]]),
         current: run([["kneads the dougk", "pass"], ["proves", "pass"]]),
-        pullRequest: withCatches("kneads the dough", 4.5, "proves"),
+        pullRequest: withNewRealTestFailures("kneads the dough", 4.5, "proves"),
       }));
       expect(suggestions.length).toBe(1);
       expect(suggestions[0]!.to.n).toBe("kneads the dougk");
-      expect(suggestions[0]!.catches).toBe(4.5);
+      expect(suggestions[0]!.newRealTestFailures).toBe(4.5);
       expect(JSON.parse(suggestions[0]!.aliasLine)).toEqual({
         date: "2026-09-07",
         from: { k: "unit", s: "bakery", n: "kneads the dough" },
@@ -613,11 +963,11 @@ describe("report", () => {
       });
     });
 
-    it("offers nothing when the departing test caught nothing", () => {
+    it("offers nothing when the departing test had no new real test failure", () => {
       expect(renames(input({
         previous: run([["kneads the dough", "pass"], ["proves", "pass"]]),
         current: run([["kneads the dougk", "pass"], ["proves", "pass"]]),
-        pullRequest: withCatches("kneads the dough", 0, "proves"),
+        pullRequest: withNewRealTestFailures("kneads the dough", 0, "proves"),
       }))).toEqual([]);
     });
 
@@ -625,7 +975,7 @@ describe("report", () => {
       expect(renames(input({
         previous: run([["kneads the dough", "pass"], ["proves", "pass"]]),
         current: run([["lights the oven", "pass"], ["proves", "pass"]]),
-        pullRequest: withCatches("kneads the dough", 4, "proves"),
+        pullRequest: withNewRealTestFailures("kneads the dough", 4, "proves"),
       }))).toEqual([]);
     });
 
@@ -643,7 +993,7 @@ describe("report", () => {
           ["census > drops a unit the tree no longer had", "pass"],
           ["census > keeps a unit the tree no longer has", "pass"],
         ]),
-        pullRequest: withCatches(
+        pullRequest: withNewRealTestFailures(
           "census > drops a unit the tree no longer has",
           4,
         ),
@@ -655,7 +1005,7 @@ describe("report", () => {
         previous: run([["kneads the dough", "pass"], ["proves", "pass"]]),
         current: run([["kneads the dougk", "pass"], ["proves", "pass"]]),
         pullRequest: {
-          ...withCatches("kneads the dough", 4, "proves"),
+          ...withNewRealTestFailures("kneads the dough", 4, "proves"),
           flakes: new Map([[key("kneads the dougk"), undefined]]),
         },
       }))).toEqual([]);
@@ -670,12 +1020,12 @@ describe("report", () => {
         v: "off",
       });
       expect(renames(input({
-        previous: new Map([[gone, "pass" as const]]),
-        current: new Map([[arrived, "pass" as const]]),
+        previous: new Map([[gone, ONCE.pass]]),
+        current: new Map([[arrived, ONCE.pass]]),
         pullRequest: {
           ...unknownPullRequest(),
           manifest: true,
-          catches: new Map([[gone, 4]]),
+          newRealTestFailures: new Map([[gone, 4]]),
           units: new Map([
             [gone, "workspace-unit\tbakery"],
             [arrived, "workspace-unit\tbakery"],
@@ -699,7 +1049,7 @@ describe("report", () => {
         pullRequest: {
           ...unknownPullRequest(),
           manifest: true,
-          catches: new Map([
+          newRealTestFailures: new Map([
             [key("kneads the dough"), 4],
             [key("lights the oven"), 2],
           ]),
@@ -721,15 +1071,15 @@ describe("report", () => {
     it("does not pair across scopes", () => {
       const gone = testIdentityKey(test("kneads the dough", "oven"));
       expect(renames(input({
-        previous: new Map([[gone, "pass" as const]]),
+        previous: new Map([[gone, ONCE.pass]]),
         current: new Map([[
           testIdentityKey(test("kneads the dough", "mill")),
-          "pass" as const,
+          ONCE.pass,
         ]]),
         pullRequest: {
           ...unknownPullRequest(),
           manifest: true,
-          catches: new Map([[gone, 4]]),
+          newRealTestFailures: new Map([[gone, 4]]),
           units: new Map([[gone, "workspace-unit\toven"]]),
         },
       }))).toEqual([]);
@@ -749,7 +1099,7 @@ describe("report", () => {
         pullRequest: {
           ...unknownPullRequest(),
           manifest: true,
-          catches: new Map([
+          newRealTestFailures: new Map([
             [key("kneads the dough"), 4],
             [key("kneads the dougx"), 3],
           ]),
@@ -774,7 +1124,7 @@ describe("report", () => {
         pullRequest: {
           ...unknownPullRequest(),
           manifest: true,
-          catches: new Map([[key("kneads the dough"), 4]]),
+          newRealTestFailures: new Map([[key("kneads the dough"), 4]]),
           units: new Map([[key("kneads the dough"), "workspace-unit\tbakery"]]),
         },
       }))).toEqual([]);
@@ -825,19 +1175,26 @@ describe("report", () => {
     /** A report holding one of each note, which is what the prose is read on. */
     function everything(): ReportInput {
       return input({
-        previous: run([
-          ["kneads the dough", "pass"],
-          ["proves", "pass"],
-          ["bakes", "pass"],
+        previous: new Map([
+          ...run([
+            ["kneads the dough", "pass"],
+            ["proves", "pass"],
+            ["bakes", "pass"],
+          ]),
+          ...counted([["glazes", 3, 0]]),
         ]),
-        current: run([
-          ["kneads the dougk", "pass"],
-          ["proves", "fail"],
-          ["bakes", "pass"],
-          ["scores the loaf", "mixed"],
+        current: new Map([
+          ...run([
+            ["kneads the dougk", "pass"],
+            ["proves", "fail"],
+            ["bakes", "pass"],
+            ["scores the loaf", "mixed"],
+          ]),
+          ...counted([["glazes", 0, 3]]),
         ]),
+        nonGating: new Map([[key("glazes"), { flakes: 7, runs: 900 }]]),
         pullRequest: knows(["proves", "bakes"], {
-          catches: new Map([[key("kneads the dough"), 6]]),
+          newRealTestFailures: new Map([[key("kneads the dough"), 6]]),
           flakes: new Map([
             [key("proves"), { flakes: 5, runs: 80 }],
             [key("bakes"), undefined],
@@ -846,11 +1203,11 @@ describe("report", () => {
         }),
         coverageBefore: both(
           figures([["workspace", 100]]),
-          ownTests([["packages/memory", 10]]),
+          ownTests([["runtime/memory", 10]]),
         ),
         coverage: both(
           figures([["workspace", 100 + COVERAGE_COMMENT_LINES]]),
-          ownTests([["packages/memory", 18]]),
+          ownTests([["runtime/memory", 18]]),
         ),
         touched: new Set(["tasks"]),
       });
@@ -865,8 +1222,11 @@ describe("report", () => {
     it("carries every note the run found", () => {
       const body = renderReport(buildReport(everything()), context)!;
       expect(body).toContain("Failing for the first time at this commit");
+      expect(body).toContain(
+        "A known flaky test that failed every time it ran",
+      );
       expect(body).toContain("Coverage debt");
-      expect(body).toContain("packages/memory");
+      expect(body).toContain("runtime/memory");
       expect(body).toContain("A new test that turned out to be flaky");
       expect(body).toContain("A rename that discarded a test's history");
       expect(body).toContain("kneads the dougk");
@@ -896,12 +1256,14 @@ describe("report", () => {
       expect(first.firstFailures.length).toBeGreaterThan(0);
       expect(second.firstFailures.map((failure) => failure.test.n))
         .toEqual(["slices"]);
+      expect(first.excusedFailures.length).toBeGreaterThan(0);
+      expect(second.excusedFailures).toEqual([]);
       expect(second.renames).toEqual([]);
       expect(second.coverageRise).toBeUndefined();
       expect(buildReport(everything())).toEqual(first);
     });
 
-    it("says the selector traded the coverage away, not that it was missed", () => {
+    it("says the lanes ran other tests, not that it was missed", () => {
       // It is not a judgement, because the system chose not to run the
       // test.
 
@@ -913,9 +1275,58 @@ describe("report", () => {
         })),
         context,
       )!;
-      expect(body).toContain("Test selection traded that coverage away");
-      expect(body).toContain("nothing here was missed");
+      expect(body).toContain(
+        "filled the rest of their budget with other tests, and this was not " +
+          "one of them",
+      );
+      expect(body).not.toContain("no room");
+      expect(body).not.toMatch(/\bscore\b/);
       expect(body).not.toMatch(/\b(should have|failed to|forgot)\b/i);
+    });
+
+    it("says the mandatory tests left no room, where they took the budget", () => {
+      const body = renderReport(
+        buildReport(input({
+          previous: run([["proves", "pass"]]),
+          current: run([["proves", "fail"]]),
+          pullRequest: knows(["proves"], { crowded: true }),
+        })),
+        context,
+      )!;
+      expect(body).toContain("nothing about this test decided that");
+      expect(body).toContain("left no room in the lanes for anything else");
+      expect(body).not.toContain("other tests, and this was not one");
+    });
+
+    it("says a test was held back with its unit", () => {
+      const body = renderReport(
+        buildReport(input({
+          previous: run([["proves", "pass"]]),
+          current: run([["proves", "fail"]]),
+          pullRequest: knows(["proves"], {
+            heldWithUnit: new Set([key("proves")]),
+            crowded: true,
+          }),
+        })),
+        context,
+      )!;
+      expect(body).toContain("holds back another test in that unit");
+      expect(body).not.toContain("no room");
+    });
+
+    it("says no lane can hold a test the packing found too costly", () => {
+      const body = renderReport(
+        buildReport(input({
+          previous: run([["proves", "pass"]]),
+          current: run([["proves", "fail"]]),
+          pullRequest: knows(["proves"], {
+            unschedulable: new Set([key("proves")]),
+          }),
+        })),
+        context,
+      )!;
+      expect(body).toContain("no lane can hold it");
+      expect(body).not.toContain("other tests, and this was not one");
     });
 
     it("labels a test the store knows disagrees with itself", () => {
@@ -993,6 +1404,113 @@ describe("report", () => {
         context,
       )!;
       expect(body).toContain("too flaky to judge a change by");
+      // This run failed for it, whatever the pull request's manifest
+      // said, since a test it did not fail for is an excused failure.
+      expect(body).not.toMatch(/fails? the run/);
+    });
+
+    describe("a known flaky test that failed every time it ran", () => {
+      /** The comment for one held-back test's runs here and at the parent. */
+      function excused(
+        passed: number,
+        failed: number,
+        flakes?: { flakes: number; runs: number },
+      ): string {
+        return renderReport(
+          buildReport(input({
+            previous: counted([["glazes", passed, 0]]),
+            current: counted([["glazes", 0, failed]]),
+            nonGating: new Map([[key("glazes"), flakes]]),
+          })),
+          context,
+        )!;
+      }
+
+      it("says the test is a known flaky one and the run was not failed by it", () => {
+        const body = excused(4, 3, { flakes: 7, runs: 900 });
+        expect(body).toContain(
+          "A known flaky test that failed every time it ran",
+        );
+        expect(body).toContain("too flaky to judge a change by");
+        expect(body).toContain("its failures never fail the run");
+        expect(body).not.toContain("Failing for the first time");
+      });
+
+      it("carries the counts behind the label", () => {
+        // It is accurate about flakes: the runs this commit and its
+        // parent took, and what the store has seen of the test, so
+        // nobody is asked to take the label on trust.
+
+        const body = excused(4, 3, { flakes: 7, runs: 900 });
+        expect(body).toContain(
+          "`[unit] bakery: glazes` failed all 3 of its runs at this commit " +
+            "and passed all 4 of its runs at the commit before.",
+        );
+        expect(body).toContain(
+          "The store has seen it disagree with itself 7 times in 900 runs",
+        );
+      });
+
+      it("counts one run as its one run", () => {
+        expect(excused(1, 1, { flakes: 1, runs: 1 })).toContain(
+          "failed its one run at this commit and passed its one run at " +
+            "the commit before.",
+        );
+      });
+
+      it("names the evidence as weak and says what to do", () => {
+        const body = excused(4, 3);
+        expect(body).toContain("one bad runner");
+        expect(body).toContain("weak evidence");
+        expect(body).toContain("Look at the failures in the run");
+      });
+
+      it("says nothing of the store's counts where there are none", () => {
+        expect(excused(4, 3)).not.toContain("The store has seen it");
+      });
+
+      it("heads several of them in the plural", () => {
+        const body = renderReport(
+          buildReport(input({
+            previous: counted([["glazes", 2, 0], ["proves", 2, 0]]),
+            current: counted([["glazes", 0, 2], ["proves", 0, 2]]),
+            nonGating: new Map([
+              [key("glazes"), undefined],
+              [key("proves"), undefined],
+            ]),
+          })),
+          context,
+        )!;
+        expect(body).toContain(
+          "### Known flaky tests that failed every time they ran",
+        );
+        expect(body).not.toContain("A known flaky test");
+      });
+    });
+
+    it("says no run of a withheld test saw it pass and fail at once", () => {
+      // An identity is withheld for a flake rate the same window's counts
+      // are behind, so the store's counts always follow this line. What
+      // the line adds is what those counts do not cover: the two runs the
+      // comparison is over are not among the disagreements they count.
+
+      const body = renderReport(
+        buildReport(input({
+          previous: run([["proves", "pass"]]),
+          current: run([["proves", "fail"]]),
+          pullRequest: knows(["proves"], {
+            withheld: new Map([[key("proves"), "flaky" as const]]),
+            flakes: new Map([[key("proves"), { flakes: 7, runs: 900 }]]),
+          }),
+        })),
+        context,
+      )!;
+      expect(body).toContain("no execution of it passed at this commit");
+      expect(body).toContain("none failed in the previous run");
+      expect(body).toContain("not what either of those two runs saw");
+      // And the counts still follow it, saying what the window holds
+      // rather than what these two runs did.
+      expect(body).toContain("disagree with itself 7 times in 900 runs");
     });
 
     // A pull request that ran the test and passed it is a flake or an
@@ -1008,7 +1526,7 @@ describe("report", () => {
         context,
       )!;
       expect(body).toContain("This pull request ran it, and it passed there");
-      expect(body).not.toContain("traded that coverage away");
+      expect(body).not.toContain("this was not one of them");
     });
 
     it("says so when the pull request's own run could not be read", () => {
@@ -1032,24 +1550,24 @@ describe("report", () => {
 
     it("gives the alias line as something to paste", () => {
       const body = renderReport(buildReport(everything()), context)!;
-      expect(body).toContain("tasks/test-identity-aliases.jsonl");
+      expect(body).toContain("`tasks/test-identity-aliases/`");
       expect(body).toContain('{"date":"2026-09-07","from":');
     });
 
     it("names where a test would go when a touched group rose", () => {
       const body = renderReport(
         buildReport(input({
-          touched: new Set(["packages/memory"]),
-          coverageBefore: figures([["workspace", 100], ["packages/memory", 5]]),
+          touched: new Set(["runtime/memory"]),
+          coverageBefore: figures([["workspace", 100], ["runtime/memory", 5]]),
           coverage: figures([
             ["workspace", 100 + COVERAGE_COMMENT_LINES],
-            ["packages/memory", 30],
+            ["runtime/memory", 30],
           ]),
         })),
         context,
       )!;
       expect(body).toContain("these source groups the change touched rose");
-      expect(body).toContain("`packages/memory`: 5 to 30, a rise of 25");
+      expect(body).toContain("`runtime/memory`: 5 to 30, a rise of 25");
     });
 
     // Most of a repository-wide movement is often somewhere the change
@@ -1058,11 +1576,11 @@ describe("report", () => {
     it("says so when the rise is not in anything the change touched", () => {
       const body = renderReport(
         buildReport(input({
-          touched: new Set(["packages/memory"]),
-          coverageBefore: figures([["workspace", 100], ["packages/memory", 5]]),
+          touched: new Set(["runtime/memory"]),
+          coverageBefore: figures([["workspace", 100], ["runtime/memory", 5]]),
           coverage: figures([
             ["workspace", 100 + COVERAGE_COMMENT_LINES],
-            ["packages/memory", 5],
+            ["runtime/memory", 5],
           ]),
         })),
         context,
@@ -1070,24 +1588,32 @@ describe("report", () => {
       expect(body).toContain("somewhere else in the repository");
     });
 
-    it("names the exclusion list's reason and the packages counted", () => {
+    it("names the exclusion list's reason and the gate the plan passed over", () => {
       const excluded = [...EXCLUDED_FROM_COVERAGE_GATE.keys()][0]!;
       const body = renderReport(
         buildReport(input({
           touched: new Set([
-            "packages/memory",
-            "packages/ui",
-            "packages/html",
+            "runtime/memory",
+            "runtime/ui",
+            "runtime/html",
             "tasks",
           ]),
-          coverageBefore: ownTests([[excluded, 10], ["packages/memory", 4]]),
-          coverage: ownTests([[excluded, 14], ["packages/memory", 9]]),
+          coverageGate: {
+            reached: [
+              "workspace-unit/runtime/memory",
+              "workspace-unit/runtime/ui",
+              "workspace-unit/runtime/html",
+            ],
+            chosen: ["workspace-unit/runtime/ui"],
+          },
+          coverageBefore: ownTests([[excluded, 10], ["runtime/memory", 4]]),
+          coverage: ownTests([[excluded, 14], ["runtime/memory", 9]]),
         })),
         context,
       )!;
       expect(body).toContain("The list gives the reason:");
       expect(body).toContain(EXCLUDED_FROM_COVERAGE_GATE.get(excluded));
-      expect(body).toContain("The change touched 3 covered packages.");
+      expect(body).toContain("did not choose the set's coverage gate");
     });
 
     it("says the coverage note is not a failure", () => {

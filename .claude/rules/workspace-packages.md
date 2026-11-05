@@ -1,16 +1,57 @@
 ---
 paths:
   - "deno.jsonc"
-  - "packages/*/deno.jsonc"
+  - "base/*/deno.jsonc"
+  - "patterns/deno.jsonc"
+  - "runtime/*/deno.jsonc"
+  - "connectors/*/*/deno.jsonc"
 ---
 
 # Workspace package configuration
 
+## A test task hands its runner a seed to shuffle by
+
+Every `deno test` in the workspace carries
+`--shuffle=$(deno task -q test-seed)`, which resolves to the root `test-seed`
+task from any directory in the checkout. `deno task check-test-shuffle` fails
+on one that does not, and on a package whose `test` task reaches no runner it
+knows shuffles.
+
+Two things about that spelling are easy to get wrong. Write it exactly, since
+`tasks/test-topology/deno-task.ts` recognizes that one string and takes it out
+before reading the rest of the task; any other command substitution makes the
+task unreadable, and the package loses the per-file granularity a
+continuous-integration lane selects with. And a package that runs its tests
+through a script of its own needs the script named in `RUNNERS` in
+`tasks/check-test-shuffle.ts`, saying whether it shuffles in its own code or
+forwards the flag to the `deno test` it starts.
+[TESTING.md](../../docs/development/TESTING.md#every-test-run-shuffles-its-order)
+covers what the shuffle reaches.
+
 ## Every package needs its own test task
 
 A package's `deno.jsonc` must contain a `"tasks"` object with a `"test"` entry.
-Use `"deno test"` when the package has tests, or `"echo 'No tests defined.'"`
-when it does not have them yet.
+When the package has tests, that entry runs `tasks/run-member-tests.ts` over a
+`"deno-test"` entry that runs the tests themselves — a `deno test` for most
+packages, or a runner of the package's own; when it does not have them yet, it
+is `"echo 'No tests defined.'"`. A `deno test` there passes `--no-check`, since
+the type check is a suite of its own, and `tasks/test-topology.test.ts` fails
+on one that does not.
+
+A package whose tests include some that need a browser keeps them out of
+`deno-test`, in a `"browser-test"` entry of their own, and its `test` task names
+both. `runtime/ui/deno.jsonc` is the worked example. Its `deno-test` ignores
+`**/*.browser.test.ts`, and its `browser-test` runs exactly those files, so the
+two halves share no file. A package can also run its Deno tests in a browser.
+`base/static/deno.jsonc` does: its `deno-test` has no `--ignore`, and its
+`browser-test` runs the same `test/*.test.ts` files in a browser, so the two
+halves share every browser file. The coverage gate reads `deno-test` as the
+package's Deno-only half, and the package's measured set holds that half's tests
+and never the browser runs, so a test that only `browser-test` runs leaves the
+package's gate as it was. A `test` task that joins `deno test` to the browser
+run with `&&` in one string gives the topology no files to point at.
+`tasks/test-topology/unit.ts` refuses to load such a member unless `RUNS_WHOLE`
+lists it with its reason.
 
 This is not a tidiness rule. The root test runner (`tasks/test.ts`) walks every
 workspace member and runs `deno task test` in each. A member with no `test`
@@ -30,7 +71,7 @@ entry is the one Deno resolves: a `deno.json` beside a `deno.jsonc` is taken
 whole and the other file ignored, so a `test` task written in the ignored one
 counts for nothing.
 
-`packages/utils/deno.jsonc` is a correct minimal example.
+`base/text/deno.jsonc` is a correct minimal example.
 
 ## A new package is three edits
 
@@ -39,11 +80,10 @@ Adding the directory is not enough. The package path also goes into the
 knows it exists.
 
 The third edit is a checked path in `tasks/typecheck.ts`, so `deno task check`
-opens the package at all. `tasks/typecheck.test.ts` walks the members that root
-manifest declares, so the workspace edit is also what puts the package under
-the type check's coverage claim: with no path naming it, and no
-`UNCHECKED_TREES` entry saying why it has none, that test fails and names the
-files. Most packages take a single directory entry.
+opens the package at all. `tasks/typecheck.test.ts` reads every file the
+repository holds, so with no path naming the package, and no `UNCHECKED_TREES`
+entry saying why it has none, that test fails and names the files. Most
+packages take a single directory entry.
 
 ## Declare dependencies at the narrowest scope
 
@@ -63,12 +103,23 @@ before you push:
 `deno task check-package-cycles` fails when a package's production source can
 reach back to itself through another package. It counts an import by package
 name and a relative path that climbs into another package alike, and it ignores
-test code, which reaches wherever it needs to. It is the mechanical floor under
-"Dependencies run downward" in `AGENTS.md`, and only the floor: a cycle is
-caught, an import that merely runs up the stack is not. That paragraph's worked
-example is where to put a module each side seems to want.
+test code, which reaches wherever it needs to.
+`deno task check-dependency-direction` reads the same imports and fails on one
+that runs from a package to a later layer of "Pace Layers" in `AGENTS.md`, or
+from a pattern to a later category. Neither sees the order of the packages
+inside `runtime/`, which rests on review. That section's worked example is
+where to put a module each side seems to want.
 
 The cycles that predate the gate are listed in `ALLOWLIST` in
 `tasks/check-package-cycles.ts`, each with what the two sides take from each
 other. That list may only shrink: break one of those cycles and the gate fails
 until its entry is deleted.
+
+## Test-only code has one export-map entry
+
+What a package offers only to other packages' tests goes behind an entry named
+`./for-testing-only`, and no other entry or barrel reaches it.
+`base/data-model/deno.jsonc` is the example. Nothing checks
+that only tests and benchmarks import it, so the rest of the convention, from
+naming to who may import it, is `docs/development/DEVELOPMENT.md`, § Offering
+test-only code to other packages.

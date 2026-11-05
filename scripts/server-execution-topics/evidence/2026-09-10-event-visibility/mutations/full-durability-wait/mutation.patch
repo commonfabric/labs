@@ -1,0 +1,11 @@
+--- a/packages/runner/src/executor/space-server.ts
++++ b/packages/runner/src/executor/space-server.ts
+@@ -3097,7 +3097,7 @@
+               // await application. Pending wave writes need not promote here.
+               await this.#options.server.flushSessions([space]);
+               if (!this.#active || this.#runtime !== runtime) return undefined;
+-              await provider.pullToServerHead();
++              await provider.synced();
+             } catch (error) {
+               if (!this.#active || this.#runtime !== runtime) return undefined;
+               logger.warn("event-visibility-sync-failed", () => [

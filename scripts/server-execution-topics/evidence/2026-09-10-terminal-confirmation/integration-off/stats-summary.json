@@ -1,0 +1,8 @@
+{
+  "servingLoopPresent": false,
+  "after": null,
+  "before": null,
+  "fullStatsAfterSha256": "5f1084daa6e8a18737fa16ae3318499ee228ab45cc4bc84a35a9029907ebc411",
+  "fullStatsBeforeSha256": "479e9baea80e6257e12943e99421be0eafd0de93f387c1f453549e4ddc75330a",
+  "sourceDirectory": "/Users/berni/.codex/artifacts/server-execution-topics-2026-09-09/runs/terminal-integration-off-01"
+}

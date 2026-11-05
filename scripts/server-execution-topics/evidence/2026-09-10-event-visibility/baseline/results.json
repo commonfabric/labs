@@ -1,0 +1,50 @@
+{
+  "observation": "matched-visibility-wave",
+  "snapshots": [
+    {
+      "watermark": 3,
+      "entries": [
+        {
+          "eventId": "visibility-0",
+          "seq": 2,
+          "consequenced": false
+        },
+        {
+          "eventId": "visibility-1",
+          "seq": 3,
+          "consequenced": false
+        }
+      ],
+      "log": []
+    },
+    {
+      "watermark": 3,
+      "entries": [
+        {
+          "eventId": "visibility-0",
+          "seq": 2,
+          "consequenced": true
+        },
+        {
+          "eventId": "visibility-1",
+          "seq": 3,
+          "consequenced": true
+        }
+      ],
+      "log": [
+        "A",
+        "B"
+      ]
+    }
+  ],
+  "counters": {
+    "waves": 2,
+    "derivedCommits": 2,
+    "wavesBudgetExhausted": 0,
+    "visibilityBarriers": 0,
+    "visibilityRecoveries": 0,
+    "visibilityDeferrals": 0,
+    "deferredRescansArmed": 1,
+    "deferredRescansFired": 0
+  }
+}

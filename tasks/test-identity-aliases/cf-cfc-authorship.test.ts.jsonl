@@ -1,0 +1,3 @@
+{"date":"2026-09-24","from":{"k":"unit","s":"ui","n":"CFCFCAuthorship > retries the resolved cell label until its cold doc loads"},"to":{"k":"unit","s":"ui","n":"CFCFCAuthorship > re-reads the value's resolved label when that cell delivers one"}}
+{"date":"2026-10-05","from":{"k":"unit","s":"ui","n":"CFCFCAuthorship > does not report verified when strict descendant text was blocked"},"to":{"k":"unit","s":"ui","n":"CFCFCAuthorship > reads `unverified` for a verified value when strict descendant text was blocked"}}
+{"date":"2026-10-05","from":{"k":"unit","s":"ui","n":"CFCFCAuthorship > stops watching an unloaded resolved cell when it disconnects"},"to":{"k":"unit","s":"ui","n":"CFCFCAuthorship > ends its observation when it disconnects"}}

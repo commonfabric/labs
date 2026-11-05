@@ -19,11 +19,12 @@ persists into a space-B document:
 |---|---|---|
 | `User{subject}`, `Space{id}`, `PersonalSpace{owner}` clause atoms | **yes — DIDs** | read gating (equality), §4.9.3 ACL point query (`Space.id` dereference) |
 | `Caveat{kind, source, by}` | **yes** — `source` is a full nested atom | evidence binding (inv-10: discharge must bind the same caveat source) |
-| `LinkReference{source:{space,id,path}, target:{…}}` | **yes** — space DID + doc id + path | provenance display; S7 exemption keys on atom *type* only |
+| `LinkReference{source:{space,id,path}, target:{…}}`, retired and no longer minted, present in labels stored before | **yes** — space DID + doc id + path | provenance display; S7 exemption keys on atom *type* only |
 | `TransformedBy{identity}` | code identity: `moduleIdentity`, `sourceFile`, `bindingPath`, `codeHash` | trust statements (B3 pattern match) |
 | `HasRole`, `UserSurfaceInput`, vouched-channel `ExternalIngest`, `authored-by`/`represents-principal` | **yes — DIDs** | role guards; authorship UI (product feature); fetch-ingest provenance carries a URL and commit SHA instead |
 | sigil-link `cfcLabelView` **inside `value`** | same atom set, second copy | link-carried enforcement at B |
 | `cfc.schemaHash` + replicated schema doc (`ensureSchemaDocument`) | policy structure, field names | schema-driven enforcement |
+| version-2 envelope `label.$ref` + replicated `cid:` label document | same atom set as the inline label, one copy per space | label resolution (`resolveStoredCfcMetadata`) |
 
 Two corrections to the audit item's inherited wording: `Origin` URIs have **no
 mint site** in the runner (nothing persists them), and policy names were never
@@ -118,17 +119,20 @@ fail-closed direction (a release that cannot be evaluated does not happen).
 ## 3. The read side: label metadata becomes an observation
 
 Representation limits what B's replicas contain; inv-12 additionally requires
-that *observing* label metadata is itself a labeled observation. Today the
-read side has no channel at all: `["cfc"]` reads are excluded from flow/PC
-(`flowReadExcluded`), runtime reads go through `INTERNAL_VERIFIER_META`, and
-one **raw unredacted IPC seam is open** — `handleCellGet` with `meta: "cfc"`
-returns the raw envelope (`runtime-processor.ts` `getMetaRaw`; zero live
-callers). SC-6 records the exclusion as "a profile decision that must be
-revisited when invariant 12 is implemented." This is that revisit:
+that *observing* label metadata is itself a labeled observation. Today the read
+side has no channel at all: a `["cfc"]` read names no payload path, so flow/PC
+never counts it (`canonicalizeDocumentPath`), runtime reads go through
+`INTERNAL_VERIFIER_META`, and one **raw unredacted IPC seam is open** —
+`handleCellGet` with `meta: "cfc"` returns the raw envelope
+(`runtime-processor.ts` `getMetaRaw`; zero live callers). SC-6 records the
+exclusion as "a profile decision that must be revisited when invariant 12 is
+implemented." This is that revisit:
 
 1. **Close the raw seam.** `meta: "cfc"` over IPC either returns the same
    redacted view as `getCfcLabel` or is removed (no callers today — remove).
-2. **`inspectConfLabel` is the only pattern-facing surface**, implemented per
+2. **`inspectConfLabel`, `principalOf` and `principalsOf` are the only
+   pattern-facing surfaces**, all reading inside the observing transaction and
+   taking their target as a cell. `inspectConfLabel` is implemented per
    §4.6.4.1: equality predicates only; result is a runtime-labeled value
    whose label joins the consumed metadata observations + query-input
    confidentiality + PC; `notAvailable` normalization for unobservable /
@@ -205,23 +209,27 @@ consumes inbound views, redacting the outbound copies is safe.
   classification table as data (no transform yet). Each is small and
   independently shippable, in that order. _Implementation note (2026-07-09):
   shipped — `MetaField` drops `"cfc"` (fail-closed at `handleCellGet`), the
-  persist loop re-derives the source's stored label map per link write while
+  persist loop derives a link slot's label from worker-authoritative sources
+  (the link schema and the restriction the written handle carries, reading the
+  source's stored labels only to bind a `CurrentPrincipal` reader) while
   the IPC ingress stops consuming inbound views, all main-thread-facing view
   copies redact `Caveat.source`, and the §2 table lives at
   `runner/src/cfc/label-field-classification.ts`._
 - **Stage 1 (representation):** the cross-space persist transform
   (commitment/public per §2's table) behind a dial
   (`cfcLabelMetadataProtection: off | observe | enforce` — observe computes
-  the transformed form and diagnoses divergence without persisting it, the
-  established rollout idiom). Migration: transformed and verbatim envelopes
+  the transformed form and diagnoses divergence without persisting it, which
+  is the measurement stage a deployment states when it wants one; the dial
+  defaults to `enforce`). Migration: transformed and verbatim envelopes
   coexist (entries are self-describing; a commitment field carries a marker
   wrapper `{digestOf: <hash>}` so consumers dispatch on shape, and SC-11
   equality is computed post-transform). _Implementation note (2026-07-09):
   shipped — the transform lives in `runner/src/cfc/label-representation.ts`
   and runs in `prepareBoundaryCommit`'s persist loop for cross-space-eligible
   entries (link-origin entries when the link source's space differs from the
-  target's — covering the re-derived view AND the carried in-value sigil
-  `cfcLabelView`; flow-derived stamps when `deriveFlowJoin` consumed a
+  target's — covering what the link schema declares and the restriction the
+  carried in-value sigil `cfcLabelView` holds at its root; flow-derived stamps,
+  the join stamp at a link slot among them, when `deriveFlowJoin` consumed a
   labeled foreign observation; ambiguity fails toward protection). Same-form
   matching landed in `atomEntails` (read gating digests the candidate) and
   `matchAtomPattern` (concrete patterns digest-match; variables refuse fresh
@@ -251,12 +259,14 @@ consumes inbound views, redacting the outbound copies is safe.
   source-protected — the source identity's confidentiality when known (no
   carrier exists yet), else the derived-component (`derived`/`structure`)
   entry's own effective confidentiality, else fail closed. The
-  pattern-facing surface is the `inspectConfLabel` BUILTIN
+  pattern-facing surfaces are the `inspectConfLabel` BUILTIN
   (`runner/src/builtins/inspect-conf-label.ts`, exposed as
-  `commonfabric.inspectConfLabel`): builtins are the one channel pattern
-  code has into runtime capability and the node runs inside the observing
-  transaction; the target rides `asCell`, so inspecting a label never reads
-  the labeled payload; the display path (`getCfcLabel`) is untouched.
+  `commonfabric.inspectConfLabel`), whose node runs inside the observing
+  transaction, and `principalOf` and `principalsOf`, plain functions
+  (`runner/src/builder/principal-of.ts`) that read through the calling
+  handler's or computation's own transaction; all take their target as a
+  cell, so inspecting a label never reads the labeled payload; the display
+  path (`getCfcLabel`) is untouched.
   Consumption is a `labelMetadata` observation class beside
   value/shape/followRef, recorded explicitly
   (`recordCfcLabelMetadataObservation`) with the population-rule label and
@@ -325,14 +335,15 @@ tension 8).
 ## Provenance
 
 Runner seams: envelope persist loop + `ensureSchemaDocument`
-(`cfc/prepare.ts`), `derivePersistedLinkLabel` + `LinkReference` mint
-(`cfc/prepare.ts`), flow join `deriveFlowJoin` (`cfc/prepare.ts`),
+(`cfc/prepare.ts`), `linkSlotLabel` (`cfc/prepare.ts`), flow join
+`deriveFlowJoin` (`cfc/prepare.ts`),
 `redactCaveatSourceAtom`/`redactCaveatSourcesForDisplay` + the
 keep-source-intact scope comment (`cfc/label-view-core.ts`), the three IPC
 redaction sites + the open `meta:"cfc"` raw seam
 (`runtime-client/src/backends/runtime-processor.ts`), sigil label views
 (`cfc/link-label-view.ts`, `cell.ts` `convertCellsToLinks`),
-`flowReadExcluded` + S18 write guard (`cfc/prepare.ts`),
+`canonicalizeDocumentPath` (`cfc/canonical.ts`) + S18 write guard
+(`cfc/prepare.ts`),
 `CFC_LABEL_READ_FAILED_ATOM` ungrantable marker (`cfc/observation.ts`),
 digest idiom (`cfc/canonical.ts`, `UserSurfaceInput.valueDigest` et al.),
 session partitioning (`memory/v2/session-open-auth.ts`), ACL point query

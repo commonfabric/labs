@@ -1,0 +1,19 @@
+{
+  "type": "cf-harness.chat.event",
+  "protocolVersion": 1,
+  "emittedAt": "2026-10-02T12:00:00.000Z",
+  "sessionId": "session-1",
+  "turnId": "turn-1",
+  "sequence": 10,
+  "event": {
+    "kind": "client_action_resolved",
+    "turnId": "turn-1",
+    "actionId": "action-2",
+    "outcome": "failed",
+    "result": "interrupted",
+    "settlement": {
+      "status": "interrupted",
+      "reason": "restart"
+    }
+  }
+}

@@ -1,15 +1,19 @@
+import { shuffleFlag, shuffleSeed } from "@commonfabric/test-support/shuffle";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import {
+  parseSkipList,
   preloadArgument,
   SKIP_LIST_VARIABLE,
 } from "@commonfabric/test-support/records";
 import {
+  coverageMemberDirectory,
+  denoTestCommand,
   fileSuite,
   unavailableFrom,
   unavailableLeaves,
   unavailableUnits,
-  writeSkipList,
+  writeBatchSkipList,
 } from "./suite.ts";
 
 /** A suite over two packages, one of which skips a leaf. */
@@ -20,30 +24,30 @@ function twoParts() {
     needs: ["deno"],
     parts: [
       {
-        packageDir: "packages/oven",
+        packageDir: "runtime/oven",
         flags: ["-A"],
         env: { HEADLESS: "1" },
         junit: {
           kind: "integration",
           scope: "oven",
-          filePrefix: "packages/oven",
+          filePrefix: "runtime/oven",
         },
-        files: ["packages/oven/integration/bake.test.ts"],
+        files: ["runtime/oven/integration/bake.test.ts"],
         unavailable: [{
-          unit: "packages/oven/integration/bake.test.ts",
+          unit: "runtime/oven/integration/bake.test.ts",
           leafName: "bakes > slowly",
           reason: "the surface that step exercises has not landed",
         }],
       },
       {
-        packageDir: "packages/mill",
+        packageDir: "runtime/mill",
         flags: ["-A"],
         junit: {
           kind: "integration",
           scope: "mill",
-          filePrefix: "packages/mill",
+          filePrefix: "runtime/mill",
         },
-        files: ["packages/mill/integration/grind.test.ts"],
+        files: ["runtime/mill/integration/grind.test.ts"],
       },
     ],
   });
@@ -51,7 +55,7 @@ function twoParts() {
 
 describe("reading a configuration's skip registry", () => {
   it("takes a whole-file entry out and leaves a step entry's file in", () => {
-    const { whole, unavailable } = unavailableFrom([
+    const { excluded, unavailable } = unavailableFrom([
       { file: "a.test.ts", phase: "phase-3", reason: "not landed" },
       {
         file: "b.test.ts",
@@ -59,8 +63,8 @@ describe("reading a configuration's skip registry", () => {
         phase: "phase-4",
         reason: "that step is not landed",
       },
-    ], "packages/oven");
-    expect([...whole]).toEqual(["packages/oven/a.test.ts"]);
+    ], "runtime/oven");
+    expect([...excluded]).toEqual(["runtime/oven/a.test.ts"]);
     expect(unavailable.map((entry) => entry.leafName)).toEqual([
       undefined,
       "bakes > slowly",
@@ -74,7 +78,7 @@ describe("reading a configuration's skip registry", () => {
     // unit and only the leaf is unavailable.
     expect([...unavailableUnits(suite)]).toEqual([]);
     expect([...unavailableLeaves(suite)]).toEqual([
-      ["packages/oven/integration/bake.test.ts", ["bakes > slowly"]],
+      ["runtime/oven/integration/bake.test.ts", ["bakes > slowly"]],
     ]);
   });
 });
@@ -87,12 +91,12 @@ describe("a suite of deno test files over several packages", () => {
     // there is a skip list to write.
     const outputDir = await Deno.makeTempDir({ prefix: "file-suite-" });
     const made = await twoParts().command([
-      { unit: "packages/oven/integration/bake.test.ts", skip: [] },
-      { unit: "packages/mill/integration/grind.test.ts", skip: [] },
+      { unit: "runtime/oven/integration/bake.test.ts", skip: [] },
+      { unit: "runtime/mill/integration/grind.test.ts", skip: [] },
     ], { ...context, outputDir });
     expect(made.map((i) => i.cwd)).toEqual([
-      "/repo/packages/oven",
-      "/repo/packages/mill",
+      "/repo/runtime/oven",
+      "/repo/runtime/mill",
     ]);
     expect(made.map((i) => i.junit?.[0]?.scope)).toEqual(["oven", "mill"]);
     expect(made[0]!.env?.HEADLESS).toBe("1");
@@ -104,20 +108,20 @@ describe("a suite of deno test files over several packages", () => {
     // test file remembering to guard itself.
     const outputDir = await Deno.makeTempDir({ prefix: "file-suite-" });
     const [invocation] = await twoParts().command(
-      [{ unit: "packages/oven/integration/bake.test.ts", skip: [] }],
+      [{ unit: "runtime/oven/integration/bake.test.ts", skip: [] }],
       { ...context, outputDir },
     );
     const listed = invocation!.env?.[SKIP_LIST_VARIABLE];
     expect(listed).toBeDefined();
     expect(JSON.parse(await Deno.readTextFile(listed!))).toEqual({
-      "packages/oven/integration/bake.test.ts": ["bakes > slowly"],
+      "runtime/oven/integration/bake.test.ts": ["bakes > slowly"],
     });
     await Deno.remove(outputDir, { recursive: true });
   });
 
   it("recognizes a record only under its own scope and variant", () => {
     const suite = twoParts();
-    const file = "packages/oven/integration/bake.test.ts";
+    const file = "runtime/oven/integration/bake.test.ts";
     expect(
       suite.locate({
         test: {
@@ -154,14 +158,14 @@ describe("a suite of deno test files over several packages", () => {
       id: "narrow",
       needs: ["deno"],
       parts: [{
-        packageDir: "packages/oven",
+        packageDir: "runtime/oven",
         flags: ["--allow-read", "--allow-write=/tmp"],
         junit: { kind: "unit", scope: "oven" },
-        files: ["packages/oven/a.test.ts"],
+        files: ["runtime/oven/a.test.ts"],
       }],
     });
     const [invocation] = await narrow.command(
-      [{ unit: "packages/oven/a.test.ts", skip: [] }],
+      [{ unit: "runtime/oven/a.test.ts", skip: [] }],
       context,
     );
     expect(invocation!.command).toContain("--allow-write=/spool");
@@ -171,33 +175,70 @@ describe("a suite of deno test files over several packages", () => {
     // This one runs under `-A`, which Deno refuses to take beside an
     // `--allow-write` path list at all, ending the run before it starts.
     const [blanket] = await twoParts().command(
-      [{ unit: "packages/mill/integration/grind.test.ts", skip: [] }],
+      [{ unit: "runtime/mill/integration/grind.test.ts", skip: [] }],
       context,
     );
     expect(blanket!.command).not.toContain("--allow-write=/spool");
     expect(blanket!.command).toContain(preloadArgument());
   });
 
-  it("grants nothing to a part that cannot read the tree", async () => {
-    // Writing the spool is what makes the preload take the class names,
-    // and reading is what finds the files that replace them, so a part
-    // holding one permission without the other records no file at all.
+  it("grants a part that cannot read the tree the marker its preload climbs to", async () => {
+    // The climb from each test file to the repository root is what names
+    // the file a name map and a skip list are keyed by, so a part
+    // reading nothing of its own is granted that one path to read, and
+    // the spool to write the name map into.
+
     const unreadable = fileSuite({
       id: "unreadable",
       needs: ["deno"],
       parts: [{
-        packageDir: "packages/oven",
+        packageDir: "runtime/oven",
         flags: ["--no-check", "--allow-env", "--allow-run", "--allow-net"],
         junit: { kind: "integration", scope: "oven" },
-        files: ["packages/oven/a.test.ts"],
+        files: ["runtime/oven/a.test.ts"],
       }],
     });
     const [invocation] = await unreadable.command(
-      [{ unit: "packages/oven/a.test.ts", skip: [] }],
+      [{ unit: "runtime/oven/a.test.ts", skip: [] }],
       context,
     );
-    expect(invocation!.command).not.toContain("--allow-write=/spool");
     expect(invocation!.command).toContain(preloadArgument());
+    expect(invocation!.command).toContain("--allow-read=/repo/.git");
+    expect(invocation!.command).toContain("--allow-write=/spool");
+  });
+
+  it("hands the run's seed to every `deno test` it builds", async () => {
+    const [invocation] = await twoParts().command(
+      [{ unit: "runtime/mill/integration/grind.test.ts", skip: [] }],
+      context,
+    );
+    expect(invocation!.command).toContain(shuffleFlag(shuffleSeed()));
+  });
+
+  it("replaces whatever a part says about checking with `--no-check`", async () => {
+    const checking = fileSuite({
+      id: "checking",
+      needs: ["deno"],
+      parts: [{
+        packageDir: "runtime/mill",
+        flags: ["--check=all", "-A", "--no-check=remote"],
+        junit: { kind: "unit", scope: "mill" },
+        files: ["runtime/mill/grind.test.ts"],
+      }],
+    });
+    for (const suite of [twoParts(), checking]) {
+      const [invocation] = await suite.command(
+        [{ unit: "runtime/mill/integration/grind.test.ts", skip: [] }, {
+          unit: "runtime/mill/grind.test.ts",
+          skip: [],
+        }],
+        context,
+      );
+      expect(
+        invocation!.command.filter((word) => /^--(no-)?check/.test(word)),
+      ).toEqual(["--no-check"]);
+      expect(invocation!.command).toContain("-A");
+    }
   });
 
   it("builds nothing for a unit it does not hold", async () => {
@@ -219,9 +260,39 @@ describe("the parts of a suite that answer no", () => {
     // The absence of the file is what tells the invocation to run
     // everything, so writing an empty one would be a different
     // instruction.
-    const at = `${await Deno.makeTempDir({ prefix: "skip-" })}/skips.json`;
-    await writeSkipList(at, {});
-    await expect(Deno.readTextFile(at)).rejects.toThrow();
+
+    const outputDir = await Deno.makeTempDir({ prefix: "skip-" });
+    try {
+      const context = { root: "/repo", outputDir, spoolDir: "/spool" };
+      const skipList = await writeBatchSkipList(context, "oven", {});
+      expect(skipList).toEqual({ env: {} });
+      expect(await Array.fromAsync(Deno.readDir(outputDir))).toEqual([]);
+      expect(
+        denoTestCommand(["--allow-env"], context, "/out/r.xml", []),
+      ).toContain("--allow-read=/repo/.git");
+    } finally {
+      await Deno.remove(outputDir, { recursive: true });
+    }
+  });
+
+  it("names a skip list it writes and grants the invocation its read", async () => {
+    const outputDir = await Deno.makeTempDir({ prefix: "skip-" });
+    try {
+      const context = { root: "/repo", outputDir, spoolDir: "/spool" };
+      const skips = { "runtime/oven/a.test.ts": ["bakes"] };
+      const skipList = await writeBatchSkipList(context, "oven", skips);
+      const written = `${outputDir}/oven.skip.json`;
+      expect(skipList).toEqual({
+        path: written,
+        env: { [SKIP_LIST_VARIABLE]: written },
+      });
+      expect(parseSkipList(await Deno.readTextFile(written))).toEqual(skips);
+      expect(
+        denoTestCommand(["--allow-env"], context, "/out/r.xml", [], written),
+      ).toContain(`--allow-read=/repo/.git,${written}`);
+    } finally {
+      await Deno.remove(outputDir, { recursive: true });
+    }
   });
 
   it("declines a record whose kind is not the part's own", () => {
@@ -232,7 +303,7 @@ describe("the parts of a suite that answer no", () => {
     expect(
       suite.locate({
         test: { k: "browser", s: "oven", n: "bakes", v: "server-execution" },
-        file: "packages/oven/integration/bake.test.ts",
+        file: "runtime/oven/integration/bake.test.ts",
       }),
     ).toBeUndefined();
   });
@@ -247,15 +318,15 @@ describe("grouping a batch across the packages it spans", () => {
       id: "package-integration",
       needs: ["deno"],
       parts: [{
-        packageDir: "packages/oven",
+        packageDir: "runtime/oven",
         flags: ["-A"],
         junit: { kind: "integration", scope: "oven" },
-        files: ["packages/oven/a.test.ts", "packages/oven/b.test.ts"],
+        files: ["runtime/oven/a.test.ts", "runtime/oven/b.test.ts"],
       }],
     });
     const made = await suite.command([
-      { unit: "packages/oven/a.test.ts", skip: [] },
-      { unit: "packages/oven/b.test.ts", skip: [] },
+      { unit: "runtime/oven/a.test.ts", skip: [] },
+      { unit: "runtime/oven/b.test.ts", skip: [] },
     ], { root: "/repo", outputDir: "/out", spoolDir: "/spool" });
     expect(made.length).toBe(1);
     expect(made[0]!.command.filter((arg) => arg.endsWith(".test.ts")))
@@ -273,32 +344,52 @@ describe("two parts of one suite under one scope", () => {
       needs: ["deno"],
       parts: [
         {
-          packageDir: "packages/oven",
+          packageDir: "runtime/oven",
           flags: [],
           junit: { kind: "unit", scope: "oven" },
-          files: ["packages/oven/a.test.ts"],
+          files: ["runtime/oven/a.test.ts"],
         },
         {
-          packageDir: "packages/oven",
+          packageDir: "runtime/oven",
           flags: [],
           junit: { kind: "browser", scope: "oven" },
-          files: ["packages/oven/b.test.ts"],
+          files: ["runtime/oven/b.test.ts"],
         },
       ],
     });
     expect(
       suite.locate({
         test: { k: "browser", s: "oven", n: "heats" },
-        file: "packages/oven/b.test.ts",
+        file: "runtime/oven/b.test.ts",
       }),
-    ).toEqual({ level: "unit", unit: "packages/oven/b.test.ts" });
+    ).toEqual({ level: "unit", unit: "runtime/oven/b.test.ts" });
     // The same file under the other kind belongs to neither: the part
     // that holds it records under `browser`.
     expect(
       suite.locate({
         test: { k: "unit", s: "oven", n: "heats" },
-        file: "packages/oven/b.test.ts",
+        file: "runtime/oven/b.test.ts",
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("naming a member's coverage directory", () => {
+  it("stands a slash up as a separator a directory name can hold", () => {
+    expect(coverageMemberDirectory("connectors/github"))
+      .toBe("connectors__github");
+  });
+
+  it("names the same directory whether or not the member leads with ./", () => {
+    expect(coverageMemberDirectory("./runtime/memory"))
+      .toBe(coverageMemberDirectory("runtime/memory"));
+  });
+
+  it("refuses a member whose own name holds the separator", () => {
+    // Two members would otherwise share one directory, and their
+    // coverage would be added together with nothing saying so.
+    expect(() => coverageMemberDirectory("runtime/one__two")).toThrow(
+      "cannot be measured",
+    );
   });
 });

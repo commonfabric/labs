@@ -1,0 +1,37 @@
+{
+  "type": "cf-harness.transcript-omissions",
+  "version": 1,
+  "results": [
+    {
+      "transcriptIndex": 3,
+      "toolCallId": "call-attested",
+      "toolId": "bash",
+      "outputId": "cfc-audit-fixture:bash:1",
+      "rules": []
+    },
+    {
+      "transcriptIndex": 5,
+      "toolCallId": "call-unattested",
+      "toolId": "bash",
+      "outputId": "cfc-audit-fixture:bash:2",
+      "rules": [
+        {
+          "rule": "observation-denied",
+          "locations": [
+            {
+              "artifactPath": "/Users/ben/.bb/worktrees/env_7rq66gp6pp/labs/runtime/cf-harness/audit/test/fixtures/runs/cfc-audit-fixture/tool-outputs/cfc-audit-fixture_bash_2-bash.json",
+              "jsonPointer": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "transcriptIndex": 7,
+      "toolCallId": "call-delegate",
+      "toolId": "delegate_task",
+      "outputId": "cfc-audit-fixture:delegate_task:3",
+      "rules": []
+    }
+  ]
+}

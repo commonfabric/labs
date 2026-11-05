@@ -1,0 +1,68 @@
+{
+  // An array within the state of a `FabricPrimitive` renders its holes the way
+  // any other array does. No shipped primitive's realm encoding holds an
+  // array, so a class defined here stands in.
+  "holes": (() => {
+    class Holey extends FabricPrimitive {
+      static get [REALM_CODEC]() {
+        return {
+          tagForValue: () => "Holey@1",
+          encode: () => [1, , , 4, , 6],
+        };
+      }
+    }
+    return new Holey();
+  })(),
+
+  "leading and trailing holes": (() => {
+    class Edges extends FabricPrimitive {
+      static get [REALM_CODEC]() {
+        return {
+          tagForValue: () => "Edges@1",
+          encode: () => {
+            const list = [, 2];
+            list.length = 5;
+            return { list };
+          },
+        };
+      }
+    }
+    return new Edges();
+  })(),
+}
+
+--
+
+holes:
+/Holey([1,void*2,4,void,6])
+/Holey([
+  1,
+  void * 2,
+  4,
+  void,
+  6
+])
+/Holey([
+  1,
+  void * 2,
+  4,
+  void,
+  6
+])
+
+leading and trailing holes:
+/Edges(list:[void,2,void*3])
+/Edges(
+  list: [
+    void,
+    2,
+    void * 3
+  ]
+)
+/Edges(
+  list: [
+    void,
+    2,
+    void * 3
+  ]
+)

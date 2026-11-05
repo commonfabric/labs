@@ -1,0 +1,20 @@
+--- a/packages/runner/src/executor/space-server.ts
++++ b/packages/runner/src/executor/space-server.ts
+@@ -3046,7 +3046,7 @@
+         // Deferral is a BARRIER, not a skip: everything at or behind
+         // this entry's arrival position waits with it, or a later
+         // arrival's consequence lands ahead of an earlier one.
+-        this.#eventVisibilityFloor = entry.seq ?? 1;
++        this.#eventVisibilityFloor = undefined;
+         this.#notePreQueueDeferral(
+           doc.id,
+           () => `sidecar ${doc.id} (sync failing)`,
+@@ -3133,7 +3133,7 @@
+             // The same barrier as above: the deferred entry's
+             // still-catching-up view must not let later arrivals run
+             // ahead of it.
+-            this.#eventVisibilityFloor = entry.seq ?? 1;
++            this.#eventVisibilityFloor = undefined;
+             this.#notePreQueueDeferral(
+               entry.eventId,
+               () => `event ${entry.eventId} (replica view lagging)`,

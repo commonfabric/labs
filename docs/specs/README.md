@@ -18,6 +18,14 @@ decision is reversed or superseded).
 
 ## Index
 
+- [Protected initialization](cfc-protected-initialization.md) — transaction-scoped initialization of protected cells, new defaulted fields, and references a collection builtin hands a sub-pattern
+
+### Addressing and navigation
+
+- [Random space identities](random-space-identities.md) (proposed; active
+  deployment direction)
+- [Common Fabric URLs](fabric-urls.md) (concept; no deployment planned)
+
 ### Pattern construction and authoring
 
 - [Pattern testing](PATTERN_TESTING_SPEC.md)
@@ -47,6 +55,7 @@ decision is reversed or superseded).
 - [Space model](space-model/README.md)
 - [Formal space-model data specification](space-model-formal-spec/README.md)
 - [Naming in collections](collection-naming.md)
+- [The cell reference grammar](cell-reference-grammar.md)
 - [Memory v2](memory-v2/README.md)
 - [FUSE filesystem](fuse-filesystem/README.md)
 - [SQLite builtins](sqlite-builtin/README.md)
@@ -60,7 +69,18 @@ decision is reversed or superseded).
 
 ### Contextual flow control and security
 
+Contextual Flow Control is specified in `commonfabric/specs` under `cfc/`. The
+documents here describe how this runtime arranges what that specification
+requires, and
+[`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
+is the procedure for changing either. The change list below is closed to new
+entries; a new gap is filed as a specs pull request.
+
+- [CFC conformance statement](cfc-conformance-statement.md) — this runtime's
+  answer to the specification's §18.6.4 checklist, with every known
+  non-conformance and its direction
 - [CFC commit preparation](cfc-commit-preparation.md)
+- [Content-addressed CFC labels](content-addressed-cfc-labels.md)
 - [CFC enforcement mode matrix](cfc-enforcement-matrix.md)
 - [CFC specification change list](cfc-spec-changes.md)
 - [Cross-space integrity](cfc-cross-space-integrity.md)
@@ -69,12 +89,16 @@ decision is reversed or superseded).
 - [Label-metadata confidentiality](cfc-label-metadata-confidentiality.md)
 - [Observation classes](cfc-observation-classes.md)
 - [Persisted declassification](cfc-persisted-declassification.md)
+- [Sealed custody](cfc-custody-seal.md)
 - [Range-scoped integrity](cfc-range-scoped-integrity.md)
 - [Render-boundary composition](cfc-render-boundary-composition.md)
 - [Runner future work](cfc-runner-future-work.md)
+- [The stored CFC envelope](cfc-stored-envelope.md)
 - [Template population](cfc-template-population.md)
+- [Input-witnessed `TransformedBy`](cfc-transformed-by-input-witnesses.md)
 - [Value-level provenance](cfc-value-level-provenance.md)
 - [Per-write read-prefix provenance](cfc-write-prefix-provenance.md)
+- [Write-destination reads](cfc-write-destination-reads.md)
 - [Sandboxing](sandboxing/README.md)
 - [Toolshed access control](toolshed-access-control.md)
 
@@ -82,3 +106,21 @@ decision is reversed or superseded).
 
 - [Shared profile space](shared-profile-space.md)
 - [Shared-profile participant rosters](shared-profile-rosters.md)
+- [Profile delegation](profile-delegation.md) (design sketch): a profile
+  space that owns itself and, before its key is destroyed, delegates to the
+  core identity; the delegation is presented as a UCAN proof chain when a
+  session opens
+
+### Chat
+
+- [FabriChat](fabrichat/README.md) (implemented, with the departures its
+  README lists): a room per conversation, a
+  per-user manager, and placements and adapters that show rooms in other
+  spaces
+
+### Files
+
+- [FabriFile](fabrifile/README.md) (implemented, with the departures its README
+  lists; no root names a store yet): a space's set of
+  named files, each a record linking a blob, with its rendering in a module of
+  its own

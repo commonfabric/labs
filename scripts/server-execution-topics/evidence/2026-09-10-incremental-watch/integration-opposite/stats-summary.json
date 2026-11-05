@@ -1,0 +1,1581 @@
+{
+  "timestamp": 1789068086975,
+  "logCounts": {
+    "ensure-piece-running": {
+      "total": 3782,
+      "ensure-piece": {
+        "debug": 3782,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 3782
+      }
+    },
+    "cooperative-yield": {
+      "total": 0
+    },
+    "cfc": {
+      "total": 8,
+      "cfc": {
+        "debug": 8,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 8
+      }
+    },
+    "event-append-queue": {
+      "total": 0
+    },
+    "memory.compression": {
+      "total": 0
+    },
+    "storage.write-trace": {
+      "total": 0
+    },
+    "builtins": {
+      "total": 0
+    },
+    "compiled-bundle-verifier": {
+      "total": 0
+    },
+    "schema-walk": {
+      "total": 0
+    },
+    "wave-accumulator": {
+      "total": 42,
+      "foreign-write-refused": {
+        "debug": 0,
+        "info": 0,
+        "warn": 40,
+        "error": 0,
+        "total": 40
+      },
+      "contribution-dropped": {
+        "debug": 0,
+        "info": 0,
+        "warn": 2,
+        "error": 0,
+        "total": 2
+      }
+    },
+    "speculation-overlay": {
+      "total": 0
+    },
+    "schema-ifc": {
+      "total": 0
+    },
+    "link-resolution": {
+      "total": 0
+    },
+    "builder.serialize-shape": {
+      "total": 0
+    },
+    "scheduler": {
+      "total": 14941,
+      "schedule": {
+        "debug": 1478,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1478
+      },
+      "schedule-resubscribe": {
+        "debug": 3065,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 3065
+      },
+      "schedule-execute-pull": {
+        "debug": 370,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 370
+      },
+      "schedule-execute": {
+        "debug": 303,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 303
+      },
+      "schedule-run-start": {
+        "debug": 2836,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 2836
+      },
+      "schedule-action-timing": {
+        "debug": 2416,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 2416
+      },
+      "schedule-run-complete": {
+        "debug": 2418,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 2418
+      },
+      "write-surface-violation": {
+        "debug": 1553,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1553
+      },
+      "schedule-debounce": {
+        "debug": 237,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 237
+      },
+      "action-timing": {
+        "debug": 53,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 53
+      },
+      "schedule-run-error": {
+        "debug": 0,
+        "info": 112,
+        "warn": 0,
+        "error": 0,
+        "total": 112
+      },
+      "schedule-backoff": {
+        "debug": 2,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 2
+      },
+      "scheduler-non-settling": {
+        "debug": 0,
+        "info": 0,
+        "warn": 2,
+        "error": 0,
+        "total": 2
+      },
+      "schedule-unsubscribe": {
+        "debug": 93,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 93
+      },
+      "schedule-error": {
+        "debug": 0,
+        "info": 0,
+        "warn": 0,
+        "error": 2,
+        "total": 2
+      },
+      "scheduler": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      }
+    },
+    "wake-shaping": {
+      "total": 0
+    },
+    "extended-storage-transaction": {
+      "total": 0
+    },
+    "attestation": {
+      "total": 1088,
+      "storage-datauri-parse": {
+        "debug": 1088,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1088
+      }
+    },
+    "attestation-hit": {
+      "total": 1754,
+      "cache-hit": {
+        "debug": 1754,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1754
+      }
+    },
+    "traverse-recorder": {
+      "total": 0
+    },
+    "traverse": {
+      "total": 14569,
+      "traverse": {
+        "debug": 4223,
+        "info": 6796,
+        "warn": 0,
+        "error": 0,
+        "total": 11019
+      },
+      "traversePointerWithSchema": {
+        "debug": 0,
+        "info": 3550,
+        "warn": 0,
+        "error": 0,
+        "total": 3550
+      }
+    },
+    "schema-view": {
+      "total": 0
+    },
+    "validateAndTransform": {
+      "total": 0
+    },
+    "normalizeAndDiff": {
+      "total": 33474,
+      "diff": {
+        "debug": 33474,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 33474
+      }
+    },
+    "memory.v2.client": {
+      "total": 0
+    },
+    "storage.v2.remote": {
+      "total": 0
+    },
+    "effects-channel": {
+      "total": 0
+    },
+    "module-record-compiler": {
+      "total": 0
+    },
+    "cell": {
+      "total": 23138,
+      "sync": {
+        "debug": 0,
+        "info": 23138,
+        "warn": 0,
+        "error": 0,
+        "total": 23138
+      }
+    },
+    "storage.v2.transaction": {
+      "total": 0
+    },
+    "storage.v2.multi-space-commit": {
+      "total": 40,
+      "seal-space-commit-failed": {
+        "debug": 0,
+        "info": 0,
+        "warn": 0,
+        "error": 40,
+        "total": 40
+      }
+    },
+    "storage.v2": {
+      "total": 3,
+      "commit-cascade-rejected": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "commit-revert": {
+        "debug": 2,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 2
+      }
+    },
+    "storage.v2.pending-patch": {
+      "total": 0
+    },
+    "storage.v2.session-remount": {
+      "total": 3,
+      "session-remount": {
+        "debug": 0,
+        "info": 0,
+        "warn": 3,
+        "error": 0,
+        "total": 3
+      }
+    },
+    "runner.filter": {
+      "total": 0
+    },
+    "runner.flatmap": {
+      "total": 0
+    },
+    "piece-helpers": {
+      "total": 0
+    },
+    "llm-dialog": {
+      "total": 0
+    },
+    "llm": {
+      "total": 0
+    },
+    "runner.map": {
+      "total": 0
+    },
+    "navigate-to": {
+      "total": 0
+    },
+    "runner.wish-flow": {
+      "total": 0
+    },
+    "cell-cache": {
+      "total": 0
+    },
+    "pattern-manager": {
+      "total": 0
+    },
+    "runner": {
+      "total": 208,
+      "cell-info": {
+        "debug": 208,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 208
+      }
+    },
+    "runner.trigger-flow": {
+      "total": 487,
+      "runner-run/none": {
+        "debug": 115,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 115
+      },
+      "setup-internal/none": {
+        "debug": 108,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 108
+      },
+      "instantiate-pattern-node/none": {
+        "debug": 60,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 60
+      },
+      "runner-run/raw:wish:4WJDCaPGwlVX": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:4WJDCaPGwlVX": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:map:sbgtkcbqVPQU": {
+        "debug": 6,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 6
+      },
+      "setup-internal/raw:map:sbgtkcbqVPQU": {
+        "debug": 6,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 6
+      },
+      "runner-run/raw:wish:v1hvltnz4PwQ": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:v1hvltnz4PwQ": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:wish:3ll5MErk57kH": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:3ll5MErk57kH": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:map:KxWP9fJSZB1T": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:map:KxWP9fJSZB1T": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:map:muBSirzpO0BJ": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:map:muBSirzpO0BJ": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:map:fab8qZMsdEUU": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:map:fab8qZMsdEUU": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:wish:m9B8OzMfWIHM": {
+        "debug": 2,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 2
+      },
+      "setup-internal/raw:wish:m9B8OzMfWIHM": {
+        "debug": 2,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 2
+      },
+      "runner-run/raw:map:gb6UzIE0KovA": {
+        "debug": 7,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 7
+      },
+      "setup-internal/raw:map:gb6UzIE0KovA": {
+        "debug": 7,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 7
+      },
+      "runner-run/raw:wish:xQJm1OVy2CR3": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:xQJm1OVy2CR3": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:wish:0YWztI5cYuje": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:0YWztI5cYuje": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:wish:hqU2fU_5ecRi": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:hqU2fU_5ecRi": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:map:-HfRH042QFWh": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:map:-HfRH042QFWh": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:map:ffXz82w9mlv4": {
+        "debug": 3,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 3
+      },
+      "setup-internal/raw:map:ffXz82w9mlv4": {
+        "debug": 3,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 3
+      },
+      "runner-run/raw:map:TfSBdnmpgayi": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:map:TfSBdnmpgayi": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:map:37PPwQfBnmWS": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:map:37PPwQfBnmWS": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:wish:5Uclda40nzb8": {
+        "debug": 2,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 2
+      },
+      "setup-internal/raw:wish:5Uclda40nzb8": {
+        "debug": 2,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 2
+      },
+      "runner-run/raw:wish:UdBehaFcmCXw": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:UdBehaFcmCXw": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:map:bf6yRnq2tcSx": {
+        "debug": 19,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 19
+      },
+      "setup-internal/raw:map:bf6yRnq2tcSx": {
+        "debug": 19,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 19
+      },
+      "runner-run/raw:wish:fgw1pDKDb5bS": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:fgw1pDKDb5bS": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:map:jeFmCBu11nsy": {
+        "debug": 19,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 19
+      },
+      "setup-internal/raw:map:jeFmCBu11nsy": {
+        "debug": 19,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 19
+      },
+      "runner-run/raw:wish:q63e0idhb83M": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:q63e0idhb83M": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:wish:73GUfo4O7xO-": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:73GUfo4O7xO-": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:wish:wNsCCViaZEdo": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:wNsCCViaZEdo": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:wish:LyJl-M9mbE13": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:LyJl-M9mbE13": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:wish:0Ejo3Qle4FU5": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:0Ejo3Qle4FU5": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:wish:tWYuVh7oCJhL": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:tWYuVh7oCJhL": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:wish:1SBBvGM6mldl": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:1SBBvGM6mldl": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:wish:bFTjOUjiwViT": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:bFTjOUjiwViT": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:wish:7nOBuNzWRyTR": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:wish:7nOBuNzWRyTR": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:wish:FCK9gC7lAitX": {
+        "debug": 6,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 6
+      },
+      "setup-internal/raw:wish:FCK9gC7lAitX": {
+        "debug": 6,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 6
+      },
+      "runner-run/raw:map:AoJuIARv-mEG": {
+        "debug": 2,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 2
+      },
+      "setup-internal/raw:map:AoJuIARv-mEG": {
+        "debug": 2,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 2
+      },
+      "runner-run/raw:map:L97hgZeUugUV": {
+        "debug": 2,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 2
+      },
+      "setup-internal/raw:map:L97hgZeUugUV": {
+        "debug": 2,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 2
+      },
+      "runner-run/raw:map:Cx7hsoAUOfQP": {
+        "debug": 6,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 6
+      },
+      "setup-internal/raw:map:Cx7hsoAUOfQP": {
+        "debug": 6,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 6
+      },
+      "instantiate-pattern-node/raw:map:Cx7hsoAUOfQP": {
+        "debug": 4,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 4
+      },
+      "runner-run/raw:map:J92-bUVAhRsC": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "setup-internal/raw:map:J92-bUVAhRsC": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      },
+      "runner-run/raw:map:mDd4P0Wm22NI": {
+        "debug": 2,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 2
+      },
+      "setup-internal/raw:map:mDd4P0Wm22NI": {
+        "debug": 2,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 2
+      }
+    },
+    "fabric-resolver": {
+      "total": 0
+    },
+    "engine": {
+      "total": 20,
+      "compile-cache-hit": {
+        "debug": 0,
+        "info": 20,
+        "warn": 0,
+        "error": 0,
+        "total": 20
+      }
+    },
+    "runner.source-reconcile": {
+      "total": 0
+    },
+    "oauth2-common": {
+      "total": 0
+    },
+    "runtime.ui-cell-write": {
+      "total": 0
+    },
+    "runner.space-root-ensure": {
+      "total": 5,
+      "custom-default-app-url-not-consulted": {
+        "debug": 0,
+        "info": 5,
+        "warn": 0,
+        "error": 0,
+        "total": 5
+      }
+    },
+    "provider-registry": {
+      "total": 8,
+      "Missing OAuth credentials (clientId/clientSecret), skipping provider": {
+        "debug": 0,
+        "info": 0,
+        "warn": 8,
+        "error": 0,
+        "total": 8
+      }
+    },
+    "webhooks.utils": {
+      "total": 0
+    },
+    "memory": {
+      "total": 0
+    },
+    "space-outbox": {
+      "total": 0
+    },
+    "space-server": {
+      "total": 823,
+      "activate": {
+        "debug": 0,
+        "info": 10,
+        "warn": 0,
+        "error": 0,
+        "total": 10
+      },
+      "space-root-ensure-no-owner": {
+        "debug": 0,
+        "info": 0,
+        "warn": 10,
+        "error": 0,
+        "total": 10
+      },
+      "space-root-ensure": {
+        "debug": 0,
+        "info": 10,
+        "warn": 0,
+        "error": 0,
+        "total": 10
+      },
+      "structure-load-terminal": {
+        "debug": 0,
+        "info": 519,
+        "warn": 0,
+        "error": 0,
+        "total": 519
+      },
+      "settle-advance": {
+        "debug": 67,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 67
+      },
+      "structure-load-rearmed": {
+        "debug": 0,
+        "info": 39,
+        "warn": 0,
+        "error": 0,
+        "total": 39
+      },
+      "wave-budget-exhausted": {
+        "debug": 76,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 76
+      },
+      "demand-arrival": {
+        "debug": 72,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 72
+      },
+      "event-view-lag": {
+        "debug": 0,
+        "info": 0,
+        "warn": 12,
+        "error": 0,
+        "total": 12
+      },
+      "watermark-clamped": {
+        "debug": 0,
+        "info": 3,
+        "warn": 0,
+        "error": 0,
+        "total": 3
+      },
+      "parked": {
+        "debug": 0,
+        "info": 4,
+        "warn": 0,
+        "error": 0,
+        "total": 4
+      },
+      "lt1-leftovers-purged": {
+        "debug": 1,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1
+      }
+    },
+    "executor": {
+      "total": 0
+    },
+    "executor-host": {
+      "total": 0
+    },
+    "memory-socket": {
+      "total": 0
+    },
+    "schema-generator.object": {
+      "total": 0
+    },
+    "schema-generator.intersection": {
+      "total": 0
+    },
+    "virtualfs": {
+      "total": 1401,
+      "vfs": {
+        "debug": 1401,
+        "info": 0,
+        "warn": 0,
+        "error": 0,
+        "total": 1401
+      }
+    },
+    "transformer": {
+      "total": 0
+    },
+    "js-compiler": {
+      "total": 0
+    },
+    "total": 95794
+  },
+  "servingLoop": {
+    "activeSpaces": 6,
+    "waves": 251,
+    "wavesBudgetExhausted": 76,
+    "supersededWrites": 0,
+    "authoredSeen": 94,
+    "effectAcks": 0,
+    "derivedCommits": 250,
+    "derivedCommitsBySpace": {
+      "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p": 190,
+      "did:key:z6MkqCADDEWMbd1ZkfzTQMHnGpFrvuVPAyELcm84BeBJshuK": 1,
+      "did:key:z6Mkek3veMChTJkyZ4s1bmcunP2K3BCaWF7MtxBjfC5Aqzk4": 1,
+      "did:key:z6MkfPMQL1cYx3tmMgGknc1DXdKVWkZHTNMsZRpZjhk88wDR": 1,
+      "did:key:z6MkfNdf1ea3UJ1mJvbmQ7F6WpqZeKFfU4K4a79pwJRiinUg": 16,
+      "did:key:z6MkpV12dMKTwNnDqRkHriDrPZwPvtoTeiXefHNh25u5GBWT": 2,
+      "did:key:z6MkvSNwa9F6jmT9ogoJQDdJenQQEL6jp342zBtfsHScNPg1": 2,
+      "did:key:z6MkfevvgSoZjosixiXBA9Hzu2F7X5bnTbBNa2J92KxWxWXT": 4,
+      "did:key:z6MkpP8pGpNyn76J9TXZj2NDEwFa7cWXCxWkLRUjFejb6gtv": 3,
+      "did:key:z6MkogURx4jHewdDhPbjpYiddniE8agvFVJMYAPupqTQMBCV": 30
+    },
+    "derivedCommitsBySpaceDropped": 0,
+    "structureLoadFailures": 0,
+    "structureLoadDeferred": 0,
+    "structureLoadStuck": 0,
+    "structureLoadTerminal": 519,
+    "structureLoadRearmed": 39,
+    "watermarkClamped": 3,
+    "unstampedSealRefusals": 0,
+    "servedIntentSealFailures": 0,
+    "parkDisposeTimeouts": 0,
+    "reactivationBackoffs": 0,
+    "foreignWriteRefusals": 40,
+    "foreignEngineFailures": 0,
+    "warmRequests": 4,
+    "undemandedNarrowingRuns": 0,
+    "earlyEmitRefusals": 0,
+    "demandArrivals": 72,
+    "watermarkLag": 1,
+    "demand": {
+      "demandedRows": 687,
+      "demandedInstances": 266,
+      "demandedInstancesMax": 2854,
+      "demandedPairs": 687,
+      "demandedWriters": 43,
+      "demandedWritersMax": 1050,
+      "demandRootEnters": 1211,
+      "demandRootLeaves": 950,
+      "notCurrentRearms": 56,
+      "demandPasses": 567,
+      "demandPassMs": 4651.20546800002,
+      "pushGrowthWakes": 152,
+      "watchWakes": 552,
+      "warmWakes": 4
+    },
+    "settleAdvances": {
+      "count": 67,
+      "lastDelta": 4,
+      "series": [
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 3,
+          "to": 4,
+          "at": 7572.797458
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 4,
+          "to": 6,
+          "at": 7667.854666
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 17,
+          "to": 21,
+          "at": 10383.918416
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 23,
+          "to": 27,
+          "at": 10773.131375
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 29,
+          "to": 31,
+          "at": 10855.227666
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 33,
+          "to": 34,
+          "at": 10977.367333
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 36,
+          "to": 38,
+          "at": 11519.226333
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 38,
+          "to": 40,
+          "at": 11537.815958
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 42,
+          "to": 45,
+          "at": 12971.192291
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 45,
+          "to": 47,
+          "at": 13111.507375
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 47,
+          "to": 51,
+          "at": 13199.626
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 53,
+          "to": 54,
+          "at": 13300.278041
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 56,
+          "to": 60,
+          "at": 13683.330416
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 62,
+          "to": 66,
+          "at": 14081.97525
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 68,
+          "to": 70,
+          "at": 14150.754208
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 72,
+          "to": 73,
+          "at": 14237.847375
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 75,
+          "to": 77,
+          "at": 14313.104625
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 79,
+          "to": 80,
+          "at": 14401.160625
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 84,
+          "to": 86,
+          "at": 16551.012791
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 86,
+          "to": 88,
+          "at": 16571.448333
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 90,
+          "to": 94,
+          "at": 18399.206125
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 96,
+          "to": 99,
+          "at": 19491.904583
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 99,
+          "to": 101,
+          "at": 19700.488333
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 101,
+          "to": 103,
+          "at": 19771.691125
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 103,
+          "to": 105,
+          "at": 19806.727416
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 107,
+          "to": 111,
+          "at": 20366.434041
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 111,
+          "to": 113,
+          "at": 20539.180375
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 113,
+          "to": 115,
+          "at": 20573.73625
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 117,
+          "to": 121,
+          "at": 21082.516875
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 123,
+          "to": 127,
+          "at": 21517.176041
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 134,
+          "to": 139,
+          "at": 22444.372
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 143,
+          "to": 147,
+          "at": 22879.060875
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 149,
+          "to": 153,
+          "at": 23362.680166
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 157,
+          "to": 161,
+          "at": 23805.2965
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 163,
+          "to": 167,
+          "at": 24252.003666
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 170,
+          "to": 171,
+          "at": 24294.397791
+        },
+        {
+          "space": "did:key:z6MkfNdf1ea3UJ1mJvbmQ7F6WpqZeKFfU4K4a79pwJRiinUg",
+          "from": 5,
+          "to": 7,
+          "at": 27373.708458
+        },
+        {
+          "space": "did:key:z6MkfNdf1ea3UJ1mJvbmQ7F6WpqZeKFfU4K4a79pwJRiinUg",
+          "from": 9,
+          "to": 10,
+          "at": 27425.827625
+        },
+        {
+          "space": "did:key:z6MkfNdf1ea3UJ1mJvbmQ7F6WpqZeKFfU4K4a79pwJRiinUg",
+          "from": 12,
+          "to": 14,
+          "at": 27470.489875
+        },
+        {
+          "space": "did:key:z6MkfNdf1ea3UJ1mJvbmQ7F6WpqZeKFfU4K4a79pwJRiinUg",
+          "from": 28,
+          "to": 30,
+          "at": 27622.837208
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 177,
+          "to": 181,
+          "at": 33997.840666000004
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 181,
+          "to": 183,
+          "at": 34043.136041
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 183,
+          "to": 187,
+          "at": 38527.948125
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 187,
+          "to": 189,
+          "at": 38580.382416
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 189,
+          "to": 191,
+          "at": 38638.245708
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 193,
+          "to": 195,
+          "at": 41230.36925
+        },
+        {
+          "space": "did:key:z6MkfevvgSoZjosixiXBA9Hzu2F7X5bnTbBNa2J92KxWxWXT",
+          "from": 2,
+          "to": 5,
+          "at": 41598.831125
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 198,
+          "to": 199,
+          "at": 41654.668125
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 201,
+          "to": 202,
+          "at": 42548.086416
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 204,
+          "to": 205,
+          "at": 42674.38575
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 207,
+          "to": 209,
+          "at": 45062.057625
+        },
+        {
+          "space": "did:key:z6MkpP8pGpNyn76J9TXZj2NDEwFa7cWXCxWkLRUjFejb6gtv",
+          "from": 2,
+          "to": 4,
+          "at": 45352.679208
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 211,
+          "to": 214,
+          "at": 45359.311458
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 216,
+          "to": 219,
+          "at": 46043.536875
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 223,
+          "to": 226,
+          "at": 46718.193583
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 229,
+          "to": 231,
+          "at": 47262.278708
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 235,
+          "to": 241,
+          "at": 48327.930916
+        },
+        {
+          "space": "did:key:z6MkoWxkBHjsFJ897YoJ6C8dX8oYFVeNabGc3FQh3jy9mw9p",
+          "from": 243,
+          "to": 244,
+          "at": 48755.198458
+        },
+        {
+          "space": "did:key:z6MkogURx4jHewdDhPbjpYiddniE8agvFVJMYAPupqTQMBCV",
+          "from": 9,
+          "to": 12,
+          "at": 204344.863333
+        },
+        {
+          "space": "did:key:z6MkogURx4jHewdDhPbjpYiddniE8agvFVJMYAPupqTQMBCV",
+          "from": 12,
+          "to": 14,
+          "at": 204520.246666
+        },
+        {
+          "space": "did:key:z6MkogURx4jHewdDhPbjpYiddniE8agvFVJMYAPupqTQMBCV",
+          "from": 14,
+          "to": 16,
+          "at": 205845.588833
+        },
+        {
+          "space": "did:key:z6MkogURx4jHewdDhPbjpYiddniE8agvFVJMYAPupqTQMBCV",
+          "from": 18,
+          "to": 19,
+          "at": 212645.934333
+        },
+        {
+          "space": "did:key:z6MkogURx4jHewdDhPbjpYiddniE8agvFVJMYAPupqTQMBCV",
+          "from": 21,
+          "to": 23,
+          "at": 212896.619375
+        },
+        {
+          "space": "did:key:z6MkogURx4jHewdDhPbjpYiddniE8agvFVJMYAPupqTQMBCV",
+          "from": 25,
+          "to": 26,
+          "at": 213230.804458
+        },
+        {
+          "space": "did:key:z6MkogURx4jHewdDhPbjpYiddniE8agvFVJMYAPupqTQMBCV",
+          "from": 28,
+          "to": 30,
+          "at": 215034.373208
+        },
+        {
+          "space": "did:key:z6MkogURx4jHewdDhPbjpYiddniE8agvFVJMYAPupqTQMBCV",
+          "from": 32,
+          "to": 34,
+          "at": 216021.014916
+        },
+        {
+          "space": "did:key:z6MkogURx4jHewdDhPbjpYiddniE8agvFVJMYAPupqTQMBCV",
+          "from": 36,
+          "to": 40,
+          "at": 216671.341583
+        }
+      ],
+      "dropped": 0
+    },
+    "events": {
+      "appended": 48,
+      "processed": 49,
+      "coalescedPerWaveMax": 4,
+      "skippedIdempotent": 0,
+      "drainInFlightSkips": 0,
+      "preQueueDeferralStuck": 0,
+      "lt1LeftoversPurged": 1,
+      "lt1LateSealsRefused": 0,
+      "orphanDeliveriesRefused": 0,
+      "handlerNotRunDeferrals": 0,
+      "loadParkDeferrals": 0,
+      "loadParkFailures": 0,
+      "deliveryDeferralsActive": 0,
+      "deliveryFailuresActive": 0,
+      "maxAccumulatedDeliveryFailureMs": 0,
+      "needsAttention": {
+        "total": 0,
+        "byPhase": {
+          "dispatch-load": 0,
+          "commit-preparation": 0,
+          "commit-finalization": 0
+        }
+      },
+      "needsAttentionSealFailures": 0,
+      "deliveryCheckpointWriteFailures": 0,
+      "explicitRetries": 0,
+      "dropped": 0
+    },
+    "memo": {
+      "hits": 0,
+      "misses": 2,
+      "inflight": 0
+    },
+    "outbox": {
+      "queued": 2,
+      "completed": 2,
+      "failed": 0,
+      "budgetDeferrals": 0
+    },
+    "lease": {
+      "held": 10,
+      "lost": 0
+    },
+    "rootEnsure": {
+      "runs": 10,
+      "created": 10,
+      "skippedNoOwner": 10,
+      "failures": 0
+    },
+    "push": {
+      "prioritizedSessions": 209,
+      "followerSessions": 166,
+      "mixedFlushes": 124
+    }
+  }
+}

@@ -1,0 +1,31 @@
+import { expect } from "@std/expect";
+import { experimentalOptionsFromEnv } from "/Users/berni/.codex/worktrees/topics-campaign-watch/labs/packages/runner/src/runtime-presets.ts";
+
+const root = "/Users/berni/.codex/worktrees/topics-campaign-watch/labs";
+const file = "tools/server-execution-topics/seed-check.ts";
+const current = await Deno.readTextFile(`${root}/${file}`);
+const result = await new Deno.Command("git", {
+  args: ["show", `f6bc2af1e36b5a3d817be75c1d3632bc964e3e37:${file}`],
+  cwd: root,
+}).output();
+if (!result.success) throw new Error("Could not read the baseline source");
+const old = new TextDecoder().decode(result.stdout);
+for (const [name, source] of [["baseline", old], ["candidate", current]]) {
+  const expression = source.slice(source.indexOf("const expectedPosture"), source.indexOf("const topicCount"));
+  const evaluate = new Function("Deno", "experimentalOptionsFromEnv", "SERVER_EXECUTION_DEFAULT_ENABLED", "expect", `${expression}\nreturn expectedPosture;`);
+  for (const fallback of [false, true]) {
+    for (const flag of [undefined, "false", "true"]) {
+      const expected = flag === undefined ? fallback : flag === "true";
+      let value: unknown;
+      let error: string | undefined;
+      try {
+        value = evaluate({env:{get:()=>flag}}, experimentalOptionsFromEnv, fallback, expect);
+      } catch (cause) {
+        error = String(cause);
+      }
+      const passed = error === undefined && value === expected;
+      expect(passed).toBe(name === "candidate" || flag !== undefined);
+      console.log(JSON.stringify({name,fallback,flag:flag??"unset",expected,value,passed,error}));
+    }
+  }
+}

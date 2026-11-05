@@ -1,0 +1,58 @@
+[
+  {
+    "variant": "sidecar-baseline-e529-01",
+    "enabled": false,
+    "identityRequests": 4,
+    "sourceRequests": 8,
+    "sourceBytes": 220344,
+    "compileCalls": 4,
+    "cache": {
+      "hits": 2,
+      "misses": 2,
+      "byIdentityHits": 0
+    },
+    "allClosures": true
+  },
+  {
+    "variant": "sidecar-baseline-e529-01",
+    "enabled": true,
+    "identityRequests": 4,
+    "sourceRequests": 8,
+    "sourceBytes": 220344,
+    "compileCalls": 4,
+    "cache": {
+      "hits": 2,
+      "misses": 2,
+      "byIdentityHits": 0
+    },
+    "allClosures": true
+  },
+  {
+    "variant": "sidecar-candidate-01",
+    "enabled": false,
+    "identityRequests": 4,
+    "sourceRequests": 4,
+    "sourceBytes": 110172,
+    "compileCalls": 4,
+    "cache": {
+      "hits": 2,
+      "misses": 2,
+      "byIdentityHits": 0
+    },
+    "allClosures": true
+  },
+  {
+    "variant": "sidecar-candidate-01",
+    "enabled": true,
+    "identityRequests": 4,
+    "sourceRequests": 4,
+    "sourceBytes": 110172,
+    "compileCalls": 4,
+    "cache": {
+      "hits": 2,
+      "misses": 2,
+      "byIdentityHits": 0
+    },
+    "allClosures": true
+  }
+]
