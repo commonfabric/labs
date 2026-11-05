@@ -693,6 +693,20 @@ export type WritePolicyInput =
   }
   | {
     /**
+     * A piece's result wiring, which setup writes or restates in this
+     * transaction (§8.9.1.3): the references its build places at the slots
+     * of the result document `target` names. The transaction re-mints the
+     * wiring's membership entries whether or not it writes the value, and
+     * where `buildDecided` holds, mints them from the transaction's trigger
+     * reads alone, since the program and the piece's identity fixed every
+     * reference the wiring places. Authority is the runtime's mark.
+     */
+    readonly kind: "result-wiring";
+    readonly target: CfcAddress;
+    readonly buildDecided: boolean;
+  }
+  | {
+    /**
      * A host's application of a schema to a document it does not write
      * (`applyCfcPolicyToExistingValue`). Authority is the runtime's mark.
      */

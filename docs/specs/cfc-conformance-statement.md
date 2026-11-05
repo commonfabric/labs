@@ -2,7 +2,7 @@
 
 The Contextual Flow Control specification in `commonfabric/specs` under `cfc/`
 says, in §18.6.4 of `18-runtime-implementation-profiles.md`, that a deployment
-claiming the reactive-runtime profile MUST document eight things. This document
+claiming the reactive-runtime profile MUST document nine things. This document
 is this runtime's answer, one section per item. Each section names the adapter
 code under `runtime/runner/src/` that implements the item, by file and
 symbol, and states every known non-conformance with its direction: an
@@ -13,7 +13,10 @@ answer, the section says "not established" and what would establish it.
 
 The statement is written against the specification at the commit the spec
 snapshot at `runtime/runner/src/cfc/kernel/spec-snapshot.json` records,
-`0c12ccf3`. It describes the runtime's shipped defaults: the dial values
+`36d037ae`. That commit is the head of
+[specs#88](https://github.com/commonfabric/specs/pull/88), which adds §8.9.1.3
+and has not merged; the rest of the specification there is `9c9e96d0` on specs
+`main`. It describes the runtime's shipped defaults: the dial values
 `RUNTIME_CFC_DIAL_DEFAULTS` in `cfc/posture-report.ts` applies to every
 `Runtime`, and `presetCfcOptions` in `runtime-presets.ts` pins for every host
 preset. A host that sets a dial lower is described by
@@ -560,3 +563,52 @@ reconciled pin.
   disclosure residuals of the metadata channel; the specification's own
   alternative, treating the metadata as visible to the destination's readers,
   is what the runtime does for the fields it leaves public.
+
+## 9. Result-wiring membership (§8.9.1.3)
+
+The specification asks whether the runtime mints a pattern setup's
+result-wiring membership from the wiring's own stamp, and if so where it marks
+the wiring scope and how each marking site establishes that the wiring is
+build-decided; and that a restated wiring re-mints its membership when its
+value write is elided.
+
+**What the runtime does.** It mints from the wiring's own stamp. Setup's
+`#updateResultProjection` in `runner.ts` is the one marking site: it records a
+`result-wiring` write-policy input, under the runtime's authorization, for
+every setup, naming the result document and whether the wiring is
+build-decided. It is build-decided unless the setup carries the stored result's
+name over, since that name is a reference the stored document chose. The
+wiring's references come from `unwrapOneLevelAndBindToDoc` over the pattern's
+result and the piece's identity, which reads no application content.
+`resultWiringsByTarget` in `cfc/prepare.ts` reads the records, and the persist
+region of `prepareBoundaryCommit` stamps a build-decided document's membership
+(its `enumerate` entries and `*`-child templates) from `deriveFlowJoin` with
+`triggersOnly`. That is the join of the trigger reads, to which the
+specification's wiring scope adds nothing, since wiring, write-destination and
+runtime-internal reads contribute nothing to a join. The stamp carries no
+`TransformedBy`. Every other entry of the document, its frozen existence entry
+among them, keeps the attempt's join.
+
+`withRestatedResultWirings` takes every recorded wiring as written at the root
+of its document, whatever the setup wrote, so the root's membership is
+re-minted at each setup: when setup finds the wiring unchanged and writes
+nothing, and when it writes only the slots that changed.
+`ownRestampContainerPaths` includes those containers, so a setup's reads of
+its own stored membership do not feed the join it re-mints from. A container
+reached only through the restatement mints no existence entry.
+
+This implements [specs#88](https://github.com/commonfabric/specs/pull/88)
+ahead of its ruling, at strict and with no dial, at @danfuzz's direction. It
+narrows what is stored and so does not satisfy the correspondence procedure's
+step 4, which asks for a default-off dial; the two deciding sites carry its
+`SPEC-PENDING` marker.
+
+**Residuals.**
+
+- A wiring whose stored name is carried over is stamped from the attempt's
+  join, an over-taint where the name was itself build-decided.
+- A result wiring at a path below its document's root is restated and
+  narrowed only at the root.
+- Restating the root also clears derived entries beneath it and re-mints a
+  covering one from the attempt's join where the wiring holds anything other
+  than references, which is what writing the root would do.

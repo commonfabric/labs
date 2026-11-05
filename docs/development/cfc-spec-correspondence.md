@@ -345,6 +345,17 @@ authorization does not establish specification conformance or amend this
 procedure. The conformance statement's §8 records the gap until a ruling and
 a reconciled pin address it.
 
+The result-wiring stamp (§8.9.1.3), a setup's membership stamp narrowed to
+its trigger reads and re-minted at every setup, implements
+[specs#88](https://github.com/commonfabric/specs/pull/88) ahead of its ruling.
+It narrows what is stored at strict, with no default-off dial, so it does not
+satisfy step 4 above; its two deciding sites carry the `SPEC-PENDING` marker.
+The snapshot is pinned at that pull request's head, the one place the pin
+names an unmerged commit, so that the kernel manifest can carry the section's
+two functions; the next regeneration after the ruling repins it to specs
+`main`. @danfuzz directed landing it this way. The conformance statement's §9
+records the gap.
+
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
 `runtime/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's

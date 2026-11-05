@@ -4138,13 +4138,30 @@ export class Runner {
     resultCell: Cell<R>,
     options: { preserveName: boolean },
   ): void {
-    const { result, fabricResult, changed } = this.#nextResultProjection(
-      tx,
-      pattern,
-      resultCell,
-      getMetaLink(resultCell.withTx(tx), "argument")!,
-      options,
-    );
+    const { result, fabricResult, changed, nameCarried } = this
+      .#nextResultProjection(
+        tx,
+        pattern,
+        resultCell,
+        getMetaLink(resultCell.withTx(tx), "argument")!,
+        options,
+      );
+    // Setup restates the result wiring whether or not it writes it, so the
+    // wiring's membership entries are re-minted either way (§8.9.1.3). The
+    // build and the piece's identity fix every reference the wiring places,
+    // save a name carried over from the stored result, which is a reference
+    // the stored document chose.
+    const resultLink = resultCell.getAsNormalizedFullLink();
+    tx.recordCfcWritePolicyInput({
+      kind: "result-wiring",
+      target: {
+        space: resultLink.space,
+        id: resultLink.id,
+        scope: resultLink.scope,
+        path: [...resultLink.path],
+      },
+      buildDecided: !nameCarried,
+    }, runtimeWritePolicyAuthorization);
     if (changed) {
       // A result field the setup projects to one of the piece's internal
       // cells is the setup's own initialization of that cell. Those cells are
@@ -4175,9 +4192,11 @@ export class Runner {
    * one stored now: `result` is the projection as bound to the document,
    * which the policy-input recorder walks; `fabricResult` is what a write
    * stores; and `changed` is whether that differs from what is stored, which
-   * is the one condition under which setup writes it. `argumentCellLink` is
-   * the argument link the projection binds to, which setup has staged under
-   * `pattern`'s argument schema by the time it writes. Reads only.
+   * is the one condition under which setup writes it. `nameCarried` is
+   * whether the projection's name is the one stored rather than the
+   * pattern's. `argumentCellLink` is the argument link the projection binds
+   * to, which setup has staged under `pattern`'s argument schema by the time
+   * it writes. Reads only.
    */
   #nextResultProjection<R>(
     tx: IExtendedStorageTransaction,
@@ -4185,7 +4204,12 @@ export class Runner {
     resultCell: Cell<R>,
     argumentCellLink: NormalizedFullLink,
     options: { preserveName: boolean },
-  ): { result: R; fabricResult: FabricValue; changed: boolean } {
+  ): {
+    result: R;
+    fabricResult: FabricValue;
+    changed: boolean;
+    nameCarried: boolean;
+  } {
     const writableResultCell = pattern.resultSchema === undefined
       ? resultCell.withTx(tx)
       : resultCell.withTx(tx).asSchema(pattern.resultSchema);
@@ -4201,11 +4225,10 @@ export class Runner {
     const previousResult = writableResultCell.getRaw({
       meta: ignoreReadForScheduling,
     });
-    if (
-      options.preserveName &&
+    const nameCarried = options.preserveName &&
       isObjectOrArray(previousResult) &&
-      previousResult[NAME]
-    ) {
+      Boolean(previousResult[NAME]);
+    if (nameCarried) {
       result = { ...result, [NAME]: previousResult[NAME] };
     }
     // Convert-and-freeze (default): a deep-frozen value lets the storage write
@@ -4230,6 +4253,7 @@ export class Runner {
       result,
       fabricResult,
       changed: !valueEqualByWalk(fabricResult, previousResult),
+      nameCarried,
     };
   }
 

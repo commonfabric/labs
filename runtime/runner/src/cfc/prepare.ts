@@ -4232,6 +4232,13 @@ const forEachFlowObservation = (
       followedSlot: boolean;
     },
   ) => boolean,
+  options?: {
+    /**
+     * Walk the trigger reads alone (§8.9.2), leaving out every read the
+     * transaction journaled.
+     */
+    triggersOnly?: boolean;
+  },
 ): boolean => {
   // Probe reads issued while FOLLOWING a reference belong to the dereference
   // (C0 §4's dereference row): the follow is journaled as a dereference
@@ -4288,7 +4295,10 @@ const forEachFlowObservation = (
     traceSources(space, id, scope)?.followed.has(
       pathKey(probedSlotPath(logicalPath)),
     ) === true;
-  for (const read of tx.getReadActivities?.() ?? []) {
+  const journaled = options?.triggersOnly === true
+    ? []
+    : tx.getReadActivities?.() ?? [];
+  for (const read of journaled) {
     if (isInternalVerifierRead(read.meta)) {
       continue;
     }
@@ -4525,6 +4535,93 @@ const forEachFlowObservation = (
   return false;
 };
 
+/**
+ * The result wirings a setup writes or restates in this transaction
+ * (§8.9.1.3), by document, from the runtime's own record of each: whether the
+ * build and the piece's identity alone decided which reference sits at each
+ * slot. A document set up more than once is build-decided only where every
+ * setup says so. Only a wiring at the document's root is taken.
+ */
+const resultWiringsByTarget = (
+  tx: IExtendedStorageTransaction,
+): Map<string, { buildDecided: boolean }> => {
+  const result = new Map<string, { buildDecided: boolean }>();
+  for (const input of tx.getCfcState().writePolicyInputs) {
+    if (
+      input.kind !== "result-wiring" || !tx.isRuntimeWritePolicyInput(input) ||
+      canonicalizeLogicalPath(input.target.path).length > 0
+    ) {
+      continue;
+    }
+    const key = targetKey({
+      space: input.target.space,
+      id: input.target.id as URI,
+      scope: normalizeCellScope(input.target.scope),
+    });
+    result.set(key, {
+      buildDecided: input.buildDecided &&
+        (result.get(key)?.buildDecided ?? true),
+    });
+  }
+  return result;
+};
+
+/**
+ * `targets`, the transaction's value writes, with each result wiring a setup
+ * restates written at the root of its document (§8.9.1.3). A setup that finds
+ * the wiring unchanged writes nothing, and one that changes it writes only the
+ * slots that changed, while the wiring's membership is the root container's:
+ * taking the root as written is what re-mints that membership either way.
+ * What the root holds is read as the transaction leaves it, through a
+ * verifier read that consumes nothing. A document the transaction does not
+ * hold a value for is left out.
+ */
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/88
+const withRestatedResultWirings = (
+  tx: IExtendedStorageTransaction,
+  targets: ReturnType<typeof valueWriteTargets>,
+): ReturnType<typeof valueWriteTargets> => {
+  const wirings = resultWiringsByTarget(tx);
+  if (wirings.size === 0) return targets;
+  const result: ReturnType<typeof valueWriteTargets> = new Map(targets);
+  for (const key of wirings.keys()) {
+    const written = targets.get(key);
+    if (written?.paths.some((path) => path.length === 0)) continue;
+    const { space, id, scope } = targetFromKey(key);
+    const value = tx.read({
+      space,
+      id,
+      scope,
+      type: "application/json",
+      path: ["value"],
+    }, { meta: internalVerifierRead }).ok?.value;
+    if (value === undefined) continue;
+    const root = pathKey([]);
+    result.set(key, {
+      space,
+      scope,
+      id,
+      type: written?.type ?? "application/json",
+      paths: [...(written?.paths ?? []), []],
+      valuesByPath: new Map([
+        ...(written?.valuesByPath ?? []),
+        [root, value],
+      ]),
+      // The document held a value before the transaction: a setup that
+      // creates its result document writes the root itself.
+      previousValuesByPath: new Map([
+        ...(written?.previousValuesByPath ?? []),
+        [root, value],
+      ]),
+      previousPresentByPath: new Map([
+        ...(written?.previousPresentByPath ?? []),
+        [root, true],
+      ]),
+    });
+  }
+  return result;
+};
+
 // The containers whose membership stamps THIS transaction re-derives this
 // attempt — the §8.12.8 replace-from-criteria readback exclusion set
 // (template-population §3.1). Two re-stamp routes, mirroring the persist
@@ -4562,7 +4659,9 @@ const ownRestampContainerPaths = (
       canonicalizeLogicalPath(addr.path),
     );
   }
-  for (const [key, target] of valueWriteTargets(tx)) {
+  for (
+    const [key, target] of withRestatedResultWirings(tx, valueWriteTargets(tx))
+  ) {
     for (const path of target.paths) {
       const written = target.valuesByPath.get(pathKey(path));
       if (written === undefined || !isPureLinkStructure(written)) {
@@ -4701,6 +4800,13 @@ const deriveFlowJoinImpl = (
      * refusal the join decided can make the run depend on them.
      */
     collectLabelSources?: boolean;
+
+    /**
+     * Join the trigger reads alone (§8.9.2): what decided that the
+     * transaction ran, without anything it went on to read. A result
+     * wiring's membership is stamped from this (§8.9.1.3).
+     */
+    triggersOnly?: boolean;
   },
 ): {
   confidentiality: CfcConfClause[];
@@ -5214,6 +5320,7 @@ const deriveFlowJoinImpl = (
         );
       return false;
     },
+    { triggersOnly: options?.triggersOnly },
   );
   // Label-metadata observations (inv-12 Stage 2, the SC-6 revisit): the
   // introspection surface's explicit records join the derivation with their
@@ -5224,7 +5331,12 @@ const deriveFlowJoinImpl = (
   // cross-space predicate — a foreign doc's metadata observed here makes the
   // stamped entry representation-eligible, same posture as a foreign labeled
   // read.
-  for (const observation of tx.getCfcState().labelMetadataObservations) {
+  const triggersOnly = options?.triggersOnly === true;
+  for (
+    const observation of triggersOnly
+      ? []
+      : tx.getCfcState().labelMetadataObservations
+  ) {
     noteLabelSource(observation.target, "application/json");
     if (observation.confidentiality.length === 0) continue;
     labeledSpaces?.add(observation.target.space);
@@ -5236,7 +5348,9 @@ const deriveFlowJoinImpl = (
     noteInputWitnesses([]);
   }
   for (
-    const observation of tx.getCfcState().externalContentObservations ?? []
+    const observation of triggersOnly
+      ? []
+      : tx.getCfcState().externalContentObservations ?? []
   ) {
     labelWithoutDocument = true;
     if (
@@ -12111,7 +12225,9 @@ export function* prepareBoundaryCommitSteps(
   // decide whether a computed target's exemption applies.
   const labelProtectionMode = state.labelMetadataProtectionMode;
   const valueTargets = valueWriteTargets(tx);
-  const flowTargets = flowMode === "off" ? undefined : valueTargets;
+  const flowTargets = flowMode === "off"
+    ? undefined
+    : withRestatedResultWirings(tx, valueTargets);
   const flowJoin: ReturnType<typeof deriveFlowJoin> = flowMode === "off"
     ? {
       confidentiality: [],
@@ -12149,6 +12265,15 @@ export function* prepareBoundaryCommitSteps(
   // persist loop runs and lands it on the target even when the join itself
   // is empty. The value stamps below mint from the join alone (`flowHasJoin`).
   const flowHasLabels = flowHasJoin || flowJoin.declaredOnward.length > 0;
+  // A build-decided result wiring's membership is stamped from the trigger
+  // reads alone (§8.9.1.3): the program and the piece's identity fixed which
+  // reference sits at each slot, so nothing else the setup read decided it.
+  const resultWirings = resultWiringsByTarget(tx);
+  let memoizedWiringConfidentiality: CfcConfClause[] | undefined;
+  const wiringConfidentiality = (): CfcConfClause[] =>
+    memoizedWiringConfidentiality ??= flowMode === "off"
+      ? []
+      : deriveFlowJoin(tx, { triggersOnly: true }).confidentiality;
   // H4 (SC-18b): the writer-fit misfit REJECTS only at `enforce-strict`;
   // every mode below persists-and-flags, so `enforce-explicit` keeps the
   // shipped behavior where the derived component is a measurement, not a
@@ -13431,6 +13556,7 @@ export function* prepareBoundaryCommitSteps(
       const seenFlowPaths = new Set<string>();
       const derivedStampPaths: (readonly string[])[] = [];
       const structureStampPaths: (readonly string[])[] = [];
+      const seenStructurePaths = new Set<string>();
       for (const path of flowWrittenPaths) {
         const flowKey = pathKey(path);
         if (seenFlowPaths.has(flowKey)) {
@@ -13443,7 +13569,16 @@ export function* prepareBoundaryCommitSteps(
         }
         const written = flowWrittenValues?.get(flowKey);
         if (isPureLinkStructure(written)) {
-          pureLinkContainerPaths(written, path, structureStampPaths);
+          // A restated result wiring is written at its root beside the slots
+          // its setup wrote, so a container can arrive twice.
+          const containers: (readonly string[])[] = [];
+          pureLinkContainerPaths(written, path, containers);
+          for (const container of containers) {
+            const containerKey = pathKey(container);
+            if (seenStructurePaths.has(containerKey)) continue;
+            seenStructurePaths.add(containerKey);
+            structureStampPaths.push(container);
+          }
           continue;
         }
         derivedStampPaths.push(path);
@@ -13897,6 +14032,28 @@ export function* prepareBoundaryCommitSteps(
           }));
         }
       }
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/88
+      // A build-decided result wiring's membership carries the trigger reads
+      // alone (§8.9.1.3), and no `TransformedBy`: the runtime placed its
+      // references, not the function the join would name. Its frozen
+      // existence entry keeps the whole join.
+      const wiringNarrowed = resultWirings.get(key)?.buildDecided === true;
+      const membershipJoin = wiringNarrowed
+        ? wiringConfidentiality()
+        : flowConfidentiality;
+      const membershipTransformedBy = wiringNarrowed ? [] : flowTransformedBy;
+      // A container this transaction reaches only by restating a result
+      // wiring existed before it and was not written by it, so no existence
+      // entry is minted there: one would record a creation this attempt did
+      // not make.
+      const restatedRoot = resultWirings.has(key) &&
+        !(valueTarget?.paths.some((written) => written.length === 0) ?? false);
+      const writtenHere = new PathPrefixIndex();
+      for (const written of valueTarget?.paths ?? []) writtenHere.add(written);
+      const reachedByRestatementAlone = (path: readonly string[]) =>
+        restatedRoot && !writtenHere.hasPrefixOf(path) &&
+        !(structureContainerPath !== undefined &&
+          pathKey(structureContainerPath) === pathKey(path));
       for (const path of structureStampPaths) {
         const at = declaredOnwardKey({ ...targetFromKey(key), path });
         // A covering derived stamp at-or-above already labels the shape;
@@ -13934,15 +14091,15 @@ export function* prepareBoundaryCommitSteps(
           [];
         landedOnward.add(at);
         const membershipConfidentiality = onward.length === 0
-          ? flowConfidentiality
-          : uniqueCfcAtoms([...flowConfidentiality, ...onward]);
+          ? membershipJoin
+          : uniqueCfcAtoms([...membershipJoin, ...onward]);
         if (membershipConfidentiality.length > 0) {
           persistedLabelEntries.push(markFlowStampEntry({
             path,
             label: {
               confidentiality: [...membershipConfidentiality],
-              ...(flowTransformedBy.length > 0
-                ? { integrity: [...flowTransformedBy] }
+              ...(membershipTransformedBy.length > 0
+                ? { integrity: [...membershipTransformedBy] }
                 : {}),
             },
             origin: "structure",
@@ -13990,7 +14147,7 @@ export function* prepareBoundaryCommitSteps(
         // application probes without feeding the runtime's own plumbing
         // traffic.
         if (
-          flowHasLabels && flowConfidentiality.length > 0
+          flowHasLabels && membershipJoin.length > 0
         ) {
           frozenShapePaths.add(pathKey([...path, "*"]));
           tx.noteCfcPreparationWork?.("flowTemplateContainers");
@@ -13999,9 +14156,9 @@ export function* prepareBoundaryCommitSteps(
             persistedLabelEntries.push(markFlowStampEntry({
               path: [...path, "*"],
               label: {
-                confidentiality: [...flowConfidentiality],
-                ...(flowTransformedBy.length > 0
-                  ? { integrity: [...flowTransformedBy] }
+                confidentiality: [...membershipJoin],
+                ...(membershipTransformedBy.length > 0
+                  ? { integrity: [...membershipTransformedBy] }
                   : {}),
               },
               origin: "structure",
@@ -14019,7 +14176,7 @@ export function* prepareBoundaryCommitSteps(
         // refuses the stale entry and the replacement above re-mints at
         // this attempt's join); a carried entry above wins.
         const hasFrozenExistence = frozenShapePaths.has(pathKey(path));
-        if (!hasFrozenExistence) {
+        if (!hasFrozenExistence && !reachedByRestatementAlone(path)) {
           const frozen = frozenConfidentialityFor(path);
           if (frozen.length > 0) {
             frozenShapePaths.add(pathKey(path));
