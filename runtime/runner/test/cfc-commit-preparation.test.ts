@@ -18,6 +18,7 @@ import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import type { FabricValue, JSONSchema } from "../src/builder/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { prepareStatusAtSettlement } from "./prepare-status-at-settlement.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-commit-preparation");
 const space = signer.did();
@@ -108,9 +109,10 @@ describe("CFC commit preparation", () => {
       );
       out.set({ copied: source.get()?.note });
 
+      const statusAtSettlement = prepareStatusAtSettlement(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
       expect(tx.getCfcState().relevant).toBe(true);
-      expect(tx.getCfcState().prepare.status).toBe("prepared");
+      expect(statusAtSettlement()).toBe("prepared");
     } finally {
       await dispose();
     }
