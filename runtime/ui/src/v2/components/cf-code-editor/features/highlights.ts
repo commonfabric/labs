@@ -131,8 +131,9 @@ const highlightTheme = EditorView.baseTheme({
 });
 
 /**
- * The id of the innermost highlight the editor draws over `pos`: the shortest
- * drawn range that holds it, the earlier-starting of two the same length.
+ * The id of the innermost highlight the editor draws over the character at
+ * `pos`: the shortest drawn range that holds it, the earlier-starting of two
+ * the same length.
  */
 export function highlightAt(
   state: EditorState,
@@ -164,8 +165,15 @@ export function highlights(onClick: (id: string) => void): Extension {
     EditorView.domEventHandlers({
       mousedown(event, view) {
         if (event.button !== 0) return false;
-        const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-        const id = pos === null ? undefined : highlightAt(view.state, pos);
+        // The character under the pointer: the one after the position on its
+        // left half, the one before it on its right half.
+        const hit = view.posAndSideAtCoords({
+          x: event.clientX,
+          y: event.clientY,
+        });
+        const id = hit === null
+          ? undefined
+          : highlightAt(view.state, hit.assoc === 1 ? hit.pos : hit.pos - 1);
         if (id !== undefined) onClick(id);
         return false;
       },

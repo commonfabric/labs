@@ -205,7 +205,9 @@ ended, because the field was released, or older than the history the store
 keeps, which reaches back at least one operation checkpoint interval, refuses
 the commit, and the handler fails rather than running again. `cf-code-editor`
 reports a selection it holds again once the selection's base falls 32 versions
-behind, so the base it reports stays within that history.
+behind. With the store's default checkpoint interval of 100 operations, that
+keeps the base it reports within the history the store keeps; a store
+configured with an interval below 32 can drop a held selection's base first.
 
 An anchor whose text an edit deletes becomes a point, `from === to`, where the
 text was; show it as a comment on text no longer in the field. Text inserted at
