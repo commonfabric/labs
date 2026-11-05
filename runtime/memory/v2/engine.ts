@@ -21,6 +21,13 @@ import {
   isObjectOrArray,
 } from "@commonfabric/js-values/types";
 import {
+  anchorsEnvelopeWith,
+  AnchorsLabelError,
+  anchorsSchemaDocument,
+  anchorsSchemaHash,
+  confidentialityOver,
+} from "./anchors-label.ts";
+import {
   judgeOwnerReleaseByIntent,
   OWNER_RELEASE_BY_INTENT_RECORD_PREFIX,
   parseOwnerReleaseByIntentRecord,
@@ -94,6 +101,7 @@ import {
   EventAppendDuplicateError,
   type FieldAnchors,
   getServerExecutionConfig,
+  identityOfScopeKey,
   type IntegratedOperation,
   isEntityDocument,
   isOperationAnchorsDocId,
@@ -1528,7 +1536,8 @@ export type AppliedRevision = {
   /**
    * Present when the engine wrote the revision from another of the commit's
    * operations, as it rewrites a field's anchors document for an edit to the
-   * field, rather than applying an operation that names the document. The
+   * field and stores the schema document that document's envelope names,
+   * rather than applying an operation that names the document. The
    * committing session supplied nothing of such a write.
    */
   derived?: true;
@@ -5228,15 +5237,78 @@ const readFieldAnchors = (
     scopeKey: string;
   },
 ): FieldAnchors => {
-  const document = readStateForScopeKey(engine, {
+  const document = readAnchorsDocument(engine, options);
+  if (document === null || document.value === undefined) return {};
+  const parsed = parseFieldAnchors(document.value);
+  return "fault" in parsed ? {} : parsed.anchors;
+};
+
+/** The anchors document of `field` as the store holds it, or `null`. */
+const readAnchorsDocument = (
+  engine: Engine,
+  options: {
+    branch: BranchName;
+    field: OperationFieldAddress;
+    scopeKey: string;
+  },
+): EntityDocument | null =>
+  readStateForScopeKey(engine, {
     branch: options.branch,
     id: operationAnchorsDocId(options.field),
     scope: normalizeScope(options.field.scope),
     scopeKey: options.scopeKey,
   })?.document ?? null;
-  if (document === null || document.value === undefined) return {};
-  const parsed = parseFieldAnchors(document.value);
-  return "fault" in parsed ? {} : parsed.anchors;
+
+/**
+ * The scope instances of a document broader than the instance `scopeKey`
+ * names, as scope keys: a user instance's space instance, and a session
+ * instance's user and space ones. A reader of a narrower instance answers to
+ * the broader ones' confidentiality as well.
+ */
+const broaderScopeKeys = (scopeKey: string): ScopeKey[] => {
+  const scope = scopeOfScopeKey(scopeKey);
+  if (scope === "space") return [];
+  if (scope === "user") return [DEFAULT_SCOPE_KEY];
+  // A session key that names no principal has no user instance to resolve,
+  // which `resolveScopeKey()` refuses.
+  return [
+    resolveScopeKey("user", identityOfScopeKey(scopeKey) ?? {}),
+    DEFAULT_SCOPE_KEY,
+  ];
+};
+
+/**
+ * The confidentiality the anchors of `field` take on when an edit moves them
+ * (§7.7.4): what the CFC envelope of the field's document holds over the
+ * field's path, in the field's own scope instance and in each broader one.
+ *
+ * @throws ProtocolError where a label cannot be read, naming the field.
+ */
+const fieldConfidentiality = (
+  engine: Engine,
+  options: {
+    branch: BranchName;
+    field: OperationFieldAddress;
+    scopeKey: string;
+  },
+): FabricValue[] => {
+  const { branch, field, scopeKey } = options;
+  const envelopes = [scopeKey, ...broaderScopeKeys(scopeKey)].map((key) =>
+    readStateForScopeKey(engine, { branch, id: field.id, scopeKey: key })
+      ?.document?.cfc
+  );
+  // A label document is content-addressed and lives at space scope.
+  return confidentialityOver(
+    envelopes,
+    field.path,
+    `the document ${field.id}`,
+    (hash) =>
+      readStateForScopeKey(engine, {
+        branch,
+        id: `cid:${hash}`,
+        scopeKey: DEFAULT_SCOPE_KEY,
+      })?.document?.value,
+  );
 };
 
 const operationValueByteLength = (value: FabricValue): number =>
@@ -5785,11 +5857,19 @@ const applyOperation = (
     }));
   }
   if (!sameAnchors(priorAnchors, nextAnchors)) {
-    revisions.push(writeAnchorsDocument(engine, {
-      ...options,
-      field: operation,
-      anchors: nextAnchors,
-    }));
+    for (
+      const revision of writeAnchorsDocument(engine, {
+        ...options,
+        field: operation,
+        scopeKey,
+        anchors: nextAnchors,
+        moved: Object.keys(nextAnchors).filter((id) =>
+          nextAnchors[id] !== priorAnchors[id]
+        ),
+      })
+    ) {
+      revisions.push(revision);
+    }
   }
   return { resolution, revisions };
 };
@@ -5826,9 +5906,20 @@ const upsertOperationFieldHead = (
 
 /**
  * Rewrites the field's anchors document (§7.15) as an edit to the field moved
- * its anchors. A patch of the document's value alone, so whatever else its
- * envelope holds, its CFC label among it, stays as its writer left it.
- * Written in the field's own scope, beside the field's materializing patch.
+ * the anchors `moved` names, in the field's own scope, beside the field's
+ * materializing patch. The patch replaces the document's value, and, where
+ * the field's document holds a confidentiality over the field, the
+ * document's CFC envelope with one that labels each moved anchor with it
+ * (§7.7.4): a moved offset was computed from the field, whoever wrote the
+ * anchor. Whatever else the envelope holds stays as its writer left it.
+ *
+ * Returns the revisions written: the document's, and ahead of it, where the
+ * envelope is the document's first and the store does not hold the schema
+ * document it names, that schema document's.
+ *
+ * @throws ProtocolError where the confidentiality cannot be read off the
+ *   field's envelope or joined onto the document's, so that no offset is
+ *   stored that is less confidential than the field it was computed from.
  */
 const writeAnchorsDocument = (
   engine: Engine,
@@ -5839,27 +5930,77 @@ const writeAnchorsDocument = (
     principal?: string;
     sessionId: SessionId;
     scopeKeyOverride?: string;
+    scopeKey: string;
     field: OperationFieldAddress;
     anchors: FieldAnchors;
+    moved: readonly string[];
   },
-): AppliedRevision => {
-  const { field, anchors, ...write } = options;
-  return {
+): AppliedRevision[] => {
+  const { field, anchors, moved, scopeKey, ...write } = options;
+  const id = operationAnchorsDocId(field);
+  let envelope: FabricValue | undefined;
+  try {
+    envelope = anchorsEnvelopeWith(
+      readAnchorsDocument(engine, { branch: write.branch, field, scopeKey })
+        ?.cfc,
+      fieldConfidentiality(engine, { branch: write.branch, field, scopeKey }),
+      moved,
+      `the anchors document ${id}`,
+    );
+  } catch (cause) {
+    throw cause instanceof AnchorsLabelError
+      ? new ProtocolError(
+        `commit operation ${write.opIndex}: the anchors of ${field.id} cannot be labeled as its edit moves them: ${cause.message}`,
+      )
+      : cause;
+  }
+  const revisions: AppliedRevision[] = [];
+  const schemaDocument = `cid:${anchorsSchemaHash()}`;
+  if (
+    envelope !== undefined &&
+    readStateForScopeKey(engine, {
+        branch: write.branch,
+        id: schemaDocument,
+        scopeKey: DEFAULT_SCOPE_KEY,
+      }) === null
+  ) {
+    revisions.push({
+      ...writeOperation(engine, {
+        ...write,
+        scopeKeyOverride: undefined,
+        operation: {
+          op: "set",
+          id: schemaDocument,
+          value: anchorsSchemaDocument(),
+        },
+      }),
+      derived: true,
+    });
+  }
+  revisions.push({
     ...writeOperation(engine, {
       ...write,
       operation: {
         op: "patch",
-        id: operationAnchorsDocId(field),
+        id,
         ...(field.scope === undefined ? {} : { scope: field.scope }),
-        patches: [{
-          op: "replace",
-          path: encodePointer(["value"]),
-          value: anchors,
-        }],
+        patches: [
+          {
+            op: "replace",
+            path: encodePointer(["value"]),
+            value: anchors,
+          },
+          ...(envelope === undefined ? [] : [{
+            op: "replace" as const,
+            path: encodePointer(["cfc"]),
+            value: envelope,
+          }]),
+        ],
       },
     }),
     derived: true,
-  };
+  });
+  return revisions;
 };
 
 /**
@@ -8753,7 +8894,9 @@ const touchedLeafPathsForPatch = (patch: PatchOp): string[][] =>
  * returned them. A stored revision does not record whether the engine derived
  * it ({@link AppliedRevision.derived}), so that is read off what the engine
  * derives: a revision of an anchors document that the operation at its index
- * does not name.
+ * does not name, and any revision an `apply-op` left of a document other
+ * than its field's, which is the anchors document or the schema document its
+ * envelope names.
  */
 const selectCommitRevisions = (
   engine: Engine,
@@ -8774,8 +8917,9 @@ const selectCommitRevisions = (
       opIndex: row.op_index,
       commitSeq: row.commit_seq,
       op: row.op,
-      ...(isOperationAnchorsDocId(row.id) && operation !== undefined &&
-          operation.op !== "sqlite" && operation.id !== row.id
+      ...(operation !== undefined && operation.op !== "sqlite" &&
+          operation.id !== row.id &&
+          (isOperationAnchorsDocId(row.id) || operation.op === "apply-op")
         ? { derived: true as const }
         : {}),
     } satisfies Omit<AppliedRevision, "document" | "patches">;
