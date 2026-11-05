@@ -19,7 +19,9 @@
  *   longer names it, in its manifest or as its argument, names a stream the
  *   owner's current pattern no longer has.
  *
- * Anything else is read as a live verb.
+ * Anything else is read as a live verb. That includes a builtin's verb its
+ * producer dropped: the builtin's document records no owner a read could
+ * consult, so a holder that stored such a verb still reads its handle.
  */
 
 import {

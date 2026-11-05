@@ -9,6 +9,7 @@ import type { JSONSchema } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { isWithdrawnVerb } from "../src/withdrawn-verb.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import { resolveLink } from "../src/link-resolution.ts";
 
 const signer = await Identity.fromPassphrase("withdrawn-verb");
 const space = signer.did();
@@ -280,6 +281,29 @@ describe("withdrawn-verb", () => {
     expect(seen.at(-1)).toBe(false);
   });
 
+  it("reads a verb its producer publishes again as its handle, through a link to its field and to its stream", async () => {
+    const producerCell = await run(producer("published"), "readded");
+    const byField = await holderOf("readded-field", {
+      tick: producerCell.key("tick"),
+    });
+    const byStream = await holderOf("readded-stream", {
+      tick: streamHandleOf(producerCell),
+    });
+    const seen: boolean[] = [];
+    const cancel = byStream.asSchema(holderSchema("tick")).sink((value) => {
+      seen.push(Object.hasOwn(value as object, "tick"));
+    });
+
+    await run(producer("gone"), "readded");
+    expect(seen.at(-1)).toBe(false);
+    await run(producer("published"), "readded");
+    cancel();
+
+    expect(seen.at(-1)).toBe(true);
+    expect(isStream(read(byField).tick)).toBe(true);
+    expect(isStream(read(byStream).tick)).toBe(true);
+  });
+
   it("reads an unwired optional verb input as absent, and as a handle once it is wired", async () => {
     const consumerCell = await run(CONSUMER, "consumer");
     const argument = consumerCell.getArgumentCell<Record<string, unknown>>()!;
@@ -294,9 +318,24 @@ describe("withdrawn-verb", () => {
   });
 
   it("keeps the handle of a builtin's verb, whose location stores nothing", async () => {
-    const dialogCell = await run(DIALOG, "dialog");
+    // A builtin's handler listens at a key of the builtin's own document.
+    // That document carries no `argument` meta, which is what keeps the
+    // empty location from reading as a field a piece does not publish.
 
-    expect(isStream(read(dialogCell, "cancel").cancel)).toBe(true);
+    const dialogCell = await run(DIALOG, "dialog");
+    const cancel = read(dialogCell, "cancel").cancel as Cell<unknown>;
+    const tx = rt.edit();
+    const end = resolveLink(rt, tx, cancel.getAsNormalizedFullLink(), "value");
+    const builtinDocument = rt.getCellFromLink(
+      { ...end, path: [], schema: undefined },
+      undefined,
+      tx,
+    );
+
+    expect(isStream(cancel)).toBe(true);
+    expect(end.path).toEqual(["cancelGeneration"]);
+    expect(builtinDocument.getMetaRaw("argument")).toBeUndefined();
+    await tx.commit().settled;
   });
 
   it("does not count a stream's own document as withdrawn while its owner names it", async () => {
