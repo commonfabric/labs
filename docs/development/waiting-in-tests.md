@@ -372,6 +372,12 @@ stimulus, including one delivered to another browser sharing the same piece, use
 `waitForSettledText`, which settles the page on every check. The lunch-poll
 two-browser vote test uses it for all of its cross-browser waits.
 
+That wait asks whether the element contains the text, so a rendering from before
+the stimulus satisfies it if it already contains that text: `two:` is part of
+`two: green`, and a wait for the row to empty would hold from the start. When a
+stimulus shortens what is drawn, pass `{ exact: true }`, which compares the
+element's whole text with its whitespace collapsed.
+
 **Non-browser and off-page waits** have no page to observe. Resolve a `defer()`
 (from `base/async/src/defer.ts`) inside a callback the test already registers
 — a cell `sink`/`subscribe`, a storage subscription's `next`, a scheduler

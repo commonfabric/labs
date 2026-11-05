@@ -308,10 +308,14 @@ describe("rendered vote rows across replicas", () => {
           await cc.runtime.settled(Infinity);
           await cc.synced();
           await controlNetwork("resume");
+          // The title can land ahead of the text, and the row's text before the
+          // removal contains its text after it, so only the whole text says the
+          // removal has been drawn.
           await waitForSettledText(
             page,
             `[data-row="two"][title="${key === "bob" ? "carol" : ""}"]`,
             key === "bob" ? "two: green" : "two:",
+            { exact: true },
           );
           await settleView(page);
           expect(
