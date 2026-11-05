@@ -994,6 +994,8 @@ export class RuntimeProcessor {
   #privateInboxEnsured: Promise<void> | undefined;
   #profileRootsRepaired: Promise<void> | undefined;
   #shareIntake: Promise<ShareIntake | undefined> | undefined;
+  // The release pass the first bring-up of Home asks for once it settles.
+  #homeBringUpReleased: Promise<void> | undefined;
   // The marks of deleted spaces on their way to Home's catalog, which
   // `handleIdle()` takes in: a reload before a mark is sent would leave the
   // space listed as saved.
@@ -1221,6 +1223,7 @@ export class RuntimeProcessor {
     privateInboxEnsured: Promise<void> | undefined;
     profileRootsRepaired: Promise<void> | undefined;
     shareIntake: Promise<ShareIntake | undefined> | undefined;
+    readonly homeBringUpReleased: Promise<void> | undefined;
     getSpaceCtx(space: DID): PiecesController;
   } {
     // deno-lint-ignore no-this-alias
@@ -1261,6 +1264,9 @@ export class RuntimeProcessor {
       },
       set shareIntake(value) {
         outerThis.#shareIntake = value;
+      },
+      get homeBringUpReleased() {
+        return outerThis.#homeBringUpReleased;
       },
       cc: this.#cc,
       spaces: this.#spaces,
@@ -2961,9 +2967,11 @@ export class RuntimeProcessor {
    * repair that makes each of the user's profiles its space's root (see
    * `PiecesController.repairProfileRoots`), and the share intake over Home's
    * inboxes (see `PiecesController.startShareIntake`) without waiting for
-   * any of them. A later bring-up shares the run already made, and repeats
-   * only a step that failed. `homeCC` is a controller over the identity's
-   * Home space.
+   * any of them. Once all of that and the scheduler have settled, as
+   * `handleIdle()` waits for them, it asks the runtime to release the
+   * documents nothing reads (`Runtime.releaseUnreadDocuments()`). A later
+   * bring-up shares the run already made, and repeats only a step that
+   * failed. `homeCC` is a controller over the identity's Home space.
    *
    * Resolves once the adoption has settled, and never rejects.
    */
@@ -3012,6 +3020,19 @@ export class RuntimeProcessor {
         return undefined;
       },
     );
+    // Home's pieces load what they read as they resume, and what its stored
+    // result links to, its chat manager's rooms among it, arrives with it,
+    // much of which nothing goes on to read. Its housekeeping goes on loading
+    // after the bring-up has answered, so the pass waits for that too.
+    this.#homeBringUpReleased ??= this.handleIdle()
+      .then(() => this.#runtime.releaseUnreadDocuments())
+      .catch((error) => {
+        if (this.#isDisposed) return;
+        console.warn(
+          "[RuntimeProcessor] Releasing what Home's bring-up loaded:",
+          error,
+        );
+      });
   }
 
   /**

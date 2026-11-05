@@ -4934,6 +4934,105 @@ describe("runtime-processor", () => {
         }
       });
 
+      it("asks the runtime to release what nothing reads once the housekeeping it started has settled", async () => {
+        const readable = Promise.withResolvers<void>();
+        const ensureSent = Promise.withResolvers<void>();
+        await using worker = await homeWorker(
+          [],
+          () => ensureSent.resolve(),
+          readable.promise,
+        );
+        // How many inbox ensures had been sent each time a release was asked
+        // for.
+        const releases: number[] = [];
+        const release = worker.runtime.releaseUnreadDocuments.bind(
+          worker.runtime,
+        );
+        worker.runtime.releaseUnreadDocuments = () => {
+          releases.push(worker.privateInboxSends());
+          return release();
+        };
+
+        await worker.processor.handleGetSpaceRootPattern({
+          type: RequestType.GetSpaceRootPattern,
+          space: worker.homeSpace,
+        });
+        await worker.runtime.idle();
+
+        expect(releases).toEqual([]);
+        readable.resolve();
+        await ensureSent.promise;
+        await worker.processor.accessForTestingOnly.homeBringUpReleased;
+        expect(releases).toEqual([1]);
+      });
+
+      it("asks for that release once however often Home is brought up", async () => {
+        await using worker = await homeWorker([]);
+        let releases = 0;
+        const release = worker.runtime.releaseUnreadDocuments.bind(
+          worker.runtime,
+        );
+        worker.runtime.releaseUnreadDocuments = () => {
+          releases++;
+          return release();
+        };
+
+        await worker.processor.handleGetSpaceRootPattern({
+          type: RequestType.GetSpaceRootPattern,
+          space: worker.homeSpace,
+        });
+        await worker.processor.handleEnsureHomePatternRunning({
+          type: RequestType.EnsureHomePatternRunning,
+        });
+        await worker.processor.accessForTestingOnly.homeBringUpReleased;
+        await worker.processor.handleIdle();
+
+        expect(releases).toBe(1);
+      });
+
+      it("reports a failure of the release Home's bring-up asks for", async () => {
+        await using worker = await homeWorker([]);
+        worker.runtime.releaseUnreadDocuments = () =>
+          Promise.reject(new Error("release failure"));
+        const warn = stub(console, "warn", () => {});
+        try {
+          await worker.processor.handleGetSpaceRootPattern({
+            type: RequestType.GetSpaceRootPattern,
+            space: worker.homeSpace,
+          });
+          await worker.processor.handleIdle();
+          await worker.processor.accessForTestingOnly.homeBringUpReleased;
+
+          expect(warn.calls.map(({ args }) => args[0])).toEqual([
+            "[RuntimeProcessor] Releasing what Home's bring-up loaded:",
+          ]);
+        } finally {
+          warn.restore();
+        }
+      });
+
+      it("reports no failure of that release once the processor is disposed", async () => {
+        await using worker = await homeWorker([]);
+        worker.runtime.releaseUnreadDocuments = () => {
+          worker.processor.accessForTestingOnly.isDisposed = true;
+          return Promise.reject(new Error("release failure"));
+        };
+        const warn = stub(console, "warn", () => {});
+        try {
+          await worker.processor.handleGetSpaceRootPattern({
+            type: RequestType.GetSpaceRootPattern,
+            space: worker.homeSpace,
+          });
+          await worker.processor.handleIdle();
+          await worker.processor.accessForTestingOnly.homeBringUpReleased;
+
+          expect(warn.calls).toEqual([]);
+        } finally {
+          warn.restore();
+          worker.processor.accessForTestingOnly.isDisposed = false;
+        }
+      });
+
       it("starts no housekeeping when the root is read with `start` `false`", async () => {
         await using worker = await homeWorker([{ name: "team-lunch" }]);
         using housekeeping = stubHousekeeping();
