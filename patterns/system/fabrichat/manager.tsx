@@ -84,9 +84,11 @@ import {
   type SharedSpaceEntry,
 } from "../shared-space/shared-space-catalog.ts";
 import { entityKeyOf, listsRoomIn } from "./room-records.tsx";
+import { addMemberRequestIdOf } from "./logic.ts";
 import FabriChatRoom from "./room.tsx";
 import {
   type AboutRecord,
+  type AddDeliveryReport,
   CHAT_ROOM_OFFER_KIND,
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
@@ -442,6 +444,55 @@ const recordOutcome = (
   }
 };
 
+/** The room's stream that hears how a member it added was told. */
+function addDeliveryStreamOf(
+  room: Cell<ChatRoomLink>,
+): Cell<{ recordAddDelivery: Stream<AddDeliveryReport> }>;
+function addDeliveryStreamOf(room: Cell<ChatRoomLink>): unknown {
+  return room;
+}
+
+/**
+ * Tells `room` how the member of the add that `offerId` offers was told, if
+ * `offerId` is an add's in that room. It holds the verdict alone, so that it
+ * carries nothing into the room that the room's own documents wouldn't admit,
+ * however this user's manager is labeled. A room with no such stream, whose
+ * code is older, is sent nothing, and reads `requests` instead: a send to a
+ * path holding no stream would write there.
+ */
+const reportDelivery = (
+  room: Cell<ChatRoomLink> | undefined,
+  offerId: string,
+  report: Omit<AddDeliveryReport, "requestId">,
+): void => {
+  if (room === undefined) return;
+  const requestId = addMemberRequestIdOf(offerId, spaceOf(room));
+  if (requestId === undefined) return;
+  const stream = addDeliveryStreamOf(room).key("recordAddDelivery");
+  if (stream.get() === undefined) return;
+  stream.send({ requestId, ...report });
+};
+
+/** `outcome`, recorded as {@link recordOutcome} does, and reported to `room`. */
+const recordOffer = (
+  state: ManagerActState,
+  requestId: string,
+  room: Cell<ChatRoomLink> | undefined,
+  outcome: Exclude<ChatRequestOutcome, { status: "pending" }> & {
+    delivery?: ChatOfferDelivery;
+    reason?: string;
+  },
+): void => {
+  recordOutcome(state, requestId, outcome as ChatRequestOutcome);
+  reportDelivery(
+    room,
+    requestId,
+    outcome.status === "refused"
+      ? { delivery: "access-only", deliveryRefusal: outcome.reason ?? "" }
+      : { delivery: outcome.delivery ?? "offered" },
+  );
+};
+
 /** The origin of the host serving this pattern, and so the rooms it creates. */
 const hostOrigin = (): string => new URL(getPatternEnvironment().apiUrl).origin;
 
@@ -733,6 +784,7 @@ const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
       );
       if (event.recordsDelivery === true && delivery === "noticed") {
         state.requests.key(event.id).set({ status: "done", delivery });
+        reportDelivery(event.room, event.id, { delivery });
       }
     }
   },
@@ -1310,7 +1362,7 @@ const performManagerAct = (
     // holds OWNER on.
     const space = spaceOf(room);
     if (!isWellFormedDID(space) || !listsRoomIn(catalog.get(), space)) {
-      recordOutcome(state, requestId, {
+      recordOffer(state, requestId, room, {
         status: "refused",
         reason: "The room isn't among this user's chats.",
       });
@@ -1321,7 +1373,7 @@ const performManagerAct = (
     // only a level it states refuses.
     const access = spaceAccess(room);
     if (access !== undefined && access !== "OWNER") {
-      recordOutcome(state, requestId, {
+      recordOffer(state, requestId, room, {
         status: "refused",
         reason: "This user can't add people to the room.",
       });
@@ -1331,7 +1383,7 @@ const performManagerAct = (
     // says it is; a link to anything else in the room's space, such as one
     // of its messages, has no such record.
     if (aboutRecordOf(room).key("kind").get() !== "group") {
-      recordOutcome(state, requestId, {
+      recordOffer(state, requestId, room, {
         status: "refused",
         reason: "The request names no group room.",
       });
@@ -1340,7 +1392,7 @@ const performManagerAct = (
     // The request's id is the offer's, which a share inbox cuts to a bounded
     // length, so a longer one could be taken for another's.
     if (requestId.length > OFFER_ID_MAX_LENGTH) {
-      recordOutcome(state, requestId, {
+      recordOffer(state, requestId, room, {
         status: "refused",
         reason: "The request's id is too long to key an offer by.",
       });
@@ -1351,7 +1403,7 @@ const performManagerAct = (
     const named = event?.profile;
     const attested = named === undefined ? undefined : profileOwnerOf(named);
     if (named !== undefined && !isPrincipalDID(attested)) {
-      recordOutcome(state, requestId, {
+      recordOffer(state, requestId, room, {
         status: "refused",
         reason: "A member's profile attests no principal.",
       });
@@ -1359,14 +1411,14 @@ const performManagerAct = (
     }
     const member = event?.member ?? attested;
     if (!isPrincipalDID(member)) {
-      recordOutcome(state, requestId, {
+      recordOffer(state, requestId, room, {
         status: "refused",
         reason: "The member is not a principal.",
       });
       return;
     }
     if (attested !== undefined && attested !== member) {
-      recordOutcome(state, requestId, {
+      recordOffer(state, requestId, room, {
         status: "refused",
         reason: "The profile is not the member's.",
       });
@@ -1374,14 +1426,14 @@ const performManagerAct = (
     }
     const from = currentPrincipal();
     if (from === undefined) {
-      recordOutcome(state, requestId, {
+      recordOffer(state, requestId, room, {
         status: "refused",
         reason: "Offering a room needs a signed-in user.",
       });
       return;
     }
     if (member === from) {
-      recordOutcome(state, requestId, {
+      recordOffer(state, requestId, room, {
         status: "refused",
         reason: "The member is this user.",
       });
@@ -1404,7 +1456,10 @@ const performManagerAct = (
     // outcome to `noticed` when none points at an inbox.
     if (profiles.length === 0) {
       outgoingNotices.push(noticeFor(member, requestId, room));
-      recordOutcome(state, requestId, { status: "done", delivery: "noticed" });
+      recordOffer(state, requestId, room, {
+        status: "done",
+        delivery: "noticed",
+      });
       return;
     }
     state.offerRooms.send({
@@ -1414,7 +1469,10 @@ const performManagerAct = (
       members: [{ recipient: member, profiles }],
       recordsDelivery: true,
     });
-    recordOutcome(state, requestId, { status: "done", delivery: "offered" });
+    recordOffer(state, requestId, room, {
+      status: "done",
+      delivery: "offered",
+    });
     return;
   }
 

@@ -1,9 +1,12 @@
 /**
  * FabriChat's rules that need no runtime: what counts as a single emoji, how
- * the two views of a conversation are derived from replies, and how a
- * thread's title reads when no member has set one. The room applies them to
- * its records; `logic.test.ts` states them directly.
+ * the two views of a conversation are derived from replies, how a thread's
+ * title reads when no member has set one, the id an add's offer goes by, and
+ * what a manager's report of an add does to its outcome. The room applies them
+ * to its records; `logic.test.ts` states them directly.
  */
+
+import type { AddDeliveryReport, AddMemberOutcome } from "./schemas.tsx";
 
 /**
  * Whether `text` is a single emoji: exactly one `RGI_Emoji` sequence, with its
@@ -122,3 +125,78 @@ export const threadExcerpt = (text: string): string => {
   const kept = atBreak || space <= 0 ? room : room.slice(0, space);
   return `${kept.join("").trimEnd()}…`;
 };
+
+/**
+ * The `requestId` under which an add to the room in `space` asks the adder's
+ * manager to offer the room, given the add's own `requestId`, which the offer
+ * carries as its `id`. It names the room as well as the add, so adds to two
+ * rooms under one `requestId` neither share an outcome in the manager nor
+ * replace each other's offer in a share inbox.
+ */
+export const addMemberOfferId = (space: string, requestId: string): string =>
+  JSON.stringify(["addMember", space, requestId]);
+
+/**
+ * The `requestId` of the add in the room in `space` that `offerId` offers, as
+ * {@link addMemberOfferId} composes it, or `undefined` if it offers no such add.
+ */
+export const addMemberRequestIdOf = (
+  offerId: string,
+  space: string | undefined,
+): string | undefined => {
+  let parts: unknown;
+  try {
+    parts = JSON.parse(offerId);
+  } catch {
+    return undefined;
+  }
+  return Array.isArray(parts) && parts.length === 3 &&
+      parts[0] === "addMember" && parts[1] === space &&
+      typeof parts[2] === "string"
+    ? parts[2]
+    : undefined;
+};
+
+/**
+ * What `report` makes of an add's `outcome`, or `undefined` if the outcome
+ * stands. It holds only for an add that is done: `offered` may yet turn to what
+ * the manager decides once it has looked where the member's profiles point, and
+ * anything else is final, so a report heard twice changes nothing.
+ */
+export const outcomeOnReport = (
+  outcome: AddMemberOutcome | undefined,
+  report: AddDeliveryReport,
+): AddMemberOutcome | undefined => {
+  if (outcome?.status !== "done") return undefined;
+  if (outcome.delivery !== undefined && outcome.delivery !== "offered") {
+    return undefined;
+  }
+  if (outcome.delivery === report.delivery) return undefined;
+  return {
+    status: "done",
+    delivery: report.delivery,
+    ...(report.deliveryRefusal === undefined
+      ? {}
+      : { deliveryRefusal: report.deliveryRefusal }),
+  };
+};
+
+/**
+ * `recorded`, each outcome copied, where each add with no `delivery` of its own
+ * takes what `read` holds for it. The one document that reads the manager is
+ * `read`, so that a label the manager carries holds back only that document.
+ */
+export const withReadDeliveries = (
+  recorded: Readonly<Record<string, AddMemberOutcome>>,
+  read: Readonly<Record<string, AddMemberOutcome>> | undefined,
+): Record<string, AddMemberOutcome> =>
+  Object.fromEntries(
+    Object.entries(recorded).map(([id, outcome]) => [
+      id,
+      outcome === undefined
+        ? outcome
+        : outcome.status === "done" && outcome.delivery === undefined
+        ? { ...(read?.[id] ?? outcome) }
+        : { ...outcome },
+    ]),
+  );

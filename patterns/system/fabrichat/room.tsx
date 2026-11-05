@@ -64,10 +64,12 @@ import {
 } from "../loom/participants.tsx";
 import { memberSet, type SpaceMember } from "../social-space/member-set.ts";
 import {
+  outcomeOnReport,
   type ShownIn,
   threadExcerpt,
   type ViewPlace,
   viewPlaces,
+  withReadDeliveries,
 } from "./logic.ts";
 import {
   canActIn,
@@ -118,6 +120,7 @@ import {
 } from "./message-row.tsx";
 import {
   type AboutRecord,
+  type AddDeliveryReport,
   type AddMemberDelivery,
   addMemberOfferId,
   type AddMemberOutcome,
@@ -349,6 +352,30 @@ export type AddRequestsCell = Writable<
 >;
 
 /**
+ * The adds the room still has to ask the viewer's manager about: those done
+ * with no `delivery` of their own. An add told of by its manager's report holds
+ * one, and reads nothing of the manager.
+ */
+const addsAwaitingDelivery = (
+  outcomes: Readonly<Record<string, AddMemberOutcome>>,
+): Record<string, AddMemberOutcome> =>
+  Object.fromEntries(
+    Object.entries(outcomes).filter(([, outcome]) =>
+      outcome?.status === "done" && outcome.delivery === undefined
+    ),
+  );
+
+/** The adds in `outcomes` that hold a `delivery`. */
+const addsDelivered = (
+  outcomes: Readonly<Record<string, AddMemberOutcome>>,
+): Record<string, AddMemberOutcome> =>
+  Object.fromEntries(
+    Object.entries(outcomes).filter(([, outcome]) =>
+      outcome?.status === "done" && outcome.delivery !== undefined
+    ),
+  );
+
+/**
  * `outcomes`, where each add that is done with no `delivery` of its own takes
  * the one the viewer's manager decided for it, which `requests` records under
  * `addMemberOfferId()`: its `delivery`, or, where the manager refused to tell
@@ -424,6 +451,26 @@ interface AddedMemberEvent {
   // written in the event type.
   profile?: Cell<ChatProfile>;
 }
+
+/** What hearing from the viewer's manager is bound to. */
+interface RecordAddDeliveryState {
+  /** The viewer's adds' outcomes; absent where they aren't remembered. */
+  requests?: AddRequestsCell;
+}
+
+/**
+ * Files what the viewer's manager reports of an add under the add's own
+ * outcome, as `outcomeOnReport()` decides.
+ */
+const recordAddDelivery = handler<AddDeliveryReport, RecordAddDeliveryState>(
+  (event, { requests }) => {
+    const next = outcomeOnReport(
+      requests?.key(event.requestId).get(),
+      event,
+    );
+    if (next !== undefined) requests?.key(event.requestId).set(next);
+  },
+);
 
 /** What adding a member is bound to. */
 interface AddMemberState {
@@ -668,6 +715,9 @@ export interface AddMemberOutput {
   /** Admits the person the event names, from a trusted gesture. */
   add: Stream<AddMemberEvent>;
 
+  /** Records how the viewer's manager says a member was told. */
+  recordDelivery: Stream<AddDeliveryReport>;
+
   /**
    * The outcome of each of the viewer's adds, with how the person was told of
    * the room once that is decided.
@@ -716,8 +766,18 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
     const addDisplayForSession = computed((): PerSession<ChatDisplay> =>
       canAddForSession && myProfile?.get() !== undefined ? "flex" : "none"
     );
-    const outcomes = computed((): Record<string, AddMemberOutcome> =>
-      withDeliveries(requests?.get() ?? {}, spaceOf(room), manager?.requests)
+    // The verdicts of the adds that hold none, as the viewer's manager records
+    // them. This reads the manager, so a label it carries that this document
+    // doesn't admit holds this document back, and nothing else. Its binding's
+    // name is its cause, the document that keeps what it has already read.
+    const outcomes = computed((): Record<string, AddMemberOutcome> => {
+      const awaiting = addsAwaitingDelivery(requests?.get() ?? {});
+      return Object.keys(awaiting).length === 0 ? {} : addsDelivered(
+        withDeliveries(awaiting, spaceOf(room), manager?.requests),
+      );
+    });
+    const addOutcomes = computed((): Record<string, AddMemberOutcome> =>
+      withReadDeliveries(requests?.get() ?? {}, outcomes)
     );
     // What the session's latest add came to: how the person was told of the
     // room, once that is decided, and what to do where they weren't.
@@ -725,7 +785,7 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
       const add = latest.get();
       if (add === undefined) return "";
       if (add.refusal !== undefined) return add.refusal;
-      const recorded = outcomes[add.requestId];
+      const recorded = addOutcomes[add.requestId];
       const done = recorded?.status === "done" ? recorded : undefined;
       const delivery = done?.delivery ?? add.delivery;
       return delivery === undefined
@@ -818,7 +878,8 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
         </cf-vstack>
       ),
       add,
-      outcomes,
+      recordDelivery: recordAddDelivery({ requests }),
+      outcomes: addOutcomes,
       canAdd: canAddForSession,
     };
   },
@@ -1190,6 +1251,13 @@ export interface ChatRoomView {
    * admit someone.
    */
   addMember: Stream<AddMemberEvent>;
+
+  /**
+   * Records in the sender's own outcome of an add how the member was told. The
+   * manager of the person who made the add sends it, in place of the room
+   * reading the manager; a report on anyone else's add finds nothing to change.
+   */
+  recordAddDelivery: Stream<AddDeliveryReport>;
 
   /**
    * Whether this reader can add someone: an OWNER of a group room in a space
@@ -1908,6 +1976,7 @@ export const FabriChatRoomCore = pattern<
     messageRights: messageRightsForSession,
     ...streams,
     addMember: addMember.add,
+    recordAddDelivery: addMember.recordDelivery,
     canAdd: addMember.canAdd,
     addRequests: addMember.outcomes,
     setTitle,
@@ -2275,6 +2344,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       sendReaction: room.sendReaction,
       deleteReaction: room.deleteReaction,
       addMember: room.addMember,
+      recordAddDelivery: room.recordAddDelivery,
       canAdd: room.canAdd,
       addRequests: room.addRequests,
       setTitle: room.setTitle,

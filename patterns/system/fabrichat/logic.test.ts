@@ -1,12 +1,16 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  addMemberOfferId,
+  addMemberRequestIdOf,
   isInMain,
   isSingleEmoji,
+  outcomeOnReport,
   THREAD_EXCERPT_LENGTH,
   threadExcerpt,
   type ViewItem,
   viewPlaces,
+  withReadDeliveries,
 } from "./logic.ts";
 
 describe("logic", () => {
@@ -135,6 +139,159 @@ describe("logic", () => {
     it("returns no code point split by the cut", () => {
       const excerpt = threadExcerpt("😺".repeat(60));
       expect(excerpt).toBe(`${"😺".repeat(THREAD_EXCERPT_LENGTH - 1)}…`);
+    });
+  });
+
+  describe("outcomeOnReport()", () => {
+    const report = (delivery: "offered" | "noticed" | "access-only") => ({
+      requestId: "add-1",
+      delivery,
+    });
+
+    it("takes the report's delivery for an add that holds none", () => {
+      expect(outcomeOnReport({ status: "done" }, report("offered")))
+        .toEqual({ status: "done", delivery: "offered" });
+    });
+
+    it("turns `offered` to `noticed`", () => {
+      expect(
+        outcomeOnReport(
+          { status: "done", delivery: "offered" },
+          report("noticed"),
+        ),
+      ).toEqual({ status: "done", delivery: "noticed" });
+    });
+
+    it("keeps the reason a manager's refusal gives", () => {
+      expect(
+        outcomeOnReport({ status: "done" }, {
+          requestId: "add-1",
+          delivery: "access-only",
+          deliveryRefusal: "The room isn't among this user's chats.",
+        }),
+      ).toEqual({
+        status: "done",
+        delivery: "access-only",
+        deliveryRefusal: "The room isn't among this user's chats.",
+      });
+    });
+
+    it("changes nothing when the same report is heard again", () => {
+      expect(
+        outcomeOnReport(
+          { status: "done", delivery: "offered" },
+          report("offered"),
+        ),
+      ).toBeUndefined();
+      expect(
+        outcomeOnReport(
+          { status: "done", delivery: "noticed" },
+          report("noticed"),
+        ),
+      ).toBeUndefined();
+    });
+
+    it("leaves `noticed` standing when `offered` arrives after it", () => {
+      expect(
+        outcomeOnReport(
+          { status: "done", delivery: "noticed" },
+          report("offered"),
+        ),
+      ).toBeUndefined();
+    });
+
+    it("leaves `access-only` standing", () => {
+      expect(
+        outcomeOnReport(
+          { status: "done", delivery: "access-only" },
+          report("offered"),
+        ),
+      ).toBeUndefined();
+    });
+
+    it("leaves an add that was refused, or isn't recorded, as it is", () => {
+      expect(
+        outcomeOnReport(
+          { status: "refused", reason: "No." },
+          report("offered"),
+        ),
+      ).toBeUndefined();
+      expect(outcomeOnReport(undefined, report("offered"))).toBeUndefined();
+    });
+  });
+
+  describe("withReadDeliveries()", () => {
+    it("takes what is read for an add with no `delivery` of its own", () => {
+      expect(
+        withReadDeliveries(
+          { a: { status: "done" } },
+          { a: { status: "done", delivery: "noticed" } },
+        ),
+      ).toEqual({ a: { status: "done", delivery: "noticed" } });
+    });
+
+    it("keeps a `delivery` the add holds over what is read", () => {
+      expect(
+        withReadDeliveries(
+          { a: { status: "done", delivery: "offered" } },
+          { a: { status: "done", delivery: "noticed" } },
+        ),
+      ).toEqual({ a: { status: "done", delivery: "offered" } });
+    });
+
+    it("keeps an add nothing is read for, with no read at all too", () => {
+      const recorded = {
+        a: { status: "done" },
+        b: { status: "refused", reason: "No." },
+      } as const;
+      expect(withReadDeliveries(recorded, {})).toEqual(recorded);
+      expect(withReadDeliveries(recorded, undefined)).toEqual(recorded);
+    });
+
+    it("keeps an add that was refused over what is read", () => {
+      expect(
+        withReadDeliveries(
+          { a: { status: "refused", reason: "No." } },
+          { a: { status: "done", delivery: "offered" } },
+        ),
+      ).toEqual({ a: { status: "refused", reason: "No." } });
+    });
+  });
+
+  describe("addMemberRequestIdOf()", () => {
+    it("returns the `requestId` that `addMemberOfferId()` composed", () => {
+      expect(
+        addMemberRequestIdOf(addMemberOfferId("did:a", "add-1"), "did:a"),
+      ).toBe("add-1");
+    });
+
+    it("returns `undefined` for another room's add", () => {
+      expect(
+        addMemberRequestIdOf(addMemberOfferId("did:a", "add-1"), "did:b"),
+      ).toBeUndefined();
+    });
+
+    it("returns `undefined` for an id that an add didn't compose", () => {
+      for (
+        const id of [
+          "add-1",
+          "",
+          "[]",
+          "null",
+          JSON.stringify(["other", "did:a", "add-1"]),
+          JSON.stringify(["addMember", "did:a"]),
+          JSON.stringify(["addMember", "did:a", 1]),
+          JSON.stringify(["addMember", "did:a", "add-1", "more"]),
+        ]
+      ) {
+        expect(addMemberRequestIdOf(id, "did:a")).toBeUndefined();
+      }
+    });
+
+    it("returns `undefined` for a room that names no space", () => {
+      expect(
+        addMemberRequestIdOf(addMemberOfferId("did:a", "add-1"), undefined),
+      ).toBeUndefined();
     });
   });
 });

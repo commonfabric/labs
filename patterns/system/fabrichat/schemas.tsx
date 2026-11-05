@@ -24,6 +24,8 @@ import type { FileEntry } from "../fabrifile/schemas.tsx";
 import type { FileStoreRecord } from "../fabrifile/store.tsx";
 import type { ProfileInbox } from "../profile-home/profile-home.tsx";
 
+export { addMemberOfferId } from "./logic.ts";
+
 //
 // Reviewed surfaces
 //
@@ -569,6 +571,22 @@ export type ChatOfferDelivery = "offered" | "noticed";
  */
 export type AddMemberDelivery = ChatOfferDelivery | "access-only";
 
+/**
+ * What a manager tells a room of an add it asked about: how the member was told,
+ * and nothing of how the manager came to it. The room files it under the add's
+ * own `requestId`.
+ */
+export interface AddDeliveryReport {
+  /** The add's `requestId` in the room. */
+  requestId: string;
+
+  /** How the member was told. */
+  delivery: AddMemberDelivery;
+
+  /** Why the manager refused to tell them, which makes it `access-only`. */
+  deliveryRefusal?: string;
+}
+
 /** The outcome of an add to a room's space, by its `requestId`. */
 export type AddMemberOutcome =
   | {
@@ -665,16 +683,6 @@ export type SetThreadTitleRefusalCode =
   | "not-member"
   | "invalid-title"
   | "not-a-root";
-
-/**
- * The `requestId` under which an add to the room in `space` asks the adder's
- * manager to offer the room, given the add's own `requestId`, which the offer
- * carries as its `id`. It names the room as well as the add, so adds to two
- * rooms under one `requestId` neither share an outcome in the manager nor
- * replace each other's offer in a share inbox.
- */
-export const addMemberOfferId = (space: string, requestId: string): string =>
-  JSON.stringify(["addMember", space, requestId]);
 
 /**
  * The `kind` of a room's own space, as the space declares it, and as an offer

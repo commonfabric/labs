@@ -188,7 +188,7 @@ its `requestId` (see
 [`ChatRoomOutput`](ChatRoomOutput.md#addmemberrequestid-string-target--value-string--profile-cellchatprofile)).
 An add that is done carries `delivery` once it is known how the person added
 was told of the room, and until then it is still being delivered: every add
-that is done gets one. Where it is `access-only`, nobody told them, and the
+that is done gets one, with the one exception `ChatRoomOutput` states. Where it is `access-only`, nobody told them, and the
 client asks the adder to send them the room's link. A client offers people to add from its
 user's manager's `people`, and names a person picked there by their profile as
 well as their address, so the manager offers the room through that profile.

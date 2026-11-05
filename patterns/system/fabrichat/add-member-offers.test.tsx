@@ -258,16 +258,51 @@ interface ManagedRoomOutput {
   about: ChatRoomOutput["about"];
   addParticipant: ChatRoomOutput["addParticipant"];
   addMember: ChatRoomOutput["addMember"];
+  recordAddDelivery: ChatRoomOutput["recordAddDelivery"];
   addRequests: ChatRoomOutput["addRequests"];
   members: ChatRoomOutput["members"];
   participantPrincipals: ChatRoomOutput["participantPrincipals"];
 }
+
+/** What a room of older code offers: no stream to hear a report on. */
+type QuietRoomOutput = Omit<ManagedRoomOutput, "recordAddDelivery"> & {
+  /** Nothing the room returns; here to read what a send would leave there. */
+  recordAddDelivery?: { requestId?: string };
+};
 
 /**
  * A group room that names itself to its viewer's manager by its own result,
  * as `FabriChatRoom` does.
  */
 const ManagedRoom = pattern<ManagedRoomInput, ManagedRoomOutput>(
+  (input) => {
+    const room = FabriChatRoomCore({
+      myProfile: input.myProfile,
+      about: { kind: "group" as const, title: "Team" },
+      messages: input.messages,
+      roster: input.roster,
+      addRequests: input.addRequests,
+      self: input[SELF],
+      manager: input.manager,
+    } as RoomArg);
+    return {
+      [UI]: room[UI],
+      about: room.about,
+      addParticipant: room.addParticipant,
+      addMember: room.addMember,
+      recordAddDelivery: room.recordAddDelivery,
+      addRequests: room.addRequests,
+      members: room.members,
+      participantPrincipals: room.participantPrincipals,
+    };
+  },
+);
+
+/**
+ * The same room, naming itself by a result that has no `recordAddDelivery`, as
+ * one on older code does, so it hears no report and reads its manager instead.
+ */
+const QuietRoom = pattern<ManagedRoomInput, QuietRoomOutput>(
   (input) => {
     const room = FabriChatRoomCore({
       myProfile: input.myProfile,
@@ -386,6 +421,18 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     outgoingNotices: notices,
   } as ManagerArg);
   const room = ManagedRoom({
+    myProfile: profile,
+    messages: setup.room.messages,
+    roster: setup.roster,
+    addRequests: Writable.of<Record<string, AddMemberOutcome>>({}),
+    manager: {
+      offerRoom: manager.offerRoom,
+      requests: manager.requests,
+      people: manager.people,
+    } as RoomManager,
+  });
+  // The same room, on code older than the manager's report.
+  const quiet = QuietRoom({
     myProfile: profile,
     messages: setup.room.messages,
     roster: setup.roster,
@@ -569,6 +616,21 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
             notices.get().some((notice) =>
               notice.recipient === setup.carolDid.get()
             );
+        }),
+      },
+      // A room with no stream to hear on reads the same verdict, and nothing
+      // is written to its result where the stream would be.
+      {
+        action: quiet.addMember,
+        event: { requestId: "add-quiet", profile: carolPlain },
+        trustedUi: addGesture,
+      },
+      {
+        assertion: assert(() => {
+          const outcome = quiet.addRequests["add-quiet"];
+          return outcome?.status === "done" &&
+            outcome.delivery === "noticed" &&
+            quiet.recordAddDelivery === undefined;
         }),
       },
       // A profile has to name the person the add does, and has to name

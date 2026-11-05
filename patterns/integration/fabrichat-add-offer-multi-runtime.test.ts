@@ -279,4 +279,69 @@ describe("fabrichat add offer across runtimes", () => {
       graceHolds(addMemberOfferId(room.space, "add-copied"))
     );
   });
+
+  // TODO(danfuzz): Expect this under server execution too. There the served
+  // `offerAddedMember` reads the labeled manager, so the mark that it handled
+  // its event, in the room's space, is refused, and nothing is offered. That
+  // holds until a served handler reading another person's labeled data can
+  // commit its bookkeeping.
+  it(
+    "records how a member was told when the manager's result carries another person's label",
+    {
+      ignore: SERVER_EXECUTION,
+    },
+    async () => {
+      // A manager's result holds only links, and a real Home's has been found
+      // stamped with the `PersonalSpace` labels of people it lists. A room's
+      // documents admit none of them, so what the room reads through the manager
+      // can't land there. What the manager reports of the add can.
+      const manager = await ada.link(["chatManager"]);
+      const atom = cfcAtom.personalSpace(grace.identity.did());
+      const stamps = [
+        { path: [], observes: "enumerate" },
+        { path: [], observes: "shape" },
+        { path: ["*"], observes: "followRef" },
+        { path: ["*"], observes: "shape" },
+        { path: ["*"], observes: "value" },
+      ].map((stamp) => ({
+        ...stamp,
+        origin: "structure",
+        label: { confidentiality: [atom] },
+      }));
+      const stored = (await ada.rawRead(manager)).value as unknown as {
+        schema: { $ref: string };
+        cfc?: { labelMap?: { entries?: unknown[] } };
+      };
+      await ada.rawWrite(manager, {
+        ...stored,
+        cfc: {
+          version: 1,
+          schemaHash: stored.schema.$ref.replace(/^cid:/, ""),
+          labelMap: {
+            version: 1,
+            entries: [...(stored.cfc?.labelMap?.entries ?? []), ...stamps],
+          },
+        },
+      } as unknown as FabricValue);
+      await harness.settle();
+
+      await ada.send("createGroup", {
+        requestId: "g-labeled",
+        title: "Labeled",
+        members: [],
+      }, START_ACTION);
+      await harness.settle();
+      const room = await ada.link(["requests", "g-labeled", "entry", "room"]);
+      const refusedBefore =
+        (await ada.loggerCounts()).cfc?.["write-policy-gate"]
+          ?.total ?? 0;
+      await addByProfile("add-labeled", room);
+      await harness.settleUntil(() =>
+        graceHolds(addMemberOfferId(room.space, "add-labeled"))
+      );
+      expect(
+        (await ada.loggerCounts()).cfc?.["write-policy-gate"]?.total ?? 0,
+      ).toBe(refusedBefore);
+    },
+  );
 });

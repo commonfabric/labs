@@ -38,6 +38,11 @@ interface ChatRoomOutput {
 
   /** Adds a profile to those who joined the room, once. */
   addParticipant: Stream<{ profile: Cell<ChatProfile> }>;
+  recordAddDelivery: Stream<{
+    requestId: string;
+    delivery: AddMemberDelivery;
+    deliveryRefusal?: string;
+  }>;
 
   /** The room's messages: facts, the newest, and its threads. */
   messages: ChatMessageList;
@@ -296,8 +301,8 @@ space.
 - **`addRequests`** holds the outcome of each of the reader's
   [`addMember`](#addmemberrequestid-string-target--value-string--profile-cellchatprofile)
   requests, by its `requestId`, and for each add that is done, how the person
-  added was told of the room, once that is decided. It reads the verdicts from
-  the reader's own manager, so it is the reader's alone, like the outcomes it
+  added was told of the room, once that is decided. The verdicts come from the
+  reader's own manager, so it is the reader's alone, like the outcomes it
   holds.
 - **`titleRequests`** holds the outcome of each of the reader's
   [`setTitle`](#settitlerequestid-string-title-string) requests, by its
@@ -688,14 +693,38 @@ with them.
   `access-only` in that event: the reader has no manager, or theirs hasn't
   resolved yet. Nothing is ever offered for such an add, even once a manager
   resolves, since nothing runs then to send it. Otherwise
-  `delivery` is the manager's verdict, which `addRequests` reads from the
-  manager's `requests` once it is recorded, and is absent until then. A
+  `delivery` is the manager's verdict, and is absent until the room has it. The
+  manager reports the verdict to
+  [`recordAddDelivery`](#recordadddeliveryrequestid-string-delivery-addmemberdelivery-deliveryrefusal-string).
+  An add with no report, as from a manager that doesn't send one, reads its
+  verdict from the manager's `requests` once it is recorded. A
   manager that refuses to tell anyone of the room, as it does for a room its
   catalog doesn't list, makes it `access-only`, with the manager's `reason` as
   `deliveryRefusal`. The manager records a verdict for every `offerRoom` it
-  receives, so every add that is done gets a `delivery` eventually, either at
-  once or when the verdict lands, and an absent one always means the verdict
-  is still coming.
+  receives, so an add that is done gets a `delivery` either at once or when the
+  verdict lands, and an absent one means the verdict is still coming. The one
+  exception is an add with no report whose manager carries a label that the
+  room's own document of what it read doesn't admit: that document can't record
+  the verdict, so the add has no `delivery` for as long as the label stays.
+
+### `recordAddDelivery(requestId: string, delivery: AddMemberDelivery, deliveryRefusal?: string)`
+
+- `requestId: string` — The add's own `requestId`.
+- `delivery: AddMemberDelivery` — How the person added was told of the room.
+- `deliveryRefusal?: string` — Why the manager refused to tell them, which makes
+  `delivery` `access-only`.
+
+The sender's manager reports here what became of the sender's add, in an event
+holding the verdict alone, so that the room's record of it depends on no label
+the manager carries.
+
+- **Admitted:** without a reviewed gesture: the add that this reports on took one.
+- **Effect:** records the verdict in the sender's own outcome of that add, in
+  `addRequests`. It holds for an add that is done, whose `delivery` is absent or
+  `offered`, so that `offered` may turn to what the manager decides once it has
+  looked where the member's profiles point, and any other `delivery` stands. A
+  report heard twice changes nothing, and a report of an add the sender didn't
+  make finds nothing to change.
 
 ### `addParticipant(profile: Cell<ChatProfile>)`
 

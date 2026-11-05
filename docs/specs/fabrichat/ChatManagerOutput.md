@@ -427,8 +427,8 @@ Creates a group room. This is an outward act: it grants other people access.
   own it is when `member` is absent.
 
 Tells someone this user has added to a room of the room. The room's
-`addMember` sends it, once it has granted the person access, and reads its
-outcome back as the add's `delivery`.
+`addMember` sends it, once it has granted the person access, and takes its
+outcome as the add's `delivery`.
 
 - **Admitted:** without a reviewed gesture: the add that admitted the person
   took one.
@@ -454,6 +454,14 @@ outcome back as the add's `delivery`.
   access list the run doesn't hold yet, as a served run may not for a room
   created moments before, refuses nothing. `offered` means sent, or about to
   be, not received.
+- **Report:** where `requestId` is one `addMember` composed for the room, each
+  outcome also goes to the room's
+  [`recordAddDelivery`](ChatRoomOutput.md#recordadddeliveryrequestid-string-delivery-addmemberdelivery-deliveryrefusal-string)
+  as `delivery` and, for a refusal, `access-only` with the `reason` as
+  `deliveryRefusal`, and the event that turns `offered` to `noticed` reports that
+  too. A report holds the verdict and nothing the manager read to reach it, so it
+  carries nothing into the room that the room's own documents wouldn't admit.
+  A room with no such stream is sent nothing, and reads `requests`.
 
 ### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string, keepArchived?: boolean)`
 
