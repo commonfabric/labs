@@ -2363,12 +2363,15 @@ export const FabriChatManagerCore = pattern<
       shownPeople.length === 0 ? "none" : "block"
     );
     // A notice whose room's roster lists a profile attesting its recipient
-    // has nothing left to tell them: they are in the room. Per user, as
-    // `roomsForUser` is: the roster is read under the reader's access, and a
-    // profile attests no one to a reader its space refuses. Its binding's
-    // name is its cause, as `foundForUser`'s is.
+    // has nothing left to tell them: they are in the room. A notice of a
+    // deleted room has nothing to tell them either: no one can open the room,
+    // and its roster can't be read. Per user, as `roomsForUser` is: the roster
+    // is read under the reader's access, and a profile attests no one to a
+    // reader its space refuses. Its binding's name is its cause, as
+    // `foundForUser`'s is.
     const noticesForUser = computed((): PerUser<ChatManagerNotice[]> =>
       ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).filter((notice) =>
+        !roomDeleted(catalogEntries, notice.room) &&
         !(notice.room.key("roster").get() ?? []).some((member) =>
           profileOwnerOf(member) === notice.recipient
         )
