@@ -2857,6 +2857,40 @@ export default pattern<{ holder: Holder }, { offer: Stream<{ title: string }> }>
     ]);
   });
 
+  it("ends a served handler's send to a foreign target confirmed absent, rather than waiting on it", async () => {
+    // The run waits only while the target's load is in flight: once the load
+    // confirms there is no document, the send writes as before, which the
+    // transaction refuses, and the event ends there, delivering nothing.
+    let inbox: Cell<unknown> | undefined;
+    const { result, entries } = await standUpServed(
+      "send-absent-stream",
+      OFFERING_HANDLER_PATTERN,
+      (client) => {
+        inbox = client.getCell(
+          foreignSpace,
+          "send-absent-stream-inbox",
+          undefined,
+        );
+        return { holder: { inbox } };
+      },
+    );
+
+    result.key("offer").send({ title: "hello" });
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    const foreign = await server.engineForSpace(foreignSpace);
+    const sidecarId = streamEntriesDocId({
+      id: inbox!.getAsNormalizedFullLink().id,
+      path: ["receive"],
+    });
+    expect(readDoc(foreign, { id: sidecarId })).toBeNull();
+    // The handler ran and failed on its write, once; it was not withdrawn
+    // dispatch after dispatch until the drain gave up on it.
+    expect(entries()[0].error).toContain("Can not open transaction writer");
+    expect(entries()[0].reason).toBeUndefined();
+  });
+
   it("runs a served event whose declared value is a foreign space-scope document", async () => {
     let target: Cell<unknown> | undefined;
     const { result, entries, stored } = await standUpServed(
