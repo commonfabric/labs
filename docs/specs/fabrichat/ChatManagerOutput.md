@@ -460,10 +460,13 @@ outcome as the add's `delivery`.
   outcome also goes to the room's
   [`recordAddDelivery`](ChatRoomOutput.md#recordadddeliveryrequestid-string-delivery-addmemberdelivery-deliveryrefusal-string)
   as `delivery` and, for a refusal, `access-only` with the `reason` as
-  `deliveryRefusal`, and the event that turns `offered` to `noticed` reports that
-  too. A report holds the verdict and nothing the manager read to reach it, so it
-  carries nothing into the room that the room's own documents wouldn't admit.
-  A room with no such stream is sent nothing, and reads `requests`.
+  `deliveryRefusal`. The event that sends the offer reports the verdict once it
+  has sent every offer, so a report the room's space can't yet take holds up
+  none of them, and a request that offers no one is reported by an event of its
+  own, after this one. A report holds the verdict and nothing the manager read
+  to reach it, so it carries nothing into the room that the room's own documents
+  wouldn't admit. A room with no such stream is sent nothing, and reads
+  `requests`.
 
 ### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string, keepArchived?: boolean)`
 

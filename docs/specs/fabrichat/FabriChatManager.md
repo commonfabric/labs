@@ -210,10 +210,11 @@ user sending it reads `people`, from an event of its own like step 3's, so
 that its own transaction reads no inbox pointer. It records `noticed` under the
 request's id at once for a person with no profile known for them, and
 `offered` for anyone else, which the event offering the room turns to
-`noticed` when no profile points at an inbox. It reports each to the room's
-`recordAddDelivery` as the add's `delivery`, in an event holding the verdict
-alone, so that the room needn't read the manager. A room that doesn't listen
-reads it from `requests` instead.
+`noticed` when no profile points at an inbox. That event then reports the
+verdict to the room's `recordAddDelivery` as the add's `delivery`, after its
+offers, in an event holding the verdict alone, so that the room needn't read the
+manager; a request that offers no one is reported the same way, by an event that
+offers no one. A room that doesn't listen reads it from `requests` instead.
 
 ## Prerequisites
 
