@@ -113,12 +113,14 @@ an `invocation` carrying the id, status, and the result read back off the
 receipt.
 
 **`tool`** — default verb `run`, input schema plus `outputSchemaSummary`. A tool
-is a *bound sub-pattern*: execution calls
-`runtime.run(tx, pattern, mergeToolInput(input, extraParams), resultCell)` to
-instantiate the pattern with the caller's arguments merged over the bound ones,
-into a freshly minted result cell (`runtime.getCell(space, crypto.randomUUID(),
-…)`), then returns that cell's value as `outputText` (`executeResolvedCallable`'s
-tool branch, same file).
+is a directly stored `PatternFactory`. Execution prepares the factory through
+the runner-owned materialization path, supplies trusted `FrameworkProvided`
+inputs, and calls `runtime.run(tx, factory, input, resultCell)` with the public
+input unchanged. Bound closure parameters remain in the factory's canonical
+state and reach callback argument 1; they are never merged into public callback
+argument 0. The result goes to a freshly minted result cell
+(`runtime.getCell(space, crypto.randomUUID(), …)`) and is returned as
+`outputText` (`executeResolvedCallable`'s tool branch, same file).
 
 And beneath the CLI, the scheduler already has invocation machinery that the
 callable layer predates:

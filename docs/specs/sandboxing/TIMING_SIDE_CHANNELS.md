@@ -232,10 +232,10 @@ Landing order, smallest and safest first. Each is its own commit/PR.
       own definition cell — unique per instance, stable for the instance's life,
       derived from identity rather than the clock/randomness, and framework-owned
       (a `FrameworkProvided<T>` brand rejects any pattern- or model-set value, and
-      the field is stripped from the model-facing schema). Both patterns now just
-      `patternTool(bash)` and read no entropy; the rebase superseded their interim
-      `Math.random()` migration. The cross-instance sandbox-sharing collision this
-      guards against (the server names sandboxes by this id at
+      the field is stripped from the model-facing schema). Both patterns now
+      pass the first-class `bash` factory directly and read no entropy. The
+      cross-instance sandbox-sharing collision this guards against (the server
+      names sandboxes by this id at
       `/v1/sandboxes/${sandboxId}`) is closed by the content-addressed derivation.
     - **Loading-state polish — DONE.** A few migrated files passed `?? 0` to a
       formatter, flashing a bogus value (e.g. the journal and calendar relative

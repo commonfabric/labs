@@ -655,9 +655,11 @@ as callback argument 0 and explicit captures as private callback argument 1.
 The builder call is hoisted and capturing sites retain one private
 `.curry(params)` tail.
 `filterWithPattern(...)`, `flatMapWithPattern(...)`,
-`groupByWithPattern(...)`, `keyByWithPattern(...)`, and `patternTool(...)`
-remain inner-scope constructs in this phase. They already carry their captures
-explicitly and are not the target of the module-hoisting rule above.
+`groupByWithPattern(...)`, and `keyByWithPattern(...)` remain inner-scope
+constructs in this phase. They already carry their captures explicitly and are
+not the target of the module-hoisting rule above. `patternTool(...)` is removed;
+an inline pattern used as a tool follows the same closure-conversion and
+hoisting rules as every other nested pattern.
 
 **Before:**
 ```typescript
