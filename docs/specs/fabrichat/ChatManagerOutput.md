@@ -243,8 +243,10 @@ session that has none is refused.
   request sent again after that starts afresh: an `openDirect` still finds the
   existing room, but a `createGroup` creates another.
 - **`outgoingNotices`** holds each notice this user's requests have produced,
-  until a client reports it delivered or the room's roster lists a profile
-  attesting its recipient, who then needs no telling.
+  until a client reports it delivered, the room's roster lists a profile
+  attesting its recipient, who then needs no telling, or the room is
+  [deleted](../random-space-identities.md#deleting-a-space), as `rooms` tells
+  it, which leaves nothing to tell them of.
 - **`people`** holds the people this user shares a room with: for each
   principal, the profiles attesting it, read from the roster of each room in
   `rooms` (see [`ChatRoomOutput`](ChatRoomOutput.md#facts)) and keyed by whose
