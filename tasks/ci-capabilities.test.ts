@@ -18,6 +18,7 @@ import {
   METRIC_EXPORT_INTERVAL_MS,
   openCapabilities,
   resolveCapabilities,
+  run,
   type Spawn,
   type SpawnedProcess,
   takeGithubToken,
@@ -433,6 +434,112 @@ describe("ci capabilities", () => {
   });
 });
 
+describe("run()", () => {
+  it("returns once a command writing to the job's log exits, whatever it left running", async () => {
+    // A process left holding the command's output is what would hold a call
+    // that reads that output to its end. The process is still there to kill
+    // only if this returned without waiting for it.
+    const dir = await Deno.makeTempDir({ prefix: "run-" });
+    try {
+      const pidFile = `${dir}/pid`;
+      expect(
+        await run(
+          "sh",
+          ["-c", 'sleep 30 & echo $! > "$1"', "sh", pidFile],
+          { inheritOutput: true },
+        ),
+      ).toBe("");
+      Deno.kill(Number(await Deno.readTextFile(pidFile)), "SIGKILL");
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+
+  it("throws naming the exit code of a command writing to the job's log", async () => {
+    await expect(
+      run("sh", ["-c", "exit 124"], { inheritOutput: true }),
+    ).rejects.toThrow("sh -c exit 124 exited 124");
+  });
+});
+
+describe("opening what it can", () => {
+  /** Opens `requested` with `jq` refusing, noting what opened and closed. */
+  async function withJqRefusing(requested: CapabilityId[]) {
+    const events: string[] = [];
+    const opening = (id: CapabilityId, needs?: CapabilityId[]): Capability => ({
+      id,
+      description: `the capability ${id}`,
+      ...(needs === undefined ? {} : { needs }),
+      open: () => {
+        events.push(`opened ${id}`);
+        return Promise.resolve({
+          env: { [id]: "1" },
+          close: () => {
+            events.push(`closed ${id}`);
+            return Promise.resolve();
+          },
+        });
+      },
+    });
+    const registry = new Map<CapabilityId, Capability>([
+      ["cf", opening("cf")],
+      ["fuse", opening("fuse", ["jq"])],
+      ["jq", {
+        id: "jq",
+        description: "a capability that cannot open",
+        open: () => Promise.reject(new Error("no jq here")),
+      }],
+      ["deno", opening("deno")],
+    ]);
+    const said: string[] = [];
+    const opened = await openCapabilities(
+      requested,
+      {
+        root: Deno.cwd(),
+        dryRun: true,
+        workDir: "/nonexistent",
+        report: (line) => said.push(line),
+      },
+      registry,
+      { partial: true },
+    );
+    return { opened, events, said };
+  }
+
+  it("opens what comes after one that fails, and says why that one did not open", async () => {
+    const { opened, events, said } = await withJqRefusing(["jq", "deno", "cf"]);
+    expect(events).toEqual(["opened cf", "opened deno"]);
+    expect(said).toContain("ci-lane: could not open jq: no jq here");
+    expect(opened.timings.map(({ capability }) => capability)).toEqual([
+      "cf",
+      "deno",
+    ]);
+    expect(said.some((line) => line.includes("opened jq"))).toBe(false);
+    await opened.close();
+  });
+
+  it("refuses what is built on one that fails, without trying to open it", async () => {
+    const { opened, events } = await withJqRefusing(["fuse", "cf"]);
+    expect(events).toEqual(["opened cf"]);
+    expect(opened.refusalsFor(["fuse"])).toEqual([
+      { capability: "jq", why: "no jq here" },
+      {
+        capability: "fuse",
+        why: "it is built on jq, which did not open",
+      },
+    ]);
+    await opened.close();
+  });
+
+  it("returns no refusals for what opened, and closes what opened", async () => {
+    const { opened, events } = await withJqRefusing(["jq", "cf"]);
+    expect(opened.refusalsFor(["cf"])).toEqual([]);
+    expect(opened.envFor(["cf"])).toEqual({ cf: "1" });
+    await opened.close();
+    expect(events).toEqual(["opened cf", "closed cf"]);
+  });
+});
+
 describe("opening a capability on a machine that answers", () => {
   /** What a server half writes once it has bound its port. */
   const LISTENING = `${READY_MARKER}\n`;
@@ -590,7 +697,8 @@ describe("opening a capability on a machine that answers", () => {
   it("says what it is about to open and run before it does", async () => {
     // A command that never finishes leaves only what was said before it
     // in the log, so each line has to come ahead of the work it names.
-    const install = "sudo apt-get install -y --no-install-recommends " +
+    const bounded = "sudo timeout --kill-after=30 300 apt-get";
+    const install = `${bounded} install -y --no-install-recommends ` +
       "pkg-config gcc libfuse3-dev fuse3";
     expect(await narrate("fuse", machine({ "command -v gcc": "!absent" })))
       .toEqual([
@@ -602,8 +710,8 @@ describe("opening a capability on a machine that answers", () => {
         "ran sh -c command -v fusermount3",
         "ci-lane: running pkg-config --exists fuse3",
         "ran pkg-config --exists fuse3",
-        "ci-lane: running sudo apt-get update",
-        "ran sudo apt-get update",
+        `ci-lane: running ${bounded} update`,
+        `ran ${bounded} update`,
         `ci-lane: running ${install}`,
         `ran ${install}`,
         "ci-lane: running sudo chmod 666 /dev/fuse",
@@ -625,9 +733,33 @@ describe("opening a capability on a machine that answers", () => {
       "ran sh -c command -v fusermount3",
       "ci-lane: running pkg-config --exists fuse3",
       "ran pkg-config --exists fuse3",
-      "ci-lane: running sudo apt-get update",
-      "ran sudo apt-get update",
-      "threw offline",
+      "ci-lane: running sudo timeout --kill-after=30 300 apt-get update",
+      "ran sudo timeout --kill-after=30 300 apt-get update",
+      "threw could not install pkg-config, gcc, libfuse3-dev, fuse3: " +
+      "`apt-get update` failed or took more than 300s, and what it said is " +
+      "in the log above: offline",
+    ]);
+  });
+
+  it("gives `apt-get` the job's log to write to, and nothing else it runs", async () => {
+    const m = machine({ "command -v gcc": "!absent" });
+    const root = await Deno.makeTempDir({ prefix: "capability-" });
+    try {
+      const opened = await openCapabilities(["fuse"], {
+        root,
+        dryRun: false,
+        workDir: root,
+        exec: m.exec,
+      });
+      await opened.close();
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+    const showing = m.asked.filter((_, i) => m.given[i]?.inheritOutput);
+    expect(showing).toEqual([
+      "sudo timeout --kill-after=30 300 apt-get update",
+      "sudo timeout --kill-after=30 300 apt-get install -y " +
+      "--no-install-recommends pkg-config gcc libfuse3-dev fuse3",
     ]);
   });
 
