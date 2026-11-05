@@ -311,6 +311,22 @@ export function areNormalizedLinksSame(
     arrayEqual(link1.path, link2.path);
 }
 
+/**
+ * Returns a string two links share exactly when `areNormalizedLinksSame()`
+ * returns `true` for them: their space, id and path, and their scope read as
+ * `space` where it is left out. `addressKey()` keys the same fields with the
+ * scope as stored.
+ *
+ * `id` stands in for the link's own, for a caller that matches ids by a rule
+ * of its own.
+ */
+export function normalizedLinkKey(
+  link: NormalizedLink,
+  id: unknown = link.id,
+): string {
+  return JSON.stringify([link.space, id, link.scope ?? "space", link.path]);
+}
+
 export function areNormalizedLinksSameIgnoringScope(
   link1: NormalizedLink,
   link2: NormalizedLink,

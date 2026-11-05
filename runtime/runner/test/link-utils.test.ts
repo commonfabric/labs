@@ -23,6 +23,7 @@ import {
   isWriteRedirectLink,
   KeepAsCell,
   type NormalizedLink,
+  normalizedLinkKey,
   parseLink,
   parseLinkOrThrow,
   parseLLMFriendlyLink,
@@ -503,6 +504,37 @@ describe("link-utils", () => {
       const cell = runtime.getCell(space, "test");
       expect(areLinksSame(cell, null)).toBe(false);
       expect(areLinksSame(null, cell)).toBe(false);
+    });
+  });
+
+  describe("normalizedLinkKey()", () => {
+    it("returns equal keys exactly where `areNormalizedLinksSame()` returns `true`", () => {
+      const base: NormalizedLink = { id: "of:test", path: ["a"], space };
+      const links: NormalizedLink[] = [
+        base,
+        { ...base, scope: "space" },
+        { ...base, scope: "user" },
+        { ...base, path: ["b"] },
+        { ...base, id: "of:other" },
+        { ...base, space: otherSpace },
+        { id: "of:test", path: ["a"] },
+      ];
+      for (const a of links) {
+        for (const b of links) {
+          expect({ a, b, same: normalizedLinkKey(a) === normalizedLinkKey(b) })
+            .toEqual({ a, b, same: areNormalizedLinksSame(a, b) });
+        }
+      }
+      expect(normalizedLinkKey(base)).toBe(
+        normalizedLinkKey({ ...base, scope: "space" }),
+      );
+    });
+
+    it("returns the key of the id it is given in place of the link's own", () => {
+      const link: NormalizedLink = { id: "of:test", path: [], space };
+      expect(normalizedLinkKey(link, "of:other")).toBe(
+        normalizedLinkKey({ ...link, id: "of:other" }),
+      );
     });
   });
 

@@ -8,6 +8,7 @@ import {
   areNormalizedLinksSame,
   isNormalizedFullLink,
   type NormalizedLink,
+  normalizedLinkKey,
 } from "./link-types.ts";
 import { parseLink } from "./link-utils.ts";
 import type { Runtime } from "./runtime.ts";
@@ -96,13 +97,14 @@ export function linkEqualityKey(
   const link = resolveBeforeComparing
     ? resolveForComparison(parsed, txForResolving, runtime, false)
     : parsed;
-  // The two rules `areLinksSame()` adds to comparing the fields: a scope left
-  // out is the space's, as `areNormalizedLinksSame()` reads it, and an inline
-  // document is named by its content.
-  const id = link.id !== undefined && isInlineCellId(link.id)
-    ? ["content", immutableContentId(link.id)]
-    : link.id;
-  return JSON.stringify([link.space, id, link.scope ?? "space", link.path]);
+  // An inline document is named by its content, as `areLinksSame()` matches
+  // two of them.
+  return normalizedLinkKey(
+    link,
+    link.id !== undefined && isInlineCellId(link.id)
+      ? ["content", immutableContentId(link.id)]
+      : link.id,
+  );
 }
 
 /**

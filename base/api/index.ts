@@ -4115,8 +4115,9 @@ export type EqualsFunction = (
  * Returns a string that two values share exactly when `equals` returns `true`
  * for them in the same run, so that a `Set` or a `Map` keyed by it finds the
  * distinct references in a list, or joins one list to another, in one pass
- * where `equals` compares them in pairs. Like `equals`, it follows links
- * first, so an alias and the document it names share a key.
+ * where `equals` compares them in pairs. Like `equals`, it follows links first
+ * inside a handler or a reactive computation, so there an alias and the
+ * document it names share a key, and elsewhere it compares links as given.
  *
  * Returns `undefined` for a value with no place in the graph — a fresh object
  * literal, a primitive, `undefined` — which `equals` matches to nothing but
