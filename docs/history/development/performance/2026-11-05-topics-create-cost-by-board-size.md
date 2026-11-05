@@ -27,7 +27,8 @@ process's CPU time per create is the absolute figure where a run recorded it.
 | --- | --- | --- | --- | --- | --- | --- |
 | 100 | yes | 0.72 s | 0.74 s | 61 | 9 | 225 MB |
 | 400 | yes | 1.71 s | 2.36 s | 96 | 8 | 397 MB |
-| 800 | yes | not recorded | 2.14 s | 30 | 8 | 601 MB |
+| 800 | yes | 3.47 s | 10.36 s | 314 | 11 | 600 MB |
+| 800, another run | yes | not recorded | 2.14 s | 30 | 8 | 601 MB |
 | 100 | no | 0.63 s | 2.52 s | 321 | 10 | 185 MB |
 | 400 | no | 0.47 s | 0.47 s | 136 | 7 | 263 MB |
 
@@ -43,7 +44,9 @@ nothing demands, a create costs the same at 400 Topics as at 100.
 ## Where the worker's time goes
 
 Share of the worker's busy time over the 20 creates, from one run that
-profiled all three sizes. Indented rows are part of the row above them.
+profiled all three sizes. Indented rows are part of the row above them. A
+second run gave the same picture at 800 Topics: `crossrefTable` 21%, `equals`
+13%, `cardRowsByActivity` 14%, each action's commit 13%.
 
 | Cost | 100 Topics | 400 | 800 |
 | --- | --- | --- | --- |
