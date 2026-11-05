@@ -598,12 +598,12 @@ export const DIALS: readonly Dial[] = [
     value: LANES_MAX,
     unit: "lanes",
     setBy: "chosen",
-    why: "Up when the lane-count job says a run needs more lanes than " +
-      "this, and the organization's runner limit has room; down when one " +
-      "run crowds out the runs behind it. A run needing more lanes than " +
-      "this takes this many: a pull request then runs fewer tests chosen " +
-      "by score, and any run's mandatory work may put its lanes past their " +
-      "budget.",
+    why: "The most lanes a run other than the full run takes. Up when the " +
+      "lane-count job says such a run needs more lanes than this, and the " +
+      "organization's runner limit has room; down when one run crowds out " +
+      "the runs behind it. A pull request needing more lanes than this " +
+      "takes this many, and then runs fewer tests chosen by score, and its " +
+      "mandatory work may put its lanes past their budget.",
   },
   {
     name: "FULL_LANES_MAX",

@@ -393,9 +393,9 @@ of the same job definition and take the same bounds, so a pull-request lane that
 hangs is stopped only at the lane step's bound, although it is packed to finish
 in five minutes. A lane's mandatory work can exceed its budget, for example when
 a test costing more than a whole budget is mandatory, or a run is capped at
-`LANES_MAX`. Such a lane runs long rather than being stopped with its later
-batches unrun and unmeasured, and its job log says how far its plan was
-projected past the budget. So moving either lane bound in `policy.ts` moves
+`LANES_MAX`, or the full run at `FULL_LANES_MAX`. Such a lane runs long rather
+than being stopped with its later batches unrun and unmeasured, and its job log
+says how far its plan was projected past the budget. So moving either lane bound in `policy.ts` moves
 nothing in the workflow, unless it moves past the lane step's bound.
 
 A lane its step bound does stop loses little. The lane appends each batch's

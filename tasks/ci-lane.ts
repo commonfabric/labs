@@ -12,8 +12,9 @@
  * the same manifest, which is why the moment they resolve it at is when
  * the commit under test was made rather than anything about the run.
  *
- * The full run differs in two values: it runs the whole corpus rather
- * than a budgeted part of it, and it has no diff. A pull request's labels
+ * The full run differs in three values: it runs the whole corpus rather
+ * than a budgeted part of it, it has no diff, and it may take
+ * `FULL_LANES_MAX` lanes rather than `LANES_MAX`. A pull request's labels
  * can make its run the full one, or scale how much it chooses by score. Everything else — what
  * the tree holds, what each test costs, how the work groups into lanes,
  * which identities inside a unit are skipped — is the same code, so the
