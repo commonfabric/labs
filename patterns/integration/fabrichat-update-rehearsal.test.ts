@@ -94,6 +94,16 @@ const counterpart = (await Identity.fromPassphrase("rehearsal counterpart"))
 const member = (await Identity.fromPassphrase("rehearsal group member")).did();
 const added = (await Identity.fromPassphrase("rehearsal added member")).did();
 
+// Someone whose data none of the rehearsal's documents hold, named by the
+// stand-in stamp the stamped run leaves on the manager's result.
+const stranger = (await Identity.fromPassphrase("rehearsal stranger")).did();
+
+/** A `PersonalSpace` clause naming `owner`. */
+const personalSpace = (owner: string) => ({
+  type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+  owner,
+});
+
 const PATTERNS = fromFileUrl(new URL("..", import.meta.url));
 
 const FROZEN = fromFileUrl(
@@ -248,6 +258,60 @@ const render = async (piece: Cell<unknown>): Promise<void> => {
   await visit(piece.key("$UI").asSchema(rendererVDOMSchema));
 };
 
+/**
+ * Writes the tree's `system/fabrichat/` into `directory` with one export added
+ * to the manager's module, so that a release of it sets the manager up again
+ * even where the tree's FabriChat is the one deployed.
+ */
+const writeChangedManagerRelease = async (directory: string): Promise<void> => {
+  const fabrichat = join(PATTERNS, "system", "fabrichat");
+  for await (const { path, isFile } of walk(fabrichat)) {
+    if (!isFile) continue;
+    const target = join(directory, relative(fabrichat, path));
+    await Deno.mkdir(posix.dirname(target), { recursive: true });
+    const source = await Deno.readTextFile(path);
+    await Deno.writeTextFile(
+      target,
+      relative(fabrichat, path) === "manager.tsx"
+        ? `${source}\nexport const rehearsalRelease = "changed manager";\n`
+        : source,
+    );
+  }
+};
+
+/**
+ * The stored label entries of the document `cell` resolves to, read raw.
+ */
+const storedLabelEntries = (
+  runtime: Runtime,
+  cell: Cell<unknown>,
+): { observes?: string; label?: { confidentiality?: unknown[] } }[] => {
+  const link = cell.resolveAsCell().getAsNormalizedFullLink();
+  const tx = runtime.edit();
+  try {
+    const stored = tx.readOrThrow({ ...link, path: [] }) as
+      | { cfc?: { labelMap?: { entries?: unknown[] } } }
+      | undefined;
+    return (stored?.cfc?.labelMap?.entries ?? []) as {
+      observes?: string;
+      label?: { confidentiality?: unknown[] };
+    }[];
+  } finally {
+    tx.abort("label read");
+  }
+};
+
+/** Whether any of `entries` names `owner`'s personal space. */
+const namesPersonalSpace = (
+  entries: { label?: { confidentiality?: unknown[] } }[],
+  owner: string,
+): boolean =>
+  entries.some((entry) =>
+    (entry.label?.confidentiality ?? []).some((clause) =>
+      JSON.stringify(clause) === JSON.stringify(personalSpace(owner))
+    )
+  );
+
 /** The slots of `after` that `before` holds too, in `after`'s order. */
 const kept = (
   after: readonly StoredSlot[],
@@ -288,8 +352,17 @@ const recipientsOf = (notices: unknown): string[] | undefined =>
  * reads the manager's and the group room's views before the update, as one
  * showing them would have. Without it, nothing reads those views until the
  * update has happened. A deployed piece can be updated in either state.
+ *
+ * With `stamped`, the manager's result carries, before the update, a
+ * membership stamp naming someone whose data it does not hold, as an earlier
+ * setup can leave one (spec §8.9.1.3), and the update releases a manager
+ * changed from the deployed one, so that the update sets the manager up again.
  */
-const rehearse = (title: string, readBefore: boolean): void => {
+const rehearse = (
+  title: string,
+  readBefore: boolean,
+  stamped = false,
+): void => {
   describe(title, () => {
     // Set up once, in `beforeAll()`: the deployed release, seeded and then
     // updated to this tree's source. Each test reads what that left, so each
@@ -311,6 +384,8 @@ const rehearse = (title: string, readBefore: boolean): void => {
     let after: Snapshot;
     let failuresBefore: Record<string, number>;
     let failuresAfter: Record<string, number>;
+    let stampedBefore = false;
+    let stampedAfter = false;
     const adopted: {
       source: string | undefined;
       identity: string | undefined;
@@ -607,10 +682,77 @@ const rehearse = (title: string, readBefore: boolean): void => {
         expect(slots.map((slot) => slot.name)).toContain("messages");
       }
 
+      if (stamped) {
+        // The stand-in stamp: the manager's result's membership, its root's
+        // `enumerate` entry and its slots' templates, naming the stranger
+        // beside the owner. It is written as the runtime writes a label map,
+        // under the transaction's privileged system write.
+        const result = home.key("chatManager");
+        const link = result.resolveAsCell().getAsNormalizedFullLink();
+        const document = { ...link, path: [] };
+        const tx = runtime.edit();
+        const stored = tx.readOrThrow(document) as {
+          schema?: { $ref?: string };
+          cfc?: {
+            schemaHash?: string;
+            labelMap?: { entries?: unknown[] };
+          };
+        };
+        const label = {
+          confidentiality: [
+            personalSpace(owner.did()),
+            personalSpace(stranger),
+          ],
+        };
+        (tx as unknown as {
+          accessForTestingOnly: {
+            privilegedSystemWrite(address: unknown, value: unknown): void;
+          };
+        }).accessForTestingOnly.privilegedSystemWrite(
+          { ...document, path: ["cfc"] },
+          {
+            ...(stored.cfc ?? {}),
+            version: 1,
+            schemaHash: stored.cfc?.schemaHash ??
+              (stored.schema?.$ref ?? "").replace(/^cid:/, ""),
+            labelMap: {
+              version: 1,
+              entries: [
+                ...(stored.cfc?.labelMap?.entries ?? []),
+                ...[
+                  { path: [], observes: "enumerate" },
+                  { path: ["*"], observes: "followRef" },
+                  { path: ["*"], observes: "shape" },
+                  { path: ["*"], observes: "value" },
+                ].map((entry) => ({ ...entry, origin: "structure", label })),
+              ],
+            },
+          },
+        );
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        stampedBefore = namesPersonalSpace(
+          storedLabelEntries(runtime, result),
+          stranger,
+        );
+      }
+
       // The update to this tree's source.
       failuresBefore = updateFailureCounts();
       // A route made afresh models a release replacing its source cache.
-      route = new PatternsRoute(PATTERNS);
+      if (stamped) {
+        const changed = join(temporary, "changed");
+        await writeChangedManagerRelease(join(changed, "system", "fabrichat"));
+        route = new PatternsRoute(PATTERNS, [
+          {
+            routePrefix: "system/fabrichat/",
+            directory: join(changed, "system", "fabrichat"),
+          },
+        ]);
+      } else {
+        route = new PatternsRoute(PATTERNS);
+      }
       const expected = [
         await route.identity("system/home/home.tsx"),
         ...rooms.map(() => route.identity("system/fabrichat/room.tsx")),
@@ -626,6 +768,12 @@ const rehearse = (title: string, readBefore: boolean): void => {
       await runtime.idle();
 
       failuresAfter = updateFailureCounts();
+      if (stamped) {
+        stampedAfter = namesPersonalSpace(
+          storedLabelEntries(runtime, home.key("chatManager")),
+          stranger,
+        );
+      }
       const resolved = await Promise.all(expected);
       for (const [index, piece] of [home, ...rooms].entries()) {
         const current = await piece.withTx().sync();
@@ -815,8 +963,36 @@ const rehearse = (title: string, readBefore: boolean): void => {
       >({ type: "object" }).pull();
       expect(Object.keys(direct)).toEqual([counterpart]);
     });
+
+    if (stamped) {
+      it("takes a stamp naming someone whose data it does not hold off the manager's result at the update", () => {
+        expect(stampedBefore).toBe(true);
+        expect(stampedAfter).toBe(false);
+      });
+
+      it("commits the outcome of an add made after the update", async () => {
+        await send(
+          room,
+          "addMember",
+          trusted(
+            { requestId: "add after the update", target: { value: added } },
+            "ChatAddMemberSurface",
+            "ChatAddMember",
+          ),
+        );
+        await runtime.idle();
+        expect(
+          await room.key("addRequests").key("add after the update").pull(),
+        ).toMatchObject({ status: "done" });
+      });
+    }
   });
 };
 
 rehearse("FabriChat update rehearsal", false);
 rehearse("FabriChat update rehearsal, its views read before the update", true);
+rehearse(
+  "FabriChat update rehearsal, its manager's result stamped before the update",
+  false,
+  true,
+);
