@@ -2591,7 +2591,16 @@ const FabriChatManager = pattern<
     },
   );
   return {
-    [NAME]: core[NAME],
+    // The name is read through a computed of its own so that a manager
+    // deployed with `core[NAME]` here takes this release as a changed result
+    // wiring. A setup that writes a changed wiring stamps the result's
+    // membership afresh from its own reads, which takes off a stamp an earlier
+    // setup left naming people whose data the result doesn't hold; a setup
+    // that finds its wiring already stored keeps the stamp it finds.
+    // TODO(danfuzz): Name it as `core[NAME]` once every deployed manager has
+    // been set up with this wiring, or once a setup restates an unchanged
+    // wiring's stamp too.
+    [NAME]: computed(() => core[NAME]),
     [UI]: core[UI],
     [VIEWS]: core[VIEWS],
     rooms: core.rooms,
