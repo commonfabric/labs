@@ -70,8 +70,11 @@ DB=$CLONE/engine-v3/engine-v3/<space-did>.sqlite
 # 2. Serve it. The clone keeps the source space's DID, so the host and port are
 #    the ONLY things distinguishing it from production — HOST pins it to
 #    loopback (the toolshed otherwise binds 0.0.0.0, putting a second store
-#    answering to production's identity on the network).
+#    answering to production's identity on the network). TOOLSHED_RELEASED_AT
+#    states this checkout as released now, without which a piece that follows
+#    a `system:` origin keeps the source it runs (see below).
 HOST=127.0.0.1 MEMORY_DIR="file://$CLONE/" \
+  TOOLSHED_RELEASED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
   ./scripts/start-local-dev.sh --port-offset 10
 ```
 
@@ -347,6 +350,15 @@ These are all failures that actually happened, not hypotheticals:
   with a profile creates one through the UI against the clone — after every
   reset, since the reset removes it (see
   [Stop the server before resetting](#stop-the-server-before-resetting)).
+- **A server that states no release time updates no piece that records one.**
+  A piece that follows a `system:` origin, as Home does, records the release
+  time of the source it adopted, and an answer stating no time is an earlier
+  release than that, so the piece keeps the source it runs
+  ([pattern updates](../specs/pattern-imports/pattern-updates.md), step 4 of the
+  loop). Nothing reports it: opening the piece starts its old pattern, and a
+  rehearsal of an update that never happened passes every check here. Serve
+  with `TOOLSHED_RELEASED_AT`, as step 2 does, and check that the piece's
+  pattern identity changed after the open.
 - **A clone tests the store and the runtime, not the deployment.** CDN and shell
   versions, and concurrent human traffic, are all absent.
   [`staging-space-copy.md`](staging-space-copy.md) is what covers that gap, at
