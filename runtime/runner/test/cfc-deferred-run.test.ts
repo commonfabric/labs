@@ -196,6 +196,29 @@ describe("cfc-deferred-run", () => {
     expect(confidentialityOf(result)).toContain(BOB);
   });
 
+  it("stamps the clause of label metadata the asking transaction observed on a deferred setup", async () => {
+    const bobs = await seedBobsDocument([]);
+    const { plain, wider } = patterns();
+    const result = await runOn("metadata-result", plain);
+    runtime.runner.stop(result);
+
+    const tx = runtime.edit();
+    tx.recordCfcLabelMetadataObservation({
+      target: { ...bobs, path: ["cfc"] },
+      observes: "labelMetadata",
+      confidentiality: [BOB],
+    });
+    const resultCell = runtime.getCell(space, "metadata-result", undefined, tx);
+    runtime.run(tx, wider, { x: 1 }, resultCell);
+    tx.prepareCfc();
+    expect((await tx.commit().settled).ok).toBeDefined();
+    await runtime.idle();
+    expect(deferredStarts.length).toBe(1);
+    await deferredStarts[0].committed;
+
+    expect(confidentialityOf(result)).toContain(BOB);
+  });
+
   it("stamps no clause on a deferred setup whose asking transaction read nothing labeled", async () => {
     await seedBobsDocument();
     const { plain, wider } = patterns();
