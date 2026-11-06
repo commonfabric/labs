@@ -674,23 +674,25 @@ The allowance has four limits. A candidate that still constrains the name, by a
 matching pattern or a typed index signature, has to hold to the field's old
 contract. An object carrying a whole-object constraint such as
 `dependentRequired`, or a field compared within a union branch, keeps the
-refusal, since there another part of the schema may still name the field. A
-verb is refused even when optional, and so is a field that holds one at any
-depth, as an optional `ui` holds `ui.tick`: a verb's absence is not something a
-holder can read, because a stream handle reads as itself when nothing is
-stored, so a holder still bound to a removed verb keeps sending and each event
-is dropped for want of a handler. And a field of a verb's event is refused even
-when optional, because a caller still sends it and the event would strip it
-without a refusal. An argument's named fields are held neither way: dropping
-one gives up a demand, which the same function accepts wherever the candidate
-object can still hold the value the piece carries. The removed-field check
-recurses, so a nested removal is judged on a nested path (`result.topic.title:
-existing result field was removed`) exactly as a flat one is. Adding a
-**required** field is rejected at any depth unless it carries a default; adding
-an **optional** one is allowed at any depth; narrowing a *value* type is
-allowed at any depth. Nesting a pattern's result under a single key therefore
-buys it nothing: whether a name may go is decided by `required` at its own
-depth.
+refusal, since there another part of the schema may still name the field. A verb
+is refused even when optional, and so is a field that holds one at any depth, as
+an optional `ui` holds `ui.tick`. An object read leaves out an optional verb its
+producer no longer publishes, unless the verb is a builtin's, whose document
+records no owner to consult; and a handle minted before the update, or by
+`Cell.get()` or a read without a schema, still reads as itself. A holder bound
+through one keeps sending, and each event waits for the producer's piece to
+start and is then dropped for want of a handler. And a field of a verb's event
+is refused even when optional, because a caller still sends it and the event
+would strip it without a refusal. An argument's named fields are held neither
+way: dropping one gives up a demand, which the same function accepts wherever
+the candidate object can still hold the value the piece carries. The
+removed-field check recurses, so a nested removal is judged on a nested path
+(`result.topic.title: existing result field was removed`) exactly as a flat one
+is. Adding a **required** field is rejected at any depth unless it carries a
+default; adding an **optional** one is allowed at any depth; narrowing a *value*
+type is allowed at any depth. Nesting a pattern's result under a single key
+therefore buys it nothing: whether a name may go is decided by `required` at its
+own depth.
 
 A verb's `asCell` marker is pinned the same way: it is a semantic extension key
 compared for exact equality (`SEMANTIC_EXTENSION_KEYS`,

@@ -121,17 +121,20 @@ a demand hits `newly required argument field has no default`, and a verb is
 a stream, which cannot carry a default, so a newly required verb is the same
 refusal arriving from the other direction.
 
-Giving a demand up is narrowing, and the gate reads it as narrowing. A field
-the pattern stopped reading leaves a writer's value unread rather than breaking
-a reader, so the argument side drops named fields freely; what it still proves
-is that the candidate can hold the value the piece already carries, which a
-closed candidate object fails as `source field is rejected by the target
-object`. The result side preserves every required field it published, every
-verb, and every field that holds a verb at any depth. An optional data field it
-may stop publishing, since whoever reads it already reads its absence. An
-optional verb it may not: a stream handle reads as itself when nothing is
-stored, so a holder still bound to a removed verb keeps sending to it, and each
-event is dropped for want of a handler.
+Giving a demand up is narrowing, and the gate reads it as narrowing. A field the
+pattern stopped reading leaves a writer's value unread rather than breaking a
+reader, so the argument side drops named fields freely; what it still proves is
+that the candidate can hold the value the piece already carries, which a closed
+candidate object fails as `source field is rejected by the target object`. The
+result side preserves every required field it published, every verb, and every
+field that holds a verb at any depth. An optional data field it may stop
+publishing, since whoever reads it already reads its absence. An optional verb
+it may not: an object read leaves out an optional verb its producer no longer
+publishes, unless the verb is a builtin's, whose document records no owner to
+consult; and a handle minted before the update, or by `Cell.get()` or a read
+without a schema, still reads as itself. A holder still bound through one keeps
+sending to it, and each event waits for the producer's piece to start and is
+then dropped for want of a handler.
 
 Stated plainly, because much of the design rests on it: **a deployed
 holder's demands can be given up freely, and added only where an existing
