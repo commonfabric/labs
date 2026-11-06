@@ -1759,7 +1759,16 @@ for a change. Where it may be run without its neighbours, the run on the
 default branch runs it as many times as its share asks for and does not
 fail for it, so it goes on being measured while it is out of changes, and
 a green run of the default branch can carry a failure of one of these
-tests and still deploy. `explain <identity>` says of any test whether the
+tests and still deploy.
+
+That count is the most a lane runs it. A lane stops repeating a unit once
+each test that asked for its repeats has either passed and failed at the
+commit, which is the disagreement the publisher reads a flake from, or
+failed twice running, which is a test failing at that commit, whose further
+runs would each take as long as its failure does. Every run the lane makes
+is recorded and measured as before, and its closing summary says, under
+"Left out, which is not a failure", how many runs of each unit it did not
+need and why. `explain <identity>` says of any test whether the
 manifest this commit resolves withholds it and how many runs it is given.
 The reasoning behind each part is in [the archived
 plan](../history/plans/pull-request-test-selection.md#an-excluded-test-still-runs-on-main).

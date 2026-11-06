@@ -63,6 +63,7 @@ import {
   parseLaneArgs,
   PATTERN_COVERAGE_DIR,
   planOver,
+  repeatSettled,
   reportLane,
   requestedRun,
   rerunFailures,
@@ -2469,6 +2470,270 @@ describe("running a lane's work", () => {
       console.log = log;
     }
     expect(lines).toEqual([]);
+  });
+});
+
+describe("repeatSettled()", () => {
+  it("returns why for a test that passed and failed", () => {
+    expect(repeatSettled(["pass", "fail"])).toBe("it passed and failed");
+    expect(repeatSettled(["fail", "pass"])).toBe("it passed and failed");
+    expect(repeatSettled(["pass", "none", "fail"])).toBe(
+      "it passed and failed",
+    );
+  });
+
+  it("returns why for a test that failed twice running", () => {
+    expect(repeatSettled(["fail", "fail"])).toBe("it failed twice running");
+    expect(repeatSettled(["none", "fail", "fail"])).toBe(
+      "it failed twice running",
+    );
+  });
+
+  it("returns `undefined` for a test that has only passed", () => {
+    expect(repeatSettled(["pass", "pass", "pass"])).toBeUndefined();
+  });
+
+  it("returns `undefined` for one failure, or two failures apart", () => {
+    expect(repeatSettled(["fail"])).toBeUndefined();
+    expect(repeatSettled(["fail", "none", "fail"])).toBeUndefined();
+  });
+
+  it("returns `undefined` for passes that recorded nothing", () => {
+    expect(repeatSettled(["none", "none"])).toBeUndefined();
+  });
+});
+
+describe("a unit's repeats", () => {
+  const unit = "runtime/bakery/glaze.test.ts";
+  const lane = {
+    lane: 1,
+    of: 1,
+    full: false,
+    dryRun: false,
+    laneCount: false,
+    root: REPOSITORY,
+  };
+
+  /**
+   * A command that records, for each test of `script`, the outcome its list
+   * gives for the number of times the command has run, which it counts in
+   * `counter`, and exits as those records say.
+   */
+  function scripted(
+    counter: string,
+    script: Record<string, readonly ("pass" | "fail")[]>,
+  ): string[] {
+    return [
+      Deno.execPath(),
+      "eval",
+      `const at = ${JSON.stringify(counter)};
+       const run = Number(Deno.readTextFileSync(at) || "0");
+       Deno.writeTextFileSync(at, String(run + 1));
+       const script = ${JSON.stringify(script)};
+       const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+       let failed = false;
+       for (const [n, outcomes] of Object.entries(script)) {
+         const outcome = outcomes[run] ?? "pass";
+         failed ||= outcome === "fail";
+         Deno.writeTextFileSync(
+           \`\${dir}/fragment-\${crypto.randomUUID()}.ndjson\`,
+           JSON.stringify({
+             line: "record",
+             test: { k: "unit", s: "bakery", n },
+             outcome,
+             durationMs: 1,
+           }) + "\\n",
+         );
+       }
+       if (failed) Deno.exit(1);`,
+    ];
+  }
+
+  /**
+   * Runs one batch of the unit, with each test of `script` asking for the
+   * repeats `repeats` gives it, and returns how many passes ran, what the
+   * batch says it left out, the outcomes it recorded by test, and the number
+   * of passes it measured.
+   */
+  async function batchOf(
+    script: Record<string, readonly ("pass" | "fail")[]>,
+    repeats: Record<string, number>,
+  ) {
+    const counter = await Deno.makeTempFile({ prefix: "repeats-" });
+    const workDir = await Deno.makeTempDir({ prefix: "repeats-work-" });
+    const spool = await Deno.makeTempDir({ prefix: "repeats-spool-" });
+    const log = console.log;
+    console.log = () => {};
+    try {
+      const glaze = suite({
+        id: "workspace-unit",
+        units: [unit],
+        locate: () => ({ level: "unit" as const, unit }),
+        command: (_units, context) =>
+          Promise.resolve([{
+            command: scripted(counter, script),
+            cwd: context.root,
+          }]),
+      });
+      const names = Object.keys(script);
+      const manifest = manifestOf(
+        names.map((n) => ({ test: { k: "unit", s: "bakery", n }, unit })),
+      );
+      const [batch] = batchesOf(
+        [glaze],
+        pricedFor([glaze], manifest),
+        manifest.entries.map((entry) => ({
+          entry,
+          reason: "value" as const,
+          repeats: repeats[entry.test.n] ?? 1,
+        })),
+      );
+      const result = await runBatch(batch!, lane, workDir, spool, {});
+      const spooled: TestRecord[] = [];
+      for await (const file of Deno.readDir(spool)) {
+        const text = await Deno.readTextFile(`${spool}/${file.name}`);
+        for (const line of text.split("\n")) {
+          if (line.startsWith("{")) spooled.push(JSON.parse(line));
+        }
+      }
+      const outcomes: Record<string, string[]> = {};
+      for (const record of result.records) {
+        (outcomes[record.test.n] ??= []).push(record.outcome);
+      }
+      return {
+        passes: Number(await Deno.readTextFile(counter)),
+        settled: result.settled,
+        outcomes,
+        measuredPasses: spooled.find((record) =>
+          record.test.n ===
+            batchMeasurementName("workspace-unit", false, "passes")
+        )?.durationMs,
+      };
+    } finally {
+      console.log = log;
+      await Deno.remove(counter);
+      await Deno.remove(workDir, { recursive: true });
+      await Deno.remove(spool, { recursive: true });
+    }
+  }
+
+  it("stops once the test asking for them has passed and failed", async () => {
+    const { passes, settled } = await batchOf(
+      { "glaze > sets": ["pass", "fail"] },
+      { "glaze > sets": 5 },
+    );
+    expect(passes).toBe(2);
+    expect(settled).toEqual([{
+      unit,
+      skipped: 3,
+      why: ["glaze > sets: it passed and failed"],
+    }]);
+  });
+
+  it("stops once the test asking for them has failed twice running", async () => {
+    const { passes, settled } = await batchOf(
+      { "glaze > sets": ["fail", "fail", "fail", "fail", "fail"] },
+      { "glaze > sets": 5 },
+    );
+    expect(passes).toBe(2);
+    expect(settled).toEqual([{
+      unit,
+      skipped: 3,
+      why: ["glaze > sets: it failed twice running"],
+    }]);
+  });
+
+  it("makes every repeat of a test that only passes", async () => {
+    const { passes, settled } = await batchOf(
+      { "glaze > sets": [] },
+      { "glaze > sets": 5 },
+    );
+    expect(passes).toBe(5);
+    expect(settled).toEqual([]);
+  });
+
+  it("keeps repeating while another test asking for them has not settled", async () => {
+    const { passes, settled } = await batchOf(
+      { "glaze > sets": ["pass", "fail"], "glaze > browns": [] },
+      { "glaze > sets": 4, "glaze > browns": 4 },
+    );
+    expect(passes).toBe(4);
+    expect(settled).toEqual([]);
+  });
+
+  it("stops for the tests that asked, whatever the others in the unit do", async () => {
+    // `browns` asked for one run, so what it comes to says nothing about
+    // whether `sets` needs more.
+    const { passes } = await batchOf(
+      { "glaze > sets": ["fail", "fail"], "glaze > browns": [] },
+      { "glaze > sets": 4 },
+    );
+    expect(passes).toBe(2);
+  });
+
+  it("records every pass it made, with its outcome, and counts those passes", async () => {
+    const { outcomes, measuredPasses } = await batchOf(
+      { "glaze > sets": ["pass", "fail"] },
+      { "glaze > sets": 5 },
+    );
+    expect(outcomes).toEqual({ "glaze > sets": ["pass", "fail"] });
+    expect(measuredPasses).toBe(2);
+  });
+
+  it("names what it left out in the lane's summary, as no failure of its own", async () => {
+    const root = await Deno.makeTempDir({ prefix: "lane-repeats-" });
+    const counter = await Deno.makeTempFile({ prefix: "repeats-" });
+    const lines: string[] = [];
+    const log = console.log;
+    const restore = setEnv({
+      RUNNER_TEMP: undefined,
+      GITHUB_ACTIONS: undefined,
+      GITHUB_STEP_SUMMARY: undefined,
+    });
+    console.log = (line: string) => lines.push(line);
+    try {
+      const glaze = suite({
+        id: "workspace-unit",
+        units: [unit],
+        locate: () => ({ level: "unit" as const, unit }),
+        command: (_units, context) =>
+          Promise.resolve([{
+            command: scripted(counter, { "glaze > sets": ["pass", "fail"] }),
+            cwd: context.root,
+          }]),
+      });
+      const manifest = manifestOf([{ repeats: 5, flakeRate: 0.5 }]);
+      const ok = await runLane({
+        lane: 1,
+        of: 1,
+        full: true,
+        dryRun: false,
+        laneCount: false,
+        root,
+        at: "2026-09-01T00:00:00Z",
+      }, {
+        topology: () => Promise.resolve([glaze]),
+        manifest: () =>
+          Promise.resolve({ manifest, objectName: "manifest-fixture.json.gz" }),
+        spool: () => undefined,
+      });
+      const printed = lines.join("\n");
+      expect(printed).toContain("Left out, which is not a failure:");
+      expect(printed).toContain(
+        `workspace-unit ${unit}: 3 of 5 runs not needed, because ` +
+          "glaze > sets: it passed and failed",
+      );
+      expect(Number(await Deno.readTextFile(counter))).toBe(2);
+      // The lane fails for the failure the test recorded, which nothing
+      // excuses here, and for nothing else.
+      expect(ok).toBe(false);
+      expect(printed).not.toContain("ran no test");
+    } finally {
+      console.log = log;
+      restore();
+      await Deno.remove(counter);
+      await Deno.remove(root, { recursive: true });
+    }
   });
 });
 
