@@ -265,6 +265,12 @@ export interface CharacterGeometry {
   coordsForChar(
     pos: number,
   ): { readonly left: number; readonly right: number } | null;
+
+  /**
+   * Returns the box, in screen coordinates, of the caret at `pos` on the
+   * `side` of it given, or `null` when the editor has not drawn `pos`.
+   */
+  coordsAtPos(pos: number, side?: -1 | 1): { readonly right: number } | null;
 }
 
 /**
@@ -278,8 +284,9 @@ export interface CharacterGeometry {
  * outside the document's lines, so the character it names is checked against
  * the point: the point lies within the character's line vertically and
  * within the character's box horizontally. A character with no box of its
- * own, text a widget stands in for, is taken as under the point; a line
- * break, which draws nothing, is not.
+ * own, text a widget stands in for, is taken as under the point unless the
+ * point lies past the end of what its line draws; a line break, which draws
+ * nothing, is not.
  */
 export function characterAt(
   view: CharacterGeometry,
@@ -298,7 +305,11 @@ export function characterAt(
   }
   const box = view.coordsForChar(at);
   if (box === null) {
-    return view.state.sliceDoc(at, at + 1) === "\n" ? undefined : at;
+    if (view.state.sliceDoc(at, at + 1) === "\n") return undefined;
+    // CodeMirror resolves a point to the right of a widget that ends a line
+    // to the widget, so such a point is checked against the line's end.
+    const end = view.coordsAtPos(view.state.doc.lineAt(at).to, -1);
+    return end !== null && point.x > end.right ? undefined : at;
   }
   return point.x >= box.left && point.x <= box.right ? at : undefined;
 }

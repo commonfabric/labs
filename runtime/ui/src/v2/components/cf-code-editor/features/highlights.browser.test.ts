@@ -12,8 +12,8 @@
  */
 
 import { expect } from "@std/expect";
-import { EditorState, StateEffect } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorState, StateEffect, StateField } from "@codemirror/state";
+import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import {
   type ApplyOpResolution,
   CODEMIRROR_CHANGESET_CODEC,
@@ -231,6 +231,50 @@ Deno.test("a press past the end of a line that ends in a highlight reports nothi
     const last = boxOf(view, 10);
     pressAt(view, last.right + 40, (last.top + last.bottom) / 2);
 
+    expect(clicks).toEqual(["h"]);
+  } finally {
+    done();
+  }
+});
+
+/** A widget standing in for text, as a mention pill does. */
+class PillWidget extends WidgetType {
+  override toDOM(): HTMLElement {
+    const pill = document.createElement("span");
+    pill.textContent = "[pill]";
+    return pill;
+  }
+}
+
+Deno.test("a press to the right of a widget that ends a highlighted line reports nothing", async () => {
+  // The highlight covers "world", the end of the first line, and a widget
+  // stands in for it.
+
+  const { view, clicks, done } = await mount({ from: 6, to: 11 });
+  try {
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(
+        StateField.define({
+          create: () =>
+            Decoration.set([
+              Decoration.replace({ widget: new PillWidget() }).range(6, 11),
+            ]),
+          update: (decorations) => decorations,
+          provide: (field) => EditorView.decorations.from(field),
+        }),
+      ),
+    });
+    const pill = view.coordsAtPos(6, 1);
+    const end = view.coordsAtPos(11, -1);
+    if (pill === null || end === null) {
+      throw new Error("The widget is not drawn.");
+    }
+    const middle = (pill.top + pill.bottom) / 2;
+
+    pressAt(view, (pill.left + end.right) / 2, middle);
+    expect(clicks).toEqual(["h"]);
+
+    pressAt(view, end.right + 40, middle);
     expect(clicks).toEqual(["h"]);
   } finally {
     done();

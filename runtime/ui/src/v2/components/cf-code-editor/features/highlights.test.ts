@@ -100,6 +100,10 @@ const gridView = (state: EditorState): CharacterGeometry => ({
     const left = 10 * (pos - line.from);
     return { left, right: left + 10 };
   },
+  coordsAtPos: (pos) => {
+    const x = 10 * (pos - state.doc.lineAt(pos).from);
+    return { right: x };
+  },
 });
 
 /** The ranges `state` draws marks over, in document order. */
@@ -375,6 +379,21 @@ describe("highlights", () => {
           posAndSideAtCoords: () => ({ pos: 2, assoc: 1 }),
         }, { x: 25, y: 110 }),
       ).toBeUndefined();
+    });
+
+    it("returns nothing for a point to the right of a widget that ends its line", () => {
+      // The widget stands in for "lo", the last two characters of "hello",
+      // which leaves them without a box; the line's end is at x = 50.
+
+      const state = EditorState.create({ doc: "hello" });
+      const widget: CharacterGeometry = {
+        ...gridView(state),
+        coordsForChar: (pos) =>
+          pos >= 3 ? null : { left: 10 * pos, right: 10 * pos + 10 },
+      };
+
+      expect(characterAt(widget, { x: 45, y: 110 })).toBe(4);
+      expect(characterAt(widget, { x: 90, y: 110 })).toBeUndefined();
     });
 
     it("returns a character that has no box of its own", () => {
