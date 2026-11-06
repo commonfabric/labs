@@ -21,15 +21,16 @@ import {
 } from "commonfabric";
 import {
   clickButton,
-  clickInRow,
   findElement,
   findElementByText,
+  findNode,
   findNodeById,
   findNodeByProp,
   fireClick,
   fireEvent,
   hasText,
   innermostNode,
+  isButton,
   propsOf,
   propValue,
   readValue,
@@ -68,14 +69,21 @@ const selectionIn = (body: string, quote: string) =>
 const displayOf = (node: unknown): unknown =>
   readValue((propValue(node, "style") as { display?: unknown })?.display);
 
+/** The place among its siblings an element takes through its style. */
+const orderOf = (node: unknown): unknown =>
+  readValue((propValue(node, "style") as { order?: unknown })?.order);
+
 /** The row of the comment whose body is `text`. */
 const rowOf = (root: unknown, text: string): unknown =>
   innermostNode(
     root,
     (node) =>
-      hasText(node, text) &&
-      findElementByText(node, "cf-button", "Delete") !== undefined,
+      hasText(node, text) && propValue(node, "data-comment-id") !== undefined,
   );
+
+/** The panel's one set of actions, which work on the selected comment. */
+const actionsOf = (root: unknown): unknown =>
+  findNodeById(root, "shared-note-comment-actions");
 
 /** A mark the editor is asked to draw, from one anchor to another. */
 type Highlight = {
@@ -348,11 +356,11 @@ export default pattern(() => {
   });
   const assert_reply_needs_a_profile = assert(() =>
     propValue(
-        findNodeByProp(rowOf(note[UI], "Needs a date"), "aria-label", "Reply"),
+        findNodeByProp(actionsOf(note[UI]), "aria-label", "Reply"),
         "disabled",
       ) === false &&
     propValue(
-        findNodeByProp(rowOf(guest[UI], "Needs a date"), "aria-label", "Reply"),
+        findNodeByProp(actionsOf(guest[UI]), "aria-label", "Reply"),
         "disabled",
       ) === true
   );
@@ -416,9 +424,15 @@ export default pattern(() => {
   const action_select_row = action(() =>
     fireClick(rowOf(note[UI], "Agent note"))
   );
+  // The actions are one set for the panel, shown under the selected row to
+  // the session that selected it.
   const assert_row_selected = assert(() =>
     highlightsOf(note[UI])?.find((h) => h.kind === "active")?.id ===
-      listed(comments.get()).find((c) => c.body === "Agent note")?.id
+      listed(comments.get()).find((c) => c.body === "Agent note")?.id &&
+    displayOf(actionsOf(note[UI])) === "flex" &&
+    orderOf(actionsOf(note[UI])) ===
+      (orderOf(rowOf(note[UI], "Agent note")) as number) + 1 &&
+    displayOf(actionsOf(guest[UI])) === "none"
   );
   const action_click_highlight = action(() =>
     fireEvent(editorOf(note[UI]), "oncf-highlight-click", {
@@ -428,16 +442,18 @@ export default pattern(() => {
   );
   const assert_highlight_selects_its_comment = assert(() =>
     highlightsOf(note[UI])?.find((h) => h.kind === "active")?.id ===
-      listed(comments.get())[0].id
+      listed(comments.get())[0].id &&
+    orderOf(actionsOf(note[UI])) ===
+      (orderOf(rowOf(note[UI], "Needs a date")) as number) + 1
   );
   const action_type_reply = action(() =>
     typeInto(
-      findNodeByProp(rowOf(note[UI], "Needs a date"), "aria-label", "Reply"),
+      findNodeByProp(actionsOf(note[UI]), "aria-label", "Reply"),
       "Dated it",
     )
   );
   const action_post_reply = action(() =>
-    clickInRow(note[UI], "Needs a date", "Reply")
+    clickButton(actionsOf(note[UI]), "Reply")
   );
   const action_reply_by_verb = action(() =>
     note.replyToComment.send({
@@ -479,18 +495,22 @@ export default pattern(() => {
       !hasText(rowOf(note[UI], "Needs a date"), "now “");
   });
   const action_resolve_comment = action(() =>
-    clickInRow(note[UI], "Needs a date", "Resolve")
+    clickButton(actionsOf(note[UI]), "Resolve")
   );
   const assert_resolved_comment_hidden = assert(() =>
     listed(comments.get())[0]?.resolved.get() === true &&
     displayOf(rowOf(note[UI], "Needs a date")) === "none" &&
+    displayOf(actionsOf(note[UI])) === "none" &&
     highlightsOf(note[UI])?.length === 1
   );
   const action_show_resolved = action(() =>
     check(findElement(note[UI], "cf-checkbox"))
   );
   const assert_resolved_comment_shown = assert(() =>
-    displayOf(rowOf(note[UI], "Needs a date")) === "flex"
+    displayOf(rowOf(note[UI], "Needs a date")) === "flex" &&
+    displayOf(actionsOf(note[UI])) === "flex" &&
+    displayOf(findNode(actionsOf(note[UI]), isButton("Reopen"))) === "flex" &&
+    displayOf(findNode(actionsOf(note[UI]), isButton("Resolve"))) === "none"
   );
   const action_reopen_by_verb = action(() =>
     note.reopenComment.send({ id: listed(comments.get())[0].id })

@@ -425,15 +425,29 @@ const highlightOf = (id: string, kind?: string): NoteHighlight => ({
 /** The `display` of an element a session shows or hides. */
 type NoteDisplay = "block" | "flex" | "none";
 
-/** What one session sees of a comment's row: which of its parts are shown. */
+/** What one session sees of a comment's row. */
 interface RowDisplay {
   row: NoteDisplay;
   border: string;
-  actions: NoteDisplay;
+}
+
+/**
+ * What one session sees of the actions on its selected comment: whether
+ * they are shown, where among the rows, and which of them.
+ */
+interface ActionsDisplay {
+  bar: NoteDisplay;
+  order: number;
   resolve: NoteDisplay;
   reopen: NoteDisplay;
   delete: NoteDisplay;
 }
+
+/**
+ * How many places in the panel's order one comment takes: its row, then the
+ * actions on it.
+ */
+const PLACES_PER_COMMENT = 2;
 
 /** Why an act from a viewer whose profile hasn't resolved is refused. */
 const NO_PROFILE = "Choose a Fabric profile to comment.";
@@ -814,13 +828,31 @@ const actOnComment = handler<
   verb.send({ id });
 });
 
-/** Sends the row's reply draft to `replyToComment`, and clears the draft. */
-const replyFromRow = handler<
+/** Sends the selected comment's id to one of the comment verbs. */
+const actOnSelected = handler<
   unknown,
-  { verb: Stream<CommentReplyEvent>; id: string; replyDraft: Writable<string> }
->((_, { verb, id, replyDraft }) => {
+  { verb: Stream<CommentIdEvent>; selectedId: Writable<string> }
+>((_, { verb, selectedId }) => {
+  const id = selectedId.get();
+  if (id === "") return;
+  verb.send({ id });
+});
+
+/**
+ * Sends the reply draft to `replyToComment` for the selected comment, and
+ * clears the draft.
+ */
+const replyToSelected = handler<
+  unknown,
+  {
+    verb: Stream<CommentReplyEvent>;
+    selectedId: Writable<string>;
+    replyDraft: Writable<string>;
+  }
+>((_, { verb, selectedId, replyDraft }) => {
+  const id = selectedId.get();
   const body = replyDraft.get().trim();
-  if (body === "") return;
+  if (id === "" || body === "") return;
   verb.send({ id, body });
   replyDraft.set("");
 });
@@ -934,6 +966,30 @@ export const SharedNoteCore = pattern<
     return ranges;
   });
 
+  // Where each comment's row sits in the panel: in the order the comments'
+  // text appears in the body, those whose text is gone after the rest. A
+  // row's place changes only when that order does, not with every edit
+  // ahead of it.
+  const placeOf = computed(() => {
+    const starts: { id: string; from: number }[] = [];
+    for (const comment of comments.get()) {
+      if (comment === undefined) continue;
+      const range = rangeOf[comment.id];
+      starts.push({
+        id: comment.id,
+        from: range === undefined || range.to <= range.from
+          ? Number.MAX_SAFE_INTEGER
+          : range.from,
+      });
+    }
+    starts.sort((a, b) => a.from - b.from);
+    const places: Record<string, number> = {};
+    starts.forEach(({ id }, rank) => {
+      places[id] = rank * PLACES_PER_COMMENT;
+    });
+    return places;
+  });
+
   // What the editor marks: the text between the two anchors of every open
   // comment, the selected one told apart. The editor knows where each anchor
   // is. The open comments are the same for every viewer, and only the last
@@ -982,6 +1038,27 @@ export const SharedNoteCore = pattern<
   const viewer = computed((): string =>
     myProfile === undefined ? "" : profileOwnerOf(myProfile) ?? ""
   );
+
+  // The actions on the selected comment are one set of controls for the
+  // panel, placed under that comment's row, rather than a hidden set in
+  // every row: a row's controls are built again for every comment on every
+  // load. They are shown while the selected comment's row is.
+  const actions = computed((): PerSession<ActionsDisplay> => {
+    const id = selectedId.get();
+    const record = comments.get().find((comment) => comment?.id === id);
+    const resolved = record?.resolved.get() ?? false;
+    const listed = record !== undefined && !record.draft &&
+      (!resolved || showResolved.get());
+    const mine = record !== undefined && viewer !== "" &&
+      principalOf(comments.elementById(id), "authored-by") === viewer;
+    return {
+      bar: listed ? "flex" : "none",
+      order: (placeOf[id] ?? 0) + 1,
+      resolve: resolved ? "none" : "flex",
+      reopen: resolved ? "flex" : "none",
+      delete: mine ? "flex" : "none",
+    };
+  });
 
   const view = (
     <cf-vstack gap="3">
@@ -1117,11 +1194,7 @@ export const SharedNoteCore = pattern<
                   ? ""
                   : content.get().slice(range.from, range.to);
                 return {
-                  // The panel lists comments in the order their text appears
-                  // in the body, and those whose text is gone after the rest.
-                  order: range === undefined || gone
-                    ? 1_000_000_000
-                    : range.from,
+                  order: placeOf[comment.id] ?? 0,
                   gone,
                   quoteDecoration: gone ? "line-through" : "none",
                   moved: now !== "" && now !== comment.quote,
@@ -1150,10 +1223,6 @@ export const SharedNoteCore = pattern<
                   border: selected
                     ? "3px solid var(--cf-theme-color-primary)"
                     : "3px solid var(--cf-theme-color-border)",
-                  actions: selected && !comment.draft ? "flex" : "none",
-                  resolve: resolved ? "none" : "flex",
-                  reopen: resolved ? "flex" : "none",
-                  delete: mine ? "flex" : "none",
                 };
               });
               return (
@@ -1273,68 +1342,77 @@ export const SharedNoteCore = pattern<
                       Discard
                     </cf-button>
                   </cf-hstack>
-                  <cf-hstack
-                    gap="2"
-                    align="center"
-                    wrap
-                    hidden
-                    style={{ display: shown.actions }}
-                  >
-                    <cf-input
-                      aria-label="Reply"
-                      placeholder="Reply…"
-                      $value={replyDraft}
-                      disabled={noProfile}
-                      timingStrategy="immediate"
-                      oncf-submit={replyFromRow({
-                        verb: replyVerb,
-                        id,
-                        replyDraft,
-                      })}
-                      style={{ flex: "1 1 8rem", minWidth: "0" }}
-                    />
-                    <cf-button
-                      size="sm"
-                      disabled={noProfile}
-                      onClick={replyFromRow({
-                        verb: replyVerb,
-                        id,
-                        replyDraft,
-                      })}
-                    >
-                      Reply
-                    </cf-button>
-                    <cf-button
-                      size="sm"
-                      variant="ghost"
-                      hidden
-                      style={{ display: shown.resolve }}
-                      onClick={actOnComment({ verb: resolveVerb, id })}
-                    >
-                      Resolve
-                    </cf-button>
-                    <cf-button
-                      size="sm"
-                      variant="ghost"
-                      hidden
-                      style={{ display: shown.reopen }}
-                      onClick={actOnComment({ verb: reopenVerb, id })}
-                    >
-                      Reopen
-                    </cf-button>
-                    <cf-button
-                      size="sm"
-                      variant="ghost"
-                      hidden
-                      style={{ display: shown.delete }}
-                      onClick={actOnComment({ verb: deleteVerb, id })}
-                    >
-                      Delete
-                    </cf-button>
-                  </cf-hstack>
                 </cf-vstack>
               );
             })}
+            <cf-hstack
+              gap="2"
+              align="center"
+              wrap
+              hidden
+              id="shared-note-comment-actions"
+              style={{
+                display: actions.bar,
+                order: actions.order,
+                // Drawn as the foot of the selected row: up against it,
+                // across the gap between rows, under the same border.
+                marginTop: "-0.5rem",
+                padding: "0 0.5rem 0.5rem",
+                borderLeft: "3px solid var(--cf-theme-color-primary)",
+              }}
+            >
+              <cf-input
+                aria-label="Reply"
+                placeholder="Reply…"
+                $value={replyDraft}
+                disabled={noProfile}
+                timingStrategy="immediate"
+                oncf-submit={replyToSelected({
+                  verb: replyVerb,
+                  selectedId,
+                  replyDraft,
+                })}
+                style={{ flex: "1 1 8rem", minWidth: "0" }}
+              />
+              <cf-button
+                size="sm"
+                disabled={noProfile}
+                onClick={replyToSelected({
+                  verb: replyVerb,
+                  selectedId,
+                  replyDraft,
+                })}
+              >
+                Reply
+              </cf-button>
+              <cf-button
+                size="sm"
+                variant="ghost"
+                hidden
+                style={{ display: actions.resolve }}
+                onClick={actOnSelected({ verb: resolveVerb, selectedId })}
+              >
+                Resolve
+              </cf-button>
+              <cf-button
+                size="sm"
+                variant="ghost"
+                hidden
+                style={{ display: actions.reopen }}
+                onClick={actOnSelected({ verb: reopenVerb, selectedId })}
+              >
+                Reopen
+              </cf-button>
+              <cf-button
+                size="sm"
+                variant="ghost"
+                hidden
+                style={{ display: actions.delete }}
+                onClick={actOnSelected({ verb: deleteVerb, selectedId })}
+              >
+                Delete
+              </cf-button>
+            </cf-hstack>
           </cf-vstack>
         </cf-vstack>
       </cf-hstack>
