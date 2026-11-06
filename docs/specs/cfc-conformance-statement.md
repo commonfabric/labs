@@ -630,7 +630,9 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
   So that the re-mint does not widen this, only a setup in the transaction
   it was asked in restates an unchanged wiring (`#askingSetupTransactions`
   in `runner.ts`: the transaction a caller hands `run`, `setup`,
-  `runSynced` or `runInTransaction`, or the one made for that call). A
+  `runSynced` or `runInTransaction`, or the one made for that call; a
+  setup nested in another, such as a pattern node its parent instantiates,
+  takes that transaction's standing). A
   deferred start, the swap of a running piece and a setup repair run in
   transactions the runner makes later, and leave an unchanged wiring's
   stored membership as a setup that wrote nothing would. One of them that
