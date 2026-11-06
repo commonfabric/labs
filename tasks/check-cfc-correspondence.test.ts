@@ -833,6 +833,14 @@ export { le as atomLe };
         .toBe(true);
     });
 
+    it("returns `false` for a declaration written in a comment or a string", () => {
+      expect(declaresSymbol("// export const g = 1;\n", "g")).toBe(false);
+      expect(declaresSymbol("/*\nexport const h = 1;\n*/\n", "h")).toBe(false);
+      expect(
+        declaresSymbol("const s = `\nexport const i = 1;\n`;\n", "i"),
+      ).toBe(false);
+    });
+
     it("returns `false` for a name declared only inside a body, or a longer name", () => {
       expect(declaresSymbol("function f() {\n  const e = 1;\n}\n", "e"))
         .toBe(false);

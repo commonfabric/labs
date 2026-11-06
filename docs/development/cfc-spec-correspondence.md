@@ -85,8 +85,9 @@ The vocabulary:
    `runtime/runner/src/cfc/` or `runtime/runner/src/cfc.ts`, to the CFC
    tests under `runtime/runner/test/`, to the memory package's CFC sources
    (`runtime/memory/v2/cfc-*.ts`, which hold decisions the store shares with
-   the runtime, and `runtime/memory/v2/envelope-admission.ts`) or their test
-   `runtime/memory/test/v2-envelope-admission.test.ts`, to the render
+   the runtime, and `runtime/memory/v2/envelope-admission.ts`) or their tests
+   (`runtime/memory/test/v2-cfc-*.test.ts` and
+   `runtime/memory/test/v2-envelope-admission.test.ts`), to the render
    boundaries in
    `runtime/html/src/worker/reconciler.ts`,
    `runtime/html/src/worker/display-fit.ts` and
@@ -315,8 +316,8 @@ on five things, each read against the committed snapshot:
   range written without its own `§` is not read.
 - More than forty `SPEC-PENDING` markers across the files the CFC rule
   governs, which `GOVERNED_SOURCE` in the task lists: the runner's CFC
-  sources and their tests, the memory package's CFC sources and
-  `v2-envelope-admission.test.ts`, the render boundaries `reconciler.ts`,
+  sources and their tests, the memory package's CFC sources and their tests,
+  the render boundaries `reconciler.ts`,
   `display-fit.ts` and `display-fit-atoms.ts` in `runtime/html`, the harness's `cfc-*.ts`,
   `contracts/cfc-*.ts` and `sandbox/runsc-cfc-result.ts`, and the harness
   console's `display-ceiling.ts`; or one on a line

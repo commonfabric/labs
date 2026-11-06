@@ -49,6 +49,7 @@
  */
 
 import { dirname, fromFileUrl } from "@std/path";
+import ts from "typescript";
 import {
   type Companion,
   COMPANIONS,
@@ -114,7 +115,7 @@ export const GOVERNED_SOURCE: readonly RegExp[] = [
   /^runtime\/cf-harness\/src\/sandbox\/runsc-cfc-result\.ts$/,
   /^runtime\/cf-harness\/console\/display-ceiling\.ts$/,
   ...MEMORY_CFC_SOURCE,
-  /^runtime\/memory\/test\/v2-envelope-admission\.test\.ts$/,
+  /^runtime\/memory\/test\/v2-(?:cfc-[^/]*|envelope-admission)\.test\.ts$/,
 ];
 
 /**
@@ -640,7 +641,7 @@ export function collectFindings(input: CheckInput): Finding[] {
           message: `the row for \`${row.name}\` names ` +
             `${symbol.file}, which does not exist`,
         });
-      } else if (!declaresSymbol(text, symbol.symbol)) {
+      } else if (!declaresSymbol(text, symbol.symbol, symbol.file)) {
         findings.push({
           file: `${KERNEL_DIR}manifest.ts`,
           message: `the row for \`${row.name}\` names ` +
@@ -688,20 +689,53 @@ const SOURCE = /\.tsx?$/;
 const RUNTIME_SYMBOL_ROOT = "runtime/runner/src/";
 
 /**
- * Whether `text` declares `name` at top level, exported or not, or names it
- * in an `export { … }` list.
+ * Whether `text` declares `name` at top level, exported or not, or exports
+ * it under that name from an `export { … }` list with no `from` clause. The
+ * source is parsed, as TSX when `path` names a `.tsx` file and as TypeScript
+ * otherwise, so a declaration written in a comment or a string is not one.
  */
-export function declaresSymbol(text: string, name: string): boolean {
-  const declared = new RegExp(
-    `^(?:export\\s+)?(?:declare\\s+)?(?:async\\s+)?(?:const|let|function\\*?|class|type|interface|enum)\\s+${name}\\b`,
-    "m",
+export function declaresSymbol(
+  text: string,
+  name: string,
+  path = "decided.ts",
+): boolean {
+  const source = ts.createSourceFile(
+    path,
+    text,
+    ts.ScriptTarget.Latest,
+    false,
+    path.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
-  if (declared.test(text)) return true;
-  for (const list of text.matchAll(/^export\s+(?:type\s+)?\{([^}]*)\}/gm)) {
-    const names = list[1].split(",").map((entry) =>
-      entry.trim().replace(/^type\s+/, "").split(/\s+as\s+/).pop()?.trim()
-    );
-    if (names.includes(name)) return true;
+  for (const statement of source.statements) {
+    if (
+      (ts.isFunctionDeclaration(statement) ||
+        ts.isClassDeclaration(statement) ||
+        ts.isInterfaceDeclaration(statement) ||
+        ts.isTypeAliasDeclaration(statement) ||
+        ts.isEnumDeclaration(statement)) &&
+      statement.name?.text === name
+    ) {
+      return true;
+    }
+    if (
+      ts.isVariableStatement(statement) &&
+      statement.declarationList.declarations.some((declaration) =>
+        ts.isIdentifier(declaration.name) && declaration.name.text === name
+      )
+    ) {
+      return true;
+    }
+    if (
+      ts.isExportDeclaration(statement) &&
+      statement.moduleSpecifier === undefined &&
+      statement.exportClause !== undefined &&
+      ts.isNamedExports(statement.exportClause) &&
+      statement.exportClause.elements.some((element) =>
+        element.name.text === name
+      )
+    ) {
+      return true;
+    }
   }
   return false;
 }

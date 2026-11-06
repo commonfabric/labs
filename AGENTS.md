@@ -158,8 +158,9 @@ what to do without access to the private specs repository. It governs
 `runtime/runner/src/cfc/` and `runtime/runner/src/cfc.ts`, the CFC tests under
 `runtime/runner/test/`, the memory package's CFC sources
 (`runtime/memory/v2/cfc-*.ts` and `runtime/memory/v2/envelope-admission.ts`) and
-their test `runtime/memory/test/v2-envelope-admission.test.ts`, the render
-boundaries in `runtime/html/src/worker/reconciler.ts`,
+their tests (`runtime/memory/test/v2-cfc-*.test.ts` and
+`runtime/memory/test/v2-envelope-admission.test.ts`), the render boundaries in
+`runtime/html/src/worker/reconciler.ts`,
 `runtime/html/src/worker/display-fit.ts` and
 `runtime/html/src/worker/display-fit-atoms.ts`, the harness's CFC enforcement in
 `runtime/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,

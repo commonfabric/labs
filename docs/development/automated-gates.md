@@ -114,7 +114,8 @@ Each of these gates fails CI on its own, and none of them run as part of
   imports past the kernel, a manifest row in
   `runtime/runner/src/cfc/kernel/manifest.ts` naming a function the snapshot
   lacks or a kernel symbol that does not exist, a `missing` row whose
-  `decidedToday` names a symbol its file no longer declares, a `§` citation in
+  `decidedToday` names a symbol its file does not declare at top level, or a
+  file that does not exist, a `§` citation in
   the CFC sources (`CITATION_SOURCE`, the runner's and the memory package's)
   naming a section the specification has not, or more
   than forty `SPEC-PENDING` markers in the files it governs (`GOVERNED_SOURCE`

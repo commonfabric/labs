@@ -6,6 +6,7 @@ paths:
   - "runtime/runner/test/cfc/**"
   - "runtime/memory/v2/cfc-*.ts"
   - "runtime/memory/v2/envelope-admission.ts"
+  - "runtime/memory/test/v2-cfc-*.test.ts"
   - "runtime/memory/test/v2-envelope-admission.test.ts"
   - "runtime/html/src/worker/reconciler.ts"
   - "runtime/html/src/worker/display-fit.ts"
