@@ -83,22 +83,27 @@ describe("cf cell release-by-intent", () => {
     );
   });
 
-  it("refuses with standard input not a terminal, before loading or signing anything", async () => {
-    let loaded = false;
-    await expect(
-      releaseCellConfidentialityByIntent(pieceConfig, [], ["abc"], {}, {
-        isStdinTerminal: () => false,
-        loadPieces: () => {
-          loaded = true;
-          return Promise.reject(new Error("loaded"));
-        },
-        loadIdentity: () => {
-          loaded = true;
-          return Promise.reject(new Error("loaded"));
-        },
-      }),
-    ).rejects.toThrow("standard input is not one");
-    expect(loaded).toBe(false);
+  it("refuses with standard input or standard error not a terminal, before loading or signing anything", async () => {
+    for (
+      const [stdin, stderr] of [[false, true], [true, false], [false, false]]
+    ) {
+      let loaded = false;
+      await expect(
+        releaseCellConfidentialityByIntent(pieceConfig, [], ["abc"], {}, {
+          isStdinTerminal: () => stdin,
+          isStderrTerminal: () => stderr,
+          loadPieces: () => {
+            loaded = true;
+            return Promise.reject(new Error("loaded"));
+          },
+          loadIdentity: () => {
+            loaded = true;
+            return Promise.reject(new Error("loaded"));
+          },
+        }),
+      ).rejects.toThrow("standard input or standard error is not one");
+      expect(loaded).toBe(false);
+    }
   });
 
   describe("against a stored result", () => {
@@ -173,6 +178,7 @@ describe("cf cell release-by-intent", () => {
           Promise.resolve(token),
         loadIdentity: () => Promise.resolve(counting as never),
         isStdinTerminal: () => true,
+        isStderrTerminal: () => true,
         show: () => {},
       } as never;
     });
@@ -189,8 +195,13 @@ describe("cf cell release-by-intent", () => {
         [],
         [],
         {},
-        { ...deps, isStdinTerminal: () => false },
+        {
+          ...deps,
+          isStdinTerminal: () => false,
+          isStderrTerminal: () => false,
+        },
       );
+      expect(outcome.owner).toBe(owner);
       expect(outcome.clauses.map((clause) => clause.digest)).toEqual(
         [own, ...others].map(cfcCanonicalClauseDigest),
       );
@@ -261,6 +272,30 @@ describe("cf cell release-by-intent", () => {
       ).rejects.toThrow("Not confirmed; nothing was signed or released.");
       expect(signed).toBe(0);
       expect(storedEntries()).toEqual(before);
+    });
+
+    it("signs nothing, and asks nothing, when the identity is not the space's owner", async () => {
+      const intruder = await Identity.fromPassphrase(
+        "cf-cell-release-by-intent-intruder",
+      );
+      let asked = false;
+      await expect(
+        releaseCellConfidentialityByIntent(
+          pieceConfig,
+          [],
+          [cfcCanonicalClauseDigest(others[0])],
+          {},
+          {
+            ...deps,
+            loadIdentity: () => Promise.resolve(intruder as never),
+            readConfirmation: () => {
+              asked = true;
+              return Promise.resolve("release");
+            },
+          },
+        ),
+      ).rejects.toThrow("is not the owner the space's access list names");
+      expect(asked).toBe(false);
     });
 
     it("signs nothing for an ambiguous or unknown digest", async () => {

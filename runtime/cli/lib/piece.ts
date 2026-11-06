@@ -5248,6 +5248,12 @@ export interface ReleaseByIntentOutcome {
   /** The space holding the document. */
   readonly space: string;
 
+  /**
+   * The owner the space's access list names, whose signature alone releases
+   * there, or `undefined` when it names none.
+   */
+  readonly owner: string | undefined;
+
   /** The document the path lands in, its crossed links followed. */
   readonly document: string;
 
@@ -5286,6 +5292,9 @@ export interface ReleaseByIntentDependencies
   extends PieceOperationDependencies {
   /** Whether standard input is a terminal. */
   isStdinTerminal?: () => boolean;
+
+  /** Whether standard error, where the release is shown, is a terminal. */
+  isStderrTerminal?: () => boolean;
 
   /**
    * Shows `prompt` to the owner and returns the line they type, or `null` at
@@ -5375,16 +5384,19 @@ const readTerminalLine = async (prompt: string): Promise<string | null> => {
  * The path is resolved to the document it lands in, the links it crosses
  * followed and a link stored at the path itself not, and names one stored
  * position, matched literally: a `*` segment names the wildcard position. With
- * no selector, this only lists the clauses stored there, and the document's
- * other stored positions holding any of them. With selectors, it refuses before
- * building or signing anything unless standard input is a terminal; it shows
+ * no selector, this only lists the clauses stored there, the document's other
+ * stored positions holding any of them, and the space's owner. With
+ * selectors, it refuses before building or signing anything unless standard
+ * input and standard error are both terminals, and unless the identity is the
+ * owner the space's access list names; it shows
  * the owner the document, the path, each clause that would come off and
  * stay, and the other positions still holding a released clause, asks them to type {@link RELEASE_BY_INTENT_CONFIRMATION}, and signs
  * with the identity only once they have. Nothing bypasses the confirmation:
  * the signature stands for the owner's own decision, which is the one thing
  * the store cannot check.
  *
- * @throws If standard input is not a terminal when a clause is named, if a
+ * @throws If standard input or standard error is not a terminal when a clause
+ *   is named, if the identity is not the space's owner, if a
  *   selector names no stored clause or several, if the owner does not
  *   confirm, or if the release is refused, by the runtime or the store.
  */
@@ -5396,10 +5408,14 @@ export async function releaseCellConfidentialityByIntent(
   deps: ReleaseByIntentDependencies = {},
 ): Promise<ReleaseByIntentOutcome> {
   const naming = selectors.length > 0;
-  if (naming && !(deps.isStdinTerminal ?? (() => Deno.stdin.isTerminal()))()) {
+  const atTerminal =
+    (deps.isStdinTerminal ?? (() => Deno.stdin.isTerminal()))() &&
+    (deps.isStderrTerminal ?? (() => Deno.stderr.isTerminal()))();
+  if (naming && !atTerminal) {
     throw new Error(
-      "A release by intent is confirmed by its owner at a terminal, and " +
-        "standard input is not one. Run it interactively; nothing was signed.",
+      "A release by intent is shown to its owner and confirmed at a " +
+        "terminal, and standard input or standard error is not one. Run it " +
+        "interactively; nothing was signed.",
     );
   }
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
@@ -5420,7 +5436,7 @@ export async function releaseCellConfidentialityByIntent(
   const targetCell = rootCell.key(...path);
   await targetCell.pull();
   const target = releaseByIntentTargetOf(targetCell);
-  const stored = storedClausesForRelease(pieces.runtime, target);
+  const stored = await storedClausesForRelease(pieces.runtime, target);
   const clauses: ReleasableClause[] = stored.clauses.map((clause) => ({
     digest: clause.digest,
     clause: clause.clause,
@@ -5430,6 +5446,7 @@ export async function releaseCellConfidentialityByIntent(
     space: target.space,
     document: target.id,
     path: [...target.path],
+    owner: stored.owner,
     clauses,
     otherPositions: stored.otherPositions,
   };
@@ -5437,6 +5454,13 @@ export async function releaseCellConfidentialityByIntent(
 
   const released = resolveClauseSelectors(selectors, clauses);
   const identity = await (deps.loadIdentity ?? loadIdentity)(config.identity);
+  if (stored.owner !== identity.did()) {
+    throw new Error(
+      `The identity ${identity.did()} is not the owner the space's access ` +
+        `list names (${stored.owner ?? "none"}), and only the owner's ` +
+        "signature releases by intent there; nothing was signed.",
+    );
+  }
   const request = ownerReleaseByIntentRequest({
     space: target.space,
     document: target.id,
@@ -5449,7 +5473,10 @@ export async function releaseCellConfidentialityByIntent(
   const location = target.path.length === 0 ? "<root>" : target.path.join("/");
   show(`Release by intent in space ${target.space}`);
   show(`  document ${target.id}, path ${location}`);
-  show(`  signed by ${identity.did()} as the space's owner`);
+  show(
+    `  to be signed by ${identity.did()}, whom the space's access list ` +
+      "names its owner",
+  );
   show("Clauses that come off every label stored at the path:");
   for (const clause of clauses) {
     if (released.includes(clause.digest)) show(describeClause(clause));

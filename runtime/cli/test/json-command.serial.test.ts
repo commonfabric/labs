@@ -190,7 +190,7 @@ describe("JSON command contracts", () => {
     expect(code).not.toBe(0);
     expect(stdout).toEqual([]);
     expect(stripAnsi(stderr.join("\n"))).toContain(
-      "standard input is not one",
+      "standard input or standard error is not one",
     );
   });
 

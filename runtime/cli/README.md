@@ -1900,9 +1900,11 @@ naming other principals whose data the result does not hold. A lowering with
 owner signs. That is the owner release by intent (§8.12.7 route 2d) proposed in
 [specs#90](https://github.com/commonfabric/specs/pull/90), which this runtime
 implements ahead of its ruling. Without `--clause` it only lists the
-confidentiality clauses stored at the path, each with its canonical clause
-digest and the labels holding it (component and observation class), and changes
-nothing:
+confidentiality clauses the label map stores at the path, each with its
+canonical clause digest and the labels holding it (component and observation
+class), and the owner the space's access list names, and changes nothing. A
+clause's plaintext and committed spellings are two clauses, each with its own
+digest:
 
 ```bash
 cf cell release-by-intent --cell ID
@@ -1943,10 +1945,12 @@ then does it sign the request with the identity and commit the release together
 with its record, a create-only document in the space holding the signed request,
 the owner, the document and path, the released clauses' digests, and digests of
 the stored labels before and after; the record is readable by the owner. With
-`--clause`, the command runs only with standard input at a terminal, refusing
-before it builds or signs anything otherwise, and no option skips the
-confirmation: the signature stands for the owner's own decision, made in person,
-which is the one thing the store cannot check.
+`--clause`, the command runs only with standard input and standard error at a
+terminal, so what it shows reaches the owner who confirms it, and refuses before
+it builds or signs anything otherwise; it refuses as well when the identity is
+not the owner the space's access list names. No option skips the confirmation:
+the signature stands for the owner's own decision, made in person, which is the
+one thing the store cannot check.
 
 The store checks the rest at the commit: that the signature verifies, that the
 signer is the owner the space's access list names (the identity whose DID is the
