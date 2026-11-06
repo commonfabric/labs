@@ -80,8 +80,13 @@ describe("cfc-deferred-run", () => {
     await storageManager.close();
   });
 
-  /** Seeds a document of Bob's, whose every read carries {@link BOB}. */
-  const seedBobsDocument = async (): Promise<IMemorySpaceAddress> => {
+  /**
+   * Seeds a document of Bob's, whose every read carries `confidentiality`,
+   * {@link BOB} unless given. Seeding it again relabels the same document.
+   */
+  const seedBobsDocument = async (
+    confidentiality = [BOB],
+  ): Promise<IMemorySpaceAddress> => {
     const tx = runtime.edit();
     const id = runtime.getCell(space, "bobs-document", undefined, tx)
       .getAsNormalizedFullLink().id;
@@ -99,7 +104,9 @@ describe("cfc-deferred-run", () => {
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: {
           version: 1,
-          entries: [{ path: [], label: { confidentiality: [BOB] } }],
+          entries: confidentiality.length === 0
+            ? []
+            : [{ path: [], label: { confidentiality } }],
         },
       },
     });
@@ -267,7 +274,13 @@ describe("cfc-deferred-run", () => {
   });
 
   it("stamps Bob's clause on a deferred setup of the pattern a lift returns after reading Bob's document", async () => {
-    const bobs = await seedBobsDocument();
+    // The lift reads Bob's document on every run, so the document is public
+    // for the first, which sets the result up in the lift's own transaction,
+    // and Bob's from the second. The second's setup is deferred, and the
+    // result, running since the first, takes the new pattern by swapping to
+    // it in transactions of its own, which set up the pattern's `b`.
+
+    const bobs = await seedBobsDocument([]);
     const { cf, plain, wider } = patterns();
     const { lift } = cf as unknown as {
       lift: (fn: (value: any) => unknown) => (value: unknown) => unknown;
@@ -298,6 +311,7 @@ describe("cfc-deferred-run", () => {
       await runtime.idle();
       expect(deferredStarts).toEqual([]);
 
+      await seedBobsDocument();
       const turnTx = runtime.edit();
       turnCell.withTx(turnTx).set(1);
       expect((await turnTx.commit().settled).ok).toBeDefined();

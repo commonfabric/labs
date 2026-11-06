@@ -467,8 +467,13 @@ receives them as trigger reads, with the asking transaction's label-metadata
 observations. So what decided that the run happens joins the PC of everything
 the run writes, at its labels when the run commits, and under
 `cfcTriggerReadGating` it enters the run's consumed sets and input gate too.
-`runInTransaction` defers by throwing `RetryImmediately`, and the scheduler
-then reruns the asking action, which reads again.
+A piece already running here takes the pattern a setup staged by swapping to
+it, in a setup transaction and an instantiation transaction of the pattern
+watcher's own (`swapToPattern`), and those carry the same observations of the
+transaction that ran the setup (`#runDecisions`); this is how the pattern a
+lift returns reaches a result that is running already. `runInTransaction`
+defers by throwing `RetryImmediately`, and the scheduler then reruns the
+asking action, which reads again.
 
 **Residuals.**
 
@@ -478,6 +483,9 @@ then reruns the asking action, which reads again.
   receipt binds it to that transaction. An action that both records external
   content and defers a run leaves that content off the run, an under-taint;
   whether any action does both is not established.
+- A swap to a pattern pointer that another runtime moved carries nothing.
+  The pointer is one of the document's own members, which carries no payload
+  label (§4.6.5), so a trigger read of it would join nothing either.
 - The SQLite and fetch destination snapshots are read under
   `ignoreReadForScheduling`, so those addresses never become trigger reads;
   `cfc-write-destination-reads.md` under "The SQLite publication comparison"

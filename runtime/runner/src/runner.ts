@@ -3031,6 +3031,19 @@ export class Runner {
   >();
 
   /**
+   * What decided the latest committed setup of each running piece, for the
+   * swap that setup's pattern reaches it by (`carryRunDecision()`). A running
+   * piece takes the pattern a setup staged in transactions of its own, the
+   * swap's setup and the instantiation of the new graph, so they carry it
+   * (CFC §8.9.2). An entry names the pattern it was set up with, and only a
+   * swap to that pattern takes it.
+   */
+  readonly #runDecisions = new Map<
+    `${MemorySpace}/${ScopeKey}/${URI}`,
+    { pattern: string; carry: (to: IExtendedStorageTransaction) => void }
+  >();
+
+  /**
    * Commit-gated starts that have not installed a registration yet, indexed by
    * result so an explicit stop can tombstone them before installation.
    */
@@ -5329,6 +5342,17 @@ export class Runner {
           this.#locallyPreparedResults.delete(key);
         }
       });
+      // A piece running here takes this setup's pattern by swapping, and the
+      // swap is decided by what decided this setup.
+      if (this.#sessionPatternSwaps.has(key)) {
+        const decided = {
+          pattern: preparedPatternKey,
+          carry: carryRunDecision(tx),
+        };
+        tx.addCommitCallback((_tx, result) => {
+          if (!result.error) this.#runDecisions.set(key, decided);
+        });
+      }
       // ALREADY-RUNNING piece, full setup staged, KEYLESS pattern: for a real
       // pattern the durable stamp carries this exact moment to the piece's meta
       // watcher, whose swap replaces the running graph with the new version
@@ -6205,11 +6229,13 @@ export class Runner {
 
     // Helper to instantiate nodes for a pattern. Returns the settlement of the
     // transaction it commits itself, and nothing when it stages into `useTx`
-    // or instantiates nothing.
+    // or instantiates nothing. A transaction it makes itself receives
+    // `carryDecision`, what decided a swap to `pattern`.
     const instantiatePattern = (
       pattern: Pattern,
       useTx?: IExtendedStorageTransaction,
       retry?: InstantiationRetry,
+      carryDecision?: (to: IExtendedStorageTransaction) => void,
     ): PieceInstantiationSettlement | undefined => {
       if (!active || startLifecycleEpoch !== this.#lifecycleEpoch) return;
       const shouldCommit = !useTx;
@@ -6232,6 +6258,7 @@ export class Runner {
 
       // Instantiate nodes
       const actualTx = useTx ?? this.#runtime.edit();
+      if (useTx === undefined) carryDecision?.(actualTx);
       enrollPieceOwnedStores(actualTx, resultCell, pattern);
       // A transaction that also carries the cold-start setup repair is named
       // for it, so its seal and any refusal of it are attributed to the repair
@@ -6593,6 +6620,7 @@ export class Runner {
                       PIECE_RUN_START_MAX_RETRIES) - 1,
                     loaded: new Set([...(retry?.loaded ?? []), ...absent]),
                   },
+                carryDecision,
               );
             } catch (retryError) {
               const failure = this.#reportPieceStartCommitFailure(
@@ -6742,6 +6770,7 @@ export class Runner {
         const pattern = this.#resolveToPattern(loaded as Pattern);
         const swap = {};
         latestSwap = swap;
+        const carryDecision = this.#takeRunDecision(pieceKey, newRef);
         // Whoever moved the pointer may have staged the incoming pattern in
         // the same transaction, which is how a transition makes staging and
         // the pointer succeed or fail together. Its completion marker says
@@ -6753,12 +6782,13 @@ export class Runner {
           setupMarker.symbol === newRef.symbol
         ) {
           cancelNodes?.();
-          instantiatePattern(pattern);
+          instantiatePattern(pattern, undefined, undefined, carryDecision);
           runningRef = newRef;
           instantiatedPatternKey = patternIdentityKey(newRef);
           return;
         }
         const setupTx = this.#runtime.edit();
+        carryDecision?.(setupTx);
         // Under an installed seal destination (serving-loop.md §3d) every
         // commit path declares its run context; the swap's setup write is
         // runtime-internal bookkeeping. A no-op everywhere else. The action
@@ -6776,7 +6806,7 @@ export class Runner {
         });
         const finishSwap = () => {
           cancelNodes?.();
-          instantiatePattern(pattern);
+          instantiatePattern(pattern, undefined, undefined, carryDecision);
           runningRef = newRef;
           runningPattern = pattern;
           instantiatedPatternKey = patternIdentityKey(newRef);
@@ -6897,6 +6927,7 @@ export class Runner {
       addCancel(() => {
         if (this.#sessionPatternSwaps.get(pieceKey) === sessionSwapHandler) {
           this.#sessionPatternSwaps.delete(pieceKey);
+          this.#runDecisions.delete(pieceKey);
         }
       });
       // Follow a pointer the watcher saw move to `newRef`: swap to the
@@ -8049,6 +8080,22 @@ export class Runner {
     return committer === undefined
       ? commit()
       : committer(tx, resultCell, commit);
+  }
+
+  /**
+   * Helper for the pattern watcher's swap, which takes what decided the setup
+   * that staged `ref` on the piece `key` names (`#runDecisions`), or nothing
+   * when the latest committed setup there staged another pattern.
+   */
+  #takeRunDecision(
+    key: `${MemorySpace}/${ScopeKey}/${URI}`,
+    ref: { identity: string; symbol: string },
+  ): ((to: IExtendedStorageTransaction) => void) | undefined {
+    const decided = this.#runDecisions.get(key);
+    this.#runDecisions.delete(key);
+    return decided?.pattern === patternIdentityKey(ref)
+      ? decided.carry
+      : undefined;
   }
 
   #createDeferredStartOwnership<T>(
