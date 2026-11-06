@@ -20,6 +20,7 @@ import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
 import type { Engine } from "../src/harness/engine.ts";
 import { labelsReached } from "./support/reached-labels.ts";
+import { reservedSiblingWriteRecordedMark } from "../src/reserved-sibling-seam.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
@@ -685,6 +686,9 @@ describe("PolicyOf label-time binding", () => {
       policyDigest: artifact.policyDigest,
       subject: space,
     } as const;
+    // The stored envelope is written beneath any extended transaction, so
+    // the write carries the mark the write chokepoint puts on what it
+    // forwards.
     const seed = storageManager.edit();
     expect(
       seed.write({
@@ -709,7 +713,7 @@ describe("PolicyOf label-time binding", () => {
             }],
           },
         },
-      }).ok,
+      }, reservedSiblingWriteRecordedMark()).ok,
     ).toBeDefined();
     expect(
       seed.write({
