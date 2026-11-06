@@ -425,6 +425,16 @@ const highlightOf = (id: string, kind?: string): NoteHighlight => ({
 /** The `display` of an element a session shows or hides. */
 type NoteDisplay = "block" | "flex" | "none";
 
+/** What one session sees of a comment's row: which of its parts are shown. */
+interface RowDisplay {
+  row: NoteDisplay;
+  border: string;
+  actions: NoteDisplay;
+  resolve: NoteDisplay;
+  reopen: NoteDisplay;
+  delete: NoteDisplay;
+}
+
 /** Why an act from a viewer whose profile hasn't resolved is refused. */
 const NO_PROFILE = "Choose a Fabric profile to comment.";
 
@@ -948,6 +958,7 @@ export const SharedNoteCore = pattern<
   });
   const openCount = computed(() => openIds.length);
   const hasProfile = computed(() => myProfile?.get() !== undefined);
+  const noProfile = computed(() => !hasProfile);
   const commentDisabled = computed((): PerSession<boolean> => {
     const selected = selection.get();
     return selected.from === selected.to || !hasProfile ||
@@ -1088,74 +1099,73 @@ export const SharedNoteCore = pattern<
           <cf-vstack gap="2" style={{ display: "flex" }}>
             {comments.map((comment) => {
               const id = comment.id;
-              const range = computed(() => rangeOf[comment.id]);
-              // The panel lists comments in the order their text appears in
-              // the body, and those whose text is gone after the rest.
-              const order = computed(() =>
-                range === undefined || range.to <= range.from
-                  ? 1_000_000_000
-                  : range.from
-              );
-              const gone = computed(() =>
-                range !== undefined && range.to <= range.from
-              );
-              // The quote is the author's; the text between the anchors is
-              // the note's now, which anyone who can write the note can
-              // change. It is shown apart from the quote whenever the two
-              // differ.
-              const now = computed(() =>
-                range === undefined || range.to <= range.from
+              // A row's derived values are two reactive nodes, one for what
+              // every viewer sees and one for what this session sees. Each
+              // node a row holds is started again for every comment on every
+              // load, so a value of its own is a cost paid per comment.
+              const placed = computed(() => {
+                const range = rangeOf[comment.id];
+                const gone = range !== undefined && range.to <= range.from;
+                const draftDisplay: NoteDisplay = comment.draft
+                  ? "flex"
+                  : "none";
+                // The quote is the author's; the text between the anchors
+                // is the note's now, which anyone who can write the note can
+                // change. It is shown apart from the quote whenever the two
+                // differ.
+                const now = range === undefined || gone
                   ? ""
-                  : content.get().slice(range.from, range.to)
-              );
-              const moved = computed(() => now !== "" && now !== comment.quote);
-              const nowExcerpt = computed(() => excerptOf(now));
-              const mine = computed(() =>
-                viewer !== "" &&
-                principalOf(comments.elementById(comment.id), "authored-by") ===
-                  viewer
-              );
-              // A draft is listed only to its author, and not while the
-              // composer is writing it.
-              const rowDisplay = computed((): PerSession<NoteDisplay> =>
-                comment.draft
-                  ? mine && composing.get().id !== comment.id ? "flex" : "none"
-                  : !comment.resolved.get() || showResolved.get()
-                  ? "flex"
-                  : "none"
-              );
-              const draftDisplay = computed((): NoteDisplay =>
-                comment.draft ? "flex" : "none"
-              );
-              const selected = computed((): PerSession<boolean> =>
-                selectedId.get() === comment.id
-              );
-              const actionsDisplay = computed((): PerSession<NoteDisplay> =>
-                selectedId.get() === comment.id && !comment.draft
-                  ? "flex"
-                  : "none"
-              );
-              const resolveDisplay = computed((): PerSession<NoteDisplay> =>
-                comment.resolved.get() ? "none" : "flex"
-              );
-              const reopenDisplay = computed((): PerSession<NoteDisplay> =>
-                comment.resolved.get() ? "flex" : "none"
-              );
-              const deleteDisplay = computed((): PerSession<NoteDisplay> =>
-                mine ? "flex" : "none"
-              );
+                  : content.get().slice(range.from, range.to);
+                return {
+                  // The panel lists comments in the order their text appears
+                  // in the body, and those whose text is gone after the rest.
+                  order: range === undefined || gone
+                    ? 1_000_000_000
+                    : range.from,
+                  gone,
+                  quoteDecoration: gone ? "line-through" : "none",
+                  moved: now !== "" && now !== comment.quote,
+                  nowExcerpt: excerptOf(now),
+                  draftDisplay,
+                };
+              });
+              const shown = computed((): PerSession<RowDisplay> => {
+                const mine = viewer !== "" &&
+                  principalOf(
+                      comments.elementById(comment.id),
+                      "authored-by",
+                    ) === viewer;
+                const selected = selectedId.get() === comment.id;
+                const resolved = comment.resolved.get();
+                return {
+                  // A draft is listed only to its author, and not while the
+                  // composer is writing it.
+                  row: comment.draft
+                    ? mine && composing.get().id !== comment.id
+                      ? "flex"
+                      : "none"
+                    : !resolved || showResolved.get()
+                    ? "flex"
+                    : "none",
+                  border: selected
+                    ? "3px solid var(--cf-theme-color-primary)"
+                    : "3px solid var(--cf-theme-color-border)",
+                  actions: selected && !comment.draft ? "flex" : "none",
+                  resolve: resolved ? "none" : "flex",
+                  reopen: resolved ? "flex" : "none",
+                  delete: mine ? "flex" : "none",
+                };
+              });
               return (
                 <cf-vstack
                   gap="1"
                   hidden
                   data-comment-id={id}
                   style={{
-                    display: rowDisplay,
-                    order,
+                    display: shown.row,
+                    order: placed.order,
                     padding: "0.5rem",
-                    borderLeft: selected
-                      ? "3px solid var(--cf-theme-color-primary)"
-                      : "3px solid var(--cf-theme-color-border)",
+                    borderLeft: shown.border,
                   }}
                   onClick={selectComment({ id, selectedId, replyDraft })}
                 >
@@ -1180,23 +1190,23 @@ export const SharedNoteCore = pattern<
                           overflow: "hidden",
                           textOverflow: "ellipsis",
                           whiteSpace: "nowrap",
-                          textDecoration: gone ? "line-through" : "none",
+                          textDecoration: placed.quoteDecoration,
                         }}
                       >
                         {comment.quote}
                       </cf-text>
                     </cf-cfc-authorship>
-                    {gone
+                    {placed.gone
                       ? (
                         <cf-text variant="caption" tone="muted">
                           text no longer in note
                         </cf-text>
                       )
                       : null}
-                    {moved
+                    {placed.moved
                       ? (
                         <cf-text variant="caption" tone="muted">
-                          now “{nowExcerpt}”
+                          now “{placed.nowExcerpt}”
                         </cf-text>
                       )
                       : null}
@@ -1237,7 +1247,7 @@ export const SharedNoteCore = pattern<
                     align="center"
                     wrap
                     hidden
-                    style={{ display: draftDisplay }}
+                    style={{ display: placed.draftDisplay }}
                   >
                     <cf-text variant="caption" tone="muted">
                       Draft
@@ -1268,13 +1278,13 @@ export const SharedNoteCore = pattern<
                     align="center"
                     wrap
                     hidden
-                    style={{ display: actionsDisplay }}
+                    style={{ display: shown.actions }}
                   >
                     <cf-input
                       aria-label="Reply"
                       placeholder="Reply…"
                       $value={replyDraft}
-                      disabled={computed(() => !hasProfile)}
+                      disabled={noProfile}
                       timingStrategy="immediate"
                       oncf-submit={replyFromRow({
                         verb: replyVerb,
@@ -1285,7 +1295,7 @@ export const SharedNoteCore = pattern<
                     />
                     <cf-button
                       size="sm"
-                      disabled={computed(() => !hasProfile)}
+                      disabled={noProfile}
                       onClick={replyFromRow({
                         verb: replyVerb,
                         id,
@@ -1298,7 +1308,7 @@ export const SharedNoteCore = pattern<
                       size="sm"
                       variant="ghost"
                       hidden
-                      style={{ display: resolveDisplay }}
+                      style={{ display: shown.resolve }}
                       onClick={actOnComment({ verb: resolveVerb, id })}
                     >
                       Resolve
@@ -1307,7 +1317,7 @@ export const SharedNoteCore = pattern<
                       size="sm"
                       variant="ghost"
                       hidden
-                      style={{ display: reopenDisplay }}
+                      style={{ display: shown.reopen }}
                       onClick={actOnComment({ verb: reopenVerb, id })}
                     >
                       Reopen
@@ -1316,7 +1326,7 @@ export const SharedNoteCore = pattern<
                       size="sm"
                       variant="ghost"
                       hidden
-                      style={{ display: deleteDisplay }}
+                      style={{ display: shown.delete }}
                       onClick={actOnComment({ verb: deleteVerb, id })}
                     >
                       Delete
