@@ -130,6 +130,17 @@ describe("envelope-admission", () => {
       expect(admitsDroppedDeclaredPaths(dropped, OWNER, OWNER)).toBe(false);
     });
 
+    it("returns `false` for an owner clause carrying a further field", () => {
+      const scoped = { ...personalSpace(OWNER), scope: "rooms" };
+      expect(
+        admitsDroppedDeclaredPaths(
+          [{ path: [], clauses: [scoped] }],
+          OWNER,
+          OWNER,
+        ),
+      ).toBe(false);
+    });
+
     it("returns `false` for a drop outside the signer's home space", () => {
       const dropped = [{ path: [], clauses: [personalSpace(OWNER)] }];
       expect(admitsDroppedDeclaredPaths(dropped, "did:key:space", OWNER))
