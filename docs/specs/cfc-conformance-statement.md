@@ -13,7 +13,7 @@ answer, the section says "not established" and what would establish it.
 
 The statement is written against the specification at the commit the spec
 snapshot at `runtime/runner/src/cfc/kernel/spec-snapshot.json` records,
-`36d037ae`. That commit is the head of
+`239fc839`. That commit is the head of
 [specs#88](https://github.com/commonfabric/specs/pull/88), which adds §8.9.1.3
 and has not merged; the rest of the specification there is `9c9e96d0` on specs
 `main`. It describes the runtime's shipped defaults: the dial values
