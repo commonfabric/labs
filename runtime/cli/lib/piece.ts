@@ -5481,8 +5481,7 @@ export async function releaseCellConfidentialityByIntent(
   show(`Release by intent in space ${target.space}`);
   show(`  document ${target.id}, path ${location}`);
   show(
-    `  to be signed by ${identity.did()}, the space's owner by its access ` +
-      "list",
+    `  to be signed by ${identity.did()}, the space's owner`,
   );
   show("Clauses that come off every label stored at the path:");
   for (const clause of clauses) {
