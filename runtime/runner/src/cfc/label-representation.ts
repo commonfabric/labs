@@ -1,14 +1,12 @@
 import type { CfcAtom, CfcJsonValue } from "@commonfabric/api/cfc";
+import { hashStringOf } from "@commonfabric/data-model";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
+
 import {
-  type FabricValue,
-  hashStringOf,
-  isFabricPlainObject,
-  valueEqual,
-} from "@commonfabric/data-model";
-import {
-  isObjectNotArray,
-  isObjectOrArray,
-} from "@commonfabric/js-values/types";
+  type CfcFieldCommitment,
+  commitmentAwareEquals,
+  isCfcFieldCommitment,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 
 import type { CfcConfClause } from "./clause.ts";
 import {
@@ -17,41 +15,10 @@ import {
 } from "./label-field-classification.ts";
 import type { IFCLabel } from "./label-view-core.ts";
 
-/**
- * Cross-space label-metadata representation (inv-12 Stage 1 / SC-25;
- * docs/specs/cfc-label-metadata-confidentiality.md §2/§5; spec §4.6.4.1).
- *
- * At the cross-space persist seam, every commitment-classified source-bearing
- * atom field (per `label-field-classification.ts`) is replaced by its
- * unsalted canonical digest, wrapped in the self-describing marker
- * `{digestOf: "<hash>"}` so consumers dispatch on SHAPE — transformed and
- * verbatim envelopes coexist without migration (a pre-Stage-1 envelope is
- * simply one whose fields are all plaintext).
- *
- * Reserved-key discipline (mirrors `clause.ts`'s `anyOf` and
- * `atom-pattern.ts`'s `var`): only a record whose SOLE own key is `digestOf`
- * with a string value is a commitment marker. A record carrying `digestOf`
- * in any other arrangement is malformed and stays an opaque value — it never
- * digest-matches anything and only equals its structural equal (fail-closed
- * in both directions: crafted atom data cannot impersonate a marker, and a
- * malformed marker cannot match plaintext).
- *
- * Digesting uses `hashStringOf` — the shipped canonical record digest
- * (`valueDigest` / `evidenceDigest` idiom; UTF-8-sorted keys, stable number
- * formatting) — so the same field value digests identically across runtimes
- * and re-derivations (SC-11 idempotence). Privacy honesty (spec §4.6.4.1):
- * commitments of low-entropy identifiers are PROBE-ABLE; this form hides
- * identities from observation, not targeted enumeration.
- */
-export type CfcFieldCommitment = { readonly digestOf: string };
-
-/** Exact marker shape: sole own key `digestOf`, string value (see module doc). */
-export const isCfcFieldCommitment = (
-  value: unknown,
-): value is CfcFieldCommitment =>
-  isObjectNotArray(value) &&
-  Object.keys(value).length === 1 &&
-  typeof (value as { digestOf?: unknown }).digestOf === "string";
+// The commitment form and its equality are defined in the memory package,
+// where the store reads them too.
+export type { CfcFieldCommitment };
+export { commitmentAwareEquals, isCfcFieldCommitment };
 
 /** The commitment form of one atom field value: its canonical digest, marked. */
 export const commitCfcFieldValue = (
@@ -59,45 +26,6 @@ export const commitCfcFieldValue = (
 ): CfcFieldCommitment => ({
   digestOf: hashStringOf(value),
 });
-
-/**
- * Structural equality extended across the commitment marker: when exactly
- * one side is a marker, the plaintext side's canonical digest is compared
- * against the committed digest — the same-form matching rule of spec
- * §4.6.4.1 ("gating digests the candidate and compares"). Marker-vs-marker
- * and plaintext-vs-plaintext reduce to plain structural equality; records
- * and arrays compare fieldwise/elementwise so a committed field nested
- * inside an atom still matches its plaintext counterpart.
- */
-export const commitmentAwareEquals = (
-  a: FabricValue,
-  b: FabricValue,
-): boolean => {
-  if (valueEqual(a, b)) return true;
-  const aIsCommitment = isCfcFieldCommitment(a);
-  const bIsCommitment = isCfcFieldCommitment(b);
-  if (aIsCommitment !== bIsCommitment) {
-    const commitment = (aIsCommitment ? a : b) as CfcFieldCommitment;
-    const plain = aIsCommitment ? b : a;
-    return hashStringOf(plain) === commitment.digestOf;
-  }
-  if (aIsCommitment) {
-    // Both markers and not equal: different digests.
-    return false;
-  }
-  if (Array.isArray(a) && Array.isArray(b)) {
-    return a.length === b.length &&
-      a.every((element, index) => commitmentAwareEquals(element, b[index]));
-  }
-  if (isFabricPlainObject(a) && isFabricPlainObject(b)) {
-    const aKeys = Object.keys(a);
-    if (aKeys.length !== Object.keys(b).length) return false;
-    return aKeys.every((key) =>
-      Object.hasOwn(b, key) && commitmentAwareEquals(a[key], b[key])
-    );
-  }
-  return false;
-};
 
 /**
  * True when `value` contains a commitment marker anywhere — the cheap

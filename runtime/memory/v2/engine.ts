@@ -20,6 +20,10 @@ import {
   isObjectNotArray,
   isObjectOrArray,
 } from "@commonfabric/js-values/types";
+import {
+  admitsDroppedDeclaredPaths,
+  droppedDeclaredPaths,
+} from "./envelope-admission.ts";
 import { findNumericLabelField } from "./label-metadata-table.ts";
 import { mapLinkSchemas } from "./schema-table-links.ts";
 import {
@@ -6857,6 +6861,35 @@ const applyCommitTransaction = (
         scopeKey: scopeKeyByOpIndex.get(opIndex),
       })?.document ?? undefined;
   };
+  // The `cfc` member each envelope-replacing operation leaves its document
+  // with, the last one per document winning, and the operation that first
+  // reached the document, whose address reads what is stored. A delete
+  // leaves no member to judge. Judged below by `droppedDeclaredPaths()`.
+  const envelopeWrites = new Map<
+    string,
+    {
+      readonly opIndex: number;
+      readonly operation: { id: string; scope?: unknown };
+      cfc: unknown;
+      deleted: boolean;
+    }
+  >();
+  const noteEnvelopeWrite = (
+    opIndex: number,
+    operation: { id: string; scope?: unknown },
+    document: unknown,
+    deleted: boolean,
+  ): void => {
+    const docKey = opDocKey(opIndex, operation);
+    const cfc = (document as { cfc?: unknown } | null | undefined)?.cfc;
+    const known = envelopeWrites.get(docKey);
+    if (known === undefined) {
+      envelopeWrites.set(docKey, { opIndex, operation, cfc, deleted });
+    } else {
+      known.cfc = cfc;
+      known.deleted = deleted;
+    }
+  };
   for (const [opIndex, operation] of commit.operations.entries()) {
     if (operation.op === "sqlite") continue;
     if (operation.op === "patch") {
@@ -6875,6 +6908,9 @@ const applyCommitTransaction = (
               operation.patches ?? [],
             );
             stagedMetadataDocs.set(docKey, patched);
+            if (!operation.id.startsWith("cid:")) {
+              noteEnvelopeWrite(opIndex, operation, patched, false);
+            }
             if (patchTouchesMetadata(operation.patches)) {
               requireInlineLabelMetadata(operation.id, patched, () => base);
               collectCfcEnvelopeRef((patched as { cfc?: unknown }).cfc);
@@ -6898,12 +6934,16 @@ const applyCommitTransaction = (
           (operation.value as { cfc?: unknown } | null)?.cfc,
         );
         collectSchemaMetaRefs(operation.id, operation.value);
+        noteEnvelopeWrite(opIndex, operation, operation.value, false);
         if (metadataPatchDocKeys.size > 0) {
           const docKey = opDocKey(opIndex, operation);
           if (metadataPatchDocKeys.has(docKey)) {
             stagedMetadataDocs.set(docKey, operation.value);
           }
         }
+      }
+      if (operation.op === "delete") {
+        noteEnvelopeWrite(opIndex, operation, undefined, true);
       }
       if (operation.op === "delete" && metadataPatchDocKeys.size > 0) {
         const docKey = opDocKey(opIndex, operation);
@@ -7113,6 +7153,43 @@ const applyCommitTransaction = (
     if (!isLabelDocumentShape(content)) {
       throw new ProtocolError(
         `memory v2 commit references CFC label document ${id} whose content does not hold a label`,
+      );
+    }
+  }
+
+  // A commit may not leave a path whose stored declared CFC label holds a
+  // confidentiality clause with no declared entry, unless it is the owner
+  // release that `admitsDroppedDeclaredPaths()` recognizes
+  // (`envelope-admission.ts`). The stored envelope's label documents were
+  // backed when it was stored, so a reference resolves against the space.
+  const actor = delegated?.actingPrincipal ?? principal;
+  const storedLabel = (ref: string): unknown => {
+    if (!ref.startsWith("cid:")) return undefined;
+    const document = readState(engine, { id: ref, branch })?.document;
+    return document === null || document === undefined
+      ? undefined
+      : document.value;
+  };
+  for (const write of envelopeWrites.values()) {
+    if (write.deleted) continue;
+    const storedCfc = (readState(engine, {
+      id: write.operation.id,
+      branch,
+      scope: write.operation.scope as Parameters<typeof readState>[1]["scope"],
+      principal: scanPrincipal,
+      sessionId: scanSession,
+      scopeKey: scopeKeyByOpIndex.get(write.opIndex),
+    })?.document as { cfc?: unknown } | null | undefined)?.cfc;
+    if (
+      storedCfc === undefined ||
+      valueEqual(storedCfc as FabricValue, write.cfc as FabricValue)
+    ) continue;
+    const dropped = droppedDeclaredPaths(storedCfc, write.cfc, storedLabel);
+    if (!admitsDroppedDeclaredPaths(dropped, space, actor)) {
+      throw new ProtocolError(
+        `memory v2 commit leaves document ${write.operation.id} with no declared CFC label at ${
+          dropped.map((drop) => JSON.stringify(drop.path)).join(", ")
+        }, where it stores one; only the space's owner, releasing clauses that are theirs alone, may drop a declared label`,
       );
     }
   }

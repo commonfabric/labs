@@ -4,39 +4,18 @@ import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { atomEntails } from "./atom-pattern.ts";
 import { isCfcFieldCommitment } from "./label-representation.ts";
+import {
+  type CfcConfClause,
+  type CfcOrClause,
+  clauseAlternatives,
+  isOrClause,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 import { compareByCanonicalHash, uniqueCfcAtoms } from "./atoms.ts";
 
-/**
- * CNF confidentiality clauses (spec §3.1.8 / §4.2.1; Epic A of
- * docs/history/plans/cfc-future-work-implementation.md).
- *
- * A confidentiality label is a conjunction of clauses. Each clause is either
- * a bare atom (a singleton clause — every entry in today's flat labels) or an
- * authored/exchange-produced disjunction written as `{ anyOf: [atom, …] }`.
- * The `anyOf` wrapper is the wire discriminator, chosen so a clause-unaware
- * reader deep-equals the whole object against ceiling atoms, finds no match,
- * and treats the data as MORE restricted — never less (mixed-version
- * fail-closed by construction).
- *
- * The `anyOf` key is therefore reserved: an atom must never use it. To keep
- * accidental collisions fail-closed, only a record whose SOLE own key is
- * `anyOf` (with an array value) is recognized as a clause; any other shape
- * stays an opaque atom (unsatisfiable against ceilings — restrictive).
- */
-export type CfcOrClause = { readonly anyOf: readonly CfcAtom[] };
-
-/** A confidentiality clause: a bare atom, or an OR of atoms. */
-export type CfcConfClause = CfcAtom | CfcOrClause;
-
-export const isOrClause = (value: unknown): value is CfcOrClause =>
-  isObjectNotArray(value) &&
-  Array.isArray((value as { anyOf?: unknown }).anyOf) &&
-  Object.keys(value).length === 1;
-
-/** The alternatives of a clause; a bare atom is its own single alternative. */
-export const clauseAlternatives = (
-  clause: CfcConfClause,
-): readonly CfcAtom[] => isOrClause(clause) ? clause.anyOf : [clause];
+// The clause forms are defined in the memory package, where the store reads
+// them too.
+export type { CfcConfClause, CfcOrClause };
+export { clauseAlternatives, isOrClause };
 
 /**
  * Canonical form of a clause:

@@ -17,22 +17,14 @@
 import { debugStr } from "@commonfabric/data-model";
 import type { DID } from "@commonfabric/identity/did";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import { clauseReleasableBy } from "@commonfabric/memory/v2/cfc-release-authority";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { canonicalizeLogicalPath } from "./canonical.ts";
-import {
-  type CfcConfClause,
-  clauseAlternatives,
-  normalizeClause,
-} from "./clause.ts";
-import { isActorOwnedAlternative } from "./host-review.ts";
-import { classifyAtomField } from "./label-field-classification.ts";
-import {
-  commitmentAwareEquals,
-  isCfcFieldCommitment,
-} from "./label-representation.ts";
+import { type CfcConfClause, normalizeClause } from "./clause.ts";
+import { commitmentAwareEquals } from "./label-representation.ts";
 import { cfcSchemaEntries } from "./schema-label-view.ts";
 import type { IFCLabel, LabelMapEntry } from "./types.ts";
 
@@ -87,51 +79,9 @@ const nonEmptyLabel = (
   return Object.keys(label).length === 0 ? undefined : label;
 };
 
-/**
- * `atom` with each commitment-classified field that holds a digest
- * commitment to `actor`'s DID written as that DID, and every other field as
- * stored. A label crossing a space boundary stores such a field — a `User`'s
- * subject, a `PersonalSpace`'s owner — as its commitment (§4.6.4.1); a field
- * the representation table keeps public, such as a `Space`'s id, never holds
- * one, so a commitment there is left as it is and matches no one.
- */
-const openActorCommitments = (atom: CfcConfClause, actor: string) =>
-  isObjectNotArray(atom)
-    ? Object.fromEntries(
-      Object.entries(atom).map(([key, value]) => [
-        key,
-        classifyAtomField(atom, [key]) === "commitment" &&
-          isCfcFieldCommitment(value) && commitmentAwareEquals(value, actor)
-          ? actor
-          : value,
-      ]),
-    )
-    : atom;
-
-/**
- * Whether `actor` may release `clause` on their own authority, the
- * specification's `canReleaseStoredClause` (§8.12.7): every alternative
- * stands for `actor` alone in the sense the trusted host's reviewed
- * operations share (`isActorOwnedAlternative()`, the specification's
- * `standsForActor`) — `actor` as
- * `User`, `Context` or `Resource` subject or as the bare DID, or the space
- * whose DID is `actor`'s as `Space` or `PersonalSpace`, whose access list
- * `actor` writes — with a digest commitment to `actor`'s DID read as the DID.
- * Releasing such a clause is choosing the audience of their own content
- * (§3.1.8). A clause with any other alternative — another principal, another
- * space, a policy principal, an `Expires` or a `Caveat` — is not theirs alone
- * to release.
- */
-export const clauseReleasableBy = (
-  clause: CfcConfClause,
-  actor: string,
-): boolean => {
-  const alternatives = clauseAlternatives(clause);
-  return alternatives.length > 0 &&
-    alternatives.every((alternative) =>
-      isActorOwnedAlternative(openActorCommitments(alternative, actor), actor)
-    );
-};
+// The release authority is defined in the memory package, where the store
+// reads it too.
+export { clauseReleasableBy };
 
 /**
  * Whether `path`, the path a release names, names the stored position
