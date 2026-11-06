@@ -265,6 +265,34 @@ describe("RuntimeClients", () => {
         }]);
       });
 
+      it("logs a failed request whose stack cannot be read by its message", async () => {
+        const failure = new Error("stack unreadable");
+        Object.defineProperty(failure, "stack", {
+          get: () => {
+            throw new Error("no stack here");
+          },
+        });
+        const h = harness({ requestFailure: failure });
+        await h.initialize(1);
+        const logged: unknown[][] = [];
+        const realError = console.error;
+        console.error = (...args: unknown[]) => {
+          logged.push(args);
+        };
+        try {
+          await h.deliver(h.owner.client, {
+            msgId: 2,
+            data: { type: RequestType.Idle },
+          });
+        } finally {
+          console.error = realError;
+        }
+        expect(logged).toEqual([[
+          "[RuntimeWorker] Error:",
+          "stack unreadable",
+        ]]);
+      });
+
       it("replies with the message of a thrown record that is not an `Error`", async () => {
         // A storage result's error is a plain `{ name, message }` record, which
         // a request handler can throw as it is.
