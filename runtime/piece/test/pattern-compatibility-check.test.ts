@@ -256,6 +256,42 @@ function dialogProducerProgram(withCancel: boolean): RuntimeProgram {
 }
 
 /**
+ * A producer that publishes `ui.cancel`, llm-dialog's verb forwarded through
+ * `ifElse`, or, with `withUi` false, the next revision, which does not.
+ */
+function forwardingProducerProgram(withUi: boolean): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [{
+      name: "/main.tsx",
+      contents: [
+        "import { NAME, Writable, ifElse, llmDialog, pattern, type Stream } from 'commonfabric';",
+        "export default pattern<",
+        "  Record<string, never>,",
+        withUi
+          ? "  { label: string; ui?: { cancel: Stream<void> } }"
+          : "  { label: string }",
+        ">(() => {",
+        "  const on = new Writable<boolean>(true).for('on');",
+        "  const messages = new Writable<any[]>([]).for('messages');",
+        "  const dialog = llmDialog({ messages });",
+        "  return {",
+        "    [NAME]: 'Forwarding producer',",
+        "    label: 'producer',",
+        ...(withUi
+          ? [
+            "    ui: ifElse(on, { cancel: dialog.cancelGeneration }, undefined),",
+          ]
+          : []),
+        "  };",
+        "});",
+        "",
+      ].join("\n"),
+    }],
+  };
+}
+
+/**
  * The CFC-labeled variants below exist because the three rules above all
  * reason about DECLARED types, and a fourth thing decides whether the setup
  * commit lands: the CFC schema envelope physically stored on the piece's
@@ -658,6 +694,27 @@ describe("setsrc compatibility preflight", () => {
         properties: { tick: { asCell: ["stream"] } },
       }).get() as Record<string, unknown>;
     expect(Object.hasOwn(holderView(), "tick")).toBe(true);
+    // A holder that stored the stream itself, as a list of verbs does,
+    // reaches the stream's own document rather than the producer's field.
+    const tickSchema = {
+      type: "object",
+      properties: { tick: { asCell: ["stream"] } },
+    } as const;
+    const stream = (producer.getCell().asSchema(tickSchema).get() as {
+      tick?: unknown;
+    }).tick;
+    const tx = runtime.edit();
+    const storedHolder = runtime.getCell<Record<string, unknown>>(
+      pieces.getSpace(),
+      "stored-tick-holder",
+      undefined,
+      tx,
+    );
+    storedHolder.set({ tick: stream });
+    await tx.commit().settled;
+    const storedView = () =>
+      storedHolder.asSchema(tickSchema).get() as Record<string, unknown>;
+    expect(Object.hasOwn(storedView(), "tick")).toBe(true);
 
     const report = await producer.checkPattern(tickProducerProgram(false));
     expect(report.issues).toEqual({});
@@ -665,6 +722,7 @@ describe("setsrc compatibility preflight", () => {
     await runtime.idle();
 
     expect(Object.hasOwn(holderView(), "tick")).toBe(false);
+    expect(Object.hasOwn(storedView(), "tick")).toBe(false);
   });
 
   it("refuses a source that stops publishing an optional verb a builtin backs", async () => {
@@ -676,6 +734,20 @@ describe("setsrc compatibility preflight", () => {
 
     expect(report.issues.schema).toContain(
       "result.cancel: existing result field was removed",
+    );
+  });
+
+  it("refuses a source that stops publishing a builtin's verb another node forwards", async () => {
+    // The field is bound to the whole of `ifElse`'s output, so nothing in the
+    // binding names the builtin's key the verb stands for.
+
+    const producer = await pieces.create(forwardingProducerProgram(true));
+    const report = await producer.checkPattern(
+      forwardingProducerProgram(false),
+    );
+
+    expect(report.issues.schema).toContain(
+      "result.ui: existing result field was removed",
     );
   });
 

@@ -38,11 +38,12 @@ the old one. Two rules drive that comparison, in opposite directions:
 - What a pattern **accepts**, it may accept more of, never less. Accepting
   less breaks whoever was sending the thing you dropped.
 - What a pattern **provides**, it may provide more of, never less of what it
-guarantees. Providing less breaks whoever was reading the thing you dropped. A
-data field it publishes as optional guarantees nothing about presence, so it may
-stop publishing one: whoever reads it already handles its absence. An optional
-verb a pattern's handler backs is such a field too, since a holder's object read
-leaves it out once it is gone; a required verb, or one a builtin backs, is not.
+  guarantees. Providing less breaks whoever was reading the thing you dropped. A
+  data field it publishes as optional guarantees nothing about presence, so it
+  may stop publishing one: whoever reads it already handles its absence. An
+  optional verb a pattern's handler backs is such a field too, since a holder's
+  object read leaves it out once it is gone; a required verb, or one a builtin
+  backs or another node forwards, is not.
 
 Sound in principle. Measured against the current runtime — not inferred —
 here is what it does to a verb's author:
@@ -52,7 +53,7 @@ here is what it does to a verb's author:
 | Add a verb | allowed |
 | Add a verb to a type another pattern stores | **refused** |
 | Remove an optional verb a handler backs | allowed, and a holder's object read leaves it out |
-| Rename a verb, or remove a required one or one a builtin backs | refused |
+| Rename a verb, or remove a required one, a builtin's, or one another node forwards | refused |
 | Mark a verb `@deprecated` | allowed, and it disappears from listings |
 | Turn a verb into data, or data into a verb | refused |
 | Add an optional field to a verb's input | allowed |
@@ -132,14 +133,15 @@ and every field that holds one. An optional data field it may stop publishing,
 since whoever reads it already reads its absence. An optional verb, and an
 optional field holding verbs, it may stop publishing too where its previous
 pattern bound each verb to a handler's stream: a holder's object read leaves the
-verb out once it is gone (`runtime/runner/src/withdrawn-verb.ts`). One bound to
-a key of a builtin's own document is refused, since that document records no
-owner to consult, and so is a verb removal judged against a recorded baseline,
-which carries no binding. What the gate accepts in letting the rest go: a handle
-minted before the update, or by `Cell.get()` or a read without a schema, still
-reads as itself, so a holder still bound through one keeps sending to it, and
-each event waits for the producer's piece to start and is then dropped for want
-of a handler.
+verb out once it is gone (`runtime/runner/src/withdrawn-verb.ts`). One bound any
+other way is refused: a verb at a key of a builtin's own document, or one
+forwarded through a builtin, a computation or a sub-pattern, may stand for a
+document that records no owner to consult. So is a verb removal judged against a
+recorded baseline, which carries no binding. What the gate accepts in letting
+the rest go: a handle minted before the update, or by `Cell.get()` or a read
+without a schema, still reads as itself, so a holder still bound through one
+keeps sending to it, and each event waits for the producer's piece to start and
+is then dropped for want of a handler.
 
 Stated plainly, because much of the design rests on it: **a deployed
 holder's demands can be given up freely, and added only where an existing

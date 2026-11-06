@@ -88,11 +88,26 @@ interface CompatibilityContext {
   verbEvent?: boolean;
 
   /**
-   * Whether the verbs a result field at the given path holds may go with it,
-   * read from what the previous pattern binds there
-   * (`verbRemovalJudge`). Unset, no verb may be removed.
+   * The result property names that lead to the object being proved, from the
+   * result's root, each one the name a named-property comparison descended
+   * by. A path through anything else (a list's items, a record's values, a
+   * union's branch) leaves the names behind, and `verbRemovable` sees the
+   * readable path disagree with them.
    */
-  verbRemovable?: (path: string) => boolean;
+  resultPropertyNames?: readonly string[];
+
+  /**
+   * Whether the verbs the result field `names` reaches may go with it,
+   * judged from what the previous pattern binds there (`verbRemovalJudge`).
+   * `path` is the proof's readable path to the field, `schema` the field's
+   * previous contract under `root`. Unset, no verb may be removed.
+   */
+  verbRemovable?: (
+    names: readonly string[],
+    path: string,
+    schema: JSONSchema,
+    root: JSONSchema,
+  ) => boolean;
 
   /**
    * Whether the proof goes on past the first issue it finds, to report every
@@ -799,6 +814,7 @@ export function patternSchemaIncompatibilities(
       sourceRoot: candidate.resultSchema,
       targetRoot: previousResultSchema,
       role: "result",
+      resultPropertyNames: [],
       verbRemovable: verbRemovalJudge(previous),
       activePairs: new WeakMap(),
       sourceUnionSplitDepth: 0,
@@ -1335,8 +1351,9 @@ function objectSubsetIssues(
   // verb, and a field holding one at any depth, may go where the previous
   // pattern bound each verb to a handler's stream: a holder's object read then
   // reads the verb as absent (`runtime/runner/src/withdrawn-verb.ts`). One the
-  // previous pattern bound to a key of a builtin's own document is refused,
-  // since nothing durable tells a holder that verb is gone, and so is any verb
+  // previous pattern bound any other way is refused, a builtin's key or a verb
+  // forwarded through another node, since what it stands for may record no
+  // owner a read could consult (`verbRemovalJudge`), and so is any verb
   // removal where the previous pattern carries no binding to judge by, as a
   // recorded baseline does not. And a verb's event refuses it outright: a caller still sends a field the event
   // stops declaring, and an event strips undeclared fields before any handler
@@ -1363,7 +1380,13 @@ function objectSubsetIssues(
         allowEvolutionPolicy && !context.verbEvent &&
         !previousRequired.has(property) &&
         (!publishesVerb(targetProperties[property], context.targetRoot) ||
-          context.verbRemovable?.(`${path}.${property}`) === true)
+          (context.resultPropertyNames !== undefined &&
+            context.verbRemovable?.(
+                [...context.resultPropertyNames, property],
+                `${path}.${property}`,
+                targetProperties[property],
+                context.targetRoot,
+              ) === true))
       ) {
         removed.add(property);
         const candidatePatterns = matchingPatternPropertySchemas(
@@ -1622,7 +1645,10 @@ function objectSubsetIssues(
         sourceDirect,
         targetProperties[property],
         propertyPath,
-        context,
+        context.resultPropertyNames === undefined ? context : {
+          ...context,
+          resultPropertyNames: [...context.resultPropertyNames, property],
+        },
       );
       if (
         directIssues.length > 0 &&
@@ -1835,46 +1861,83 @@ function publishesVerb(schema: JSONSchema, root: JSONSchema): boolean {
 /**
  * Judges, from the bindings in `previous`'s graph, whether the verbs a result
  * field holds may be removed with it. A holder reads a removed verb as absent
- * when the verb listened at the root of a stream's own document, which a
- * pattern's handler does and which a builtin that hands its whole output to a
- * field does too. A builtin that listens at a key of its own document, as
- * llm-dialog's verbs do, leaves nothing a holder could read, so a field bound
- * to a key of a builtin node's output keeps its verbs. A field the graph does
- * not bind, or binds below a value it cannot see into, is judged not
- * removable.
- *
- * `path` is the proof's path to the field, `result` and then one property name
- * per level; a path through a list or a record names no binding.
+ * when the verb listened at the root of its own stream's document, which is
+ * where a pattern's handler listens. So each place the field's previous
+ * contract declares a verb has to be bound straight to one of the pattern's
+ * own handler streams: an alias, at no path, to a derived cell whose
+ * descriptor declares a stream. A verb forwarded through anything else, a
+ * builtin, a computation, a sub-pattern or an input, may stand for a builtin's
+ * key, which records no owner a read could consult, and keeps the field. So
+ * does a verb below a binding the walk cannot see into, and a field whose
+ * names disagree with the readable path, as they do past a list or a record.
+ * Data the field holds beside its verbs is not judged.
  */
-function verbRemovalJudge(previous: Pattern): (path: string) => boolean {
-  const builtinOutputs = new Set<string>();
-  for (const node of previous.nodes ?? []) {
-    const type = node.module?.type;
-    if (type === "javascript" || type === "pattern") continue;
-    for (const alias of aliasesIn(node.outputs)) {
-      builtinOutputs.add(causeKey(alias));
+function verbRemovalJudge(previous: Pattern): (
+  names: readonly string[],
+  path: string,
+  schema: JSONSchema,
+  root: JSONSchema,
+) => boolean {
+  const handlerStreams = (previous.derivedInternalCells ?? []).filter(
+    (descriptor) => declaresVerbStream(descriptor.schema as JSONSchema),
+  );
+  const isHandlerStream = (binding: unknown): boolean => {
+    const alias = aliasOf(binding);
+    return alias !== undefined && alias.cell === undefined &&
+      alias.path.length === 0 &&
+      handlerStreams.some((descriptor) =>
+        fabricAwareEqual(
+          descriptor.partialCause as never,
+          alias.partialCause as never,
+        )
+      );
+  };
+  const verbsBound = (
+    schema: JSONSchema,
+    root: JSONSchema,
+    binding: unknown,
+  ): boolean => {
+    if (!publishesVerb(schema, root)) return true;
+    const { schema: node, root: nodeRoot } = resolveSchema(schema, root);
+    if (!isObjectNotArray(node)) return false;
+    if (declaresVerbStream(node)) return isHandlerStream(binding);
+    if (aliasOf(binding) !== undefined || !isObjectNotArray(binding)) {
+      return false;
     }
-  }
-  return (path) => {
-    const [root, ...names] = path.split(".");
-    if (root !== "result") return false;
+    const properties = isObjectNotArray((node as SchemaObject).properties)
+      ? (node as SchemaObject).properties as Record<string, JSONSchema>
+      : {};
+    const named = new Set<unknown>(Object.values(properties));
+    const elsewhere = subschemaChildren(node, REFERENCE_TABLE_KEYS).some(
+      (child) =>
+        !named.has(child) && publishesVerb(child as JSONSchema, nodeRoot),
+    );
+    if (elsewhere) return false;
+    return Object.entries(properties).every(([name, property]) =>
+      verbsBound(
+        property,
+        nodeRoot,
+        Object.hasOwn(binding, name)
+          ? (binding as Record<string, unknown>)[name]
+          : undefined,
+      )
+    );
+  };
+  return (names, path, schema, root) => {
+    if (["result", ...names].join(".") !== path) return false;
     let binding: unknown = previous.result;
     for (const name of names) {
-      if (aliasOf(binding) !== undefined) break;
-      if (!isObjectNotArray(binding) || !Object.hasOwn(binding, name)) {
+      if (aliasOf(binding) !== undefined || !isObjectNotArray(binding)) {
         return false;
       }
+      if (!Object.hasOwn(binding, name)) return false;
       binding = (binding as Record<string, unknown>)[name];
     }
-    const aliases = aliasesIn(binding);
-    return aliases.length > 0 &&
-      aliases.every((alias) =>
-        alias.path.length === 0 || !builtinOutputs.has(causeKey(alias))
-      );
+    return verbsBound(schema, root, binding);
   };
 }
 
-/** The target of a graph's `$alias` binding, which names a cell by cause. */
+/** The target of a graph's `$alias` binding, which names a cell. */
 interface AliasTarget {
   readonly path: readonly unknown[];
   readonly partialCause?: unknown;
@@ -1888,20 +1951,6 @@ function aliasOf(value: unknown): AliasTarget | undefined {
       Array.isArray((target as { path?: unknown }).path)
     ? target as unknown as AliasTarget
     : undefined;
-}
-
-/** Every alias in a graph binding, not looking past one into its target. */
-function aliasesIn(value: unknown): AliasTarget[] {
-  const alias = aliasOf(value);
-  if (alias !== undefined) return [alias];
-  if (Array.isArray(value)) return value.flatMap(aliasesIn);
-  if (isObjectNotArray(value)) return Object.values(value).flatMap(aliasesIn);
-  return [];
-}
-
-/** What identifies the cell an alias names, across a graph. */
-function causeKey(alias: AliasTarget): string {
-  return JSON.stringify([alias.cell ?? null, alias.partialCause ?? null]);
 }
 
 function declaresVerbStream(schema: JSONSchema): boolean {
