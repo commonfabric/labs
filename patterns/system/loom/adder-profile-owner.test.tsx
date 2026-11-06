@@ -20,11 +20,13 @@ import {
   TESTS,
   type TrustedActionWrite,
   UI,
-  VIEWS,
   Writable,
 } from "commonfabric";
+import {
+  clickButton,
+  findElement,
+} from "../../tools/test-support/vnode-helpers.ts";
 import Loom from "./main.tsx";
-import { runPanelAction } from "./menu-test-fixture.ts";
 import type { LoomOutput, Panel, ParticipantProfile } from "./schemas.tsx";
 
 /** The reviewed surface and action a person writes their own profile from. */
@@ -193,7 +195,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     setup.loom.viewerState.key("actingProfile").set(setup.handoff.get().profile)
   );
   const duplicateFromUI = action(() =>
-    runPanelAction(setup.loom[VIEWS].menu, 0, "Duplicate")
+    clickButton(findElement(setup.loom[UI], "cf-card"), "Duplicate")
   );
   const addPieceAsSelf = action(() =>
     setup.loom.addPiece.send({ piece, as: profile })

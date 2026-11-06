@@ -8,15 +8,13 @@ import {
   pattern,
   TESTS,
   UI,
-  VIEWS,
   Writable,
 } from "commonfabric";
 import {
-  countElements,
+  clickButton,
   hasText,
 } from "../../tools/test-support/vnode-helpers.ts";
 import Loom from "./main.tsx";
-import { menuLabels, runLoomAction } from "./menu-test-fixture.ts";
 import type { LoomOutput, Panel } from "./schemas.tsx";
 
 type TestProfile = Confidential<
@@ -48,9 +46,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const select = action(() =>
     setup.loom.viewerState.set({ selectedPanel: panel })
   );
-  const stage = action(() =>
-    runLoomAction(setup.loom[VIEWS].menu, "Stage all for everyone")
-  );
+  const stage = action(() => clickButton(setup.loom[UI], "Stage all"));
   // Labeled, as a real profile is.
   const profile = Writable.of<TestProfile>({
     name: "Alice",
@@ -78,9 +74,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       {
         assertion: assert(() =>
           hasText(setup.loom[UI], "Staged for everyone") &&
-          !menuLabels(setup.loom[VIEWS].menu).includes(
-            "Stage all for everyone",
-          )
+          !hasText(setup.loom[UI], "Not staged")
         ),
       },
       {
@@ -145,15 +139,6 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           setup.loom.presentation.stagedPanels.length === 2
         ),
       },
-      // A WRITE member arranges, but is offered no Remove: they may remove
-      // only what they added, which only the handler can tell.
-      {
-        assertion: assert(() => {
-          const labels = menuLabels(setup.loom[VIEWS].menu);
-          return labels.includes("Duplicate") && labels.includes("Move last") &&
-            !labels.includes("Remove");
-        }),
-      },
       { action: join },
       { label: "bob-joined" },
       { await: "alice-joined" },
@@ -197,44 +182,10 @@ export const aliceTab2 = pattern<{ setup: Setup }>(({ setup }) => {
       { assertion: assert(() => setup.loom.participants.length === 3) },
       { label: "tab2-counted" },
       { render: setup.loom[UI] },
-      {
-        assertion: assert(() =>
-          countElements(setup.loom[UI], "cf-card") === 2 &&
-          menuLabels(setup.loom[VIEWS].menu).includes("Clear stage")
-        ),
-      },
+      { assertion: assert(() => hasText(setup.loom[UI], "Stage all")) },
     ],
   };
 });
-
-/** The actions that change what everyone sees. */
-const ARRANGING = [
-  "Stage all for everyone",
-  "Clear stage",
-  "Focus for everyone",
-  "Move first",
-  "Move last",
-  "Duplicate",
-  "Remove",
-];
-
-// A reader is offered only what changes their own view: never arranging what
-// everyone sees, which their access would refuse.
-export const carol = pattern<{ setup: Setup }>(({ setup }) => ({
-  [TESTS]: [
-    { await: "alice-staged" },
-    { await: "bob-added" },
-    { render: setup.loom[UI] },
-    {
-      assertion: assert(() => {
-        const labels = menuLabels(setup.loom[VIEWS].menu);
-        return setup.loom.panels.length === 2 &&
-          labels.includes("Hide for me") &&
-          !ARRANGING.some((label) => labels.includes(label));
-      }),
-    },
-  ],
-}));
 
 export default multiUserTest({
   setup,
@@ -242,6 +193,5 @@ export default multiUserTest({
     alice,
     bob,
     aliceTab2: { pattern: aliceTab2, user: "alice" },
-    carol: { pattern: carol, access: "READ" },
   },
 });
