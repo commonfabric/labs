@@ -621,8 +621,8 @@ then means one deployment rather than one process.
 Rejection at the target (LT4, RULED 2026-08-03): the outbox's
 at-least-once retry covers TRANSPORT failures only; a
 DETERMINISTIC admission rejection — an invalid capability grant,
-the owner's `refused` answer to the routed append, or its refusal
-to open the routed session under the target's access list —
+the owner's `refused` answer to the routed append, or a deleted
+target —
 is not retried. It surfaces in the SOURCE space per events.md §5's
 error-is-the-consequence shape: a failure notice on the source
 event's stream entry, written by the source SpaceServer in a later

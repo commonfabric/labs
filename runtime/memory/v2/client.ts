@@ -5738,25 +5738,6 @@ export function isDeletedSpaceError(error: unknown): error is Error & {
     (error as { deleted?: unknown }).deleted === true;
 }
 
-/**
- * Recognizes the memory server's refusal under the access list as it stands,
- * which a retry meets again until that list changes: a deleted space's
- * (`isDeletedSpaceError()`), or an `AuthorizationError` the server backs with
- * the list's revision and does not mark `retriable`. The error a revoked
- * session closes with is not one unless the revocation was for a deletion,
- * since a new session may be admitted where the revoked one was not.
- */
-export function isAccessListRefusalError(error: unknown): boolean {
-  if (isDeletedSpaceError(error)) return true;
-  const verdict = error as {
-    permanentEvidence?: unknown;
-    aclRevision?: unknown;
-  };
-  return isPermanentAuthorizationError(error) &&
-    verdict.permanentEvidence === true &&
-    typeof verdict.aclRevision === "number";
-}
-
 /** Recognizes a server refusal whose recovery requires replacing the runtime. */
 export function isClientUpdateRequiredError(error: unknown): error is Error & {
   /** Explicit recovery instruction, independent of the refusal's error name. */

@@ -823,13 +823,12 @@ describe("executor owner routing", () => {
     });
   };
 
-  /** Grants `who` the level `level` on the target, as `as` through a client
-   * of `owner`, so the owner sweeps the sessions the change de-authorizes. */
-  const grantOnTarget = async (
+  /** Makes `edit` to the target's access list, as `as` through a client of
+   * `owner`, so the owner sweeps the sessions the change de-authorizes. */
+  const editTargetAcl = async (
     owner: MemoryV2Server.Server,
     as: Identity,
-    who: string,
-    level: "READ" | "WRITE" | "OWNER",
+    edit: (acl: ACLManager) => Promise<unknown>,
   ): Promise<void> => {
     const manager = EmulatedStorageManager.connectTo(owner, { as });
     managers.push(manager);
@@ -838,7 +837,7 @@ describe("executor owner routing", () => {
       storageManager: manager,
     });
     runtimes.push(runtime);
-    await new ACLManager(runtime, targetSpace).set(who as never, level);
+    await edit(new ACLManager(runtime, targetSpace));
     await runtime.idle();
     await runtime.storageManager.synced();
   };
@@ -896,7 +895,11 @@ describe("executor owner routing", () => {
 
     // The routed session acts as the target's owner, `second`. Granting
     // `first` OWNER moves the owner to `first`, so the owner revokes it.
-    await grantOnTarget(owner, second, first.did(), "OWNER");
+    await editTargetAcl(
+      owner,
+      second,
+      (acl) => acl.set(first.did() as never, "OWNER"),
+    );
     await revocations.reached(1);
 
     await scope.append(targetSpace, appendOf("evt-after-revoke", second));
@@ -925,7 +928,11 @@ describe("executor owner routing", () => {
       });
     });
 
-    await grantOnTarget(owner, second, first.did(), "OWNER");
+    await editTargetAcl(
+      owner,
+      second,
+      (acl) => acl.set(first.did() as never, "OWNER"),
+    );
     await revocations.reached(1);
     await scope.append(
       targetSpace,
@@ -989,7 +996,7 @@ describe("executor owner routing", () => {
     await lease.release();
   });
 
-  it("retires a row once the owner refuses the session replacing a revoked one, the target's list binding the service to no owner, as a deterministic refusal with the notice on the source entry", async () => {
+  it("keeps a row while the owner refuses the session replacing a revoked one under the target's access list, and delivers it once a later change to the list admits the session again", async () => {
     const owner = enforcingOwner();
     // A space of a declared kind that owns itself binds a routed session
     // to no user, so the service's own grant decides its open, and the
@@ -1011,7 +1018,11 @@ describe("executor owner routing", () => {
     });
     expect((await outbox.deliverPendingAppends()).remaining).toBe(0);
 
-    await grantOnTarget(owner, aliceSigner, targetSpace, "OWNER");
+    await editTargetAcl(
+      owner,
+      aliceSigner,
+      (acl) => acl.set(targetSpace as never, "OWNER"),
+    );
     await revocations.reached(1);
     insertExecutionOutboxRows(engine, {
       branch: "",
@@ -1022,24 +1033,25 @@ describe("executor owner routing", () => {
         sourceEvent,
       }],
     });
+    expect((await outbox.deliverPendingAppends()).remaining).toBe(1);
+    expect(stats.outbox.failed).toBe(0);
 
+    // Alice takes the space's own entry off the list, which binds the
+    // service's session to her again.
+    await editTargetAcl(owner, aliceSigner, (acl) => acl.remove(targetSpace));
     expect((await outbox.deliverPendingAppends()).remaining).toBe(0);
-    expect(selectPendingExecutionOutboxRows(engine, { branch: "" }).length)
-      .toBe(0);
-    expect(stats.outbox.failed).toBe(1);
     expect(
       (await entriesOn(owner, targetSpace, sidecar)).map((entry) =>
         entry.eventId
       ),
-    ).toEqual(["evt-before-unbind"]);
+    ).toEqual(["evt-before-unbind", "evt-after-unbind"]);
+    expect(stats.outbox.failed).toBe(0);
     const [sourceEntry] = await entriesOn(
       "A",
       homeSpace,
       sourceEvent.sidecarId,
     );
-    expect(sourceEntry.deliveryFailures?.map((f) => f.eventId)).toEqual([
-      "evt-after-unbind",
-    ]);
+    expect(sourceEntry.deliveryFailures).toBeUndefined();
     await lease.release();
   });
 

@@ -56,7 +56,7 @@ import type {
   StreamEventEntry,
   StreamLinkRef,
 } from "@commonfabric/memory/v2";
-import { isAccessListRefusalError } from "@commonfabric/memory/v2/client";
+import { isDeletedSpaceError } from "@commonfabric/memory/v2/client";
 import type { FabricValue, JSONSchema } from "@commonfabric/api";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
@@ -537,12 +537,22 @@ export class EventAppendQueue {
           attempt = 0;
           continue;
         }
+        const verdict = error as {
+          permanentEvidence?: unknown;
+          aclRevision?: unknown;
+          retriable?: unknown;
+        } | undefined;
         // A current ACL denial proves this append was not admitted. A
         // session challenge race remains retryable and carries no such basis.
         // A deleted space admits nothing again, and the error a session
         // revoked for the deletion closes with carries only `deleted`, so
         // that marker alone is a refusal (INV-15).
-        if (REFUSED_ERROR_NAMES.has(name) || isAccessListRefusalError(error)) {
+        const aclRefusal = isDeletedSpaceError(error) ||
+          (name === "AuthorizationError" &&
+            verdict?.permanentEvidence === true &&
+            typeof verdict.aclRevision === "number" &&
+            verdict.retriable !== true);
+        if (REFUSED_ERROR_NAMES.has(name) || aclRefusal) {
           logger.warn("event-append-refused", () => [
             `event append ${next.eventId} refused deterministically; ` +
             "dropped from the queue",

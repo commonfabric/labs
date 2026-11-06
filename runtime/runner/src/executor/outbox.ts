@@ -39,7 +39,7 @@ import {
 } from "@commonfabric/memory/v2/execution-outbox";
 import type { PendingOutboxRow } from "@commonfabric/memory/v2/execution-outbox";
 import { ProtocolError } from "@commonfabric/memory/v2";
-import { isAccessListRefusalError } from "@commonfabric/memory/v2/client";
+import { isDeletedSpaceError } from "@commonfabric/memory/v2/client";
 import { getLogger } from "@commonfabric/logger";
 import {
   POST_COMMIT_RELEASE_REJECTED,
@@ -645,16 +645,18 @@ export class SpaceOutbox {
       } catch (error) {
         // The owner's `refused` is the engine's `ProtocolError`, answered
         // over the route, and an append too large to send is refused before
-        // it is sent and never fits later. The owner's refusal of the routed
-        // session under the target's access list, the target's deletion
-        // included, holds until that list changes. Every other refusal of
-        // the owner's is transient, the close of a session it revoked among
-        // them: the route opens a new session for the next attempt.
+        // it is sent and never fits later. A deleted target admits nothing
+        // again (INV-15), whether the owner refuses the routed session's open
+        // for it or revoked the open session with it. Every other refusal of
+        // the owner's is transient: a denial under the target's access list,
+        // which a later grant can lift, and the close of a session the owner
+        // revoked, after which the route opens a new one for the next
+        // attempt.
         if (
           error instanceof ProtocolError ||
           isServedRefusal(error, "refused") ||
           isServedRefusal(error, "payload-too-large") ||
-          isAccessListRefusalError(error)
+          isDeletedSpaceError(error)
         ) {
           // LT4: a deterministic admission rejection does not retry. The
           // source-side failure notice writes BEFORE the row retires

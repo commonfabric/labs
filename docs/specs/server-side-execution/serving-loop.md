@@ -2014,11 +2014,12 @@ the durable rows of §5 carry APPENDS, never effect state).
   host given no route delivers the row as a delegated append on its
   own memory server. The owner's `refused` answer is LT4's
   deterministic rejection, which writes the failure notice in the
-  source, and so is its refusal to open the session under the
-  target's access list, the target's deletion among them;
-  `unavailable`, `internal`, a transport failure and the close of a
-  revoked session are transient, and the row is kept for the next
-  attempt. The pattern-lifecycle handler's
+  source, and so is a deleted target, whether the owner refuses the
+  session's open for it or revokes the open session with it;
+  `unavailable`, `internal`, a transport failure, the close of a
+  session revoked for any other reason, and a refusal of the open
+  under the target's access list, which a later grant can lift, are
+  transient, and the row is kept for the next attempt. The pattern-lifecycle handler's
   registration delivery into a space the verb did not run in takes
   the same path, and watches the stream document on that session
   for the event's outcome where it watched its own server's
