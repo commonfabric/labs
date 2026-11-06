@@ -38,7 +38,10 @@ import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { canonicalizeLogicalPath } from "./canonical.ts";
 import { normalizeClause } from "./clause.ts";
-import { cfcSchemaEntries } from "./schema-label-view.ts";
+import {
+  cfcSchemaEntries,
+  declaredObservationClass,
+} from "./schema-label-view.ts";
 import type { IFCLabel, LabelMapEntry } from "./types.ts";
 
 /** Builtin implementation identity that alone writes confidentiality releases. */
@@ -448,7 +451,8 @@ interface StoredPosition {
 /**
  * Every position the payload label map of `entries` and the stored schema's
  * declarations hold a label at, its path canonical, a schema declaration's
- * component being `declared` and an entry with no origin `legacy`.
+ * component being `declared`, with the observation class its `ifc` declares,
+ * and an entry with no origin `legacy`.
  */
 const storedPositions = (
   entries: readonly LabelMapEntry[],
@@ -460,11 +464,15 @@ const storedPositions = (
     origin: entry.origin ?? "legacy",
     ...(entry.observes === undefined ? {} : { observes: entry.observes }),
   })),
-  ...(schema === undefined ? [] : cfcSchemaEntries(schema)).map((entry) => ({
-    path: canonicalizeLogicalPath(entry.path),
-    label: entry.label,
-    origin: "declared",
-  })),
+  ...(schema === undefined ? [] : cfcSchemaEntries(schema)).map((entry) => {
+    const observes = declaredObservationClass(entry.schema);
+    return {
+      path: canonicalizeLogicalPath(entry.path),
+      label: entry.label,
+      origin: "declared",
+      ...(observes === undefined ? {} : { observes }),
+    };
+  }),
 ];
 
 /**

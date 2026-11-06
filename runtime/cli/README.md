@@ -1897,10 +1897,12 @@ lowering keep the label they were served under.
 theirs alone, such as the stamps an earlier setup left on a result's membership
 naming other principals whose data the result does not hold. A lowering with
 `set-label` refuses those; this command releases them on a request the space's
-owner signs, the owner release by intent of the CFC specification's §8.12.7.
-Without `--clause` it only lists the confidentiality clauses stored at the path,
-each with its canonical clause digest and the labels holding it (component and
-observation class), and changes nothing:
+owner signs. That is the owner release by intent (§8.12.7 route 2d) proposed in
+[specs#90](https://github.com/commonfabric/specs/pull/90), which this runtime
+implements ahead of its ruling. Without `--clause` it only lists the
+confidentiality clauses stored at the path, each with its canonical clause
+digest and the labels holding it (component and observation class), and changes
+nothing:
 
 ```bash
 cf cell release-by-intent --cell ID
@@ -1940,11 +1942,11 @@ holding a clause it releases, and asks for the word `release` to be typed. Only
 then does it sign the request with the identity and commit the release together
 with its record, a create-only document in the space holding the signed request,
 the owner, the document and path, the released clauses' digests, and digests of
-the stored labels before and after; the record is readable by the owner. The
-command runs only with standard input at a terminal, refusing before it builds
-or signs anything otherwise, and no option skips the confirmation: the signature
-stands for the owner's own decision, made in person, which is the one thing the
-store cannot check.
+the stored labels before and after; the record is readable by the owner. With
+`--clause`, the command runs only with standard input at a terminal, refusing
+before it builds or signs anything otherwise, and no option skips the
+confirmation: the signature stands for the owner's own decision, made in person,
+which is the one thing the store cannot check.
 
 The store checks the rest at the commit: that the signature verifies, that the
 signer is the owner the space's access list names (the identity whose DID is the

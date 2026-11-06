@@ -199,7 +199,7 @@ describe("owner release by intent", () => {
           ],
           schema: {
             type: "object",
-            ifc: { confidentiality: [TEN[0]] },
+            ifc: { confidentiality: [TEN[0]], observes: "value" },
           } as JSONSchema,
         }),
       ).toEqual([
@@ -214,7 +214,7 @@ describe("owner release by intent", () => {
         {
           clause: TEN[0],
           digest: tenDigests[0],
-          positions: [{ origin: "declared" }],
+          positions: [{ origin: "declared", observes: "value" }],
         },
       ]);
     });

@@ -2342,8 +2342,8 @@ The command shows the document, the path, and each clause that comes off and
 stays, and asks you to type "release". Only then does it sign the request
 with the identity, which must be the owner the space's access list names, and
 commit the release together with a record of it, holding the signed request.
-It runs only with standard input at a terminal, and nothing skips the
-confirmation. The store checks the signature, the owner, and that the labels
+With --clause it runs only with standard input at a terminal, and nothing
+skips the confirmation. The store checks the signature, the owner, and that the labels
 are still the ones you were shown; a request is used once.`,
       ),
     )
