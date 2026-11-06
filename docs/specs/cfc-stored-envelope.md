@@ -149,6 +149,43 @@ and the reader that goes on to want its labels fails closed.
 
 A new consumer adopts the rule by leaving `StoredCfcMetadataError` alone.
 
+## What the store refuses of a handed envelope
+
+The rule above is the reader's. The store that receives an envelope has a
+check of its own, because a writer can hand it an envelope the runtime never
+derived: a client that skips its runtime's label machinery and writes the
+reserved position itself. Specification §8.12.8 makes the declared
+component, the store policy, monotone, so the store can judge it against
+what it already holds without re-deriving anything.
+
+The memory engine refuses a commit that leaves a path whose stored declared
+entries (`origin: "declared"`) hold a confidentiality clause with no
+declared entry at that path, the whole `cfc` member erased included
+([envelope-admission.ts](../../runtime/memory/v2/envelope-admission.ts),
+called from `applyCommitTransaction` in
+[engine.ts](../../runtime/memory/v2/engine.ts)). The runtime writes that
+shape in one case only, an owner release
+([confidentiality-release.ts](../../runtime/runner/src/cfc/confidentiality-release.ts),
+§8.12.7 route 2c), so a commit the space's owner signs, every clause of
+whose dropped entries is the owner's alone to release, is admitted. That
+decision is `clauseReleasableBy()`, which the runtime's release makes too
+and which lives in the memory package
+([cfc-release-authority.ts](../../runtime/memory/v2/cfc-release-authority.ts))
+so that both read it. A label held by reference is read from the label
+document the space stores; one that doesn't resolve can't be released. A
+commit deleting the document is admitted, and a later write is a creation.
+
+This is the interim rule of
+[specs#89](https://github.com/commonfabric/specs/pull/89), which this
+runtime implements ahead of the ruling. The rule that pull request proposes
+also refuses a lowering that keeps a declared entry at the path, and a
+change to a still-existing path's existence entry. Those are left to the
+runtime here until its own declared-monotonicity gate
+([`cfcDeclaredMonotonicity`](../development/EXPERIMENTAL_OPTIONS.md#cfcdeclaredmonotonicity))
+runs at `enforce`. The derived and link-carried components are the
+runtime's to get right under either rule, since judging them means
+re-deriving them.
+
 ## Recovery
 
 Two of the three errors are permanent for the stored bytes: an unknown
@@ -170,6 +207,11 @@ are memoized by the identity of the stored label map, never failures.
   — a version-2 entry naming a label document nothing backs, one naming a
   document that does not hold a label, one whose content does not hash to
   its id, and a reference in a version-1 envelope.
+- [v2-envelope-admission.test.ts](../../runtime/memory/test/v2-envelope-admission.test.ts)
+  — the store refuses a commit dropping another principal's declared label,
+  by erasure, by a rewrite or patch leaving its entry out, or through a
+  label held by reference, and admits the space owner's drop of their own
+  clause, a lowering that keeps the entry, and a delete.
 - [cfc/verifier-metadata.test.ts](../../runtime/runner/test/cfc/verifier-metadata.test.ts)
   — a transaction that consumed an uninterpretable envelope is refused even
   when its write target declares no gate.

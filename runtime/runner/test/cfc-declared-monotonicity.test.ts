@@ -250,13 +250,20 @@ const rewriteStoredEntries = async (
     };
   };
   cloned.cfc.labelMap.entries = mutate(cloned.cfc.labelMap.entries);
-  seedStoredEnvelope(tx, {
+  const address = {
     space: signer.did(),
     id: docId as URI,
-    type: "application/json",
+    type: "application/json" as const,
     path: [],
-  }, cloned as never);
-  const result = await tx.commit().settled;
+  };
+  // The store refuses a commit that leaves a declared path with no declared
+  // entry, which a rewrite into legacy or derived entries does, so the
+  // document is deleted and then stored afresh, a creation the store admits.
+  seedStoredEnvelope(tx, address, undefined as never, { delete: true });
+  expect((await tx.commit().settled).error).toBeUndefined();
+  const rewrite = seeder.edit();
+  seedStoredEnvelope(rewrite, address, cloned as never);
+  const result = await rewrite.commit().settled;
   expect(result.error).toBeUndefined();
 };
 
