@@ -42,13 +42,15 @@ host answers with its manifest and with each command's result unchanged. The
 host decides what a run may list and run: it filters its listing for the caller,
 each command's `actors`, `origins_required`, and `origins_refused` apply to this
 caller as to any other, and the run-id header marks the call as an agent's
-session. cf-harness filters nothing itself.
+session. cf-harness applies no additional command-selection filter to the host's
+catalog. The run's tool grants and CFC policy still apply.
 
 The host may also name the commands relevant to a run: `--commands-relevant`,
 repeatable, or `relevant` in a local-job profile's `commands` entry. A hint
 only, it neither adds a command to the listing nor takes one away:
-`list_commands` shows those commands first and marks them `relevant: true`, so a
-listing past the model bound keeps them whole.
+`list_commands` shows those commands first and marks them `relevant: true`.
+Relevance does not add detail: only commands named in `detail` carry their
+description and input schema.
 
 `list_commands` and the first `run_command` of a run read the listing. Each call
 `run_command` sends to the host, a lone call or one call of a batch, is one
