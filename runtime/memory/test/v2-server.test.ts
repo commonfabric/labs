@@ -3060,44 +3060,6 @@ describe("v2-server", () => {
       }
     });
 
-    it("sends the committing session the deletion of the document its deletion of the field's entity caused", async () => {
-      // A session is not sent its own `delete` of a document. The deletion
-      // of the anchors document is the engine's, for the session's deletion
-      // of the entity that holds the field.
-
-      const server = createServer("memory://memory-v2-server-delete-anchors");
-      const space = "did:key:z6Mk-memory-v2-delete-anchors";
-
-      try {
-        const { connection, messages, session } = await openAnchorsWatcher(
-          server,
-          space,
-        );
-        await transact(connection, messages, session, 1, [
-          { op: "set", id: "of:doc:a", value: { value: { body: "hello" } } },
-          insertAhead,
-          { op: "set", id: anchorsId, value: { value: { from: 2, to: 4 } } },
-        ]);
-        await server.flushSessions([space]);
-        expect(assertEffect(shiftMessage(messages)).effect.upserts).toEqual([]);
-
-        const seq = await transact(connection, messages, session, 2, [
-          { op: "delete", id: "of:doc:a" },
-        ]);
-        await server.flushSessions([space]);
-        expect(assertEffect(shiftMessage(messages)).effect.upserts).toEqual([{
-          branch: "",
-          id: anchorsId,
-          scope: "space",
-          seq,
-          deleted: true,
-        }]);
-        expect(messages).toEqual([]);
-      } finally {
-        await server.close();
-      }
-    });
-
     it("sends a session watching the field's operations the anchors another session wrote to the document", async () => {
       const server = createServer("memory://memory-v2-server-watch-anchors");
       const writerMessages: ServerMessage[] = [];

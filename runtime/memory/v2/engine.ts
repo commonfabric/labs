@@ -117,7 +117,6 @@ import {
   type StreamEventsDocValue,
   type StreamLinkRef,
   tableDeclaresRowLabel,
-  toValuePath,
   type ValuePath,
 } from "../v2.ts";
 
@@ -5886,42 +5885,6 @@ const assertAnchorsDocument = (
   }
 };
 
-/** Deletes the field's anchors document when it exists. */
-const deleteAnchorsDocument = (
-  engine: Engine,
-  options: {
-    branch: BranchName;
-    seq: number;
-    opIndex: number;
-    principal?: string;
-    sessionId: SessionId;
-    scopeKeyOverride?: string;
-    scopeKey: string;
-    field: OperationFieldAddress;
-  },
-): AppliedRevision | undefined => {
-  const { field, scopeKey, ...write } = options;
-  const id = operationAnchorsDocId(field);
-  const state = readStateForScopeKey(engine, {
-    branch: options.branch,
-    id,
-    scope: normalizeScope(field.scope),
-    scopeKey,
-  });
-  if (state === null || state.document === null) return undefined;
-  return {
-    ...writeOperation(engine, {
-      ...write,
-      operation: {
-        op: "delete",
-        id,
-        ...(field.scope === undefined ? {} : { scope: field.scope }),
-      },
-    }),
-    derived: true,
-  };
-};
-
 const releaseOperationField = (
   engine: Engine,
   options: {
@@ -5974,53 +5937,28 @@ const releaseOperationField = (
 };
 
 /**
- * Releases every active operation field of an entity being deleted, and
- * deletes the anchors document of every field of it that has ever been
- * active, released ones included. The anchors of a field that was never
- * active are not found this way, since nothing records which fields of an
- * entity hold anchors but their own documents, whose ids are hashes.
+ * Releases every active operation field of an entity being deleted. Their
+ * anchors documents stay, as a release of one field leaves its anchors (§7.8):
+ * a writer that deletes the entity and wants them gone deletes them in the
+ * same commit.
  */
 const releaseEntityOperationFields = (
   engine: Engine,
   options: {
     branch: BranchName;
-    seq: number;
-    opIndex: number;
     operation: DeleteOperation;
     principal?: string;
     sessionId: SessionId;
     scopeKeyOverride?: string;
   },
-): AppliedRevision[] => {
+): void => {
   const { branch, operation, principal, sessionId } = options;
   const scopeKey = options.scopeKeyOverride ??
     resolveScopeKey(operation.scope, { principal, sessionId });
-  const keys = { branch, id: operation.id, scope_key: scopeKey };
-  const fields = engine.database.prepare(`
-    SELECT path FROM op_field_epoch
-    WHERE branch = :branch AND id = :id AND scope_key = :scope_key
-  `).all(keys) as { path: string }[];
   engine.database.prepare(`
     UPDATE op_field_epoch SET active = 0
     WHERE branch = :branch AND id = :id AND scope_key = :scope_key
-  `).run(keys);
-  return fields.flatMap(({ path }) => {
-    const deleted = deleteAnchorsDocument(engine, {
-      branch,
-      seq: options.seq,
-      opIndex: options.opIndex,
-      principal,
-      sessionId,
-      scopeKeyOverride: options.scopeKeyOverride,
-      scopeKey,
-      field: {
-        id: operation.id,
-        ...(operation.scope === undefined ? {} : { scope: operation.scope }),
-        path: toValuePath(parsePointer(path)),
-      },
-    });
-    return deleted === undefined ? [] : [deleted];
-  });
+  `).run({ branch, id: operation.id, scope_key: scopeKey });
 };
 
 const assertOperationFieldsPreserved = (
@@ -7371,16 +7309,13 @@ const applyCommitTransaction = (
       continue;
     }
     if (operation.op === "delete") {
-      const released = releaseEntityOperationFields(engine, {
+      releaseEntityOperationFields(engine, {
         branch,
-        seq,
-        opIndex,
         operation,
         principal: scanPrincipal,
         sessionId: scanSession,
         scopeKeyOverride: scopeKeyByOpIndex.get(opIndex),
       });
-      for (const revision of released) revisions.push(revision);
     } else {
       assertOperationFieldsPreserved(engine, {
         branch,

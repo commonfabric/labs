@@ -3335,7 +3335,7 @@ describe("v2-operation-engine", () => {
       }
     });
 
-    it("deletes the anchors document with its entity, whether or not the field was released", async () => {
+    it("keeps the anchors document when its entity is deleted, for the entity created anew", async () => {
       const { engine, path } = await openTestEngine();
       try {
         setup(engine, "of:deleted", "abc");
@@ -3343,41 +3343,40 @@ describe("v2-operation-engine", () => {
           applyOp("of:deleted", "alice:1", "abc", [changes(3, 3, "d")]),
         ]);
         commit(engine, [setAnchors("of:deleted", { a: 1 })]);
+
         const deleted = commit(engine, [{ op: "delete", id: "of:deleted" }]);
+
+        expect(written(deleted)).toEqual([["of:deleted", "delete", false]]);
+        expect(storedAnchors(engine, "of:deleted")).toEqual({
+          value: { a: 1 },
+        });
+        setup(engine, "of:deleted", "abcd");
+        expect(snapshot(engine, "of:deleted").anchors).toEqual({ a: 1 });
+      } finally {
+        close(engine);
+        await Deno.remove(path);
+      }
+    });
+
+    it("deletes the anchors document that the commit deleting its entity deletes", async () => {
+      const { engine, path } = await openTestEngine();
+      try {
+        setup(engine, "of:both", "abc");
+        commit(engine, [
+          applyOp("of:both", "alice:1", "abc", [changes(3, 3, "d")]),
+        ]);
+        commit(engine, [setAnchors("of:both", { a: 1 })]);
+
+        const deleted = commit(engine, [
+          { op: "delete", id: "of:both" },
+          { op: "delete", id: anchorsDoc("of:both") },
+        ]);
+
         expect(written(deleted)).toEqual([
-          [anchorsDoc("of:deleted"), "delete", true],
-          ["of:deleted", "delete", false],
+          ["of:both", "delete", false],
+          [anchorsDoc("of:both"), "delete", false],
         ]);
-        expect(storedAnchors(engine, "of:deleted")).toBeNull();
-
-        setup(engine, "of:released", "abc");
-        commit(engine, [
-          applyOp("of:released", "alice:1", "abc", [changes(3, 3, "d")]),
-        ]);
-        commit(engine, [setAnchors("of:released", { a: 1 })]);
-        commit(engine, [{
-          op: "release-op-field",
-          id: "of:released",
-          path: body,
-          codec: CODEMIRROR_CHANGESET_CODEC,
-          cursor: { epoch: 1, version: 1 },
-        }]);
-        const afterRelease = commit(engine, [
-          { op: "delete", id: "of:released" },
-        ]);
-        expect(written(afterRelease)).toEqual([
-          [anchorsDoc("of:released"), "delete", true],
-          ["of:released", "delete", false],
-        ]);
-        expect(storedAnchors(engine, "of:released")).toBeNull();
-
-        // A field with no anchors document has none to delete.
-        setup(engine, "of:bare", "abc");
-        commit(engine, [
-          applyOp("of:bare", "alice:1", "abc", [changes(3, 3, "d")]),
-        ]);
-        const bare = commit(engine, [{ op: "delete", id: "of:bare" }]);
-        expect(written(bare)).toEqual([["of:bare", "delete", false]]);
+        expect(storedAnchors(engine, "of:both")).toBeNull();
       } finally {
         close(engine);
         await Deno.remove(path);

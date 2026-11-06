@@ -166,9 +166,10 @@ its label included, as it was. An edit that moves no anchor leaves the
 document alone.
 
 Releasing a field keeps its anchors, since the released text is the text they
-refer to. Deleting the field's entity deletes the anchors of each of its
-fields that has been collaborative; the anchors document of a field no editor
-ever opened is not found then, and stays. Memory moves anchors
+refer to, and so does deleting the field's entity, which releases its fields.
+A writer that deletes an entity and wants its fields' anchors gone deletes
+their anchors documents in the same commit; one that leaves them has them
+again if the entity is created anew. Memory moves anchors
 through collaborative edits and through nothing else, so an ordinary write
 that replaces the text of a released field, or of one no editor has opened,
 moves none of them. The writer that replaces the text, an agent rewording a

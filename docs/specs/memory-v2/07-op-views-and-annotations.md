@@ -519,9 +519,10 @@ anchors. The engine does not check an offset against the field's value, which
 it cannot find; the codec takes an offset past the end as the end (§7.5).
 
 The engine itself writes the document only to map its anchors through an
-integrated operation (§7.7.4), and deletes it only with the field's entity:
-deleting an entity deletes the anchors document of each of its fields that
-has ever been active. Releasing a field leaves the document as it is. The
+integrated operation (§7.7.4), and never deletes it. Releasing a field leaves
+the document as it is, and so does deleting the field's entity, which
+releases its fields: a writer that deletes the entity and wants the anchors
+gone deletes their documents in the same commit. The
 released value still holds the text the anchors refer to, and an ordinary
 write may replace it from then on, as it may the value of a field that was
 never active. Such a write moves no anchor, so the writer that replaces the
