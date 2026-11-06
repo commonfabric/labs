@@ -1346,10 +1346,13 @@ transaction of its own, so the speculative-consequence sanction
 above — written for the deferred-start transaction — has nothing
 to govern there; the load walk's own setup/instantiation writes
 keep the sanctioned `bookkeeping` stamp of the piece-start site,
-exactly as a reload's do. The OFF arm keeps the refusal terminal
-(a cross-tab race is the cross-tab mutex's story — this OFF
-sentence is the COORDINATOR's conservative default, not part of
-the 2026-08-24 ruling; the owner may re-rule it).
+exactly as a reload's do. The OFF arm recovers the same way:
+there the participant that set the piece up first is another
+client, a second tab of the same user among them, and the client
+that lost needs the piece's context as much as under the flag. The
+load walk's own instantiation can then be refused in turn, for
+reading through a commit of the lost start's run that was refused
+or dropped meanwhile; that refusal is retried like a stale read.
 
 - The accumulator is a layered view: store snapshot at the wave's input
   seq + previously sealed writes. Actions run serially per space, so a

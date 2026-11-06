@@ -247,6 +247,7 @@ import {
 import {
   isCfcEnforcementRejection,
   isConflictRejection,
+  isDeadDependencyRejection,
   isPermanentAuthorizationRefusal,
   isStaleReadConflict,
   isStorageTransactionInconsistent,
@@ -6609,9 +6610,13 @@ export class Runner {
                 // this replica's own consistency check: the retry reads the
                 // replica once the refusal's catch-up has brought the
                 // conflicting documents into it, whichever side wrote them.
+                // And so does a read through another commit's layer that was
+                // refused or dropped meanwhile, as the commits a lost start
+                // left behind are: the retry reads without that layer.
                 if (
                   isStaleReadConflict(error) ||
-                  isStorageTransactionInconsistent(error)
+                  isStorageTransactionInconsistent(error) ||
+                  isDeadDependencyRejection(error)
                 ) {
                   return await recoverInstantiation(error, "basis");
                 }
@@ -9146,18 +9151,19 @@ export class Runner {
 
   /**
    * The catch-up recovery a commit-gated start earns when its transaction
-   * is refused for a STALE CONFIRMED READ under server execution. Returns
-   * whether a recovery was scheduled — `false` leaves the caller's terminal
-   * arm to run exactly as it does for every other refusal.
+   * is refused for a STALE CONFIRMED READ. Returns whether a recovery was
+   * scheduled — `false` leaves the caller's terminal arm to run exactly as it
+   * does for every other refusal.
    *
-   * WHY a start earns one at all. Under the flag a piece is materialized
-   * SERVER-side, and the client's navigate-deferred start reads that
-   * piece's computed documents to base its own transaction on. At first
-   * hydration those two acts race by construction: the serving loop's
-   * derived commits for the just-born piece are in flight exactly while
-   * the client reads their targets as absent, so the client's basis is
-   * stale whenever the interleaving is tight — the EXPECTED outcome of
-   * losing the race, not an exceptional one. Terminating there would make
+   * WHY a start earns one at all. Another participant can set the same piece
+   * up first: under the flag the serving side, and without it another client,
+   * a second tab of the same user among them. The client's navigate-deferred
+   * start reads that piece's computed documents to base its own transaction
+   * on. At first hydration those two acts race by construction: the other
+   * participant's derived commits for the just-born piece are in flight
+   * exactly while the client reads their targets as absent, so the client's
+   * basis is stale whenever the interleaving is tight — the EXPECTED outcome
+   * of losing the race, not an exceptional one. Terminating there would make
    * the race fatal: `#startWithTx()` has already installed the
    * client-side piece inside the transaction when the refusal lands, the
    * error arm's cancel tears that install down, and nothing re-runs it —
@@ -9166,27 +9172,30 @@ export class Runner {
    * holds every append.
    *
    * WHAT the recovery does — and deliberately does not. The refusal is treated
-   * as "the server won the race": await the conflict's readiness (the session
-   * catch-up the wire attaches as `readyToRetry`, plus the named document's
-   * pull — `Runtime.awaitCommitRetryReadiness`), then START the piece from the
-   * served documents through the ordinary load walk (`#doStart`), the same walk
-   * a reload runs. The recovery arm COMMITS NOTHING: it does not re-mint and
-   * re-commit the refused materialization, and it mints no transaction of its
-   * own. The load walk's own instantiation transaction keeps its sanctioned
-   * `bookkeeping` stamp exactly as a reload's does (serving-loop.md §3d's
-   * piece-start site), and for a piece the server materialized it has nothing
-   * left to write. A document still in flight reads as PENDING and re-triggers
-   * on arrival (speculation.md §2's unresolved-input semantics) — the entirely
-   * reactive flow that catches up with the server.
+   * as "the other participant won the race": await the conflict's readiness
+   * (the session catch-up the wire attaches as `readyToRetry`, plus the named
+   * document's pull — `Runtime.awaitCommitRetryReadiness`), then START the
+   * piece from the stored documents through the ordinary load walk
+   * (`#doStart`), the same walk a reload runs. The recovery arm COMMITS
+   * NOTHING: it does not re-mint and re-commit the refused materialization,
+   * and it mints no transaction of its own. The load walk's own
+   * instantiation transaction keeps its sanctioned `bookkeeping` stamp
+   * exactly as a reload's does (serving-loop.md §3d's piece-start site),
+   * and for a piece another participant materialized it
+   * has nothing left to write. That transaction can still read through the
+   * layers of the commits the refused start's run left behind, which are
+   * refused in turn; its own retry covers that ({@link
+   * isDeadDependencyRejection}). A document still in flight reads as PENDING
+   * and re-triggers on arrival (speculation.md §2's unresolved-input
+   * semantics) — the entirely reactive flow that catches up with the store.
    *
-   * ON-ONLY: under OFF a stale confirmed read on a deferred start means another
-   * CLIENT raced, and the cross-tab mutex semantics own that story — the OFF
-   * arm of a commit-gated start stays terminal. A named piece's run refused
-   * over a policy manifest another participant installed first is not that
-   * story either, and neither is one whose every conflicting read claimed a
-   * document absent that the store holds: `#retryPieceRunStart()` runs those
-   * again in a fresh transaction, under either arm, when this recovery
-   * declines.
+   * BOTH ARMS. With the flag off the participant that won is another client,
+   * and the client that lost needs the piece's context exactly as much. A
+   * named piece's run refused over a policy manifest another participant
+   * installed first is not this story, and neither is one whose every
+   * conflicting read claimed a document absent that the store holds:
+   * `#retryPieceRunStart()` runs those again in a fresh transaction when this
+   * recovery declines.
    *
    * WHAT stays terminal. Only the engine's stale-read family recovers —
    * `stale confirmed read` and its `stale pending read` sibling
@@ -9240,7 +9249,6 @@ export class Runner {
     ownership: DeferredCancelOwnership,
     installedRegistration: Cancel | undefined,
   ): boolean {
-    if (this.#runtime.experimental.serverExecution !== true) return false;
     if (!isStaleReadConflict(error)) return false;
     if (scheduledLifecycleEpoch !== this.#lifecycleEpoch) return false;
     if (ownership.isCancelled()) return false;
@@ -9260,7 +9268,7 @@ export class Runner {
     logger.warn(
       "deferred-start-catchup",
       `Deferred ${label} transaction lost its first-hydration basis to ` +
-        "the serving side; starting from the served documents instead",
+        "another participant; starting from the stored documents instead",
       error,
     );
     // Tear the refused install down exactly as the token's own cancel
