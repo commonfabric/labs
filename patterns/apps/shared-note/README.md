@@ -86,8 +86,9 @@ holds exactly once, as `replaceText` does:
 | `reopenComment`  | `{ id }`          | Marks the comment open again.                                                               |
 | `deleteComment`  | `{ id }`          | Deletes the comment and its anchors; refused to anyone but its author.                      |
 
-`addComment` and `replyToComment` are refused to a caller with no Fabric
-profile, since a comment and a reply are shown under their author's profile.
+`addComment` and `replyToComment` are refused to a caller with no Fabric profile
+of their own, since a comment and a reply are shown under their author's
+profile: a profile someone else owns would show them as the author.
 
 `appendLine`, `prependLine` and `replaceText` each read the body and edit it
 through `applyChanges()`, by position in the text they read. The edit reaches

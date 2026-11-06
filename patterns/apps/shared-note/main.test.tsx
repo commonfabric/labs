@@ -531,6 +531,34 @@ export default pattern(() => {
       hasText(rowOf(note[UI], "Needs a date"), "Dated it") &&
       hasText(rowOf(note[UI], "Needs a date"), "Thanks");
   });
+  // A reply under a profile that is not the writer's own is refused in the
+  // notice, and the reply typed stays in its field.
+  const action_select_comment_under_a_borrowed_profile = action(() =>
+    fireEvent(editorOf(borrowed[UI]), "oncf-highlight-click", {
+      type: "cf-highlight-click",
+      detail: { id: listed(comments.get())[0].id },
+    })
+  );
+  const action_type_reply_under_a_borrowed_profile = action(() =>
+    typeInto(
+      findNodeByProp(actionsOf(borrowed[UI]), "aria-label", "Reply"),
+      "Not mine",
+    )
+  );
+  const action_reply_under_a_borrowed_profile = action(() =>
+    clickButton(actionsOf(borrowed[UI]), "Reply")
+  );
+  const assert_borrowed_reply_refused = assert(() =>
+    listed(comments.get())[0]?.replies.get().length === 2 &&
+    hasText(
+      findNodeById(borrowed[UI], "shared-note-comment-notice"),
+      "Choose a Fabric profile of your own",
+    ) &&
+    boundCell<string>(
+        findNodeByProp(actionsOf(borrowed[UI]), "aria-label", "Reply"),
+        "$value",
+      ).get() === "Not mine"
+  );
   // A verb rewrites the commented text: the anchor covers the replacement,
   // and the row shows the author's quote and, apart from it, the text now.
   const EDITED = "- [x] task";
@@ -930,6 +958,10 @@ export default pattern(() => {
       { action: action_post_reply },
       { action: action_reply_by_verb },
       { assertion: assert_replies_carry_their_author },
+      { action: action_select_comment_under_a_borrowed_profile },
+      { action: action_type_reply_under_a_borrowed_profile },
+      { action: action_reply_under_a_borrowed_profile },
+      { assertion: assert_borrowed_reply_refused },
       { action: action_verb_rewrites_the_commented_text },
       { assertion: assert_row_shows_the_quote_and_the_text_now },
       { action: action_verb_deletes_the_commented_text },

@@ -132,9 +132,11 @@ its own.
 A comment, highlight or bookmark on a string field says which text it is
 about with **anchors**: points in the field, each stored under an id the
 pattern chooses. The runtime moves every anchor of a field through every
-edit, whoever makes it, so the pattern stores its anchors' ids and never a
-position of its own. A range of text is two anchors, one where it starts and
-one where it ends.
+edit made in an editor or through `.applyChanges()`, whoever makes it, so the
+pattern stores its anchors' ids and never a position of its own. A pattern
+that replaces the text with `.set()` instead is responsible for updating the
+anchors itself. A range of text is two anchors, one where it starts and one
+where it ends.
 
 `anchorsOf(field)` returns the field's anchors as a cell. Its value is a map
 from anchor id to offset, counted in UTF-16 code units as string indexes are,

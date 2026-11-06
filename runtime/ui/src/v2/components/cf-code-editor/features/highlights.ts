@@ -1,6 +1,6 @@
 /**
  * Draws a host's highlights over the anchors of a collaborative field, and
- * reports the main selection as a range of the text Memory has confirmed. A
+ * reports the main selection as a range of the editor's document. A
  * highlight is the text from one anchor to another. Memory states where each
  * anchor is, and between its statements the editor carries every anchor
  * through its own edits by Memory's rule, so nothing here chooses an anchor's
@@ -281,15 +281,21 @@ export interface HighlightClick {
  * Returns the editor's handler for a `click` event, which calls `onClick`
  * with the id of the innermost highlight drawn over the character under the
  * click. A click is a press and release of the primary button that leaves
- * nothing selected: a press that drags out a selection, or extends one, is a
- * selection and not a click, wherever it starts. The handler returns `false`
- * for every event, which leaves the editor to handle it as usual.
+ * nothing selected in any of the editor's selection ranges: a press that
+ * drags out a selection, or extends one, is a selection and not a click,
+ * wherever it starts. The handler returns `false` for every event, which
+ * leaves the editor to handle it as usual.
  */
 export function highlightClickHandler(
   onClick: (id: string) => void,
 ): (click: HighlightClick, view: CharacterGeometry) => boolean {
   return (click, view) => {
-    if (click.button !== 0 || !view.state.selection.main.empty) return false;
+    if (
+      click.button !== 0 ||
+      view.state.selection.ranges.some((range) => !range.empty)
+    ) {
+      return false;
+    }
     const at = characterAt(view, { x: click.clientX, y: click.clientY });
     const id = at === undefined ? undefined : highlightAt(view.state, at);
     if (id !== undefined) onClick(id);

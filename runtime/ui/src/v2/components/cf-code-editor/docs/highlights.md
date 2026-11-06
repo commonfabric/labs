@@ -164,13 +164,14 @@ of the drag.
 ## Which presses are clicks
 
 `cf-highlight-click` fires on the browser's `click` event, which follows the
-release of the primary button, and only when the editor's main selection is then
-empty. A press that drags out a selection is therefore a selection and not a
-click, even when it starts on a mark, which is what lets a person select text
-inside one highlight to place another. A press that extends a selection, such as
-a shift-click or the second press of a double-click, is not a click either. A
-plain click on a mark that lies inside a selection is one: the editor collapses
-the selection to a caret before the click is read.
+release of the primary button, and only when no range of the editor's selection
+then holds text, the main one or any other. A press that drags out a selection
+is therefore a selection and not a click, even when it starts on a mark, which
+is what lets a person select text inside one highlight to place another. A press
+that extends a selection, such as a shift-click or the second press of a
+double-click, is not a click either. A plain click on a mark that lies inside a
+selection is one: the editor collapses the selection to a caret before the click
+is read.
 
 A click is on a highlight when the character under the pointer is inside the
 highlight's range. CodeMirror resolves a point to the nearest position between

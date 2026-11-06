@@ -376,6 +376,9 @@ const anchorComment = (
   from: number,
   to: number,
 ): void => {
+  // Memory bounds what a field's anchors document may hold, and refuses a
+  // commit past its bounds with an error that says so; the note leaves those
+  // bounds to Memory rather than restating them here.
   anchors.set({
     ...anchors.get(),
     [fromAnchorOf(id)]: from,
@@ -873,11 +876,9 @@ const actOnSelected = handler<
 
 /**
  * Sends the reply draft to `replyToComment` for the selected comment, and
- * clears the draft. A reply the verb would refuse, from a viewer with no
- * profile of their own or to a comment no longer posted, is refused here
- * first, so the draft stays.
- *
- * @throws If the verb would refuse the reply.
+ * clears the draft and the notice. A reply the verb would refuse, from a
+ * viewer with no profile of their own or to a comment no longer posted, is
+ * refused here first, in the notice, so the draft stays.
  */
 const replyToSelected = handler<
   unknown,
@@ -885,15 +886,24 @@ const replyToSelected = handler<
     verb: Stream<CommentReplyEvent>;
     selectedId: Writable<string>;
     replyDraft: Writable<string>;
+    notice: Writable<string>;
   }
->((_, { comments, myProfile, verb, selectedId, replyDraft }) => {
+>((_, { comments, myProfile, verb, selectedId, replyDraft, notice }) => {
   const id = selectedId.get();
   const body = replyDraft.get().trim();
   if (id === "" || body === "") return;
-  if (ownProfile(myProfile) === undefined) throw new Error(NO_PROFILE);
-  commentNamed(comments, id);
+  if (ownProfile(myProfile) === undefined) {
+    notice.set(NO_PROFILE);
+    return;
+  }
+  const current: StoredComment | undefined = comments.elementById(id).get();
+  if (current === undefined || current.draft) {
+    notice.set("This comment is no longer posted.");
+    return;
+  }
   verb.send({ id, body });
   replyDraft.set("");
+  notice.set("");
 });
 
 /** What selecting a comment changes: the selection, and the reply draft. */
@@ -1411,6 +1421,7 @@ export const SharedNoteCore = pattern<
                   verb: replyVerb,
                   selectedId,
                   replyDraft,
+                  notice,
                 })}
                 style={{ flex: "1 1 8rem", minWidth: "0" }}
               />
@@ -1423,6 +1434,7 @@ export const SharedNoteCore = pattern<
                   verb: replyVerb,
                   selectedId,
                   replyDraft,
+                  notice,
                 })}
               >
                 Reply

@@ -138,8 +138,8 @@ export interface OperationFieldInspection {
     /**
      * Whether the anchors document's value is what the engine admits as
      * anchors, which is what an edit to the field maps; `null` when the field
-     * holds no anchors document. An edit takes a document that fails this as
-     * holding no anchors.
+     * holds no anchors document. An edit reads a document that fails this as
+     * holding no anchors; one that does not decode makes the edit fail.
      */
     anchorsDocumentValid: boolean | null;
     healthy: boolean;

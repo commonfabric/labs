@@ -1,6 +1,11 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-import { type ChangeDesc, ChangeSet, EditorState } from "@codemirror/state";
+import {
+  type ChangeDesc,
+  ChangeSet,
+  EditorSelection,
+  EditorState,
+} from "@codemirror/state";
 import type { FieldAnchors } from "@commonfabric/runtime-client";
 import type { CodeMirrorSynchronizationSnapshot } from "../codemirror-collaboration.ts";
 import {
@@ -429,6 +434,33 @@ describe("highlights", () => {
       }).state;
 
       expect(handle(selecting, clickOn(8, 0.5)).reported).toEqual([]);
+    });
+
+    it("reports nothing for a click that leaves text selected in a range other than the main one", () => {
+      // The main range is the caret the click placed in `world`; a second
+      // range still holds `hel`.
+
+      const twoRanges = EditorState.create({
+        doc: "hello world",
+        extensions: [
+          highlightField,
+          EditorState.allowMultipleSelections.of(true),
+        ],
+        selection: EditorSelection.create([
+          EditorSelection.range(0, 3),
+          EditorSelection.cursor(8),
+        ], 1),
+      }).update({
+        effects: [
+          setHighlightAnchorsEffect.of({ from: 6, to: 11 }),
+          setHighlightsEffect.of([
+            { id: "h", fromAnchor: "from", toAnchor: "to" },
+          ]),
+        ],
+      }).state;
+
+      expect(twoRanges.selection.main.empty).toBe(true);
+      expect(handle(twoRanges, clickOn(8, 0.5)).reported).toEqual([]);
     });
 
     it("reports nothing for a click on a character outside every highlight", () => {
