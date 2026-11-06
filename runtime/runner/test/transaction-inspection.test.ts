@@ -8,7 +8,7 @@ import { toDocumentPath } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { NormalizedFullLink } from "../src/link-utils.ts";
-import { reservedSiblingWriteRecordedMark } from "../src/reserved-sibling-seam.ts";
+import { writeChokepointMark } from "../src/storage/write-chokepoint.ts";
 import { txToReactivityLog } from "../src/scheduler.ts";
 import {
   ExtendedStorageTransaction,
@@ -213,7 +213,7 @@ describe("transaction inspection", () => {
         value: { count: 1 },
         source: { "/": "origin" },
         meta: { updatedAt: "before" },
-      }, reservedSiblingWriteRecordedMark());
+      }, writeChokepointMark());
       await seed.commit().settled;
 
       const tx = storageManager.edit();

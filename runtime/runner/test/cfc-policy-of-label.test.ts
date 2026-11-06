@@ -20,7 +20,7 @@ import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
 import type { Engine } from "../src/harness/engine.ts";
 import { labelsReached } from "./support/reached-labels.ts";
-import { reservedSiblingWriteRecordedMark } from "../src/reserved-sibling-seam.ts";
+import { writeChokepointMark } from "../src/storage/write-chokepoint.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
@@ -713,7 +713,7 @@ describe("PolicyOf label-time binding", () => {
             }],
           },
         },
-      }, reservedSiblingWriteRecordedMark()).ok,
+      }, writeChokepointMark()).ok,
     ).toBeDefined();
     expect(
       seed.write({

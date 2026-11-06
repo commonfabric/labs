@@ -18,7 +18,7 @@ import {
   type CfcPrefixProvenanceSummary,
   prepareBoundaryCommit,
 } from "../src/cfc/mod.ts";
-import { reservedSiblingWriteRecordedMark } from "../src/reserved-sibling-seam.ts";
+import { writeChokepointMark } from "../src/storage/write-chokepoint.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { internalVerifierRead } from "../src/storage/reactivity-log.ts";
@@ -299,7 +299,7 @@ describe("CFC prefix-provenance precision counters (Stage 0, doc §6)", () => {
                         label: { integrity: [OTHER_ATOM] },
                       }],
                     },
-                    reservedSiblingWriteRecordedMark(),
+                    writeChokepointMark(),
                   ).ok,
                 ).toBeDefined();
               }
