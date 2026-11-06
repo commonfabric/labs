@@ -2521,7 +2521,7 @@ describe("a unit's repeats", () => {
    */
   function scripted(
     counter: string,
-    script: Record<string, readonly ("pass" | "fail")[]>,
+    script: Record<string, readonly ("pass" | "fail" | "none")[]>,
   ): string[] {
     return [
       Deno.execPath(),
@@ -2534,6 +2534,7 @@ describe("a unit's repeats", () => {
        let failed = false;
        for (const [n, outcomes] of Object.entries(script)) {
          const outcome = outcomes[run] ?? "pass";
+         if (outcome === "none") continue;
          failed ||= outcome === "fail";
          Deno.writeTextFileSync(
            \`\${dir}/fragment-\${crypto.randomUUID()}.ndjson\`,
@@ -2556,7 +2557,7 @@ describe("a unit's repeats", () => {
    * of passes it measured.
    */
   async function batchOf(
-    script: Record<string, readonly ("pass" | "fail")[]>,
+    script: Record<string, readonly ("pass" | "fail" | "none")[]>,
     repeats: Record<string, number>,
   ) {
     const counter = await Deno.makeTempFile({ prefix: "repeats-" });
@@ -2659,6 +2660,27 @@ describe("a unit's repeats", () => {
     );
     expect(passes).toBe(4);
     expect(settled).toEqual([]);
+  });
+
+  it("keeps a test settled through later passes that record nothing for it", async () => {
+    // `sets` settles by failing twice and then records nothing, while
+    // `browns` keeps the unit repeating until it disagrees in the fourth.
+    const { passes, settled } = await batchOf(
+      {
+        "glaze > sets": ["fail", "fail", "none", "none", "none"],
+        "glaze > browns": ["pass", "pass", "pass", "fail"],
+      },
+      { "glaze > sets": 5, "glaze > browns": 5 },
+    );
+    expect(passes).toBe(4);
+    expect(settled).toEqual([{
+      unit,
+      skipped: 1,
+      why: [
+        "glaze > sets: it failed twice running",
+        "glaze > browns: it passed and failed",
+      ],
+    }]);
   });
 
   it("stops for the tests that asked, whatever the others in the unit do", async () => {

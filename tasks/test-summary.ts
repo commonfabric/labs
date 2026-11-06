@@ -6,8 +6,9 @@
  * to explain it, it gives the end of that command's output. It ends with
  * where the full logs are.
  *
- * A passing run's block is one line, and a second naming what ran without
- * reporting any test, where something did.
+ * A passing run's block is one line, then a line naming what ran without
+ * reporting any test, where something did, and then a section listing what
+ * the run left out without failing for it, where it left anything out.
  *
  * `tasks/workspace-tests.ts`, `tasks/integration.ts` and `tasks/ci-lane.ts`
  * each end with one.

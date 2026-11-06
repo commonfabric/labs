@@ -1269,8 +1269,10 @@ export async function runBatch(
 }> {
   const records: TestRecord[] = [];
   // What each identity asking for repeats came to in each pass that ran its
-  // unit, and the units that need no more repeats, with why.
+  // unit, why each that has settled needs no more, and the units that need no
+  // more repeats, with why.
   const outcomes = new Map<string, PassOutcome[]>();
+  const settledAskers = new Map<string, string>();
   const settledUnits = new Map<Unit, string[]>();
   // The message each failing record's report gave it.
   const failures = new Map<TestRecord, string>();
@@ -1445,7 +1447,7 @@ export async function runBatch(
       hooks.push({ unit, seconds });
     }
     if (stop.signal === undefined) {
-      settleRepeats(batch, execution, outcomes, settledUnits);
+      settleRepeats(batch, execution, outcomes, settledAskers, settledUnits);
     }
   }
   // A batch that stopped part way measured only the part it ran, and the
@@ -1541,13 +1543,19 @@ export async function runBatch(
 
 /**
  * Helper for `runBatch()`, which adds what each identity asking for repeats
- * came to in `execution` to `outcomes`, and adds to `settled` each unit of the
- * execution whose every such identity needs no more repeats, with why.
+ * came to in `execution` to `outcomes`, adds to `askersSettled` each such
+ * identity that now needs no more repeats, with why, and adds to `settled` each
+ * unit of the execution whose every such identity needs no more, with why.
+ *
+ * An identity that has settled stays settled, whatever a later pass that its
+ * unit makes for another identity comes to for it: what settled it has
+ * already happened at this commit.
  */
 function settleRepeats(
   batch: Batch,
   execution: Execution,
   outcomes: Map<string, PassOutcome[]>,
+  askersSettled: Map<string, string>,
   settled: Map<Unit, string[]>,
 ): void {
   for (const unit of execution.units) {
@@ -1555,6 +1563,11 @@ function settleRepeats(
     if (askers === undefined || settled.has(unit)) continue;
     const why: string[] = [];
     for (const key of askers) {
+      const already = askersSettled.get(key);
+      if (already !== undefined) {
+        why.push(already);
+        continue;
+      }
       const mine = execution.records.filter((record) =>
         testIdentityKey(record.test) === key
       );
@@ -1569,7 +1582,9 @@ function settleRepeats(
       outcomes.set(key, history);
       const reason = repeatSettled(history);
       if (reason !== undefined) {
-        why.push(`${mine[0]?.test.n ?? key}: ${reason}`);
+        const said = `${mine[0]?.test.n ?? key}: ${reason}`;
+        askersSettled.set(key, said);
+        why.push(said);
       }
     }
     if (why.length === askers.size) {
