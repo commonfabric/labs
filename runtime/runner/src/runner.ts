@@ -9665,13 +9665,17 @@ export class Runner {
     options?: RunnerRunOptions,
   ): Cell<R>;
   run<T, R = any>(
-    providedTx: IExtendedStorageTransaction,
+    providedTx: IExtendedStorageTransaction | undefined,
     patternOrModule: Pattern | Module | undefined,
     argument: T,
     resultCell: Cell<R>,
     options: RunnerRunOptions = {},
   ): Cell<R> {
-    this.#askingSetupTransactions.add(providedTx);
+    // A run given no transaction starts in one the runner makes, which holds
+    // none of its caller's reads, so it restates no unchanged wiring.
+    if (providedTx !== undefined) {
+      this.#askingSetupTransactions.add(providedTx);
+    }
     return this.#runWithStartOwnership(
       providedTx,
       patternOrModule,
