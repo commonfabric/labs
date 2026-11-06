@@ -8,12 +8,12 @@
  */
 
 import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
+import { uniqueCfcAtoms } from "@commonfabric/memory/v2/cfc-clause-identity";
 import type {
   CfcConfClause,
   CfcLabelView,
   IFCLabel,
 } from "@commonfabric/runner/cfc";
-import { uniqueCfcAtoms } from "@commonfabric/runner/cfc/atoms";
 import { defaultDisplayCeiling } from "@commonfabric/runner/cfc/default-display-ceiling";
 import { CFC_LABEL_READ_FAILED_ATOM } from "@commonfabric/runner/cfc/observation";
 import { readConsumesEntry } from "@commonfabric/runner/cfc/observation-classes";

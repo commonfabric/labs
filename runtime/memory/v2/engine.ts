@@ -21,6 +21,12 @@ import {
   isObjectOrArray,
 } from "@commonfabric/js-values/types";
 import {
+  judgeOwnerReleaseByIntent,
+  OWNER_RELEASE_BY_INTENT_RECORD_PREFIX,
+  parseOwnerReleaseByIntentRecord,
+  type VerifiedOwnerReleaseByIntent,
+} from "./cfc-owner-release-by-intent.ts";
+import {
   admitsDroppedDeclaredPaths,
   droppedDeclaredPaths,
 } from "./envelope-admission.ts";
@@ -6116,6 +6122,104 @@ const releaseOperationField = (
 };
 
 /**
+ * Verifies every release record (`cfc-owner-release-by-intent.ts`, §8.12.7
+ * route 2d) `operations` create, and returns the releases they verify, by the
+ * document released at. A record is created by one `set` at space scope; any
+ * other write to an id under the record scheme, a record the judgment
+ * refuses, and a second release of one document in one commit are refused,
+ * which refuses the commit whole. `documentEnvelope` returns the envelope the
+ * commit leaves a document with at space scope and the one the store holds,
+ * or `undefined` when the commit writes none or deletes the document.
+ *
+ * @throws A {@link ProtocolError} naming the refusal.
+ */
+const verifyOwnerReleasesByIntent = (input: {
+  readonly engine: Engine;
+  readonly branch: BranchName;
+  readonly space: string | undefined;
+  readonly operations: readonly Operation[];
+  readonly elidedOpIndexes: ReadonlySet<number>;
+  readonly storedLabel: (ref: string) => unknown;
+  readonly documentEnvelope: (
+    id: string,
+  ) => { readonly stored: unknown; readonly proposed: unknown } | undefined;
+}): ReadonlyMap<string, readonly VerifiedOwnerReleaseByIntent[]> => {
+  const records = new Map<string, unknown>();
+  const committedLabels = new Map<string, unknown>();
+  for (const [opIndex, operation] of input.operations.entries()) {
+    if (operation.op === "sqlite") continue;
+    if (operation.id.startsWith("cid:")) {
+      if (operation.op === "set" && isEntityDocument(operation.value)) {
+        committedLabels.set(operation.id, operation.value.value);
+      }
+      continue;
+    }
+    if (!operation.id.startsWith(OWNER_RELEASE_BY_INTENT_RECORD_PREFIX)) {
+      continue;
+    }
+    if (input.elidedOpIndexes.has(opIndex)) continue;
+    if (
+      operation.op !== "set" || records.has(operation.id) ||
+      normalizeScope(operation.scope) !== DEFAULT_SCOPE ||
+      !isEntityDocument(operation.value)
+    ) {
+      throw new ProtocolError(
+        `memory v2 commit writes release record ${operation.id} other than ` +
+          "by creating it once, at space scope, with one `set`",
+      );
+    }
+    records.set(operation.id, operation.value.value);
+  }
+  const verified = new Map<string, VerifiedOwnerReleaseByIntent[]>();
+  if (records.size === 0) return verified;
+  const space = input.space;
+  if (space === undefined) {
+    throw new ProtocolError(
+      "memory v2 commit names no space, and creates a release record",
+    );
+  }
+  const aclState = readState(input.engine, { id: aclDocId(space) });
+  const acl = aclState === null
+    ? { stored: false as const }
+    : { stored: true as const, value: aclState.document?.value };
+  for (const [recordId, record] of records) {
+    const document = parseOwnerReleaseByIntentRecord(record)?.document;
+    const judged = judgeOwnerReleaseByIntent({
+      space,
+      recordId,
+      record,
+      recordStored:
+        readState(input.engine, { id: recordId, branch: input.branch }) !==
+          null,
+      acl,
+      document: document === undefined
+        ? undefined
+        : input.documentEnvelope(document),
+      resolveStoredLabel: input.storedLabel,
+      resolveProposedLabel: (ref) =>
+        committedLabels.has(ref)
+          ? committedLabels.get(ref)
+          : input.storedLabel(ref),
+    });
+    if ("refused" in judged) {
+      throw new ProtocolError(
+        `memory v2 commit creates release record ${recordId}, which the ` +
+          `store refuses: ${judged.refused}`,
+      );
+    }
+    const release = judged.verified;
+    if (verified.has(release.document)) {
+      throw new ProtocolError(
+        `memory v2 commit releases document ${release.document} by more ` +
+          "than one request",
+      );
+    }
+    verified.set(release.document, [release]);
+  }
+  return verified;
+};
+
+/**
  * Releases every active operation field of an entity being deleted, and
  * deletes their anchors documents.
  */
@@ -7449,9 +7553,13 @@ const applyCommitTransaction = (
       ? undefined
       : document.value;
   };
-  for (const write of envelopeWrites.values()) {
-    if (write.deleted || elidedOpIndexes.has(write.lastOpIndex)) continue;
-    const storedCfc = (readState(engine, {
+  const storedCfcOf = (
+    write: {
+      readonly opIndex: number;
+      readonly operation: { id: string; scope?: unknown };
+    },
+  ): unknown =>
+    (readState(engine, {
       id: write.operation.id,
       branch,
       scope: write.operation.scope as Parameters<typeof readState>[1]["scope"],
@@ -7459,12 +7567,44 @@ const applyCommitTransaction = (
       sessionId: scanSession,
       scopeKey: scopeKeyByOpIndex.get(write.opIndex),
     })?.document as { cfc?: unknown } | null | undefined)?.cfc;
+  const releasesByIntent = verifyOwnerReleasesByIntent({
+    engine,
+    branch,
+    space,
+    operations: commit.operations,
+    elidedOpIndexes,
+    storedLabel,
+    // The envelope a commit leaves the request's document with at space
+    // scope, as the drop check below judges it, and what the store holds.
+    documentEnvelope: (id) => {
+      for (const write of envelopeWrites.values()) {
+        if (
+          write.operation.id !== id ||
+          normalizeScope(write.operation.scope as CellScope | undefined) !==
+            DEFAULT_SCOPE
+        ) continue;
+        if (write.deleted || elidedOpIndexes.has(write.lastOpIndex)) {
+          return undefined;
+        }
+        return { stored: storedCfcOf(write), proposed: write.cfc };
+      }
+      return undefined;
+    },
+  });
+  for (const write of envelopeWrites.values()) {
+    if (write.deleted || elidedOpIndexes.has(write.lastOpIndex)) continue;
+    const storedCfc = storedCfcOf(write);
     if (
       storedCfc === undefined ||
       valueEqual(storedCfc as FabricValue, write.cfc as FabricValue)
     ) continue;
     const dropped = droppedDeclaredPaths(storedCfc, write.cfc, storedLabel);
-    if (!admitsDroppedDeclaredPaths(dropped, space, actor)) {
+    const releases = normalizeScope(
+        write.operation.scope as CellScope | undefined,
+      ) === DEFAULT_SCOPE
+      ? releasesByIntent.get(write.operation.id) ?? []
+      : [];
+    if (!admitsDroppedDeclaredPaths(dropped, space, actor, releases)) {
       throw new ProtocolError(
         `memory v2 commit leaves document ${write.operation.id} with no declared CFC label at ${
           dropped.map((drop) => JSON.stringify(drop.path)).join(", ")

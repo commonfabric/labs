@@ -10284,6 +10284,16 @@ const coalesceLabelEntries = (
 };
 
 /**
+ * The label-metadata templates (§4.6.4.2) an envelope whose payload entries
+ * are `entries` holds: derived from them alone, and coalesced per path,
+ * origin and class, as every persist writes them.
+ */
+export const labelMetadataTemplatesFor = (
+  entries: readonly LabelMapEntry[],
+): LabelMapEntry[] =>
+  coalesceLabelEntries(deriveLabelMetadataTemplateEntries(entries));
+
+/**
  * Whether two envelope spellings decompose to the SAME root document —
  * equality over the content-addressed form, where authored `$defs` names
  * (which recomposition does not preserve) are matching-inert. This is the
@@ -14445,9 +14455,7 @@ export function* prepareBoundaryCommitSteps(
     // the per-path §4.6.4.1 metadata addressing requires. No new dial: the
     // templates describe whatever payload entries the existing dials
     // persisted.
-    const templateEntries = coalesceLabelEntries(
-      deriveLabelMetadataTemplateEntries(collapsedLabelEntries),
-    );
+    const templateEntries = labelMetadataTemplatesFor(collapsedLabelEntries);
 
     const manifestFailures = installCarriedPolicyManifests(
       tx,

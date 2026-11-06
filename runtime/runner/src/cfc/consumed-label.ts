@@ -7,7 +7,8 @@
  * reads.
  */
 
-import { uniqueCfcAtoms } from "./atoms.ts";
+import { uniqueCfcAtoms } from "@commonfabric/memory/v2/cfc-clause-identity";
+
 import type { ConsumedLabelIndex } from "./consumed-label-index.ts";
 import {
   type ReadClassSelection,

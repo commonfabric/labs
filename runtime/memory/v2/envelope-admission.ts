@@ -13,7 +13,10 @@
  * entries hold a confidentiality clause with no declared entry at all, which
  * the runtime never writes except in an owner release. A commit that the
  * space's owner signs, every clause of whose dropped entries is the owner's
- * alone to release, is that release, and is admitted. A lowering that keeps
+ * alone to release, is that release (§8.12.7 route 2c), and is admitted. So
+ * is a commit holding a release by intent the store has verified
+ * (`cfc-owner-release-by-intent.ts`, route 2d) that releases every clause of
+ * the dropped entries at that path of that document. A lowering that keeps
  * some declared entry at the path, and any change to a path's existence
  * entry, are left to the runtime.
  */
@@ -27,6 +30,8 @@
 
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
+import { cfcCanonicalClauseDigest } from "./cfc-clause-identity.ts";
+import type { VerifiedOwnerReleaseByIntent } from "./cfc-owner-release-by-intent.ts";
 import {
   type CfcConfClause,
   clauseReleasableBy,
@@ -96,23 +101,51 @@ export const droppedDeclaredPaths = (
 
 /**
  * Whether a commit `actor` signs for a document in `space` may drop the
- * declared paths `dropped`: it drops none, or it is an owner release, the
- * space being the actor's home space and every dropped clause the actor's
- * alone to release. A commit naming no actor, or no space, releases nothing.
+ * declared paths `dropped`. Each drop must be one of two releases. In an owner
+ * release, the space is the actor's home space and every dropped clause is
+ * the actor's alone to release. In a release by intent, one of `releases`,
+ * the verified releases by intent of this document the commit holds, is at
+ * the drop's path and releases every clause dropped there. A commit naming no
+ * actor, or no space, makes no owner release.
  */
 export const admitsDroppedDeclaredPaths = (
   dropped: readonly DroppedDeclaredPath[],
   space: string | undefined,
   actor: string | undefined,
+  releases: readonly VerifiedOwnerReleaseByIntent[] = [],
 ): boolean =>
-  dropped.length === 0 ||
-  (actor !== undefined && space === actor &&
-    dropped.every((drop) =>
-      drop.clauses !== undefined &&
+  dropped.every((drop) =>
+    drop.clauses !== undefined &&
+    ((actor !== undefined && space === actor &&
       drop.clauses.every((clause) =>
         clauseReleasableBy(clause as CfcConfClause, actor)
+      )) ||
+      releasesByIntent(drop, releases))
+  );
+
+/**
+ * Helper for {@link admitsDroppedDeclaredPaths}, which returns whether one of
+ * `releases` is at `drop`'s path and names every clause dropped there.
+ */
+const releasesByIntent = (
+  drop: DroppedDeclaredPath,
+  releases: readonly VerifiedOwnerReleaseByIntent[],
+): boolean => {
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/90 A verified
+  // route-2d release admits the drop of clauses that are not the owner's
+  // alone.
+  const clauses = drop.clauses;
+  return clauses !== undefined &&
+    releases.some((release) =>
+      release.path.length === drop.path.length &&
+      release.path.every((segment, index) => segment === drop.path[index]) &&
+      clauses.every((clause) =>
+        release.releasedClauseDigests.has(
+          cfcCanonicalClauseDigest(clause as CfcConfClause),
+        )
       )
-    ));
+    );
+};
 
 /** One stored or proposed label-map entry, as far as this rule reads it. */
 interface EntryView {

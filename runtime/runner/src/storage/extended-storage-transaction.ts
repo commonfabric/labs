@@ -23,6 +23,14 @@ import {
   type SqliteOperation,
   toDocumentPath,
 } from "@commonfabric/memory/v2";
+import {
+  ownerReleaseByIntentEnvelopeDigest,
+  ownerReleaseByIntentRecordId,
+  ownerReleaseByIntentRequestDigest,
+  ownerReleaseByIntentSpaceOwner,
+  parseSignedOwnerReleaseByIntentRequest,
+  verifyOwnerReleaseByIntentSignature,
+} from "@commonfabric/memory/v2/cfc-owner-release-by-intent";
 import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -33,9 +41,13 @@ import { isObjectOrArray, isPlainObject } from "@commonfabric/js-values/types";
 import type { CellScope } from "../builder/types.ts";
 import {
   type CfcConfidentialityRelease,
+  type CfcConfidentialityReleaseByIntent,
+  type CfcConfidentialityReleaseByIntentInput,
   type CfcConfidentialityReleaseInput,
   CONFIDENTIALITY_RELEASE_WRITER,
+  OWNER_RELEASE_BY_INTENT_WRITER,
   planConfidentialityRelease,
+  planConfidentialityReleaseByIntent,
 } from "../cfc/confidentiality-release-plan.ts";
 import {
   canonicalizeCfcMetadata,
@@ -104,6 +116,7 @@ import {
 import { withoutEnvelopeStabilityToken } from "../cfc/envelope-stability-reason.ts";
 import {
   ensureSchemaDocument,
+  labelMetadataTemplatesFor,
   loadStoredCfcEnvelope,
   prepareBoundaryCommitSteps,
   writeStoredCfcEnvelope,
@@ -164,7 +177,7 @@ import {
   deliverSchemaDocumentClosure,
   linkSchemaRefHashes,
 } from "../schema-doc-delivery.ts";
-import { normalizeCellScope, scopeRank } from "../scope.ts";
+import { DEFAULT_CELL_SCOPE, normalizeCellScope, scopeRank } from "../scope.ts";
 import type { URI } from "../sigil-types.ts";
 import { spaceCellId, SpaceRootMissingError } from "../space-root-slot.ts";
 import { createTransactionCommitReceipt } from "./commit-receipt.ts";
@@ -2777,6 +2790,141 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     };
   }
 
+  releaseCfcConfidentialityByIntent(
+    input: CfcConfidentialityReleaseByIntentInput,
+  ): CfcConfidentialityReleaseByIntent {
+    this.#assertWritable("releaseCfcConfidentialityByIntent()");
+    // Like an owner release, a release by intent lowers a stored label in
+    // place, so authoring one takes its writer's own builtin identity.
+    const identity = this.#cfcState.implementationIdentity;
+    if (
+      identity?.kind !== "builtin" ||
+      identity.builtinId !== OWNER_RELEASE_BY_INTENT_WRITER
+    ) {
+      throw new Error(
+        "cfc-owner-release-by-intent: `releaseCfcConfidentialityByIntent()` " +
+          `requires the \`${OWNER_RELEASE_BY_INTENT_WRITER}\` builtin ` +
+          "implementation identity",
+      );
+    }
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/90 Route 2d,
+    // which the pin does not have: a verified request lowers clauses that are
+    // not the owner's alone.
+    const signed = parseSignedOwnerReleaseByIntentRequest(input.signed);
+    if (signed === undefined) {
+      throw new Error(
+        "Cannot release by intent: the request is not a well-formed signed " +
+          "release request.",
+      );
+    }
+    const { request } = signed;
+    const location = request.path.length === 0
+      ? "<root>"
+      : request.path.join("/");
+    const refuse: (reason: string) => never = (reason) => {
+      throw new Error(
+        `Cannot release by intent at ${location} of ${request.document}: ` +
+          `${reason}.`,
+      );
+    };
+    if (!verifyOwnerReleaseByIntentSignature(signed)) {
+      refuse("the request's signature does not verify");
+    }
+    const space = request.space as MemorySpace;
+    const readMember = (id: string, path: readonly string[]) =>
+      this.read({
+        space,
+        id: id as URI,
+        scope: DEFAULT_CELL_SCOPE,
+        type: "application/json",
+        path: [...path],
+      }, { meta: internalVerifierRead }).ok?.value;
+    const acl = readMember(aclDocId(space), ["value"]);
+    const owner = ownerReleaseByIntentSpaceOwner(
+      space,
+      acl === undefined ? { stored: false } : { stored: true, value: acl },
+    );
+    if (owner === undefined || owner !== request.signer || !isDID(owner)) {
+      refuse(
+        `${request.signer} is not the owner the space's access list names`,
+      );
+    }
+    const storedCfc = readMember(request.document, ["cfc"]);
+    if (
+      ownerReleaseByIntentEnvelopeDigest(storedCfc) !== request.envelopeDigest
+    ) {
+      refuse("the document's envelope has changed since the request was made");
+    }
+    const recordId = ownerReleaseByIntentRecordId(
+      request.document,
+      ownerReleaseByIntentRequestDigest(request),
+    );
+    if (readMember(recordId, []) !== undefined) {
+      refuse("the request has already been used");
+    }
+    const target = {
+      space,
+      id: request.document as URI,
+      scope: DEFAULT_CELL_SCOPE,
+    };
+    const stored = loadStoredCfcEnvelope(this, target);
+    if (stored.status !== "loaded") {
+      refuse(
+        stored.status === "unreadable"
+          ? stored.reason
+          : "the document stores no labels",
+      );
+    }
+    const { metadata: existing, schema: storedSchema } = stored;
+    const plan = planConfidentialityReleaseByIntent({
+      path: request.path,
+      entries: existing.labelMap.entries,
+      schema: storedSchema,
+      releasedClauseDigests: request.releasedClauseDigests,
+    });
+    if (plan.schema === undefined) {
+      refuse("the document stores no schema");
+    }
+    const lowered = plan.schema;
+    // Deliberately NOT marked CFC-relevant, like an owner release: the checks
+    // above are the whole of the verification, and a throw leaves nothing
+    // written.
+    this.#runPrivilegedSystemWrite(() => {
+      let schemaHash = existing.schemaHash;
+      if (lowered !== storedSchema) {
+        const interned = internSchema(lowered, true);
+        ensureSchemaDocument(
+          this,
+          target.space,
+          interned.taggedHashString,
+          interned.schema,
+        );
+        schemaHash = interned.taggedHashString;
+      }
+      const templates = labelMetadataTemplatesFor(plan.entries);
+      writeStoredCfcEnvelope(this, target, {
+        ...existing,
+        schemaHash,
+        labelMap: {
+          version: existing.labelMap.version,
+          entries: [...plan.entries],
+          ...(templates.length > 0 ? { documentEntries: templates } : {}),
+        },
+      });
+    });
+    return {
+      owner,
+      released: plan.released,
+      paths: plan.paths,
+      releasedDigests: plan.released.map(cfcCanonicalClauseDigest),
+      priorEnvelopeDigest: request.envelopeDigest,
+      envelopeDigest: ownerReleaseByIntentEnvelopeDigest(
+        readMember(request.document, ["cfc"]),
+      ),
+      recordId,
+    };
+  }
+
   setCfcDeclaredWideningExemption(
     exemption: CfcDeclaredWideningExemption,
   ): void {
@@ -5163,6 +5311,12 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     input: CfcConfidentialityReleaseInput,
   ): CfcConfidentialityRelease {
     return this.#wrapped.releaseCfcConfidentiality(input);
+  }
+
+  releaseCfcConfidentialityByIntent(
+    input: CfcConfidentialityReleaseByIntentInput,
+  ): CfcConfidentialityReleaseByIntent {
+    return this.#wrapped.releaseCfcConfidentialityByIntent(input);
   }
 
   noteCfcSinkReleaseReject(
