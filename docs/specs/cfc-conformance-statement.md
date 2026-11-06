@@ -483,9 +483,11 @@ asking action, which reads again.
   receipt binds it to that transaction. An action that both records external
   content and defers a run leaves that content off the run, an under-taint;
   whether any action does both is not established.
-- A swap to a pattern pointer that another runtime moved carries nothing.
-  The pointer is one of the document's own members, which carries no payload
-  label (§4.6.5), so a trigger read of it would join nothing either.
+- A swap to a pattern that no setup in this runtime staged, such as one whose
+  pointer another runtime moved, receives no carried observations: its
+  transactions weigh only what they read themselves. The pointer is one of
+  the document's own members, which carries no payload label (§4.6.5), so a
+  trigger read of it would join nothing either.
 - The SQLite and fetch destination snapshots are read under
   `ignoreReadForScheduling`, so those addresses never become trigger reads;
   `cfc-write-destination-reads.md` under "The SQLite publication comparison"
