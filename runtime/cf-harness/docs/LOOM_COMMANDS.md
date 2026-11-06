@@ -76,7 +76,6 @@ Takes an optional `detail`, naming up to sixteen commands. Returns:
       "name": "people-discovery.dossier",
       "signature": "people-discovery.dossier(entity_id: string, limit?: integer = 50) -> {messages, records}  [read, global]",
       "title": "Gather what is known about a person.",
-      "description": "…",
       "relevant": true
     }
   ]
@@ -104,14 +103,12 @@ Each entry's `signature` is one line read from the command's argument schema
   `run_command` passes the one a call names and infers none from the target.
 
 A line is cut to 400 characters, its trailing parameters replaced by `…`. A
-command named in `detail` also carries its `inputSchema`: the host's schema with
-its `x-*` extension keywords removed, which every schema the model sees is, or
-`true`, open, where the host's is not an object or is larger than 16 KiB once
-those keywords are removed. A listing larger than the model bound keeps its
-first entries whole and the rest without description; a command named in
-`detail` is always kept whole. Every row the host lists is kept, however many;
-`omitted` counts rows that could not be read as a command, and `compacted` the
-entries shown without description.
+command named in `detail` also carries its description and `inputSchema`: the
+host's schema with its `x-*` extension keywords removed, which every schema the
+model sees is, or `true`, open, where the host's is not an object or is larger
+than 16 KiB once those keywords are removed. Descriptions and schemas are absent
+for commands not named in `detail`. Every row the host lists is kept, however
+many; `omitted` counts rows that could not be read as a command.
 
 The listing's `notice` says to assume a command with an absent or unknown effect
 may change the person's data.
@@ -184,18 +181,20 @@ Each call, alone or in a batch, comes back as one of:
 call alone would have returned, with its own `outputId`, minted in the calls'
 order. Three things differ from sending the calls one at a time. An executed
 call's summary is compact: `completed` is replaced by its count,
-`outcome.completedOmitted`, and `hint` is left out; the `signature` a `bad-args`
-refusal carries is kept. The summaries are charged against one output bound for
+`outcome.completedOmitted`; the refusal `hint` and the `signature` a `bad-args`
+refusal carries are kept. The summaries are charged against one output bound for
 the whole batch at their serialized size, in the calls' order, each beside the
 smallest form of every call after it; one that does not fit drops its
 `signature`, and then keeps only the outcome's `ok`, `code`, and `bodyBytes`,
 marked `summaryOmitted: true`, so later calls shrink first. The answers are
-measured in the calls' order against what the summaries leave: an answer that
-would have fit alone can be left out of its result, which is then marked
-truncated, and `truncated` says whether any was. And an answer without a label
-of its own takes the label of the batch's input as a whole, which covers every
-call's arguments: for a call whose own arguments carried less, that is the
-conservative choice.
+measured smallest-first by body size against what the summaries leave: an answer
+that would have fit alone can be left out of its result, which is then marked
+truncated, with a `hint` explaining that no requested values are shown and
+asking for a smaller range, fewer results, or a smaller batch. An existing
+refusal hint takes precedence over this omission guidance. The batch `truncated`
+says whether any result was cut. And an answer without a label of its own takes
+the label of the batch's input as a whole, which covers every call's arguments:
+for a call whose own arguments carried less, that is the conservative choice.
 
 ### Authorization
 
