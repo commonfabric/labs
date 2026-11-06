@@ -302,6 +302,11 @@ const storedLabelEntries = (
   }
 };
 
+/** The `[NAME]` stored on the document `cell` resolves to, read raw. */
+const storedName = (cell: Cell<unknown>): unknown =>
+  (cell.resolveAsCell().getRaw() as Record<string, unknown> | undefined)
+    ?.["$NAME"];
+
 /** Whether any of `entries` names `owner`'s personal space. */
 const namesPersonalSpace = (
   entries: { label?: { confidentiality?: unknown[] } }[],
@@ -394,6 +399,8 @@ const rehearse = (
     let stuckBefore: unknown;
     let stuckAfter: unknown;
     let addedSince: unknown;
+    let nameBefore: unknown;
+    let nameAfter: unknown;
     const adopted: {
       source: string | undefined;
       identity: string | undefined;
@@ -759,6 +766,7 @@ const rehearse = (
         );
         stuckBefore = await room.key("addRequests").key("add while stamped")
           .pull();
+        nameBefore = storedName(result);
         // What the update has to keep is what is stored when it happens, the
         // records of that add among them.
         before = await snapshot();
@@ -782,6 +790,7 @@ const rehearse = (
           storedLabelEntries(runtime, home.key("chatManager")),
           stranger,
         );
+        nameAfter = storedName(home.key("chatManager"));
         stuckAfter = await room.key("addRequests").key("add while stamped")
           .pull();
       }
@@ -1010,6 +1019,13 @@ const rehearse = (
 
     if (stamped) {
       it("takes a stamp naming someone whose data it does not hold off the manager's result at the update", () => {
+        // A setup of the same pattern carries the stored name over whatever
+        // the pattern wires there. The update's setup is of a changed
+        // manager, so it writes the name this tree's manager wires.
+
+        expect(nameBefore).toBeDefined();
+        expect(nameAfter).toBeDefined();
+        expect(nameAfter).not.toEqual(nameBefore);
         expect(stampedBefore).toBe(true);
         expect(stampedAfter).toBe(false);
       });
