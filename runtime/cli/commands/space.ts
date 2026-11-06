@@ -446,8 +446,8 @@ export const space = new Command()
           // server; only the host binding keeps it off the network entirely.
           // The release time states the checkout as released now: a piece
           // following a `system:` origin records the release it adopted, and
-          // takes an answer stating no time as an earlier one, keeping the
-          // source it runs.
+          // takes an answer stating no time as an earlier one, which it does
+          // not adopt while its running pattern loads.
           `serve it (NOT the live store — note the host and port):\n` +
           `  HOST=127.0.0.1 MEMORY_DIR=${
             shellQuote(toFileUrl(`${targetDir}/`).href)

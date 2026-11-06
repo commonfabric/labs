@@ -350,10 +350,12 @@ These are all failures that actually happened, not hypotheticals:
   with a profile creates one through the UI against the clone — after every
   reset, since the reset removes it (see
   [Stop the server before resetting](#stop-the-server-before-resetting)).
-- **A server that states no release time updates no piece that records one.**
-  A piece that follows a `system:` origin, as Home does, records the release
-  time of the source it adopted, and an answer stating no time is an earlier
-  release than that, so the piece keeps the source it runs
+- **A server that states no release time leaves a loadable piece on its
+  source.** A piece that follows a `system:` origin, as Home does, records the
+  release time of the source it adopted, and an answer stating no time is an
+  earlier release than that. So while the piece's running pattern loads, it
+  keeps that pattern; only one that cannot load, with no recorded move from the
+  offered source, takes the earlier release as a rescue
   ([pattern updates](../specs/pattern-imports/pattern-updates.md), step 4 of the
   loop). Nothing reports it: opening the piece starts its old pattern, and a
   rehearsal of an update that never happened passes every check here. Serve
