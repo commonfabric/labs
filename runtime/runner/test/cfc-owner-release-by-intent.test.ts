@@ -521,6 +521,32 @@ describe("owner release by intent", () => {
           tx.abort();
         });
 
+        it("throws from the transaction operation itself, before anything is committed, on a bad signature or a signer other than the owner", async () => {
+          const good = await sign(requestAt(result, [], tenDigests));
+          const notOwner = await sign(
+            requestAt(result, [], tenDigests, { signer: intruder.did() }),
+            intruder,
+          );
+          for (
+            const [signed, reason] of [
+              [
+                { ...good, signature: good.signature.slice(4) },
+                "the request's signature does not verify",
+              ],
+              [notOwner, `${intruder.did()} is not the owner`],
+            ] as const
+          ) {
+            const tx = runtime.edit();
+            setCfcImplementationIdentity(tx, {
+              kind: "builtin",
+              builtinId: OWNER_RELEASE_BY_INTENT_WRITER,
+            });
+            expect(() => tx.releaseCfcConfidentialityByIntent({ signed }))
+              .toThrow(reason);
+            tx.abort();
+          }
+        });
+
         it("refuses a record committed with no release, at the store", async () => {
           const signed = await sign(requestAt(result, [], tenDigests));
           const recordId = ownerReleaseByIntentRecordId(
