@@ -1,66 +1,61 @@
-/** The trusted dialog's plain-language reading of a reviewed snapshot. */
+/** The trusted dialog's line-by-line reading of a reviewed snapshot. */
 
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import {
-  audienceId,
-  audienceWords,
-  fieldLabel,
-  snapshotLines,
-} from "./snapshot-view.ts";
+import { audienceId, audienceWords, snapshotLines } from "./snapshot-view.ts";
 
 describe("snapshot view", () => {
-  it("reads field names as words", () => {
-    expect(fieldLabel("plusOne")).toBe("Plus one");
-    expect(fieldLabel("plus_one")).toBe("Plus one");
-    expect(fieldLabel("dietary")).toBe("Dietary");
-    expect(fieldLabel("")).toBe("");
+  it("shows field names exactly as stored, never as prose", () => {
+    expect(snapshotLines({ onlyYouWillSeeThis: "x" })).toEqual([
+      { key: "onlyYouWillSeeThis", text: "x", empty: false },
+    ]);
   });
 
-  it("keeps every field, naming empty ones rather than dropping them", () => {
+  it("keeps every field, marking empty ones rather than dropping them", () => {
     expect(snapshotLines({
       dietary: "",
       needs: [],
-      note: "Running late",
-      plusOne: { name: "", count: 0 },
+      plusOne: { name: "(blank)", count: 0 },
       vegan: false,
       gone: null,
     })).toEqual([
-      { label: "Dietary", text: "(blank)" },
-      { label: "Needs", text: "(none)" },
-      { label: "Note", text: "Running late" },
+      { key: "dietary", text: "blank", empty: true },
+      { key: "needs", text: "none", empty: true },
       {
-        label: "Plus one",
+        key: "plusOne",
         text: "",
+        empty: false,
         children: [
-          { label: "Name", text: "(blank)" },
-          { label: "Count", text: "0" },
+          // A string that reads "(blank)" is a value, not an empty mark.
+          { key: "name", text: "(blank)", empty: false },
+          { key: "count", text: "0", empty: false },
         ],
       },
-      { label: "Vegan", text: "No" },
-      { label: "Gone", text: "(none)" },
+      { key: "vegan", text: "false", empty: false },
+      { key: "gone", text: "none", empty: true },
     ]);
   });
 
-  it("joins plain lists and nests lists of objects", () => {
-    expect(snapshotLines({ needs: ["nut-free", "vegan"] })).toEqual([
-      { label: "Needs", text: "nut-free, vegan" },
-    ]);
-    expect(snapshotLines({ books: [{ title: "Solaris" }] })).toEqual([{
-      label: "Books",
+  it("gives each list entry its own line, so no two values read as one", () => {
+    expect(snapshotLines({ needs: ["a, b", "c"] })).toEqual([{
+      key: "needs",
       text: "",
-      children: [{
-        label: "1",
-        text: "",
-        children: [{ label: "Title", text: "Solaris" }],
-      }],
+      empty: false,
+      children: [
+        { key: "0", text: "a, b", empty: false },
+        { key: "1", text: "c", empty: false },
+      ],
     }]);
   });
 
   it("reads a value that is not an object as one line", () => {
-    expect(snapshotLines("hello")).toEqual([{ label: "Value", text: "hello" }]);
-    expect(snapshotLines(null)).toEqual([{ label: "Value", text: "(none)" }]);
+    expect(snapshotLines("hello")).toEqual([
+      { key: "", text: "hello", empty: false },
+    ]);
+    expect(snapshotLines(null)).toEqual([
+      { key: "", text: "none", empty: true },
+    ]);
   });
 
   it("names the audience kind and its verified id", () => {

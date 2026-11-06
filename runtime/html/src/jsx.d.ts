@@ -4392,7 +4392,7 @@ interface CFShareSnapshotAttributes<T> extends CFHTMLAttributes<T> {
   /** Matches the element property; JSX props are assigned as properties. */
   audienceKind?: "user" | "space";
   /** Text of the button that opens the review; the dialog never shows it. */
-  label?: string;
+  buttonText?: string;
   "oncf-shared"?: EventHandler<{}>;
 }
 

@@ -1239,13 +1239,16 @@ own `User` ceiling. This permits the default shell to share the user's private
 draft while refusing a source labeled only for another user.
 
 The host displays the exact snapshot and the audience verified by the runtime in
-a native modal dialog. Its disclosure and preview are fixed host UI: each field
-appears as a labelled line, with empty fields named rather than dropped, and the
-exact JSON sits under "Exact data". The dialog takes no words or theme from the
-pattern. The button that opens it follows the ambient theme, and a pattern may
-set its text with `label` (default "Review and share"), since opening the review
-releases nothing. The user must confirm with a trusted browser gesture; a scripted click cannot publish.
-The source stays private, and future changes are not included in the copy. JSON
+a native modal dialog. Its sentences and styles are fixed host UI, and take no
+theme from the page. Each field of the snapshot appears on its own line, its
+name exactly as stored and its value as data in a monospace style, so a pattern
+cannot pass a field name off as the dialog's own words. Empty values are named
+rather than dropped, and the exact JSON sits under "Exact data". The button that
+opens the dialog is a themed `cf-button`, and a pattern may set its text with
+`buttonText` (attribute `button-text`, default "Review and share"), since
+opening the review releases nothing. The user must confirm with a trusted
+browser gesture; a scripted click cannot publish. The source stays private, and
+future changes are not included in the copy. JSON
 values containing links are refused.
 
 Changing a binding, dismissing the dialog, or disconnecting the component

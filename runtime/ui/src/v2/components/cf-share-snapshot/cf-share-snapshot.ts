@@ -7,6 +7,7 @@ import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { runtimeContext } from "../../runtime-context.ts";
+import "../cf-button/index.ts";
 import {
   audienceId,
   audienceWords,
@@ -32,15 +33,16 @@ type ReviewBinding = {
  * Reviews an exact JSON snapshot and its runtime-verified audience in host UI.
  * Only a trusted native confirmation click can publish the reviewed snapshot.
  *
- * The opening button carries the ambient theme and the pattern's own label,
- * since it only opens the dialog. The dialog takes nothing from the pattern
- * or the page: its styles name fixed colors and no theme variables, and every word
- * in it comes from the runtime's preview, so a pattern cannot restyle or
- * reword what the person confirms.
+ * The opening button is an ordinary themed `cf-button` with the pattern's
+ * own text, since opening the review releases nothing. The dialog takes no
+ * theme or wording from the pattern: its styles name fixed colors and no
+ * theme variables, its sentences are fixed, and the reviewed value's field
+ * names and values appear only as data, in a monospace style apart from
+ * the dialog's own words.
  *
  * @element cf-share-snapshot
  * @attr {"user"|"space"} audience-kind - Kind of verified recipient
- * @attr {string} label - Text of the button that opens the review
+ * @attr {string} button-text - Text of the button that opens the review
  * @fires cf-shared - The released cell link has been stored in the result cell
  */
 export class CFShareSnapshot extends BaseElement {
@@ -62,16 +64,6 @@ export class CFShareSnapshot extends BaseElement {
       button:disabled {
         opacity: .5;
         cursor: default;
-      }
-      .open {
-        min-height: 2.5rem;
-        padding: .5rem 1rem;
-        border: 1px solid transparent;
-        border-radius: var(--cf-theme-border-radius, .5rem);
-        background: var(--cf-theme-color-primary, #244938);
-        color: var(--cf-theme-color-primary-foreground, #fff);
-        font-family: var(--cf-theme-font-family, inherit);
-        font-weight: 600;
       }
       dialog {
         all: initial;
@@ -123,16 +115,23 @@ export class CFShareSnapshot extends BaseElement {
         grid-template-columns: max-content 1fr;
         gap: .35rem 1rem;
       }
-      dl dl {
-        grid-column: 1 / -1;
-        margin: 0 0 0 1rem;
+      dd dl {
+        margin: 0;
+      }
+      dt,
+      dd {
+        font: 14px/1.5 monospace;
+        overflow-wrap: anywhere;
       }
       dt {
         color: #4a5a50;
       }
       dd {
         margin: 0;
-        overflow-wrap: anywhere;
+      }
+      .empty {
+        font: italic 14px/1.5 system-ui, sans-serif;
+        color: #6b776f;
       }
       details {
         margin: 0 0 1rem;
@@ -194,8 +193,8 @@ export class CFShareSnapshot extends BaseElement {
   accessor audienceKind: "user" | "space" = "user";
 
   /** Text of the button that opens the review; the dialog never uses it. */
-  @property()
-  accessor label = "Review and share";
+  @property({ attribute: "button-text" })
+  accessor buttonText = "Review and share";
 
   #preview: SnapshotPreview | undefined;
   #binding: ReviewBinding | undefined;
@@ -249,10 +248,10 @@ export class CFShareSnapshot extends BaseElement {
   override render() {
     const preview = this.#preview;
     return html`
-      <button class="open" type="button" ?disabled=${this.#busy ||
-        !this.source || !this.recipient ||
+      <cf-button class="open" ?disabled=${this.#busy || !this.source ||
+        !this.recipient ||
         !(this.result || (this.recommended && this.received)) || !this.runtime}
-        @click=${this.#prepare}>${this.label}</button>
+        @click=${this.#prepare}>${this.buttonText}</cf-button>
       ${this.#error ? html`<p role="alert">${this.#error}</p>` : nothing}
       <dialog aria-labelledby="share-title" @cancel=${this.#cancel}>
         <h2 id="share-title" tabindex="-1" autofocus>Share a copy of this?</h2>
@@ -422,16 +421,20 @@ export class CFShareSnapshot extends BaseElement {
   }
 }
 
-/** Reviewed fields as a definition list, nested objects indented. */
+/** Reviewed fields as a definition list, a nested object or list inside
+ * its field's `dd`. Values with nothing in them are named in the dialog's
+ * own italic words. */
 function renderLines(lines: SnapshotLine[]): unknown {
   return html`<dl>${
     lines.map((line) =>
-      line.children
-        ? html`<dt>${line.label}</dt><dd></dd>${renderLines(line.children)}`
-        : html`
-          <dt>${line.label}</dt>
-          <dd>${line.text}</dd>
-        `
+      html`
+        <dt>${line.key}</dt>
+        <dd>${line.children
+          ? renderLines(line.children)
+          : line.empty
+          ? html`<span class="empty">${line.text}</span>`
+          : line.text}</dd>
+      `
     )
   }</dl>`;
 }
