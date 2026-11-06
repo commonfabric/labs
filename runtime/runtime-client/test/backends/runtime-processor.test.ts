@@ -8705,6 +8705,127 @@ describe("runtime-processor", () => {
       });
     });
 
+    describe("an idle space's context", () => {
+      const counterSchema = {
+        type: "object",
+        properties: { n: { type: "number" } },
+      } as const satisfies JSONSchema;
+      const client = (id: number): WorkerClient => ({ id, post: () => true });
+
+      /** A processor whose runtime holds a cell in a second space. */
+      async function spaceState() {
+        const state = makeProcessorState();
+        const spaceB = (await Identity.fromPassphrase(
+          "runtime-processor-idle-space",
+        )).did();
+        const cell = createCellRef(
+          state.runtime.getCell(spaceB, "idle-space-counter", counterSchema),
+        );
+        const subscribe = (subscriber: WorkerClient) =>
+          state.processor.handleCellSubscribe(
+            { type: RequestType.CellSubscribe, cell },
+            subscriber,
+          );
+        const unsubscribe = (subscriber: WorkerClient) =>
+          state.processor.handleCellUnsubscribe(
+            { type: RequestType.CellUnsubscribe, cell },
+            subscriber,
+          );
+        return { ...state, spaceB, subscribe, unsubscribe };
+      }
+
+      it("drops the context once its space's last subscription is cancelled, and makes a new one when the space is named again", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        try {
+          const first = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.has(spaceB)).toBe(false);
+          const again = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          expect(again).not.toBe(first);
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(again);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the context while another subscription in its space stands", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+          subscribe(client(2));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the context while a piece in its space runs", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        using _running = stub(
+          runtime.runner,
+          "runsPieceIn",
+          (space) => space === spaceB,
+        );
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the home space's context when nothing in it is open", async () => {
+        const {
+          processor,
+          runtime,
+          homeSpace,
+          spaceB,
+          subscribe,
+          unsubscribe,
+        } = await spaceState();
+        try {
+          processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(homeSpace)).toBe(
+            processor.accessForTestingOnly.cc,
+          );
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("drops the context of a space a departing client alone had open", async () => {
+        const { processor, runtime, spaceB, subscribe } = await spaceState();
+        try {
+          processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          processor.disposeClient(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.has(spaceB)).toBe(false);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+    });
+
     describe("handleRuntimeSynced()", () => {
       it("awaits every opened space, naming none", async () => {
         const { processor, runtime } = makeProcessorState();
