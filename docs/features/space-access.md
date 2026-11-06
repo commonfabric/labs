@@ -228,6 +228,18 @@ loads of that space it remembered as failed, a piece's or the space root's, and
 runs again each one a view is showing, so a refused space's home or piece
 appears once access is granted, without a reload.
 
+A space whose first connection never completed a handshake, as when its memory
+host was down or out of the network's reach, is retried the same way, and only
+when asked: the runtime fails its loads at once rather than dialing again for
+each. Such a space is never refused, so it gets no "Access unavailable"
+placeholder; a load of it fails with `RuntimeErrorCode.SpaceUnreachable`. The
+shell asks the runtime to retry every such space
+(`RuntimeClient.retryUnreachableSpaces()`) on the occasions it retries refused
+ones, on the browser's `online` event, and when the person presses "Try again"
+on the failed load, which shows while a retry is in flight. A retry that reaches
+the space crosses the worker boundary as `spaceaccessrestored` too, so the
+failed load runs again as it does after an admission.
+
 ## A deleted space
 
 A deleted space

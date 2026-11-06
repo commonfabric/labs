@@ -986,7 +986,8 @@ export class XAppView extends BaseView {
   /**
    * Handler for the runtime's `spaceaccessrestored`, which does what
    * {@link XAppView.#onConnectionRestored} does when the space that admitted
-   * the runtime's principal again is the one the view shows. The runtime
+   * the runtime's principal again, or that a retry reached after its first
+   * connection never did, is the one the view shows. The runtime
    * drops that space's failed loads alone, so a run for any other space
    * would reach only the failure it already has.
    */
