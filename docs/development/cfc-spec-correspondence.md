@@ -348,7 +348,8 @@ a reconciled pin address it.
 The result-wiring stamp (§8.9.1.3) implements
 [specs#88](https://github.com/commonfabric/specs/pull/88) ahead of its ruling.
 Where the wiring is build-decided, a setup's membership stamp on its result
-document is narrowed to the setup's trigger reads; a setup that carries the
+document is narrowed to what the transaction read before the setup began,
+its trigger reads among it; a setup that carries the
 stored result's name over is not build-decided, so its membership keeps the
 full join. On a result document holding nothing but references, the stamp is
 re-minted at every setup, whether or not the setup writes the value; on one

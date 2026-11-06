@@ -476,11 +476,12 @@ export const MANIFEST: readonly ManifestRow[] = [
     ],
     note: "setup records a `result-wiring` input naming the result " +
       "document and whether the wiring is build-decided, which it is " +
-      "unless a stored name was carried over; the membership stamp of " +
-      "such a document joins the trigger reads alone " +
-      "(`deriveFlowJoin` with `triggersOnly`), as the pseudocode's scope " +
-      "of wiring, write-destination and runtime-internal reads contributes " +
-      "nothing to a join",
+      "unless a stored name was carried over, and the journal position " +
+      "the setup began at; the membership stamp of such a document joins " +
+      "what the transaction read before that position, the trigger reads " +
+      "among it (`deriveFlowJoin` with `journalBefore`), which is at least " +
+      "the pseudocode's triggers, its scope of wiring, write-destination " +
+      "and runtime-internal reads contributing nothing to a join",
   },
   {
     file: PROPAGATION,

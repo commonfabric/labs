@@ -575,17 +575,22 @@ value write is elided.
 **What the runtime does.** It mints from the wiring's own stamp. Setup's
 `#updateResultProjection` in `runner.ts` is the one marking site: it records a
 `result-wiring` write-policy input, under the runtime's authorization, for
-every setup, naming the result document and whether the wiring is
-build-decided. It is build-decided unless the setup carries the stored result's
-name over, since that name is a reference the stored document chose. The
+every setup, naming the result document, whether the wiring is
+build-decided, and the journal position the setup began at. It is
+build-decided unless the setup carries the stored result's name over, since
+that name is a reference the stored document chose. The
 wiring's references come from `unwrapOneLevelAndBindToDoc` over the pattern's
 result and the piece's identity, which reads no application content.
 `resultWiringsByTarget` in `cfc/prepare.ts` reads the records, and the persist
 region of `prepareBoundaryCommit` stamps a build-decided document's membership
 (its `enumerate` entries and `*`-child templates) from `deriveFlowJoin` with
-`triggersOnly`. That is the join of the trigger reads, to which the
-specification's wiring scope adds nothing, since wiring, write-destination and
-runtime-internal reads contribute nothing to a join. The stamp carries no
+`journalBefore` at that position: what the transaction read before the setup
+began, the trigger reads among it. Those reads decided which pattern, and so
+which build, the setup sets up, which is what the specification's triggers
+stand for; a caller that reads data and sets up a pattern chosen by it carries
+that data onto the membership. The specification's wiring scope adds nothing
+to it, since wiring, write-destination and runtime-internal reads contribute
+nothing to a join. The stamp carries no
 `TransformedBy`. Every other entry of the document, its frozen existence entry
 among them, keeps the attempt's join.
 
@@ -594,9 +599,12 @@ nothing but references as written at the root of that document, whatever the
 setup wrote, so the root's membership is re-minted at each setup: when setup
 finds the wiring unchanged and writes nothing, and when it writes only the
 slots that changed.
-`ownRestampContainerPaths` includes those containers, so a setup's reads of
-its own stored membership do not feed the join it re-mints from. A container
-reached only through the restatement mints no existence entry.
+`ownRestampContainerPaths` includes the build-decided ones, so a setup's
+reads of its own stored membership do not feed the join it re-mints from. A
+wiring that carries the stored name over is left out of it: the name is a
+reference the stored document's membership guards, so the setup's read of it
+joins the stamp it re-mints. A container reached only through the restatement
+mints no existence entry.
 
 This implements [specs#88](https://github.com/commonfabric/specs/pull/88)
 ahead of its ruling, at strict and with no dial, at @danfuzz's direction. It

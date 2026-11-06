@@ -4234,10 +4234,10 @@ const forEachFlowObservation = (
   ) => boolean,
   options?: {
     /**
-     * Walk the trigger reads alone (§8.9.2), leaving out every read the
-     * transaction journaled.
+     * Walk only the journaled reads taken before this journal position,
+     * beside the trigger reads (§8.9.2). A read with no position is walked.
      */
-    triggersOnly?: boolean;
+    journalBefore?: number;
   },
 ): boolean => {
   // Probe reads issued while FOLLOWING a reference belong to the dereference
@@ -4295,11 +4295,15 @@ const forEachFlowObservation = (
     traceSources(space, id, scope)?.followed.has(
       pathKey(probedSlotPath(logicalPath)),
     ) === true;
-  const journaled = options?.triggersOnly === true
-    ? []
-    : tx.getReadActivities?.() ?? [];
-  for (const read of journaled) {
+  const journalBefore = options?.journalBefore;
+  for (const read of tx.getReadActivities?.() ?? []) {
     if (isInternalVerifierRead(read.meta)) {
+      continue;
+    }
+    if (
+      journalBefore !== undefined && read.journalIndex !== undefined &&
+      read.journalIndex >= journalBefore
+    ) {
       continue;
     }
     // Scheduler dependency seeding materializes declared deps so the
@@ -4539,13 +4543,17 @@ const forEachFlowObservation = (
  * The result wirings a setup writes or restates in this transaction
  * (§8.9.1.3), by document, from the runtime's own record of each: whether the
  * build and the piece's identity alone decided which reference sits at each
- * slot. A document set up more than once is build-decided only where every
- * setup says so. Only a wiring at the document's root is taken.
+ * slot, and the journal position the setup began at. A document set up more
+ * than once is build-decided only where every setup says so, and takes the
+ * earliest position. Only a wiring at the document's root is taken.
  */
 const resultWiringsByTarget = (
   tx: IExtendedStorageTransaction,
-): Map<string, { buildDecided: boolean }> => {
-  const result = new Map<string, { buildDecided: boolean }>();
+): Map<string, { buildDecided: boolean; setupBegan: number }> => {
+  const result = new Map<
+    string,
+    { buildDecided: boolean; setupBegan: number }
+  >();
   for (const input of tx.getCfcState().writePolicyInputs) {
     if (
       input.kind !== "result-wiring" || !tx.isRuntimeWritePolicyInput(input) ||
@@ -4558,9 +4566,10 @@ const resultWiringsByTarget = (
       id: input.target.id as URI,
       scope: normalizeCellScope(input.target.scope),
     });
+    const known = result.get(key);
     result.set(key, {
-      buildDecided: input.buildDecided &&
-        (result.get(key)?.buildDecided ?? true),
+      buildDecided: input.buildDecided && (known?.buildDecided ?? true),
+      setupBegan: Math.min(input.setupBegan, known?.setupBegan ?? Infinity),
     });
   }
   return result;
@@ -4583,11 +4592,13 @@ const resultWiringsByTarget = (
 const withRestatedResultWirings = (
   tx: IExtendedStorageTransaction,
   targets: ReturnType<typeof valueWriteTargets>,
+  options?: { buildDecidedOnly?: boolean },
 ): ReturnType<typeof valueWriteTargets> => {
   const wirings = resultWiringsByTarget(tx);
   if (wirings.size === 0) return targets;
   const result: ReturnType<typeof valueWriteTargets> = new Map(targets);
-  for (const key of wirings.keys()) {
+  for (const [key, wiring] of wirings) {
+    if (options?.buildDecidedOnly === true && !wiring.buildDecided) continue;
     const written = targets.get(key);
     if (written?.paths.some((path) => path.length === 0)) continue;
     const { space, id, scope } = targetFromKey(key);
@@ -4662,8 +4673,15 @@ const ownRestampContainerPaths = (
       canonicalizeLogicalPath(addr.path),
     );
   }
+  // A restated wiring that carries a reference over from the stored result is
+  // not build-decided: what the setup read there decided what it writes, so
+  // its readback joins.
   for (
-    const [key, target] of withRestatedResultWirings(tx, valueWriteTargets(tx))
+    const [key, target] of withRestatedResultWirings(
+      tx,
+      valueWriteTargets(tx),
+      { buildDecidedOnly: true },
+    )
   ) {
     for (const path of target.paths) {
       const written = target.valuesByPath.get(pathKey(path));
@@ -4805,11 +4823,13 @@ const deriveFlowJoinImpl = (
     collectLabelSources?: boolean;
 
     /**
-     * Join the trigger reads alone (§8.9.2): what decided that the
-     * transaction ran, without anything it went on to read. A result
-     * wiring's membership is stamped from this (§8.9.1.3).
+     * Join only the reads journaled before this journal position, beside the
+     * trigger reads (§8.9.2) and the transaction's other observations: what
+     * the transaction had read when a setup it runs began, which decided
+     * what that setup builds. A result wiring's membership is stamped from
+     * this (§8.9.1.3).
      */
-    triggersOnly?: boolean;
+    journalBefore?: number;
   },
 ): {
   confidentiality: CfcConfClause[];
@@ -5323,7 +5343,7 @@ const deriveFlowJoinImpl = (
         );
       return false;
     },
-    { triggersOnly: options?.triggersOnly },
+    { journalBefore: options?.journalBefore },
   );
   // Label-metadata observations (inv-12 Stage 2, the SC-6 revisit): the
   // introspection surface's explicit records join the derivation with their
@@ -5334,12 +5354,7 @@ const deriveFlowJoinImpl = (
   // cross-space predicate — a foreign doc's metadata observed here makes the
   // stamped entry representation-eligible, same posture as a foreign labeled
   // read.
-  const triggersOnly = options?.triggersOnly === true;
-  for (
-    const observation of triggersOnly
-      ? []
-      : tx.getCfcState().labelMetadataObservations
-  ) {
+  for (const observation of tx.getCfcState().labelMetadataObservations) {
     noteLabelSource(observation.target, "application/json");
     if (observation.confidentiality.length === 0) continue;
     labeledSpaces?.add(observation.target.space);
@@ -5351,9 +5366,7 @@ const deriveFlowJoinImpl = (
     noteInputWitnesses([]);
   }
   for (
-    const observation of triggersOnly
-      ? []
-      : tx.getCfcState().externalContentObservations ?? []
+    const observation of tx.getCfcState().externalContentObservations ?? []
   ) {
     labelWithoutDocument = true;
     if (
@@ -12268,15 +12281,23 @@ export function* prepareBoundaryCommitSteps(
   // persist loop runs and lands it on the target even when the join itself
   // is empty. The value stamps below mint from the join alone (`flowHasJoin`).
   const flowHasLabels = flowHasJoin || flowJoin.declaredOnward.length > 0;
-  // A build-decided result wiring's membership is stamped from the trigger
-  // reads alone (§8.9.1.3): the program and the piece's identity fixed which
-  // reference sits at each slot, so nothing else the setup read decided it.
+  // A build-decided result wiring's membership is stamped from what the
+  // transaction had read when its setup began, the trigger reads among it
+  // (§8.9.1.3): the program, chosen by that, and the piece's identity fixed
+  // which reference sits at each slot, so nothing the setup itself read
+  // decided it.
   const resultWirings = resultWiringsByTarget(tx);
-  let memoizedWiringConfidentiality: CfcConfClause[] | undefined;
-  const wiringConfidentiality = (): CfcConfClause[] =>
-    memoizedWiringConfidentiality ??= flowMode === "off"
-      ? []
-      : deriveFlowJoin(tx, { triggersOnly: true }).confidentiality;
+  const wiringConfidentialityAt = new Map<number, CfcConfClause[]>();
+  const wiringConfidentiality = (setupBegan: number): CfcConfClause[] => {
+    let confidentiality = wiringConfidentialityAt.get(setupBegan);
+    if (confidentiality === undefined) {
+      confidentiality = flowMode === "off"
+        ? []
+        : deriveFlowJoin(tx, { journalBefore: setupBegan }).confidentiality;
+      wiringConfidentialityAt.set(setupBegan, confidentiality);
+    }
+    return confidentiality;
+  };
   // H4 (SC-18b): the writer-fit misfit REJECTS only at `enforce-strict`;
   // every mode below persists-and-flags, so `enforce-explicit` keeps the
   // shipped behavior where the derived component is a measurement, not a
@@ -14036,18 +14057,20 @@ export function* prepareBoundaryCommitSteps(
         }
       }
       // SPEC-PENDING https://github.com/commonfabric/specs/pull/88
-      // A build-decided result wiring's membership carries the trigger reads
-      // alone (§8.9.1.3), and no `TransformedBy`: the runtime placed its
+      // A build-decided result wiring's membership carries what the
+      // transaction had read when its setup began (§8.9.1.3), and no
+      // `TransformedBy`: the runtime placed its
       // references, not the function the join would name. Its frozen
       // existence entry keeps the whole join, and so does a container a
       // coordinator declared here, whose membership its selection decided.
-      const wiringNarrowed = resultWirings.get(key)?.buildDecided === true;
+      const wiring = resultWirings.get(key);
+      const wiringNarrowed = wiring?.buildDecided === true;
       const isDeclaredContainer = (path: readonly string[]) =>
         structureContainerPath !== undefined &&
         pathKey(structureContainerPath) === pathKey(path);
       const membershipJoinAt = (path: readonly string[]) =>
-        wiringNarrowed && !isDeclaredContainer(path)
-          ? wiringConfidentiality()
+        wiring !== undefined && wiringNarrowed && !isDeclaredContainer(path)
+          ? wiringConfidentiality(wiring.setupBegan)
           : flowConfidentiality;
       const membershipTransformedByAt = (path: readonly string[]) =>
         wiringNarrowed && !isDeclaredContainer(path) ? [] : flowTransformedBy;

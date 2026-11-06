@@ -1462,6 +1462,21 @@ function describeSkippedSubPatternNode(
 }
 
 /**
+ * The journal position the next activity `tx` journals takes: one past every
+ * position its journaled reads hold so far. Reads and write attempts share the
+ * clock, so a read journaled later holds this position or a later one.
+ */
+const nextJournalPosition = (tx: IExtendedStorageTransaction): number => {
+  let next = 0;
+  for (const read of tx.getReadActivities?.() ?? []) {
+    if (read.journalIndex !== undefined && read.journalIndex >= next) {
+      next = read.journalIndex + 1;
+    }
+  }
+  return next;
+};
+
+/**
  * Records what each write redirect `projection` stages into `resultCell`
  * initializes, at the position the redirect takes. A redirect to one of
  * `ownCells`, the documents the setup creates for its piece, is the setup's own
@@ -4136,7 +4151,7 @@ export class Runner {
     tx: IExtendedStorageTransaction,
     pattern: Pattern,
     resultCell: Cell<R>,
-    options: { preserveName: boolean },
+    options: { preserveName: boolean; setupBegan: number },
   ): void {
     const { result, fabricResult, changed, nameCarried } = this
       .#nextResultProjection(
@@ -4148,9 +4163,10 @@ export class Runner {
       );
     // Setup restates the result wiring whether or not it writes it, so the
     // wiring's membership entries are re-minted either way (§8.9.1.3). The
-    // build and the piece's identity fix every reference the wiring places,
-    // save a name carried over from the stored result, which is a reference
-    // the stored document chose.
+    // build, chosen by what the transaction had read when the setup began,
+    // and the piece's identity fix every reference the wiring places, save a
+    // name carried over from the stored result, which is a reference the
+    // stored document chose.
     const resultLink = resultCell.getAsNormalizedFullLink();
     tx.recordCfcWritePolicyInput({
       kind: "result-wiring",
@@ -4161,6 +4177,7 @@ export class Runner {
         path: [...resultLink.path],
       },
       buildDecided: !nameCarried,
+      setupBegan: options.setupBegan,
     }, runtimeWritePolicyAuthorization);
     if (changed) {
       // A result field the setup projects to one of the piece's internal
@@ -4541,6 +4558,9 @@ export class Runner {
     capturedArgumentFields: readonly string[] = [],
     droppedArgumentFields: readonly string[] = [],
   ): void {
+    // Where in the transaction's journal this setup begins: what was read
+    // before it chose the pattern and the argument the setup builds from.
+    const setupBegan = nextJournalPosition(tx);
     // A setup of the version a piece's record names, over cells holding
     // state that the record says another build numbered differently, would
     // stage this build's projection over that state and record it as agreed.
@@ -4842,6 +4862,7 @@ export class Runner {
 
     this.#updateResultProjection(tx, pattern, resultCell.withTx(tx), {
       preserveName: sameStoredSetup,
+      setupBegan,
     });
 
     // This completion marker records the identity whose schema, arguments,

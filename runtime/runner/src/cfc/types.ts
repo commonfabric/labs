@@ -697,13 +697,15 @@ export type WritePolicyInput =
      * transaction (§8.9.1.3): the references its build places at the slots
      * of the result document `target` names. The transaction re-mints the
      * wiring's membership entries whether or not it writes the value, and
-     * where `buildDecided` holds, mints them from the transaction's trigger
-     * reads alone, since the program and the piece's identity fixed every
-     * reference the wiring places. Authority is the runtime's mark.
+     * where `buildDecided` holds, mints them from what it had read before
+     * `setupBegan`, the journal position the setup began at: the program
+     * chosen by that and the piece's identity fixed every reference the
+     * wiring places. Authority is the runtime's mark.
      */
     readonly kind: "result-wiring";
     readonly target: CfcAddress;
     readonly buildDecided: boolean;
+    readonly setupBegan: number;
   }
   | {
     /**

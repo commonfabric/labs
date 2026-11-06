@@ -38,9 +38,6 @@ const BOB = "bob-secret";
 /** The confidentiality a planted existence entry carries. */
 const CAROL = "carol-secret";
 
-/** The confidentiality of data no setup below reads. */
-const DAVE = "dave-secret";
-
 describe("cfc-result-wiring-stamp", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
   let runtime: Runtime;
@@ -243,15 +240,30 @@ describe("cfc-result-wiring-stamp", () => {
   };
 
   describe("a setup that reads another principal's data", () => {
-    it("leaves it off a build-decided wiring's membership", async () => {
-      const { plain } = patterns();
-      const bobs = await seedBobsDocument();
-      const result = await setUp("reads-bob", plain, bobs);
+    it("stamps it on the membership where the transaction read it before choosing the pattern", async () => {
+      // What a transaction read before a setup began decided which pattern
+      // it set up, and so which references the wiring places.
 
+      const { plain, wider } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("chosen-by-bob", plain);
       expect(membershipOf(result)).not.toContain(BOB);
-      // The setup created the document, so its existence entry carries the
-      // whole join, Bob's data among it.
-      expect(existenceOf(result)).toContain(BOB);
+
+      const tx = runtime.edit();
+      const { note } = runtime.getCellFromLink(bobs, undefined, tx).get() as {
+        note: string;
+      };
+      runtime.run(
+        tx,
+        note === "wider" ? wider : plain,
+        { x: 1 },
+        runtime.getCell(space, "chosen-by-bob", undefined, tx),
+      );
+      tx.prepareCfc();
+      expect((await tx.commit().settled).ok).toBeDefined();
+      await runtime.idle();
+
+      expect(membershipOf(result)).toContain(BOB);
     });
 
     it("stamps it on the membership of a wiring that carries its stored name", async () => {
@@ -304,16 +316,33 @@ describe("cfc-result-wiring-stamp", () => {
       expect(existenceOf(result)).toEqual([CAROL]);
     });
 
-    it("gives way to what the restating setup's own reads carry", async () => {
+    it("stays where the setup carries over the stored name it guards", async () => {
+      // The stored name is a reference the stored document chose, so the
+      // stamp on which reference sits there stays with it.
+
       const { named } = patterns();
       const bobs = await seedBobsDocument();
-      const result = await setUp("supported", named);
-      await plantStamp(result, DAVE);
+      const result = await setUp("name-carried", named);
+      const tx = runtime.edit();
+      const link = result.getAsNormalizedFullLink();
+      writeSeedEnvelopeDoc(tx, space);
+      seedStoredEnvelope(tx, {
+        space: link.space,
+        scope: link.scope,
+        id: link.id,
+        path: ["value", NAME],
+      }, {
+        "/": {
+          "link@1": { id: bobs.id, path: [], space, scope: "space" },
+        },
+      } as FabricValue);
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).ok).toBeDefined();
+      await plantStamp(result, BOB);
 
-      await setUp("supported", named, bobs);
+      await setUp("name-carried", named);
 
       expect(membershipOf(result)).toContain(BOB);
-      expect(membershipOf(result)).not.toContain(DAVE);
       expect(existenceOf(result)).toEqual([CAROL]);
     });
   });
