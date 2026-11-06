@@ -30,6 +30,7 @@ import { type ACL, isACLUser, isCapability } from "@commonfabric/memory/acl";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
   isDeletedSpaceError,
+  isFirstHandshakeFailure,
   type PresenceEvent,
   type PresenceMembership,
 } from "@commonfabric/memory/v2/client";
@@ -1116,8 +1117,9 @@ export class RuntimeProcessor {
   #cancelClientUpdateRequired?: Cancel;
 
   /**
-   * The retries of refused spaces in flight, which the render boundaries'
-   * retry controls and `handleRetrySpaceAccess()` share.
+   * The retries of refused and unreachable spaces in flight, which the render
+   * boundaries' retry controls, `handleRetrySpaceAccess()` and
+   * `handleRetryUnreachableSpaces()` share.
    */
   readonly #spaceAccessRetries = new SpaceAccessRetries((space) =>
     this.#runtime.retrySpaceAccess(space)
@@ -2759,7 +2761,7 @@ export class RuntimeProcessor {
   ): Promise<CellFieldsResponse> {
     const cell = getCell(this.#runtime, request.cell);
     await cell.sync();
-    this.#throwIfAccessRefused(request.cell.space);
+    this.#throwIfUnreadable(request.cell.space);
     return this.#hostReadGate.fields(cell);
   }
 
@@ -3345,6 +3347,8 @@ export class RuntimeProcessor {
    *   the space, whether or not a root is still held from before.
    * @throws {SpaceNotFoundError} When the request opens a DID that no space
    *   answers to, other than this runtime's identity's own Home.
+   * @throws The failure to reach the space when its first connection never
+   *   completed a handshake, before anything decides the space has no root.
    */
   async handleGetSpaceRootPattern(
     request: PatternGetSpaceRoot,
@@ -3364,11 +3368,11 @@ export class RuntimeProcessor {
       });
       // Checked whatever the lookup found, since a root this runtime read
       // before losing the space is still in its replica.
-      this.#throwIfAccessRefused(request.space);
+      this.#throwIfUnreadable(request.space);
       return stored ? { piece: createPieceRef(stored) } : {};
     }
     const existing = await cc.getDefaultPattern(false);
-    this.#throwIfAccessRefused(request.space);
+    this.#throwIfUnreadable(request.space);
     if (existing === undefined && !(await this.#ownsSpace(request.space))) {
       // No owner means either a space someone else owns, which has nothing in
       // it yet, or no space at all, which opening does not create.
@@ -3407,14 +3411,19 @@ export class RuntimeProcessor {
 
   /**
    * Throws the server's refusal of `space`, or of this runtime's session
-   * there, if it refused either. A refused read finds nothing, so a caller
-   * that would report what it found asks this first.
+   * there, if it refused either, and the failure to reach the space if its
+   * first connection never completed a handshake. A refused read finds
+   * nothing, and so does a read of a space never reached, so a caller that
+   * would report what it found asks this first. A space never reached would
+   * otherwise read as one with no root, which an owner goes on to create.
    */
-  #throwIfAccessRefused(space: MemorySpace): void {
+  #throwIfUnreadable(space: MemorySpace): void {
     const storage = this.#runtime.storageManager;
     const denied = storage.spaceAccessError?.(space) ??
       storage.authorizationError?.(space);
     if (denied !== undefined) throw denied;
+    const sessionError = storage.spaceSessionError?.(space);
+    if (isFirstHandshakeFailure(sessionError)) throw sessionError;
   }
 
   /**
