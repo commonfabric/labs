@@ -112,7 +112,7 @@ export class CFShareSnapshot extends BaseElement {
       dl {
         margin: 0 0 1rem;
         display: grid;
-        grid-template-columns: max-content 1fr;
+        grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
         gap: .35rem 1rem;
       }
       dd dl {
@@ -126,8 +126,12 @@ export class CFShareSnapshot extends BaseElement {
       dt {
         color: #4a5a50;
       }
+      dt {
+        max-width: 14rem;
+      }
       dd {
         margin: 0;
+        white-space: pre-wrap;
       }
       .empty {
         font: italic 14px/1.5 system-ui, sans-serif;

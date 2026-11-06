@@ -48,6 +48,10 @@ Deno.test("cf-share-snapshot presents the exact snapshot and verified audience",
       Array.from(element.shadowRoot?.querySelectorAll("dt") ?? [])
         .map((dt) => dt.textContent),
     ).toEqual(["books", "0", "title", "author"]);
+    expect(
+      Array.from(element.shadowRoot?.querySelectorAll("dd dd dd") ?? [])
+        .map((dd) => dd.textContent),
+    ).toEqual(["Solaris", "Lem"]);
     expect(element.shadowRoot?.querySelector("cf-button.open")?.textContent)
       .toBe("Share with the host");
     expect(element.shadowRoot?.querySelector("dialog")?.textContent).not

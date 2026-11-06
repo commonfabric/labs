@@ -21,6 +21,9 @@ export interface SnapshotLine {
 function leaf(value: JSONValue): { text: string; empty: boolean } {
   if (value === null) return { text: "none", empty: true };
   if (value === "") return { text: "blank", empty: true };
+  if (typeof value === "string" && value.trim() === "") {
+    return { text: `only spaces (${value.length})`, empty: true };
+  }
   return { text: String(value), empty: false };
 }
 
@@ -32,6 +35,9 @@ function isRecord(value: JSONValue): value is { [key: string]: JSONValue } {
  * entry, so no two values can read as one. */
 function line(key: string, value: JSONValue): SnapshotLine {
   if (isRecord(value)) {
+    if (Object.keys(value).length === 0) {
+      return { key, text: "none", empty: true };
+    }
     return { key, text: "", empty: false, children: snapshotLines(value) };
   }
   if (Array.isArray(value)) {
@@ -46,7 +52,8 @@ function line(key: string, value: JSONValue): SnapshotLine {
   return { key, ...leaf(value) };
 }
 
-/** Every field of a reviewed value as lines, in stored order. A value
+/** Every field of a reviewed value as lines, in the order JSON gives them
+ * (number-like keys first, as in the exact data). A value
  * that is not an object reads as one line with an empty key. */
 export function snapshotLines(value: JSONValue): SnapshotLine[] {
   if (isRecord(value)) {

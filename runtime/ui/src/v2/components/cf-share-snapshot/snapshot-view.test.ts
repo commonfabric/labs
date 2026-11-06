@@ -37,6 +37,13 @@ describe("snapshot view", () => {
     ]);
   });
 
+  it("marks values that hold only spaces, and empty objects", () => {
+    expect(snapshotLines({ a: "   ", b: {} })).toEqual([
+      { key: "a", text: "only spaces (3)", empty: true },
+      { key: "b", text: "none", empty: true },
+    ]);
+  });
+
   it("gives each list entry its own line, so no two values read as one", () => {
     expect(snapshotLines({ needs: ["a, b", "c"] })).toEqual([{
       key: "needs",
