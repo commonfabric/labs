@@ -58,8 +58,13 @@ describe("cfc-result-wiring-stamp", () => {
     await storageManager.close();
   });
 
-  /** Seeds a document of Bob's, whose every read carries {@link BOB}. */
-  const seedBobsDocument = async (): Promise<IMemorySpaceAddress> => {
+  /**
+   * Seeds a document of Bob's, whose every read carries `confidentiality`,
+   * {@link BOB} unless given. Seeding it again relabels the same document.
+   */
+  const seedBobsDocument = async (
+    confidentiality = [BOB],
+  ): Promise<IMemorySpaceAddress> => {
     const tx = runtime.edit();
     const id = runtime.getCell(space, "bobs-document", undefined, tx)
       .getAsNormalizedFullLink().id;
@@ -77,7 +82,9 @@ describe("cfc-result-wiring-stamp", () => {
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: {
           version: 1,
-          entries: [{ path: [], label: { confidentiality: [BOB] } }],
+          entries: confidentiality.length === 0
+            ? []
+            : [{ path: [], label: { confidentiality } }],
         },
       },
     });
@@ -561,6 +568,64 @@ describe("cfc-result-wiring-stamp", () => {
 
       expect(membershipOf(result)).toContain(BOB);
       expect(existenceOf(result)).toEqual([CAROL]);
+    });
+
+    it("takes nothing a deferred start read itself onto a nested wiring it restates", async () => {
+      // A pattern the runtime has not named yet is set up later, in a
+      // transaction of its own that carries the asking transaction's reads,
+      // here none. Instantiating the pattern there sets up a nested piece
+      // whose result names Bob, and reads that result, before setting up the
+      // nested piece that keeps its wiring. What the start read on the way
+      // chose nothing about that wiring.
+
+      const { commonfabric: cf } = createTrustedBuilder(runtime);
+      const { lift } = cf as unknown as {
+        lift: (fn: (value: any) => unknown) => (value: unknown) => unknown;
+      };
+      const double = lift((x: number) => x * 2);
+      const triple = lift((x: number) => x * 3);
+      const first = cf.pattern<{ x: number }>(({ x }) => ({ b: triple(x) }));
+      const second = cf.pattern<{ x: number }>(({ x }) => ({ a: double(x) }));
+      const siblings = (version: number) =>
+        cf.pattern<{ x: number }>(({ x }) => ({
+          aFirst: first({ x }),
+          zSecond: second({ x }),
+          version,
+        }));
+      const run = async (version: number): Promise<Cell<unknown>> => {
+        const tx = runtime.edit();
+        const result = runtime.run(
+          tx,
+          siblings(version),
+          { x: 1 },
+          runtime.getCell(space, "deferred-siblings", undefined, tx),
+        );
+        tx.prepareCfc();
+        expect((await tx.commit().settled).ok).toBeDefined();
+        await runtime.idle();
+        runtime.runner.stop(result);
+        return result;
+      };
+      const child = (result: Cell<unknown>, key: string) =>
+        (result as Cell<Record<string, unknown>>).key(key).resolveAsCell();
+
+      const result = await run(1);
+      const firstChild = child(result, "aFirst");
+      const secondChild = child(result, "zSecond");
+      await plantStamp(firstChild, BOB, BOB);
+      expect(membershipOf(secondChild)).not.toContain(BOB);
+
+      await run(2);
+
+      expect((result as Cell<{ version: number }>).key("version").get())
+        .toBe(2);
+      expect(child(result, "zSecond").getAsNormalizedFullLink().id).toBe(
+        secondChild.getAsNormalizedFullLink().id,
+      );
+      // The first nested piece's existence entry still names Bob, so the
+      // start's read of it had a clause to consume.
+      expect(existenceOf(firstChild)).toEqual([BOB]);
+      expect(membershipOf(secondChild)).not.toContain(BOB);
     });
 
     describe("a source update that leaves a nested wiring unchanged", () => {

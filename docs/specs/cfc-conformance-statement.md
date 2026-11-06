@@ -741,8 +741,15 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
   committed, and not while it is open or once it is aborted or refused, so a
   source update that leaves a result's wiring unchanged restates it in the
   start that follows the update. The standing is read when the deferred
-  setup runs, so a refusal that arrives after that does not take it back. Where
-  the nested piece carries its stored name over, that restatement keeps the
+  setup runs, so a refusal that arrives after that does not take it back.
+  Every setup in such a transaction begins at the transaction's start: what
+  decided it is the reads the transaction carries, and the transaction's own
+  earlier reads, such as an instantiation reading the result of a piece it
+  set up beside the nested one, chose nothing, so they join none of its
+  stamps. In a transaction a setup was asked in, a setup nested in it begins
+  where it does, so what the instantiation read before it, of the pieces set
+  up beside it, joins its stamp: an over-taint. Where the nested piece
+  carries its stored name over, that restatement keeps the
   stored membership, as the carried-name rule above has any setup do, so
   such an update leaves an earlier attempt's stamp in place. A setup repair,
   and a swap to a pattern no setup in this runtime staged, carry no such
