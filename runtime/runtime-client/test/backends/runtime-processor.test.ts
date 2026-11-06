@@ -8809,6 +8809,37 @@ describe("runtime-processor", () => {
         }
       });
 
+      it("drops the context once the last piece running in its space stops", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        let running = true;
+        using _running = stub(
+          runtime.runner,
+          "runsPieceIn",
+          (space) => running && space === spaceB,
+        );
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          using _stop = stub(ctx, "stopPiece", () => {
+            running = false;
+            return Promise.resolve();
+          });
+          subscribe(client(1));
+          unsubscribe(client(1));
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+
+          await processor.handlePieceStop({
+            type: RequestType.PieceStop,
+            pieceId: fid("idle-space-piece"),
+            space: spaceB,
+          });
+
+          expect(processor.accessForTestingOnly.spaces.has(spaceB)).toBe(false);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
       it("keeps the home space's context when nothing in it is open", async () => {
         const {
           processor,
