@@ -8,6 +8,7 @@ import type {
   PerSession,
   PerSpace,
   PerUser,
+  SpaceAccessLevel,
   Stream,
   UI,
   VNode,
@@ -342,6 +343,14 @@ export interface LoomOutput {
   hiddenPanels: PerUser<Writable<Writable<Panel>[]>>;
   privatePanels: PerUser<Writable<PrivatePanel[]>>;
   viewerPanels: Writable<Panel>[];
+  /**
+   * The viewer's access to the Loom's space, for a host that draws its own
+   * arranging: READ may only hide and show panels for itself, WRITE may
+   * arrange and remove the panels it added, and OWNER may also remove panels
+   * of members who have left. `removePanel` still decides each removal.
+   * `undefined` until the session has derived it.
+   */
+  viewerAccess: PerSession<SpaceAccessLevel | undefined>;
   hidePanel: Stream<{ panel: Writable<Panel> }>;
   unhidePanel: Stream<{ panel: Writable<Panel> }>;
   addPrivatePanel: Stream<PanelPosition>;

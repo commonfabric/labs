@@ -7,6 +7,9 @@ import {
   ifElse,
   NAME,
   pattern,
+  type PerSession,
+  spaceAccess,
+  type SpaceAccessLevel,
   spaceOf,
   type Stream,
   UI,
@@ -727,6 +730,11 @@ export default pattern<LoomInput, LoomOutput>(
         privatePanels.get(),
       )
     );
+    // What this viewer may do here, so a host that draws its own arranging
+    // offers only that. The handlers stay the gate.
+    const viewerAccess = computed(
+      (): PerSession<SpaceAccessLevel | undefined> => spaceAccess(panels),
+    );
     const state = { panels, presentation };
     const viewerState = new Writable.perSession<ViewerState>({});
     const remove = removePanel(state);
@@ -906,6 +914,7 @@ export default pattern<LoomInput, LoomOutput>(
       retargetPanel: retargetPanel({ panels }),
       hiddenPanels,
       viewerPanels,
+      viewerAccess,
       hidePanel: hide,
       unhidePanel: unhide,
       privatePanels,

@@ -67,6 +67,8 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
           setup.loom.viewerState.key("selectedPanel").equals(panel)
         ),
       },
+      // The first participant owns the space.
+      { assertion: assert(() => setup.loom.viewerAccess === "OWNER") },
       { render: setup.loom[UI] },
       { action: stage },
       { label: "alice-staged" },
@@ -126,6 +128,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       { action: add },
       { action: select },
       { label: "bob-added" },
+      { assertion: assert(() => setup.loom.viewerAccess === "WRITE") },
       { await: "alice-added" },
       { assertion: assert(() => setup.loom.panels.length === 2) },
       {
@@ -187,11 +190,20 @@ export const aliceTab2 = pattern<{ setup: Setup }>(({ setup }) => {
   };
 });
 
+// A reader: what the Loom tells a host it may do here.
+export const carol = pattern<{ setup: Setup }>(({ setup }) => ({
+  [TESTS]: [
+    { await: "bob-added" },
+    { assertion: assert(() => setup.loom.viewerAccess === "READ") },
+  ],
+}));
+
 export default multiUserTest({
   setup,
   participants: {
     alice,
     bob,
+    carol: { pattern: carol, access: "READ" },
     aliceTab2: { pattern: aliceTab2, user: "alice" },
   },
 });

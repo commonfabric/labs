@@ -242,6 +242,16 @@ panels as cards of their own, after the shared ones, each with a Remove button.
 A private loom shown in a social loom is a private panel whose piece is that
 loom's root, so several social looms can each show one private loom.
 
+A host may draw a Loom's panels and arranging with its own toolkit instead of
+rendering the root's `[UI]`, which stays complete for every other host. It reads
+the same outputs: `viewerPanels`, `presentation`, `hiddenPanels`,
+`privatePanels`, and the streams above. `viewerAccess` is the viewer's access to
+the Loom's space, derived for each session, so such a host offers only what the
+viewer may do: `READ` hides and shows panels for itself, `WRITE` also arranges
+and removes the panels it added, and `OWNER` also removes those of members who
+have left. The streams still decide each event, so a host's offer is a
+convenience, never the check.
+
 `participants` lists the Fabric profiles of the Loom's participants, each as the
 live profile cell in its own space. It records no DID and no name: a profile
 names its principal in its label, and its name and avatar are read from it when
