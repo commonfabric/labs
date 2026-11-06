@@ -469,16 +469,19 @@ the run writes, at its labels when the run commits, and under
 `cfcTriggerReadGating` it enters the run's consumed sets and input gate too.
 A piece already running here takes the pattern a setup staged by swapping to
 it, in a setup transaction and an instantiation transaction of the pattern
-watcher's own (`swapToPattern`), and those carry the same observations of the
-transaction that ran the setup (`#runDecisions`); this is how the pattern a
-lift returns reaches a result that is running already. `runInTransaction`
-defers by throwing `RetryImmediately`, and the scheduler then reruns the
-asking action, which reads again.
+watcher's own (`swapToPattern`). The swap's setup carries the same
+observations of the transaction that ran the setup (`#runDecisions`), and the
+instantiation carries the swap setup's own along with them; this is how the
+pattern a lift returns reaches a result that is running already.
+`runInTransaction` defers by throwing `RetryImmediately`, and the scheduler
+then reruns the asking action, which reads again.
 
 **Residuals.**
 
 - A read the asking transaction took shallowly is carried as a recursive
-  trigger read of its address: an over-taint.
+  trigger read of its address: an over-taint. So is a read it declared
+  onward, whose membership the asking transaction's own join leaves to the
+  declared target.
 - External content the asking transaction observed is not carried, since its
   receipt binds it to that transaction. An action that both records external
   content and defers a run leaves that content off the run, an under-taint;

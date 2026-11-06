@@ -5349,8 +5349,18 @@ export class Runner {
           pattern: preparedPatternKey,
           carry: carryRunDecision(tx),
         };
-        tx.addCommitCallback((_tx, result) => {
-          if (!result.error) this.#runDecisions.set(key, decided);
+        tx.addCommitCallback((settledTx, result) => {
+          if (result.error) return;
+          this.#runDecisions.set(key, decided);
+          // A wave that withdraws the setup after accepting it leaves nothing
+          // the decision decided.
+          void (waveSettlementOf(settledTx) ?? waveSettlementOf(tx))?.then(
+            ({ error }) => {
+              if (error && this.#runDecisions.get(key) === decided) {
+                this.#runDecisions.delete(key);
+              }
+            },
+          );
         });
       }
       // ALREADY-RUNNING piece, full setup staged, KEYLESS pattern: for a real
@@ -6804,9 +6814,11 @@ export class Runner {
           kind: "bookkeeping",
         });
         carryDecision?.(setupTx);
-        const finishSwap = () => {
+        const finishSwap = (
+          setupDecision: (to: IExtendedStorageTransaction) => void,
+        ) => {
           cancelNodes?.();
-          instantiatePattern(pattern, undefined, undefined, carryDecision);
+          instantiatePattern(pattern, undefined, undefined, setupDecision);
           runningRef = newRef;
           runningPattern = pattern;
           instantiatedPatternKey = patternIdentityKey(newRef);
@@ -6823,6 +6835,16 @@ export class Runner {
             currentPatternKey = instantiatedPatternKey;
           }
           this.#evictResultPatternMemos(`${pieceLink.space}/${pieceLink.id}`);
+          // A later swap to the same pattern is decided as this one was.
+          if (
+            carryDecision !== undefined && active &&
+            !this.#runDecisions.has(pieceKey)
+          ) {
+            this.#runDecisions.set(pieceKey, {
+              pattern: patternIdentityKey(newRef),
+              carry: carryDecision,
+            });
+          }
         };
         // The running graph is replaced only once the setup it reads is
         // accepted. A commit can be refused, and a serving wave can still
@@ -6834,6 +6856,7 @@ export class Runner {
         // later pointer write (or reactivation) repairs. Events for the piece
         // wait for the outcome (`pendingPatternChangeFor`).
         const setupWork = (async () => {
+          let setupDecision: (to: IExtendedStorageTransaction) => void;
           try {
             this.#applySetupState(
               setupTx,
@@ -6847,6 +6870,9 @@ export class Runner {
               undefined,
               resultCell,
             );
+            // The new graph is set up from what the setup read, and from what
+            // decided the swap, which the setup carries.
+            setupDecision = carryRunDecision(setupTx);
             this.#runtime.prepareTxForCommit(setupTx);
             const committed = await setupTx.commit().settled;
             if (committed.error !== undefined) {
@@ -6887,7 +6913,7 @@ export class Runner {
           // one while the settlement was pending.
           if (!active || startLifecycleEpoch !== this.#lifecycleEpoch) return;
           if (currentPatternKey !== patternIdentityKey(newRef)) return;
-          finishSwap();
+          finishSwap(setupDecision);
         })().catch((error) => {
           logger.error(
             "pattern-swap-setup-error",

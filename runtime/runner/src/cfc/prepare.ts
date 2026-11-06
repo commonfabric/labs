@@ -14650,9 +14650,10 @@ export const collectConsumedLabel: typeof collectConsumedLabelImpl = (
  * What `tx` has observed so far that its flow join weighs (spec §8.9.2): the
  * addresses of its journal reads and its trigger reads, each once and rooted
  * at the stored document as `addCfcTriggerReads()` takes them, and its
- * label-metadata observations. A read whose content `tx` declared onward is
- * left out, as is the write path's read of its own destination, since the
- * join weighs neither's confidentiality.
+ * label-metadata observations. The write path's reads of its own destination
+ * are left out, since the join weighs none of their confidentiality. A read
+ * `tx` declared onward is kept whole, so the membership at its own path, which
+ * the join leaves to the declared target, is carried too: an over-taint.
  *
  * A run that `tx` decided on, set up or started later in a transaction of its
  * own, carries these, because what `tx` observed decided that the run
@@ -14672,12 +14673,7 @@ export const flowJoinObservationsOf = (
   forEachFlowObservation(
     tx,
     (space, id, scope, _type, logicalPath, observation) => {
-      if (
-        observation.writeDestination ||
-        observation.declaredOnward !== undefined
-      ) {
-        return false;
-      }
+      if (observation.writeDestination) return false;
       const key = stringTupleKey([
         targetKey({ space, id, scope }),
         pathKey(logicalPath),
