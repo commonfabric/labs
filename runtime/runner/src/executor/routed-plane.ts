@@ -13,6 +13,7 @@
  */
 
 import type { FabricPlainObject } from "@commonfabric/api";
+import { getLogger } from "@commonfabric/logger";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import {
   encodeMemoryBoundary,
@@ -40,6 +41,8 @@ import type {
   ServedAppendResult,
 } from "./served-requests.ts";
 import type { WaveSpaceCommit } from "./wave.ts";
+
+const logger = getLogger("routed-plane", { enabled: true, level: "warn" });
 
 /** How a host reaches the owner of any space: the deployment's route. */
 export type RouteOptions = {
@@ -455,8 +458,13 @@ export class RoutedPlane {
   #hold(space: MemorySpace, session: Promise<RoutedSession>): void {
     this.#sessions.set(space, session);
     session.then((routed) => {
-      routed.session.subscribeTermination(() => {
-        if (this.#sessions.get(space) === session) this.#replace(space, routed);
+      routed.session.subscribeTermination((error) => {
+        if (this.#sessions.get(space) !== session) return;
+        logger.warn("session-replaced", () => [
+          `the routed session to ${space} ended, and is replaced`,
+          error,
+        ]);
+        this.#replace(space, routed);
       });
     }, () => {
       if (this.#sessions.get(space) === session) this.#sessions.delete(space);
