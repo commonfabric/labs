@@ -1462,6 +1462,21 @@ function describeSkippedSubPatternNode(
 }
 
 /**
+ * The journal position the next activity `tx` journals takes: one past every
+ * position its journaled reads hold so far. Reads and write attempts share the
+ * clock, so a read journaled later holds this position or a later one.
+ */
+const nextJournalPosition = (tx: IExtendedStorageTransaction): number => {
+  let next = 0;
+  for (const read of tx.getReadActivities?.() ?? []) {
+    if (read.journalIndex !== undefined && read.journalIndex >= next) {
+      next = read.journalIndex + 1;
+    }
+  }
+  return next;
+};
+
+/**
  * Records what each write redirect `projection` stages into `resultCell`
  * initializes, at the position the redirect takes. A redirect to one of
  * `ownCells`, the documents the setup creates for its piece, is the setup's own
@@ -2782,6 +2797,23 @@ export class Runner {
     IExtendedStorageTransaction
   >();
 
+  /**
+   * The transactions a setup runs in that are the ones it was asked in: the
+   * transaction a caller hands `run`, `setup`, `runSynced` or
+   * `runInTransaction`, or one the runner makes for that call as it is made.
+   * Only these are added, at those entry points; a setup nested in another,
+   * such as a pattern node instantiated with its parent, takes whatever
+   * standing the transaction already has. Only a setup in one of these
+   * restates a result wiring it finds unchanged (§8.9.1.3). Every other setup
+   * transaction is one the runner makes later, for a start deferred out of
+   * the asking transaction, a swap or a repair, and holds none of the reads
+   * that decided the setup, so re-minting the stored membership there would
+   * drop a clause those reads carried.
+   */
+  readonly #askingSetupTransactions = new WeakSet<
+    IExtendedStorageTransaction
+  >();
+
   #runtime: Runtime;
   readonly #cancels = new Map<
     `${MemorySpace}/${ScopeKey}/${URI}`,
@@ -3689,6 +3721,7 @@ export class Runner {
   ): Promise<Cell<R>> {
     if (providedTx) {
       this.#callerOwnedSetupTransactions.add(providedTx);
+      this.#askingSetupTransactions.add(providedTx);
       this.#setupInternal(
         providedTx,
         patternOrModule,
@@ -3707,6 +3740,7 @@ export class Runner {
       // setup.
       return this.#runtime.editWithRetry((tx) => {
         this.#callerOwnedSetupTransactions.add(tx);
+        this.#askingSetupTransactions.add(tx);
         this.#setupInternal(tx, patternOrModule, argument, resultCell, options);
       }).then(({ error }) => {
         if (error) {
@@ -4136,15 +4170,36 @@ export class Runner {
     tx: IExtendedStorageTransaction,
     pattern: Pattern,
     resultCell: Cell<R>,
-    options: { preserveName: boolean },
+    options: { preserveName: boolean; setupBegan: number },
   ): void {
-    const { result, fabricResult, changed } = this.#nextResultProjection(
-      tx,
-      pattern,
-      resultCell,
-      getMetaLink(resultCell.withTx(tx), "argument")!,
-      options,
-    );
+    const { result, fabricResult, changed, nameCarried } = this
+      .#nextResultProjection(
+        tx,
+        pattern,
+        resultCell,
+        getMetaLink(resultCell.withTx(tx), "argument")!,
+        options,
+      );
+    // Setup restates the result wiring whether or not it writes it, so the
+    // wiring's membership entries are re-minted either way (§8.9.1.3). The
+    // build, chosen by what the transaction had read when the setup began,
+    // and the piece's identity fix every reference the wiring places, save a
+    // name carried over from the stored result, which is a reference the
+    // stored document chose.
+    const resultLink = resultCell.getAsNormalizedFullLink();
+    if (changed || this.#askingSetupTransactions.has(tx)) {
+      tx.recordCfcWritePolicyInput({
+        kind: "result-wiring",
+        target: {
+          space: resultLink.space,
+          id: resultLink.id,
+          scope: resultLink.scope,
+          path: [...resultLink.path],
+        },
+        buildDecided: !nameCarried,
+        setupBegan: options.setupBegan,
+      }, runtimeWritePolicyAuthorization);
+    }
     if (changed) {
       // A result field the setup projects to one of the piece's internal
       // cells is the setup's own initialization of that cell. Those cells are
@@ -4175,9 +4230,11 @@ export class Runner {
    * one stored now: `result` is the projection as bound to the document,
    * which the policy-input recorder walks; `fabricResult` is what a write
    * stores; and `changed` is whether that differs from what is stored, which
-   * is the one condition under which setup writes it. `argumentCellLink` is
-   * the argument link the projection binds to, which setup has staged under
-   * `pattern`'s argument schema by the time it writes. Reads only.
+   * is the one condition under which setup writes it. `nameCarried` is
+   * whether the projection's name is the one stored rather than the
+   * pattern's. `argumentCellLink` is the argument link the projection binds
+   * to, which setup has staged under `pattern`'s argument schema by the time
+   * it writes. Reads only.
    */
   #nextResultProjection<R>(
     tx: IExtendedStorageTransaction,
@@ -4185,7 +4242,12 @@ export class Runner {
     resultCell: Cell<R>,
     argumentCellLink: NormalizedFullLink,
     options: { preserveName: boolean },
-  ): { result: R; fabricResult: FabricValue; changed: boolean } {
+  ): {
+    result: R;
+    fabricResult: FabricValue;
+    changed: boolean;
+    nameCarried: boolean;
+  } {
     const writableResultCell = pattern.resultSchema === undefined
       ? resultCell.withTx(tx)
       : resultCell.withTx(tx).asSchema(pattern.resultSchema);
@@ -4201,11 +4263,10 @@ export class Runner {
     const previousResult = writableResultCell.getRaw({
       meta: ignoreReadForScheduling,
     });
-    if (
-      options.preserveName &&
+    const nameCarried = options.preserveName &&
       isObjectOrArray(previousResult) &&
-      previousResult[NAME]
-    ) {
+      Boolean(previousResult[NAME]);
+    if (nameCarried) {
       result = { ...result, [NAME]: previousResult[NAME] };
     }
     // Convert-and-freeze (default): a deep-frozen value lets the storage write
@@ -4230,6 +4291,7 @@ export class Runner {
       result,
       fabricResult,
       changed: !valueEqualByWalk(fabricResult, previousResult),
+      nameCarried,
     };
   }
 
@@ -4513,6 +4575,7 @@ export class Runner {
     setupState: SetupStateReuse,
     argument: T,
     resultCell: Cell<R>,
+    setupBegan: number,
     referencedArgumentFields: readonly string[] = [],
     capturedArgumentFields: readonly string[] = [],
     droppedArgumentFields: readonly string[] = [],
@@ -4818,6 +4881,7 @@ export class Runner {
 
     this.#updateResultProjection(tx, pattern, resultCell.withTx(tx), {
       preserveName: sameStoredSetup,
+      setupBegan,
     });
 
     // This completion marker records the identity whose schema, arguments,
@@ -5035,6 +5099,10 @@ export class Runner {
     validationOptions: SetupValidationOptions = {},
   ): SetupResult<R> {
     const tx = providedTx ?? this.#runtime.edit();
+    // Where in the transaction's journal this setup begins, before it reads
+    // anything of its own: what was read before it chose the pattern and the
+    // argument the setup builds from (§8.9.1.3).
+    const setupBegan = nextJournalPosition(tx);
 
     logger.debug("cell-info", () => [
       `resultCell: ${resultCell.getAsNormalizedFullLink().id}`,
@@ -5279,6 +5347,7 @@ export class Runner {
       setupState,
       argument,
       resultCell,
+      setupBegan,
       validationOptions.referencedArgumentFields,
       validationOptions.capturedArgumentFields,
       validationOptions.droppedArgumentFields,
@@ -6735,6 +6804,8 @@ export class Runner {
           return;
         }
         const setupTx = this.#runtime.edit();
+        // The swap's setup reads nothing before this, so it begins here.
+        const setupBegan = nextJournalPosition(setupTx);
         // Under an installed seal destination (serving-loop.md §3d) every
         // commit path declares its run context; the swap's setup write is
         // runtime-internal bookkeeping. A no-op everywhere else. The action
@@ -6792,6 +6863,7 @@ export class Runner {
               },
               undefined,
               resultCell,
+              setupBegan,
             );
             this.#runtime.prepareTxForCommit(setupTx);
             const committed = await setupTx.commit().settled;
@@ -7332,6 +7404,8 @@ export class Runner {
           pattern,
           ref,
           stage: (repairTx) => {
+            // The repair's setup begins with this stage, before its own reads.
+            const setupBegan = nextJournalPosition(repairTx);
             // A retry re-stages what a refused commit rolled back; once a
             // commit has landed the stored setup agrees with the pattern and
             // there is nothing left to stage.
@@ -7387,6 +7461,7 @@ export class Runner {
               },
               undefined,
               resultCell,
+              setupBegan,
             );
           },
         };
@@ -9590,12 +9665,17 @@ export class Runner {
     options?: RunnerRunOptions,
   ): Cell<R>;
   run<T, R = any>(
-    providedTx: IExtendedStorageTransaction,
+    providedTx: IExtendedStorageTransaction | undefined,
     patternOrModule: Pattern | Module | undefined,
     argument: T,
     resultCell: Cell<R>,
     options: RunnerRunOptions = {},
   ): Cell<R> {
+    // A run given no transaction starts in one the runner makes, which holds
+    // none of its caller's reads, so it restates no unchanged wiring.
+    if (providedTx !== undefined) {
+      this.#askingSetupTransactions.add(providedTx);
+    }
     return this.#runWithStartOwnership(
       providedTx,
       patternOrModule,
@@ -10041,6 +10121,7 @@ export class Runner {
     };
     if (givenTx) {
       this.#callerOwnedSetupTransactions.add(givenTx);
+      this.#askingSetupTransactions.add(givenTx);
       if (sourceUpdate !== undefined) {
         throw new Error(
           "source update authority requires an owned setup transaction",
@@ -10103,6 +10184,7 @@ export class Runner {
             setCfcTrustSnapshot(tx, options.cfcTrustSnapshot);
           }
           assertExpectedPatternIdentity(resultCell.withTx(tx));
+          this.#askingSetupTransactions.add(tx);
           return this.#setupInternal(
             tx,
             pattern,

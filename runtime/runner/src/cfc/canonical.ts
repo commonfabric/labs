@@ -242,6 +242,7 @@ const compareWritePolicyInput = (
     case "preserved-output":
     case "policy-application":
     case "release-program":
+    case "result-wiring":
     case "owner-adoption":
     case "initialization": {
       primary = compareAddress(
@@ -324,6 +325,7 @@ export const canonicalizeWritePolicyInput = (
     case "preserved-output":
     case "policy-application":
     case "release-program":
+    case "result-wiring":
     case "owner-adoption":
     case "initialization":
       return {
