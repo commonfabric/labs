@@ -526,7 +526,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "__vNKTeIt2LkZ4iLkvw_npgtJSy8yj2xYzNfkvM6mdE",
+              "moduleIdentity": "5JJtt9gCS2MIvp6Fbg1_MzFaqaSRFVHr6Y-Tctl0rWw",
               "path": [
                 "admitPanel"
               ]
@@ -554,7 +554,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "__vNKTeIt2LkZ4iLkvw_npgtJSy8yj2xYzNfkvM6mdE",
+              "moduleIdentity": "5JJtt9gCS2MIvp6Fbg1_MzFaqaSRFVHr6Y-Tctl0rWw",
               "path": [
                 "admitPanel"
               ]
@@ -1401,6 +1401,9 @@
       },
       "LoomMenuAction": {
         "properties": {
+          "id": {
+            "type": "string"
+          },
           "label": {
             "type": "string"
           },
@@ -1412,6 +1415,7 @@
           }
         },
         "required": [
+          "id",
           "label",
           "run"
         ],
@@ -1427,6 +1431,10 @@
           },
           "heading": {
             "type": "string"
+          },
+          "panel": {
+            "$ref": "#/$defs/Panel",
+            "description": "The panel a headed section is about."
           }
         },
         "required": [
@@ -1582,7 +1590,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "__vNKTeIt2LkZ4iLkvw_npgtJSy8yj2xYzNfkvM6mdE",
+              "moduleIdentity": "5JJtt9gCS2MIvp6Fbg1_MzFaqaSRFVHr6Y-Tctl0rWw",
               "path": [
                 "admitPanel"
               ]
@@ -1607,7 +1615,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "__vNKTeIt2LkZ4iLkvw_npgtJSy8yj2xYzNfkvM6mdE",
+              "moduleIdentity": "5JJtt9gCS2MIvp6Fbg1_MzFaqaSRFVHr6Y-Tctl0rWw",
               "path": [
                 "admitPanel"
               ]

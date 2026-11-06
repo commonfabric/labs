@@ -294,8 +294,15 @@ export interface ViewerState {
   actingProfile?: ParticipantProfile;
 }
 
-/** One action a host may draw in a menu of its own, under the label it shows. */
+/**
+ * One action a host may draw in a menu of its own. `id` names what it does,
+ * from a small set (`stage-all`, `clear-focus`, `clear-stage`, `open`,
+ * `focus`, `move-first`, `move-last`, `duplicate`, `hide`, `remove`,
+ * `remove-from-my-view`, `show`), so a host can draw a known one its own way;
+ * `label` is what to show for one it does not know.
+ */
 export interface LoomMenuAction {
+  id: string;
   label: string;
   run: Stream<void>;
 }
@@ -306,6 +313,8 @@ export interface LoomMenuAction {
  */
 export interface LoomMenuSection {
   heading?: string;
+  /** The panel a headed section is about. */
+  panel?: Writable<Panel>;
   actions: LoomMenuAction[];
 }
 

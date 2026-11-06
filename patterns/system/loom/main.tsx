@@ -662,8 +662,9 @@ function panelHeading(panel: Writable<Panel>, place: number): string {
   const value = panel.get();
   if (value?.titleOverride) return value.titleOverride;
   if (value?.kind === "url") return value.url;
+  // Only the source: reading the whole document would follow its notes.
   const source = value?.kind === "document"
-    ? value.content.get()?.source
+    ? value.content.key("source").get()
     : undefined;
   if (source?.kind === "page-excerpt") return source.title;
   if (source !== undefined) return source.name;
@@ -732,11 +733,16 @@ const clearFocus = handler<
   present.send({ stagedPanels: [...presentation.get().stagedPanels] })
 );
 
+/** Shows the acting principal every panel they hid. */
+const showAllHidden = handler<
+  void,
+  { hiddenPanels: Writable<Writable<Panel>[]> }
+>((_, { hiddenPanels }) => hiddenPanels.set([]));
+
 /** The actions bound to one shared panel. */
 interface SharedPanelActions {
   panel: Writable<Panel>;
   focus: Stream<void>;
-  select: Stream<void>;
   duplicate: Stream<void>;
   open: Stream<void>;
   hide: Stream<void>;
@@ -757,7 +763,6 @@ interface MenuFacts {
   shared: readonly Writable<Panel>[];
   shown: readonly Writable<Panel>[];
   presentation: Presentation;
-  selected: Writable<Panel> | undefined;
   loom: {
     stageAll: Stream<void>;
     clearStage: Stream<void>;
@@ -770,7 +775,10 @@ interface MenuFacts {
  * panel they are shown, in the order they are shown it, and last a way to show
  * each panel they hid. The actions of a Loom's only panel join the Loom's own,
  * since the panel is all the page shows. Arranging what everyone sees takes
- * WRITE or OWNER; hiding, selecting and a viewer's own panels take nothing.
+ * WRITE or OWNER, and removing a shared panel takes OWNER: a WRITE member may
+ * remove only a panel they added, which only the handler can tell, so the menu
+ * offers it to nobody it could refuse but an OWNER clearing up after someone
+ * who left. Opening, hiding and a viewer's own panels take nothing.
  */
 function loomMenu(
   facts: MenuFacts,
@@ -778,54 +786,82 @@ function loomMenu(
   privateActions: readonly OwnPanelAction[],
   hiddenActions: readonly OwnPanelAction[],
 ): LoomMenu {
-  const { level, shared, shown, presentation, selected, loom } = facts;
+  const { level, shared, shown, presentation, loom } = facts;
   const arranges = level === "OWNER" || level === "WRITE";
+  const place = (panel: Writable<Panel>) =>
+    shared.findIndex((member) => member.equals(panel)) + 1;
   const staged = presentation.stagedPanels;
   const focused = presentation.focusedPanel?.get() === undefined
     ? undefined
     : presentation.focusedPanel;
   const own: LoomMenuAction[] = [];
   if (arranges && shared.length > 0 && staged.length < shared.length) {
-    own.push({ label: "Stage all for everyone", run: loom.stageAll });
+    own.push({
+      id: "stage-all",
+      label: "Stage all for everyone",
+      run: loom.stageAll,
+    });
   }
   if (arranges && focused !== undefined) {
-    own.push({ label: "Clear focus", run: loom.clearFocus });
+    own.push({ id: "clear-focus", label: "Clear focus", run: loom.clearFocus });
   }
   if (arranges && staged.length > 0) {
-    own.push({ label: "Clear stage", run: loom.clearStage });
+    own.push({ id: "clear-stage", label: "Clear stage", run: loom.clearStage });
   }
-  const panelSections: LoomMenuSection[] = shown.map((panel, place) => {
-    const heading = panelHeading(panel, place + 1);
+  const panelSections: LoomMenuSection[] = shown.map((panel, at) => {
+    const heading = panelHeading(panel, at + 1);
     const mine = privateActions.find((entry) => entry.panel.equals(panel));
     if (mine !== undefined) {
       return {
         heading,
-        actions: [{ label: "Remove from my view", run: mine.run }],
+        panel,
+        actions: [{
+          id: "remove-from-my-view",
+          label: "Remove from my view",
+          run: mine.run,
+        }],
       };
     }
     const bound = sharedActions.find((entry) => entry.panel.equals(panel));
-    if (bound === undefined) return { heading, actions: [] };
-    const index = shared.findIndex((member) => member.equals(panel));
+    if (bound === undefined) return { heading, panel, actions: [] };
+    const index = place(panel) - 1;
     const actions: LoomMenuAction[] = [];
     if (panel.get()?.kind === "piece") {
-      actions.push({ label: "Open on its own", run: bound.open });
+      actions.push({ id: "open", label: "Open on its own", run: bound.open });
     }
     if (arranges && !(focused?.equals(panel) ?? false)) {
-      actions.push({ label: "Focus for everyone", run: bound.focus });
+      actions.push({
+        id: "focus",
+        label: "Focus for everyone",
+        run: bound.focus,
+      });
     }
     if (arranges && index > 0) {
-      actions.push({ label: "Move first", run: bound.moveFirst });
+      actions.push({
+        id: "move-first",
+        label: "Move first",
+        run: bound.moveFirst,
+      });
     }
     if (arranges && index >= 0 && index < shared.length - 1) {
-      actions.push({ label: "Move last", run: bound.moveLast });
+      actions.push({
+        id: "move-last",
+        label: "Move last",
+        run: bound.moveLast,
+      });
     }
-    if (!(selected?.equals(panel) ?? false)) {
-      actions.push({ label: "Select in this session", run: bound.select });
+    if (arranges) {
+      actions.push({
+        id: "duplicate",
+        label: "Duplicate",
+        run: bound.duplicate,
+      });
     }
-    if (arranges) actions.push({ label: "Duplicate", run: bound.duplicate });
-    actions.push({ label: "Hide for me", run: bound.hide });
-    if (arranges) actions.push({ label: "Remove", run: bound.remove });
-    return { heading, actions };
+    actions.push({ id: "hide", label: "Hide for me", run: bound.hide });
+    if (level === "OWNER") {
+      actions.push({ id: "remove", label: "Remove", run: bound.remove });
+    }
+    return { heading, panel, actions };
   });
   const sections: LoomMenuSection[] = shown.length === 1
     ? [{ actions: [...own, ...panelSections[0].actions] }]
@@ -833,13 +869,25 @@ function loomMenu(
   if (hiddenActions.length > 0) {
     sections.push({
       heading: "Hidden for you",
-      actions: hiddenActions.map((entry, place) => ({
-        label: `Show ${panelHeading(entry.panel, place + 1)}`,
+      actions: hiddenActions.map((entry) => ({
+        id: "show",
+        label: `Show ${panelHeading(entry.panel, place(entry.panel))}`,
         run: entry.run,
       })),
     });
   }
   return { sections: sections.filter((section) => section.actions.length > 0) };
+}
+
+/**
+ * Whether the viewer is shown one panel, and it is a shared one. That one is
+ * the page; a private one keeps its card, which says only the viewer sees it.
+ */
+function loneShared(
+  shared: readonly Writable<Panel>[],
+  shown: readonly Writable<Panel>[],
+): boolean {
+  return shown.length === 1 && shared.some((panel) => panel.equals(shown[0]));
 }
 
 /** Standalone view of one linked panel occurrence. */
@@ -880,13 +928,6 @@ const duplicateAsViewer = handler<
 >((_, { panel, duplicate, claimed, wished }) => {
   const profile = resolvedProfile(claimed) ?? resolvedProfile(wished);
   duplicate.send({ panel, ...(profile === undefined ? {} : { as: profile }) });
-});
-
-const selectPanel = handler<
-  void,
-  { panel: Writable<Panel>; viewerState: Writable<ViewerState> }
->((_, { panel, viewerState }) => {
-  viewerState.key("selectedPanel").set(panel);
 });
 
 export default pattern<LoomInput, LoomOutput>(
@@ -935,7 +976,6 @@ export default pattern<LoomInput, LoomOutput>(
     const sharedActions = panels.map((panel) => ({
       panel,
       focus: focusPanel({ panel, presentation, present }),
-      select: selectPanel({ panel, viewerState }),
       duplicate: duplicateAsViewer({
         panel,
         duplicate,
@@ -948,9 +988,10 @@ export default pattern<LoomInput, LoomOutput>(
       moveLast: sendPanel({ panel, to: move }),
       remove: sendPanel({ panel, to: remove }),
     }));
-    // Mapped through a computed list of the panels, as the page maps them: a
-    // map over the per-user list itself would store per-user links in shared
-    // data.
+    // Each private entry is a per-user record, so its list is mapped through a
+    // computed list of the panels, as the page maps them; a map over the list
+    // itself would store per-user links in shared data. A hidden entry is a
+    // link to a shared panel, so its list can be mapped as it is.
     const mine = computed(() =>
       (privatePanels.get() ?? []).map((entry) => entry.panel)
     );
@@ -967,7 +1008,7 @@ export default pattern<LoomInput, LoomOutput>(
       clearStage: clearStage({ present }),
       clearFocus: clearFocus({ presentation, present }),
     };
-    // Each session's own: it turns on who is viewing and what they selected.
+    // Each session's own: it turns on who is viewing.
     const menu = computed((): PerSession<LoomMenu> =>
       loomMenu(
         {
@@ -975,7 +1016,6 @@ export default pattern<LoomInput, LoomOutput>(
           shared: panels.get(),
           shown: viewerPanels,
           presentation: presentation.get(),
-          selected: viewerState.key("selectedPanel").get(),
           loom: loomActions,
         },
         sharedActions,
@@ -986,11 +1026,18 @@ export default pattern<LoomInput, LoomOutput>(
     // What everyone is shown as staged or focused, said only while it holds.
     const presentationNote = computed(() => {
       const { stagedPanels, focusedPanel } = presentation.get();
-      if (focusedPanel?.get() !== undefined) return "Focused for everyone";
+      if (focusedPanel?.get() !== undefined) {
+        const shared = panels.get();
+        const place = shared.findIndex((panel) => panel.equals(focusedPanel));
+        return `Focused for everyone: ${panelHeading(focusedPanel, place + 1)}`;
+      }
       if (stagedPanels.length > 0) return "Staged for everyone";
       return "";
     });
-    const alone = computed(() => viewerPanels.length === 1);
+    const alone = computed(() => loneShared(panels.get(), viewerPanels));
+    const allHidden = computed(() =>
+      viewerPanels.length === 0 && (hiddenPanels.get() ?? []).length > 0
+    );
     return {
       [NAME]: title,
       // The page is the panels and nothing else. Arranging them is offered
@@ -1016,11 +1063,28 @@ export default pattern<LoomInput, LoomOutput>(
                     hiddenPanels.get(),
                     privatePanels.get(),
                   );
-                  return shown.length === 1
+                  return loneShared(panels.get(), shown)
                     ? renderPanel(shown[0], "alone")
                     : null;
                 }),
                 <cf-vstack gap="4" padding="4">
+                  {
+                    /* The menu shows hidden panels again; a page with nothing
+                    left on it says how, wherever it is drawn. */
+                  }
+                  {ifElse(
+                    allHidden,
+                    <cf-vstack gap="2">
+                      <cf-text>You've hidden every panel.</cf-text>
+                      <cf-button
+                        variant="ghost"
+                        onClick={showAllHidden({ hiddenPanels })}
+                      >
+                        Show them again
+                      </cf-button>
+                    </cf-vstack>,
+                    null,
+                  )}
                   {panels.map((panel) =>
                     ifElse(
                       computed(() => !isHidden(hiddenPanels.get(), panel)),

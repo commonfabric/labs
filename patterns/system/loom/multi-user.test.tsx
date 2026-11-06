@@ -145,6 +145,15 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           setup.loom.presentation.stagedPanels.length === 2
         ),
       },
+      // A WRITE member arranges, but is offered no Remove: they may remove
+      // only what they added, which only the handler can tell.
+      {
+        assertion: assert(() => {
+          const labels = menuLabels(setup.loom[VIEWS].menu);
+          return labels.includes("Duplicate") && labels.includes("Move last") &&
+            !labels.includes("Remove");
+        }),
+      },
       { action: join },
       { label: "bob-joined" },
       { await: "alice-joined" },

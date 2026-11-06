@@ -12,6 +12,7 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  clickButton,
   countElements,
   findElement,
   hasText,
@@ -102,9 +103,6 @@ export default pattern(() => {
   const removeOtherPiece = action(() =>
     loom.removePiece.send({ piece: otherPiece })
   );
-  const selectFromUI = action(() =>
-    runPanelAction(loom[VIEWS].menu, 0, "Select in this session")
-  );
   const focusFromUI = action(() =>
     runPanelAction(loom[VIEWS].menu, 0, "Focus for everyone")
   );
@@ -139,6 +137,12 @@ export default pattern(() => {
       panel: lone.panels[0],
       titleOverride: "Retitled lone panel",
     })
+  );
+  const hideLone = action(() =>
+    runPanelAction(lone[VIEWS].menu, 0, "Hide for me")
+  );
+  const showLoneFromPage = action(() =>
+    clickButton(lone[UI], "Show them again")
   );
   const secondUrl = new Writable<Panel>({
     kind: "url",
@@ -321,17 +325,14 @@ export default pattern(() => {
         ),
       },
       { render: loom[UI] },
-      { action: selectFromUI },
-      { render: loom[UI] },
+      // Each action names what it does, and each panel's section its panel.
       {
         assertion: assert(() =>
-          !panelSections(loom[VIEWS].menu)[0].actions.some((entry) =>
-            entry.label === "Select in this session"
-          ) &&
-          panelSections(loom[VIEWS].menu)[1].actions.some((entry) =>
-            entry.label === "Select in this session"
-          ) &&
-          loom.viewerState.key("selectedPanel").equals(loom.panels[0])
+          panelSections(loom[VIEWS].menu)[0].panel?.equals(loom.panels[0]) ===
+            true &&
+          panelSections(loom[VIEWS].menu)[0].actions.some((entry) =>
+            entry.id === "hide" && entry.label === "Hide for me"
+          )
         ),
       },
       { action: focusFromUI },
@@ -463,6 +464,26 @@ export default pattern(() => {
           menuLabels(lone[VIEWS].menu).includes("Hide for me") &&
           menuLabels(lone[VIEWS].menu).includes("Stage all for everyone") &&
           !menuLabels(lone[VIEWS].menu).includes("Move first")
+        ),
+      },
+      // Hiding the only panel leaves a page that says how to get it back,
+      // for a host that draws no menu; it is the page's only control.
+      { action: hideLone },
+      { render: lone[UI] },
+      {
+        assertion: assert(() =>
+          lone.viewerPanels.length === 0 &&
+          hasText(lone[UI], "You've hidden every panel") &&
+          countElements(lone[UI], "cf-button") === 1
+        ),
+      },
+      { action: showLoneFromPage },
+      { render: lone[UI] },
+      {
+        assertion: assert(() =>
+          lone.viewerPanels.length === 1 &&
+          !hasText(lone[UI], "You've hidden every panel") &&
+          countElements(lone[UI], "cf-button") === 0
         ),
       },
       // A second panel puts each in a card, the piece under its title, and

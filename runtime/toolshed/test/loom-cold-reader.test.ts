@@ -51,6 +51,16 @@ const renderTargets = (value: unknown): Cell<unknown>[] => {
   ];
 };
 
+/** The names of the elements `value` renders, outermost first. */
+const elementNames = (value: unknown): string[] => {
+  if (!value || typeof value !== "object" || isCell(value)) return [];
+  const node = value as Record<string, unknown>;
+  return [
+    ...(typeof node.name === "string" ? [node.name] : []),
+    ...viewChildren(node).flatMap(elementNames),
+  ];
+};
+
 /** The text each of the three published panels renders. */
 const PANEL_TEXTS = ["Cold URL title", "Cold document", "Cold foreign piece"];
 
@@ -401,10 +411,11 @@ describe("loom-cold-reader", () => {
       ? await waitForCellValue(
         viewer,
         ui,
+        // The piece panel shows as its renderer, under no text of its own.
         (value) =>
-          ["Cold URL title", "Cold document", "Open piece"].every((text) =>
+          ["Cold URL title", "Cold document"].every((text) =>
             visibleText(value).includes(text)
-          ),
+          ) && renderTargets(value).length > 0,
         { stuckLabel: `cold ${access} root served` },
       )
       : await ui.pull();
@@ -563,7 +574,9 @@ describe("loom-cold-reader", () => {
       const value = await ui.pull();
       const text = visibleText(value);
 
-      expect(text).toContain("Cold shared root");
+      // The root renders its page, which names no title of its own: the
+      // title is the root's name, for a host to show.
+      expect(elementNames(value)).toContain("cf-screen");
       for (const panelText of PANEL_TEXTS) {
         expect(text).not.toContain(panelText);
       }

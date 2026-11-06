@@ -19,28 +19,31 @@ viewer state and send no action. Space WRITE or OWNER authority admits changes;
 READ viewers observe them.
 
 The page is the panels and nothing else, so what a Loom holds fills the screen.
-A Loom showing one panel shows it alone, edge to edge: a piece with no card and
-no title above it, since the piece names itself. With several, each is a card, a
-piece under its title when it has one. The Loom's title is its `[NAME]`, for a
-host to show; the page does not repeat it. While anything is staged or focused,
-a note says so; otherwise the page carries no status.
+A Loom showing one shared panel shows it alone, edge to edge: a piece with no
+card and no title above it, since the piece names itself. With several, or a
+private one, each is a card, a piece under its title when it has one, and a
+private panel marked as the viewer's alone. The Loom's title is its `[NAME]`,
+for a host to show; the page does not repeat it. While anything is staged or
+focused, a note says so, naming the focused panel; a viewer who has hidden every
+panel is told so and offered to show them again. Otherwise the page carries no
+controls.
 
 Arranging is offered through `[VIEWS].menu` rather than as controls on the page,
 for a host to draw in a menu of its own. `menu.sections` holds a section of the
-Loom's own actions (Stage all for everyone, Clear focus, Clear stage), then one
-per shown panel headed by its title (Open on its own, Focus for everyone, Move
-first, Move last, Select in this session, Duplicate, Hide for me, Remove, or
-Remove from my view for a private panel), then "Hidden for you" with a Show for
-each hidden panel. A Loom showing one panel offers that panel's actions in its
-own section. Each action is a `label` and a `run` stream that takes no event.
-The menu is each session's own and holds only what that viewer may do now:
-arranging what everyone sees takes WRITE or OWNER, so a READ member is offered
-only Open, Select, Hide and their own panels' actions, and an action that would
-change nothing, such as moving the first panel first, is absent rather than
-disabled. Remove is offered to every WRITE member; the handler still refuses one
-on a panel someone else added, since who added a panel can be checked only in a
-handler. `PanelView`, a panel on a page of its own, keeps its title and a link
-to its piece.
+Loom's own actions, then one per shown panel, headed by its title and naming the
+`panel`, then "Hidden for you" with a Show for each hidden panel. A Loom showing
+one panel offers that panel's actions in its own section. Each action is an
+`id`, a `label` and a `run` stream that takes no event. The ids are `stage-all`,
+`clear-focus` and `clear-stage` for the Loom; `open`, `focus` (which stages the
+panel too), `move-first`, `move-last`, `duplicate`, `hide` and `remove` for a
+shared panel; `remove-from-my-view` for a private one; and `show`. A host that
+knows an id may draw it its own way and falls back to the label otherwise. The
+menu is each session's own and holds only what that viewer may do now: arranging
+what everyone sees takes WRITE or OWNER, and Remove is offered only to an OWNER,
+since a WRITE member may remove only a panel they added, which only the handler
+can tell. An action that would change nothing, such as moving the first panel
+first, is absent rather than disabled. `PanelView`, a panel on a page of its
+own, keeps its title and a link to its piece.
 
 A panel is a `piece`, `document`, or HTTP(S) `url`. Piece and document targets
 are native cell references. Their complete space, scope, document, and path
