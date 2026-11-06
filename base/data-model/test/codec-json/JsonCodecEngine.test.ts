@@ -2117,13 +2117,52 @@ describe("JsonCodecEngine", () => {
     });
 
     it("rejects a `/hole` outside array context rather than calling it unknown", () => {
-      // Per spec §9, `UnknownValue` is for a syntactically well-formed tag no
-      // codec claims. `hole` is a meta-tag, meaningful only among array
-      // elements, and is a structural violation anywhere else.
+      // `hole` is a tag syntactically, but this format reserves it in tag
+      // position for a run of holes, meaningful only among array elements and
+      // a structural violation anywhere else.
 
       const data = { "/hole": 5 } as JsonCodecValue;
 
-      expect(() => fromEncodedFormat(data)).toThrow(/malformed tag/);
+      expect(() => fromEncodedFormat(data)).toThrow(/outside an array/);
+    });
+
+    it("round-trips `UnknownValue` under tags in any case, versioned or not", () => {
+      for (const tag of ["bytes@1", "Sys.Boop@1", "Bytes", "fid1"]) {
+        const us = new UnknownValue(tag, { some: "data" });
+        expect(toEncodedFormat(us)).toEqual({ [`/${tag}`]: { some: "data" } });
+        const result = roundTrip(us) as unknown as UnknownValue;
+        expect(result).toBeInstanceOf(UnknownValue);
+        expect(result.wireTypeTag).toBe(tag);
+      }
+    });
+
+    it("round-trips `UnknownValue` under a reserved name with a version", () => {
+      // The reservation is of the bare names, so `hole@1` is an ordinary tag,
+      // even among array elements.
+
+      for (const tag of ["quote@1", "object@1", "hole@1"]) {
+        const us = new UnknownValue(tag, 1);
+        const result = roundTrip([us]) as unknown as UnknownValue[];
+        expect(result[0]).toBeInstanceOf(UnknownValue);
+        expect(result[0]!.wireTypeTag).toBe(tag);
+      }
+    });
+
+    it("throws on encode for an `UnknownValue` under a name this format reserves", () => {
+      // Each is a tag, so an `UnknownValue` can hold one -- off the realm
+      // format, say -- but written here it would read back as this format's
+      // own form rather than as the value.
+
+      const { jsonCodecEngine } = makeTestCodec();
+      for (const tag of ["quote", "object", "hole"]) {
+        const us = new UnknownValue(tag, 1);
+        expect(() => jsonCodecEngine.encode(us)).toThrow(
+          `Cannot encode a value under the tag \`${tag}\``,
+        );
+        expect(() => jsonCodecEngine.encode([us])).toThrow(
+          `Cannot encode a value under the tag \`${tag}\``,
+        );
+      }
     });
   });
 

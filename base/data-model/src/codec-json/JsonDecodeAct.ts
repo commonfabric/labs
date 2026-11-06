@@ -130,8 +130,21 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
         return this.freezeUnlessMutable(result);
       }
 
-      // `/quote` and `/object` returned above, so no codec ever sees their
-      // state, and `/quote` contents alone go undecoded.
+      // `CODEC_META_TAGS.hole` runs (`3-json-encoding.md` Section 3), which
+      // the array arm below takes before they reach here, so one that does is
+      // outside an array. The name is a tag syntactically, and this format
+      // reserves it in tag position, so it is never an unknown type. Reported
+      // over the decoded state, as a malformed tag is.
+      if (tag === CODEC_META_TAGS.hole) {
+        return this.reportMalformed(
+          tag,
+          this.decodeValue(rawState),
+          "`/hole` run outside an array.",
+        );
+      }
+
+      // `/quote`, `/object` and `/hole` returned above, so no codec ever sees
+      // their state, and `/quote` contents alone go undecoded.
       return this.decodeTagged(tag, rawState);
     }
 

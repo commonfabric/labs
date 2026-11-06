@@ -1,9 +1,18 @@
+import { backtickQuote } from "@commonfabric/text/markdown";
 import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
 
 import type { FabricValue } from "@/interface.ts";
 import { BaseEncodeAct } from "@/codec-common";
 import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";
 import { ENCODING_PREFIX_TAG, type JsonCodecValue } from "./interface.ts";
+
+/**
+ * The names this format reserves in tag position for forms of its own, which
+ * a value's type tag therefore cannot be (`3-json-encoding.md` Section 2).
+ */
+const RESERVED_TAGS: ReadonlySet<string> = new Set(
+  Object.values(CODEC_META_TAGS),
+);
 
 /**
  * What an act tracks from its first `/`-keyed object on, so that each such
@@ -80,28 +89,24 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
    * Prepends `/` to the tag to produce the JSON key. See `3-json-encoding.md`
    * Section 2.
    *
-   * Every form built here is one a `/quote` cannot hold, this class's own
-   * `/hole` and `/object` forms included, and is counted as such. A `/quote`
-   * wrap is the one `/`-keyed form that is not built here.
-   *
-   * The result is not frozen, and neither is anything else this act builds. An
-   * encode-side tree is stringified and discarded without ever reaching a
-   * caller, so the deep-frozen invariant `JsonCodecValue` states does not
-   * cover it, and freezing every tagged node on the way out is measurable on
-   * small values.
+   * @throws If `tag` is one of the names this format reserves in tag position
+   *   for a form of its own, the members of `CODEC_META_TAGS`. Such a tag is a
+   *   tag syntactically, and may arrive on a value decoded from another format,
+   *   but a key written under it would read back as that form rather than as
+   *   the value.
    */
   protected override wrapTag(
     tag: string,
     state: JsonCodecValue,
   ): JsonCodecValue {
-    // With no bookkeeping there has been no `/`-keyed object, and so there is
-    // nothing whose quote-safety this form could decide.
-    const escape = this.#escape;
-    if (escape !== undefined) {
-      escape.unquotableCount++;
+    if (RESERVED_TAGS.has(tag)) {
+      throw new Error(
+        `Cannot encode a value under the tag ${backtickQuote(tag)}: this ` +
+          "format reserves that name for a form of its own.",
+      );
     }
 
-    return { [`/${tag}`]: state } as JsonCodecValue;
+    return this.#wrapForm(tag, state);
   }
 
   /**
@@ -126,7 +131,7 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
             count++;
             i++;
           }
-          result.push(this.wrapTag(CODEC_META_TAGS.hole, count));
+          result.push(this.#wrapForm(CODEC_META_TAGS.hole, count));
         } else {
           const encoded = this.encodeValue(value[i]!);
 
@@ -230,7 +235,7 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
       // Something under this object is not quote-safe, which is as true of
       // every object enclosing it, so nothing will quote the wraps beneath.
       unwraps.length = unwrapsBefore;
-      return this.wrapTag(CODEC_META_TAGS.object, result);
+      return this.#wrapForm(CODEC_META_TAGS.object, result);
     }
 
     // Everything under this object is literal but for the wraps beneath it,
@@ -245,6 +250,30 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
     escaped.latestQuote = quote;
     escaped.latestLiteral = result;
     return quote;
+  }
+
+  /**
+   * Builds the tagged form of `state` under `tag`, either a value's type tag
+   * or one of this format's own `/hole` and `/object` forms.
+   *
+   * Every form built here is one a `/quote` cannot hold, and is counted as
+   * such. A `/quote` wrap is the one `/`-keyed form that is not built here.
+   *
+   * The result is not frozen, and neither is anything else this act builds. An
+   * encode-side tree is stringified and discarded without ever reaching a
+   * caller, so the deep-frozen invariant `JsonCodecValue` states does not
+   * cover it, and freezing every tagged node on the way out is measurable on
+   * small values.
+   */
+  #wrapForm(tag: string, state: JsonCodecValue): JsonCodecValue {
+    // With no bookkeeping there has been no `/`-keyed object, and so there is
+    // nothing whose quote-safety this form could decide.
+    const escape = this.#escape;
+    if (escape !== undefined) {
+      escape.unquotableCount++;
+    }
+
+    return { [`/${tag}`]: state } as JsonCodecValue;
   }
 
   //

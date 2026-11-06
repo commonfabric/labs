@@ -63,20 +63,28 @@ key follows the pattern `/<Type>@<Version>`.
 
 - `/` — sigil prefix (nodding to IPLD heritage)
 - `<Type>` — type name, after any namespace prefixes
-- `@<Version>` — version number
+- `@<Version>` — version number, which a type name with no prefix may omit
 
 The key is a type tag with the sigil in front of it, and the tag is the key
 without its sigil. The tag syntax is not particular to JSON: it is the one
 every interchange format shares, defined in `1-fabric-values.md` Section 2.5.
-So `Bytes@1` and `sys.beep.Boop@1` are tags, written as the keys `/Bytes@1` and
-`/sys.beep.Boop@1`, while `bytes@1` and `sys.Boop` are not.
+So `Bytes@1`, `sys.beep.Boop@1` and `widget` are tags, written as the keys
+`/Bytes@1`, `/sys.beep.Boop@1` and `/widget`, while `sys.Boop` and `By-tes@1`
+are not.
 
 A key whose remainder after the sigil is not a tag is a structural violation
-under Section 9 rather than an `UnknownValue` under Section 8. The escapes
-`/quote` and `/object` (Section 6), and the sparse-array marker `/hole`
-(Section 3), fall outside the tag syntax deliberately — none of them has an
-uppercase name or an `@<Version>` — each being a structural marker the format
-handles itself rather than a type anything encodes.
+under Section 9 rather than an `UnknownValue` under Section 8.
+
+**Reserved names.** This format reserves three names in tag position for forms
+of its own: the escapes `quote` and `object` (Section 6), and the sparse-array
+marker `hole` (Section 3). Each is syntactically a tag, and is reserved here
+alone: the reservation is of the bare name in the key of a tagged form, so
+`quote@1` is an ordinary tag, and another interchange format carries `quote` as
+a tag like any other. A decoder reads a `/quote`, `/object` or `/hole` key as
+that form, and never as an `UnknownValue`. An encoder therefore **must not**
+write a value whose type tag is one of the three — an `UnknownValue` preserving
+`quote` that arrived through another format, say — since a reader would take it
+for the form, and refuses the value instead.
 
 This convention does **not** prohibit storing plain objects that happen to have
 `/`-prefixed keys. The escaping mechanism in Section 6 (`/object` and
@@ -126,8 +134,9 @@ These types need no rule beyond the shape of their state:
 - `Set@1` — `[value, ...]`, values in insertion order.
 - `Bytes@1` — a base64url string, per the convention above.
 - `hole` — a positive integer giving the length of a run of array holes. This
-  is a structural meta-key rather than a type tag, and is valid only directly
-  inside an array; see the sparse-array note below.
+  is a form of the format's own, under a name it reserves (Section 2), rather
+  than a type, and is valid only directly inside an array; see the sparse-array
+  note below.
 
 ### `Error@1` — errors
 
@@ -147,10 +156,12 @@ a string nor `null`, produces a `ProblematicValue`.
 ### `Hash@1` — content hashes
 
 State is `{ tag: string, hash: string }`. `tag` is the algorithm tag (for
-example `fid1`), and `hash` is the hash bytes as an unpadded base64url string,
-per the convention above. On decoding, a state that is not an object, or whose
-fields are not strings, produces a `ProblematicValue`. See `1-fabric-values.md`
-Section 1.4.9.
+example `fid1`), in the tag syntax of `1-fabric-values.md` Section 2.5, and
+`hash` is the hash bytes as an unpadded base64url string, per the convention
+above. An encoder does not write a hash whose algorithm tag is outside the tag
+syntax. On decoding, a state that is not an object, whose fields are not
+strings, or whose `tag` is outside the tag syntax, produces a
+`ProblematicValue`. See `1-fabric-values.md` Section 1.4.9.
 
 ### `KeyPair@1` — asymmetric key pairs
 
@@ -534,9 +545,12 @@ returning the preserved bare state, so the value passes through byte for byte
 when it arrived as its canonical text (Section 11).
 
 This applies only to a key that is syntactically a tag but claimed by no
-codec. A key that is not a tag at all is a structural violation rather than an
-unknown type, and is rejected under Section 9 — so an `UnknownValue` always
-holds a real tag, which is what makes the round trip above a guarantee.
+codec, and is not one of the names this format reserves (Section 2). A key that
+is not a tag at all is a structural violation rather than an unknown type, and
+is rejected under Section 9 — so an `UnknownValue` always holds a real tag,
+which is what makes the round trip above a guarantee. An `UnknownValue` whose
+tag is a reserved name, which only another format can have produced, has no
+text in this one, and an encoder refuses it (Section 2).
 
 A `ProblematicValue` (Section 3) does not work this way. It encodes under its
 own `Problematic@1` key with the preserved tag as data, because that tag may
@@ -559,12 +573,13 @@ Specifically:
   stripping the leading `/`) are always encoding errors, and are rejected. No
   valid tag has an empty name.
 - **Single-key objects** whose sole key starts with `/` are either a tagged
-  value of a known type (e.g. `{ "/Error@1": ... }`), a built-in escape
-  (`/object`, `/quote`), or an unrecognized tag. A syntactically well-formed
-  but unrecognized tag (e.g. `{ "/Future@2": ... }`) must be treated as
-  `UnknownValue` (see Section 8) to preserve it for round-tripping. Structural
-  violations — e.g. a tag name that cannot be a valid type identifier — are
-  rejected.
+  value of a known type (e.g. `{ "/Error@1": ... }`), one of this format's own
+  forms under a name it reserves (`/object`, `/quote`, and `/hole` among an
+  array's elements; Section 2), or an unrecognized tag. A syntactically
+  well-formed but unrecognized tag (e.g. `{ "/Future@2": ... }`) must be
+  treated as `UnknownValue` (see Section 8) to preserve it for round-tripping.
+  Structural violations — a key whose remainder is not a tag, such as
+  `/sys.Boop`, or a `/hole` outside an array — are rejected.
 - **Multi-key objects** containing one or more `/`-prefixed keys are structural
   encoding errors, and are rejected. They are not valid plain objects.
 

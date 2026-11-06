@@ -454,16 +454,8 @@ export class DebugStringifier {
   #renderTaggedForm(tagged: TaggedForm, indent: string): string {
     const { tag, payload } = tagged;
 
-    if (isCodecTypeTag(tag)) {
-      // A `FabricInstance`, carried as its encoding under its codec type tag,
-      // laid out the way a class instance is.
-      return this.#renderInstance(
-        DebugStringifier.#typeNameOf(tag),
-        payload,
-        indent,
-      );
-    }
-
+    // The conversion's own marker names take precedence over an instance
+    // carried under the same word.
     switch (tag) {
       case "circle": {
         // A reference back to an enclosing object.
@@ -524,8 +516,13 @@ export class DebugStringifier {
       // deno-coverage-ignore-stop
 
       default: {
-        // A class instance, carried under its class name.
-        return this.#renderInstance(tag, payload, indent);
+        // A `FabricInstance`, carried as its encoding under its codec type
+        // tag, or another class instance, carried under its class name, either
+        // one laid out the way a class instance is.
+        const name = isCodecTypeTag(tag)
+          ? DebugStringifier.#typeNameOf(tag)
+          : tag;
+        return this.#renderInstance(name, payload, indent);
       }
     }
   }
