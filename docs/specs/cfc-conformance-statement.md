@@ -587,8 +587,9 @@ region of `prepareBoundaryCommit` stamps a build-decided document's membership
 `journalBefore` at that position: what the transaction read before the setup
 began, the trigger reads among it. Those reads decided which pattern, and so
 which build, the setup sets up, which is what the specification's triggers
-stand for; a caller that reads data and sets up a pattern chosen by it carries
-that data onto the membership. The specification's wiring scope adds nothing
+stand for; a caller that reads data and sets up a pattern chosen by it, in
+the same transaction, carries that data onto the membership. A run the runtime
+defers is the exception, below. The specification's wiring scope adds nothing
 to it, since wiring, write-destination and runtime-internal reads contribute
 nothing to a join. The stamp carries no
 `TransformedBy`. Every other entry of the document, its frozen existence entry
@@ -616,6 +617,16 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
 
 - A wiring whose stored name is carried over is stamped from the attempt's
   join, an over-taint where the name was itself build-decided.
+- A `runtime.run` of a pattern the runtime has not yet named is deferred:
+  the pattern's family is named first, and the setup runs later in a fresh
+  transaction (`#runWithStartOwnership`'s deferred start in `runner.ts`),
+  which holds none of the caller's reads. So a caller that reads data and
+  sets up a pattern chosen by it, when that pattern is not yet named, leaves
+  that data off the membership, and off every other entry the deferred setup
+  writes. That is an under-taint, and it predates the result-wiring stamp:
+  the deferred transaction carries no trace of what decided it. Carrying the
+  caller's reads into it, as trigger reads of the deferred transaction, would
+  close it; this runtime does not do that.
 - The pre-setup bound applies to journaled reads with a position. A read
   without one, and every label-metadata or external-content observation,
   which carry none, joins the narrowed stamp whenever it happened: an
