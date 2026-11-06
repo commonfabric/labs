@@ -8768,6 +8768,27 @@ describe("runtime-processor", () => {
         }
       });
 
+      it("keeps the context while a view mount of a cell in its space stands", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          processor.accessForTestingOnly.vdomMounts = new Map([["2 1", {
+            reconciler: { unmount: () => {} },
+            cancel: () => {},
+            client: client(2),
+            space: spaceB,
+          }]]) as never;
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
       it("keeps the context while a piece in its space runs", async () => {
         const { processor, runtime, spaceB, subscribe, unsubscribe } =
           await spaceState();
