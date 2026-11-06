@@ -222,6 +222,20 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
             adders.filter((adder) => adder === me.get()).length === 1;
         }),
       },
+      // Its offers name each panel's adder rather than offering a writer the
+      // removal of panels whose adders are still here.
+      {
+        assertion: assert(() => {
+          const shared = setup.loom[VIEWS].deck.shared;
+          const offers = setup.loom[VIEWS].deck.offers.panels;
+          return offers.length === 3 &&
+            offers.every((offer, at) =>
+              !offer.actions.includes("remove") &&
+              shared[at].removal.by === "adder" &&
+              offer.removableBy === shared[at].removal.adder
+            );
+        }),
+      },
       { action: linkAlicesElsewhere },
       { assertion: assert(() => setup.elsewhere.panels.length === 0) },
       { action: retitleAlices },

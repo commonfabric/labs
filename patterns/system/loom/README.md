@@ -255,11 +255,19 @@ viewer may, because a reactive computation cannot yet read the acting principal
 (`currentPrincipal()` is handler-only); once it can, a per-viewer answer can
 replace it, and a host offers nothing for a `by` it does not know. Each `view`
 is built inline, as the floor's panels are, so a cold reader needs no child
-pattern set up. `private` holds the viewer's private panels the same way,
-without `removal`. `access` is the viewer's access to the Loom's space, derived
-for each session. Which panels the viewer is shown, and in what order, is
-`viewerPanels`; what they hid is `hiddenPanels`. The streams still decide every
-event, so what a host offers is a convenience, never the check.
+pattern set up. `offers` is what this viewer may do, as action ids from
+`offers.ts` with no wording: `stage-all`, `clear-focus` and `clear-stage` on the
+Loom, and per panel `open`, `focus`, `move-first`, `move-last`, `duplicate`,
+`hide`, `remove`, `remove-from-my-view` and `show`. A host draws the ids it
+knows in its own words and ignores the rest, so every host offers the same
+actions and a new one reaches them from the Loom, not from a copy of its rules.
+Removal by a panel's adder is the one offer the Loom cannot make, since a
+computation cannot yet ask who the viewer is; such a panel names its adder in
+`removableBy`. `private` holds the viewer's private panels the same way, without
+`removal`. `access` is the viewer's access to the Loom's space, derived for each
+session. Which panels the viewer is shown, and in what order, is `viewerPanels`;
+what they hid is `hiddenPanels`. The streams still decide every event, so what a
+host offers is a convenience, never the check.
 
 `participants` lists the Fabric profiles of the Loom's participants, each as the
 live profile cell in its own space. It records no DID and no name: a profile

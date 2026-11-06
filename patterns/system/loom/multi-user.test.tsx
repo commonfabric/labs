@@ -68,6 +68,18 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
           setup.loom.viewerState.key("selectedPanel").equals(panel)
         ),
       },
+      // An owner is offered every arrangement, and the removal of panels
+      // linked without an adder, which anyone may remove.
+      {
+        assertion: assert(() => {
+          const offers = setup.loom[VIEWS].deck.offers;
+          const [first, second] = offers.panels;
+          return offers.loom.length === 1 && offers.loom[0] === "stage-all" &&
+            offers.panels.length === 2 &&
+            first.actions.join() === "focus,move-last,duplicate,hide,remove" &&
+            second.actions.join() === "focus,move-first,duplicate,hide,remove";
+        }),
+      },
       // The first participant owns the space. A host drawing its own deck
       // reads each shared panel with who may remove it: these were linked
       // without an adder, so anyone may.
@@ -203,21 +215,49 @@ export const aliceTab2 = pattern<{ setup: Setup }>(({ setup }) => {
 });
 
 // A reader: what the Loom tells a host it may do here.
-export const carol = pattern<{ setup: Setup }>(({ setup }) => ({
-  [TESTS]: [
-    { await: "bob-added" },
-    { assertion: assert(() => setup.loom[VIEWS].deck.access === "READ") },
-    // A reader gets each panel's body with nothing set up for it first.
-    {
-      assertion: assert(() =>
-        setup.loom[VIEWS].deck.shared.length === 2 &&
-        setup.loom[VIEWS].deck.shared.every((entry) =>
-          entry.kind === "url" && entry.view[UI] !== undefined
-        )
-      ),
-    },
-  ],
-}));
+export const carol = pattern<{ setup: Setup }>(({ setup }) => {
+  // What the deck offers a reader, the reader can do.
+  const hideFirst = action(() =>
+    setup.loom.hidePanel.send({ panel: setup.loom.panels[0] })
+  );
+  return {
+    [TESTS]: [
+      { await: "bob-added" },
+      { assertion: assert(() => setup.loom[VIEWS].deck.access === "READ") },
+      // A reader gets each panel's body with nothing set up for it first.
+      {
+        assertion: assert(() =>
+          setup.loom[VIEWS].deck.shared.length === 2 &&
+          setup.loom[VIEWS].deck.shared.every((entry) =>
+            entry.kind === "url" && entry.view[UI] !== undefined
+          )
+        ),
+      },
+      // A reader is offered its own view of the panels, and no arranging.
+      {
+        assertion: assert(() => {
+          const offers = setup.loom[VIEWS].deck.offers;
+          return offers.loom.length === 0 && offers.panels.length === 2 &&
+            offers.panels.every((offer) =>
+              offer.actions.length === 1 && offer.actions[0] === "hide" &&
+              offer.removableBy === undefined
+            );
+        }),
+      },
+      { action: hideFirst },
+      {
+        assertion: assert(() => {
+          const offers = setup.loom[VIEWS].deck.offers;
+          return offers.panels.filter((offer) => offer.actions[0] === "show")
+                .length === 1 &&
+            offers.panels.length === 2 &&
+            offers.panels[1].actions.length === 1 &&
+            offers.panels[1].actions[0] === "show";
+        }),
+      },
+    ],
+  };
+});
 
 export default multiUserTest({
   setup,

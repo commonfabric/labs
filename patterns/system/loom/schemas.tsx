@@ -308,6 +308,24 @@ export type PanelRemoval =
   | { by: "owner" }
   | { by: "adder"; adder: string; adderLeft: boolean };
 
+/**
+ * The actions one panel admits from this viewer, as ids a host draws in its
+ * own words and ignores when it does not know them. `removableBy` names the
+ * one principal whose `remove` the Loom accepts besides those `actions`
+ * already offer it to: its adder, whom only the host can tell is the viewer.
+ */
+export interface PanelOffer {
+  panel: Writable<Panel>;
+  actions: string[];
+  removableBy?: string;
+}
+
+/** The actions on the Loom itself, and on each panel shown or hidden. */
+export interface LoomOffers {
+  loom: string[];
+  panels: PanelOffer[];
+}
+
 /** One panel as a host drawing its own deck needs it. */
 export interface LoomDeckPanel {
   panel: Writable<Panel>;
@@ -330,6 +348,8 @@ export interface LoomDeckPanel {
  */
 export interface LoomDeck {
   access: PerSession<SpaceAccessLevel | undefined>;
+  /** What this viewer may do, as action ids (`offers.ts`). */
+  offers: PerSession<LoomOffers>;
   shared: (LoomDeckPanel & { removal: PanelRemoval })[];
   private: PerUser<LoomDeckPanel[]>;
 }

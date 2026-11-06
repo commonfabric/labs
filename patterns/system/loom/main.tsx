@@ -21,12 +21,11 @@ import {
 import FabriChatRoom from "../fabrichat/room.tsx";
 import { ensureFileStore } from "../fabrifile/store.tsx";
 import {
-  adderHasLeft,
   admitPanel,
   assertRemovable,
   externalUrl,
   insertionIndex,
-  panelRemoval,
+  removalFact,
   validatePanel,
 } from "./admission.tsx";
 import type {
@@ -34,13 +33,13 @@ import type {
   ChatRoomCell,
   ChatRoomChoice,
   LoomInput,
+  LoomOffers,
   LoomOutput,
   LoomStyle,
   MeetingAssociationCell,
   Panel,
   PanelAdmission,
   PanelPosition,
-  PanelRemoval,
   PanelRetarget,
   PanelTitle,
   ParticipantProfile,
@@ -49,6 +48,7 @@ import type {
   PrivatePanel,
   ViewerState,
 } from "./schemas.tsx";
+import { loomOffers } from "./offers.ts";
 import { addParticipant, rosterProfiles } from "./participants.tsx";
 
 type State = {
@@ -769,12 +769,7 @@ export default pattern<LoomInput, LoomOutput>(
       view: computed(() => ({ [UI]: renderPanel(panel, true) })),
       kind: computed(() => panel.get()?.kind),
       heading: computed(() => panelHeading(panel)),
-      removal: computed((): PanelRemoval => {
-        const removal = panelRemoval(panel.resolveAsCell());
-        return removal.by === "adder"
-          ? { ...removal, adderLeft: adderHasLeft(panels, removal.adder) }
-          : removal;
-      }),
+      removal: computed(() => removalFact(panel, panels)),
     }));
     // Mapped from a list of the links, not the per-user list itself, whose
     // entries a shared output may not hold.
@@ -787,6 +782,20 @@ export default pattern<LoomInput, LoomOutput>(
       kind: computed(() => panel.get()?.kind),
       heading: computed(() => panelHeading(panel)),
     }));
+    const offers = computed((): PerSession<LoomOffers> =>
+      loomOffers({
+        access: spaceAccess(panels),
+        shared: panels.get(),
+        shown: viewerList(
+          panels.get(),
+          hiddenPanels.get(),
+          privatePanels.get(),
+        ),
+        hidden: hiddenPanels.get() ?? [],
+        presentation: presentation.get(),
+        removal: (panel) => removalFact(panel, panels),
+      })
+    );
     const state = { panels, presentation };
     const viewerState = new Writable.perSession<ViewerState>({});
     const remove = removePanel(state);
@@ -799,7 +808,7 @@ export default pattern<LoomInput, LoomOutput>(
     const removePrivate = removePrivatePanel({ privatePanels });
     return {
       [VIEWS]: {
-        deck: { access, shared: deckShared, private: deckPrivate },
+        deck: { access, offers, shared: deckShared, private: deckPrivate },
       },
       [NAME]: title,
       [UI]: (

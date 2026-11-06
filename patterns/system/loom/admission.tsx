@@ -18,7 +18,7 @@ import {
   type WriteAuthorizedBy,
 } from "commonfabric";
 import type { ParticipantProfile } from "./participants.tsx";
-import type { Panel, PanelAdmission } from "./schemas.tsx";
+import type { Panel, PanelAdmission, PanelRemoval } from "./schemas.tsx";
 
 /**
  * The DID of the principal who added a panel.
@@ -242,6 +242,20 @@ export function adderHasLeft(
   adder: DID,
 ): boolean {
   return spaceAccessOf(panels, adder) === "none";
+}
+
+/**
+ * Who may remove `panel` for everyone, as the Loom's deck states it: its
+ * {@link panelRemoval}, with whether its adder has left.
+ */
+export function removalFact(
+  panel: Writable<Panel>,
+  panels: Writable<Writable<Panel>[]>,
+): PanelRemoval {
+  const removal = panelRemoval(panel.resolveAsCell());
+  return removal.by === "adder"
+    ? { ...removal, adderLeft: adderHasLeft(panels, removal.adder) }
+    : removal;
 }
 
 /**

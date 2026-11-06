@@ -526,7 +526,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "nJIF2UBgcqEHCQGEYsCsVVUafygEoIT8y_aZUMwNhbo",
+              "moduleIdentity": "kuw3xAByyEHQXtM6g7iEKRm06k2mUYwdJg2lLYxfc5g",
               "path": [
                 "admitPanel"
               ]
@@ -554,7 +554,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "nJIF2UBgcqEHCQGEYsCsVVUafygEoIT8y_aZUMwNhbo",
+              "moduleIdentity": "kuw3xAByyEHQXtM6g7iEKRm06k2mUYwdJg2lLYxfc5g",
               "path": [
                 "admitPanel"
               ]
@@ -1404,6 +1404,11 @@
             ],
             "scope": "session"
           },
+          "offers": {
+            "$ref": "#/$defs/LoomOffers",
+            "description": "What this viewer may do, as action ids (`offers.ts`).",
+            "scope": "session"
+          },
           "private": {
             "items": {
               "$ref": "#/$defs/LoomDeckPanel"
@@ -1458,6 +1463,7 @@
         },
         "required": [
           "access",
+          "offers",
           "shared",
           "private"
         ],
@@ -1496,6 +1502,27 @@
         "required": [
           "panel",
           "view"
+        ],
+        "type": "object"
+      },
+      "LoomOffers": {
+        "properties": {
+          "loom": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "panels": {
+            "items": {
+              "$ref": "#/$defs/PanelOffer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "loom",
+          "panels"
         ],
         "type": "object"
       },
@@ -1647,7 +1674,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "nJIF2UBgcqEHCQGEYsCsVVUafygEoIT8y_aZUMwNhbo",
+              "moduleIdentity": "kuw3xAByyEHQXtM6g7iEKRm06k2mUYwdJg2lLYxfc5g",
               "path": [
                 "admitPanel"
               ]
@@ -1672,7 +1699,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "nJIF2UBgcqEHCQGEYsCsVVUafygEoIT8y_aZUMwNhbo",
+              "moduleIdentity": "kuw3xAByyEHQXtM6g7iEKRm06k2mUYwdJg2lLYxfc5g",
               "path": [
                 "admitPanel"
               ]
@@ -1713,6 +1740,27 @@
             "type": "unknown"
           }
         },
+        "type": "object"
+      },
+      "PanelOffer": {
+        "properties": {
+          "actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          },
+          "removableBy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "panel",
+          "actions"
+        ],
         "type": "object"
       },
       "PanelPosition": {
