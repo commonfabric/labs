@@ -13,6 +13,7 @@ import {
   valueEqualByWalk,
 } from "@commonfabric/data-model";
 import { type ACL, aclDocId, aclOwner, isACL } from "@commonfabric/memory/acl";
+import { isFirstHandshakeFailure } from "@commonfabric/memory/v2/client";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { getLogger } from "@commonfabric/logger";
@@ -7889,7 +7890,17 @@ export class Runner {
           "rootCellSync",
         );
         if (rootCell.getRaw() === undefined) {
-          return Promise.reject(new Error("No data at cell"));
+          // A space whose first connection never opened reads as empty too,
+          // since a sync resolves either way; say so rather than reporting
+          // nothing there. Only that failure: a refused space stays an empty
+          // read, as its loads are.
+          const sessionError = this.#runtime.storageManager
+            .spaceSessionError?.(rootCell.space);
+          return Promise.reject(
+            isFirstHandshakeFailure(sessionError)
+              ? sessionError
+              : new Error("No data at cell"),
+          );
         } else {
           return this.#doStart(rootCell, seenCells, attempt);
         }

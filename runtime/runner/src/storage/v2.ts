@@ -2580,7 +2580,8 @@ export class StorageManager implements IStorageManager {
     const provider = this.#providers.get(space);
     await provider?.retryAccess(() =>
       this.#spaceAccessErrors.has(space) ||
-      provider.authorizationError() !== undefined
+      provider.authorizationError() !== undefined ||
+      MemoryV2Client.isFirstHandshakeFailure(this.spaceSessionError(space))
     );
   }
 
@@ -5273,7 +5274,8 @@ class Provider
 
   /**
    * Opens a session on this space again, as an ACL change would, when
-   * `refused()` says the memory server refused the last one, and then makes
+   * `refused()` says the memory server refused the last one or its connection
+   * never completed a first handshake, and then makes
    * again the loads it refused for want of access. Resolves once the server
    * has decided. A refusal is recorded where the first one was, and does not
    * reject; any other failure, of the open or of a load, rejects, and leaves
@@ -6901,7 +6903,9 @@ export class SpaceReplica
 
   /**
    * Reconsiders a permanent admission or ACL refusal after word of an ACL
-   * change. Runtime incompatibility requires a new runtime and stays latched.
+   * change, and a first connection that never completed a handshake after a
+   * host asked for a retry. Runtime incompatibility requires a new runtime
+   * and stays latched.
    */
   #consumeOwedSessionRemount(): void {
     if (!this.#aclChangedSinceMount) return;
@@ -6911,11 +6915,15 @@ export class SpaceReplica
       this.#aclChangedSinceMount = false;
       return;
     }
-    // ONLY an ACL verdict. A handle still opening, a live session, a
-    // graceful close ("memory session closed"), and a transport drop (which
-    // the client's own `reconnect()`/`restore()` already heals) must all be
-    // left alone: this arm exists for the one termination class no other
-    // path recovers from.
+    // ONLY an ACL verdict, or a first connection that never opened. A handle
+    // still opening, a live session, a graceful close ("memory session
+    // closed"), and a transport drop (which the client's own
+    // `reconnect()`/`restore()` already heals) must all be left alone: this
+    // arm exists for the termination classes no other path recovers from.
+    // A first-handshake failure is one of them because it is latched on
+    // purpose (`#memoizedSessionHandle()`), so that loads of a host that is
+    // down fail at once instead of each dialing it again; the latch is
+    // released here, on a host's explicit retry, and never on a load.
     const closeError = this.#sessionAdmissionError ??
       this.#sessionSession?.closeError;
     if (MemoryV2Client.isClientUpdateRequiredError(closeError)) {
@@ -6925,7 +6933,8 @@ export class SpaceReplica
     if (
       closeError === undefined ||
       (closeError.name !== "SessionRevokedError" &&
-        closeError.name !== "AuthorizationError")
+        closeError.name !== "AuthorizationError" &&
+        !MemoryV2Client.isFirstHandshakeFailure(closeError))
     ) {
       // The latch is deliberately LEFT SET here, and clearing it would be a
       // race rather than a tidy-up. The notice arrives BEFORE the revocation
@@ -6966,12 +6975,15 @@ export class SpaceReplica
     // connection per revocation.
     stale.then(({ client }) => client.close()).catch(() => {});
     sessionRemountLogger.warn("session-remount", () => [
-      `space ${this.#space}: the memoized session was terminated by ` +
-      `${closeError.name} and its ACL may have changed; remounting. ` +
-      "A fresh session.open re-runs the server's admission against the " +
-      "ACL as it now stands (OW31: a serving mount's READ decisions " +
-      "resolve as the space's OWNER), so a genuine de-authorization is " +
-      "denied there rather than healed here.",
+      MemoryV2Client.isFirstHandshakeFailure(closeError)
+        ? `space ${this.#space}: the memoized session never connected ` +
+          `(${closeError.message}) and a host asked for a retry; remounting.`
+        : `space ${this.#space}: the memoized session was terminated by ` +
+          `${closeError.name} and its ACL may have changed; remounting. ` +
+          "A fresh session.open re-runs the server's admission against the " +
+          "ACL as it now stands (OW31: a serving mount's READ decisions " +
+          "resolve as the space's OWNER), so a genuine de-authorization is " +
+          "denied there rather than healed here.",
     ]);
     // DROP THE WATCH-SELECTOR TRACKER. The fresh session carries no
     // watches — `terminateSession` cleared `#watchSpecs` and the server
