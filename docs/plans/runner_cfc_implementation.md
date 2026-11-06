@@ -373,6 +373,12 @@ therefore carries its own guard:
   with no read at all. The refusal is also the first of these guards to run,
   ahead of the ones keyed by target id, so which document a write names cannot
   decide whether it is asked for an authorization. Meta fields stay readable.
+  The storage transaction beneath the chokepoint, reachable as an extended
+  transaction's `.tx`, refuses a write that changes a meta field unless the
+  write carries the chokepoint's mark (below): an address naming the field, a
+  root write carrying another value or leaving a stored one out, or a root
+  delete. A root write carrying every stored meta field forward unchanged
+  passes there, as it changes nothing.
 - The reserved siblings — the `cfc` label map and `source` — are the runtime's,
   and a write reaching either from outside the privileged persistence scope is
   recorded, with the commit boundary turning each record into a fail-closed
@@ -428,9 +434,10 @@ therefore carries its own guard:
   record, and so left the commit boundary nothing to refuse over, whether the
   transaction is then committed through the extended transaction or directly;
   this refusal therefore holds whatever the enforcement mode. The mark is a
-  symbol of `reserved-sibling-seam.ts`, which no package entry exports: an
+  symbol of `storage/write-chokepoint.ts`, which no package entry exports: an
   authorization of the same kind as the meta seam's, and as firmly held as the
-  realm holds it. It says only that the chokepoint saw the write.
+  realm holds it. It says only that the chokepoint saw the write, and the
+  storage transaction asks for it on the meta seam too.
 - At the chokepoint, the refusal is a record rather than a throw, unlike the
   meta seam beside it.
   A forged label map is a signal whose treatment follows the enforcement mode:
