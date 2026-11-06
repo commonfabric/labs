@@ -20,7 +20,11 @@ import type {
   FileStoreRecord,
   FileStoreRecordCell,
 } from "../fabrifile/store.tsx";
-import type { PanelAdderDid, PanelAdderProfile } from "./admission.tsx";
+import type {
+  PanelAdderDid,
+  PanelAdderProfile,
+  PanelRemoval,
+} from "./admission.tsx";
 import type {
   ParticipantProfile,
   ParticipantRoster,
@@ -30,6 +34,7 @@ import type {
 export type {
   PanelAdderDid,
   PanelAdderProfile,
+  PanelRemoval,
   ParticipantProfile,
   ParticipantRoster,
   ParticipantRosterCell,
@@ -294,19 +299,6 @@ export interface ViewerState {
   selectedPanel?: Writable<Panel>;
   actingProfile?: ParticipantProfile;
 }
-
-/**
- * Who may remove a panel for everyone, as `removePanel` decides it: `anyone`
- * for an occurrence that records no adder, `owner` for one whose adder cannot
- * be read, and otherwise the principal who added it, whom an OWNER may stand
- * in for once `adderLeft`. The Loom states it rather than a yes or no for the
- * viewer because a reactive computation cannot yet ask who the viewer is; a
- * host that meets a `by` it does not know offers nothing.
- */
-export type PanelRemoval =
-  | { by: "anyone" }
-  | { by: "owner" }
-  | { by: "adder"; adder: string; adderLeft: boolean };
 
 /**
  * One action a viewer may take, as `offers.ts` states it: an `id` a host names
