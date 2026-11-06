@@ -2,7 +2,7 @@
 
 The Contextual Flow Control specification in `commonfabric/specs` under `cfc/`
 says, in §18.6.4 of `18-runtime-implementation-profiles.md`, that a deployment
-claiming the reactive-runtime profile MUST document eight things. This document
+claiming the reactive-runtime profile MUST document nine things. This document
 is this runtime's answer, one section per item. Each section names the adapter
 code under `runtime/runner/src/` that implements the item, by file and
 symbol, and states every known non-conformance with its direction: an
@@ -13,7 +13,10 @@ answer, the section says "not established" and what would establish it.
 
 The statement is written against the specification at the commit the spec
 snapshot at `runtime/runner/src/cfc/kernel/spec-snapshot.json` records,
-`0c12ccf3`. It describes the runtime's shipped defaults: the dial values
+`239fc839`. That commit is the head of
+[specs#88](https://github.com/commonfabric/specs/pull/88), which adds §8.9.1.3
+and has not merged; the rest of the specification there is `9c9e96d0` on specs
+`main`. It describes the runtime's shipped defaults: the dial values
 `RUNTIME_CFC_DIAL_DEFAULTS` in `cfc/posture-report.ts` applies to every
 `Runtime`, and `presetCfcOptions` in `runtime-presets.ts` pins for every host
 preset. A host that sets a dial lower is described by
@@ -598,3 +601,96 @@ reconciled pin.
   disclosure residuals of the metadata channel; the specification's own
   alternative, treating the metadata as visible to the destination's readers,
   is what the runtime does for the fields it leaves public.
+
+## 9. Result-wiring membership (§8.9.1.3)
+
+The specification asks whether the runtime mints a pattern setup's
+result-wiring membership from the wiring's own stamp, and if so where it marks
+the wiring scope and how each marking site establishes that the wiring is
+build-decided; and that a restated wiring re-mints its membership when its
+value write is elided.
+
+**What the runtime does.** It mints from the wiring's own stamp. Setup's
+`#updateResultProjection` in `runner.ts` is the one marking site: it records a
+`result-wiring` write-policy input, under the runtime's authorization, for
+every setup, naming the result document, whether the wiring is
+build-decided, and the journal position the setup began at. It is
+build-decided unless the setup carries the stored result's name over, since
+that name is a reference the stored document chose. The
+wiring's references come from `unwrapOneLevelAndBindToDoc` over the pattern's
+result and the piece's identity, which reads no application content.
+`resultWiringsByTarget` in `cfc/prepare.ts` reads the records, and the persist
+region of `prepareBoundaryCommit` stamps a build-decided document's membership
+(its `enumerate` entries and `*`-child templates) from `deriveFlowJoin` with
+`journalBefore` at that position: what the transaction read before the setup
+began, the trigger reads among it. Those reads decided which pattern, and so
+which build, the setup sets up, which is what the specification's triggers
+stand for; a caller that reads data and sets up a pattern chosen by it, in
+the same transaction, carries that data onto the membership. A run the runtime
+defers is the exception, below. The specification's wiring scope adds nothing
+to it, since wiring, write-destination and runtime-internal reads contribute
+nothing to a join. The stamp carries no
+`TransformedBy`. Every other entry of the document, its frozen existence entry
+among them, keeps the attempt's join.
+
+`withRestatedResultWirings` takes every recorded wiring whose document holds
+nothing but references as written at the root of that document, whatever the
+setup wrote, so the root's membership is re-minted at each setup: when setup
+finds the wiring unchanged and writes nothing, and when it writes only the
+slots that changed.
+`ownRestampContainerPaths` includes the build-decided ones, so a setup's
+reads of its own stored membership do not feed the join it re-mints from. A
+wiring that carries the stored name over is left out of it: the name is a
+reference the stored document's membership guards, so the setup's read of it
+joins the stamp it re-mints. A container reached only through the restatement
+mints no existence entry.
+
+This implements [specs#88](https://github.com/commonfabric/specs/pull/88)
+ahead of its ruling, at strict and with no dial, at @danfuzz's direction. It
+narrows what is stored and so does not satisfy the correspondence procedure's
+step 4, which asks for a default-off dial; the two deciding sites carry its
+`SPEC-PENDING` marker.
+
+**Residuals.**
+
+- A wiring whose stored name is carried over is stamped from the attempt's
+  join, an over-taint where the name was itself build-decided.
+- A `runtime.run` of a pattern the runtime has not yet named is deferred:
+  the pattern's family is named first, and the setup runs later in a fresh
+  transaction (`#runWithStartOwnership`'s deferred start in `runner.ts`),
+  which holds none of the caller's reads. So a caller that reads data and
+  sets up a pattern chosen by it, when that pattern is not yet named, leaves
+  that data off the membership, and off every other entry the deferred setup
+  writes. That is an under-taint, and it predates the result-wiring stamp:
+  the deferred transaction carries no trace of what decided it. Carrying the
+  caller's reads into it, as trigger reads of the deferred transaction, would
+  close it; this runtime does not do that.
+  So that the re-mint does not widen this, only a setup in the transaction
+  it was asked in restates an unchanged wiring (`#askingSetupTransactions`
+  in `runner.ts`: the transaction a caller hands `run`, `setup`,
+  `runSynced` or `runInTransaction`, or the one made for that call; a
+  setup nested in another, such as a pattern node its parent instantiates,
+  takes that transaction's standing). A
+  deferred start, the swap of a running piece and a setup repair run in
+  transactions the runner makes later, and leave an unchanged wiring's
+  stored membership as a setup that wrote nothing would. One of them that
+  changes the wiring writes it, and is stamped from its own transaction, as
+  before. A source update is one of these routes: the piece is set up again in
+  the start that follows the update, so an update that leaves a result's
+  wiring unchanged leaves an earlier attempt's stamp on its membership, and
+  only one that changes the wiring re-mints it. Carrying the asking
+  transaction's reads into those starts, which
+  [labs#9650](https://github.com/commonfabric/labs/pull/9650) does, is what
+  lets a same-wiring update restate.
+- The pre-setup bound applies to journaled reads with a position. A read
+  without one, and every label-metadata or external-content observation,
+  which carry none, joins the narrowed stamp whenever it happened: an
+  over-taint, which on a transaction with no activity clock leaves the stamp
+  the attempt's whole join.
+- A result wiring at a path below its document's root is restated and
+  narrowed only at the root.
+- A result document holding data beside its references is not restated, so
+  a setup that leaves it unchanged re-mints none of its membership: an
+  over-taint where an earlier attempt's stamp is wider than the setup's own.
+  Restating it would take a value stamp from what the setup read onto data no
+  write of the setup made.

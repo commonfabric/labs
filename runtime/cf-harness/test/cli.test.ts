@@ -4363,9 +4363,9 @@ Deno.test("runCfHarnessCli validates a top-level structured result sidecar", asy
   assertEquals(stderr, []);
   assertEquals(
     runPromptOptions?.systemPrompt?.includes(
-      "Writing a JSON file at /workspace/capture.results.json",
+      "Write a JSON file at /workspace/capture.results.json",
     ),
-    true,
+    false,
   );
   assertEquals(
     runPromptOptions?.systemPrompt?.includes(
@@ -4865,9 +4865,9 @@ Deno.test("resolveCfHarnessCliSystemPrompt offers the pattern index only to a ru
     ),
     false,
   );
-  assertStringIncludes(
-    indexed!,
-    "The parent can run an indexed pattern with run_pattern",
+  assertEquals(
+    indexed?.includes("The parent can run an indexed pattern with run_pattern"),
+    false,
   );
   assertEquals(unindexed?.includes("pattern index"), false);
   assertEquals(unindexed?.includes("indexed pattern"), false);
@@ -4887,7 +4887,7 @@ Deno.test("buildCfHarnessBatchSystemPrompt omits submit_result guidance when the
   assertEquals(prompt.includes("submit_result"), false);
   assertStringIncludes(
     prompt,
-    "Writing a JSON file at /workspace/result.json",
+    "Write a JSON file at /workspace/result.json",
   );
 });
 
