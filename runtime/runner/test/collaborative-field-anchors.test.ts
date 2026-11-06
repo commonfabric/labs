@@ -478,6 +478,59 @@ describe("collaborative-field-anchors", () => {
       return await tx.commit({ holdSyncedUntilCovered: false }).verdict;
     };
 
+    it("refuses while the field's document has not arrived, then names its anchors", async () => {
+      // The argument links to a note this session has not received, so the
+      // chain to its body stops at a document still loading, which may yet
+      // hold a link to the field that stores the text.
+
+      const errors: Error[] = [];
+      rt.scheduler.onError((error: Error) => errors.push(error));
+      const { commonfabric } = createTrustedBuilder(rt);
+      const anchored = commonfabric.pattern<{ body: string }>(({ body }) => ({
+        anchors: commonfabric.anchorsOf(body),
+      }));
+      const later = rt.getCell<Note>(
+        space,
+        "collaborative-anchors-later",
+        noteSchema,
+      );
+      const setup = rt.edit();
+      const result = rt.run(
+        setup,
+        anchored,
+        { body: later.key("body") },
+        rt.getCell(
+          space,
+          "collaborative-anchors-later-reader",
+          undefined,
+          setup,
+        ),
+      );
+      await setup.commit().verdict;
+      void result.pull();
+      await rt.scheduler.idle();
+      // The result's slot redirects to the node's output, which holds the
+      // link to the anchors document once the node has sent one.
+      const beforeArrival = result.key("anchors").resolveAsCell().getRaw();
+
+      const arrive = rt.edit();
+      later.withTx(arrive).set({ title: "Later", body: "ac" });
+      await arrive.commit({ holdSyncedUntilCovered: false }).verdict;
+      await result.pull();
+      const write = rt.edit();
+      result.withTx(write).key("anchors").set({ a: 1 });
+      const committed = await write.commit({ holdSyncedUntilCovered: false })
+        .verdict;
+
+      expect(beforeArrival).toBeUndefined();
+      expect(errors.length).toBeGreaterThan(0);
+      expect(new Set(errors.map((error) => error.name))).toEqual(
+        new Set(["UnresolvedInputError"]),
+      );
+      expect(committed.error).toBeUndefined();
+      expect(await readAnchors(server, later)).toEqual({ a: 1 });
+    });
+
     it("throws for a constant, which no document stores", async () => {
       const failed = Promise.withResolvers<Error>();
       rt.scheduler.onError((error: Error) => failed.resolve(error));

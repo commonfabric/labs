@@ -26,8 +26,11 @@ import type { IExtendedStorageTransaction } from "../storage/interface.ts";
  * the anchors may learn is decided by the document's own label.
  *
  * @throws `UnresolvedInputError` while the link chain to the field passes a
- *   document this replica has not received, so the node runs again once it
- *   arrives. Throws when the input is a value stored in no document, such as
+ *   document this replica has not received: what that document holds there
+ *   may be a link to the field that stores the text, so the anchors document
+ *   is not yet known. The scheduler reports the refusal, and the node runs
+ *   again once the document arrives. Throws when the input is a value stored
+ *   in no document, such as
  *   a constant, which has no edits to move anchors through. Since the node
  *   reads nothing of the field, a stored value that is not a string is not
  *   refused here.
