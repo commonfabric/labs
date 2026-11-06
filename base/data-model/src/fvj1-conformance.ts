@@ -638,11 +638,14 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     "sys.Boop",
     "core.Globals",
     "sys.Boop@01",
-    "Bytes",
-    "widget",
-    "fid1",
   ].map((tag): Fvj1ConformanceCase => ({
     name: `malformed tag ${JSON.stringify(tag)}`,
+    section: SECTION_TAG_SYNTAX,
+    text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
+  })),
+  // Tags in the general syntax that, having no version, are not type tags.
+  ...["Bytes", "widget", "fid1"].map((tag): Fvj1ConformanceCase => ({
+    name: `key that is a tag but not a type tag ${JSON.stringify(tag)}`,
     section: SECTION_TAG_SYNTAX,
     text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
   })),

@@ -2763,10 +2763,10 @@ the realm format as one slot of a tagged form (`4-realm-encoding.md` Section
 
 #### 2.5.1 Syntax
 
-The interchange syntax of a tag is exact, because that syntax is what separates
-an unrecognized type from a malformation. A tag is zero or more prefixes, each
-followed by `.`, then a name, then optionally `@` and a version, with nothing
-before or after:
+The interchange syntax of a tag is exact, and that of a type tag is what
+separates an unrecognized type from a malformation. A tag is zero or more
+prefixes, each followed by `.`, then a name, then optionally `@` and a version,
+with nothing before or after:
 
 ```
 (<prefix>.)*<name>(@<version>)?
@@ -2827,8 +2827,9 @@ These reservations are conventions rather than syntax. A decoder sorts tags by
 the syntax of Section 2.5.1 alone, and treats a tag that departs from a
 convention exactly as it treats any other.
 
-- **An initial capital on a type tag's name**, as in `Bytes@1` and
-  `sys.beep.Boop@1`, is the convention for a type tag.
+- **The name of a type tag starts with a capital letter**, as in `Bytes@1` and
+  `sys.beep.Boop@1`. This is convention, not syntax: `bytes@1` is a type tag
+  like any other.
 - **A tag with no prefix** is reserved by convention for what the interchange
   specifications themselves define: the types they define, whose type tags are
   versioned, such as `Bytes@1` and `Map@1`; and the names they give without a
@@ -2851,10 +2852,10 @@ convention exactly as it treats any other.
 The syntax binds interchange, not an implementation's internals. An
 implementation need not restrict the tags it uses internally at all, but a codec
 engine writing an interchange format — FVJ1 (`3-json-encoding.md`) or the realm
-format (`4-realm-encoding.md`) — **must not** encode a type tag that is not one,
-nor a hash algorithm tag outside the general syntax. A `ProblematicValue` is no
-exception: what it writes is its own type tag, `Problematic@1`, and the tag it
-preserves travels as data (Section 3.2).
+format (`4-realm-encoding.md`) — **must not** write a string that is not a type
+tag where a type tag belongs, nor a hash algorithm tag outside the general
+syntax. A `ProblematicValue` is no exception: what it writes is its own type
+tag, `Problematic@1`, and the tag it preserves travels as data (Section 3.2).
 
 What a decoder does is independent of that latitude. Reading an interchange
 format, it treats a string that is not a type tag where a type tag belongs as a
