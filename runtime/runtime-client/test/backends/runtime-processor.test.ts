@@ -8840,6 +8840,54 @@ describe("runtime-processor", () => {
         }
       });
 
+      it("keeps the context across a view mount replaced under the same id", async () => {
+        const { processor, runtime, spaceB } = await spaceState();
+        try {
+          const view = createCellRef(
+            runtime.getCell(spaceB, "idle-space-view", counterSchema),
+          );
+          const mount = () =>
+            processor.handleVDomMount(
+              { type: RequestType.VDomMount, mountId: 1, cell: view },
+              client(1),
+            );
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          await mount();
+
+          await mount();
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("finds a context for the pieces a running piece creates, after its space's was dropped", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        let running = false;
+        using _running = stub(
+          runtime.runner,
+          "runsPieceIn",
+          (space) => running && space === spaceB,
+        );
+        try {
+          processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+          unsubscribe(client(1));
+          expect(processor.piecesFor(spaceB)).toBeUndefined();
+
+          // The piece's start was under way when the context went.
+          running = true;
+
+          const found = processor.piecesFor(spaceB);
+          expect(found).toBeDefined();
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(found);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
       it("keeps the home space's context when nothing in it is open", async () => {
         const {
           processor,

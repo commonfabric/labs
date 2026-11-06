@@ -1495,13 +1495,17 @@ export class RuntimeProcessor {
   }
 
   /**
-   * The PiecesController already serving a space, if any. Used by the
-   * piece-created callback to register a piece in its own space's
-   * list; deliberately does NOT create a context (a piece can only be
-   * created by a pattern some existing context started).
+   * The PiecesController serving a space, if any. Used by the piece-created
+   * callback to register a piece in its own space's list. It makes a context
+   * only for a space where a piece runs: a piece is created by a running
+   * pattern, and a space's context can have been dropped while that pattern's
+   * start was under way, before it ran.
    */
   piecesFor(space: DID): PiecesController | undefined {
-    return this.#spaces.get(space);
+    return this.#spaces.get(space) ??
+      (this.#runtime.runner.runsPieceIn(space)
+        ? this.#getSpaceCtx(space)
+        : undefined);
   }
 
   dispose(): Promise<void> {
@@ -4485,12 +4489,9 @@ export class RuntimeProcessor {
 
     // Check if already mounted. Scoped to this client, so a second client
     // mounting under the same id mounts rather than displacing the first.
-    if (this.#vdomMounts.has(key)) {
-      this.handleVDomUnmount(
-        { type: RequestType.VDomUnmount, mountId },
-        client,
-      );
-    }
+    // A mount replacing one under the same id keeps its space's context: the
+    // context is not dropped between the two.
+    if (this.#vdomMounts.has(key)) this.#unmountView(key);
 
     // Get the cell from the runtime and apply rendererVDOMSchema
     // The schema has a [UI] property definition that handles VDOM unwrapping
@@ -4568,17 +4569,21 @@ export class RuntimeProcessor {
   ): void {
     const { mountId } = request;
 
-    const mount = this.#vdomMounts.get(clientScopedKey(client, mountId));
-    if (!mount) {
+    const key = clientScopedKey(client, mountId);
+    if (!this.#vdomMounts.has(key)) {
       console.warn(`[RuntimeProcessor] Mount ${mountId} not found for unmount`);
       return;
     }
+    this.#unmountView(key);
+    this.#releaseIdleSpaceContexts();
+  }
 
-    // Cancel subscriptions and clean up
+  /** Cancels the view mount at `key` and forgets it. */
+  #unmountView(key: string): void {
+    const mount = this.#vdomMounts.get(key)!;
     mount.cancel();
     mount.reconciler.unmount();
-    this.#vdomMounts.delete(clientScopedKey(client, mountId));
-    this.#releaseIdleSpaceContexts();
+    this.#vdomMounts.delete(key);
   }
 
   handleVDomBatchApplied(
