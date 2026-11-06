@@ -555,6 +555,11 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
     make: () => new FabricHash(new Uint8Array(), "fid1"),
   },
   {
+    name: "hash under the algorithm tag sha256",
+    section: SECTION_HASH,
+    make: () => new FabricHash(new Uint8Array(32).fill(0xab), "sha256"),
+  },
+  {
     name: "hash under an algorithm tag of 65 UTF-8 bytes",
     section: SECTION_HASH,
     make: () => new FabricHash(new Uint8Array([1]), "t".repeat(65)),
