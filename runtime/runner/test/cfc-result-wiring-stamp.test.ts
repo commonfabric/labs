@@ -521,22 +521,19 @@ describe("cfc-result-wiring-stamp", () => {
         tx: ReturnType<Runtime["edit"]>,
         cell: Cell<unknown>,
         same: Parameters<Runtime["run"]>[1],
-        fresh: Parameters<Runtime["run"]>[1],
-      ) => void;
+        fresh: () => Parameters<Runtime["run"]>[1],
+      ) => Cell<unknown> | undefined;
     }[] = [
       {
         name: "a run in the transaction that read the data",
         running: false,
-        run: (tx, cell, same) => {
-          runtime.run(tx, same, { x: 1 }, cell);
-        },
+        run: (tx, cell, same) => runtime.run(tx, same, { x: 1 }, cell),
       },
       {
         name: "a run deferred until its pattern is named",
         running: false,
-        run: (tx, cell, _same, fresh) => {
-          runtime.run(tx, fresh, { x: 1 }, cell);
-        },
+        run: (tx, cell, _same, fresh) =>
+          runtime.run(tx, fresh(), { x: 1 }, cell),
       },
       {
         name: "a start after the asking transaction commits",
@@ -550,14 +547,14 @@ describe("cfc-result-wiring-stamp", () => {
             >[2],
             { x: 1 },
           );
+          return undefined;
         },
       },
       {
         name: "a swap of the running piece",
         running: true,
-        run: (tx, cell, _same, fresh) => {
-          runtime.run(tx, fresh, { x: 1 }, cell);
-        },
+        run: (tx, cell, _same, fresh) =>
+          runtime.run(tx, fresh(), { x: 1 }, cell),
       },
     ];
 
@@ -565,9 +562,11 @@ describe("cfc-result-wiring-stamp", () => {
       for (const route of routes) {
         it(`keeps it through ${route.name}${nested ? ", on a nested child" : ""}`, async () => {
           const same = patterns();
-          const fresh = patterns();
           const pattern = nested ? same.outer : same.plain;
-          const freshPattern = nested ? fresh.outer : fresh.plain;
+          // A pattern built afresh, after the first setup, is one this
+          // runtime has not named.
+          const freshPattern = () =>
+            nested ? patterns().outer : patterns().plain;
           const bobs = await seedBobsDocument();
           const cause = `kept-${nested ? "child" : "top"}-${route.name}`;
 
@@ -581,14 +580,15 @@ describe("cfc-result-wiring-stamp", () => {
           first.prepareCfc();
           expect((await first.commit().settled).ok).toBeDefined();
           await runtime.idle();
-          await result.key(nested ? "child" : "a").pull();
+          // Reading the result would name the families its graph runs, and a
+          // run deferred until its pattern is named would then not defer.
           const target = nested ? result.key("child").resolveAsCell() : result;
           if (!route.running) runtime.runner.stop(result);
           await plantStamp(target, BOB);
 
           const tx = runtime.edit();
           runtime.getCellFromLink(bobs, undefined, tx).get();
-          route.run(
+          const again = route.run(
             tx,
             runtime.getCell(space, cause, undefined, tx),
             pattern,
@@ -596,6 +596,8 @@ describe("cfc-result-wiring-stamp", () => {
           );
           tx.prepareCfc();
           expect((await tx.commit().settled).ok).toBeDefined();
+          // A deferred setup lands after the asking transaction commits.
+          await again?.pull();
           await runtime.idle();
           runtime.runner.stop(result);
 
