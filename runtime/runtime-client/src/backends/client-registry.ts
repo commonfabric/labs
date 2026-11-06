@@ -79,7 +79,7 @@ const ipcTimingLogger = getLogger("runner.ipc", { enabled: false });
  */
 function failureText(thrown: unknown): string {
   try {
-    if (thrown instanceof Error && typeof thrown.stack === "string") {
+    if (Error.isError(thrown) && typeof thrown.stack === "string") {
       return thrown.stack;
     }
   } catch {
