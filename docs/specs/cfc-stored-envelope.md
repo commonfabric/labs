@@ -173,7 +173,9 @@ and which lives in the memory package
 ([cfc-release-authority.ts](../../runtime/memory/v2/cfc-release-authority.ts))
 so that both read it. A label held by reference is read from the label
 document the space stores; one that doesn't resolve can't be released. A
-commit deleting the document is admitted, and a later write is a creation.
+commit leaving the document deleted is admitted, and a later commit writing
+it is a creation; a commit that deletes the document and writes it again is
+judged by what it writes.
 
 This is the interim rule of
 [specs#89](https://github.com/commonfabric/specs/pull/89), which this
