@@ -88,6 +88,13 @@ interface CompatibilityContext {
   verbEvent?: boolean;
 
   /**
+   * Whether the verbs a result field at the given path holds may go with it,
+   * read from what the previous pattern binds there
+   * (`verbRemovalJudge`). Unset, no verb may be removed.
+   */
+  verbRemovable?: (path: string) => boolean;
+
+  /**
    * Whether the proof goes on past the first issue it finds, to report every
    * one, as {@link schemaSubsetIssues} describes. Unset, it stops at the first.
    */
@@ -792,6 +799,7 @@ export function patternSchemaIncompatibilities(
       sourceRoot: candidate.resultSchema,
       targetRoot: previousResultSchema,
       role: "result",
+      verbRemovable: verbRemovalJudge(previous),
       activePairs: new WeakMap(),
       sourceUnionSplitDepth: 0,
       allowEvolutionPolicy: true,
@@ -1323,12 +1331,14 @@ function objectSubsetIssues(
   // whole-object constraint such as `dependentRequired` can name it too.
   // A candidate that still constrains the name, through a matching pattern
   // or a typed index signature, still publishes a value there, which must
-  // hold to every contract the previous object gave the name. A verb is
-  // refused even when optional, and so is a field holding one at any depth,
-  // because a verb's absence is not something a holder can read: a stream
-  // handle reads as itself when nothing is stored, so a holder still bound to
-  // it keeps sending, and each event is dropped for want of a handler. And a
-  // verb's event refuses it outright: a caller still sends a field the event
+  // hold to every contract the previous object gave the name. An optional
+  // verb, and a field holding one at any depth, may go where the previous
+  // pattern bound each verb to a handler's stream: a holder's object read then
+  // reads the verb as absent (`runtime/runner/src/withdrawn-verb.ts`). One the
+  // previous pattern bound to a key of a builtin's own document is refused,
+  // since nothing durable tells a holder that verb is gone, and so is any verb
+  // removal where the previous pattern carries no binding to judge by, as a
+  // recorded baseline does not. And a verb's event refuses it outright: a caller still sends a field the event
   // stops declaring, and an event strips undeclared fields before any handler
   // runs, so the caller's value would be dropped without a refusal.
   //
@@ -1352,7 +1362,8 @@ function objectSubsetIssues(
       if (
         allowEvolutionPolicy && !context.verbEvent &&
         !previousRequired.has(property) &&
-        !publishesVerb(targetProperties[property], context.targetRoot)
+        (!publishesVerb(targetProperties[property], context.targetRoot) ||
+          context.verbRemovable?.(`${path}.${property}`) === true)
       ) {
         removed.add(property);
         const candidatePatterns = matchingPatternPropertySchemas(
@@ -1819,6 +1830,78 @@ function publishesVerb(schema: JSONSchema, root: JSONSchema): boolean {
     );
   };
   return visit(schema, root);
+}
+
+/**
+ * Judges, from the bindings in `previous`'s graph, whether the verbs a result
+ * field holds may be removed with it. A holder reads a removed verb as absent
+ * when the verb listened at the root of a stream's own document, which a
+ * pattern's handler does and which a builtin that hands its whole output to a
+ * field does too. A builtin that listens at a key of its own document, as
+ * llm-dialog's verbs do, leaves nothing a holder could read, so a field bound
+ * to a key of a builtin node's output keeps its verbs. A field the graph does
+ * not bind, or binds below a value it cannot see into, is judged not
+ * removable.
+ *
+ * `path` is the proof's path to the field, `result` and then one property name
+ * per level; a path through a list or a record names no binding.
+ */
+function verbRemovalJudge(previous: Pattern): (path: string) => boolean {
+  const builtinOutputs = new Set<string>();
+  for (const node of previous.nodes ?? []) {
+    const type = node.module?.type;
+    if (type === "javascript" || type === "pattern") continue;
+    for (const alias of aliasesIn(node.outputs)) {
+      builtinOutputs.add(causeKey(alias));
+    }
+  }
+  return (path) => {
+    const [root, ...names] = path.split(".");
+    if (root !== "result") return false;
+    let binding: unknown = previous.result;
+    for (const name of names) {
+      if (aliasOf(binding) !== undefined) break;
+      if (!isObjectNotArray(binding) || !Object.hasOwn(binding, name)) {
+        return false;
+      }
+      binding = (binding as Record<string, unknown>)[name];
+    }
+    const aliases = aliasesIn(binding);
+    return aliases.length > 0 &&
+      aliases.every((alias) =>
+        alias.path.length === 0 || !builtinOutputs.has(causeKey(alias))
+      );
+  };
+}
+
+/** The target of a graph's `$alias` binding, which names a cell by cause. */
+interface AliasTarget {
+  readonly path: readonly unknown[];
+  readonly partialCause?: unknown;
+  readonly cell?: unknown;
+}
+
+function aliasOf(value: unknown): AliasTarget | undefined {
+  if (!isObjectNotArray(value)) return undefined;
+  const target = (value as { $alias?: unknown }).$alias;
+  return isObjectNotArray(target) &&
+      Array.isArray((target as { path?: unknown }).path)
+    ? target as unknown as AliasTarget
+    : undefined;
+}
+
+/** Every alias in a graph binding, not looking past one into its target. */
+function aliasesIn(value: unknown): AliasTarget[] {
+  const alias = aliasOf(value);
+  if (alias !== undefined) return [alias];
+  if (Array.isArray(value)) return value.flatMap(aliasesIn);
+  if (isObjectNotArray(value)) return Object.values(value).flatMap(aliasesIn);
+  return [];
+}
+
+/** What identifies the cell an alias names, across a graph. */
+function causeKey(alias: AliasTarget): string {
+  return JSON.stringify([alias.cell ?? null, alias.partialCause ?? null]);
 }
 
 function declaresVerbStream(schema: JSONSchema): boolean {

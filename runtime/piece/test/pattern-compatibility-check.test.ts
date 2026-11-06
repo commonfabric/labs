@@ -178,6 +178,84 @@ function noteConsumerProgram(): RuntimeProgram {
 }
 
 /**
+ * A producer that publishes `tick`, an optional verb its handler backs, or,
+ * with `withTick` false, the next revision, which runs no such handler.
+ */
+function tickProducerProgram(withTick: boolean): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [{
+      name: "/main.tsx",
+      contents: [
+        "import { Default, NAME, handler, pattern, type Stream, type Writable } from 'commonfabric';",
+        "const bump = handler<{ n: number }, { count: Writable<number> }>(",
+        "  ({ n }, { count }) => { count.set((count.get() ?? 0) + n); },",
+        ");",
+        "export default pattern<",
+        "  { count?: Writable<number | Default<0>> },",
+        withTick
+          ? "  { label: string; tick?: Stream<{ n: number }> }"
+          : "  { label: string }",
+        ">(({ count }) => ({",
+        "  [NAME]: 'Tick producer',",
+        "  label: 'producer',",
+        ...(withTick ? ["  tick: bump({ count }),"] : []),
+        "}));",
+        "",
+      ].join("\n"),
+    }],
+  };
+}
+
+/** A consumer taking an optional verb as its input. */
+function tickConsumerProgram(): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [{
+      name: "/main.tsx",
+      contents: [
+        "import { NAME, pattern, type Stream } from 'commonfabric';",
+        "export default pattern<{ tick?: Stream<{ n: number }> }, { label: string }>(",
+        "  () => ({ [NAME]: 'Tick consumer', label: 'consumer' }),",
+        ");",
+        "",
+      ].join("\n"),
+    }],
+  };
+}
+
+/**
+ * A producer that publishes llm-dialog's `cancelGeneration` as an optional
+ * verb, or, with `withCancel` false, the next revision, which does not.
+ */
+function dialogProducerProgram(withCancel: boolean): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [{
+      name: "/main.tsx",
+      contents: [
+        "import { NAME, Writable, llmDialog, pattern, type Stream } from 'commonfabric';",
+        "export default pattern<",
+        "  Record<string, never>,",
+        withCancel
+          ? "  { label: string; cancel?: Stream<void> }"
+          : "  { label: string }",
+        ">(() => {",
+        "  const messages = new Writable<any[]>([]).for('messages');",
+        "  const dialog = llmDialog({ messages });",
+        "  return {",
+        "    [NAME]: 'Dialog producer',",
+        "    label: 'producer',",
+        ...(withCancel ? ["    cancel: dialog.cancelGeneration,"] : []),
+        "  };",
+        "});",
+        "",
+      ].join("\n"),
+    }],
+  };
+}
+
+/**
  * The CFC-labeled variants below exist because the three rules above all
  * reason about DECLARED types, and a fourth thing decides whether the setup
  * commit lands: the CFC schema envelope physically stored on the piece's
@@ -557,6 +635,48 @@ describe("setsrc compatibility preflight", () => {
       label: "producer",
     });
     expect(await seen()).toBe("absent");
+  });
+
+  it("applies a source that stops publishing an optional verb a linked piece holds", async () => {
+    // The consumer's link to `tick` was admitted against an optional producer
+    // slot. Once the producer gives the verb up, the consumer's read of its
+    // input leaves the verb out instead of handing it a handle that would
+    // drop every event.
+
+    const producer = await pieces.create(tickProducerProgram(true));
+    const consumer = await pieces.create(tickConsumerProgram());
+    await pieces.link(
+      producer.getCell().getAsNormalizedFullLink().id,
+      ["tick"],
+      consumer.getCell().getAsNormalizedFullLink().id,
+      ["tick"],
+    );
+    await runtime.idle();
+    const holderView = () =>
+      pieces.getArgument(consumer.getCell()).asSchema({
+        type: "object",
+        properties: { tick: { asCell: ["stream"] } },
+      }).get() as Record<string, unknown>;
+    expect(Object.hasOwn(holderView(), "tick")).toBe(true);
+
+    const report = await producer.checkPattern(tickProducerProgram(false));
+    expect(report.issues).toEqual({});
+    await producer.setPattern(tickProducerProgram(false));
+    await runtime.idle();
+
+    expect(Object.hasOwn(holderView(), "tick")).toBe(false);
+  });
+
+  it("refuses a source that stops publishing an optional verb a builtin backs", async () => {
+    // llm-dialog listens at a key of its own document, which records no
+    // owner, so a holder could not read the verb's absence.
+
+    const producer = await pieces.create(dialogProducerProgram(true));
+    const report = await producer.checkPattern(dialogProducerProgram(false));
+
+    expect(report.issues.schema).toContain(
+      "result.cancel: existing result field was removed",
+    );
   });
 
   it("agrees with the apply path on the verdict and the cause", async () => {

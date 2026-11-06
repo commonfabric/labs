@@ -2670,9 +2670,10 @@ describe("piece schema compatibility", () => {
       ).toEqual(["result.state.checked.ship"]);
     });
 
-    it("refuses dropping an optional verb", () => {
-      // A holder cannot read a verb's absence: its stream handle reads as
-      // itself, so it keeps sending to a handler that is gone.
+    it("refuses dropping an optional verb the previous pattern binds to nothing", () => {
+      // Only the previous pattern's binding says whether a holder could read
+      // the verb's absence. A recorded baseline, like these patterns, carries
+      // none.
 
       expect(
         patternSchemaIncompatibilities(
@@ -2683,6 +2684,107 @@ describe("piece schema compatibility", () => {
         path: "result.tick",
         reason: "existing result field was removed",
       }]);
+    });
+
+    describe("against the previous pattern's bindings", () => {
+      /** `base` with `result` bound in its graph, among `nodes`. */
+      const bound = (
+        base: Pattern,
+        result: Record<string, unknown>,
+        nodes: unknown[] = [],
+      ): Pattern => ({ ...base, result, nodes } as Pattern);
+      const handlerStream = {
+        $alias: { partialCause: { stream: "own" }, path: [] },
+      };
+      const dialog = {
+        module: { type: "ref", implementation: "llmDialog" },
+        inputs: {},
+        outputs: { $alias: { partialCause: "dialog", path: [] } },
+      };
+
+      it("accepts dropping an optional verb bound to a handler's stream", () => {
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({ doubled: { type: "number" }, tick }, ["doubled"]),
+              { tick: handlerStream },
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([]);
+      });
+
+      it("accepts dropping an optional field whose verb is bound to a handler's stream", () => {
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({
+                doubled: { type: "number" },
+                ui: { type: "object", properties: { tick } },
+              }, ["doubled"]),
+              { ui: { tick: handlerStream } },
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([]);
+      });
+
+      it("accepts dropping an optional verb bound to a builtin's whole output", () => {
+        // A builtin that hands its whole output to the field, as `ifElse`
+        // does, leaves the verb's own stream behind it, which a holder reads.
+
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({ doubled: { type: "number" }, tick }, ["doubled"]),
+              { tick: { $alias: { partialCause: "dialog", path: [] } } },
+              [dialog],
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([]);
+      });
+
+      it("refuses dropping an optional verb bound to a key of a builtin's output", () => {
+        // llm-dialog listens at keys of its own document, which records no
+        // owner, so a holder would read the removed verb as live.
+
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({ doubled: { type: "number" }, tick }, ["doubled"]),
+              {
+                tick: {
+                  $alias: {
+                    partialCause: "dialog",
+                    path: ["cancelGeneration"],
+                  },
+                },
+              },
+              [dialog],
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([{
+          path: "result.tick",
+          reason: "existing result field was removed",
+        }]);
+      });
+
+      it("refuses dropping a required verb bound to a handler's stream", () => {
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({ doubled: { type: "number" }, tick }, ["doubled", "tick"]),
+              { tick: handlerStream },
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([{
+          path: "result.tick",
+          reason: "existing result field was removed",
+        }]);
+      });
     });
 
     it("refuses dropping an optional verb whose marker its reference carries", () => {
