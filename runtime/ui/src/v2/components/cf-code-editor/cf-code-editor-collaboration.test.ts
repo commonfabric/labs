@@ -470,14 +470,15 @@ describe("CFCodeEditor collaboration", () => {
   });
 
   describe("cf-selection-change", () => {
-    // Each case holds a selection in an editor that has reported nothing
-    // yet. `report()` stands in for the editor seeing its selection change,
-    // and `confirm()` for the collaboration controller publishing a
-    // synchronization snapshot: at a version, for a field with no version,
-    // or as collaboration ends. `events` collects the details of the
-    // `cf-selection-change` events the editor emits.
+    // Each case holds a selection in an editor, over "abc", that has
+    // reported nothing yet. `report()` stands in for the editor seeing its
+    // selection change, `change()` for a transaction that changes the
+    // document and names no selection, and `confirm()` for the collaboration
+    // controller publishing a synchronization snapshot: at a version, for a
+    // field with no version, or as collaboration ends. `events` collects the
+    // details of the `cf-selection-change` events the editor emits.
 
-    const NOTHING = { from: 0, to: 0, text: "" };
+    const NOTHING = { from: 0, to: 0, text: "", value: "" };
 
     const snapshotAt = (
       version: number | "unversioned",
@@ -489,16 +490,19 @@ describe("CFCodeEditor collaboration", () => {
       anchors: {},
     });
 
-    const selectionHarness = (
-      anchor: number,
-      head: number,
-      extensions: unknown[] = [],
-    ) => {
+    const selectionHarness = (anchor: number, head: number) => {
       const events: unknown[] = [];
       const element = new CFCodeEditor();
-      const view = statefulView(extensions);
+      // The state carries the fields the editor reads on every change to the
+      // document, and a read-only editor writes nothing back for one.
+      const view = statefulView([
+        backlinkField,
+        mentionRefField,
+        refShortNameField,
+      ]);
       view.dispatch({ selection: { anchor, head } } as never);
       (element as any)._editorView = view;
+      (element as any).readonly = true;
       (element as any).emit = (name: string, detail: unknown) => {
         if (name === "cf-selection-change") events.push(detail);
       };
@@ -510,15 +514,27 @@ describe("CFCodeEditor collaboration", () => {
           version === "ended" ? null : snapshotAt(version, pending),
         );
       const report = () => (element as any)._reportSelection();
-      return { element, events, view, confirm, report };
+      const change = (changes: unknown) => {
+        const startState = view.state;
+        const transaction = startState.update({ changes } as never);
+        view.state = transaction.state;
+        (element as any)._handleEditorUpdate({
+          transactions: [transaction],
+          docChanged: true,
+          selectionSet: false,
+          state: transaction.state,
+          startState,
+        });
+      };
+      return { events, view, confirm, report, change };
     };
 
-    it("reports the range and its text, and nothing else", () => {
+    it("reports the range, its text and the editor's document", () => {
       const { events, report } = selectionHarness(0, 2);
 
       report();
 
-      expect(events).toEqual([{ from: 0, to: 2, text: "ab" }]);
+      expect(events).toEqual([{ from: 0, to: 2, text: "ab", value: "abc" }]);
     });
 
     it("reports that nothing is selected in an editor that has reported nothing yet", () => {
@@ -530,7 +546,7 @@ describe("CFCodeEditor collaboration", () => {
     });
 
     it("reports nothing more as the caret moves, as the person types, or as collaborators' edits arrive", () => {
-      const { events, view, confirm, report } = selectionHarness(0, 0);
+      const { events, view, confirm, report, change } = selectionHarness(0, 0);
       report();
 
       view.dispatch({ selection: { anchor: 2 } } as never);
@@ -542,7 +558,7 @@ describe("CFCodeEditor collaboration", () => {
       report();
       confirm(4, [ChangeSet.of({ from: 2, insert: "X" }, 3).desc]);
       confirm(5);
-      view.dispatch({ changes: { from: 0, insert: "remote " } } as never);
+      change({ from: 0, insert: "remote " });
       confirm(6);
 
       expect(events).toEqual([NOTHING]);
@@ -552,132 +568,55 @@ describe("CFCodeEditor collaboration", () => {
       // A change that names no selection still moves the one held, as a
       // rename of a reference ahead of it does.
 
-      // The state carries the fields the editor reads on every change to
-      // the document.
-      const { element, events, view, report } = selectionHarness(1, 3, [
-        backlinkField,
-        mentionRefField,
-        refShortNameField,
-      ]);
-      (element as any).readonly = true;
+      const { events, report, change } = selectionHarness(1, 3);
       report();
 
-      const startState = view.state;
-      const transaction = startState.update({
-        changes: { from: 0, insert: "longer " },
-      });
-      view.state = transaction.state;
-      (element as any)._handleEditorUpdate({
-        transactions: [transaction],
-        docChanged: true,
-        selectionSet: false,
-        state: transaction.state,
-        startState,
-      });
+      change({ from: 0, insert: "longer " });
 
       expect(events).toEqual([
-        { from: 1, to: 3, text: "bc" },
-        { from: 8, to: 10, text: "bc" },
+        { from: 1, to: 3, text: "bc", value: "abc" },
+        { from: 8, to: 10, text: "bc", value: "longer abc" },
       ]);
     });
 
-    it("states a changed selection against the snapshot the collaboration holds", () => {
+    it("reports a held selection again against the new document when a change after it leaves its range in place", () => {
+      const { events, report, change } = selectionHarness(0, 2);
+      report();
+
+      change({ from: 3, insert: "!" });
+
+      expect(events).toEqual([
+        { from: 0, to: 2, text: "ab", value: "abc" },
+        { from: 0, to: 2, text: "ab", value: "abc!" },
+      ]);
+    });
+
+    it("states a selection against the editor's document while the editor's own edit is unconfirmed", () => {
       // Memory has confirmed "abc"; the editor holds ">abc", its insertion
       // still pending, and the person selects "ab".
 
-      const { element, events, view, report } = selectionHarness(0, 0);
-      view.dispatch({
-        changes: { from: 0, insert: ">" },
-        selection: { anchor: 1, head: 3 },
-      } as never);
-      (element as any)._collaboration = {
-        synchronizationSnapshot: snapshotAt(4, [
-          ChangeSet.of({ from: 0, insert: ">" }, 3).desc,
-        ]),
-      };
-
-      report();
-
-      expect(events).toEqual([{ from: 0, to: 2, text: "ab" }]);
-    });
-
-    it("reports a held selection once while later versions leave its range in place", () => {
-      const { events, view, confirm, report } = selectionHarness(0, 2);
-
-      report();
-      confirm(5);
-      // A collaborator's edit after the selection, which Memory confirmed.
-      view.dispatch({ changes: { from: 3, insert: "!" } } as never);
-      confirm(6);
-      confirm(40);
-
-      expect(events).toEqual([{ from: 0, to: 2, text: "ab" }]);
-    });
-
-    it("reports a held selection again at the range a confirmed edit moves it to", () => {
-      const { events, view, confirm, report } = selectionHarness(1, 3);
-
-      report();
-      // A collaborator's edit before the selection, which Memory confirmed.
-      view.dispatch({ changes: { from: 0, insert: ">> " } } as never);
-      confirm(5);
-
-      expect(events).toEqual([
-        { from: 1, to: 3, text: "bc" },
-        { from: 4, to: 6, text: "bc" },
-      ]);
-      expect(view.state.sliceDoc(4, 6)).toBe("bc");
-    });
-
-    it("reports a selection over an unconfirmed edit as nothing selected, then as a range once Memory confirms the edit", () => {
-      const { events, view, confirm } = selectionHarness(0, 0);
-
-      // The person types "X" and selects it with the text after it.
-      view.dispatch({
-        changes: { from: 0, insert: "X" },
-        selection: { anchor: 0, head: 3 },
-      } as never);
-      confirm(4, [ChangeSet.of({ from: 0, insert: "X" }, 3).desc]);
-      expect(events).toEqual([NOTHING]);
-
-      confirm(5);
-
-      expect(events).toEqual([NOTHING, { from: 0, to: 3, text: "Xab" }]);
-    });
-
-    it("reports a selection against the stored value of a field with no collaborative edit", () => {
-      // The field holds "abc" and has no version. The person types ">" at the
-      // start, which is pending, and selects the "ab" after it.
-
-      const { events, view, confirm } = selectionHarness(0, 0);
-      view.dispatch({
-        changes: { from: 0, insert: ">" },
-        selection: { anchor: 1, head: 3 },
-      } as never);
-
-      confirm("unversioned", [ChangeSet.of({ from: 0, insert: ">" }, 3).desc]);
-
-      expect(events).toEqual([{ from: 0, to: 2, text: "ab" }]);
-    });
-
-    it("reports the editor's own range once more when it differs from the confirmed one as collaboration ends", () => {
-      // Memory has confirmed "abc"; the editor holds ">abc" with "ab"
-      // selected, its insertion still pending.
-
-      const { events, view, confirm } = selectionHarness(0, 0);
+      const { events, view, confirm, report } = selectionHarness(0, 0);
       view.dispatch({
         changes: { from: 0, insert: ">" },
         selection: { anchor: 1, head: 3 },
       } as never);
       confirm(4, [ChangeSet.of({ from: 0, insert: ">" }, 3).desc]);
 
-      confirm("ended");
+      report();
+
+      expect(events).toEqual([{ from: 1, to: 3, text: "ab", value: ">abc" }]);
+    });
+
+    it("reports nothing for a synchronization snapshot, at a version, without one, or as collaboration ends", () => {
+      const { events, confirm, report } = selectionHarness(0, 2);
+      report();
+
+      confirm(5);
+      confirm("unversioned");
+      confirm(6, [ChangeSet.of({ from: 0, insert: ">" }, 3).desc]);
       confirm("ended");
 
-      expect(events).toEqual([
-        { from: 0, to: 2, text: "ab" },
-        { from: 1, to: 3, text: "ab" },
-      ]);
+      expect(events).toEqual([{ from: 0, to: 2, text: "ab", value: "abc" }]);
     });
   });
 

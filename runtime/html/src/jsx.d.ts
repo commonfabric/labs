@@ -4125,14 +4125,16 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "oncf-presence-join"?: any;
 
   /**
-   * The main selection as a range of the text Memory has confirmed to the
-   * editor, with the text that range holds. Nothing selected is
-   * `from === to`.
+   * The main selection as a range of the editor's text, with the text that
+   * range holds and the whole of the editor's text, `value`. The range is
+   * right for the field only while the field holds `value`. Nothing selected
+   * is `from === to`, with an empty `value`.
    */
   "oncf-selection-change"?: EventHandler<{
     from: number;
     to: number;
     text: string;
+    value: string;
   }>;
 
   /**

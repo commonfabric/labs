@@ -150,17 +150,17 @@ interface Comment {
 
 type Anchors = Writable<FieldAnchors | undefined>;
 
-// `from`, `to` and `quote` are an editor's selection, as `cf-selection-change`
+// `from`, `to` and `value` are an editor's selection, as `cf-selection-change`
 // reports it.
 const addComment = handler<
-  { id: string; text: string; from: number; to: number; quote: string },
+  { id: string; text: string; from: number; to: number; value: string },
   {
     content: Writable<string>;
     anchors: Anchors;
     comments: Writable<Comment[]>;
   }
->(({ id, text, from, to, quote }, { content, anchors, comments }) => {
-  if (content.get().slice(from, to) !== quote) {
+>(({ id, text, from, to, value }, { content, anchors, comments }) => {
+  if (content.get() !== value) {
     throw new Error("The text changed under the selection.");
   }
   anchors.set({ ...anchors.get(), [`${id}:from`]: from, [`${id}:to`]: to });
@@ -207,12 +207,12 @@ never applied to different text.
 
 An offset that comes from outside the handler needs a check of its own. A
 range taken from an editor's selection refers to the text the editor showed,
-which may be older than what the field holds by the time the handler runs. The
-selection carries the text it covered, and the handler compares that with what
-the field holds at the range, as `addComment` does above, before it anchors
-the range. The comparison catches every edit but one that leaves the same text
-at the same offsets, such as a repeated word deleted just ahead of the
-selection; the anchors then land on the other copy.
+which may differ from what the field holds by the time the handler runs. The
+selection carries that whole text as `value`, and the handler compares it with
+the whole field, as `addComment` does above, before it anchors the range.
+Comparing only the text at the range is not enough: where an edit leaves the
+same text at the same offsets, such as a repeated word deleted just ahead of
+the selection, the anchors would land on the other copy.
 
 Every anchor moves the way a cursor does. Text inserted at an anchor lands
 after it, and an anchor inside deleted text lands where the deletion began. So

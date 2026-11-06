@@ -53,17 +53,21 @@ type TestProfile = AddIntegrity<
   readonly ["shared-note-test-profile"]
 >;
 
-/** A `cf-selection-change` event for `quote` at `from`. */
-const selectionAt = (from: number, quote: string) => ({
+/**
+ * A `cf-selection-change` event for `quote` at `from`, from an editor whose
+ * text is `value`.
+ */
+const selectionAt = (value: string, from: number, quote: string) => ({
   type: "cf-selection-change",
-  detail: { from, to: from + quote.length, text: quote },
+  detail: { from, to: from + quote.length, text: quote, value },
 });
 
 /**
- * A `cf-selection-change` event for the one occurrence of `quote` in `body`.
+ * A `cf-selection-change` event for the first occurrence of `quote` in
+ * `body`, from an editor whose text is `body`.
  */
 const selectionIn = (body: string, quote: string) =>
-  selectionAt(body.indexOf(quote), quote);
+  selectionAt(body, body.indexOf(quote), quote);
 
 /** The `display` an element shown or hidden through its style takes. */
 const displayOf = (node: unknown): unknown =>
@@ -312,7 +316,7 @@ export default pattern(() => {
     fireEvent(
       editorOf(note[UI]),
       "oncf-selection-change",
-      selectionAt(quoteFrom, QUOTE),
+      selectionAt(content.get(), quoteFrom, QUOTE),
     )
   );
   const assert_selection_enables_comment = assert(() =>
@@ -384,13 +388,13 @@ export default pattern(() => {
       !hasText(rowOf(note[UI], "Needs a date"), "text no longer in note") &&
       !hasText(rowOf(note[UI], "Needs a date"), "now “");
   });
-  // A selection whose text the body no longer holds there is refused when
-  // the composer opens, and the composer stays closed.
+  // A selection reported against text the body does not hold is refused
+  // when the composer opens, and the composer stays closed.
   const action_select_stale_text = action(() =>
     fireEvent(
       editorOf(note[UI]),
       "oncf-selection-change",
-      selectionAt(0, "Not in the note"),
+      selectionIn("Not in the note", "Not in the note"),
     )
   );
   const action_open_composer_on_stale_text = action(() =>
@@ -561,16 +565,18 @@ export default pattern(() => {
       range !== undefined &&
       content.get().slice(range.from, range.to) === HEADING;
   });
-  // A selection the body has changed under: its range no longer holds its
-  // text, so the composer refuses it and says so. The editor's next report
-  // names the range that holds the text now, and the comment lands. Here the
-  // first report is one character off.
+  // A selection the body has changed under is refused, and the composer
+  // says so; the editor's next report is against the body as it is, and the
+  // comment lands. Here the editor reported against text that held a second
+  // `> Pinned` line at the start, since deleted, and the selection is on the
+  // deleted copy. The body holds `Pinned` at the same offsets, on the copy
+  // that is left, so only the whole text tells the two apart.
   const PINNED = "Pinned";
-  const action_select_pinned_where_it_was = action(() =>
+  const action_select_pinned_in_older_text = action(() =>
     fireEvent(
       editorOf(note[UI]),
       "oncf-selection-change",
-      selectionAt(content.get().indexOf(PINNED) + 1, PINNED),
+      selectionIn(`> ${PINNED}\n${content.get()}`, PINNED),
     )
   );
   const action_open_composer_on_pinned = action(() =>
@@ -859,7 +865,7 @@ export default pattern(() => {
       { action: action_type_heading_comment },
       { action: action_post_heading_comment },
       { assertion: assert_comment_lands_where_the_text_moved },
-      { action: action_select_pinned_where_it_was },
+      { action: action_select_pinned_in_older_text },
       { action: action_open_composer_on_the_moved_selection },
       { assertion: assert_moved_selection_refused },
       { action: action_editor_restates_the_selection },

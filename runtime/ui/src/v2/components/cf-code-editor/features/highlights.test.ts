@@ -37,18 +37,6 @@ const synchronization = (
 const insert = (length: number, from: number, text: string): ChangeDesc =>
   ChangeSet.of({ from, insert: text }, length).desc;
 
-/**
- * A pending edit of `confirmed` that puts `text` in place of what it holds
- * from `from` up to `to`.
- */
-const replace = (
-  confirmed: string,
-  from: number,
-  to: number,
-  text = "",
-): ChangeDesc =>
-  ChangeSet.of({ from, to, insert: text }, confirmed.length).desc;
-
 const stateWith = (
   doc: string,
   anchors: FieldAnchors,
@@ -499,170 +487,27 @@ describe("highlights", () => {
       EditorState.create({ doc, selection: { anchor, head } });
 
     it("reports an empty selection as nothing selected", () => {
-      expect(selectionReport(selected("abc", 1, 1), synchronization()))
-        .toEqual(NOTHING_SELECTED);
+      expect(selectionReport(selected("abc", 1, 1))).toEqual(NOTHING_SELECTED);
     });
 
-    it("states the selection against the editor's document outside collaboration", () => {
-      expect(selectionReport(selected("hello", 3, 1), null)).toEqual({
+    it("states the selection against the editor's document, which it carries", () => {
+      expect(selectionReport(selected("hello", 3, 1))).toEqual({
         from: 1,
         to: 3,
         text: "el",
+        value: "hello",
       });
-    });
-
-    it("returns the editor's own range when nothing is pending", () => {
-      expect(selectionReport(selected("hello", 1, 3), synchronization()))
-        .toEqual({ from: 1, to: 3, text: "el" });
-    });
-
-    it("maps the selection back over pending edits outside it", () => {
-      // Confirmed "hello world"; the pending edit typed ">> " at the start.
-
-      const state = selected(">> hello world", 9, 14);
-
-      expect(selectionReport(state, synchronization([insert(11, 0, ">> ")])))
-        .toEqual({ from: 6, to: 11, text: "world" });
-    });
-
-    it("maps a selection that starts right after a pending insertion", () => {
-      const state = selected("Xabc", 1, 3);
-
-      expect(selectionReport(state, synchronization([insert(3, 0, "X")])))
-        .toEqual({ from: 0, to: 2, text: "ab" });
-    });
-
-    it("reports the text the confirmed document holds at the range", () => {
-      // Confirmed "hello world"; the pending edits typed at both ends.
-
-      const confirmed = "hello world";
-      const state = selected(">> hello world <<", 5, 10);
-      const report = selectionReport(
-        state,
-        synchronization([insert(11, 0, ">> "), insert(14, 14, " <<")]),
-      );
-
-      expect(report).toEqual({ from: 2, to: 7, text: "llo w" });
-      expect(confirmed.slice(report.from, report.to)).toBe(report.text);
-    });
-
-    it("states the selection against the stored value of a field with no collaborative edit", () => {
-      // The field holds "hello world" and has no version; the editor's first
-      // edit, ">> " typed at the start, is still pending.
-
-      const state = selected(">> hello world", 9, 14);
-      const unversioned = synchronization([insert(11, 0, ">> ")], {}, null);
-
-      expect(selectionReport(state, unversioned))
-        .toEqual({ from: 6, to: 11, text: "world" });
-      expect(selectionReport(selected(">> hello world", 0, 5), unversioned))
-        .toEqual(NOTHING_SELECTED);
-    });
-
-    it("maps the selection back over a pending deletion beside it", () => {
-      // Each pending edit deletes text that touches the selection's edge and
-      // none of the selection.
-
-      const confirmed = "hello world";
-      const cases = [
-        // "hello " deleted before the selected "world".
-        { pending: replace(confirmed, 0, 6), doc: "world", from: 0, to: 5 },
-        // " world" deleted after the selected "hello".
-        { pending: replace(confirmed, 5, 11), doc: "hello", from: 0, to: 5 },
-        // "lo wo" deleted right after the selected "el".
-        { pending: replace(confirmed, 3, 8), doc: "helrld", from: 1, to: 3 },
-        // "lo wo" deleted right before the selected "rl".
-        { pending: replace(confirmed, 3, 8), doc: "helrld", from: 3, to: 5 },
-      ];
-
-      const reports = cases.map(({ pending, doc, from, to }) =>
-        selectionReport(selected(doc, from, to), synchronization([pending]))
-      );
-
-      expect(reports).toEqual([
-        { from: 6, to: 11, text: "world" },
-        { from: 0, to: 5, text: "hello" },
-        { from: 1, to: 3, text: "el" },
-        { from: 8, to: 10, text: "rl" },
-      ]);
-      expect(reports.map(({ from, to }) => confirmed.slice(from, to)))
-        .toEqual(reports.map(({ text }) => text));
-    });
-
-    it("reports nothing selected over a pending deletion inside the selection", () => {
-      // "lo wo" is deleted from the middle of the selected text.
-
-      const confirmed = "hello world";
-      const state = selected("helrld", 0, 6);
-
-      expect(
-        selectionReport(state, synchronization([replace(confirmed, 3, 8)])),
-      ).toEqual(NOTHING_SELECTED);
-    });
-
-    it("maps a selection that ends where a pending replacement starts", () => {
-      // "world" is replaced by "there"; the selection is the "hello " before
-      // it.
-
-      const confirmed = "hello world";
-      const pending = [replace(confirmed, 6, 11, "there")];
-      const report = selectionReport(
-        selected("hello there", 0, 6),
-        synchronization(pending),
-      );
-
-      expect(report).toEqual({ from: 0, to: 6, text: "hello " });
-      expect(confirmed.slice(report.from, report.to)).toBe(report.text);
-    });
-
-    it("reports nothing selected for a selection that reaches into a pending replacement", () => {
-      // "world" is replaced by "there". The selections reach two characters
-      // into the replacement, cover exactly it, and start two characters
-      // into it.
-
-      const confirmed = "hello world";
-      const pending = [replace(confirmed, 6, 11, "there")];
-      const reports = [[0, 8], [6, 11], [8, 11]].map(([from, to]) =>
-        selectionReport(
-          selected("hello there", from, to),
-          synchronization(pending),
-        )
-      );
-
-      expect(reports).toEqual([
-        NOTHING_SELECTED,
-        NOTHING_SELECTED,
-        NOTHING_SELECTED,
-      ]);
-    });
-
-    it("reports nothing selected over a pending edit", () => {
-      const pending = [insert(3, 1, "X")];
-
-      expect(selectionReport(selected("aXbc", 0, 3), synchronization(pending)))
-        .toEqual(NOTHING_SELECTED);
-      expect(selectionReport(selected("aXbc", 1, 2), synchronization(pending)))
-        .toEqual(NOTHING_SELECTED);
-      expect(selectionReport(selected("aXbc", 0, 2), synchronization(pending)))
-        .toEqual(NOTHING_SELECTED);
-    });
-
-    it("reports nothing selected when the pending edits end elsewhere", () => {
-      const state = selected("abcdef", 0, 2);
-
-      expect(selectionReport(state, synchronization([insert(3, 0, "X")])))
-        .toEqual(NOTHING_SELECTED);
     });
   });
 
   describe("sameSelection", () => {
-    it("returns `true` only for the same range holding the same text", () => {
-      const report = { from: 1, to: 3, text: "el" };
+    it("returns `true` only for the same range of the same document", () => {
+      const report = { from: 1, to: 3, text: "el", value: "hello" };
 
       expect(sameSelection(report, { ...report })).toBe(true);
       expect(sameSelection(report, { ...report, from: 0 })).toBe(false);
       expect(sameSelection(report, { ...report, to: 4 })).toBe(false);
-      expect(sameSelection(report, { ...report, text: "le" })).toBe(false);
+      expect(sameSelection(report, { ...report, value: "hello!" })).toBe(false);
     });
   });
 

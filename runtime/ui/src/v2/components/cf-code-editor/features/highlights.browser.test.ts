@@ -171,7 +171,7 @@ Deno.test("a newly mounted editor reports that nothing is selected", async () =>
     await editor.updateComplete;
     const view = editor.editorView;
     if (view === undefined) throw new Error("The editor view is missing.");
-    expect(reports).toEqual([{ from: 0, to: 0, text: "" }]);
+    expect(reports).toEqual([{ from: 0, to: 0, text: "", value: "" }]);
 
     // Moving the caret and typing say nothing more; a selection does.
     view.dispatch({ selection: { anchor: 3 } });
@@ -182,8 +182,8 @@ Deno.test("a newly mounted editor reports that nothing is selected", async () =>
     expect(reports).toHaveLength(1);
     view.dispatch({ selection: { anchor: 0, head: 5 } });
     expect(reports).toEqual([
-      { from: 0, to: 0, text: "" },
-      { from: 0, to: 5, text: "Hel!l" },
+      { from: 0, to: 0, text: "", value: "" },
+      { from: 0, to: 5, text: "Hel!l", value: "Hel!lo world" },
     ]);
   } finally {
     editor.remove();

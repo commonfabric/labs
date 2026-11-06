@@ -54,17 +54,20 @@ two anchors are.
   selected. The press still places the caret.
   [Which presses are clicks](#which-presses-are-clicks) says which presses count
   and which mark a click lands on.
-- `cf-selection-change` fires with `{ from, to, text }` when the main selection
-  changes. The range is stated against the text Memory last confirmed to this
-  editor, and `text` is the whole of the text that range holds. Nothing selected
-  is reported as `from === to`.
+- `cf-selection-change` fires with `{ from, to, text, value }` when the main
+  selection changes. `value` is the editor's whole document, the range is stated
+  against it, and `text` is the whole of the text that range holds. Nothing
+  selected is reported as `from === to`, with an empty `value`.
 - The marks need a collaboration that is running. The editor clears them when
   collaboration fails or ends, and draws none while `collaborative` is off.
 
 A handler that turns a selection into a highlight reads the field, checks that
-it still holds `text` at `[from, to)`, and writes the two offsets into the
-field's anchors under two ids of its choosing. The check matters because the
-field can change between the report and the handler's run. "Anchoring text" in
+it holds `value`, and writes the two offsets into the field's anchors under two
+ids of its choosing. The check matters because the field and the editor's
+document can differ when the handler runs, in edits that have reached the field
+and not yet the editor, or the other way round. Checking `text` at `[from, to)`
+alone does not catch every such edit: with the same text at those offsets on
+another copy, the anchors would land on that copy. "Anchoring text" in
 `docs/common/concepts/types-and-schemas/writable.md` shows such a handler and
 explains when its commit is refused and run again.
 
@@ -119,45 +122,37 @@ highlight over "el", from offset 1 to offset 3:
 | Insert "XY" at 3 | 1 and 3       | "el": text typed at the end stays outside it        |
 | Delete "el"      | 1 and 1       | nothing                                             |
 
-## How a selection becomes a confirmed range
+## How a selection is reported
 
-Local typing reaches Memory a moment after it appears in the editor. Until
-Memory confirms it, the editor's text and the confirmed text differ.
-`selectionReport()` restates the selection against the confirmed text by running
-the pending edits backwards:
+`selectionReport()` states the selection against the editor's own document, the
+text the person sees, and carries that document as `value`. The field can hold
+other text when a host's handler runs: a collaborator's edit can reach the field
+before it reaches the editor, and the editor's own typing can reach the editor
+before it reaches the field. A handler that reads the field and finds `value`
+knows the offsets name the selected text in what it read. Its commit lands only
+while the field still holds what it read, so anchors it writes from those
+offsets land on that text. A handler that finds other text refuses, and the
+editor's next report, against the document it then holds, can succeed.
 
-- A selection with no pending edits inside it maps exactly. It is reported as
-  the range the same text has in the confirmed text.
-- A selection that covers a pending edit has no range in the confirmed text. It
-  is reported as nothing selected, with `from === to`. When Memory confirms the
-  edit, the editor reports the selection again, with a range.
-- A field with no collaborative edit has the value it stores as its confirmed
-  text, and its selections map the same way.
-- Outside collaboration there is no confirmed text, and the range is the
-  editor's own.
-
-The editor restates the selection whenever the selection changes, whenever its
-document changes, and whenever the confirmed text does, and fires the event when
-the report differs from the last one it sent. A change to the document counts
-because it can move a selection without setting one: outside collaboration, a
-rename of a reference ahead of a held selection moves its range, and the event
-fires with the new one. Every empty selection is the same report, so moving the
-caret while typing fires nothing. An edit that leaves a held selection's range
-where it was, such as one made after it, fires nothing either. An edit that
-moves or changes the range, such as a collaborator typing before it, fires the
-event with the range the selection has in the newer text, so the last report a
-handler received names where the selected text is in the text Memory has
-confirmed to this editor.
+The editor restates the selection whenever the selection changes and whenever
+its document changes, and fires the event when the report differs from the last
+one it sent. Every empty selection is the same report, so moving the caret while
+typing fires nothing. A held selection is reported again after every change to
+the document, wherever the change is, since each report carries the document. A
+change before the selection also moves its range, whether or not it names a
+selection: a collaborator typing ahead of it, or, outside collaboration, a
+rename of a reference ahead of it. So the last report a handler received is
+against the editor's latest document.
 
 A new editor has sent no report, so its first one is always sent, and says that
 nothing is selected. A host that keeps the last report somewhere that outlives
 the editor is told that way that the selection it kept is gone.
 
-Each event carries the selected text in full. The editor sends one on each
-change of the selection, and again each time a confirmed edit moves a selection
-the person is holding, so a host that stores every report writes the whole of
-the selected text each time. Dragging out a long selection sends a report, each
-longer than the last, for every step of the drag.
+Each event carries the selected text and the whole document. The editor sends
+one on each change of the selection, and again on each change to the document
+while the person holds a selection, so a host that stores every report writes
+the whole document each time. Dragging out a long selection sends a report for
+every step of the drag.
 
 ## Which presses are clicks
 

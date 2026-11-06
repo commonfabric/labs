@@ -395,16 +395,17 @@ const unanchorComment = (anchors: AnchorsCell, id: string): void => {
 
 /**
  * The editor's main selection, as `cf-selection-change` reports it: a range
- * of the body as Memory has confirmed it to the editor, and the text there.
- * `from === to` is nothing selected.
+ * of the editor's text, the text there, and the whole of the editor's text,
+ * `value`, which the range is right for. `from === to` is nothing selected.
  */
 interface NoteSelection {
   from: number;
   to: number;
   text: string;
+  value: string;
 }
 
-const NOTHING_SELECTED: NoteSelection = { from: 0, to: 0, text: "" };
+const NOTHING_SELECTED: NoteSelection = { from: 0, to: 0, text: "", value: "" };
 
 /** A mark the editor draws: the text from one anchor of the body to another. */
 interface NoteHighlight {
@@ -532,8 +533,8 @@ const trackSelection = handler<
   { detail: NoteSelection },
   { selection: Writable<NoteSelection> }
 >((event, { selection }) => {
-  const { from, to, text } = event.detail;
-  selection.set({ from, to, text });
+  const { from, to, text, value } = event.detail;
+  selection.set({ from, to, text, value });
 });
 
 /**
@@ -562,11 +563,12 @@ interface OpenComposerState {
 
 /**
  * Starts a comment on the current selection: a draft record under a new id,
- * and the two anchors of the body named for it. The selection is checked
- * against the body first, and refused if the body no longer holds its text
- * there. From then on Memory keeps the anchors on that text through every
- * edit, however long the person writes and whatever they select meanwhile,
- * and the draft stays theirs to continue or discard if they leave.
+ * and the two anchors of the body named for it. The selection is refused
+ * unless the body is the text the editor reported it against, since only
+ * then do its offsets name the selected text. From then on Memory keeps the
+ * anchors on that text through every edit, however long the person writes
+ * and whatever they select meanwhile, and the draft stays theirs to continue
+ * or discard if they leave.
  */
 const openComposer = handler<unknown, OpenComposerState>((_, state) => {
   const profile = resolvedProfile(state.myProfile);
@@ -578,13 +580,15 @@ const openComposer = handler<unknown, OpenComposerState>((_, state) => {
     state.notice.set("Post or cancel the comment you are writing first.");
     return;
   }
-  const { from, to, text } = state.selection.get();
+  const { from, to, text, value } = state.selection.get();
   if (from === to) {
     state.notice.set("Select the text to comment on first.");
     return;
   }
-  if (state.content.get().slice(from, to) !== text) {
-    state.notice.set("The note changed under your selection; select again.");
+  // The commit lands only while the body is still what this reads, so the
+  // anchors land on the selected text.
+  if (state.content.get() !== value) {
+    state.notice.set("The note changed under your selection; try again.");
     return;
   }
   const id = mintCommentId();

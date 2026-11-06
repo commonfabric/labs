@@ -309,9 +309,11 @@ export function highlights(onClick: (id: string) => void): Extension {
 
 /**
  * The detail of `cf-selection-change`: the main selection as a range of the
- * text Memory has confirmed to this editor, with the text that range holds.
- * For a field with no collaborative edit that text is the field's stored
- * value. Outside collaboration the range is of the editor's own document.
+ * editor's document, the text that range holds, and the whole document. The
+ * range is right for a field exactly when the field holds `value`, so a host
+ * that anchors it checks that first: the field may hold other text by the
+ * time the host's handler runs, edits that have reached it and not yet the
+ * editor, or edits the editor has made that have not yet reached it.
  */
 export interface SelectionReport {
   /** Start of the range, in UTF-16 code units. */
@@ -322,47 +324,41 @@ export interface SelectionReport {
 
   /** The text the range holds. */
   text: string;
+
+  /**
+   * The editor's document, which `from` and `to` are offsets into; empty
+   * when nothing is selected.
+   */
+  value: string;
 }
 
-/** The report of an empty selection, or of one no confirmed range states. */
+/** The report of an empty selection. */
 export const NOTHING_SELECTED: Readonly<SelectionReport> = Object.freeze({
   from: 0,
   to: 0,
   text: "",
+  value: "",
 });
 
-/** Whether `a` and `b` report the same range holding the same text. */
+/** Whether `a` and `b` report the same range of the same document. */
 export const sameSelection = (
   a: SelectionReport,
   b: SelectionReport,
-): boolean => a.from === b.from && a.to === b.to && a.text === b.text;
+): boolean => a.from === b.from && a.to === b.to && a.value === b.value;
 
 /**
- * Restates the main selection against the confirmed document. A selection
- * that covers an edit Memory has not yet confirmed has no such range, and
- * reports as nothing selected until Memory confirms the edit.
+ * Reports the main selection of `state` against its document. Every empty
+ * selection reports as {@link NOTHING_SELECTED}.
  */
-export function selectionReport(
-  state: EditorState,
-  synchronization: CodeMirrorSynchronizationSnapshot | null,
-): SelectionReport {
+export function selectionReport(state: EditorState): SelectionReport {
   const { from, to } = state.selection.main;
   if (from === to) return NOTHING_SELECTED;
-  const text = state.sliceDoc(from, to);
-  if (synchronization === null) return { from, to, text };
-  const pending = composePendingChangeDesc(synchronization.pendingChanges);
-  if (pending === undefined) return { from, to, text };
-  if (pending.newLength !== state.doc.length) return NOTHING_SELECTED;
-  const confirmedFrom = pending.invertedDesc.mapPos(from, 1);
-  const confirmedTo = pending.invertedDesc.mapPos(to, -1);
-  let touched = pending.mapPos(confirmedFrom, 1) !== from ||
-    pending.mapPos(confirmedTo, -1) !== to;
-  pending.iterChangedRanges((changeFrom, changeTo) => {
-    if (changeFrom < confirmedTo && changeTo > confirmedFrom) touched = true;
-  });
-  return touched || confirmedFrom >= confirmedTo
-    ? NOTHING_SELECTED
-    : { from: confirmedFrom, to: confirmedTo, text };
+  return {
+    from,
+    to,
+    text: state.sliceDoc(from, to),
+    value: state.doc.toString(),
+  };
 }
 
 /**

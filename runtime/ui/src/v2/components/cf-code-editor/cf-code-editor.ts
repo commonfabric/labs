@@ -331,13 +331,12 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  * @fires cf-presence-join - Fired each time the editor joins its presence room,
  *   including a rejoin after `cf-presence-error`. It carries no detail.
  * @fires cf-selection-change - Fired when the main selection changes, with
- *   detail `{ from, to, text }`: the range in the text Memory has confirmed to
- *   this editor, and the whole of the text that range holds. An empty
- *   selection, or one over an edit not yet confirmed, reports `from === to`;
- *   the second is reported again once Memory confirms the edit. A selection
- *   held while an edit moves its range, a confirmed edit under collaboration
- *   and any edit outside it, is reported again at the range it has moved to. A new editor's first report is always fired, and
- *   says that nothing is selected.
+ *   detail `{ from, to, text, value }`: the range in the editor's document,
+ *   the text that range holds, and the whole document. An empty selection
+ *   reports `from === to` and an empty `value`. A selection held while any
+ *   edit changes the document is reported again, against the new document. A
+ *   new editor's first report is always fired, and says that nothing is
+ *   selected.
  * @fires cf-highlight-click - Fired when a highlight is clicked, with detail
  *   `{ id }` naming the highlight: on the release of a primary-button press
  *   that leaves nothing selected, so a press that drags out a selection fires
@@ -2057,10 +2056,9 @@ export class CFCodeEditor extends BaseElement {
     if (update.selectionSet && !isCellSync && !isRemote) {
       this._publishPresence();
     }
-    // A change to the document moves the selection without setting one, as
-    // a rename of a reference ahead of it does, so the selection is restated
-    // after either. One the change left where it was reports as it did,
-    // which emits nothing.
+    // A report carries the document, so a change to it restates a held
+    // selection, which the change may also have moved without setting one,
+    // as a rename of a reference ahead of it does.
     if (update.selectionSet || update.docChanged) this._reportSelection();
     if (!update.docChanged || isCellSync) return;
 
@@ -2298,21 +2296,11 @@ export class CFCodeEditor extends BaseElement {
     if (snapshot === null) {
       this._cleanupPresence();
       this._clearAnchors();
-      // The selection stays; with no confirmed text it is stated against the
-      // editor's own.
-      this._reportSelection(null);
       return;
     }
-    // Anchors and the selection are stated against the confirmed text, which
-    // a field with no collaborative edit has as much as one with a version.
+    // Anchors are stated against the confirmed text, which a field with no
+    // collaborative edit has as much as one with a version.
     this._showAnchors(snapshot);
-    // The confirmed text is what a selection is stated against, so each
-    // change to it restates the selection. A selection over an edit Memory
-    // had not confirmed reported nothing, and has a range to report once
-    // Memory confirms the edit; one a confirmed edit moved has a new range.
-    // One that the change left where it was reports as it did, which emits
-    // nothing.
-    this._reportSelection(snapshot);
     // Presence is stated against a version, so a field without one has none.
     if (!hasConfirmedCursor(snapshot)) {
       this._cleanupPresence();
@@ -2377,18 +2365,11 @@ export class CFCodeEditor extends BaseElement {
     view.dispatch({ effects: setHighlightAnchorsEffect.of(anchors) });
   }
 
-  /**
-   * Reports the main selection, stated against the text Memory has confirmed
-   * as `synchronization` holds it: the collaboration's current snapshot
-   * unless the caller has one in hand, and `null` outside collaboration.
-   */
-  private _reportSelection(
-    synchronization: CodeMirrorSynchronizationSnapshot | null =
-      this._collaboration?.synchronizationSnapshot ?? null,
-  ): void {
+  /** Reports the main selection, against the editor's document. */
+  private _reportSelection(): void {
     const view = this._editorView;
     if (!view) return;
-    this._emitSelection(selectionReport(view.state, synchronization));
+    this._emitSelection(selectionReport(view.state));
   }
 
   /**
