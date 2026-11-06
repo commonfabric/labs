@@ -299,7 +299,9 @@ export interface ViewerState {
  * Who may remove a panel for everyone, as `removePanel` decides it: `anyone`
  * for an occurrence that records no adder, `owner` for one whose adder cannot
  * be read, and otherwise the principal who added it, whom an OWNER may stand
- * in for once `adderLeft`.
+ * in for once `adderLeft`. The Loom states it rather than a yes or no for the
+ * viewer because a reactive computation cannot yet ask who the viewer is; a
+ * host that meets a `by` it does not know offers nothing.
  */
 export type PanelRemoval =
   | { by: "anyone" }
@@ -329,7 +331,7 @@ export interface LoomDeckPanel {
 export interface LoomDeck {
   access: PerSession<SpaceAccessLevel | undefined>;
   shared: (LoomDeckPanel & { removal: PanelRemoval })[];
-  private: LoomDeckPanel[];
+  private: PerUser<LoomDeckPanel[]>;
 }
 
 /** Standard default-pattern exports and the public composition actions. */

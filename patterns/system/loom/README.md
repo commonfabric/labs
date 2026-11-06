@@ -250,7 +250,12 @@ rendering the root's `[UI]`, which stays complete for every other host. It reads
 fields), and `removal`, who may remove it as `removePanel` decides it
 (`panelRemoval()`): `anyone` for an occurrence that records no adder, `owner`
 for one whose adder cannot be read, or the `adder`, whom an OWNER may stand in
-for once `adderLeft`. `private` holds the viewer's private panels the same way,
+for once `adderLeft`. The Loom states who may remove a panel, not whether this
+viewer may, because a reactive computation cannot yet read the acting principal
+(`currentPrincipal()` is handler-only); once it can, a per-viewer answer can
+replace it, and a host offers nothing for a `by` it does not know. Each `view`
+is built inline, as the floor's panels are, so a cold reader needs no child
+pattern set up. `private` holds the viewer's private panels the same way,
 without `removal`. `access` is the viewer's access to the Loom's space, derived
 for each session. Which panels the viewer is shown, and in what order, is
 `viewerPanels`; what they hid is `hiddenPanels`. The streams still decide every

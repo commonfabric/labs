@@ -526,7 +526,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "ISKO27ZMaFYoMXpxijSmlhMJ5wrbk5xu-UR3aKFeEsg",
+              "moduleIdentity": "nJIF2UBgcqEHCQGEYsCsVVUafygEoIT8y_aZUMwNhbo",
               "path": [
                 "admitPanel"
               ]
@@ -554,7 +554,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "ISKO27ZMaFYoMXpxijSmlhMJ5wrbk5xu-UR3aKFeEsg",
+              "moduleIdentity": "nJIF2UBgcqEHCQGEYsCsVVUafygEoIT8y_aZUMwNhbo",
               "path": [
                 "admitPanel"
               ]
@@ -1408,6 +1408,7 @@
             "items": {
               "$ref": "#/$defs/LoomDeckPanel"
             },
+            "scope": "user",
             "type": "array"
           },
           "shared": {
@@ -1646,7 +1647,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "ISKO27ZMaFYoMXpxijSmlhMJ5wrbk5xu-UR3aKFeEsg",
+              "moduleIdentity": "nJIF2UBgcqEHCQGEYsCsVVUafygEoIT8y_aZUMwNhbo",
               "path": [
                 "admitPanel"
               ]
@@ -1671,7 +1672,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "ISKO27ZMaFYoMXpxijSmlhMJ5wrbk5xu-UR3aKFeEsg",
+              "moduleIdentity": "nJIF2UBgcqEHCQGEYsCsVVUafygEoIT8y_aZUMwNhbo",
               "path": [
                 "admitPanel"
               ]

@@ -207,6 +207,15 @@ export const carol = pattern<{ setup: Setup }>(({ setup }) => ({
   [TESTS]: [
     { await: "bob-added" },
     { assertion: assert(() => setup.loom[VIEWS].deck.access === "READ") },
+    // A reader gets each panel's body with nothing set up for it first.
+    {
+      assertion: assert(() =>
+        setup.loom[VIEWS].deck.shared.length === 2 &&
+        setup.loom[VIEWS].deck.shared.every((entry) =>
+          entry.kind === "url" && entry.view[UI] !== undefined
+        )
+      ),
+    },
   ],
 }));
 

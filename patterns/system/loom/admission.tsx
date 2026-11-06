@@ -18,7 +18,7 @@ import {
   type WriteAuthorizedBy,
 } from "commonfabric";
 import type { ParticipantProfile } from "./participants.tsx";
-import type { Panel, PanelAdmission, PanelRemoval } from "./schemas.tsx";
+import type { Panel, PanelAdmission } from "./schemas.tsx";
 
 /**
  * The DID of the principal who added a panel.
@@ -216,7 +216,7 @@ export function assertRemovable(
   panel: Writable<Panel>,
   panels: Writable<Writable<Panel>[]>,
 ): void {
-  const removal = panelRemoval(panel, panels);
+  const removal = panelRemoval(panel);
   if (removal.by === "anyone") return;
   if (removal.by === "owner") {
     if (spaceAccess(panels) === "OWNER") return;
@@ -228,24 +228,33 @@ export function assertRemovable(
   // An owner clears up after a participant who has left: one the Loom's list
   // grants nothing, as the list stands on this replica. A list not yet read
   // admits nobody's removal of another's panel.
-  if (spaceAccess(panels) === "OWNER" && removal.adderLeft) return;
+  if (
+    spaceAccess(panels) === "OWNER" && adderHasLeft(panels, removal.adder)
+  ) return;
   throw new Error(
     "Only the principal who added a panel can remove it, unless they have left the Loom and an OWNER removes it",
   );
 }
 
+/** Whether the Loom's list, as it stands on this replica, admits `adder` no more. */
+export function adderHasLeft(
+  panels: Writable<Writable<Panel>[]>,
+  adder: DID,
+): boolean {
+  return spaceAccessOf(panels, adder) === "none";
+}
+
 /**
  * Who may remove `panel` for everyone, by the rule {@link assertRemovable}
- * enforces, read from the same stamps and the same list: `anyone` for an
- * occurrence that records no adder, `owner` for one whose stamps do not settle
- * on one adder, and otherwise its `adder`, whom an OWNER may stand in for once
- * the adder has left. It reads no acting principal, so a reactive
+ * enforces, read from the same stamps: `anyone` for an occurrence that records
+ * no adder, `owner` for one whose stamps do not settle on one adder, and
+ * otherwise its `adder`, whom an OWNER may stand in for once
+ * {@link adderHasLeft}. It reads no acting principal, so a reactive
  * computation can offer a viewer only the removals it would be granted.
  */
 export function panelRemoval(
   panel: Writable<Panel>,
-  panels: Writable<Writable<Panel>[]>,
-): PanelRemoval {
+): { by: "anyone" } | { by: "owner" } | { by: "adder"; adder: DID } {
   const byDid = attestedAdders(panel);
   const byProfile = principalsOf(
     panel.key("addedByProfile"),
@@ -259,12 +268,7 @@ export function panelRemoval(
     return { by: "anyone" };
   }
   if (adders?.length !== 1) return { by: "owner" };
-  const [adder] = adders;
-  return {
-    by: "adder",
-    adder,
-    adderLeft: spaceAccessOf(panels, adder) === "none",
-  };
+  return { by: "adder", adder: adders[0] };
 }
 
 /** A copy of `source` that keeps its target and title and takes a new adder. */

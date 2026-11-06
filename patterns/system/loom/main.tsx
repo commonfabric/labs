@@ -21,6 +21,7 @@ import {
 import FabriChatRoom from "../fabrichat/room.tsx";
 import { ensureFileStore } from "../fabrifile/store.tsx";
 import {
+  adderHasLeft,
   admitPanel,
   assertRemovable,
   externalUrl,
@@ -39,6 +40,7 @@ import type {
   Panel,
   PanelAdmission,
   PanelPosition,
+  PanelRemoval,
   PanelRetarget,
   PanelTitle,
   ParticipantProfile,
@@ -671,13 +673,6 @@ function panelHeading(panel: Writable<Panel>): string | undefined {
   return document?.kind === "page-excerpt" ? document.title : document?.name;
 }
 
-/** One linked panel occurrence's body, for a host that frames it itself. */
-export const PanelBody = pattern<{ panel: Writable<Panel> }, { [UI]: VNode }>((
-  { panel },
-) => ({
-  [UI]: computed(() => renderPanel(panel, true)),
-}));
-
 /** Standalone view of one linked panel occurrence. */
 export const PanelView = pattern<{ panel: Writable<Panel> }, { [UI]: VNode }>((
   { panel },
@@ -766,12 +761,19 @@ export default pattern<LoomInput, LoomOutput>(
     const access = computed(
       (): PerSession<SpaceAccessLevel | undefined> => spaceAccess(panels),
     );
+    // A panel's view is inline, as the floor's are: a child pattern per
+    // panel would need setting up before a cold reader saw anything.
     const deckShared = panels.map((panel) => ({
       panel,
-      view: PanelBody({ panel }),
+      view: { [UI]: computed(() => renderPanel(panel, true)) },
       kind: computed(() => panel.get()?.kind),
       heading: computed(() => panelHeading(panel)),
-      removal: computed(() => panelRemoval(panel.resolveAsCell(), panels)),
+      removal: computed((): PanelRemoval => {
+        const removal = panelRemoval(panel.resolveAsCell());
+        return removal.by === "adder"
+          ? { ...removal, adderLeft: adderHasLeft(panels, removal.adder) }
+          : removal;
+      }),
     }));
     // Mapped from a list of the links, not the per-user list itself, whose
     // entries a shared output may not hold.
@@ -780,7 +782,7 @@ export default pattern<LoomInput, LoomOutput>(
     );
     const deckPrivate = privateList.map((panel) => ({
       panel,
-      view: PanelBody({ panel }),
+      view: { [UI]: computed(() => renderPanel(panel, true)) },
       kind: computed(() => panel.get()?.kind),
       heading: computed(() => panelHeading(panel)),
     }));
