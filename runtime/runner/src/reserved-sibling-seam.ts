@@ -2,7 +2,6 @@ import { type FabricValue, valueEqual } from "@commonfabric/data-model";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { cfcMetadataPresent } from "./cfc/metadata.ts";
-import type { IWriteOptions } from "./storage/interface.ts";
 
 /**
  * The reserved siblings: the document-root siblings of `value` that hold
@@ -22,8 +21,8 @@ import type { IWriteOptions } from "./storage/interface.ts";
  * The chokepoint is the extended transaction's write surface. The storage
  * transaction beneath it, which anything holding an extended transaction
  * reaches as its `.tx`, refuses outright a write that changes a reserved
- * sibling and does not carry {@link RESERVED_SIBLING_WRITE_RECORDED}, the
- * mark the chokepoint puts on every write it forwards. That refusal holds
+ * sibling and does not carry the mark the chokepoint puts on every write it
+ * forwards (`write-chokepoint.ts`). That refusal holds
  * whatever the CFC enforcement mode, since a write that skipped the
  * chokepoint left nothing for the commit boundary to judge.
  *
@@ -89,42 +88,6 @@ export function reservedSiblingChanges(
 }
 
 /**
- * Marks a write as one the extended transaction's write chokepoint has seen,
- * which is the only mark the storage transaction beneath it accepts for a
- * write that changes a reserved sibling. A symbol cannot be named by a module
- * that did not import it, and the sandbox hands pattern code the builder
- * namespace rather than the runner's modules.
- */
-export const RESERVED_SIBLING_WRITE_RECORDED: unique symbol = Symbol(
-  "reserved-sibling-write-recorded",
-);
-
-/** Write options carrying {@link RESERVED_SIBLING_WRITE_RECORDED}. */
-export interface ReservedSiblingWriteRecorded {
-  readonly [RESERVED_SIBLING_WRITE_RECORDED]: true;
-}
-
-/**
- * The options the chokepoint forwards a write with: `options` with
- * {@link RESERVED_SIBLING_WRITE_RECORDED} added.
- */
-export function reservedSiblingWriteRecordedMark(
-  options?: IWriteOptions,
-): IWriteOptions & ReservedSiblingWriteRecorded {
-  return options === undefined
-    ? RECORDED_ONLY
-    : { ...options, [RESERVED_SIBLING_WRITE_RECORDED]: true };
-}
-
-/** Whether write options carry {@link RESERVED_SIBLING_WRITE_RECORDED}. */
-export function reservedSiblingWriteRecorded(options: unknown): boolean {
-  return isObjectNotArray(options) &&
-    (options as Partial<ReservedSiblingWriteRecorded>)[
-        RESERVED_SIBLING_WRITE_RECORDED
-      ] === true;
-}
-
-/**
  * Whether a value at a reserved sibling leaves the document carrying that
  * sibling, as the sibling's own reader accounts for it.
  *
@@ -170,10 +133,3 @@ const NO_RESERVED_SIBLING_CHANGES: readonly (readonly [
   ReservedSibling,
   ReservedSiblingChange,
 ])[] = Object.freeze([]);
-
-/** The mark alone, for a write that carries no other options. */
-const RECORDED_ONLY: ReservedSiblingWriteRecorded = Object.freeze(
-  {
-    [RESERVED_SIBLING_WRITE_RECORDED]: true,
-  } as const,
-);

@@ -144,10 +144,8 @@ import {
   storedMetaFields,
 } from "../meta-seam.ts";
 import type { ModuleDelegationSnapshot } from "../module-delegations.ts";
-import {
-  reservedSiblingChanges,
-  reservedSiblingWriteRecordedMark,
-} from "../reserved-sibling-seam.ts";
+import { reservedSiblingChanges } from "../reserved-sibling-seam.ts";
+import { writeChokepointMark } from "./write-chokepoint.ts";
 import { isRuntimeSecretId } from "../runtime-secret-id.ts";
 import {
   isRuntimeSecretOwnRead,
@@ -4000,7 +3998,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     const result = this.tx.write(
       address,
       value,
-      reservedSiblingWriteRecordedMark(options),
+      writeChokepointMark(options),
     );
     if (result.ok) {
       this.#noteWrite();
@@ -4029,7 +4027,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     const writeResult = this.tx.write(
       address,
       value,
-      reservedSiblingWriteRecordedMark(options),
+      writeChokepointMark(options),
     );
     if (
       writeResult.error &&
@@ -4097,7 +4095,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       const writeResultRetry = this.tx.write(
         parentAddress,
         valueObj,
-        reservedSiblingWriteRecordedMark(),
+        writeChokepointMark(),
       );
       if (writeResultRetry.error) {
         throw toThrowable(writeResultRetry.error);

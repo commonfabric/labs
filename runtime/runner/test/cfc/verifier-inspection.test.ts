@@ -10,7 +10,7 @@ import {
   prepareBoundaryCommit,
 } from "../../src/cfc/prepare.ts";
 import type { CfcMetadata } from "../../src/cfc/types.ts";
-import { reservedSiblingWriteRecordedMark } from "../../src/reserved-sibling-seam.ts";
+import { writeChokepointMark } from "../../src/storage/write-chokepoint.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
@@ -156,7 +156,7 @@ describe("prepareBoundaryCommit()", () => {
                       tx.tx.write(
                         { ...source, path: ["cfc"] },
                         metadata,
-                        reservedSiblingWriteRecordedMark(),
+                        writeChokepointMark(),
                       ).ok,
                     )
                       .toBeDefined();
