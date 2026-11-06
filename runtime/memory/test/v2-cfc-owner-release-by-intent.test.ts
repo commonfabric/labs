@@ -445,8 +445,10 @@ describe("cfc-owner-release-by-intent", () => {
         expect(storedCfc()).toEqual(STAMPED);
       };
 
+      let seedSeq: number;
+
       beforeEach(() => {
-        seed(OWNER, STAMPED);
+        seedSeq = seed(OWNER, STAMPED).seq;
       });
 
       it("throws on a signature that does not verify", async () => {
@@ -505,6 +507,27 @@ describe("cfc-owner-release-by-intent", () => {
         );
       });
 
+      it("throws on a release that removes a clause at the path its request does not name", async () => {
+        const signed = await sign(
+          owner,
+          requestFor({ releasedClauseDigests: FOREIGN.slice(1).map(digest) }),
+        );
+        expectRefused(
+          releaseOps(signed, RELEASED),
+          /removes a clause at the path its request does not name/,
+        );
+        const ownGone = envelope([
+          entry([], "derived", [], "shape"),
+          entry([], "structure", [personalSpace(OWNER)], "enumerate"),
+          entry(["rooms"], "declared", [personalSpace(OTHER)]),
+          entry(["direct"], "declared", [personalSpace(OWNER)]),
+        ]);
+        expectRefused(
+          releaseOps(await sign(owner, requestFor()), ownGone),
+          /removes a clause at the path its request does not name/,
+        );
+      });
+
       it("throws on a clause not stored at the path", async () => {
         const signed = await sign(
           owner,
@@ -539,6 +562,41 @@ describe("cfc-owner-release-by-intent", () => {
           value: { value: { rooms: [] }, cfc: STAMPED },
         }]);
         expectRefused(releaseOps(signed, RELEASED), /already been used/);
+      });
+
+      it("throws on the same release submitted again, and admits it as a no-op over a stale read, changing nothing", async () => {
+        const signed = await sign(owner, requestFor());
+        const operations = releaseOps(signed, RELEASED);
+        commitIn(OWNER, OWNER, operations);
+        const recordId = ownerReleaseByIntentRecordId(
+          id,
+          ownerReleaseByIntentRequestDigest(signed.request),
+        );
+        const record = read(engine, { id: recordId });
+
+        expect(() => commitIn(OWNER, OWNER, operations)).toThrow(
+          /already been used/,
+        );
+        // The same commit made against the stamped envelope, a retry of the
+        // one that landed, is an identity commit: every operation leaves the
+        // store as it is, so it releases nothing again.
+        const retry = applyCommit(engine, {
+          sessionId: "s:a",
+          space: OWNER,
+          principal: OWNER,
+          commit: {
+            localSeq: ++localSeq,
+            reads: {
+              confirmed: [{ id, path: [], seq: seedSeq }],
+              pending: [],
+            },
+            operations,
+          } as never,
+        });
+        expect(retry.revisions).toEqual([]);
+        expect(retry.elidedOpIndexes).toEqual([0, 1]);
+        expect(storedCfc()).toEqual(RELEASED);
+        expect(read(engine, { id: recordId })).toEqual(record);
       });
 
       it("throws on a record at an id its request does not derive", async () => {
@@ -619,15 +677,24 @@ describe("cfc-owner-release-by-intent", () => {
       });
 
       it("throws on two releases of one document in one commit", async () => {
+        // Each request, judged at its own path, is one the store admits.
+        const both = envelope([
+          entry([], "derived", [personalSpace(OWNER)], "shape"),
+          entry([], "structure", [personalSpace(OWNER)], "enumerate"),
+          entry(["direct"], "declared", [personalSpace(OWNER)]),
+        ]);
         const first = await sign(owner, requestFor());
         const second = await sign(
           owner,
-          requestFor({ releasedClauseDigests: FOREIGN.slice(1).map(digest) }),
+          requestFor({
+            path: ["rooms"],
+            releasedClauseDigests: [digest(personalSpace(OTHER))],
+          }),
         );
         expectRefused(
           [
-            ...releaseOps(first, RELEASED),
-            ...releaseOps(second, RELEASED).slice(1),
+            ...releaseOps(first, both),
+            ...releaseOps(second, both).slice(1),
           ],
           /more than one request/,
         );

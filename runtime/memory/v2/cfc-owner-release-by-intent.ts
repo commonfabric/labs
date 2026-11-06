@@ -452,22 +452,25 @@ const isStoredPath = (
 
 /**
  * The clauses the label-map entries of `cfc`, a document's `cfc` member, hold
- * at exactly `path`, by canonical clause digest, every component and
- * observation class there, the label-metadata templates aside: those describe
- * the labels rather than label the payload. `resolveLabel` returns the
- * content of the label document a `cid:` reference names, or `undefined`.
- * Returns `undefined` when an entry at the path holds a label that does not
- * resolve, so what is stored there is not known.
+ * at exactly `path`, by canonical clause digest, grouped by the entry's
+ * component and observation class (its `origin` and `observes`), the
+ * label-metadata templates aside: those describe the labels rather than label
+ * the payload. `resolveLabel` returns the content of the label document a
+ * `cid:` reference names, or `undefined`. Returns `undefined` when an entry at
+ * the path holds a label that does not resolve, so what is stored there is not
+ * known.
  */
-export const clauseDigestsStoredAt = (
+export const clauseDigestsByEntryAt = (
   cfc: unknown,
   path: readonly string[],
   resolveLabel: (ref: string) => unknown,
-): ReadonlyMap<string, CfcConfClause> | undefined => {
-  const stored = new Map<string, CfcConfClause>();
-  if (!isObjectNotArray(cfc) || !isObjectNotArray(cfc.labelMap)) return stored;
+): ReadonlyMap<string, ReadonlyMap<string, CfcConfClause>> | undefined => {
+  const byEntry = new Map<string, Map<string, CfcConfClause>>();
+  if (!isObjectNotArray(cfc) || !isObjectNotArray(cfc.labelMap)) {
+    return byEntry;
+  }
   const entries = cfc.labelMap.entries;
-  if (!Array.isArray(entries)) return stored;
+  if (!Array.isArray(entries)) return byEntry;
   for (const entry of entries) {
     if (
       !isObjectNotArray(entry) || entry.origin === "label-metadata" ||
@@ -489,12 +492,35 @@ export const clauseDigestsStoredAt = (
     const confidentiality = label.confidentiality;
     if (confidentiality === undefined) continue;
     if (!Array.isArray(confidentiality)) return undefined;
+    const key = JSON.stringify([entry.origin ?? null, entry.observes ?? null]);
+    const clauses = byEntry.get(key) ?? new Map<string, CfcConfClause>();
+    byEntry.set(key, clauses);
     for (const clause of confidentiality) {
-      stored.set(
+      clauses.set(
         cfcCanonicalClauseDigest(clause as CfcConfClause),
         clause as CfcConfClause,
       );
     }
+  }
+  return byEntry;
+};
+
+/**
+ * The clauses the label-map entries of `cfc` hold at exactly `path`, by
+ * canonical clause digest, every component and observation class there
+ * together, as {@link clauseDigestsByEntryAt} reads them, or `undefined` when
+ * what is stored there is not known.
+ */
+export const clauseDigestsStoredAt = (
+  cfc: unknown,
+  path: readonly string[],
+  resolveLabel: (ref: string) => unknown,
+): ReadonlyMap<string, CfcConfClause> | undefined => {
+  const byEntry = clauseDigestsByEntryAt(cfc, path, resolveLabel);
+  if (byEntry === undefined) return undefined;
+  const stored = new Map<string, CfcConfClause>();
+  for (const clauses of byEntry.values()) {
+    for (const [digest, clause] of clauses) stored.set(digest, clause);
   }
   return stored;
 };
@@ -561,13 +587,16 @@ export interface VerifiedOwnerReleaseByIntent {
  * not at the id it derives or is already stored, the commit writes no
  * envelope of the document it names, the stored envelope's digest is not the
  * one it names, a clause it releases is not stored at the path, the proposed
- * envelope still holds one there, or the record's `after` is not the
- * proposed envelope's digest.
+ * envelope still holds one there or no longer holds a clause the request does
+ * not name in an entry of the same component and class at the path, or the
+ * record's `after` is not the proposed envelope's digest.
  *
- * What the commit does elsewhere in the envelope, at other paths and in the
- * components the store does not judge, is not compared here: the store judges
- * the declared component alone (`envelope-admission.ts`), and the runtime
- * that derives the rest is the one to get it right.
+ * At the path, the confidentiality clauses of every entry are compared,
+ * component and class by component and class. What the commit does elsewhere
+ * in the envelope, at other paths, to integrity, and to the label-metadata
+ * templates, is not compared here: the store judges the declared component
+ * alone there (`envelope-admission.ts`), and the runtime that derives the rest
+ * is the one to get it right.
  */
 export const judgeOwnerReleaseByIntent = (
   commit: OwnerReleaseByIntentCommit,
@@ -630,27 +659,43 @@ export const judgeOwnerReleaseByIntent = (
       "the document's envelope has changed since the request was made",
     );
   }
-  const stored = clauseDigestsStoredAt(
+  const stored = clauseDigestsByEntryAt(
     commit.document.stored,
     request.path,
     commit.resolveStoredLabel,
   );
+  const released = new Set(request.releasedClauseDigests);
   if (
     stored === undefined ||
-    !request.releasedClauseDigests.every((digest) => stored.has(digest))
+    !request.releasedClauseDigests.every((digest) =>
+      [...stored.values()].some((clauses) => clauses.has(digest))
+    )
   ) {
     return refused("a clause its request releases is not stored at the path");
   }
-  const left = clauseDigestsStoredAt(
+  const left = clauseDigestsByEntryAt(
     commit.document.proposed,
     request.path,
     commit.resolveProposedLabel,
   );
   if (
     left === undefined ||
-    request.releasedClauseDigests.some((digest) => left.has(digest))
+    [...left.values()].some((clauses) =>
+      [...released].some((digest) => clauses.has(digest))
+    )
   ) {
     return refused("the commit leaves a released clause at the path");
+  }
+  // Exactly the named clauses come off: every other clause an entry at the
+  // path holds stays in the entry of the same component and class.
+  for (const [key, clauses] of stored) {
+    for (const digest of clauses.keys()) {
+      if (!released.has(digest) && left.get(key)?.has(digest) !== true) {
+        return refused(
+          "the commit removes a clause at the path its request does not name",
+        );
+      }
+    }
   }
   if (
     record.after !==

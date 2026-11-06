@@ -600,9 +600,14 @@ its request, on any other write under the record id scheme, and on two
 releases of one document in one commit; and the interim admission rule of
 [specs#89](https://github.com/commonfabric/specs/pull/89) admits a dropped
 declared path that a verified release names (`admitsDroppedDeclaredPaths` in
-`runtime/memory/v2/envelope-admission.ts`). What the commit does to the rest of
-the envelope, at other paths and in the components the store does not judge,
-is the runtime's to get right, as it is for every write. The intent is
+`runtime/memory/v2/envelope-admission.ts`). At the request's path the store
+compares the confidentiality clauses of every entry, component and class by
+component and class, so the commit removes exactly the clauses named there.
+What the commit does to the rest of the envelope, at other paths, to
+integrity, and in the components the store does not judge elsewhere, is the
+runtime's to get right, as it is for every write. An identity commit, a stale
+retry whose every operation leaves the store as it is, records nothing and
+releases nothing, so its record is not judged again. The intent is
 obtained by `cf cell release-by-intent` in `runtime/cli`, which signs only
 after the owner, at a terminal, is shown the request's target and its clauses
 and types a confirmation; nothing else in this repository signs under the

@@ -6157,6 +6157,12 @@ const verifyOwnerReleasesByIntent = (input: {
     if (!operation.id.startsWith(OWNER_RELEASE_BY_INTENT_RECORD_PREFIX)) {
       continue;
     }
+    // An elided record is one of an identity commit, whose every operation
+    // leaves the store as it is: the record is already stored with this
+    // content, and the document's envelope is already what the commit
+    // proposes. Such a commit releases nothing, so it uses no request again,
+    // and it is judged as the no-op it is. A commit that would change
+    // anything is not an identity commit, and its record is judged below.
     if (input.elidedOpIndexes.has(opIndex)) continue;
     if (
       operation.op !== "set" || records.has(operation.id) ||
