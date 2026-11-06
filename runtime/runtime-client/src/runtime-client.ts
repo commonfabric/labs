@@ -1484,6 +1484,12 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * whether this client's or a rendered retry control's, shares that retry
    * rather than asking again, and a rendered retry control shows it in
    * flight either way. It rejects on any failure other than a refusal.
+   *
+   * A space whose first connection never completed a handshake, such as one
+   * on a host that was down or out of the network's reach, counts as refused
+   * here: its loads fail at once without dialing again until this call makes
+   * one more round of connection attempts, after which the loads that failed
+   * are made again. It rejects if the space is still out of reach.
    */
   async retrySpaceAccess(space: DID): Promise<void> {
     await this.#conn.request<RequestType.RetrySpaceAccess>({

@@ -6665,14 +6665,6 @@ export class SpaceReplica
   }
 
   /**
-   * Records that an ACL change may admit a session whose authorization ended.
-   *
-   * The notice and termination may arrive in either order. Once both have
-   * arrived, the replica opens through ordinary server admission and restores
-   * its standing watches. A healthy session stays mounted; a refused reopen
-   * waits for another notice. Loads in flight also consume the same latch.
-   */
-  /**
    * Records that a host asked for this space again, as `noteAclChanged()`
    * does, and that the ask also covers a first connection that never
    * completed a handshake: the remount it owes dials such a space again.
@@ -6683,6 +6675,14 @@ export class SpaceReplica
     this.noteAclChanged();
   }
 
+  /**
+   * Records that an ACL change may admit a session whose authorization ended.
+   *
+   * The notice and termination may arrive in either order. Once both have
+   * arrived, the replica opens through ordinary server admission and restores
+   * its standing watches. A healthy session stays mounted; a refused reopen
+   * waits for another notice. Loads in flight also consume the same latch.
+   */
   noteAclChanged(): void {
     if (this.#closed) return;
     this.#aclChangedSinceMount = true;

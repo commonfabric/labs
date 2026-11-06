@@ -337,7 +337,10 @@ export enum RequestType {
    * Asks the memory server once more for a space it refused this runtime,
    * and is done once the server has admitted or refused it again. It is for a
    * host that has word the runtime's principal was granted access, and does
-   * nothing for a space the runtime has not opened or was not refused.
+   * nothing for a space the runtime has not opened or was not refused. A space
+   * whose first connection never completed a handshake counts as refused: the
+   * retry dials it once more, for a host with reason to think it is reachable
+   * now, and rejects if it still is not.
    */
   RetrySpaceAccess = "runtime:retrySpaceAccess",
 
