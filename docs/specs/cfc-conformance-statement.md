@@ -468,11 +468,14 @@ observations. So what decided that the run happens joins the PC of everything
 the run writes, at its labels when the run commits, and under
 `cfcTriggerReadGating` it enters the run's consumed sets and input gate too.
 A piece already running here takes the pattern a setup staged by swapping to
-it, in a setup transaction and an instantiation transaction of the pattern
-watcher's own (`swapToPattern`). The swap's setup carries the same
-observations of the transaction that ran the setup (`#runDecisions`), and the
-instantiation carries the swap setup's own along with them; this is how the
-pattern a lift returns reaches a result that is running already.
+it, in transactions of the pattern watcher's own (`swapToPattern`): a setup
+transaction, unless the setup that moved the pointer staged the pattern
+already, and an instantiation transaction. Those carry the same observations
+of the transaction that ran the setup, a source update's setup for resume
+included (`#runDecisions`, recorded when the setup stages), and the
+instantiation carries the swap setup's own along with them. This is how the
+pattern a lift returns reaches a result that is running already, and how a
+source update reaches the patterns the updated piece nests.
 `runInTransaction` defers by throwing `RetryImmediately`, and the scheduler
 then reruns the asking action, which reads again.
 
