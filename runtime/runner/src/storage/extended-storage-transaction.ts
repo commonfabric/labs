@@ -38,7 +38,7 @@ import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray, isPlainObject } from "@commonfabric/js-values/types";
 
-import type { CellScope } from "../builder/types.ts";
+import type { CellScope, JSONSchema } from "../builder/types.ts";
 import {
   type CfcConfidentialityRelease,
   type CfcConfidentialityReleaseByIntent,
@@ -131,6 +131,7 @@ import {
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
   type CfcPreparationWork,
+  type LabelMapEntry,
   POST_COMMIT_RELEASE_REJECTED,
   runtimeWritePolicyAuthorized,
 } from "../cfc/types.ts";
@@ -1520,6 +1521,53 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   /**
+   * Helper for {@link releaseCfcConfidentiality} and
+   * {@link releaseCfcConfidentialityByIntent}, which writes, in the privileged
+   * scope, the envelope `existing` becomes once a release leaves the payload
+   * entries `entries` and the stored schema `lowered`, and returns it. A
+   * schema other than `storedSchema` is installed and named, and the
+   * label-metadata templates are derived from `entries`, as every persist
+   * derives them.
+   */
+  #writeReleasedEnvelope(
+    target: {
+      space: MemorySpace;
+      id: URI;
+      scope: ReturnType<typeof normalizeCellScope>;
+    },
+    existing: CfcMetadata,
+    storedSchema: JSONSchema | undefined,
+    entries: readonly LabelMapEntry[],
+    lowered: JSONSchema,
+  ): CfcMetadata {
+    return this.#runPrivilegedSystemWrite((): CfcMetadata => {
+      let schemaHash = existing.schemaHash;
+      if (lowered !== storedSchema) {
+        const interned = internSchema(lowered, true);
+        ensureSchemaDocument(
+          this,
+          target.space,
+          interned.taggedHashString,
+          interned.schema,
+        );
+        schemaHash = interned.taggedHashString;
+      }
+      const templates = labelMetadataTemplatesFor(entries);
+      const metadata: CfcMetadata = {
+        ...existing,
+        schemaHash,
+        labelMap: {
+          version: existing.labelMap.version,
+          entries: [...entries],
+          ...(templates.length > 0 ? { documentEntries: templates } : {}),
+        },
+      };
+      writeStoredCfcEnvelope(this, target, metadata);
+      return metadata;
+    });
+  }
+
+  /**
    * Records a write that reaches a document's `["cfc"]` label map from outside
    * the privileged scope, whether by naming that path or by replacing the whole
    * document envelope. Such a write forges or erases the metadata that drives
@@ -2760,26 +2808,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     const lowered = plan.schema;
     // Deliberately NOT marked CFC-relevant, like a grant write: the plan above
     // is the whole of the verification, and a throw leaves nothing written.
-    const metadata = this.#runPrivilegedSystemWrite((): CfcMetadata => {
-      let schemaHash = existing.schemaHash;
-      if (lowered !== storedSchema) {
-        const interned = internSchema(lowered, true);
-        ensureSchemaDocument(
-          this,
-          target.space,
-          interned.taggedHashString,
-          interned.schema,
-        );
-        schemaHash = interned.taggedHashString;
-      }
-      const metadata: CfcMetadata = {
-        ...existing,
-        schemaHash,
-        labelMap: { ...existing.labelMap, entries: [...plan.entries] },
-      };
-      writeStoredCfcEnvelope(this, target, metadata);
-      return metadata;
-    });
+    const metadata = this.#writeReleasedEnvelope(
+      target,
+      existing,
+      storedSchema,
+      plan.entries,
+      lowered,
+    );
     return {
       actor,
       released: plan.released,
@@ -2839,11 +2874,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         type: "application/json",
         path: [...path],
       }, { meta: internalVerifierRead }).ok?.value;
-    const acl = readMember(aclDocId(space), ["value"]);
-    const owner = ownerReleaseByIntentSpaceOwner(
-      space,
-      acl === undefined ? { stored: false } : { stored: true, value: acl },
-    );
+    const owner = ownerReleaseByIntentSpaceOwner(space, input.acl);
     if (owner === undefined || owner !== request.signer || !isDID(owner)) {
       refuse(
         `${request.signer} is not the owner the space's access list names`,
@@ -2889,29 +2920,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // Deliberately NOT marked CFC-relevant, like an owner release: the checks
     // above are the whole of the verification, and a throw leaves nothing
     // written.
-    this.#runPrivilegedSystemWrite(() => {
-      let schemaHash = existing.schemaHash;
-      if (lowered !== storedSchema) {
-        const interned = internSchema(lowered, true);
-        ensureSchemaDocument(
-          this,
-          target.space,
-          interned.taggedHashString,
-          interned.schema,
-        );
-        schemaHash = interned.taggedHashString;
-      }
-      const templates = labelMetadataTemplatesFor(plan.entries);
-      writeStoredCfcEnvelope(this, target, {
-        ...existing,
-        schemaHash,
-        labelMap: {
-          version: existing.labelMap.version,
-          entries: [...plan.entries],
-          ...(templates.length > 0 ? { documentEntries: templates } : {}),
-        },
-      });
-    });
+    this.#writeReleasedEnvelope(
+      target,
+      existing,
+      storedSchema,
+      plan.entries,
+      lowered,
+    );
     return {
       owner,
       released: plan.released,

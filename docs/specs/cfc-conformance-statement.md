@@ -622,9 +622,18 @@ each, and the CLI names the other positions holding a clause it releases.
 Whether a request may name a wildcard position is not stated by the pending
 route, which says "exactly the one path"; this runtime reads a wildcard
 position as a path of its own.
-The release re-derives the envelope's label-metadata templates from the
-payload entries it leaves, as every persist does; a route 2c release leaves
-them as they were.
+A clause is identified by its canonical clause digest throughout, in the
+runtime's plan and listing as in the request and the store, so two spellings
+of one clause, a field in plaintext and committed, are named and released
+apart. What may be named is what the label map holds at the path, which is
+what the store reads: a clause only the stored schema declares there, with no
+label-map entry, is not stored and is refused on both sides. The store also
+refuses a record whose stored label holds no declared `User(owner)` clause at
+its root. The runtime reads the space's access list only once it has loaded
+the list document from the store, so an owner other than the space's own DID
+is read as the list names it. Both owner releases re-derive the envelope's
+label-metadata templates from the payload entries they leave, as every
+persist does.
 
 Route 2d is pending ruling in
 [specs#90](https://github.com/commonfabric/specs/pull/90), which the pin does

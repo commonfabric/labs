@@ -3094,7 +3094,8 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * `cfc/confidentiality-release-plan.ts`). Requires the transaction's
    * current implementation identity to be the `cfc-owner-release-by-intent`
    * builtin. Verifies the signed request first: its signature, that its
-   * signer is the space's owner by the access list the transaction reads,
+   * signer is the space's owner by `input.acl`, the access list the caller
+   * read once it loaded the list document from the store,
    * that the document's stored envelope is the one it names, and that its
    * record does not exist yet. Then removes the clauses it names from every
    * component of the label at its path and from the stored schema, re-derives

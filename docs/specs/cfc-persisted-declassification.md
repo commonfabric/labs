@@ -274,8 +274,10 @@ decision is `planConfidentialityRelease()` in
   caller's list does not name, from every component there — the declared
   entries and the stored schema's declaration at that path, the derived
   `shape` and `value` entries, and a link's own label — leaving labels at
-  other paths, an ancestor's covering this one included, and the
-  label-metadata templates as they are. A `*` segment of the path stands for
+  other paths, an ancestor's covering this one included, as they are. The
+  label-metadata templates are derived again from the payload entries the
+  release leaves, as every persist derives them. A `*` segment of the path
+  stands for
   any segment, so a path holding one reaches every stored position it matches
   at its depth: the wildcard entry there, and each concrete position's
   entries. A path naming a concrete segment leaves a wildcard entry covering
@@ -347,12 +349,18 @@ request, its signed bytes, the record and the store's judgment are in
 `runtime/memory/v2/cfc-owner-release-by-intent.ts`.
 
 - **What it removes.** The clauses the request names by canonical clause
-  digest, from every component at exactly the path — the declared entries and
+  digest, and only those: a clause is identified by its digest throughout, so
+  a field's plaintext and committed spellings are two clauses, each named on
+  its own. It removes them from every component at exactly the path — the declared entries and
   the stored schema's declaration there, the derived `shape` and membership
   entries, and a link's own label — and nothing at any other path, no value,
   and no integrity label. The envelope's label-metadata templates are derived
   again from the payload entries the release leaves. A clause the stored
   schema declares is declared again by the next write through that schema.
+- **What may be named.** A clause the label map holds at the path, which is
+  what the store reads too. A declaration of the stored schema that no
+  label-map entry holds, at a property the value lacks or the elements of an
+  empty list, labels nothing stored and is not one.
 - **Which path.** The request names its document directly and one stored
   path, matched literally against the paths the label map holds: a `*`
   segment names the wildcard position, such as a container's class
@@ -378,8 +386,11 @@ request, its signed bytes, the record and the store's judgment are in
   used once and a document's releases share an id prefix. It holds the signed
   request, the owner, the document and path, the removed clauses' digests,
   and digests of the stored envelope before and after, and is labeled
-  `User(owner)` and writable only by the release-by-intent writer. Reads
-  journaled before the release keep the label they consumed.
+  `User(owner)` and writable only by the release-by-intent writer. The store
+  refuses a record whose stored label holds no declared `User(owner)` clause
+  at its root; that only the release-by-intent writer writes it is the
+  runtime's `writeAuthorizedBy` to enforce, which the store does not check.
+  Reads journaled before the release keep the label they consumed.
 
 ## 4. The rewrite event (specify now, build later)
 

@@ -18,6 +18,7 @@ import {
 } from "@commonfabric/memory/v2/cfc-owner-release-by-intent";
 import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
+import { ACLManager } from "../src/acl-manager.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import {
@@ -32,11 +33,16 @@ import {
   OWNER_RELEASE_BY_INTENT_WRITER,
   planConfidentialityReleaseByIntent,
 } from "../src/cfc/confidentiality-release-plan.ts";
+import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { labelMetadataTemplatesFor } from "../src/cfc/prepare.ts";
 import type { LabelMapEntry } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
-import { StorageManager } from "../src/storage/cache.deno.ts";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+  StorageManager,
+} from "../src/storage/cache.deno.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -86,7 +92,7 @@ const sign = async (
   };
 };
 
-describe("owner release by intent", () => {
+describe("cfc-owner-release-by-intent", () => {
   describe("planConfidentialityReleaseByIntent()", () => {
     it("removes the named clauses from every entry at the path, whoever they stand for, and from no other path", () => {
       const other = entry(["rooms"], "declared", { confidentiality: TEN });
@@ -147,18 +153,72 @@ describe("owner release by intent", () => {
       ).toThrow("no clause stored there has the digest");
     });
 
-    it("removes a wildcard position's schema declaration through `items` alone", () => {
+    it("removes a wildcard position's declared entry and its schema declaration through `items` alone", () => {
       const schema = {
         type: "array",
         items: { type: "string", ifc: { confidentiality: [TEN[0]] } },
       } as const satisfies JSONSchema;
       const plan = planConfidentialityReleaseByIntent({
         path: ["*"],
-        entries: [],
+        entries: [entry(["*"], "declared", { confidentiality: [TEN[0]] })],
         schema,
         releasedClauseDigests: [tenDigests[0]],
       });
+      expect(plan.entries).toEqual([]);
       expect(plan.schema).toEqual({ type: "array", items: { type: "string" } });
+    });
+
+    it("throws for a clause only the stored schema declares at the path, which the store does not find there either", () => {
+      const schema = {
+        type: "object",
+        properties: {
+          absent: { type: "string", ifc: { confidentiality: [TEN[0]] } },
+        },
+      } as const satisfies JSONSchema;
+      expect(() =>
+        planConfidentialityReleaseByIntent({
+          path: ["absent"],
+          entries: [],
+          schema,
+          releasedClauseDigests: [tenDigests[0]],
+        })
+      ).toThrow("no clause stored there has the digest");
+    });
+
+    it("removes exactly the spelling a digest names, the committed spelling of one clause being another", () => {
+      const committed = {
+        type: own.type,
+        owner: commitCfcFieldValue("did:key:z6MkTenPrincipal0"),
+      };
+      const plain = entry(
+        [],
+        "derived",
+        { confidentiality: [TEN[0]] },
+        "value",
+      );
+      const plan = planConfidentialityReleaseByIntent({
+        path: [],
+        entries: [
+          entry([], "derived", { confidentiality: [committed] }, "shape"),
+          plain,
+        ],
+        schema: undefined,
+        releasedClauseDigests: [cfcCanonicalClauseDigest(committed)],
+      });
+      expect(plan.released).toEqual([committed]);
+      expect(plan.entries).toEqual([plain]);
+      expect(
+        clausesStoredForRelease({
+          path: [],
+          entries: [
+            entry([], "derived", { confidentiality: [committed] }, "shape"),
+            plain,
+          ],
+        }).map((clause) => clause.digest),
+      ).toEqual([
+        cfcCanonicalClauseDigest(committed),
+        cfcCanonicalClauseDigest(TEN[0]),
+      ]);
     });
   });
 
@@ -172,13 +232,8 @@ describe("owner release by intent", () => {
             entry(["*"], "structure", { confidentiality: [TEN[1]] }, "shape"),
             entry(["*"], "structure", { confidentiality: [TEN[0]] }, "value"),
             entry(["items"], "link", { confidentiality: [own] }),
+            entry(["items"], "declared", { confidentiality: [TEN[1]] }),
           ],
-          schema: {
-            type: "object",
-            properties: {
-              items: { type: "array", ifc: { confidentiality: [TEN[1]] } },
-            },
-          } as JSONSchema,
           digests: [tenDigests[0], tenDigests[1]],
         }),
       ).toEqual([
@@ -196,11 +251,8 @@ describe("owner release by intent", () => {
           entries: [
             entry([], "derived", { confidentiality: [own] }, "shape"),
             entry([], "structure", { confidentiality: [own] }, "enumerate"),
+            entry([], "declared", { confidentiality: [TEN[0]] }, "value"),
           ],
-          schema: {
-            type: "object",
-            ifc: { confidentiality: [TEN[0]], observes: "value" },
-          } as JSONSchema,
         }),
       ).toEqual([
         {
@@ -302,7 +354,7 @@ describe("owner release by intent", () => {
     };
 
     /** The request releasing `digests` at `path` of `cell`, as stored now. */
-    const requestAt = (
+    const requestAt = async (
       cell: Cell<unknown>,
       path: string[],
       digests: readonly string[],
@@ -315,11 +367,11 @@ describe("owner release by intent", () => {
         document: id,
         path,
         releasedClauseDigests: digests,
-        envelopeDigest: storedClausesForRelease(runtime, {
+        envelopeDigest: (await storedClausesForRelease(runtime, {
           space: actor,
           id,
           path,
-        }).envelopeDigest,
+        })).envelopeDigest,
         signer: actor,
         ...overrides,
       });
@@ -352,8 +404,8 @@ describe("owner release by intent", () => {
         ]);
       });
 
-      it("lists the ten among the clauses stored at the root", () => {
-        const { clauses } = storedClausesForRelease(runtime, {
+      it("lists the ten among the clauses stored at the root", async () => {
+        const { clauses } = await storedClausesForRelease(runtime, {
           space: actor,
           id: result.getAsNormalizedFullLink().id,
           path: [],
@@ -365,7 +417,7 @@ describe("owner release by intent", () => {
       });
 
       it("removes the ten at the root, keeps every other path, the value and integrity, and re-derives the templates", async () => {
-        const signed = await sign(requestAt(result, [], tenDigests));
+        const signed = await sign(await requestAt(result, [], tenDigests));
 
         const release = await releaseConfidentialityByIntent(runtime, signed);
 
@@ -392,7 +444,7 @@ describe("owner release by intent", () => {
       });
 
       it("writes the record of the release, readable by the owner alone", async () => {
-        const signed = await sign(requestAt(result, [], tenDigests));
+        const signed = await sign(await requestAt(result, [], tenDigests));
         const before = signed.request.envelopeDigest;
 
         const release = await releaseConfidentialityByIntent(runtime, signed);
@@ -417,7 +469,7 @@ describe("owner release by intent", () => {
       });
 
       it("refuses the same request again, once the envelope it names is back, and writes nothing", async () => {
-        const signed = await sign(requestAt(result, [], tenDigests));
+        const signed = await sign(await requestAt(result, [], tenDigests));
         await releaseConfidentialityByIntent(runtime, signed);
         // The stamp comes back, so the envelope is again the one the request
         // names, and only the record's presence refuses the replay.
@@ -426,11 +478,11 @@ describe("owner release by intent", () => {
           ...ELSEWHERE,
         ]);
         expect(
-          storedClausesForRelease(runtime, {
+          (await storedClausesForRelease(runtime, {
             space: actor,
             id: result.getAsNormalizedFullLink().id,
             path: [],
-          }).envelopeDigest,
+          })).envelopeDigest,
         ).toBe(signed.request.envelopeDigest);
         const before = storedMetadata(result);
 
@@ -461,7 +513,7 @@ describe("owner release by intent", () => {
         };
 
         it("refuses a signature that does not verify", async () => {
-          const signed = await sign(requestAt(result, [], tenDigests));
+          const signed = await sign(await requestAt(result, [], tenDigests));
           await expectRefused(
             { ...signed, signature: signed.signature.slice(4) },
             "signature does not verify",
@@ -469,7 +521,7 @@ describe("owner release by intent", () => {
         });
 
         it("refuses a request signed under another purpose", async () => {
-          const request = requestAt(result, [], tenDigests);
+          const request = await requestAt(result, [], tenDigests);
           const { purpose: _, ...rest } = request;
           await expectRefused(
             await sign(
@@ -491,7 +543,9 @@ describe("owner release by intent", () => {
         it("refuses a request signed by someone other than the space's owner", async () => {
           await expectRefused(
             await sign(
-              requestAt(result, [], tenDigests, { signer: intruder.did() }),
+              await requestAt(result, [], tenDigests, {
+                signer: intruder.did(),
+              }),
               intruder,
             ),
             "is not the owner the space's access list names",
@@ -501,20 +555,22 @@ describe("owner release by intent", () => {
         it("refuses a request naming another space, document or path", async () => {
           await expectRefused(
             await sign(
-              requestAt(result, [], tenDigests, { space: intruder.did() }),
+              await requestAt(result, [], tenDigests, {
+                space: intruder.did(),
+              }),
             ),
             "is not the owner",
           );
           await expectRefused(
             await sign(
-              requestAt(result, [], tenDigests, {
+              await requestAt(result, [], tenDigests, {
                 document: "of:runner-cfc-intent-elsewhere",
               }),
             ),
             "changed since the request was made",
           );
           await expectRefused(
-            await sign(requestAt(result, ["title"], tenDigests)),
+            await sign(await requestAt(result, ["title"], tenDigests)),
             "no clause stored there has the digest",
           );
         });
@@ -522,7 +578,7 @@ describe("owner release by intent", () => {
         it("refuses a clause not stored at the path", async () => {
           await expectRefused(
             await sign(
-              requestAt(result, [], [
+              await requestAt(result, [], [
                 ...tenDigests,
                 cfcCanonicalClauseDigest(cfcAtom.user(intruder.did())),
               ]),
@@ -532,7 +588,7 @@ describe("owner release by intent", () => {
         });
 
         it("refuses a request made against an envelope that has changed since", async () => {
-          const signed = await sign(requestAt(result, [], tenDigests));
+          const signed = await sign(await requestAt(result, [], tenDigests));
           const reseeded = await seedDocument(
             "runner-cfc-intent-result",
             VALUE,
@@ -547,17 +603,22 @@ describe("owner release by intent", () => {
         });
 
         it("refuses a transaction without the release-by-intent writer's identity", async () => {
-          const signed = await sign(requestAt(result, [], tenDigests));
+          const signed = await sign(await requestAt(result, [], tenDigests));
           const tx = runtime.edit();
-          expect(() => tx.releaseCfcConfidentialityByIntent({ signed }))
+          expect(() =>
+            tx.releaseCfcConfidentialityByIntent({
+              signed,
+              acl: { stored: false },
+            })
+          )
             .toThrow(OWNER_RELEASE_BY_INTENT_WRITER);
           tx.abort();
         });
 
         it("throws from the transaction operation itself, before anything is committed, on a bad signature or a signer other than the owner", async () => {
-          const good = await sign(requestAt(result, [], tenDigests));
+          const good = await sign(await requestAt(result, [], tenDigests));
           const notOwner = await sign(
-            requestAt(result, [], tenDigests, { signer: intruder.did() }),
+            await requestAt(result, [], tenDigests, { signer: intruder.did() }),
             intruder,
           );
           for (
@@ -574,14 +635,19 @@ describe("owner release by intent", () => {
               kind: "builtin",
               builtinId: OWNER_RELEASE_BY_INTENT_WRITER,
             });
-            expect(() => tx.releaseCfcConfidentialityByIntent({ signed }))
+            expect(() =>
+              tx.releaseCfcConfidentialityByIntent({
+                signed,
+                acl: { stored: false },
+              })
+            )
               .toThrow(reason);
             tx.abort();
           }
         });
 
         it("refuses a record committed with no release, at the store", async () => {
-          const signed = await sign(requestAt(result, [], tenDigests));
+          const signed = await sign(await requestAt(result, [], tenDigests));
           const recordId = ownerReleaseByIntentRecordId(
             signed.request.document,
             ownerReleaseByIntentRequestDigest(signed.request),
@@ -675,7 +741,7 @@ describe("owner release by intent", () => {
         const value = storedValue(result);
         expect(heldAnywhere(result, tenDigests)).not.toEqual([]);
 
-        const atRoot = storedClausesForRelease(runtime, {
+        const atRoot = await storedClausesForRelease(runtime, {
           space: actor,
           id,
           path: [],
@@ -696,7 +762,7 @@ describe("owner release by intent", () => {
         for (const path of positions) {
           await releaseConfidentialityByIntent(
             runtime,
-            await sign(requestAt(result, path, tenDigests)),
+            await sign(await requestAt(result, path, tenDigests)),
           );
         }
 
@@ -704,12 +770,105 @@ describe("owner release by intent", () => {
         expect(heldAnywhere(result, [cfcCanonicalClauseDigest(own)]))
           .not.toEqual([]);
         expect(
-          storedClausesForRelease(runtime, { space: actor, id, path: [] })
+          (await storedClausesForRelease(runtime, {
+            space: actor,
+            id,
+            path: [],
+          }))
             .otherPositions.filter((position) =>
               position.digests.some((digest) => tenDigests.includes(digest))
             ),
         ).toEqual([]);
         expect(storedValue(result)).toEqual(value);
+      });
+    });
+
+    describe("in a shared space whose access list names someone else its owner", () => {
+      // The space's own key writes an access list naming the owner, who
+      // seeds a document there; a fresh session of the owner's, which has
+      // loaded nothing, then releases on it.
+
+      it("reads the owner from the stored access list, and commits the owner's release", async () => {
+        const spaceSigner = await Identity.fromPassphrase(
+          "runner-cfc-intent-shared-space",
+        );
+        const space = spaceSigner.did();
+        const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+        const session = async (
+          as: Identity,
+          use: (runtime: Runtime) => Promise<void>,
+        ) => {
+          const manager = EmulatedStorageManager.connectTo(server, { as });
+          const runtime = new Runtime({
+            apiUrl: new URL("https://example.com"),
+            storageManager: manager,
+          });
+          try {
+            await use(runtime);
+          } finally {
+            await runtime.dispose();
+            await manager.close();
+          }
+        };
+        try {
+          await session(spaceSigner, async (runtime) => {
+            await new ACLManager(runtime, space).set(actor, "OWNER");
+          });
+          let id = "" as URI;
+          await session(signer, async (runtime) => {
+            const cell = runtime.getCell<unknown>(
+              space,
+              "runner-cfc-intent-shared",
+            );
+            id = cell.getAsNormalizedFullLink().id;
+            const tx = runtime.edit();
+            writeSeedEnvelopeDoc(tx, space);
+            seedStoredEnvelope(tx, {
+              ...cell.getAsNormalizedFullLink(),
+              path: [],
+            }, {
+              value: { rooms: [] },
+              cfc: {
+                version: 1,
+                schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+                labelMap: {
+                  version: 1,
+                  entries: [entry([], "derived", { confidentiality: TEN })],
+                },
+              },
+            } as never);
+            expect((await tx.commit().settled).error).toBeUndefined();
+          });
+          let envelopeDigest = "";
+          await session(signer, async (runtime) => {
+            const listed = await storedClausesForRelease(runtime, {
+              space,
+              id,
+              path: [],
+            });
+            expect(listed.owner).toBe(actor);
+            envelopeDigest = listed.envelopeDigest;
+          });
+          await session(signer, async (runtime) => {
+            const release = await releaseConfidentialityByIntent(
+              runtime,
+              await sign(
+                ownerReleaseByIntentRequest({
+                  space,
+                  document: id,
+                  path: [],
+                  releasedClauseDigests: tenDigests,
+                  envelopeDigest,
+                  signer: actor,
+                }),
+              ),
+            );
+            expect(release.owner).toBe(actor);
+            expect(release.released).toHaveLength(TEN.length);
+          });
+        } finally {
+          await server.close();
+        }
       });
     });
 
@@ -727,7 +886,7 @@ describe("owner release by intent", () => {
         await releaseConfidentialityByIntent(
           runtime,
           await sign(
-            requestAt(cell, ["rooms"], [cfcCanonicalClauseDigest(other)]),
+            await requestAt(cell, ["rooms"], [cfcCanonicalClauseDigest(other)]),
           ),
         );
 
@@ -760,18 +919,18 @@ describe("owner release by intent", () => {
         await releaseConfidentialityByIntent(
           runtime,
           await sign(
-            requestAt(plain, [], [cfcCanonicalClauseDigest(other)]),
+            await requestAt(plain, [], [cfcCanonicalClauseDigest(other)]),
           ),
         );
 
         const metadata = storedMetadata(plain);
         expect(metadata?.schemaHash).not.toBe(schemaBefore);
         expect(
-          storedClausesForRelease(runtime, {
+          (await storedClausesForRelease(runtime, {
             space: actor,
             id: plain.getAsNormalizedFullLink().id,
             path: [],
-          }).clauses,
+          })).clauses,
         ).toEqual([]);
       });
 
@@ -790,7 +949,9 @@ describe("owner release by intent", () => {
         await releaseConfidentialityByIntent(
           runtime,
           await sign(
-            requestAt(cell, ["profile"], [cfcCanonicalClauseDigest(other)]),
+            await requestAt(cell, ["profile"], [
+              cfcCanonicalClauseDigest(other),
+            ]),
           ),
         );
 

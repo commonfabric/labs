@@ -206,11 +206,7 @@ const collectCfcSchemaEntries = (
   return entries;
 };
 
-/**
- * The observation class the `ifc` of `schema` declares, or `undefined` when it
- * declares none, or a value that names no class.
- */
-export const declaredObservationClass = (
+const declaredObservationClass = (
   schema: JSONSchema,
 ): LabelObservationClass | undefined => {
   const observes = isObjectOrArray(schema) && isObjectOrArray(schema.ifc)

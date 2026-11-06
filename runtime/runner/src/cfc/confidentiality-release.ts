@@ -19,10 +19,16 @@
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { debugStr } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import { aclDocId } from "@commonfabric/memory/acl";
 import {
+  type OwnerReleaseByIntentAcl,
   ownerReleaseByIntentEnvelopeDigest,
   ownerReleaseByIntentRecord,
+  ownerReleaseByIntentRecordId,
+  ownerReleaseByIntentRequestDigest,
+  ownerReleaseByIntentSpaceOwner,
   type SignedOwnerReleaseByIntentRequest,
 } from "@commonfabric/memory/v2/cfc-owner-release-by-intent";
 import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
@@ -298,6 +304,54 @@ export function releaseByIntentTargetOf(
   }
 }
 
+/**
+ * Loads `ids` of `space` into the runtime's replica from the store, so that a
+ * read of each afterwards finds what the store holds, an absent document
+ * reading as absent rather than as not loaded yet.
+ *
+ * @throws If a load fails, or the store holds a document back.
+ */
+const syncDocuments = async (
+  runtime: Runtime,
+  space: MemorySpace,
+  ids: readonly string[],
+): Promise<void> => {
+  const provider = runtime.storageManager.open(space);
+  const loads = await Promise.all(
+    ids.map((id) => provider.sync(id as URI)),
+  );
+  for (const { error } of loads) {
+    if (error !== undefined) throw error;
+  }
+  for (const id of ids) {
+    const failure = await provider.replica.quarantineFailure?.(id as URI);
+    if (failure !== undefined) throw failure;
+  }
+};
+
+/**
+ * The access list of `space` as `tx` reads it, which a caller has loaded with
+ * {@link syncDocuments}: not stored where the store holds no list document,
+ * and stored, with the document's `value`, which may be absent, where it holds
+ * one.
+ */
+const accessListOf = (
+  tx: ReturnType<Runtime["edit"]>,
+  space: MemorySpace,
+): OwnerReleaseByIntentAcl => {
+  const document = tx.read({
+    space,
+    id: aclDocId(space) as URI,
+    scope: DEFAULT_CELL_SCOPE,
+    type: "application/json",
+    path: [],
+  }).ok?.value;
+  return document === undefined ? { stored: false } : {
+    stored: true,
+    value: isObjectNotArray(document) ? document.value : undefined,
+  };
+};
+
 /** What a release by intent at a target can name, and the envelope it names. */
 export interface StoredClausesForRelease {
   /** The clauses stored at the path, with their digests and positions. */
@@ -312,23 +366,38 @@ export interface StoredClausesForRelease {
 
   /** The digest of the stored envelope, which a request names. */
   readonly envelopeDigest: string;
+
+  /**
+   * The owner the space's access list names, whose signature alone a release
+   * there takes, or `undefined` when the list names none.
+   */
+  readonly owner: string | undefined;
 }
 
 /**
- * The confidentiality clauses stored at `target`, each with its canonical
- * clause digest and the entries holding it, the other stored positions of the
- * document holding any of them, and the digest of the document's stored
- * envelope: what an owner reads before signing a release by intent there. Read as the runtime's replica holds the document, so a caller syncs
- * it first.
+ * The confidentiality clauses the label map stores at `target`, each with its
+ * canonical clause digest and the entries holding it, the other stored
+ * positions of the document holding any of them, the digest of the document's
+ * stored envelope, and the space's owner: what an owner reads before signing
+ * a release by intent there. The document and the space's access list are
+ * loaded from the store first.
  *
- * @throws If the document's labels cannot be read.
+ * @throws If either cannot be loaded, or the document's labels cannot be read.
  */
-export function storedClausesForRelease(
+export async function storedClausesForRelease(
   runtime: Runtime,
   target: ReleaseByIntentTarget,
-): StoredClausesForRelease {
+): Promise<StoredClausesForRelease> {
+  await syncDocuments(runtime, target.space, [
+    aclDocId(target.space),
+    target.id,
+  ]);
   const tx = runtime.edit();
   try {
+    const owner = ownerReleaseByIntentSpaceOwner(
+      target.space,
+      accessListOf(tx, target.space),
+    );
     const stored = loadStoredCfcEnvelope(tx, {
       space: target.space,
       id: target.id,
@@ -346,17 +415,13 @@ export function storedClausesForRelease(
       type: "application/json",
       path: ["cfc"],
     }).ok?.value;
+    const envelopeDigest = ownerReleaseByIntentEnvelopeDigest(cfc);
     if (stored.status !== "loaded") {
-      return {
-        clauses: [],
-        otherPositions: [],
-        envelopeDigest: ownerReleaseByIntentEnvelopeDigest(cfc),
-      };
+      return { clauses: [], otherPositions: [], envelopeDigest, owner };
     }
     const labels = {
       path: target.path,
       entries: stored.metadata.labelMap.entries,
-      schema: stored.schema,
     };
     const clauses = clausesStoredForRelease(labels);
     return {
@@ -365,7 +430,8 @@ export function storedClausesForRelease(
         ...labels,
         digests: clauses.map((clause) => clause.digest),
       }),
-      envelopeDigest: ownerReleaseByIntentEnvelopeDigest(cfc),
+      envelopeDigest,
+      owner,
     };
   } finally {
     tx.abort();
@@ -388,10 +454,13 @@ export interface ConfidentialityReleaseByIntent
  * release did, and is labeled for the owner alone. The request names its
  * document directly, so no link is followed to find it.
  *
- * The transaction runs under the release-by-intent writer's builtin identity;
+ * The space's access list, the document and the record's id are loaded from
+ * the store first, so the checks below read what the store holds. The
+ * transaction runs under the release-by-intent writer's builtin identity;
  * `IExtendedStorageTransaction.releaseCfcConfidentialityByIntent()` verifies
- * the request before writing, and the store verifies it again at the commit,
- * against the space's access list as it stands then.
+ * the request before writing, against the access list loaded here, and the
+ * store verifies it again at the commit, against the access list as it stands
+ * then.
  *
  * @throws When the request is refused (see
  *   `IExtendedStorageTransaction.releaseCfcConfidentialityByIntent()`), or
@@ -401,13 +470,25 @@ export async function releaseConfidentialityByIntent(
   runtime: Runtime,
   signed: SignedOwnerReleaseByIntentRequest,
 ): Promise<ConfidentialityReleaseByIntent> {
+  const space = signed.request.space as MemorySpace;
+  await syncDocuments(runtime, space, [
+    aclDocId(space),
+    signed.request.document,
+    ownerReleaseByIntentRecordId(
+      signed.request.document,
+      ownerReleaseByIntentRequestDigest(signed.request),
+    ),
+  ]);
   const tx = runtime.edit();
   try {
     setCfcImplementationIdentity(tx, {
       kind: "builtin",
       builtinId: OWNER_RELEASE_BY_INTENT_WRITER,
     });
-    const release = tx.releaseCfcConfidentialityByIntent({ signed });
+    const release = tx.releaseCfcConfidentialityByIntent({
+      signed,
+      acl: accessListOf(tx, space),
+    });
     const record = runtime.getCellFromLink({
       space: signed.request.space as MemorySpace,
       id: release.recordId as URI,

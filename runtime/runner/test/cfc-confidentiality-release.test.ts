@@ -18,6 +18,7 @@ import {
 import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
 import { cfcLabelViewForResolvedCell } from "../src/cfc/label-view.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { labelMetadataTemplatesFor } from "../src/cfc/prepare.ts";
 import type { LabelMapEntry } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { isAllowedAuthoredImportSpecifier } from "../src/sandbox/runtime-module-policy.ts";
@@ -476,6 +477,65 @@ describe("confidentiality release", () => {
             .map((entry) => entry.label.confidentiality),
         ).toContainEqual([cfcAtom.user(actor)]);
         tx.abort();
+      });
+
+      it("derives the label-metadata templates again from the entries the release leaves", async () => {
+        const kept: LabelMapEntry = {
+          path: [],
+          label: { confidentiality: [cfcAtom.personalSpace(other)] },
+          origin: "derived",
+          observes: "value",
+        };
+        const released: LabelMapEntry = {
+          path: [],
+          label: { confidentiality: [owner] },
+          origin: "derived",
+          observes: "shape",
+        };
+        const cell = runtime.getCell<unknown>(
+          actor,
+          "runner-cfc-release-templates",
+        );
+        const tx = runtime.edit();
+        writeSeedEnvelopeDoc(tx, actor);
+        seedStoredEnvelope(
+          tx,
+          { ...cell.getAsNormalizedFullLink(), path: [] },
+          {
+            value: { text: "t" },
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: {
+                version: 1,
+                entries: [
+                  kept,
+                  released,
+                  ...labelMetadataTemplatesFor([kept, released]),
+                ],
+              },
+            },
+          } as never,
+        );
+        expect((await tx.commit().settled).error).toBeUndefined();
+        const metadataOf = () => {
+          const read = runtime.edit();
+          try {
+            return readStoredCfcMetadata(read, cell.getAsNormalizedFullLink());
+          } finally {
+            read.abort();
+          }
+        };
+        expect(metadataOf()?.labelMap.documentEntries).toEqual(
+          labelMetadataTemplatesFor([kept, released]),
+        );
+
+        await releaseCellConfidentiality(cell, [cfcAtom.personalSpace(other)]);
+
+        expect(metadataOf()?.labelMap.entries).toEqual([kept]);
+        expect(metadataOf()?.labelMap.documentEntries).toEqual(
+          labelMetadataTemplatesFor([kept]),
+        );
       });
 
       it("releases and records nothing when every stored clause is kept", async () => {
