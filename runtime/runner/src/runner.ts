@@ -6788,7 +6788,6 @@ export class Runner {
           return;
         }
         const setupTx = this.#runtime.edit();
-        carryDecision?.(setupTx);
         // Under an installed seal destination (serving-loop.md §3d) every
         // commit path declares its run context; the swap's setup write is
         // runtime-internal bookkeeping. A no-op everywhere else. The action
@@ -6804,6 +6803,7 @@ export class Runner {
           }/${pieceLink.id}`,
           kind: "bookkeeping",
         });
+        carryDecision?.(setupTx);
         const finishSwap = () => {
           cancelNodes?.();
           instantiatePattern(pattern, undefined, undefined, carryDecision);
