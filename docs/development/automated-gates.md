@@ -113,8 +113,10 @@ Each of these gates fails CI on its own, and none of them run as part of
   function whose `@spec` header hash the snapshot no longer carries or that
   imports past the kernel, a manifest row in
   `runtime/runner/src/cfc/kernel/manifest.ts` naming a function the snapshot
-  lacks or a kernel symbol that does not exist, a `§` citation under
-  `runtime/runner/src/cfc/` naming a section the specification has not, or more
+  lacks or a kernel symbol that does not exist, a `missing` row whose
+  `decidedToday` names a symbol its file no longer declares, a `§` citation in
+  the CFC sources (`CITATION_SOURCE`, the runner's and the memory package's)
+  naming a section the specification has not, or more
   than forty `SPEC-PENDING` markers in the files it governs (`GOVERNED_SOURCE`
   in `tasks/check-cfc-correspondence.ts`), or one naming no specs pull request. The specification is private and the snapshot is what crosses:
   `deno task cfc-spec-snapshot` regenerates it from a specs checkout, and labs

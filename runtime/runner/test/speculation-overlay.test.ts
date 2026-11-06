@@ -30,6 +30,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import type { FabricValue } from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import { Logger, type LogMessage } from "@commonfabric/logger";
@@ -85,10 +86,10 @@ import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
  * whose stored declared entries hold a confidentiality clause with no
  * declared entry.
  */
-const storedLabelEntries = (document: unknown): unknown[] => {
+const storedLabelEntries = (document: unknown): FabricValue[] => {
   const entries = (document as { cfc?: { labelMap?: { entries?: unknown } } })
     .cfc?.labelMap?.entries;
-  return Array.isArray(entries) ? entries : [];
+  return Array.isArray(entries) ? entries as FabricValue[] : [];
 };
 const spaceSigner = await Identity.fromPassphrase("speculation overlay space");
 const space = spaceSigner.did() as MemorySpace;

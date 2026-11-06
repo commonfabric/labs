@@ -24,14 +24,17 @@
  *    runs and is allowed from anywhere, and nothing else from outside the
  *    kernel executes. The ledger files, {@link KERNEL_LEDGER_FILES}, are
  *    exempt from the header rule and held to the import rule.
- * 3. **Every `§` citation under `runtime/runner/src/cfc/` names a section
- *    the snapshot has.** A citation written on purpose to something else is
+ * 3. **Every `§` citation in the CFC sources, {@link CITATION_SOURCE}, names
+ *    a section the snapshot has.** A citation written on purpose to something else is
  *    recorded in {@link EXEMPTIONS}, naming the file, the citation and why;
  *    an entry whose file no longer writes its citation is reported too.
  * 4. **`SPEC-PENDING` markers stay under budget and name their ruling.** At
  *    most {@link SPEC_PENDING_BUDGET} markers across the files the CFC rule
  *    governs, {@link GOVERNED_SOURCE}, each on a line naming a
  *    `commonfabric/specs` pull request.
+ * 5. **A `missing` row's runtime symbols are there.** Every symbol a row's
+ *    `decidedToday` names is declared at the top level of the file it
+ *    names, so a function that moves takes its row with it.
  *
  * What it does not check: that a kernel function's body matches its block,
  * which is equivalence the hash makes reviewable and review decides; that a
@@ -84,10 +87,21 @@ export const KERNEL_LEDGER_FILES: ReadonlySet<string> = new Set([
 export const SPEC_PENDING_BUDGET = 40;
 
 /**
+ * The memory package's CFC sources: the release authority and the label-field
+ * table, which the store and the runtime both decide by, and the store's
+ * envelope admission.
+ */
+const MEMORY_CFC_SOURCE: readonly RegExp[] = [
+  /^runtime\/memory\/v2\/cfc-[^/]*\.ts$/,
+  /^runtime\/memory\/v2\/envelope-admission\.ts$/,
+];
+
+/**
  * The source files the CFC rule in `.claude/rules/cfc.md` governs, which is
  * where a `SPEC-PENDING` marker may sit: the runner's CFC sources and their
- * tests, the render boundaries in `html`, the harness's CFC modules, and the
- * harness console's display ceiling. The two lists are kept in step by hand.
+ * tests, the memory package's CFC sources and the store's test of them, the
+ * render boundaries in `html`, the harness's CFC modules, and the harness
+ * console's display ceiling. The two lists are kept in step by hand.
  */
 export const GOVERNED_SOURCE: readonly RegExp[] = [
   /^runtime\/runner\/src\/cfc\/.*\.tsx?$/,
@@ -99,6 +113,19 @@ export const GOVERNED_SOURCE: readonly RegExp[] = [
   /^runtime\/cf-harness\/src\/contracts\/cfc-[^/]*\.ts$/,
   /^runtime\/cf-harness\/src\/sandbox\/runsc-cfc-result\.ts$/,
   /^runtime\/cf-harness\/console\/display-ceiling\.ts$/,
+  ...MEMORY_CFC_SOURCE,
+  /^runtime\/memory\/test\/v2-envelope-admission\.test\.ts$/,
+];
+
+/**
+ * The CFC sources whose `§` citations are held to the snapshot: the runner's
+ * CFC sources, and the memory package's, which hold the decisions the store
+ * shares with the runtime.
+ */
+export const CITATION_SOURCE: readonly RegExp[] = [
+  /^runtime\/runner\/src\/cfc\/.*\.tsx?$/,
+  /^runtime\/runner\/src\/cfc\.ts$/,
+  ...MEMORY_CFC_SOURCE,
 ];
 
 /** Whether `path` is one the CFC rule governs. */
@@ -168,6 +195,13 @@ export interface CheckInput {
   /** Every governed file a marker may sit in. */
   markerFiles: readonly SourceFile[];
   budget: number;
+
+  /**
+   * Each file a `missing` row's `decidedToday` names, by its path under
+   * `runtime/runner/src/`, as the row writes it; `undefined` text for one
+   * that does not exist.
+   */
+  decidedFiles: ReadonlyMap<string, string | undefined>;
 }
 
 /** The 1-based line number holding `index` in `text`. */
@@ -593,6 +627,29 @@ export function collectFindings(input: CheckInput): Finding[] {
     }
   }
 
+  // The runtime symbols a `missing` row says decide its function today.
+  for (const row of input.manifest) {
+    if (row.relation !== "missing" || row.decidedToday === "unknown") {
+      continue;
+    }
+    for (const symbol of row.decidedToday) {
+      const text = input.decidedFiles.get(symbol.file);
+      if (text === undefined) {
+        findings.push({
+          file: `${KERNEL_DIR}manifest.ts`,
+          message: `the row for \`${row.name}\` names ` +
+            `${symbol.file}, which does not exist`,
+        });
+      } else if (!declaresSymbol(text, symbol.symbol)) {
+        findings.push({
+          file: `${KERNEL_DIR}manifest.ts`,
+          message: `the row for \`${row.name}\` names ` +
+            `\`${symbol.symbol}\` in ${symbol.file}, which does not declare it at top level`,
+        });
+      }
+    }
+  }
+
   // Pending markers.
   let markers = 0;
   for (const file of input.markerFiles) {
@@ -627,6 +684,39 @@ export function collectFindings(input: CheckInput): Finding[] {
 /** A TypeScript or TSX source file. */
 const SOURCE = /\.tsx?$/;
 
+/** The directory a manifest row's `decidedToday` file is relative to. */
+const RUNTIME_SYMBOL_ROOT = "runtime/runner/src/";
+
+/**
+ * Whether `text` declares `name` at top level, exported or not, or names it
+ * in an `export { … }` list.
+ */
+export function declaresSymbol(text: string, name: string): boolean {
+  const declared = new RegExp(
+    `^(?:export\\s+)?(?:declare\\s+)?(?:async\\s+)?(?:const|let|function\\*?|class|type|interface|enum)\\s+${name}\\b`,
+    "m",
+  );
+  if (declared.test(text)) return true;
+  for (const list of text.matchAll(/^export\s+(?:type\s+)?\{([^}]*)\}/gm)) {
+    const names = list[1].split(",").map((entry) =>
+      entry.trim().replace(/^type\s+/, "").split(/\s+as\s+/).pop()?.trim()
+    );
+    if (names.includes(name)) return true;
+  }
+  return false;
+}
+
+/** `path` with its `.` and `..` segments resolved, `/`-separated. */
+function normalizedPath(path: string): string {
+  const segments: string[] = [];
+  for (const segment of path.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") segments.pop();
+    else segments.push(segment);
+  }
+  return segments.join("/");
+}
+
 /** Reads the files the check covers from the tree at `root`. */
 export async function readInput(root: string): Promise<CheckInput> {
   const read = async (path: string): Promise<SourceFile> => ({
@@ -641,14 +731,26 @@ export async function readInput(root: string): Promise<CheckInput> {
     if (path.startsWith(KERNEL_DIR) && SOURCE.test(path)) {
       kernelFiles.push(await read(path));
     }
-    if (
-      (path.startsWith("runtime/runner/src/cfc/") ||
-        path === "runtime/runner/src/cfc.ts") && SOURCE.test(path)
-    ) {
+    if (CITATION_SOURCE.some((pattern) => pattern.test(path))) {
       citationFiles.push(await read(path));
     }
     if (isGovernedSource(path)) {
       markerFiles.push(await read(path));
+    }
+  }
+  const decidedFiles = new Map<string, string | undefined>();
+  const tracked = new Set(files);
+  for (const row of MANIFEST) {
+    if (row.relation !== "missing" || row.decidedToday === "unknown") {
+      continue;
+    }
+    for (const { file } of row.decidedToday) {
+      if (decidedFiles.has(file)) continue;
+      const path = normalizedPath(`${RUNTIME_SYMBOL_ROOT}${file}`);
+      decidedFiles.set(
+        file,
+        tracked.has(path) ? (await read(path)).text : undefined,
+      );
     }
   }
   return {
@@ -663,6 +765,7 @@ export async function readInput(root: string): Promise<CheckInput> {
     exemptions: EXEMPTIONS,
     markerFiles,
     budget: SPEC_PENDING_BUDGET,
+    decidedFiles,
   };
 }
 

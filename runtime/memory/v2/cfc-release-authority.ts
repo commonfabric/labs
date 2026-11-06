@@ -2,8 +2,9 @@
  * Who may release a stored confidentiality clause on their own authority, the
  * specification's `canReleaseStoredClause` (§8.12.7 route 2c), with the clause
  * and commitment forms it reads. It lives here, below the runner, so that the
- * store recognizes the owner release §8.12.9 admits by the same decision the
- * runtime's release makes. The runner imports each name from here.
+ * store recognizes an owner release (`envelope-admission.ts`) by the same
+ * decision the runtime's release makes. The runner imports each name from
+ * here.
  */
 
 import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
