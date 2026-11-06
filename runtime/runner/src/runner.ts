@@ -2831,7 +2831,8 @@ export class Runner {
    * restates a result wiring it finds unchanged (§8.9.1.3). A transaction
    * the runner makes later, for a start deferred out of the asking
    * transaction or a swap, joins them when it carries the reads that decided
-   * it (`#carryDecision()`). Every other setup transaction, a repair's or a
+   * it from an asking one (`#runDecisionOf()`). Every other setup
+   * transaction, a repair's or a
    * swap's that no setup here staged, holds none of those reads, so
    * re-minting the stored membership there would drop a clause they carried.
    */
@@ -3065,7 +3066,7 @@ export class Runner {
 
   /**
    * What decided the latest committed setup of each running piece, for the
-   * swap that setup's pattern reaches it by (`carryRunDecision()`). A running
+   * swap that setup's pattern reaches it by (`#runDecisionOf()`). A running
    * piece takes the pattern a setup staged in transactions of its own, the
    * swap's setup and the instantiation of the new graph, so they carry it
    * (CFC §8.9.2). An entry names the pattern it was set up with, and only a
@@ -5410,7 +5411,7 @@ export class Runner {
     if (this.#sessionPatternSwaps.has(runningKey)) {
       const decided = {
         pattern: patternIdentityKey(entryRef),
-        carry: carryRunDecision(tx),
+        carry: this.#runDecisionOf(tx),
       };
       this.#runDecisions.set(runningKey, decided);
       const undecide = () => {
@@ -6351,7 +6352,7 @@ export class Runner {
       // Instantiate nodes
       const actualTx = useTx ?? this.#runtime.edit();
       if (useTx === undefined && carryDecision !== undefined) {
-        this.#carryDecision(carryDecision, actualTx);
+        carryDecision(actualTx);
       }
       enrollPieceOwnedStores(actualTx, resultCell, pattern);
       // A transaction that also carries the cold-start setup repair is named
@@ -6900,7 +6901,7 @@ export class Runner {
           kind: "bookkeeping",
         });
         if (carryDecision !== undefined) {
-          this.#carryDecision(carryDecision, setupTx);
+          carryDecision(setupTx);
         }
         const finishSwap = (
           setupDecision: (to: IExtendedStorageTransaction) => void,
@@ -6961,7 +6962,7 @@ export class Runner {
             );
             // The new graph is set up from what the setup read, and from what
             // decided the swap, which the setup carries.
-            setupDecision = carryRunDecision(setupTx);
+            setupDecision = this.#runDecisionOf(setupTx);
             this.#runtime.prepareTxForCommit(setupTx);
             const committed = await setupTx.commit().settled;
             if (committed.error !== undefined) {
@@ -8201,18 +8202,22 @@ export class Runner {
   }
 
   /**
-   * Hands `to`, a transaction the runner makes for a run deferred out of the
-   * transaction it was asked in, what decided the run (`carry`, from
-   * `carryRunDecision()`), and with it that transaction's standing
-   * (`#askingSetupTransactions`): holding the reads that decided the setup,
-   * it restates a wiring it finds unchanged as the asking transaction would.
+   * Takes what decided a run `from` deferred into a transaction the runner
+   * makes later (`carryRunDecision()`), and returns the step that hands it to
+   * that transaction, along with `from`'s standing: a transaction carrying an
+   * asking transaction's reads is an asking one (`#askingSetupTransactions`),
+   * and restates a wiring it finds unchanged as that transaction would. One
+   * carrying the reads of a transaction that was not asking is not.
    */
-  #carryDecision(
-    carry: (to: IExtendedStorageTransaction) => void,
-    to: IExtendedStorageTransaction,
-  ): void {
-    carry(to);
-    this.#askingSetupTransactions.add(to);
+  #runDecisionOf(
+    from: IExtendedStorageTransaction,
+  ): (to: IExtendedStorageTransaction) => void {
+    const carry = carryRunDecision(from);
+    const asking = this.#askingSetupTransactions.has(from);
+    return (to) => {
+      carry(to);
+      if (asking) this.#askingSetupTransactions.add(to);
+    };
   }
 
   /**
@@ -8328,7 +8333,7 @@ export class Runner {
     const resultLink = resultCell.getAsNormalizedFullLink();
     const startLifecycleEpoch = this.#lifecycleEpoch;
     const ownership = this.#createDeferredStartOwnership(resultCell);
-    const carryDecision = carryRunDecision(tx);
+    const carryDecision = this.#runDecisionOf(tx);
     tx.addCommitCallback((_committedTx, result) => {
       if (result.error) {
         // The callback that would install this start is the one running now,
@@ -8341,7 +8346,7 @@ export class Runner {
       if (ownership.isCancelled()) return;
 
       const startTx = this.#runtime.edit();
-      this.#carryDecision(carryDecision, startTx);
+      carryDecision(startTx);
       // A start deferred from a handler run initializes on that run's behalf.
       carryAttributionMarks(tx, startTx);
       // Minted inside a commit callback — by definition outside any scheduler
@@ -9125,7 +9130,7 @@ export class Runner {
     const navigateContext = navigateEventContextFromRunInfo(
       waveRunContextOf(tx) ?? speculationContext,
     );
-    const carryDecision = carryRunDecision(tx);
+    const carryDecision = this.#runDecisionOf(tx);
     const work = (async () => {
       let toName = named;
       let retriesLeft = PIECE_RUN_START_MAX_RETRIES;
@@ -9149,7 +9154,7 @@ export class Runner {
         }
         if (ownership.isCancelled()) return;
         const startTx = this.#runtime.edit();
-        this.#carryDecision(carryDecision, startTx);
+        carryDecision(startTx);
         // Speculative starts keep defaults in their overlay transaction. A
         // bookkeeping seed here would escape the parent's destination, and a
         // later authored start still needs its own durable preparation.
@@ -9655,7 +9660,7 @@ export class Runner {
     // (`#ancestorSystemOrigin`), so the chain is recorded ahead of the start
     // exactly as the immediate path's start records it.
     this.#demandRootChainFor(resultLink.id, parentPieceRootId);
-    const carryDecision = carryRunDecision(tx);
+    const carryDecision = this.#runDecisionOf(tx);
     tx.addCommitCallback((_committedTx, result) => {
       if (result.error) {
         // Settled here for the same reason as the start above: this callback
@@ -9667,7 +9672,7 @@ export class Runner {
       if (ownership.isCancelled()) return;
 
       const startTx = this.#runtime.edit();
-      this.#carryDecision(carryDecision, startTx);
+      carryDecision(startTx);
       // A result pattern deferred from a handler run initializes on that
       // run's behalf, as the deferred start above does.
       carryAttributionMarks(tx, startTx);
