@@ -149,7 +149,6 @@ import { recordWriteStackTrace } from "./write-stack-trace.ts";
 import { hasInlineCellScheme } from "../immutable-cell.ts";
 import {
   isReservedSibling,
-  readStoredReservedSibling,
   reservedSiblingChanges,
   reservedSiblingWriteRecorded,
 } from "../reserved-sibling-seam.ts";
@@ -2380,12 +2379,12 @@ export class V2StorageTransaction implements IStorageTransaction {
     value?: FabricValue,
     options?: IWriteOptions,
   ): Result<IAttestation, WriterError | WriteError> {
-    if (!reservedSiblingWriteRecorded(options)) {
-      this.#refuseReservedSiblingChange(address, value);
-    }
     const ready = this.#prepareWriteSpace(address.space);
     if (ready.error) {
       return { error: ready.error };
+    }
+    if (!reservedSiblingWriteRecorded(options)) {
+      this.#refuseReservedSiblingChange(ready.ok, address, value);
     }
     return this.#writeWithinBranch(
       ready.ok,
@@ -2411,6 +2410,11 @@ export class V2StorageTransaction implements IStorageTransaction {
       if (ready.error) {
         return { error: ready.error };
       }
+      // A batch request carries no options, so it carries no mark either. The
+      // whole run is checked before any of it is applied.
+      for (const write of run) {
+        this.#refuseReservedSiblingChange(ready.ok, write.address, write.value);
+      }
       const result = this.#writeBatchRun(address.space, ready.ok, run);
       run = [];
       runKey = undefined;
@@ -2418,8 +2422,6 @@ export class V2StorageTransaction implements IStorageTransaction {
     };
 
     for (const write of writes) {
-      // A batch request carries no options, so it carries no mark either.
-      this.#refuseReservedSiblingChange(write.address, write.value);
       // The run is flushed against a single document, fetched from the first
       // write's address (see `#writeBatchRun`). Documents are keyed by scope as
       // well as id (`makeDocKey`), so the run key must include scope: otherwise
@@ -2453,18 +2455,20 @@ export class V2StorageTransaction implements IStorageTransaction {
    * marks every write it forwards here. A write without that mark came from
    * whatever holds this transaction directly, skipping the chokepoint, and
    * left nothing for the boundary to judge, so it is refused whatever the CFC
-   * enforcement mode. The read deciding a root write is this transaction's
-   * own, as the chokepoint's is.
+   * enforcement mode. A root write is decided against the document as this
+   * transaction holds it in `branch`, read from the entry the write itself
+   * lands in, so deciding records no read.
    */
   #refuseReservedSiblingChange(
+    branch: SpaceBranch,
     address: IMemorySpaceAddress,
     value: FabricValue | undefined,
   ): void {
-    const changes = reservedSiblingChanges(
-      address.path,
-      value,
-      (sibling) => readStoredReservedSibling(this, address, sibling),
-    );
+    const changes = reservedSiblingChanges(address.path, value, (sibling) => {
+      const { doc } = this.#document(branch, address);
+      const root = (doc.current ?? doc.initial).value;
+      return isObjectNotArray(root) ? root[sibling] : undefined;
+    });
     if (changes.length === 0) return;
     throw new Error(
       debugStr`${address.id}: refusing a write that changes reserved members of the document (${

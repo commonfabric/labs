@@ -416,7 +416,20 @@ therefore carries its own guard:
   transaction's `accessForTestingOnly` getter, which a lint rule confines to
   tests and benchmarks. The runtime keeps no second door: there is no write
   option, and no exported value, that lets a caller past the guard.
-- The refusal is a record rather than a throw, unlike the meta seam beside it.
+- The guard is the extended transaction's write surface, and the storage
+  transaction beneath it is reachable as its `.tx`. So that storage
+  transaction holds the line itself: it throws on a write, a batch write, or a
+  mergeable op that changes a reserved sibling, as the three shapes above
+  define a change, unless the write carries the mark the extended transaction
+  puts on every write it forwards. A write made there directly skipped the
+  record, and so left the commit boundary nothing to refuse over, whether the
+  transaction is then committed through the extended transaction or directly;
+  this refusal therefore holds whatever the enforcement mode. The mark is a
+  symbol of `reserved-sibling-seam.ts`, which no package entry exports: an
+  authorization of the same kind as the meta seam's, and as firmly held as the
+  realm holds it. It says only that the chokepoint saw the write.
+- At the chokepoint, the refusal is a record rather than a throw, unlike the
+  meta seam beside it.
   A forged label map is a signal whose treatment follows the enforcement mode:
   enforce rejects the commit, observe diagnoses it, and `disabled` keeps the
   record so a mid-transaction escalation still rejects. A deployment running

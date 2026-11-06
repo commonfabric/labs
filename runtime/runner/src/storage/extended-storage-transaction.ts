@@ -145,7 +145,6 @@ import {
 } from "../meta-seam.ts";
 import type { ModuleDelegationSnapshot } from "../module-delegations.ts";
 import {
-  readStoredReservedSibling,
   reservedSiblingChanges,
   reservedSiblingWriteRecordedMark,
 } from "../reserved-sibling-seam.ts";
@@ -207,6 +206,7 @@ import {
   allowMutableTransactionRead,
   clearSchemaRefusalTx,
   ignoreReadForCommit,
+  internalVerifierRead,
   isInternalVerifierRead,
   isLazyMaterializationTx,
   isUiInputBlindWriteTx,
@@ -1773,12 +1773,27 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // write instead.
     //
     // The reads carry no weight of their own, the way the meta seam's guard
-    // read above carries none; `readStoredReservedSibling()` says how they
-    // are kept so.
+    // read above carries none. They go through the inner transaction, so they
+    // stay out of the outer transaction's reactivity log, and
+    // `ignoreReadForCommit` keeps them out of the conflict set, so a blind
+    // root write stays blind rather than becoming a read-modify-write that
+    // loses the race against any advance of the document it replaces. They
+    // name a member rather than the document root, and a read of one of the
+    // document's own members observes no payload, so it consumes nothing
+    // whatever a user field called `cfc` holds. `internalVerifierRead` says
+    // what the read is: the runtime resolving a label, the same mark
+    // `readStoredCfcMetadata()` carries.
     const changes = reservedSiblingChanges(
       address.path,
       value,
-      (sibling) => readStoredReservedSibling(this.tx, address, sibling),
+      (sibling) =>
+        this.tx.read({ ...address, path: [sibling] }, {
+          meta: {
+            ...ignoreReadForScheduling,
+            ...ignoreReadForCommit,
+            ...internalVerifierRead,
+          },
+        }).ok?.value,
     );
     for (const [sibling, change] of changes) {
       this.markCfcRelevant(

@@ -2,16 +2,7 @@ import { type FabricValue, valueEqual } from "@commonfabric/data-model";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { cfcMetadataPresent } from "./cfc/metadata.ts";
-import type {
-  IMemorySpaceAddress,
-  IStorageTransaction,
-  IWriteOptions,
-} from "./storage/interface.ts";
-import {
-  ignoreReadForCommit,
-  ignoreReadForScheduling,
-  internalVerifierRead,
-} from "./storage/reactivity-log.ts";
+import type { IWriteOptions } from "./storage/interface.ts";
 
 /**
  * The reserved siblings: the document-root siblings of `value` that hold
@@ -95,34 +86,6 @@ export function reservedSiblingChanges(
     }
   }
   return changes ?? NO_RESERVED_SIBLING_CHANGES;
-}
-
-/**
- * The reserved sibling `sibling` of the document `address` names, as `tx`
- * holds it, for the `stored` reader {@link reservedSiblingChanges} takes.
- *
- * The read carries no weight of its own. It goes through the storage
- * transaction, so it stays out of an extended transaction's reactivity log,
- * and `ignoreReadForCommit` keeps it out of the conflict set, so a blind root
- * write stays blind rather than becoming a read-modify-write that loses the
- * race against any advance of the document it replaces. It names a member
- * rather than the document root, and a read of one of the document's own
- * members observes no payload, so it consumes nothing whatever a user field
- * called `cfc` holds. `internalVerifierRead` says what the read is: the
- * runtime resolving a label, the same mark `readStoredCfcMetadata()` carries.
- */
-export function readStoredReservedSibling(
-  tx: IStorageTransaction,
-  address: IMemorySpaceAddress,
-  sibling: ReservedSibling,
-): unknown {
-  return tx.read({ ...address, path: [sibling] }, {
-    meta: {
-      ...ignoreReadForScheduling,
-      ...ignoreReadForCommit,
-      ...internalVerifierRead,
-    },
-  }).ok?.value;
 }
 
 /**
