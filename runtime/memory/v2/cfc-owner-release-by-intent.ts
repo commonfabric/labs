@@ -28,7 +28,7 @@ import {
   fromBase64url,
   toUnpaddedBase64url,
 } from "@commonfabric/bytes/base64url";
-import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
+import { hashStringOf, isValidFabricValue } from "@commonfabric/data-model";
 import { encodeDagCbor } from "@commonfabric/identity/dag-cbor";
 import { isDID } from "@commonfabric/identity/did";
 import { verifyEd25519SignatureSync } from "@commonfabric/identity/verify-sync";
@@ -264,7 +264,16 @@ export const ownerReleaseByIntentSignature = (signature: Uint8Array): string =>
 /** The digest naming `request`, which the record's id derives from. */
 export const ownerReleaseByIntentRequestDigest = (
   request: OwnerReleaseByIntentRequest,
-): string => hashStringOf(request as unknown as FabricValue);
+): string =>
+  hashStringOf({
+    purpose: request.purpose,
+    space: request.space,
+    document: request.document,
+    path: [...request.path],
+    releasedClauseDigests: [...request.releasedClauseDigests],
+    envelopeDigest: request.envelopeDigest,
+    signer: request.signer,
+  });
 
 /**
  * The id of the record a release of `document` by the request whose digest is
@@ -283,9 +292,19 @@ export const ownerReleaseByIntentRecordId = (
  * member as the store holds it, `null` for a document that holds none. A
  * label held by reference is named by the reference, whose `cid:` id is the
  * hash of the label, so the digest covers every label the envelope holds.
+ *
+ * @throws An {@link OwnerReleaseByIntentError} if `cfc` is not a value a
+ *   document can store.
  */
-export const ownerReleaseByIntentEnvelopeDigest = (cfc: unknown): string =>
-  hashStringOf((cfc === undefined ? null : cfc) as FabricValue);
+export const ownerReleaseByIntentEnvelopeDigest = (cfc: unknown): string => {
+  if (cfc === undefined) return hashStringOf(null);
+  if (!isValidFabricValue(cfc)) {
+    throw new OwnerReleaseByIntentError(
+      "Cannot digest an envelope that is not a stored value.",
+    );
+  }
+  return hashStringOf(cfc);
+};
 
 /**
  * `value` as a request, or `undefined` when it is not one: a record of exactly

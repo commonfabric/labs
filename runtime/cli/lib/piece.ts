@@ -5454,9 +5454,9 @@ export async function releaseCellConfidentialityByIntent(
   if (answer?.trim() !== RELEASE_BY_INTENT_CONFIRMATION) {
     throw new Error("Not confirmed; nothing was signed or released.");
   }
-  // Signing happens here, on the owner's typed confirmation, and nowhere
-  // else: this host holds the owner's key, so the route's obligation that a
-  // signature stands for the owner's direct decision rests on this line.
+  // Only the owner's typed confirmation reaches this signature. This host
+  // holds the owner's key, so the route's obligation that a signature stands
+  // for the owner's direct decision rests here.
   const signature = await identity.sign(
     ownerReleaseByIntentSignedBytes(request) as AsBytes<unknown>,
   );
