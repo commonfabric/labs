@@ -5330,6 +5330,39 @@ export class Runner {
       );
     }
 
+    // A piece running here takes this setup's pattern by swapping, a setup
+    // for resume such as a source update's included, and the swap is decided
+    // by what decided this setup. The decision is there from the setup on,
+    // since the store's notification of the pointer move can reach the
+    // swap before this transaction's commit callbacks run, and goes with a
+    // setup that does not land.
+    const runningKey = this.#getSetupKey(resultCell.withTx(tx));
+    if (this.#sessionPatternSwaps.has(runningKey)) {
+      const decided = {
+        pattern: patternIdentityKey(entryRef),
+        carry: carryRunDecision(tx),
+      };
+      this.#runDecisions.set(runningKey, decided);
+      const undecide = () => {
+        if (this.#runDecisions.get(runningKey) === decided) {
+          this.#runDecisions.delete(runningKey);
+        }
+      };
+      tx.addCommitCallback((settledTx, result) => {
+        if (result.error) {
+          undecide();
+          return;
+        }
+        // A wave that withdraws the setup after accepting it leaves nothing
+        // the decision decided.
+        void (waveSettlementOf(settledTx) ?? waveSettlementOf(tx))?.then(
+          ({ error }) => {
+            if (error) undecide();
+          },
+        );
+      });
+    }
+
     if (!validationOptions.prepareForResume) {
       const key = this.#getSetupKey(resultCell.withTx(tx));
       const preparedPatternKey = patternIdentityKey(entryRef);
@@ -5342,27 +5375,6 @@ export class Runner {
           this.#locallyPreparedResults.delete(key);
         }
       });
-      // A piece running here takes this setup's pattern by swapping, and the
-      // swap is decided by what decided this setup.
-      if (this.#sessionPatternSwaps.has(key)) {
-        const decided = {
-          pattern: preparedPatternKey,
-          carry: carryRunDecision(tx),
-        };
-        tx.addCommitCallback((settledTx, result) => {
-          if (result.error) return;
-          this.#runDecisions.set(key, decided);
-          // A wave that withdraws the setup after accepting it leaves nothing
-          // the decision decided.
-          void (waveSettlementOf(settledTx) ?? waveSettlementOf(tx))?.then(
-            ({ error }) => {
-              if (error && this.#runDecisions.get(key) === decided) {
-                this.#runDecisions.delete(key);
-              }
-            },
-          );
-        });
-      }
       // ALREADY-RUNNING piece, full setup staged, KEYLESS pattern: for a real
       // pattern the durable stamp carries this exact moment to the piece's meta
       // watcher, whose swap replaces the running graph with the new version

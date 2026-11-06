@@ -353,4 +353,88 @@ describe("cfc-deferred-run", () => {
       stopReading();
     }
   });
+
+  describe("a running piece swapped to a compiled pattern", () => {
+    // A compiled pattern has a durable pointer, so the piece's pattern
+    // watcher swaps the running graph to the pattern a setup staged, and
+    // the new graph's instantiation sets up its nested pattern. A source
+    // update stages its setup the same way, for resume.
+
+    /**
+     * A piece whose `inner` is a nested piece multiplying `input` by
+     * `factor`, which with `wider` also exposes `w`, so that a swap to it
+     * writes the nested piece's result wiring afresh.
+     */
+    const nesting = (factor: number, wider: boolean) => ({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+          import { computed, pattern, Writable } from "commonfabric";
+          const inner = pattern<{ input: Writable<number> }>(({ input }) => ({
+            v: computed(() => input.get() * ${factor}),
+            ${wider ? "w: computed(() => input.get() + 1)," : ""}
+          }));
+          export default pattern<{ input: Writable<number> }>(
+            ({ input }) => ({ inner: inner({ input }) }),
+          );
+        `,
+      }],
+    });
+
+    for (const prepareForResume of [false, true]) {
+      it(`stamps Bob's clause on the nested setup after a setup${prepareForResume ? " for resume" : ""} in a transaction that read Bob's document`, async () => {
+        const bobs = await seedBobsDocument();
+        const v1 = await runtime.patternManager.compilePattern(
+          nesting(2, false),
+          {
+            space,
+          },
+        );
+        const v2 = await runtime.patternManager.compilePattern(
+          nesting(3, true),
+          {
+            space,
+          },
+        );
+        const input = runtime.getCell<number>(space, "nesting-input");
+        const piece = runtime.getCell<{ inner: unknown }>(
+          space,
+          `nesting-piece-${prepareForResume}`,
+        );
+        const seed = runtime.edit();
+        input.withTx(seed).set(1);
+        await runtime.setup(seed, v1, { input }, piece);
+        expect((await seed.commit().settled).error).toBeUndefined();
+        expect(await runtime.start(piece)).toBe(true);
+        const stopReading = piece.sink(() => {});
+        try {
+          await runtime.idle();
+          await runtime.runner.idlePieceInstantiationSettlements();
+          const before = piece.key("inner").resolveAsCell();
+          expect(confidentialityOf(before)).not.toContain(BOB);
+
+          const tx = runtime.edit();
+          runtime.getCellFromLink(bobs, undefined, tx).get();
+          await runtime.setup(
+            tx,
+            v2,
+            prepareForResume ? undefined : { input },
+            piece.withTx(tx),
+            { prepareForResume },
+          );
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await runtime.idle();
+          await runtime.runner.idlePieceInstantiationSettlements();
+          await runtime.idle();
+
+          const after = piece.key("inner").resolveAsCell();
+          expect(after.key("v").get()).toBe(3);
+          expect(confidentialityOf(after)).toContain(BOB);
+        } finally {
+          stopReading();
+        }
+      });
+    }
+  });
 });
