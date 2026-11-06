@@ -18,6 +18,7 @@ import { seedProfileOwner } from "../../../runner/test/cfc-seed-envelope.ts";
 import { installCustomRoot } from "../install-custom-root.ts";
 import {
   ensurePrivateInboxOf,
+  PRIVATE_INBOX_SPACE_NAME,
   type PrivateInboxEnsure,
 } from "../../src/ops/private-inbox.ts";
 
@@ -27,8 +28,8 @@ const identity = await Identity.fromPassphrase("private inbox adoption");
 const someoneElse = (await Identity.fromPassphrase("someone else")).did();
 
 // A Home pattern reduced to the fields the host reads and the stream it sends,
-// whose handler records what it is sent: the inbox to adopt, the deciding
-// profile, and the refusal, its reason and inbox. `defaultProfile` is a slot
+// whose handler records what it is sent: the inbox to adopt, the inbox to
+// replace, the deciding profile, and the refusal, its reason and inbox. `defaultProfile` is a slot
 // holding the default under `profile`, as Home's is. The handler throws while
 // `failEnsure` is set.
 const program: RuntimeProgram = {
@@ -47,20 +48,23 @@ type Refused = { reason?: string; piece?: Cell<{ name?: string }> };
 const ensurePrivateInbox = handler<
   {
     adopt?: Cell<{ name?: string }>;
+    replace?: Cell<{ name?: string }>;
     from?: Cell<{ inbox?: Pointer }>;
     refused?: { reason: string; inbox: Cell<{ name?: string }> };
   },
   {
     ensured: Writable<number>;
     adopted: Writable<Pointer>;
+    replaced: Writable<Pointer>;
     decidedBy: Writable<Named>;
     refused: Writable<Refused>;
     failEnsure: Writable<boolean>;
   }
->((event, { ensured, adopted, decidedBy, refused, failEnsure }) => {
+>((event, { ensured, adopted, replaced, decidedBy, refused, failEnsure }) => {
   if (failEnsure.get()) throw new Error("Home fails the ensure");
   ensured.set(ensured.get() + 1);
   adopted.set(event?.adopt === undefined ? {} : { piece: event.adopt });
+  replaced.set(event?.replace === undefined ? {} : { piece: event.replace });
   decidedBy.set(event?.from === undefined ? {} : { piece: event.from });
   refused.set(
     event?.refused === undefined
@@ -81,6 +85,7 @@ export default pattern(() => {
   );
   const ensured = new Writable(0).for("ensured");
   const adopted = new Writable<Pointer>({}).for("adopted");
+  const replaced = new Writable<Pointer>({}).for("replaced");
   const decidedBy = new Writable<Named>({}).for("decidedBy");
   const refused = new Writable<Refused>({}).for("refused");
   const failEnsure = new Writable(false).for("failEnsure");
@@ -92,12 +97,14 @@ export default pattern(() => {
     retiredProfiles,
     ensured,
     adopted,
+    replaced,
     decidedBy,
     refused,
     failEnsure,
     ensurePrivateInbox: ensurePrivateInbox({
       ensured,
       adopted,
+      replaced,
       decidedBy,
       refused,
       failEnsure,
@@ -106,6 +113,12 @@ export default pattern(() => {
 });`,
   }],
 };
+
+/** A space's allocation record of the space a name stands for. */
+const allocationSchema = {
+  type: "object",
+  properties: { did: { type: "string" } },
+} as const satisfies JSONSchema;
 
 /** A list of links, each read as the link it is. */
 const linkListSchema = {
@@ -124,6 +137,9 @@ describe("ensurePrivateInboxOf()", () => {
   let runtime: Runtime;
   let controller: PiecesController;
   let home: Cell<unknown>;
+  // The space Home's own inboxes live in, which Home's space records under
+  // `PRIVATE_INBOX_SPACE_NAME`, as Home's first creation of one records it.
+  let ownSpace: MemorySpace;
 
   beforeEach(async () => {
     storage = StorageManager.emulate({ as: identity });
@@ -138,6 +154,20 @@ describe("ensurePrivateInboxOf()", () => {
     );
     await controller.synced();
     home = await installCustomRoot(runtime, controller, program);
+    ownSpace = await runtime.createSpace({ grants: { "*": "WRITE" } });
+    await runtime.editWithRetry((tx) =>
+      runtime.getCell(
+        home.space,
+        {
+          inSpaceAllocation: {
+            space: home.space,
+            name: PRIVATE_INBOX_SPACE_NAME,
+          },
+        },
+        allocationSchema,
+        tx,
+      ).set({ did: ownSpace })
+    );
   });
 
   afterEach(async () => {
@@ -168,8 +198,16 @@ describe("ensurePrivateInboxOf()", () => {
     };
   }
 
-  /** An inbox in a space of its own that grants every principal `WRITE`. */
+  /** A usable inbox Home made, in the space it makes its own inboxes in. */
   async function usableInbox(): Promise<Cell<unknown>> {
+    return await documentIn(ownSpace, inboxValue(ownSpace));
+  }
+
+  /**
+   * A usable inbox Home did not make, as a loom daemon makes one: in a space
+   * of its own that grants every principal `WRITE`.
+   */
+  async function inboxHomeDidNotMake(): Promise<Cell<unknown>> {
     const space = await runtime.createSpace({ grants: { "*": "WRITE" } });
     return await documentIn(space, inboxValue(space));
   }
@@ -241,6 +279,15 @@ describe("ensurePrivateInboxOf()", () => {
   /** The inbox Home's handler was last sent to adopt, if any. */
   async function adopted(): Promise<Cell<unknown> | undefined> {
     const pointer = await home.key("adopted" as never).asSchema({
+      type: "object",
+      properties: { piece: { type: "unknown", asCell: ["cell"] } },
+    }).pull() as { piece?: Cell<unknown> } | undefined;
+    return pointer?.piece;
+  }
+
+  /** The inbox Home's handler was last sent to replace, if any. */
+  async function replacedSent(): Promise<Cell<unknown> | undefined> {
+    const pointer = await home.key("replaced" as never).asSchema({
       type: "object",
       properties: { piece: { type: "unknown", asCell: ["cell"] } },
     }).pull() as { piece?: Cell<unknown> } | undefined;
@@ -727,6 +774,138 @@ describe("ensurePrivateInboxOf()", () => {
       expect(await adopted()).toBeUndefined();
       expect(await home.key("ensured" as never).pull()).toBe(1);
       expect(refusalsLogged()).toBe(before + 1);
+    });
+  });
+
+  describe("an inbox Home did not make", () => {
+    /** Has Home hold `inbox` as its private inbox. */
+    async function hold(inbox: Cell<unknown>): Promise<void> {
+      await runtime.editWithRetry((tx) =>
+        home.withTx(tx).key("privateInbox" as never).set(
+          { piece: inbox } as never,
+        )
+      );
+    }
+
+    /** The address of the inbox Home's handler was last sent to replace. */
+    async function replacedAddress(): Promise<
+      { space: string; id: string } | undefined
+    > {
+      const named = await replacedSent();
+      return named === undefined ? undefined : addressOf(named);
+    }
+
+    /** The address of the profile Home's handler was last sent, if any. */
+    async function deciderAddress(): Promise<
+      { space: string; id: string } | undefined
+    > {
+      const decider = await decidedBy();
+      return decider === undefined ? undefined : addressOf(decider);
+    }
+
+    it("names the inbox Home holds to replace, and no profile, when no profile advertises it", async () => {
+      const held = await inboxHomeDidNotMake();
+      await hold(held);
+      await listProfiles([await profilePointingAt(undefined)]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("replace");
+      expect(result).not.toHaveProperty("profile");
+      expect(await replacedAddress()).toEqual(addressOf(held));
+      expect(await deciderAddress()).toBeUndefined();
+      expect(await adopted()).toBeUndefined();
+    });
+
+    it("names the held inbox to replace with the deciding profile when that profile advertises it", async () => {
+      const held = await inboxHomeDidNotMake();
+      await hold(held);
+      const deciding = await profilePointingAt(held);
+      await listProfiles([deciding]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("replace");
+      expect(await replacedAddress()).toEqual(addressOf(held));
+      expect(await deciderAddress()).toEqual(addressOf(deciding));
+    });
+
+    it("names the held inbox to replace though the deciding profile advertises one Home made", async () => {
+      const held = await inboxHomeDidNotMake();
+      await hold(held);
+      await listProfiles([await profilePointingAt(await usableInbox())]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("replace");
+      expect(await replacedAddress()).toEqual(addressOf(held));
+      expect(await adopted()).toBeUndefined();
+    });
+
+    it("names a usable advertised inbox to replace, with its profile, when Home holds none", async () => {
+      const inbox = await inboxHomeDidNotMake();
+      const deciding = await profilePointingAt(inbox);
+      await listProfiles([deciding]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("replace");
+      expect(await replacedAddress()).toEqual(addressOf(inbox));
+      expect(await deciderAddress()).toEqual(addressOf(deciding));
+      expect(await adopted()).toBeUndefined();
+      expect(await refusedSent()).toBeUndefined();
+    });
+
+    it("names a usable advertised inbox to replace when Home holds one of its own", async () => {
+      await hold(await usableInbox());
+      const inbox = await inboxHomeDidNotMake();
+      await listProfiles([await profilePointingAt(inbox)]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("replace");
+      expect(await replacedAddress()).toEqual(addressOf(inbox));
+      expect(await adopted()).toBeUndefined();
+    });
+
+    it("names every usable advertised inbox to replace while Home's space records no space of its own", async () => {
+      await runtime.editWithRetry((tx) =>
+        runtime.getCell(
+          home.space,
+          {
+            inSpaceAllocation: {
+              space: home.space,
+              name: PRIVATE_INBOX_SPACE_NAME,
+            },
+          },
+          allocationSchema,
+          tx,
+        ).set({})
+      );
+      const inbox = await usableInbox();
+      await listProfiles([await profilePointingAt(inbox)]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("replace");
+      expect(await replacedAddress()).toEqual(addressOf(inbox));
+    });
+
+    it("names an advertised inbox that fails vetting as refused, not to replace", async () => {
+      const space = await runtime.createSpace({
+        owner: someoneElse,
+        grants: { "*": "WRITE" },
+      });
+      await listProfiles([
+        await profilePointingAt(await documentIn(space, inboxValue(space))),
+      ]);
+
+      const result = await ensure();
+
+      expect(result.outcome === "refused" && result.reason).toBe(
+        "inbox-adoption-acl-mismatch",
+      );
+      expect(await replacedSent()).toBeUndefined();
     });
   });
 
