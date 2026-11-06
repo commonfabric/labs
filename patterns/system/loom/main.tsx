@@ -761,11 +761,12 @@ export default pattern<LoomInput, LoomOutput>(
     const access = computed(
       (): PerSession<SpaceAccessLevel | undefined> => spaceAccess(panels),
     );
-    // A panel's view is inline, as the floor's are: a child pattern per
-    // panel would need setting up before a cold reader saw anything.
+    // A panel's view is a computation of its own, which a host renders as
+    // it would a piece, rather than a child pattern per panel, which would
+    // need setting up before a cold reader saw anything.
     const deckShared = panels.map((panel) => ({
       panel,
-      view: { [UI]: computed(() => renderPanel(panel, true)) },
+      view: computed(() => ({ [UI]: renderPanel(panel, true) })),
       kind: computed(() => panel.get()?.kind),
       heading: computed(() => panelHeading(panel)),
       removal: computed((): PanelRemoval => {
@@ -782,7 +783,7 @@ export default pattern<LoomInput, LoomOutput>(
     );
     const deckPrivate = privateList.map((panel) => ({
       panel,
-      view: { [UI]: computed(() => renderPanel(panel, true)) },
+      view: computed(() => ({ [UI]: renderPanel(panel, true) })),
       kind: computed(() => panel.get()?.kind),
       heading: computed(() => panelHeading(panel)),
     }));
