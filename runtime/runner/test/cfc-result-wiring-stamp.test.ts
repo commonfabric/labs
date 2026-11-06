@@ -99,7 +99,9 @@ describe("cfc-result-wiring-stamp", () => {
     const double = lift((x: number) => x * 2);
     const triple = lift((x: number) => x * 3);
     const title = lift((x: number) => `Page ${x}`);
+    const inner = cf.pattern<{ x: number }>(({ x }) => ({ a: double(x) }));
     return {
+      outer: cf.pattern<{ x: number }>(({ x }) => ({ child: inner({ x }) })),
       plain: cf.pattern<{ x: number }>(({ x }) => ({ a: double(x) })),
       wider: cf.pattern<{ x: number }>(({ x }) => ({
         a: double(x),
@@ -503,5 +505,104 @@ describe("cfc-result-wiring-stamp", () => {
       expect(membershipOf(result)).toContain(BOB);
       expect(existenceOf(result)).toEqual([CAROL]);
     });
+  });
+
+  describe("a stamp a setup that writes nothing would keep", () => {
+    // Each way the runner sets a stamped document up again, in a transaction
+    // that read Bob's data first, with a wiring that does not change: a setup
+    // that writes nothing leaves Bob's clause on the membership, so a re-mint
+    // must keep it too. A nested child is set up by its parent's setup, and
+    // takes the standing of whatever transaction that runs in.
+
+    const routes: {
+      name: string;
+      running: boolean;
+      run: (
+        tx: ReturnType<Runtime["edit"]>,
+        cell: Cell<unknown>,
+        same: Parameters<Runtime["run"]>[1],
+        fresh: Parameters<Runtime["run"]>[1],
+      ) => void;
+    }[] = [
+      {
+        name: "a run in the transaction that read the data",
+        running: false,
+        run: (tx, cell, same) => {
+          runtime.run(tx, same, { x: 1 }, cell);
+        },
+      },
+      {
+        name: "a run deferred until its pattern is named",
+        running: false,
+        run: (tx, cell, _same, fresh) => {
+          runtime.run(tx, fresh, { x: 1 }, cell);
+        },
+      },
+      {
+        name: "a start after the asking transaction commits",
+        running: false,
+        run: (tx, cell, same) => {
+          runtime.runner.accessForTestingOnly.runPatternAfterSuccessfulCommit(
+            tx,
+            cell,
+            same as Parameters<
+              typeof runtime.runner.accessForTestingOnly.runPatternAfterSuccessfulCommit
+            >[2],
+            { x: 1 },
+          );
+        },
+      },
+      {
+        name: "a swap of the running piece",
+        running: true,
+        run: (tx, cell, _same, fresh) => {
+          runtime.run(tx, fresh, { x: 1 }, cell);
+        },
+      },
+    ];
+
+    for (const nested of [false, true]) {
+      for (const route of routes) {
+        it(`keeps it through ${route.name}${nested ? ", on a nested child" : ""}`, async () => {
+          const same = patterns();
+          const fresh = patterns();
+          const pattern = nested ? same.outer : same.plain;
+          const freshPattern = nested ? fresh.outer : fresh.plain;
+          const bobs = await seedBobsDocument();
+          const cause = `kept-${nested ? "child" : "top"}-${route.name}`;
+
+          const first = runtime.edit();
+          const result = runtime.run(
+            first,
+            pattern,
+            { x: 1 },
+            runtime.getCell(space, cause, undefined, first),
+          );
+          first.prepareCfc();
+          expect((await first.commit().settled).ok).toBeDefined();
+          await runtime.idle();
+          await result.key(nested ? "child" : "a").pull();
+          const target = nested ? result.key("child").resolveAsCell() : result;
+          if (!route.running) runtime.runner.stop(result);
+          await plantStamp(target, BOB);
+
+          const tx = runtime.edit();
+          runtime.getCellFromLink(bobs, undefined, tx).get();
+          route.run(
+            tx,
+            runtime.getCell(space, cause, undefined, tx),
+            pattern,
+            freshPattern,
+          );
+          tx.prepareCfc();
+          expect((await tx.commit().settled).ok).toBeDefined();
+          await runtime.idle();
+          runtime.runner.stop(result);
+
+          expect(membershipOf(target)).toContain(BOB);
+          expect(existenceOf(target)).toEqual([CAROL]);
+        });
+      }
+    }
   });
 });

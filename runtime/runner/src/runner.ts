@@ -2801,11 +2801,14 @@ export class Runner {
    * The transactions a setup runs in that are the ones it was asked in: the
    * transaction a caller hands `run`, `setup`, `runSynced` or
    * `runInTransaction`, or one the runner makes for that call as it is made.
-   * Only a setup in one of these restates a result wiring it finds unchanged
-   * (§8.9.1.3). Every other setup transaction is one the runner makes later,
-   * for a start deferred out of the asking transaction, a swap or a repair,
-   * and holds none of the reads that decided the setup, so re-minting the
-   * stored membership there would drop a clause those reads carried.
+   * Only these are added, at those entry points; a setup nested in another,
+   * such as a pattern node instantiated with its parent, takes whatever
+   * standing the transaction already has. Only a setup in one of these
+   * restates a result wiring it finds unchanged (§8.9.1.3). Every other setup
+   * transaction is one the runner makes later, for a start deferred out of
+   * the asking transaction, a swap or a repair, and holds none of the reads
+   * that decided the setup, so re-minting the stored membership there would
+   * drop a clause those reads carried.
    */
   readonly #askingSetupTransactions = new WeakSet<
     IExtendedStorageTransaction
@@ -9074,8 +9077,6 @@ export class Runner {
             argument,
             startCell,
             { ...options, attributeInitialization: false },
-            true,
-            true,
           );
           if (ownership.markInstalled(started.installedCancel)) {
             startTx.abort("Deferred runner start was cancelled");
@@ -9571,8 +9572,6 @@ export class Runner {
           inputs,
           committedResultCell,
           parentPieceRootId === undefined ? {} : { parentPieceRootId },
-          true,
-          true,
         ).installedCancel;
         if (ownership.markInstalled(installedRegistration)) {
           startTx.abort("Deferred runner start was cancelled");
@@ -9672,6 +9671,7 @@ export class Runner {
     resultCell: Cell<R>,
     options: RunnerRunOptions = {},
   ): Cell<R> {
+    this.#askingSetupTransactions.add(providedTx);
     return this.#runWithStartOwnership(
       providedTx,
       patternOrModule,
@@ -9731,10 +9731,6 @@ export class Runner {
    * stores what the patterns nested in it set up, and stopping leaves nothing
    * of the piece running here. Such a run leaves a piece whose setup is
    * stored already as it is.
-   *
-   * With `deferred`, the run is one this runner deferred out of the
-   * transaction that asked for it, so the transaction it sets up in is not an
-   * asking one (`#askingSetupTransactions`).
    */
   #runWithStartOwnership<T, R = any>(
     providedTx: IExtendedStorageTransaction | undefined,
@@ -9743,7 +9739,6 @@ export class Runner {
     resultCell: Cell<R>,
     options: RunnerRunOptions = {},
     retain = true,
-    deferred = false,
   ): RunResult<R> {
     // Before anything this run stages: retiring a registration cancels any
     // start pending for the result, and one staged here would take this
@@ -9825,7 +9820,6 @@ export class Runner {
     // piece whose pattern moved underneath it is an ordinary in-place swap.
     const creatingPiece = options.sourceOrigin !== undefined &&
       getPatternIdentityRef(resultCell.withTx(tx)) === undefined;
-    if (!deferred) this.#askingSetupTransactions.add(tx);
     const { needsStart, pattern } = this.#setupInternal(
       tx,
       patternOrModule,
