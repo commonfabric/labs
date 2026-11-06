@@ -3655,8 +3655,8 @@ subclasses the act and carries it there.
 
 `JsonCodecEngine` supplies both directions at its one boundary type:
 
-- `encode(value, env?)` encodes a `FabricValue` into the `/<Type>@<Version>`
-  tagged wire format, then stringifies the result.
+- `encode(value, env?)` encodes a `FabricValue` into the `/<tag>` tagged
+  wire format, then stringifies the result.
 - `decode(data, env)` parses a JSON string, then decodes tagged forms back into
   runtime types.
 
@@ -3981,7 +3981,7 @@ requirements.
 ### 5.2 JSON
 
 The JSON encoding for `FabricValue`s — the `fvj1:` encoding prefix, the
-`/<Type>@<Version>` wire format, type encodings, escaping mechanisms, the
+`/<tag>` wire format, type encodings, escaping mechanisms, the
 `/`-key reservation rule, the canonical text an encoder writes, and the floors
 on the size guarantees an implementation states — is specified in
 [`3-json-encoding.md`](./3-json-encoding.md). Section 7 covers conventions
@@ -4233,8 +4233,8 @@ Freezing or caching a container's hash does not change its equality result.
 
 **The JSON layering defined by `codec-json` is to be the only JSON layering the
 system defines. This is settled.** It is the direction the system is committed
-to, not one option among several: a value's JSON form is the
-`/<Type>@<Version>` tagged-object convention of `3-json-encoding.md`, and no
+to, not one option among several: a value's JSON form is the `/<tag>`
+tagged-object convention of `3-json-encoding.md`, and no
 other layer defines a competing one.
 
 **It is not yet the whole truth of the system, and this section says so

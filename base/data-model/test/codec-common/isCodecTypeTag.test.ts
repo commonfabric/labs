@@ -77,7 +77,7 @@ describe("isCodecTypeTag", () => {
     expect(isCodecTypeTag("sys_x.Boop@1")).toBe(false);
     expect(isCodecTypeTag("sys-x.Boop@1")).toBe(false);
     expect(isCodecTypeTag("1sys.Boop@1")).toBe(false);
-    expect(isCodecTypeTag("süs.Boop@1")).toBe(false);
+    expect(isCodecTypeTag("s\u00fcs.Boop@1")).toBe(false);
   });
 
   it("returns `false` for a prefixed tag whose version is malformed", () => {
@@ -115,10 +115,10 @@ describe("isCodecTypeTag", () => {
     // tag crosses between systems, so the set of names it can carry cannot
     // depend on which alphabet a decoder reads it with.
 
-    expect(isCodecTypeTag("Éclair@1")).toBe(false);
-    expect(isCodecTypeTag("Café@1")).toBe(false);
-    expect(isCodecTypeTag("Бytes@1")).toBe(false);
-    expect(isCodecTypeTag("café")).toBe(false);
+    expect(isCodecTypeTag("\u00c9clair@1")).toBe(false);
+    expect(isCodecTypeTag("Caf\u00e9@1")).toBe(false);
+    expect(isCodecTypeTag("\u0411ytes@1")).toBe(false);
+    expect(isCodecTypeTag("caf\u00e9")).toBe(false);
   });
 
   it("returns `false` for a tag padded with whitespace or a newline", () => {

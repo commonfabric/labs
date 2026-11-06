@@ -10,9 +10,20 @@ import {
 // circular load-time dependency. `codecOf.ts` itself is a leaf.
 import { codecOf } from "@/codec-common/codecOf.ts";
 import { isCodecTypeTag } from "@/codec-common/isCodecTypeTag.ts";
+import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
 import { REALM_CODEC } from "@/codec-interface/interface.ts";
 import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
 import type { RealmCodecValue } from "@/codec-realm";
+// Imported from their own modules rather than from the barrels, for the same
+// reason as `codecOf.ts`: neither module loads this one. `FabricHash` is
+// imported for its type alone, because its module loads the `fabric-bases`
+// barrel.
+import {
+  BaseFabricPrimitive,
+  VALUE_TAG,
+} from "@/fabric-bases/BaseFabricPrimitive.ts";
+import type { FabricHash } from "@/fabric-primitives/FabricHash.ts";
+import { FABRIC_PRIMITIVE_VALUE_TAGS } from "@/fabric-primitives/interface.ts";
 import {
   type FabricPlainObject,
   FabricPrimitive,
@@ -176,23 +187,34 @@ export class DebugStringifier {
    * encoding, in the same form a class instance's properties take. When the
    * codec cannot be found, the class name stands in for the type name and the
    * state is elided.
+   *
+   * A `FabricHash` is rendered in that form from the hash itself rather than
+   * through its codec. The codec refuses a hash whose algorithm tag is outside
+   * the tag syntax, and a rendering shows such a hash as it shows any other.
    */
   #renderFabricPrimitive(value: FabricPrimitive, indent: string): string {
     let tag: string;
     let state: PrimitiveState;
 
-    try {
-      // A `FabricPrimitive` binds no `[CODEC]`, so its realm codec supplies
-      // the tag and the state. That codec is the one whose terminals are the
-      // richest -- a `bigint` stays a `bigint`, bytes stay bytes -- which is
-      // what makes it the one to render.
-      const codec = codecOf<RealmCodecValue>(value, REALM_CODEC);
-      tag = codec.tagForValue(value);
-      state = codec.encode(value, NULL_LIVE_ENVIRONMENT);
-    } catch {
-      // Never let the debug renderer throw; fall back to the class name, with
-      // the state elided.
-      return DebugStringifier.#renderElidedInstance(classNameOf(value));
+    if (DebugStringifier.#isFabricHash(value)) {
+      const hash = new ArrayBuffer(value.length);
+      value.copyInto(new Uint8Array(hash));
+      tag = CODEC_TYPE_TAGS.Hash;
+      state = { tag: value.tag, hash };
+    } else {
+      try {
+        // A `FabricPrimitive` binds no `[CODEC]`, so its realm codec supplies
+        // the tag and the state. That codec is the one whose terminals are the
+        // richest -- a `bigint` stays a `bigint`, bytes stay bytes -- which is
+        // what makes it the one to render.
+        const codec = codecOf<RealmCodecValue>(value, REALM_CODEC);
+        tag = codec.tagForValue(value);
+        state = codec.encode(value, NULL_LIVE_ENVIRONMENT);
+      } catch {
+        // Never let the debug renderer throw; fall back to the class name, with
+        // the state elided.
+        return DebugStringifier.#renderElidedInstance(classNameOf(value));
+      }
     }
 
     const typeName = DebugStringifier.#typeNameOf(tag);
@@ -458,15 +480,25 @@ export class DebugStringifier {
     // carried under the same word.
     switch (tag) {
       case "circle": {
-        // A reference back to an enclosing object.
-        return "<circle>";
+        // A reference back to an enclosing object, whose payload is the depth
+        // of that object. A payload not of that shape falls through to render
+        // as it is.
+        if (typeof payload === "number") {
+          return "<circle>";
+        }
+        return this.#renderInstance(tag, payload, indent);
       }
 
       case "uniqueSymbol": {
-        // A unique (uninterned) symbol, whose payload is its description.
-        return (payload === undefined)
-          ? "Symbol()"
-          : `Symbol(${JSON.stringify(payload)})`;
+        // A unique (uninterned) symbol, whose payload is its description, if
+        // it has one. A payload not of that shape falls through to render as
+        // it is.
+        if (payload === undefined) {
+          return "Symbol()";
+        } else if (typeof payload === "string") {
+          return `Symbol(${JSON.stringify(payload)})`;
+        }
+        return this.#renderInstance(tag, payload, indent);
       }
 
       case "function": {
@@ -508,12 +540,8 @@ export class DebugStringifier {
         if (partial !== undefined) {
           return this.#renderPartialString(partial, indent);
         }
-        // deno-coverage-ignore-start
-        // The conversion is the form's only producer and shapes it no other
-        // way, so this fallthrough is a prophylactic no test can reach.
         return this.#renderInstance(tag, payload, indent);
       }
-      // deno-coverage-ignore-stop
 
       default: {
         // A `FabricInstance`, carried as its encoding under its codec type
@@ -692,18 +720,23 @@ export class DebugStringifier {
   }
 
   /**
+   * Indicates whether `value` is a `FabricHash`, asked by the tag it reports
+   * rather than by its class, which this module does not load.
+   */
+  static #isFabricHash(value: FabricPrimitive): value is FabricHash {
+    return (value instanceof BaseFabricPrimitive) &&
+      (value[VALUE_TAG] === FABRIC_PRIMITIVE_VALUE_TAGS.FabricHash);
+  }
+
+  /**
    * Returns the length and excerpt of the given value when it is the payload
    * shape of the string-length form, a plain object whose `length` is a
    * number and whose `excerpt` is a string, and `undefined` when it is not.
    */
   static #partialStringOf(value: FabricValue): PartialString | undefined {
-    // deno-coverage-ignore-start
-    // The conversion shapes the form no other way; see the `partialString`
-    // arm of `#renderTaggedForm()`.
     if (!isPlainObject(value)) {
       return undefined;
     }
-    // deno-coverage-ignore-stop
 
     const { length, excerpt } = value;
     return ((typeof length === "number") && (typeof excerpt === "string"))

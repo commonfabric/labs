@@ -23,10 +23,10 @@
  * rendering is `impl.test.ts`'s to check, so no case here is cut by one.
  *
  * The expression is evaluated with every `FabricInstance` and
- * `FabricPrimitive` class in scope under its own name, along with the three
- * abstract base classes and the realm codec's binding symbol, so that a case
- * can define a class of its own; nothing else beyond the language is in
- * scope.
+ * `FabricPrimitive` class in scope under its own name, along with
+ * `UnknownValue`, the three abstract base classes and the realm codec's binding
+ * symbol, so that a case can define a class of its own; nothing else beyond the
+ * language is in scope.
  *
  * To rewrite each file's recorded renderings from the actual ones, run this
  * from the package directory. A new file holds its expression alone, and the
@@ -52,7 +52,7 @@ import {
   toIndentedDebugString,
   toStructuredDebugValue,
 } from "@";
-import { REALM_CODEC } from "@/codec-common";
+import { REALM_CODEC, UnknownValue } from "@/codec-common";
 import { BaseFabricSpecialObject } from "@/fabric-bases";
 import * as fabricInstances from "@/fabric-instances";
 import * as fabricPrimitives from "@/fabric-primitives";
@@ -108,6 +108,7 @@ const SCOPE: Record<string, unknown> = Object.fromEntries([
     FabricInstance,
     FabricPrimitive,
     REALM_CODEC,
+    UnknownValue,
   }),
 ]);
 

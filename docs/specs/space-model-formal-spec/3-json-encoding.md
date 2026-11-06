@@ -56,10 +56,10 @@ encoding ever evolve in a way older decoders cannot interpret, a new prefix
 cleanly rather than parsing it incorrectly. The current spec defines only
 `fvj1:`.
 
-## 2. Key Convention: `/<Type>@<Version>`
+## 2. Key Convention: `/<Type>(@<Version>)?`
 
 All special types in JSON use a single convention: single-key objects where the
-key follows the pattern `/<Type>@<Version>`.
+key follows the pattern `/<Type>(@<Version>)?`.
 
 - `/` — sigil prefix (nodding to IPLD heritage)
 - `<Type>` — type name, after any namespace prefixes
@@ -510,7 +510,7 @@ a decoder preserves regardless of which form it sees.
 
 ## 7. Codec Engine Responsibilities
 
-The JSON engine generates and parses `/<Type>@<Version>` keys. It is also
+The JSON engine generates and parses `/<tag>` keys. It is also
 responsible for:
 
 - Owning recursion and tag-wrapping around the shallow per-type codecs (see
@@ -537,7 +537,7 @@ escaping rather than type encoding.
 
 ## 8. Unknown Type Handling
 
-When a JSON decode encounters a `/<Type>@<Version>` key it doesn't recognize,
+When a JSON decode encounters a `/<tag>` key it doesn't recognize,
 it wraps the data in `UnknownValue` (see `1-fabric-values.md` Section 3) to
 preserve it for round-tripping. Re-encoding reproduces the original key,
 the codec's `tagForValue()` reading back the preserved tag and `encode()`
@@ -627,7 +627,7 @@ including:
 > diffing. The sort key is the same UTF-8 byte order used by hashing, so the two
 > systems share one specification of "canonical key order."
 >
-> The keys of a single-key tagged object (`/<Type>@<Version>`, `/object`,
+> The keys of a single-key tagged object (`/<tag>`, `/object`,
 > `/quote`, `/hole`, etc.) are trivially "sorted" — there is only one key. The
 > requirement is meaningful only for plain objects with two or more keys, and
 > for the inner contents of `/object` and `/quote` wrappers.
