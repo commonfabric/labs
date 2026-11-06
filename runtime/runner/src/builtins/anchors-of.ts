@@ -5,7 +5,6 @@
  */
 
 import { debugStr } from "@commonfabric/data-model";
-import { internSchema } from "@commonfabric/data-model-schema";
 
 import type { Cell } from "../cell.ts";
 import { anchorsDocumentLink } from "../field-anchors.ts";
@@ -15,15 +14,6 @@ import type { Runtime } from "../runtime.ts";
 import type { Action } from "../scheduler.ts";
 import { UnresolvedInputError } from "../schema-view.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
-
-/**
- * Argument schema for `anchorsOf`. The field rides the input as a cell, so
- * the node receives its link, which names its anchors document.
- */
-export const ANCHORS_OF_ARGUMENT_SCHEMA = internSchema({
-  type: "object",
-  properties: { field: { type: "string", asCell: ["cell"] } },
-});
 
 /**
  * anchorsOf(field) — a write redirect to the anchors document of the string

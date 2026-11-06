@@ -28,7 +28,6 @@ import type {
   WishState,
 } from "commonfabric";
 
-import { ANCHORS_OF_ARGUMENT_SCHEMA } from "../builtins/anchors-of.ts";
 import { wishStateSchemaForResult } from "../builtins/wish-schema.ts";
 import { LLMDialogResultSchema } from "../builtins/llm-schemas.ts";
 import { sqliteQueryNodeFactory } from "../builtins/sqlite/query-node.ts";
@@ -404,7 +403,6 @@ export function anchorsOf(
   anchorsOfFactory ||= createNodeFactory({
     type: "ref",
     implementation: "anchorsOf",
-    argumentSchema: ANCHORS_OF_ARGUMENT_SCHEMA,
   });
   return anchorsOfFactory({ field }) as Reactive<FieldAnchors | undefined>;
 }
