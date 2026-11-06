@@ -8,7 +8,6 @@ import {
   type MutableFabricPlainObjectLayer,
   shallowMutableClone,
   taggedHashStringOf,
-  valueEqual,
 } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
@@ -64,7 +63,6 @@ import {
   type CfcLabelMetadataObservation,
   type CfcLabelMetadataProtectionMode,
   type CfcMetadata,
-  cfcMetadataPresent,
   type CfcPolicyEvaluationMode,
   type CfcPrefixProvenanceSummary,
   type CfcRecordAddress,
@@ -146,11 +144,8 @@ import {
   storedMetaFields,
 } from "../meta-seam.ts";
 import type { ModuleDelegationSnapshot } from "../module-delegations.ts";
-import {
-  isReservedSibling,
-  RESERVED_SIBLINGS,
-  type ReservedSibling,
-} from "../reserved-sibling-seam.ts";
+import { reservedSiblingChanges } from "../reserved-sibling-seam.ts";
+import { writeChokepointMark } from "./write-chokepoint.ts";
 import { isRuntimeSecretId } from "../runtime-secret-id.ts";
 import {
   isRuntimeSecretOwnRead,
@@ -263,44 +258,6 @@ const createOnlyMarkKey = (
   link: { id: string; scope?: unknown },
 ): string =>
   `${normalizeCellScope(link.scope as CellScope | undefined)}\0${link.id}`;
-
-/**
- * Whether a value at a reserved sibling leaves the document carrying that
- * sibling, as the sibling's own reader accounts for it.
- *
- * `cfc` has such a reader, and `cfcMetadataPresent` is its account: `null` and
- * a record with no `version` are values a document reads as carrying no label
- * map. Nothing interprets `source`, so definedness is the whole account there,
- * which is how the meta seam reads its own fields.
- */
-const reservedSiblingPresent = (
-  sibling: ReservedSibling,
-  value: unknown,
-): boolean =>
-  sibling === "cfc" ? cfcMetadataPresent(value) : value !== undefined;
-
-/**
- * Whether a written reserved sibling is the stored one carried forward.
- *
- * What a whole-document write owes a reserved sibling is the value the
- * document already holds, which is what reading the stored envelope and
- * spreading it produces. An envelope assembled some other way is one this
- * transaction composed rather than carried, and the guard records it whether
- * or not the labels it names work out the same. Holding the rule at the value
- * keeps one answer across every spelling a stored envelope takes: a version-1
- * envelope carrying its labels, a version-2 one naming the large ones by
- * content hash and holding the small ones inline, and a version the build
- * does not read at all.
- */
-const reservedSiblingCarriedForward = (
-  carried: unknown,
-  stored: unknown,
-): boolean =>
-  // `valueEqual` refuses a function, which is not a `FabricValue`. Such a
-  // value is not what the document holds, so it records, and the storage
-  // layer reports it as the error it is.
-  typeof carried !== "function" &&
-  valueEqual(carried as FabricValue, stored as FabricValue);
 
 /**
  * What a transaction reports its CFC work through, and the runtime services it
@@ -1756,26 +1713,21 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         }
       }
     }
-    // A path-[] write replaces the whole document envelope, so it reaches
-    // every reserved sibling without naming one.
-    if (address.path.length === 0) {
-      this.#noteRootEnvelopeWrite(address, value);
-      return;
-    }
-    // An address that names a reserved sibling, or a path inside one. The
-    // ["cfc"] sibling holds the persisted label map and ["source"] names the
-    // entity a document was derived from; a value-path write (path[0] is
-    // "value") is neither.
-    const sibling = address.path[0];
-    if (!isReservedSibling(sibling)) return;
-    this.markCfcRelevant(`unprivileged-${sibling}-write`);
-    this.#cfcState.unprivilegedSystemWrites.push(
-      `${address.id}/${address.path.join("/")}`,
+    // A delete stores nothing, whatever value it names, so a root delete
+    // erases every stored sibling.
+    this.#noteReservedSiblingWrite(
+      address,
+      options?.delete === true ? undefined : value,
     );
   }
 
   /**
-   * Records a path-`[]` whole-document write that changes a reserved sibling.
+   * Records a write that changes a reserved sibling: one addressed at the
+   * sibling, or at a path inside it, and a path-`[]` whole-document write. The
+   * `cfc` sibling holds the persisted label map and `source` names the entity
+   * a document was derived from; a value-path write (`path[0]` is `value`)
+   * reaches neither.
+   *
    * A root write replaces every sibling of `value`, so it reaches each of them
    * at once, by omission as much as by overwrite. An envelope that leaves the
    * document without a label map erases the one it held, and a labeled
@@ -1783,9 +1735,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * map behind that is not the stored one installs a map the derivation pass
    * never derived, and a document's map is what decides the label it claims —
    * the runtime-evidence atoms a prompt-injection screen trusts included. Both
-   * are the downgrade the addressed arm of `#noteSystemWrite()` catches,
-   * reached by replacing the envelope rather than by naming the sibling, so
-   * both land in the same record and yield the same fail-closed reason.
+   * are the downgrade an addressed write makes, reached by replacing the
+   * envelope rather than by naming the sibling, so all three land in the same
+   * record and yield the same fail-closed reason.
    *
    * A sibling is compared on what a reader would see, so the arm fires on a
    * change rather than on the presence of a key. For `cfc` that account is
@@ -1809,7 +1761,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * `cfc-privileged-system-write.test.ts` pins the bypass, so it fails when
    * either lands.
    */
-  #noteRootEnvelopeWrite(
+  #noteReservedSiblingWrite(
     address: IMemorySpaceAddress,
     value: FabricValue | undefined,
   ): void {
@@ -1834,26 +1786,27 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // whatever a user field called `cfc` holds. `internalVerifierRead` says
     // what the read is: the runtime resolving a label, the same mark
     // `readStoredCfcMetadata()` carries.
-    const envelope = isObjectOrArray(value)
-      ? value as { readonly [key in ReservedSibling]?: FabricValue }
-      : undefined;
-    for (const sibling of RESERVED_SIBLINGS) {
-      const carried = envelope?.[sibling];
-      const stored = this.tx.read({ ...address, path: [sibling] }, {
-        meta: {
-          ...ignoreReadForScheduling,
-          ...ignoreReadForCommit,
-          ...internalVerifierRead,
-        },
-      }).ok?.value;
-      if (reservedSiblingPresent(sibling, carried)) {
-        if (reservedSiblingCarriedForward(carried, stored)) continue;
-        this.markCfcRelevant(`unprivileged-${sibling}-forgery`);
-      } else {
-        if (!reservedSiblingPresent(sibling, stored)) continue;
-        this.markCfcRelevant(`unprivileged-${sibling}-erasure`);
-      }
-      this.#cfcState.unprivilegedSystemWrites.push(`${address.id}/${sibling}`);
+    const changes = reservedSiblingChanges(
+      address.path,
+      value,
+      (sibling) =>
+        this.tx.read({ ...address, path: [sibling] }, {
+          meta: {
+            ...ignoreReadForScheduling,
+            ...ignoreReadForCommit,
+            ...internalVerifierRead,
+          },
+        }).ok?.value,
+    );
+    for (const [sibling, change] of changes) {
+      this.markCfcRelevant(
+        `unprivileged-${sibling}-${change === "addressed" ? "write" : change}`,
+      );
+      this.#cfcState.unprivilegedSystemWrites.push(
+        change === "addressed"
+          ? `${address.id}/${address.path.join("/")}`
+          : `${address.id}/${sibling}`,
+      );
     }
   }
 
@@ -4042,7 +3995,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     if (options?.delete !== true) {
       this.#refuseMalformedSchemaMeta(address, value);
     }
-    const result = this.tx.write(address, value, options);
+    const result = this.tx.write(
+      address,
+      value,
+      writeChokepointMark(options),
+    );
     if (result.ok) {
       this.#noteWrite();
       this.#stageSchemaDocsForValue(address.space, address, value);
@@ -4067,7 +4024,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     if (options?.delete !== true) {
       this.#refuseMalformedSchemaMeta(address, value);
     }
-    const writeResult = this.tx.write(address, value, options);
+    const writeResult = this.tx.write(
+      address,
+      value,
+      writeChokepointMark(options),
+    );
     if (
       writeResult.error &&
       (writeResult.error.name === "NotFoundError")
@@ -4131,7 +4092,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       }
       nextValue[lastKey] = value;
       const parentAddress = { ...address, path: lastExistingPath };
-      const writeResultRetry = this.tx.write(parentAddress, valueObj);
+      const writeResultRetry = this.tx.write(
+        parentAddress,
+        valueObj,
+        writeChokepointMark(),
+      );
       if (writeResultRetry.error) {
         throw toThrowable(writeResultRetry.error);
       }

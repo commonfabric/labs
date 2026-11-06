@@ -214,7 +214,7 @@ consumes inbound views, redacting the outbound copies is safe.
   source's stored labels only to bind a `CurrentPrincipal` reader) while
   the IPC ingress stops consuming inbound views, all main-thread-facing view
   copies redact `Caveat.source`, and the §2 table lives at
-  `runner/src/cfc/label-field-classification.ts`._
+  `memory/v2/cfc-label-fields.ts`._
 - **Stage 1 (representation):** the cross-space persist transform
   (commitment/public per §2's table) behind a dial
   (`cfcLabelMetadataProtection: off | observe | enforce` — observe computes

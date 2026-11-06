@@ -70,6 +70,24 @@ const ipcLogger = getLogger("runtime-worker.ipc", { enabled: false });
 // (handler awaited something slow) vs the residue (response return path).
 const ipcTimingLogger = getLogger("runner.ipc", { enabled: false });
 
+/**
+ * `thrown` as text for the console: an error's stack where it has one, and
+ * otherwise what `describeFailure()` makes of it. A console keeps what it is
+ * given for as long as it keeps the message, and an error keeps the frames of
+ * its stack, and through them whatever those frames' closures captured: for a
+ * failed request, the cells it was working on and the documents they hold.
+ */
+function failureText(thrown: unknown): string {
+  try {
+    if (Error.isError(thrown) && typeof thrown.stack === "string") {
+      return thrown.stack;
+    }
+  } catch {
+    // Reading the stack threw.
+  }
+  return describeFailure(thrown);
+}
+
 export interface RuntimeClientsOptions {
   /**
    * Turns the worker's console forwarding on and off. It patches the worker's
@@ -290,7 +308,10 @@ export class RuntimeClients {
           this.#runtime.handleNotification(message, client);
         }
       } catch (error) {
-        console.error("[RuntimeWorker] Notification error:", error);
+        console.error(
+          "[RuntimeWorker] Notification error:",
+          failureText(error),
+        );
       }
       return;
     }
@@ -467,7 +488,7 @@ export class RuntimeClients {
         : { msgId };
       this.#reply(payload, request.type, client);
     } catch (error) {
-      console.error("[RuntimeWorker] Error:", error);
+      console.error("[RuntimeWorker] Error:", failureText(error));
       const type = isIPCClientMessage(message) ? message.data.type : "invalid";
       ipcLogger.debug(`responded-error/${type}`, () => []);
       const code = runtimeErrorCode(error);

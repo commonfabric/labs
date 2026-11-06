@@ -147,6 +147,12 @@ import { toTransactionDocumentValue } from "./v2-document.ts";
 import { hasValueAtPath, readValueAtPath } from "./v2-path.ts";
 import { recordWriteStackTrace } from "./write-stack-trace.ts";
 import { hasInlineCellScheme } from "../immutable-cell.ts";
+import { metaFieldChanges } from "../meta-seam.ts";
+import {
+  isReservedSibling,
+  reservedSiblingChanges,
+} from "../reserved-sibling-seam.ts";
+import { passedWriteChokepoint } from "./write-chokepoint.ts";
 
 type RootAttestation = IAttestation;
 
@@ -1445,6 +1451,14 @@ export class V2StorageTransaction implements IStorageTransaction {
     delta: MergeableOpDelta,
   ): void {
     this.#assertWritable("recordMergeableOp()");
+    // An intent stands in for a diff at its path, so one at a reserved
+    // sibling would change it with no write to refuse. The extended
+    // transaction records intents only on the value surface.
+    if (isReservedSibling(address.path[0] ?? "")) {
+      throw new Error(
+        debugStr`${address.id}: refusing a mergeable op at $quote${address.path}, which is runtime state rather than user data.`,
+      );
+    }
     const ready = this.#editable();
     if (ready.error) throw ready.error;
     if (isNoopMergeableDelta(delta)) {
@@ -2370,6 +2384,13 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (ready.error) {
       return { error: ready.error };
     }
+    if (!passedWriteChokepoint(options)) {
+      this.#refuseUnmarkedMemberChange(
+        ready.ok,
+        address,
+        options?.delete === true ? undefined : value,
+      );
+    }
     return this.#writeWithinBranch(
       ready.ok,
       address.space,
@@ -2393,6 +2414,15 @@ export class V2StorageTransaction implements IStorageTransaction {
       const ready = this.#prepareWriteSpace(address.space);
       if (ready.error) {
         return { error: ready.error };
+      }
+      // A batch request carries no options, so it carries no mark either. The
+      // whole run is checked before any of it is applied.
+      for (const write of run) {
+        this.#refuseUnmarkedMemberChange(
+          ready.ok,
+          write.address,
+          write.delete === true ? undefined : write.value,
+        );
       }
       const result = this.#writeBatchRun(address.space, ready.ok, run);
       run = [];
@@ -2423,6 +2453,52 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
 
     return flushRun();
+  }
+
+  /**
+   * Throws when a write at `address` carrying `value` changes a member of the
+   * document the runtime owns: a meta field, as `metaFieldChanges()` defines a
+   * change, or a reserved sibling, as `reservedSiblingChanges()` does. A
+   * delete carries `undefined`, whatever value it names, since applying it
+   * stores nothing there: a root delete erases every stored member.
+   *
+   * The extended transaction's write chokepoint is where such a write is
+   * judged. It refuses a meta write the runtime didn't authorize, and records
+   * a reserved-sibling write from outside the runtime's privileged
+   * persistence scope for the commit boundary to refuse, and it marks every
+   * write it forwards here. A write without that mark came from whatever
+   * holds this transaction directly, skipping the chokepoint, so it is
+   * refused whatever the CFC enforcement mode. A root write is decided
+   * against the document as this transaction holds it in `branch`, read from
+   * the entry the write itself lands in, so deciding records no read.
+   */
+  #refuseUnmarkedMemberChange(
+    branch: SpaceBranch,
+    address: IMemorySpaceAddress,
+    value: FabricValue | undefined,
+  ): void {
+    const storedRoot = (): unknown => {
+      const { doc } = this.#document(branch, address);
+      return (doc.current ?? doc.initial).value;
+    };
+    const metaChanges = metaFieldChanges(address.path, value, storedRoot);
+    if (metaChanges.length > 0) {
+      throw new Error(
+        debugStr`${address.id}: refusing a write that changes meta fields of the document (${
+          metaChanges.map((field) => `\`${field}\``).join(", ")
+        }). They name the program a piece runs and the cells it is wired to, and the runtime writes them through \`setMetaRaw()\` on an extended transaction.`,
+      );
+    }
+    const changes = reservedSiblingChanges(address.path, value, (sibling) => {
+      const root = storedRoot();
+      return isObjectNotArray(root) ? root[sibling] : undefined;
+    });
+    if (changes.length === 0) return;
+    throw new Error(
+      debugStr`${address.id}: refusing a write that changes reserved members of the document (${
+        changes.map(([sibling]) => `\`${sibling}\``).join(", ")
+      }). They hold runtime state, which the runtime writes through an extended transaction's write chokepoint.`,
+    );
   }
 
   #writeWithinSpace(

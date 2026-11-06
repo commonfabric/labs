@@ -226,7 +226,7 @@ describe("CFC clause-aware ceiling fit", () => {
     });
 
     it("meets a committed owner field against its plaintext twin", () => {
-      // `label-field-classification.ts` commits `PersonalSpace.owner` and
+      // `cfc-label-fields.ts` commits `PersonalSpace.owner` and
       // `User.subject` alike, and the digest is of the field value, so a
       // label persisted at a cross-space seam still meets a ceiling naming
       // the same owner in plaintext.

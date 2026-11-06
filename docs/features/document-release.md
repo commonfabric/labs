@@ -39,6 +39,14 @@ A replica keeps a document while any of these holds:
 - A sink registered on the replica itself (`SpaceReplica.sinkDocument()`) names
   it.
 - A local write to it is still pending.
+- It is the stream sidecar of an event this runtime sent under server
+  execution whose consequence has not yet arrived. The speculation overlay
+  reads the sidecar for the event's consequence mark, so the sidecar stays
+  watched until the mark arrives (`SpeculationOverlayDestination.trackIntent()`
+  in `runtime/runner/src/speculation/overlay-destination.ts`; the
+  requirement is in
+  [`../specs/server-side-execution/speculation.md`](../specs/server-side-execution/speculation.md),
+  section 4).
 
 A release pass also keeps the watches rooted at a document that was loaded, or
 read through the replica, since the previous pass began. A value read lazily,
@@ -60,10 +68,23 @@ the handler's transaction commits, which leaves running one a client demands
 at that moment (`#releaseServedHandlerResult` in
 `runtime/runner/src/runner.ts`; "A piece a handler starts" in
 [`../specs/server-side-execution/serving-loop.md`](../specs/server-side-execution/serving-loop.md)),
-and when a host's client departs
-(`RuntimeProcessor.disposeClient()` in `runtime/runtime-client`). A host may
+when a host's client cancels a cell subscription
+(`RuntimeProcessor.handleCellUnsubscribe()` in `runtime/runtime-client`), and
+when a host's client departs (`RuntimeProcessor.disposeClient()`). A host may
 also call `Runtime.releaseUnreadDocuments()` itself. The pass waits until the
-scheduler is idle. Passes run one after another, never two at once.
+scheduler is idle. Passes run one after another, never two at once. Requests
+made before a pass begins share it, and a request made while a pass is under
+way is answered by the next one, which waits for that one to finish. So at most
+one pass waits at a time, and the requests that arrive while one is under way,
+as a closing pane's cancellations of each of its subscriptions do, cost one
+more pass between them.
+
+A cell holds its document until it is collected, and a pass keeps every watch
+rooted at a document it keeps. So the document a cancelled subscription's own
+cell loaded stays, with what its watch reaches, until a pass that runs after
+that cell is collected, and nothing asks for that pass on the cell's account.
+What the subscription read only through its links, in documents watched on
+their own, is what the pass its cancellation asks for can release.
 
 A pass keeps the watches rooted at a document loaded or read since the
 previous pass began, and removes only those rooted at one neither loaded nor
@@ -76,6 +97,13 @@ next idle. That pass removes the watches rooted at each such document neither
 loaded nor read since the first pass began, and asks for no further one. It
 keeps a document loaded or read after the first pass began, as any pass would,
 and the next pass anything asks for decides it.
+
+A host's worker also asks for a pass once it has first brought up the user's
+Home, and the housekeeping that starts has settled with the scheduler idle
+(`RuntimeProcessor.#startHomeHousekeeping()` in `runtime/runtime-client`).
+Bringing Home up loads what its pieces read as they resume and what its stored
+result links to, each room its chat manager lists among it, and nothing goes on
+to read much of that.
 
 A pass that has watches to remove first gives each document the replica keeps,
 as above, and the session still delivers, a watch of its own where it has none,

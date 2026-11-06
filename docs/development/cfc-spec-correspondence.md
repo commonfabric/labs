@@ -83,7 +83,12 @@ The vocabulary:
 
 1. **Read the specification before the code.** A change under
    `runtime/runner/src/cfc/` or `runtime/runner/src/cfc.ts`, to the CFC
-   tests under `runtime/runner/test/`, to the render boundaries in
+   tests under `runtime/runner/test/`, to the memory package's CFC sources
+   (`runtime/memory/v2/cfc-*.ts`, which hold decisions the store shares with
+   the runtime, and `runtime/memory/v2/envelope-admission.ts`) or their tests
+   (`runtime/memory/test/v2-cfc-*.test.ts` and
+   `runtime/memory/test/v2-envelope-admission.test.ts`), to the render
+   boundaries in
    `runtime/html/src/worker/reconciler.ts`,
    `runtime/html/src/worker/display-fit.ts` and
    `runtime/html/src/worker/display-fit-atoms.ts`, to the harness's CFC enforcement
@@ -275,7 +280,7 @@ it. The procedure still applies; what changes is who completes which step.
 ## What checks what
 
 `deno task check-cfc-correspondence` runs in CI as a repository gate and fails
-on four things, each read against the committed snapshot:
+on five things, each read against the committed snapshot:
 
 - A manifest row in `runtime/runner/src/cfc/kernel/manifest.ts` naming a
   function the snapshot does not define in the section the row says, or a
@@ -293,9 +298,16 @@ on four things, each read against the committed snapshot:
   packages that hold such constants also export behavior. The manifest and the
   header module are the ledger: they carry no header and are held to the
   import rule.
-- A `§` citation in `runtime/runner/src/cfc.ts` or under
-  `runtime/runner/src/cfc/` naming a section number the snapshot does not
-  list. A citation written on purpose to something else, such as a section
+- A row marked `missing` whose `decidedToday` names a symbol the file it
+  names does not declare at top level, or a file that does not exist. The
+  file is written relative to `runtime/runner/src/`, so a decision that
+  lives in another package, as the release authority in
+  `runtime/memory/v2/cfc-release-authority.ts` does, is named by a `../..`
+  path, and a function that moves takes its row with it.
+- A `§` citation in `runtime/runner/src/cfc.ts`, under
+  `runtime/runner/src/cfc/`, or in the memory package's CFC sources
+  (`CITATION_SOURCE` in the task) naming a section number the snapshot does
+  not list. A citation written on purpose to something else, such as a section
   of a labs document, is recorded in `EXEMPTIONS` in
   `tasks/check-cfc-correspondence.ts` with the file, the citation and the
   reason, and an entry whose file stopped writing its citation fails too.
@@ -304,7 +316,8 @@ on four things, each read against the committed snapshot:
   range written without its own `§` is not read.
 - More than forty `SPEC-PENDING` markers across the files the CFC rule
   governs, which `GOVERNED_SOURCE` in the task lists: the runner's CFC
-  sources and their tests, the render boundaries `reconciler.ts`,
+  sources and their tests, the memory package's CFC sources and their tests,
+  the render boundaries `reconciler.ts`,
   `display-fit.ts` and `display-fit-atoms.ts` in `runtime/html`, the harness's `cfc-*.ts`,
   `contracts/cfc-*.ts` and `sandbox/runsc-cfc-result.ts`, and the harness
   console's `display-ceiling.ts`; or one on a line
@@ -344,6 +357,23 @@ pull requests ahead of unresolved specs dependencies covers landing it; that
 authorization does not establish specification conformance or amend this
 procedure. The conformance statement's §8 records the gap until a ruling and
 a reconciled pin address it.
+
+The result-wiring stamp (§8.9.1.3) implements
+[specs#88](https://github.com/commonfabric/specs/pull/88) ahead of its ruling.
+Where the wiring is build-decided, a setup's membership stamp on its result
+document is narrowed to what the transaction read before the setup began,
+its trigger reads among it; a setup that carries the
+stored result's name over is not build-decided, so its membership keeps the
+full join. On a result document holding nothing but references, the stamp is
+re-minted at every setup, whether or not the setup writes the value; on one
+holding data as well, only a setup that writes the root re-mints it.
+It narrows what is stored at strict, with no default-off dial, so it does not
+satisfy step 4 above; its two deciding sites carry the `SPEC-PENDING` marker.
+The snapshot is pinned at that pull request's head, the one place the pin
+names an unmerged commit, so that the kernel manifest can carry the section's
+two functions; the next regeneration after the ruling repins it to specs
+`main`. @danfuzz directed landing it this way. The conformance statement's §9
+records the gap.
 
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by

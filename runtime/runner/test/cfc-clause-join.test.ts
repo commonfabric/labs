@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-
 import {
   type CfcConfClause,
   clauseAlternatives,
   isOrClause,
-} from "../src/cfc/clause.ts";
+} from "@commonfabric/memory/v2/cfc-release-authority";
+
 import { mergeCfcLabelViews, mergeLabel } from "../src/cfc/label-view-core.ts";
 
 // Epic A3 (docs/history/plans/cfc-future-work-implementation.md): the confidentiality

@@ -1,6 +1,7 @@
 import type { FabricValue } from "@commonfabric/api";
 import type { CfcModulePolicyRefAtom } from "@commonfabric/api/cfc";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import type { Immutable } from "@commonfabric/js-values/types";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
@@ -8,7 +9,6 @@ import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type { Metadata } from "../storage/interface.ts";
 import type { ConsumedLocation } from "./access-integrity.ts";
-import type { CfcConfClause } from "./clause.ts";
 import type {
   CfcLabelView,
   IFCLabel,
@@ -690,6 +690,24 @@ export type WritePolicyInput =
     readonly kind: "release-program";
     readonly target: CfcAddress;
     readonly modules: readonly string[];
+  }
+  | {
+    /**
+     * A piece's result wiring, which setup writes or restates in this
+     * transaction (§8.9.1.3): the references its build places at the slots
+     * of the result document `target` names. The transaction re-mints the
+     * wiring's membership entries whether or not it writes the value, and
+     * where `buildDecided` holds, mints them from what it had read before
+     * `setupBegan`, the journal position the setup began at: the program
+     * chosen by that and the piece's identity fixed every reference the
+     * wiring places. A read the journal holds no position for counts as read
+     * before it, so a transaction with no activity clock stamps from all of
+     * its reads, which over-taints. Authority is the runtime's mark.
+     */
+    readonly kind: "result-wiring";
+    readonly target: CfcAddress;
+    readonly buildDecided: boolean;
+    readonly setupBegan: number;
   }
   | {
     /**

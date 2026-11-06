@@ -1,9 +1,11 @@
 import { isObjectOrArray } from "@commonfabric/js-values/types";
-import type { CfcConfClause } from "./clause.ts";
+import { classifyAtomField } from "@commonfabric/memory/v2/cfc-label-fields";
+import {
+  type CfcConfClause,
+  clauseAlternatives,
+  isCfcFieldCommitment,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 import { canonicalizeLogicalPath } from "./canonical.ts";
-import { clauseAlternatives } from "./clause.ts";
-import { classifyAtomField } from "./label-field-classification.ts";
-import { isCfcFieldCommitment } from "./label-representation.ts";
 import { cfcLabelPathPrefixMatches } from "./label-view-core.ts";
 import { uniqueCfcAtoms } from "./observation.ts";
 import type { IFCLabel, LabelEntryOrigin, LabelMapEntry } from "./types.ts";

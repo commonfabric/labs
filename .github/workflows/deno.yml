@@ -55,6 +55,14 @@ env:
   TEST_RECORDS_BUCKET: ${{ vars.TEST_RECORDS_BUCKET }}
   TEST_RECORDS_PREFIX: ${{ vars.TEST_RECORDS_PREFIX }}
   TEST_SELECTION_PREFIX: ${{ vars.TEST_SELECTION_PREFIX }}
+  # The image every job here runs on, named rather than `ubuntu-latest`.
+  # `runtime/fuse/platform-linux.ts` lays out libfuse 3's structs as the
+  # headers of this image's release define them, and
+  # `runtime/fuse/verify-structs.test.ts` holds it to those headers; a newer
+  # release's libfuse lays them out differently. Every job shares the one
+  # image, so a binary one job builds runs on the libraries of the job that
+  # tests it.
+  RUNNER_IMAGE: &runner ubuntu-24.04
   WORK_TIMEOUT_MINUTES: &work-timeout 30
   JOB_TIMEOUT_MINUTES: &job-timeout 40
   # A lane of the full run is packed to finish inside FULL_LANE_BOUND_SECONDS
@@ -91,7 +99,7 @@ jobs:
   # ---------------------------------------------------------------------------
   plan:
     name: "Plan the Run"
-    runs-on: ubuntu-latest
+    runs-on: *runner
     timeout-minutes: *job-timeout
     permissions:
       contents: read
@@ -150,7 +158,7 @@ jobs:
   tests:
     name: "Tests (${{ matrix.lane }}/${{ needs.plan.outputs.of }})"
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: *runner
     timeout-minutes: *lane-job-timeout
     permissions:
       contents: read
@@ -323,7 +331,7 @@ jobs:
     needs:
       - plan
       - tests
-    runs-on: ubuntu-latest
+    runs-on: *runner
     timeout-minutes: *job-timeout
     # The coverage gates read the pull request's description as it stands,
     # which is where an acceptance is written, and on a push read what the
@@ -501,7 +509,7 @@ jobs:
   build-toolshed:
     name: "Build Binary (toolshed)"
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: *runner
     timeout-minutes: *job-timeout
     steps:
       - name: 📥 Checkout repository
@@ -532,7 +540,7 @@ jobs:
   build-cf:
     name: "Build Binary (cf)"
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: *runner
     timeout-minutes: *job-timeout
     steps:
       - name: 📥 Checkout repository
@@ -558,7 +566,7 @@ jobs:
   attest-binaries:
     name: "Attest and Upload Binaries"
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: *runner
     timeout-minutes: *job-timeout
     # A release artifact must not outlive a failing test, the
     # `pattern-compat`, `pattern-vintage` and `deployed-topology` suites among
@@ -762,7 +770,7 @@ jobs:
     name: "Deploy Shell to Staging"
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: ["tests"]
-    runs-on: ubuntu-latest
+    runs-on: *runner
     environment: ci
     steps:
       - name: 📥 Checkout repository

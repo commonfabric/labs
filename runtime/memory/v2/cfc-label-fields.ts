@@ -1,3 +1,9 @@
+/**
+ * The representation table for source-bearing atom fields, and its lookups.
+ * It lives here, below the runner, so that a store judging an envelope it is
+ * handed reads the same table the runtime persists labels by.
+ */
+
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 

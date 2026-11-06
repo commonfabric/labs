@@ -2125,6 +2125,28 @@ describe("JsonCodecEngine", () => {
 
       expect(() => fromEncodedFormat(data)).toThrow(/malformed tag/);
     });
+
+    it("round-trips `UnknownValue` under type tags in any case", () => {
+      for (const tag of ["bytes@1", "Sys.Boop@1", "sys.boop@1"]) {
+        const us = new UnknownValue(tag, { some: "data" });
+        expect(toEncodedFormat(us)).toEqual({ [`/${tag}`]: { some: "data" } });
+        const result = roundTrip(us) as unknown as UnknownValue;
+        expect(result).toBeInstanceOf(UnknownValue);
+        expect(result.wireTypeTag).toBe(tag);
+      }
+    });
+
+    it("round-trips `UnknownValue` under a meta-tag's name with a version", () => {
+      // With a version, each is a type tag like any other, even among array
+      // elements, where a bare `/hole` is a run of holes.
+
+      for (const tag of ["quote@1", "object@1", "hole@1"]) {
+        const us = new UnknownValue(tag, 1);
+        const result = roundTrip([us]) as unknown as UnknownValue[];
+        expect(result[0]).toBeInstanceOf(UnknownValue);
+        expect(result[0]!.wireTypeTag).toBe(tag);
+      }
+    });
   });
 
   describe("circular reference detection", () => {

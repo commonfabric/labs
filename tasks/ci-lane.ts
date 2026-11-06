@@ -12,8 +12,9 @@
  * the same manifest, which is why the moment they resolve it at is when
  * the commit under test was made rather than anything about the run.
  *
- * The full run differs in two values: it runs the whole corpus rather
- * than a budgeted part of it, and it has no diff. A pull request's labels
+ * The full run differs in three values: it runs the whole corpus rather
+ * than a budgeted part of it, it has no diff, and it may take
+ * `FULL_LANES_MAX` lanes rather than `LANES_MAX`. A pull request's labels
  * can make its run the full one, or scale how much it chooses by score. Everything else — what
  * the tree holds, what each test costs, how the work groups into lanes,
  * which identities inside a unit are skipped — is the same code, so the
@@ -94,6 +95,7 @@ import {
   type GateChoice,
   type LaneCount,
   laneCount,
+  lanesMaxOf,
   type Plan,
   plan,
   type PlanInput,
@@ -134,7 +136,6 @@ import {
   DISCRETIONARY_SECONDS,
   FULL_RUN_LABEL,
   LANE_PROLOGUE_SECONDS,
-  LANES_MAX,
   RERUN_BUDGET_SECONDS,
   RERUN_EXECUTIONS,
 } from "./test-selection/policy.ts";
@@ -611,7 +612,9 @@ export interface Batch {
   units: UnitRequest[];
 
   /**
-   * How many times each unit runs, by unit. Every run must pass.
+   * How many times each unit runs, by unit, at most: a unit stops
+   * repeating once the identities that asked for its repeats have settled,
+   * as `askers` says. Every run must pass.
    *
    * Per unit rather than per batch, because what a repeat is for is
    * catching one test disagreeing with itself. One flaky unit is not a
@@ -642,6 +645,50 @@ export interface Batch {
    * later pass runs. A unit absent here skips the same names in every pass.
    */
   holds?: ReadonlyMap<Unit, ReadonlySet<string>>;
+
+  /**
+   * The identities in each unit that asked for more than one run, as
+   * `testIdentityKey()` names them. A unit stops repeating once every one of
+   * them has settled, as `repeatSettled()` decides. A unit absent here
+   * repeats as many times as `runs` says.
+   */
+  askers?: ReadonlyMap<Unit, ReadonlySet<string>>;
+}
+
+/** What an identity came to in one pass: a pass, a failure, or no record. */
+export type PassOutcome = "pass" | "fail" | "none";
+
+/**
+ * Why an identity that asked for repeats needs no more of them, given what it
+ * came to in each pass so far, or undefined where it still does.
+ *
+ * A repeat exists to catch a test disagreeing with itself. One that has passed
+ * and failed at this commit has done that, which is the evidence the publisher
+ * reads a flake from. One that has failed twice running is failing at this
+ * commit, and each further run of it measures how long its failure takes,
+ * which can be a wait's whole safety net.
+ */
+export function repeatSettled(
+  outcomes: readonly PassOutcome[],
+): "it passed and failed" | "it failed twice running" | undefined {
+  if (outcomes.includes("pass") && outcomes.includes("fail")) {
+    return "it passed and failed";
+  }
+  if (outcomes.length >= 2 && outcomes.slice(-2).every((o) => o === "fail")) {
+    return "it failed twice running";
+  }
+  return undefined;
+}
+
+/** Repeats of one unit a batch did not make, and why. */
+export interface RepeatsSettled {
+  unit: Unit;
+
+  /** How many of the passes the unit asked for did not run. */
+  skipped: number;
+
+  /** For each identity that asked for them, why it needed no more. */
+  why: string[];
 }
 
 /** How `Batch.known` names an identity in a unit. */
@@ -717,6 +764,15 @@ export function batchesOf(
   const batches = new Map<string, Batch>();
   const known = new Map<string, Set<string>>();
   const holds = new Map<string, Map<Unit, ReadonlySet<string>>>();
+  const askers = new Map<string, Map<Unit, Set<string>>>();
+  for (const selection of selections) {
+    if (selection.repeats <= 1) continue;
+    const suiteAskers = askers.get(selection.entry.suite) ?? new Map();
+    askers.set(selection.entry.suite, suiteAskers);
+    const unitAskers = suiteAskers.get(selection.entry.unit) ?? new Set();
+    suiteAskers.set(selection.entry.unit, unitAskers);
+    unitAskers.add(testIdentityKey(selection.entry.test));
+  }
   // What each unit was selected for: the names to run, and the most
   // repeats any one of them asked for.
   const selected = new Map<string, { names: Set<string>; repeats: number }>();
@@ -786,6 +842,7 @@ export function batchesOf(
         ),
         known: suiteKnows,
         holds: suiteHolds,
+        ...(askers.has(suiteId) ? { askers: askers.get(suiteId)! } : {}),
       });
     } else {
       batch.units.push(request);
@@ -1178,7 +1235,9 @@ export interface Execution {
  * Runs one batch, once per repeat, gathering each execution's records
  * before the next can reuse a path the runner owns. Every repeat must
  * pass: a repeat is not a retry, and three runs of a test is strictly
- * stricter than one.
+ * stricter than one. A unit makes no more repeats once each identity that
+ * asked for them has settled, as `repeatSettled()` decides, and what it did
+ * not make is returned as `settled`.
  *
  * A record whose kind and scope are outside the suite's declared
  * surfaces, or that a producer marked with a variant the batch did not
@@ -1206,8 +1265,15 @@ export async function runBatch(
   unexplained: number;
   executions: Execution[];
   failures: Map<TestRecord, string>;
+  settled: RepeatsSettled[];
 }> {
   const records: TestRecord[] = [];
+  // What each identity asking for repeats came to in each pass that ran its
+  // unit, why each that has settled needs no more, and the units that need no
+  // more repeats, with why.
+  const outcomes = new Map<string, PassOutcome[]>();
+  const settledAskers = new Map<string, string>();
+  const settledUnits = new Map<Unit, string[]>();
   // The message each failing record's report gave it.
   const failures = new Map<TestRecord, string>();
   const conflicts: TestRecord[] = [];
@@ -1238,6 +1304,10 @@ export async function runBatch(
   const hooks: { unit: string; seconds: number }[] = [];
   for (let run = 1; run <= batchRepeats(batch); run++) {
     if (stop.signal !== undefined) break;
+    const due = unitsForRun(batch, run, executions[0]?.registered);
+    const requests = due.filter((request) => !settledUnits.has(request.unit));
+    // A pass whose every unit needs no more repeats is not made.
+    if (due.length > 0 && requests.length === 0) break;
     console.log(
       `ci-lane: starting ${batch.suite.id}, run ${run} of ` +
         `${batchRepeats(batch)}`,
@@ -1245,8 +1315,7 @@ export async function runBatch(
     const outputDir = path.join(workDir, `${batch.suite.id}-${run}`);
     const batchSpool = path.join(outputDir, "spool");
     await Deno.mkdir(batchSpool, { recursive: true });
-    const asked = unitsForRun(batch, run, executions[0]?.registered);
-    opened += asked.length;
+    opened += requests.length;
     // The tests a unit's skip list named, by unit and name. Each is a test
     // the plan gave another lane, or none, or one the manifest does not hold
     // that the first pass ran already, so the skip its process registers is
@@ -1254,14 +1323,14 @@ export async function runBatch(
     // ships no record. A skip the test registers itself is not on this list
     // and ships.
     const skipped = new Set(
-      asked.flatMap((request) =>
+      requests.flatMap((request) =>
         request.skip.map((name) => `${request.unit}\t${name}`)
       ),
     );
     // What this pass's units' hooks took, summed over their reports.
     const hooked = new Map<string, number>();
     const execution: Execution = {
-      units: asked.map(({ unit }) => unit),
+      units: requests.map(({ unit }) => unit),
       records: [],
       registered: new Map(),
     };
@@ -1272,7 +1341,7 @@ export async function runBatch(
       if (known === undefined) execution.registered.set(unit, new Set(names));
       else for (const name of names) known.add(name);
     };
-    const invocations = await batch.suite.command(asked, {
+    const invocations = await batch.suite.command(requests, {
       root: options.root,
       outputDir,
       spoolDir: batchSpool,
@@ -1377,6 +1446,9 @@ export async function runBatch(
       ran += seconds;
       hooks.push({ unit, seconds });
     }
+    if (stop.signal === undefined) {
+      settleRepeats(batch, execution, outcomes, settledAskers, settledUnits);
+    }
   }
   // A batch that stopped part way measured only the part it ran, and the
   // cost fit reads only a passing batch's measurements.
@@ -1430,7 +1502,7 @@ export async function runBatch(
           coverage !== undefined,
           "passes",
         ),
-        batchRepeats(batch),
+        executions.length,
         ok,
       ),
       timingRecord(
@@ -1451,6 +1523,12 @@ export async function runBatch(
       ),
     ]);
   }
+  const settled: RepeatsSettled[] = [];
+  for (const [unit, why] of settledUnits) {
+    const made = executions.filter(({ units }) => units.includes(unit)).length;
+    const skipped = (batch.runs.get(unit) ?? 1) - made;
+    if (skipped > 0) settled.push({ unit, skipped, why });
+  }
   return {
     ok,
     records,
@@ -1459,7 +1537,64 @@ export async function runBatch(
     unexplained,
     executions,
     failures,
+    settled,
   };
+}
+
+/**
+ * Helper for `runBatch()`, which adds what each identity asking for repeats
+ * came to in `execution` to `outcomes`, adds to `askersSettled` each such
+ * identity that now needs no more repeats, with why, and adds to `settled` each
+ * unit of the execution whose every such identity needs no more, with why.
+ *
+ * An identity that has settled stays settled, whatever a later pass that its
+ * unit makes for another identity comes to for it: what settled it has
+ * already happened at this commit.
+ */
+function settleRepeats(
+  batch: Batch,
+  execution: Execution,
+  outcomes: Map<string, PassOutcome[]>,
+  askersSettled: Map<string, string>,
+  settled: Map<Unit, string[]>,
+): void {
+  for (const unit of execution.units) {
+    const askers = batch.askers?.get(unit);
+    if (askers === undefined || settled.has(unit)) continue;
+    const why: string[] = [];
+    for (const key of askers) {
+      const already = askersSettled.get(key);
+      if (already !== undefined) {
+        why.push(already);
+        continue;
+      }
+      const mine = execution.records.filter((record) =>
+        testIdentityKey(record.test) === key
+      );
+      const outcome: PassOutcome = mine.some(({ outcome }) =>
+          outcome === "fail"
+        )
+        ? "fail"
+        : mine.some(({ outcome }) => outcome === "pass")
+        ? "pass"
+        : "none";
+      const history = [...outcomes.get(key) ?? [], outcome];
+      outcomes.set(key, history);
+      const reason = repeatSettled(history);
+      if (reason !== undefined) {
+        const said = `${mine[0]?.test.n ?? key}: ${reason}`;
+        askersSettled.set(key, said);
+        why.push(said);
+      }
+    }
+    if (why.length === askers.size) {
+      settled.set(unit, why);
+      console.log(
+        `ci-lane: not repeating ${unit} of ${batch.suite.id} again, because ` +
+          why.join("; "),
+      );
+    }
+  }
 }
 
 /** What reading a batch's records against what it was asked to run found. */
@@ -2576,7 +2711,7 @@ export interface RunLanes {
 
 /**
  * How many lanes a run takes, and what to tell each of them: as many as
- * it needs, up to `LANES_MAX`.
+ * it needs, up to `LANES_MAX`, or `FULL_LANES_MAX` for the full run.
  *
  * This is the whole of what the job ahead of the lanes decides. The lanes
  * then read the same tree against the same manifest and take their own
@@ -2608,6 +2743,7 @@ export async function runLanes(
   );
   const { laid } = planOver({ ...input, lanes });
   if (capped) {
+    const most = input.full ? "FULL_LANES_MAX" : "LANES_MAX";
     const short = [
       ...(laid.overflowed > 0 ? ["a lane may run past its budget"] : []),
       ...(laid.discretionarySeconds < laid.discretionaryTargetSeconds
@@ -2619,8 +2755,8 @@ export async function runLanes(
         : []),
     ];
     console.error(
-      `ci-lane: this run needs more than ${LANES_MAX} lanes and takes ` +
-        `${LANES_MAX}, the most LANES_MAX allows` +
+      `ci-lane: this run needs more than ${lanes} lanes and takes ` +
+        `${lanes}, the most ${most} allows` +
         (short.length === 0 ? "" : `, so ${short.join(", and ")}`),
     );
   }
@@ -2676,7 +2812,7 @@ export function describeLanes(laid: Plan, prologue: number): void {
 }
 
 /**
- * How many lanes a run takes, up to `LANES_MAX`, counted over the tree
+ * How many lanes a run takes, up to `lanesMaxOf()`, counted over the tree
  * priced with no suite measured, which is how its plan is first packed.
  */
 function lanesNeeded(input: RunInput, read: Census): LaneCount {
@@ -2712,6 +2848,7 @@ function lanesNeeded(input: RunInput, read: Census): LaneCount {
       return suite.units.some((unit) => !unavailable.has(unit));
     });
     const byCost = laneCount(packing);
+    const most = lanesMaxOf(packing);
     const wanted = Math.max(1, running.length, byCost.lanes);
     console.error(
       `ci-lane: nothing in this tree has a measured cost, so the lane ` +
@@ -2720,8 +2857,8 @@ function lanesNeeded(input: RunInput, read: Census): LaneCount {
         `than a projection from costs nobody has measured`,
     );
     return {
-      lanes: Math.min(wanted, LANES_MAX),
-      capped: byCost.capped || wanted > LANES_MAX,
+      lanes: Math.min(wanted, most),
+      capped: byCost.capped || wanted > most,
     };
   }
   return laneCount(packing);
@@ -2918,6 +3055,8 @@ export async function runLane(
   const addReruns = rerunCommands(options.root);
   const commands: FailedCommand[] = [];
   const notes: string[] = [];
+  // Repeats a unit did not need, which the lane names without failing for.
+  const omitted: string[] = [];
   // The batches the lane has not begun, and where it heard it was to stop.
   let notStarted = [...batches];
   let stoppedIn: string | undefined;
@@ -2965,6 +3104,13 @@ export async function runLane(
           `${batchRepeats(batch)}`;
       }
       for (const conflict of result.conflicts) conflicts.push(conflict);
+      for (const { unit, skipped, why } of result.settled) {
+        omitted.push(
+          `${batch.suite.id} ${unit}: ${skipped} of ` +
+            `${batch.runs.get(unit) ?? 1} runs not needed, because ` +
+            why.join("; "),
+        );
+      }
       const { passed, accounting, excusing } = judgeBatch(
         batch,
         mine.selections,
@@ -3152,6 +3298,7 @@ export async function runLane(
     tests: [...tests.values()],
     commands,
     notes,
+    omitted,
     logs: "the output above" +
       (!ok && temp !== undefined
         ? `, and ${workDir}, which the job uploads as its lane-failure artifact`

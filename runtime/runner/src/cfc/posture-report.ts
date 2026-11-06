@@ -39,7 +39,8 @@
  * terms.
  */
 
-import type { CfcConfClause } from "./clause.ts";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+
 import {
   buildCfcPolicySnapshot,
   type CfcPolicyRecordInput,

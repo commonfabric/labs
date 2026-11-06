@@ -49,6 +49,49 @@ describe("cli structured result prompt", () => {
     }
   });
 
+  it("advertises only submission when available and files otherwise", () => {
+    const structuredResult = {
+      path: "/tmp/result.json",
+      sandboxPath: "/workspace/result.json",
+      schema,
+    };
+    for (
+      const allowedToolIds of [
+        undefined,
+        ["submit_result"] as const,
+        ["write_file"] as const,
+      ]
+    ) {
+      for (
+        const prompt of [
+          buildCfHarnessBatchSystemPrompt({ structuredResult, allowedToolIds }),
+          buildCfHarnessOperatorSystemPrompt({
+            workspace: "/tmp",
+            focusRoot: "/tmp",
+            structuredResult,
+            allowedToolIds,
+          }),
+        ]
+      ) {
+        const submits = allowedToolIds === undefined ||
+          allowedToolIds[0] === "submit_result";
+        expect(prompt.includes("Finish by calling submit_result")).toBe(
+          submits,
+        );
+        expect(
+          prompt.includes(
+            "Write a JSON file at /workspace/result.json when an available tool can write it",
+          ),
+        ).toBe(!submits);
+        expect(prompt.includes("The harness validates that file")).toBe(
+          !submits,
+        );
+        expect(prompt.includes("If the file is missing")).toBe(!submits);
+        expect(prompt).not.toContain("the other way to the same place");
+      }
+    }
+  });
+
   it("includes a boolean schema and omits the contract when no schema is configured", () => {
     expect(buildCfHarnessBatchSystemPrompt({
       structuredResult: {
@@ -57,9 +100,19 @@ describe("cli structured result prompt", () => {
         schema: true,
       },
     })).toContain("Result schema (JSON):\ntrue");
-    expect(buildCfHarnessBatchSystemPrompt({})).not.toContain(
-      "Result schema (JSON):",
-    );
+    for (
+      const prompt of [
+        buildCfHarnessBatchSystemPrompt({}),
+        buildCfHarnessOperatorSystemPrompt({
+          workspace: "/tmp",
+          focusRoot: "/tmp",
+        }),
+      ]
+    ) {
+      expect(prompt).not.toContain("Result schema (JSON):");
+      expect(prompt).not.toContain("Write a JSON file");
+      expect(prompt).not.toContain("Structured result contract:");
+    }
   });
 
   it("validates object schemas as closed unless additional properties are allowed", () => {

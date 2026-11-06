@@ -2008,12 +2008,18 @@ the durable rows of §5 carry APPENDS, never effect state).
   [owner routing](#2-the-lease-single-deriver-operationally)),
   which the owner admits exactly as its own host's delegated
   append; the host keeps one such session per target space for as
-  long as a tenure uses it. A host given no route delivers the row
-  as a delegated append on its own memory server. The
-  owner's `refused` answer is LT4's deterministic rejection, which
-  writes the failure notice in the source; `unavailable`,
-  `internal` and a transport failure are transient, and the row is
-  kept for the next attempt. The pattern-lifecycle handler's
+  long as a tenure uses it, and replaces one the owner ends, so a
+  session an access-list change revokes is opened again for the
+  next attempt and admitted against the list as it then stands. A
+  host given no route delivers the row as a delegated append on its
+  own memory server. The owner's `refused` answer is LT4's
+  deterministic rejection, which writes the failure notice in the
+  source, and so is a deleted target, whether the owner refuses the
+  session's open for it or revokes the open session with it;
+  `unavailable`, `internal`, a transport failure, the close of a
+  session revoked for any other reason, and a refusal of the open
+  under the target's access list, which a later grant can lift, are
+  transient, and the row is kept for the next attempt. The pattern-lifecycle handler's
   registration delivery into a space the verb did not run in takes
   the same path, and watches the stream document on that session
   for the event's outcome where it watched its own server's

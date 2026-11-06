@@ -3,9 +3,11 @@ import { expect } from "@std/expect";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
 import {
-  commitCfcFieldValue,
   commitmentAwareEquals,
   isCfcFieldCommitment,
+} from "@commonfabric/memory/v2/cfc-release-authority";
+import {
+  commitCfcFieldValue,
   transformCfcLabelForCrossSpacePersist,
 } from "../src/cfc/label-representation.ts";
 

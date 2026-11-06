@@ -38,6 +38,7 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { linkResolutionProbe } from "../src/storage/reactivity-log.ts";
+import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-probe-slot");
 const space = signer.did();
@@ -434,34 +435,34 @@ describe("link-resolution probes and `*` templates", () => {
         cfc: { version: 1, schemaHash, labelMap: { version: 1, entries } },
       });
       const seed = runtime.edit() as ExtendedStorageTransaction;
-      expect(
-        seed.tx.write(
-          target,
-          envelope({ offers: [{ kind: "loom" }] }, [{
-            path: ["offers"],
-            origin: "declared",
-            label: { confidentiality: [BENEATH_CLAUSE] },
-          }]),
-        ).error,
-      ).toBeUndefined();
-      expect(
-        seed.tx.write(
-          holder,
-          envelope(
+      // The envelopes are written with the runtime's own authority, and the
+      // commit goes to the storage transaction, so nothing prepares it.
+      seedStoredEnvelope(
+        seed,
+        target,
+        envelope({ offers: [{ kind: "loom" }] }, [{
+          path: ["offers"],
+          origin: "declared",
+          label: { confidentiality: [BENEATH_CLAUSE] },
+        }]),
+      );
+      seedStoredEnvelope(
+        seed,
+        holder,
+        envelope(
+          {
+            piece: { "/": { "link@1": { id: target.id, space, path: [] } } },
+          },
+          [
+            { path: ["piece"], origin: "link", label: slotLabel },
             {
-              piece: { "/": { "link@1": { id: target.id, space, path: [] } } },
+              path: ["piece", "offers"],
+              origin: "link",
+              label: { confidentiality: [BENEATH_CLAUSE] },
             },
-            [
-              { path: ["piece"], origin: "link", label: slotLabel },
-              {
-                path: ["piece", "offers"],
-                origin: "link",
-                label: { confidentiality: [BENEATH_CLAUSE] },
-              },
-            ],
-          ),
-        ).error,
-      ).toBeUndefined();
+          ],
+        ),
+      );
       expect(
         seed.tx.write({ ...target, id: `cid:${schemaHash}` }, {
           value: schema,
