@@ -9195,7 +9195,10 @@ export class Runner {
    * installed first is not this story, and neither is one whose every
    * conflicting read claimed a document absent that the store holds:
    * `#retryPieceRunStart()` runs those again in a fresh transaction when this
-   * recovery declines.
+   * recovery declines, and with the flag off it declines them. There no
+   * serving side commits what the start carries, a source transition's
+   * creator record among them, so only a run made again lands it. A refusal
+   * over a revision another writer moved past is this story in both arms.
    *
    * WHAT stays terminal. Only the engine's stale-read family recovers —
    * `stale confirmed read` and its `stale pending read` sibling
@@ -9242,7 +9245,7 @@ export class Runner {
    * continuation, whose sweep could not see this scheduling.
    */
   #catchUpAndStartOnStaleRead<T>(
-    error: { name?: string; message?: string },
+    error: CommitError,
     resultCell: Cell<T>,
     label: string,
     scheduledLifecycleEpoch: number,
@@ -9250,6 +9253,15 @@ export class Runner {
     installedRegistration: Cancel | undefined,
   ): boolean {
     if (!isStaleReadConflict(error)) return false;
+    // Without the flag nothing else commits what this start carries, such as
+    // a source transition's record, so a refusal a fresh run lands is left to
+    // that run.
+    if (
+      this.#runtime.experimental.serverExecution !== true &&
+      (refusalNamesPolicyManifest(error) || refusalClaimsOnlyAbsence(error))
+    ) {
+      return false;
+    }
     if (scheduledLifecycleEpoch !== this.#lifecycleEpoch) return false;
     if (ownership.isCancelled()) return false;
     const key = this.#getDocKey(resultCell);
