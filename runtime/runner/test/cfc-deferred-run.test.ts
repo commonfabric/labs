@@ -204,7 +204,7 @@ describe("cfc-deferred-run", () => {
 
     const tx = runtime.edit();
     tx.recordCfcLabelMetadataObservation({
-      target: { ...bobs, path: ["cfc"] },
+      target: { space: bobs.space, id: bobs.id, scope: "space", path: ["cfc"] },
       observes: "labelMetadata",
       confidentiality: [BOB],
     });
