@@ -6863,8 +6863,10 @@ const applyCommitTransaction = (
   };
   // The `cfc` member each envelope-replacing operation leaves its document
   // with, the last one per document winning, and the operation that first
-  // reached the document, whose address reads what is stored. A delete
-  // leaves no member to judge. Judged below by `droppedDeclaredPaths()`.
+  // reached the document, whose address reads what is stored. A commit that
+  // leaves the document deleted leaves no member to judge; one that deletes
+  // and then writes it again is judged by what it writes. Judged below by
+  // `droppedDeclaredPaths()`.
   const envelopeWrites = new Map<
     string,
     {
@@ -6923,6 +6925,18 @@ const applyCommitTransaction = (
       }
     }
     if (!operation.id.startsWith("cid:")) {
+      // A patch that touches no metadata leaves the `cfc` member as it
+      // found it, which after a delete in this commit is no member at all.
+      if (operation.op === "patch") {
+        const known = envelopeWrites.get(opDocKey(opIndex, operation));
+        if (
+          known?.deleted === true &&
+          !metadataPatchDocKeys.has(opDocKey(opIndex, operation))
+        ) {
+          known.cfc = undefined;
+          known.deleted = false;
+        }
+      }
       if (operation.op === "set") {
         requireInlineLabelMetadata(
           operation.id,

@@ -313,6 +313,27 @@ describe("envelope-admission", () => {
       expect(storedCfc()).toEqual(lowered);
     });
 
+    it("throws on a delete and a re-creation in one commit", () => {
+      const cfc = seed([declared(["rooms"], [personalSpace(OTHER)])]);
+      expect(() =>
+        commitAs(OWNER, [
+          { op: "delete", id },
+          {
+            op: "patch",
+            id,
+            patches: [{ op: "add", path: "/value", value: { rooms: [] } }],
+          },
+        ])
+      ).toThrow(ProtocolError);
+      expect(() =>
+        commitAs(OWNER, [
+          { op: "delete", id },
+          { op: "set", id, value: { value: { rooms: [] } } },
+        ])
+      ).toThrow(ProtocolError);
+      expect(storedCfc()).toEqual(cfc);
+    });
+
     it("commits a delete of the document", () => {
       seed([declared(["rooms"], [personalSpace(OTHER)])]);
       commitAs(OTHER, [{ op: "delete", id }]);
