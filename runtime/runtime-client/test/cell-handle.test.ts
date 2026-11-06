@@ -3965,4 +3965,267 @@ describe("cell-handle", () => {
       second.cancel();
     });
   });
+
+  describe("CellHandle reads that wait for the cell's turn", () => {
+    const ref: CellRef = {
+      id: "of:waiting-read-cell" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: [],
+    };
+    const resolvedRef: CellRef = {
+      ...ref,
+      id: "of:waiting-read-target" as CellRef["id"],
+    };
+    const label = (subject: string) => ({
+      version: 1 as const,
+      entries: [{
+        path: [],
+        label: { integrity: [{ kind: "authored-by", subject }] },
+      }],
+    });
+
+    /**
+     * A runtime whose worker answers nothing until told to. `sent` lists the
+     * type of every request in the order it reached the connection.
+     * `answer()` answers the oldest request not yet answered: a label read
+     * with a label naming how many label reads were answered before it, and a
+     * resolution with `resolvedRef`. `fail()` fails that request instead.
+     */
+    const heldRuntime = () => {
+      const sent: RequestType[] = [];
+      const held: {
+        type: RequestType;
+        settle: PromiseWithResolvers<unknown>;
+      }[] = [];
+      let labelsAnswered = 0;
+      const runtime = {
+        [$conn]: () => ({
+          request: (request: { type: RequestType }) => {
+            sent.push(request.type);
+            const settle = Promise.withResolvers<unknown>();
+            held.push({ type: request.type, settle });
+            return settle.promise;
+          },
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      } as unknown as RuntimeClient;
+      return {
+        runtime,
+        sent,
+
+        /** Answers the oldest unanswered request, and lets what follows run. */
+        async answer() {
+          const next = held.shift()!;
+          next.settle.resolve(
+            next.type === RequestType.CellGetCfcLabel
+              ? { cfcLabel: label(`read ${labelsAnswered++}`) }
+              : next.type === RequestType.CellResolveAsCell
+              ? { cell: resolvedRef }
+              : {},
+          );
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        },
+
+        /** Fails the oldest unanswered request with `error`. */
+        async fail(error: Error) {
+          held.shift()!.settle.reject(error);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        },
+      };
+    };
+
+    describe("getCfcLabel()", () => {
+      it("sends one request for calls made while the first of them waits behind another operation", async () => {
+        const { runtime, sent, answer } = heldRuntime();
+        const cell = new CellHandle(runtime, ref);
+        const equal = new CellHandle(runtime, { ...ref });
+
+        const ahead = cell.getCfcLabel();
+        const waiting = [
+          cell.getCfcLabel(),
+          cell.getCfcLabel(),
+          equal.getCfcLabel(),
+        ];
+        await answer();
+        await answer();
+
+        expect(sent).toEqual([
+          RequestType.CellGetCfcLabel,
+          RequestType.CellGetCfcLabel,
+        ]);
+        expect(await ahead).toEqual(label("read 0"));
+        expect(await Promise.all(waiting)).toEqual([
+          label("read 1"),
+          label("read 1"),
+          label("read 1"),
+        ]);
+      });
+
+      it("sends a request of its own for a call made with nothing ahead of it", async () => {
+        const { runtime, sent, answer } = heldRuntime();
+        const cell = new CellHandle(runtime, ref);
+
+        const first = cell.getCfcLabel();
+        await answer();
+        const second = cell.getCfcLabel();
+        await answer();
+
+        expect(sent).toHaveLength(2);
+        expect(await first).toEqual(label("read 0"));
+        expect(await second).toEqual(label("read 1"));
+      });
+
+      it("sends a request of its own for a call made after the waiting read was sent", async () => {
+        const { runtime, sent, answer } = heldRuntime();
+        const cell = new CellHandle(runtime, ref);
+
+        const ahead = cell.getCfcLabel();
+        const waiting = cell.getCfcLabel();
+        await answer();
+        const later = cell.getCfcLabel();
+        await answer();
+        await answer();
+
+        expect(sent).toHaveLength(3);
+        expect(await ahead).toEqual(label("read 0"));
+        expect(await waiting).toEqual(label("read 1"));
+        expect(await later).toEqual(label("read 2"));
+      });
+
+      it("sends a request of its own, after the write, for a call made once a write is queued behind the waiting read", async () => {
+        const { runtime, sent, answer } = heldRuntime();
+        const cell = new CellHandle<{ n: number }>(runtime, ref, {
+          value: { n: 0 },
+        });
+
+        const ahead = cell.getCfcLabel();
+        const waiting = cell.getCfcLabel();
+        const writing = cell.setStrict({ n: 1 });
+        const afterWrite = cell.getCfcLabel();
+        await answer();
+        await answer();
+        await answer();
+        await answer();
+        await Promise.all([ahead, writing]);
+
+        expect(sent).toEqual([
+          RequestType.CellGetCfcLabel,
+          RequestType.CellGetCfcLabel,
+          RequestType.CellSet,
+          RequestType.CellGetCfcLabel,
+        ]);
+        expect(await waiting).toEqual(label("read 1"));
+        expect(await afterWrite).toEqual(label("read 2"));
+      });
+
+      it("sends a request of its own for a call through a ref with another schema", async () => {
+        const { runtime, sent, answer } = heldRuntime();
+        const cell = new CellHandle(runtime, ref);
+        const shaped = new CellHandle(runtime, {
+          ...ref,
+          schema: { type: "string" },
+        });
+
+        const ahead = cell.getCfcLabel();
+        const waiting = cell.getCfcLabel();
+        const other = shaped.getCfcLabel();
+        await answer();
+        await answer();
+        await answer();
+        await Promise.all([ahead, waiting, other]);
+
+        expect(sent).toHaveLength(3);
+      });
+
+      it("sends a request of its own while a resolution is the read that waits", async () => {
+        const { runtime, sent, answer } = heldRuntime();
+        const cell = new CellHandle(runtime, ref);
+
+        const ahead = cell.getCfcLabel();
+        const resolving = cell.resolveAsCell();
+        const reading = cell.getCfcLabel();
+        await answer();
+        await answer();
+        await answer();
+        await Promise.all([ahead, resolving, reading]);
+
+        expect(sent).toEqual([
+          RequestType.CellGetCfcLabel,
+          RequestType.CellResolveAsCell,
+          RequestType.CellGetCfcLabel,
+        ]);
+      });
+
+      it("rejects every call that shares a request the worker fails", async () => {
+        const { runtime, sent, answer, fail } = heldRuntime();
+        const cell = new CellHandle(runtime, ref);
+        const failure = new Error("the label cannot be read");
+
+        const ahead = cell.getCfcLabel();
+        const waiting = Promise.allSettled([
+          cell.getCfcLabel(),
+          cell.getCfcLabel(),
+        ]);
+        await answer();
+        await fail(failure);
+        await ahead;
+
+        expect(sent).toHaveLength(2);
+        expect(await waiting).toEqual([
+          { status: "rejected", reason: failure },
+          { status: "rejected", reason: failure },
+        ]);
+      });
+    });
+
+    describe("resolveAsCell()", () => {
+      it("sends one request for calls made while the first of them waits behind another operation, and returns each a handle of its own", async () => {
+        const { runtime, sent, answer } = heldRuntime();
+        const cell = new CellHandle(runtime, ref);
+        const equal = new CellHandle(runtime, { ...ref });
+
+        const ahead = cell.getCfcLabel();
+        const waiting = [cell.resolveAsCell(), equal.resolveAsCell()];
+        await answer();
+        await answer();
+        await ahead;
+        const [first, second] = await Promise.all(waiting);
+
+        expect(sent).toEqual([
+          RequestType.CellGetCfcLabel,
+          RequestType.CellResolveAsCell,
+        ]);
+        expect(first).not.toBe(second);
+        expect(first.ref()).toEqual(resolvedRef);
+        expect(second.ref()).toEqual(resolvedRef);
+      });
+
+      it("sends a request of its own for a call through a ref with another schema", async () => {
+        const { runtime, sent, answer } = heldRuntime();
+        const cell = new CellHandle(runtime, ref);
+        const shaped = new CellHandle(runtime, {
+          ...ref,
+          schema: { type: "string" },
+        });
+
+        const ahead = cell.getCfcLabel();
+        const waiting = cell.resolveAsCell();
+        const other = shaped.resolveAsCell();
+        await answer();
+        await answer();
+        await answer();
+        await Promise.all([ahead, waiting, other]);
+
+        expect(sent).toEqual([
+          RequestType.CellGetCfcLabel,
+          RequestType.CellResolveAsCell,
+          RequestType.CellResolveAsCell,
+        ]);
+      });
+    });
+  });
 });

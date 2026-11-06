@@ -40,14 +40,16 @@ import {
   type CellPullRequest,
   type CellReadRefusal,
   type CellRef,
+  type CellResponse,
   type CellValueResponse,
   type CfcLabelView,
+  type CfcLabelViewResponse,
   JSONValue,
   RequestType,
   type SqliteParams,
 } from "./protocol/mod.ts";
 import { $conn, type RuntimeClient } from "./runtime-client.ts";
-import { cellRefToIdentityKey } from "./shared/utils.ts";
+import { cellRefToIdentityKey, cellRefToKey } from "./shared/utils.ts";
 
 // Logger for schema warnings - disabled by default.
 // Enable via: globalThis.commonfabric.logger["cell-handle"].disabled = false
@@ -78,7 +80,36 @@ interface CellOperationQueue {
   view: string | undefined;
   // Changes when any equivalent handle receives an authoritative update.
   authoritativeGeneration: number;
+
+  /** The read at the end of the queue that has yet to be sent, if any. */
+  waitingRead: WaitingRead | undefined;
 }
+
+/**
+ * A read of a cell that waits for its turn in the cell's queue, with nothing
+ * queued behind it. It has yet to be sent, so its answer is no older than
+ * the one a call made now for the same read would get, and such a call takes
+ * it in place of asking again.
+ */
+type WaitingRead =
+  | {
+    readonly type: RequestType.CellResolveAsCell;
+
+    /** `cellRefToKey()` of the ref the read was asked through. */
+    readonly ref: string;
+
+    /** The worker's answer. */
+    readonly answer: Promise<CellResponse>;
+  }
+  | {
+    readonly type: RequestType.CellGetCfcLabel;
+
+    /** `cellRefToKey()` of the ref the read was asked through. */
+    readonly ref: string;
+
+    /** The worker's answer. */
+    readonly answer: Promise<CfcLabelViewResponse>;
+  };
 
 const operationQueues = new WeakMap<
   RuntimeClient,
@@ -666,8 +697,16 @@ export class CellHandle<T = unknown> {
       : new CellReadRefusedError(this.#refusal);
   }
 
+  /**
+   * Runs `operation` in the cell's turn: at once when no operation on the
+   * cell is under way, and otherwise once every operation asked for before
+   * it has finished. Given `waiting`, an operation that has to wait is the
+   * cell's waiting read, recorded as what `waiting` makes of its result,
+   * until its turn comes or another operation is asked for behind it.
+   */
   #enqueueOperation<R>(
     operation: (queue: CellOperationQueue) => Promise<R>,
+    waiting?: (result: Promise<R>) => WaitingRead,
   ): Promise<R> {
     let queues = operationQueues.get(this.#rt);
     if (!queues) {
@@ -683,9 +722,13 @@ export class CellHandle<T = unknown> {
         value: undefined,
         view: undefined,
         authoritativeGeneration: 0,
+        waitingRead: undefined,
       };
       queues.set(key, queue);
     }
+    // This operation is sent after a read waiting ahead of it, so a call
+    // made from here on is owed a read sent after this operation.
+    queue.waitingRead = undefined;
     const previous = queue.tail;
     // With nothing ahead of it, the operation starts at once, but only after
     // it holds the queue: an operation asked for while it runs, as a
@@ -693,7 +736,17 @@ export class CellHandle<T = unknown> {
     let result: Promise<R>;
     let started: PromiseWithResolvers<R> | undefined;
     if (previous) {
-      result = previous.then(() => operation(queue));
+      let recorded: WaitingRead | undefined;
+      result = previous.then(() => {
+        if (recorded !== undefined && queue.waitingRead === recorded) {
+          queue.waitingRead = undefined;
+        }
+        return operation(queue);
+      });
+      if (waiting) {
+        recorded = waiting(result);
+        queue.waitingRead = recorded;
+      }
     } else {
       started = Promise.withResolvers<R>();
       result = started.promise;
@@ -716,6 +769,20 @@ export class CellHandle<T = unknown> {
       }
     }
     return result;
+  }
+
+  /**
+   * The read of this cell, through a ref equal to this handle's, that waits
+   * for its turn with nothing queued behind it; `undefined` when there is
+   * none.
+   */
+  #waitingRead(): WaitingRead | undefined {
+    const waiting = operationQueues.get(this.#rt)?.get(
+      cellRefToIdentityKey(this.#ref),
+    )?.waitingRead;
+    return waiting !== undefined && waiting.ref === cellRefToKey(this.#ref)
+      ? waiting
+      : undefined;
   }
 
   #serializeWrite(value: T): FabricValue {
@@ -1424,16 +1491,30 @@ export class CellHandle<T = unknown> {
   /**
    * Resolve links in this cell to get the actual cell it points to.
    * Returns a new CellHandle pointing to the resolved cell.
+   *
+   * The worker is asked in the cell's turn, after the operations asked for
+   * before this one. Calls made through equal refs while one of them waits
+   * for that turn, with nothing else asked of the cell since, share its
+   * request, and each gets a handle of its own.
    */
   async resolveAsCell(): Promise<CellHandle<T>> {
-    const response = await this.#enqueueOperation(() =>
-      this.#conn.request<RequestType.CellResolveAsCell>({
-        type: RequestType.CellResolveAsCell,
-        cell: this.ref(),
-      })
-    );
+    const waiting = this.#waitingRead();
+    const pending = waiting?.type === RequestType.CellResolveAsCell
+      ? waiting.answer
+      : this.#enqueueOperation(
+        () =>
+          this.#conn.request<RequestType.CellResolveAsCell>({
+            type: RequestType.CellResolveAsCell,
+            cell: this.ref(),
+          }),
+        (answer) => ({
+          type: RequestType.CellResolveAsCell,
+          ref: cellRefToKey(this.#ref),
+          answer,
+        }),
+      );
 
-    return new CellHandle<T>(this.#rt, response.cell);
+    return new CellHandle<T>(this.#rt, (await pending).cell);
   }
 
   /**
@@ -1467,14 +1548,33 @@ export class CellHandle<T = unknown> {
     return fields;
   }
 
+  /**
+   * The cell's display CFC label, as the worker's store holds it now;
+   * `undefined` for a cell with none, or one whose document the worker has
+   * not loaded.
+   *
+   * The worker is asked in the cell's turn, after the operations asked for
+   * before this one. Calls made through equal refs while one of them waits
+   * for that turn, with nothing else asked of the cell since, share its
+   * request.
+   */
   async getCfcLabel(): Promise<CfcLabelView | undefined> {
-    const response = await this.#enqueueOperation(() =>
-      this.#conn.request<RequestType.CellGetCfcLabel>({
-        type: RequestType.CellGetCfcLabel,
-        cell: this.ref(),
-      })
-    );
-    return response.cfcLabel;
+    const waiting = this.#waitingRead();
+    const pending = waiting?.type === RequestType.CellGetCfcLabel
+      ? waiting.answer
+      : this.#enqueueOperation(
+        () =>
+          this.#conn.request<RequestType.CellGetCfcLabel>({
+            type: RequestType.CellGetCfcLabel,
+            cell: this.ref(),
+          }),
+        (answer) => ({
+          type: RequestType.CellGetCfcLabel,
+          ref: cellRefToKey(this.#ref),
+          answer,
+        }),
+      );
+    return (await pending).cfcLabel;
   }
 
   /** Run a read-only query when this handle refers to a SQLite database. */

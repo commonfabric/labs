@@ -221,6 +221,72 @@ const labelDeliveringCell = (
 };
 
 /**
+ * A cell as a handle on a document the worker has yet to answer for. Its
+ * subscription hands the subscriber nothing at first, as not current, and its
+ * reads (`sync()` and `getCfcLabel()`) stay unanswered until `answerReads()`.
+ * `deliver()` hands over a value with `label` as current, as the
+ * subscription's first update does. It resolves to `resolved`, and counts
+ * what the worker is asked.
+ */
+const unansweredCell = (label: unknown, resolved: unknown) => {
+  let value: unknown;
+  let subscriber: DeliveryCallback | undefined;
+  const unanswered: (() => void)[] = [];
+  const asked = { label: 0, resolution: 0 };
+  const answeredLater = <T>(answer: () => T): Promise<T> =>
+    new Promise((resolve) => unanswered.push(() => resolve(answer())));
+  return {
+    get: () => value,
+    sync: () => answeredLater(() => value),
+    getCfcLabel: () => {
+      asked.label++;
+      return answeredLater(() => label);
+    },
+    resolveAsCell: () => {
+      asked.resolution++;
+      return Promise.resolve(resolved);
+    },
+    subscribe(callback: DeliveryCallback) {
+      subscriber = callback;
+      callback(undefined, undefined, { cfcLabelCurrent: false });
+      return () => {
+        subscriber = undefined;
+      };
+    },
+
+    /** How many labels and resolutions the worker has been asked for. */
+    asked,
+
+    /** Delivers `next` with the label, and settles the reads it starts. */
+    async deliver(next: unknown) {
+      value = next;
+      subscriber?.(value, label, { cfcLabelCurrent: true });
+      await settle();
+    },
+
+    /** Answers every read asked so far, and settles what follows. */
+    async answerReads() {
+      for (const answer of unanswered.splice(0)) answer();
+      await settle();
+    },
+  };
+};
+
+/** A cell whose label is `label`, counting the reads of it. */
+const labelCountingCell = (label: unknown) => {
+  let reads = 0;
+  return {
+    getCfcLabel: () => {
+      reads++;
+      return Promise.resolve(label);
+    },
+
+    /** How many times the worker has been asked for the label. */
+    reads: () => reads,
+  };
+};
+
+/**
  * Observes `value` and `author`, keeping every report the observation makes.
  */
 const observe = (
@@ -571,6 +637,61 @@ describe("authorship", () => {
       } finally {
         observation.cancel();
       }
+    });
+
+    it("resolves the value once when its first update arrives before its first read is answered", async () => {
+      // The first read asks for the value's own label. The update starts a
+      // read that takes the delivered label, so the first has nothing left
+      // to ask for when its answer comes.
+
+      const resolved = labelCountingCell(authoredByLabel("alice"));
+      const value = unansweredCell(undefined, resolved);
+      const observation = observe(value, "alice");
+
+      try {
+        await value.deliver("text");
+        await value.answerReads();
+
+        expect(observation.states()).toEqual(["verified"]);
+        expect(value.asked).toEqual({ label: 1, resolution: 1 });
+        expect(resolved.reads()).toBe(1);
+      } finally {
+        observation.cancel();
+      }
+    });
+
+    it("resolves the author once, asking for no label of its own, when its first update arrives before its first read is answered", async () => {
+      const profile = labelCountingCell(representsLabel("did:key:alice"));
+      const author = unansweredCell(undefined, profile);
+      const observation = observe(
+        {
+          getCfcLabel: () => Promise.resolve(authoredByLabel("did:key:alice")),
+        },
+        author,
+      );
+
+      try {
+        await author.deliver({ name: "Alice" });
+        await author.answerReads();
+
+        expect(observation.states()).toEqual(["verified"]);
+        expect(author.asked).toEqual({ label: 0, resolution: 1 });
+        expect(profile.reads()).toBe(1);
+      } finally {
+        observation.cancel();
+      }
+    });
+
+    it("asks the worker for nothing more on a read that is still unanswered when the observation is cancelled", async () => {
+      const resolved = labelCountingCell(authoredByLabel("alice"));
+      const value = unansweredCell(undefined, resolved);
+      const observation = observe(value, "alice");
+
+      observation.cancel();
+      await value.answerReads();
+
+      expect(value.asked).toEqual({ label: 1, resolution: 0 });
+      expect(resolved.reads()).toBe(0);
     });
 
     it("moves the watch between resolved cells that have no ref", async () => {
