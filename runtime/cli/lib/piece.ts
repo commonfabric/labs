@@ -5249,8 +5249,10 @@ export interface ReleaseByIntentOutcome {
   readonly space: string;
 
   /**
-   * The owner the space's access list names, whose signature alone releases
-   * there, or `undefined` when it names none.
+   * The space's owner, whose signature alone releases there: the owner its
+   * stored access list names; the space's own DID, a home space's owner, where
+   * it stores no access list; or `undefined` where its stored list names no
+   * valid concrete owner, so that no signature releases there.
    */
   readonly owner: string | undefined;
 
@@ -5459,9 +5461,11 @@ export async function releaseCellConfidentialityByIntent(
   const identity = await (deps.loadIdentity ?? loadIdentity)(config.identity);
   if (stored.owner !== identity.did()) {
     throw new Error(
-      `The identity ${identity.did()} is not the owner the space's access ` +
-        `list names (${stored.owner ?? "none"}), and only the owner's ` +
-        "signature releases by intent there; nothing was signed.",
+      `The identity ${identity.did()} is not the space's owner (` +
+        (stored.owner ??
+          "it has none: its access list names no valid concrete owner") +
+        "), and only the owner's signature releases by intent there; " +
+        "nothing was signed.",
     );
   }
   const request = ownerReleaseByIntentRequest({
@@ -5477,8 +5481,8 @@ export async function releaseCellConfidentialityByIntent(
   show(`Release by intent in space ${target.space}`);
   show(`  document ${target.id}, path ${location}`);
   show(
-    `  to be signed by ${identity.did()}, whom the space's access list ` +
-      "names its owner",
+    `  to be signed by ${identity.did()}, the space's owner by its access ` +
+      "list",
   );
   show("Clauses that come off every label stored at the path:");
   for (const clause of clauses) {

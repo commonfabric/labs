@@ -346,8 +346,10 @@ export interface StoredClausesForRelease {
   readonly envelopeDigest: string;
 
   /**
-   * The owner the space's access list names, whose signature alone a release
-   * there takes, or `undefined` when the list names none.
+   * The space's owner, whose signature alone a release there takes, as
+   * `ownerReleaseByIntentSpaceOwner()` decides it: the owner its stored access
+   * list names; the space's own DID where it stores no access list; or
+   * `undefined` where its stored list names no valid concrete owner.
    */
   readonly owner: string | undefined;
 }

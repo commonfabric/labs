@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { cfcAtom } from "@commonfabric/api/cfc";
+import { taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { encodeDagCbor } from "@commonfabric/identity/dag-cbor";
 import type { URI } from "@commonfabric/memory/interface";
@@ -950,6 +951,113 @@ describe("cfc-owner-release-by-intent", () => {
         expect(storedMetadata(cell)?.labelMap.entries).toEqual([]);
         expect(storedMetadata(target)?.labelMap.entries).toEqual(targetEntries);
       });
+    });
+  });
+
+  describe("releasing in a session that has loaded nothing", () => {
+    // The document's labels are held by reference, in version-2 label
+    // documents. No runtime outlives a session here, so the realm's label
+    // document index is cleared between sessions, as it is for a fresh
+    // process, and each session finds a label only by loading its document.
+
+    it("lists and releases the clauses of a document whose labels are held by reference", async () => {
+      const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+      const session = async (use: (runtime: Runtime) => Promise<void>) => {
+        const manager = EmulatedStorageManager.connectTo(server, {
+          as: signer,
+        });
+        const runtime = new Runtime({
+          apiUrl: new URL("https://example.com"),
+          storageManager: manager,
+        });
+        try {
+          await use(runtime);
+        } finally {
+          await runtime.dispose();
+          await manager.close();
+        }
+      };
+      try {
+        const label = { confidentiality: [own, ...TEN] };
+        const labelId = `cid:${taggedHashStringOf(label)}` as URI;
+        let id = "" as URI;
+        await session(async (runtime) => {
+          const cell = runtime.getCell<unknown>(
+            actor,
+            "runner-cfc-intent-by-reference",
+          );
+          id = cell.getAsNormalizedFullLink().id;
+          const tx = runtime.edit();
+          writeSeedEnvelopeDoc(tx, actor);
+          tx.writeOrThrow({
+            space: actor,
+            scope: "space",
+            id: labelId,
+            path: [],
+          }, { value: label } as never);
+          seedStoredEnvelope(tx, {
+            ...cell.getAsNormalizedFullLink(),
+            path: [],
+          }, {
+            value: { rooms: [] },
+            cfc: {
+              version: 2,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: {
+                version: 1,
+                entries: [{
+                  path: [],
+                  origin: "structure",
+                  observes: "enumerate",
+                  label: { $ref: labelId },
+                }],
+              },
+            },
+          } as never);
+          expect((await tx.commit().settled).error).toBeUndefined();
+        });
+        let envelopeDigest = "";
+        await session(async (runtime) => {
+          const listed = await storedClausesForRelease(runtime, {
+            space: actor,
+            id,
+            path: [],
+          });
+          expect(listed.clauses.map((clause) => clause.digest)).toEqual([
+            cfcCanonicalClauseDigest(own),
+            ...tenDigests,
+          ]);
+          envelopeDigest = listed.envelopeDigest;
+        });
+        await session(async (runtime) => {
+          const release = await releaseConfidentialityByIntent(
+            runtime,
+            await sign(
+              ownerReleaseByIntentRequest({
+                space: actor,
+                document: id,
+                path: [],
+                releasedClauseDigests: tenDigests,
+                envelopeDigest,
+                signer: actor,
+              }),
+            ),
+          );
+          expect(release.released).toHaveLength(TEN.length);
+        });
+        await session(async (runtime) => {
+          const listed = await storedClausesForRelease(runtime, {
+            space: actor,
+            id,
+            path: [],
+          });
+          expect(listed.clauses.map((clause) => clause.digest)).toEqual([
+            cfcCanonicalClauseDigest(own),
+          ]);
+        });
+      } finally {
+        await server.close();
+      }
     });
   });
 });

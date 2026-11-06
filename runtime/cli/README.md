@@ -1902,9 +1902,12 @@ owner signs. That is the owner release by intent (§8.12.7 route 2d) proposed in
 implements ahead of its ruling. Without `--clause` it only lists the
 confidentiality clauses the label map stores at the path, each with its
 canonical clause digest and the labels holding it (component and observation
-class), and the owner the space's access list names, and changes nothing. A
-clause's plaintext and committed spellings are two clauses, each with its own
-digest:
+class), and the space's owner, and changes nothing. A clause's plaintext and
+committed spellings are two clauses, each with its own digest. The space's owner
+is the owner its access list names; where the space stores no access list, it is
+the identity whose DID is the space's, as for a home space; and a stored list
+naming no valid concrete owner gives the space no owner, so no release by intent
+is possible there:
 
 ```bash
 cf cell release-by-intent --cell ID
@@ -1948,19 +1951,17 @@ the stored labels before and after; the record is readable by the owner. With
 `--clause`, the command runs only with standard input and standard error at a
 terminal, so what it shows reaches the owner who confirms it, and refuses before
 it builds or signs anything otherwise; it refuses as well when the identity is
-not the owner the space's access list names. No option skips the confirmation:
-the signature stands for the owner's own decision, made in person, which is the
-one thing the store cannot check.
+not the space's owner. No option skips the confirmation: the signature stands
+for the owner's own decision, made in person, which is the one thing the store
+cannot check.
 
 The store checks the rest at the commit: that the signature verifies, that the
-signer is the owner the space's access list names (the identity whose DID is the
-space's, for a home space with no list), that the request names the space,
-document and path the commit changes, that every clause it names is stored
-there, that the stored labels are still the ones the request was made against,
-and that the request has not been used before. Any failure refuses the release
-whole. A request is used once: running the command again builds a new request
-against the labels as they are then. Reads served before the release keep the
-label they were served under.
+signer is the space's owner, that the request names the space, document and path
+the commit changes, that every clause it names is stored there, that the stored
+labels are still the ones the request was made against, and that the request has
+not been used before. Any failure refuses the release whole. A request is used
+once: running the command again builds a new request against the labels as they
+are then. Reads served before the release keep the label they were served under.
 
 ## Invocation sessions
 

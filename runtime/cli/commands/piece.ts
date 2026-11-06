@@ -2340,12 +2340,15 @@ names them.
 
 The command shows the document, the path, and each clause that comes off and
 stays, and asks you to type "release". Only then does it sign the request
-with the identity, which must be the owner the space's access list names, and
-commit the release together with a record of it, holding the signed request.
-With --clause it runs only with standard input and standard error at a
-terminal, and only for the owner the space's access list names, and nothing
-skips the confirmation. The store checks the signature, the owner, and that
-the labels are still the ones you were shown; a request is used once.`,
+with the identity, which must be the space's owner, and commit the release
+together with a record of it, holding the signed request. The space's owner is
+the owner its access list names; with no access list stored, it is the space's
+own DID, as in a home space; and a stored list naming no valid owner has none,
+so no release is possible there. With --clause it runs only with standard
+input and standard error at a terminal, and only for the space's owner, and
+nothing skips the confirmation. The store checks the signature, the owner,
+and that the labels are still the ones you were shown; a request is used
+once.`,
       ),
     )
     .usage(`${pieceUsage} [path]`)

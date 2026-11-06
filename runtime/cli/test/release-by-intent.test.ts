@@ -294,7 +294,7 @@ describe("cf cell release-by-intent", () => {
             },
           },
         ),
-      ).rejects.toThrow("is not the owner the space's access list names");
+      ).rejects.toThrow(`is not the space's owner (${owner})`);
       expect(asked).toBe(false);
     });
 
