@@ -637,7 +637,14 @@ const writtenByCaller = (record: Writable<StoredComment>): boolean => {
   return actor !== undefined && principalOf(record, "authored-by") === actor;
 };
 
-/** Removes the comment `record`, stored under `id`, with its anchors. */
+/**
+ * Removes the comment `record`, stored under `id`, with its anchors. The list
+ * stops linking the record, and the record is left holding `undefined`, which
+ * is how a deleted comment is represented: a pattern cannot delete the
+ * document itself. The list therefore never holds a deleted comment, while a
+ * read of a record by its id can find one, which is why such reads are typed
+ * `StoredComment | undefined`.
+ */
 const removeComment = (
   anchors: AnchorsCell,
   comments: CommentsCell,
