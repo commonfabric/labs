@@ -53,16 +53,24 @@ export function anchorsOf(
   return (tx: IExtendedStorageTransaction) => {
     // Resolution follows the link chain from the input to the stored field,
     // whose address the document's id is derived from. A chain that stops at
-    // a document still loading names that document, not the field.
+    // a document still loading names that document, not the field. The
+    // second resolution repeats the first from the transaction's memo, so it
+    // leaves the pull of any hop in another space to the first.
     const field = inputsCell.withTx(tx).key("field");
-    const reached = resolveLink(runtime, tx, field.getAsNormalizedFullLink());
+    const stored = field.resolveAsCell().getAsNormalizedFullLink();
+    const reached = resolveLink(
+      runtime,
+      tx,
+      field.getAsNormalizedFullLink(),
+      "value",
+      { kickCrossSpaceTargets: false },
+    );
     if (reached.pendingHopDoc) {
       tx.readValueOrThrow(reached);
       const refusal = new UnresolvedInputError(reached);
       tx.noteSchemaRefusal(refusal);
       throw refusal;
     }
-    const stored = field.resolveAsCell().getAsNormalizedFullLink();
     if (hasInlineCellScheme(stored.id)) {
       throw new Error(
         debugStr`\`anchorsOf()\` needs a field stored in a document; its ` +
