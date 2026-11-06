@@ -72,6 +72,7 @@ export class CFShareSnapshot extends BaseElement {
         inset: 0;
         margin: auto;
         width: min(42rem, calc(100vw - 2rem));
+        height: fit-content;
         max-height: calc(100vh - 2rem);
         overflow: auto;
         padding: 1.5rem;
@@ -157,9 +158,18 @@ export class CFShareSnapshot extends BaseElement {
         gap: .75rem;
         justify-content: flex-end;
       }
-      .confirm {
+      .actions button {
+        padding: .55rem 1.1rem;
+        border: 1px solid #b9c4bd;
+        border-radius: .5rem;
+        background: #fff;
+        color: #18221c;
+      }
+      .actions .confirm {
+        border-color: #244938;
         background: #244938;
         color: #fff;
+        font-weight: 600;
       }
       [role="alert"] {
         color: #932c22;
