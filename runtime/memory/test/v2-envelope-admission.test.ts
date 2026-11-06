@@ -47,6 +47,39 @@ describe("envelope-admission", () => {
       ).toEqual([{ path: ["rooms"], clauses: [personalSpace(OTHER)] }]);
     });
 
+    it("returns nothing for a stored member holding no label map, or no member at all", () => {
+      expect(droppedDeclaredPaths(undefined, undefined, () => undefined))
+        .toEqual([]);
+      expect(droppedDeclaredPaths({ version: 1 }, undefined, () => undefined))
+        .toEqual([]);
+      expect(
+        droppedDeclaredPaths(
+          { version: 1, labelMap: { version: 1 } },
+          undefined,
+          () => undefined,
+        ),
+      ).toEqual([]);
+    });
+
+    it("joins the clauses of stored declared entries sharing a path, and returns `undefined` clauses when one of them doesn't resolve", () => {
+      const joined = envelope([
+        declared(["rooms"], [personalSpace(OWNER)]),
+        declared(["rooms"], [personalSpace(OTHER)]),
+      ]);
+      expect(droppedDeclaredPaths(joined, undefined, () => undefined))
+        .toEqual([{
+          path: ["rooms"],
+          clauses: [personalSpace(OWNER), personalSpace(OTHER)],
+        }]);
+      const unresolved = envelope([
+        declared(["rooms"], [personalSpace(OWNER)]),
+        { path: ["rooms"], origin: "declared", label: { $ref: "cid:gone" } },
+        declared(["rooms"], [personalSpace(OTHER)]),
+      ]);
+      expect(droppedDeclaredPaths(unresolved, undefined, () => undefined))
+        .toEqual([{ path: ["rooms"], clauses: undefined }]);
+    });
+
     it("returns nothing for a path the proposal keeps a declared entry at, however lowered", () => {
       const stored = envelope([
         declared(["rooms"], [personalSpace(OTHER), personalSpace(OWNER)]),
