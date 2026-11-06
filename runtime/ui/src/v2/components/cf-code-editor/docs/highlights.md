@@ -61,15 +61,20 @@ two anchors are.
 - The marks need a collaboration that is running. The editor clears them when
   collaboration fails or ends, and draws none while `collaborative` is off.
 
-A handler that turns a selection into a highlight reads the field, checks that
-it holds `value`, and writes the two offsets into the field's anchors under two
-ids of its choosing. The check matters because the field and the editor's
-document can differ when the handler runs, in edits that have reached the field
-and not yet the editor, or the other way round. Checking `text` at `[from, to)`
-alone does not catch every such edit: with the same text at those offsets on
-another copy, the anchors would land on that copy. "Anchoring text" in
-`docs/common/concepts/types-and-schemas/writable.md` shows such a handler and
-explains when its commit is refused and run again.
+The handler bound to `cf-selection-change` reads the field and compares it with
+`value`. The field and the editor's document can differ when it runs, in edits
+that have reached the field and not yet the editor, or the other way round, and
+the range is right for the field only where the two are the same. Checking
+`text` at `[from, to)` instead does not catch every such edit: with the same
+text at those offsets on another copy, a highlight would land on that copy. A
+host that anchors the selection later, from a button, keeps the range and its
+text when the comparison holds, and nothing selected when it does not; the
+editor's next report, against its newer document, replaces it. `value` itself
+need not be kept. The later handler checks that the field still holds `text` at
+the range, which catches an edit that arrives after the range was kept, unless
+the edit leaves the same text there. "Anchoring text" in
+`docs/common/concepts/types-and-schemas/writable.md` shows a handler that
+anchors a selection and explains when its commit is refused and run again.
 
 ## Where the marks come from
 
@@ -148,11 +153,13 @@ A new editor has sent no report, so its first one is always sent, and says that
 nothing is selected. A host that keeps the last report somewhere that outlives
 the editor is told that way that the selection it kept is gone.
 
-Each event carries the selected text and the whole document. The editor sends
-one on each change of the selection, and again on each change to the document
-while the person holds a selection, so a host that stores every report writes
-the whole document each time. Dragging out a long selection sends a report for
-every step of the drag.
+Each event carries the selected text and the whole document, from the editor to
+the handler bound to it, within the runtime. The editor sends one on each change
+of the selection, and again on each change to the document while the person
+holds a selection. A host that keeps only the range and its text writes the
+selected text each time, and one that kept `value` would write the whole
+document each time. Dragging out a long selection sends a report for every step
+of the drag.
 
 ## Which presses are clicks
 

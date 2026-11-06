@@ -432,17 +432,14 @@ export default pattern(() => {
       !hasText(rowOf(note[UI], "Needs a date"), "text no longer in note") &&
       !hasText(rowOf(note[UI], "Needs a date"), "now “");
   });
-  // A selection reported against text the body does not hold is refused
-  // when the composer opens, and the composer stays closed.
+  // A selection reported against text the body does not hold is not kept,
+  // so there is nothing to comment on.
   const action_select_stale_text = action(() =>
     fireEvent(
       editorOf(note[UI]),
       "oncf-selection-change",
       selectionIn("Not in the note", "Not in the note"),
     )
-  );
-  const action_open_composer_on_stale_text = action(() =>
-    clickButton(note[UI], "Comment")
   );
   // A comment written under a profile that is not the writer's own is
   // refused, so its row cannot show someone else as its author.
@@ -467,10 +464,7 @@ export default pattern(() => {
   const assert_stale_selection_refused = assert(() =>
     listed(comments.get()).length === 1 &&
     anchoredCount(note.commentAnchors) === 1 &&
-    hasText(
-      findNodeById(note[UI], "shared-note-comment-notice"),
-      "The note changed under your selection",
-    ) &&
+    commentDisabled(note[UI]) === true &&
     displayOf(findNodeById(note[UI], "shared-note-composer")) === "none"
   );
   // An agent comments on text it names, which the body holds once.
@@ -629,12 +623,12 @@ export default pattern(() => {
       range !== undefined &&
       content.get().slice(range.from, range.to) === HEADING;
   });
-  // A selection the body has changed under is refused, and the composer
-  // says so; the editor's next report is against the body as it is, and the
-  // comment lands. Here the editor reported against text that held a second
-  // `> Pinned` line at the start, since deleted, and the selection is on the
-  // deleted copy. The body holds `Pinned` at the same offsets, on the copy
-  // that is left, so only the whole text tells the two apart.
+  // A selection the body has changed under is not kept; the editor's next
+  // report is against the body as it is, and the comment lands. Here the
+  // editor reported against text that held a second `> Pinned` line at the
+  // start, since deleted, and the selection is on the deleted copy. The body
+  // holds `Pinned` at the same offsets, on the copy that is left, so only the
+  // whole text tells the two apart.
   const PINNED = "Pinned";
   const action_select_pinned_in_older_text = action(() =>
     fireEvent(
@@ -646,15 +640,9 @@ export default pattern(() => {
   const action_open_composer_on_pinned = action(() =>
     clickButton(note[UI], "Comment")
   );
-  const action_open_composer_on_the_moved_selection = action(() =>
-    clickButton(note[UI], "Comment")
-  );
   const assert_moved_selection_refused = assert(() =>
+    commentDisabled(note[UI]) === true &&
     displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
-    hasText(
-      findNodeById(note[UI], "shared-note-comment-notice"),
-      "The note changed under your selection",
-    ) &&
     !listed(comments.get()).some((c) => c.draft)
   );
   const action_editor_restates_the_selection = action(() =>
@@ -669,6 +657,30 @@ export default pattern(() => {
   );
   const action_post_pinned_comment = action(() =>
     clickButton(note[UI], "Post")
+  );
+  // A selection kept against the body as it was, then an edit ahead of it
+  // that the editor has not reported the selection against yet: the range
+  // no longer holds the selected text, and the composer refuses it.
+  const action_select_pinned_before_an_edit = action(() =>
+    fireEvent(
+      editorOf(note[UI]),
+      "oncf-selection-change",
+      selectionIn(content.get(), PINNED),
+    )
+  );
+  const action_verb_edits_before_the_editor_reports = action(() =>
+    note.prependLine.send({ text: "> Later" })
+  );
+  const action_open_composer_after_the_edit = action(() =>
+    clickButton(note[UI], "Comment")
+  );
+  const assert_range_from_before_the_edit_refused = assert(() =>
+    displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
+    hasText(
+      findNodeById(note[UI], "shared-note-comment-notice"),
+      "The note changed under your selection",
+    ) &&
+    !listed(comments.get()).some((c) => c.draft)
   );
   const assert_restated_selection_posts = assert(() => {
     const pinned = listed(comments.get()).find((c) => c.body === "Why pin?");
@@ -892,7 +904,6 @@ export default pattern(() => {
       { action: action_verb_appends_a_line },
       { assertion: assert_verbs_moved_the_anchor_with_the_text },
       { action: action_select_stale_text },
-      { action: action_open_composer_on_stale_text },
       { assertion: assert_stale_selection_refused },
       { action: action_select_quote_under_a_borrowed_profile },
       { action: action_comment_under_a_borrowed_profile },
@@ -938,7 +949,6 @@ export default pattern(() => {
       { action: action_post_heading_comment },
       { assertion: assert_comment_lands_where_the_text_moved },
       { action: action_select_pinned_in_older_text },
-      { action: action_open_composer_on_the_moved_selection },
       { assertion: assert_moved_selection_refused },
       { action: action_editor_restates_the_selection },
       { action: action_open_composer_on_pinned },
@@ -972,6 +982,10 @@ export default pattern(() => {
       { assertion: assert_discarded_draft_is_gone },
       { action: action_cancel_after_discard },
       { assertion: assert_composer_closed_after_discard },
+      { action: action_select_pinned_before_an_edit },
+      { action: action_verb_edits_before_the_editor_reports },
+      { action: action_open_composer_after_the_edit },
+      { assertion: assert_range_from_before_the_edit_refused },
     ],
     subject,
     note,

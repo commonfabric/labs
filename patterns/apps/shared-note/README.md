@@ -127,11 +127,13 @@ point that Memory keeps for the field and moves through every edit, whoever
 makes it, in the transaction that stores the edit
 (`docs/features/collaborative-fields.md`). Text typed at the start of a
 comment's text joins it, and text typed at its end does not. The editor reports
-a selection with its whole text, and the composer adds the anchors only while
-the body is that text, refusing a selection the body has changed under; the
-editor's next report, against its newer text, can then be commented on. From
-then on everything typed while the person writes moves the anchors with their
-text. The panel lists comments in the order their text appears in the body.
+a selection with its whole text. The note keeps the selection only while the
+body is that text, and nothing selected until the editor's next report
+otherwise, so a selection the body has changed under is never kept. The composer
+checks again that the body holds the selected text at its range before it adds
+the anchors, refusing a selection an edit has moved since. From then on
+everything typed while the person writes moves the anchors with their text. The
+panel lists comments in the order their text appears in the body.
 `commentAnchors` gives every comment's two anchors.
 
 Each row shows the comment's quote: the text its author selected, stored in the

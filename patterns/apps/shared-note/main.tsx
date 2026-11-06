@@ -394,18 +394,25 @@ const unanchorComment = (anchors: AnchorsCell, id: string): void => {
 };
 
 /**
- * The editor's main selection, as `cf-selection-change` reports it: a range
- * of the editor's text, the text there, and the whole of the editor's text,
- * `value`, which the range is right for. `from === to` is nothing selected.
+ * The editor's main selection, as the note keeps it: a range of the body and
+ * the text there. `from === to` is nothing selected.
  */
 interface NoteSelection {
   from: number;
   to: number;
   text: string;
-  value: string;
 }
 
-const NOTHING_SELECTED: NoteSelection = { from: 0, to: 0, text: "", value: "" };
+const NOTHING_SELECTED: NoteSelection = { from: 0, to: 0, text: "" };
+
+/**
+ * What `cf-selection-change` reports: the selection as a range of the
+ * editor's text, and the whole of that text, `value`, which the range is
+ * right for.
+ */
+interface SelectionReport extends NoteSelection {
+  value: string;
+}
 
 /** A mark the editor draws: the text from one anchor of the body to another. */
 interface NoteHighlight {
@@ -538,12 +545,24 @@ const commentNamed = (
   return record;
 };
 
+/**
+ * Keeps the editor's selection while the body is the text the editor
+ * reported it against, since only then does its range name the selected text
+ * in the body, and keeps nothing selected otherwise, until the editor reports
+ * against the body as it is. The report reaches this handler from the editor
+ * within the runtime, and the editor's text is compared here rather than
+ * kept.
+ */
 const trackSelection = handler<
-  { detail: NoteSelection },
-  { selection: Writable<NoteSelection> }
->((event, { selection }) => {
+  { detail: SelectionReport },
+  { content: Writable<string>; selection: Writable<NoteSelection> }
+>((event, { content, selection }) => {
   const { from, to, text, value } = event.detail;
-  selection.set({ from, to, text, value });
+  selection.set(
+    from === to || content.get() !== value
+      ? NOTHING_SELECTED
+      : { from, to, text },
+  );
 });
 
 /**
@@ -572,12 +591,12 @@ interface OpenComposerState {
 
 /**
  * Starts a comment on the current selection: a draft record under a new id,
- * and the two anchors of the body named for it. The selection is refused
- * unless the body is the text the editor reported it against, since only
- * then do its offsets name the selected text. From then on Memory keeps the
- * anchors on that text through every edit, however long the person writes
- * and whatever they select meanwhile, and the draft stays theirs to continue
- * or discard if they leave.
+ * and the two anchors of the body named for it. The selection was kept
+ * against the body as it was then, and is refused if the body no longer
+ * holds its text at its range. From then on Memory keeps the anchors on that
+ * text through every edit, however long the person writes and whatever they
+ * select meanwhile, and the draft stays theirs to continue or discard if they
+ * leave.
  */
 const openComposer = handler<unknown, OpenComposerState>((_, state) => {
   const profile = ownProfile(state.myProfile);
@@ -589,14 +608,15 @@ const openComposer = handler<unknown, OpenComposerState>((_, state) => {
     state.notice.set("Post or cancel the comment you are writing first.");
     return;
   }
-  const { from, to, text, value } = state.selection.get();
+  const { from, to, text } = state.selection.get();
   if (from === to) {
     state.notice.set("Select the text to comment on first.");
     return;
   }
-  // The commit lands only while the body is still what this reads, so the
-  // anchors land on the selected text.
-  if (state.content.get() !== value) {
+  // The range was right for the body when it was kept. An edit since, which
+  // the editor has not yet reported the selection against, can leave other
+  // text there; one that leaves the same text at the range gets past this.
+  if (state.content.get().slice(from, to) !== text) {
     state.notice.set("The note changed under your selection; try again.");
     return;
   }
@@ -1117,7 +1137,7 @@ export const SharedNoteCore = pattern<
           oncf-collaboration-reconcile={preserveUnsentText({ recovery })}
           oncf-presence-error={reportPresenceError({ presenceNotice })}
           oncf-presence-join={clearPresenceNotice({ presenceNotice })}
-          oncf-selection-change={trackSelection({ selection })}
+          oncf-selection-change={trackSelection({ content, selection })}
           oncf-highlight-click={selectHighlight({ selectedId, replyDraft })}
           style={{ flex: "3 1 24rem", minWidth: "0", minHeight: "20rem" }}
         />
