@@ -24,6 +24,7 @@ import {
   toDocumentPath,
 } from "@commonfabric/memory/v2";
 import {
+  type OwnerReleaseByIntentAcl,
   ownerReleaseByIntentEnvelopeDigest,
   ownerReleaseByIntentRecordId,
   ownerReleaseByIntentRequestDigest,
@@ -2874,7 +2875,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         type: "application/json",
         path: [...path],
       }, { meta: internalVerifierRead }).ok?.value;
-    const owner = ownerReleaseByIntentSpaceOwner(space, input.acl);
+    // The caller loaded the access list from the store, so reading it here
+    // reads what the store holds; the check reads it on this transaction,
+    // and depends on nothing the caller says about it.
+    const owner = ownerReleaseByIntentSpaceOwner(
+      space,
+      releaseAccessListOf(this, space),
+    );
     if (owner === undefined || owner !== request.signer || !isDID(owner)) {
       refuse(
         `${request.signer} is not the owner the space's access list names`,
@@ -5770,4 +5777,29 @@ export function setCfcImplementationIdentity(
     (target) => assignCfcImplementationIdentity(target, identity),
     "setCfcImplementationIdentity()",
   );
+}
+
+/**
+ * The access list of `space` as `tx` reads it, which a caller has loaded from
+ * the store first: not stored where the store holds no list document, and
+ * stored, with the document's `value`, which may be absent, where it holds
+ * one. Read loaded, an absent document is one the store does not hold; read
+ * unloaded, it may only be one the replica has not fetched, and this would
+ * call it not stored.
+ */
+export function releaseAccessListOf(
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+): OwnerReleaseByIntentAcl {
+  const document = tx.read({
+    space,
+    id: aclDocId(space) as URI,
+    scope: DEFAULT_CELL_SCOPE,
+    type: "application/json",
+    path: [],
+  }, { meta: internalVerifierRead }).ok?.value;
+  return document === undefined ? { stored: false } : {
+    stored: true,
+    value: isPlainObject(document) ? document.value : undefined,
+  };
 }

@@ -9,14 +9,14 @@
  * and record shapes, the record's identity, the envelope digest, and the
  * clauses a stored envelope holds at a path.
  *
- * Signing is not here. A signature under {@link OWNER_RELEASE_BY_INTENT_PURPOSE}
- * stands for the owner's own decision, made in person and shown the request's
- * target and the clauses it releases; the store sees a signature and not a
- * person, so that obligation rests on the host that holds the owner's key. The
- * `cf` command that releases by intent is that host here: it signs only after
- * the owner confirms the request on a terminal. No runner API, builtin,
- * handler or client action signs under this purpose, and nothing that can be
- * handed to code should.
+ * Signing is not here. A signature under the purpose
+ * {@link OWNER_RELEASE_BY_INTENT_PURPOSE} stands for the owner's own decision,
+ * made in person and shown the request's target and the clauses it releases;
+ * the store sees a signature and not a person, so that obligation rests on the
+ * host that holds the owner's key. The `cf` command that releases by intent is
+ * that host here: it signs only after the owner confirms the request on a
+ * terminal. No runner API, builtin, handler or client action signs under this
+ * purpose, and nothing that can be handed to code should.
  *
  * The request names its document directly, by space and id at space scope,
  * and one stored path, matched literally against the paths the envelope's
@@ -504,26 +504,6 @@ export const clauseDigestsByEntryAt = (
 };
 
 /**
- * The clauses the label-map entries of `cfc` hold at exactly `path`, by
- * canonical clause digest, every component and observation class there
- * together, as {@link clauseDigestsByEntryAt} reads them, or `undefined` when
- * what is stored there is not known.
- */
-export const clauseDigestsStoredAt = (
-  cfc: unknown,
-  path: readonly string[],
-  resolveLabel: (ref: string) => unknown,
-): ReadonlyMap<string, CfcConfClause> | undefined => {
-  const byEntry = clauseDigestsByEntryAt(cfc, path, resolveLabel);
-  if (byEntry === undefined) return undefined;
-  const stored = new Map<string, CfcConfClause>();
-  for (const clauses of byEntry.values()) {
-    for (const [digest, clause] of clauses) stored.set(digest, clause);
-  }
-  return stored;
-};
-
-/**
  * Whether `cfc`, the `cfc` member of a record's document, labels the record
  * for `owner`: a declared entry at its root holds the clause naming `owner` as
  * a `User`, so a reader other than the owner does not read it.
@@ -591,7 +571,9 @@ export interface OwnerReleaseByIntentCommit {
   readonly resolveProposedLabel: (ref: string) => unknown;
 }
 
-/** A release the store has verified, as its admission of the envelope reads it. */
+/**
+ * A release the store has verified, as its admission of the envelope reads it.
+ */
 export interface VerifiedOwnerReleaseByIntent {
   /** The document released at. */
   readonly document: string;

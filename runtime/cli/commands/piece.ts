@@ -2321,7 +2321,7 @@ export function buildReleaseByIntentCommand(spelling: string): Command<any> {
   const command: Command<any> = new Command()
     .description(
       cliText(
-        `Release confidentiality clauses stored at a piece data path, as the owner of its space.
+        `Release CFC clauses stored at a piece data path, as its space's owner.
 
 Without --clause, the command lists every confidentiality clause stored at the
 path, each with its canonical clause digest and the labels holding it, and the
@@ -2344,8 +2344,8 @@ with the identity, which must be the owner the space's access list names, and
 commit the release together with a record of it, holding the signed request.
 With --clause it runs only with standard input and standard error at a
 terminal, and only for the owner the space's access list names, and nothing
-skips the confirmation. The store checks the signature, the owner, and that the labels
-are still the ones you were shown; a request is used once.`,
+skips the confirmation. The store checks the signature, the owner, and that
+the labels are still the ones you were shown; a request is used once.`,
       ),
     )
     .usage(`${pieceUsage} [path]`)

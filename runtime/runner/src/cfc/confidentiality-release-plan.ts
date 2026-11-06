@@ -26,10 +26,7 @@ import { debugStr } from "@commonfabric/data-model";
 import type { DID } from "@commonfabric/identity/did";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { cfcCanonicalClauseDigest } from "@commonfabric/memory/v2/cfc-clause-identity";
-import type {
-  OwnerReleaseByIntentAcl,
-  SignedOwnerReleaseByIntentRequest,
-} from "@commonfabric/memory/v2/cfc-owner-release-by-intent";
+import type { SignedOwnerReleaseByIntentRequest } from "@commonfabric/memory/v2/cfc-owner-release-by-intent";
 import {
   type CfcConfClause,
   clauseReleasableBy,
@@ -123,7 +120,10 @@ const pathNames = (
     segment === "*" || segment === position[index]
   );
 
-/** The test of whether a release's path names a stored position, by `matching`. */
+/**
+ * The test of whether a release's path names a stored position, by
+ * `matching`.
+ */
 const namesPosition = (matching: PathMatching) =>
   matching === "wildcard"
     ? pathNames
@@ -216,8 +216,9 @@ const lowerSchemaAt = (
 };
 
 /**
- * The confidentiality clauses stored at `path`, each once, as stored: those of
- * every payload label-map entry at a position `path` names by `matching`,
+ * Helper for {@link planConfidentialityRelease}, which returns the
+ * confidentiality clauses stored at `path`, each once, as stored: those of
+ * every payload label-map entry at a position `path` names (`pathNames()`),
  * whatever its origin or observation class, together with those the stored
  * schema declares there (`schemaEntries`, `cfcSchemaEntries()` of it).
  */
@@ -225,13 +226,11 @@ const clausesStoredAt = (
   path: readonly string[],
   entries: readonly LabelMapEntry[],
   schemaEntries: ReturnType<typeof cfcSchemaEntries>,
-  matching: PathMatching,
 ): CfcConfClause[] => {
-  const names = namesPosition(matching);
   const stored: CfcConfClause[] = [];
   for (
     const clause of [...entries, ...schemaEntries]
-      .filter((entry) => names(path, canonicalizeLogicalPath(entry.path)))
+      .filter((entry) => pathNames(path, canonicalizeLogicalPath(entry.path)))
       .flatMap((entry) => entry.label.confidentiality ?? [])
   ) {
     if (!stored.some((known) => sameClause(known, clause))) {
@@ -247,8 +246,8 @@ const clausesStoredAt = (
  * holds once the clauses `released` are removed from every payload label-map
  * entry and stored-schema declaration at a position `path` names by
  * `matching`, and from nothing else. `isReleased` is how a clause is
- * recognized as one of `released`, which differs between the two routes. `path` is canonical, and `location` is
- * how a refusal names it.
+ * recognized as one of `released`, which differs between the two routes.
+ * `path` is canonical, and `location` is how a refusal names it.
  *
  * @throws If the stored schema declares a released clause at a position the
  *   path names through a reference or an `allOf`, `anyOf` or `oneOf` branch,
@@ -380,12 +379,7 @@ export const planConfidentialityRelease = (input: {
   const schemaEntries = input.schema === undefined
     ? []
     : cfcSchemaEntries(input.schema);
-  const stored = clausesStoredAt(
-    path,
-    input.entries,
-    schemaEntries,
-    "wildcard",
-  );
+  const stored = clausesStoredAt(path, input.entries, schemaEntries);
   for (const clause of input.keep) {
     if (!stored.some((known) => sameClause(known, clause))) {
       throw new Error(
@@ -518,9 +512,9 @@ export interface OtherStoredPosition {
 
 /**
  * Every position of the document's label map other than `path` whose label
- * holds a clause one of `digests` names, with the digests it holds, in path order:
- * the further releases by intent it takes for those clauses to be gone from
- * the document, one request per position. The label-metadata templates are
+ * holds a clause one of `digests` names, with the digests it holds, in path
+ * order: the further releases by intent it takes for those clauses to be gone
+ * from the document, one request per position. The label-metadata templates are
  * not positions here, being derived again from the payload by each release.
  */
 export const otherPositionsHolding = (input: {
@@ -577,12 +571,13 @@ const comparePaths = (
  * path. A clause is identified by its digest throughout, as the request, the
  * record and the store identify it: what the label map holds at the path is
  * what may be named ({@link clausesStoredForRelease}), and only a clause of a
- * named digest comes off, a differently spelled form of it staying. Unlike {@link planConfidentialityRelease}, it asks nothing of who may
- * release a clause: the gate is the owner's signed request, which the caller
- * verifies. `path` names one stored position, matched literally: a `*`
- * segment names the wildcard position there, the class templates and the
- * schema's `items` among it, and reaches none of the concrete positions the
- * wildcard covers, each of which is a release of its own.
+ * named digest comes off, a differently spelled form of it staying. Unlike
+ * {@link planConfidentialityRelease}, it asks nothing of who may release a
+ * clause: the gate is the owner's signed request, which the caller verifies.
+ * `path` names one stored position, matched literally: a `*` segment names the
+ * wildcard position there, the class templates and the schema's `items` among
+ * it, and reaches none of the concrete positions the wildcard covers, each of
+ * which is a release of its own.
  *
  * @throws If a digest names no clause stored at the path, or if the stored
  *   schema declares a released clause through a reference or a branch, as
@@ -677,13 +672,6 @@ export interface CfcConfidentialityRelease {
 export interface CfcConfidentialityReleaseByIntentInput {
   /** The request and its signature, as the owner signed them. */
   readonly signed: SignedOwnerReleaseByIntentRequest;
-
-  /**
-   * The access list of the request's space as the store holds it, read once
-   * the list document is loaded from the store: what the signer is checked
-   * against before anything is written.
-   */
-  readonly acl: OwnerReleaseByIntentAcl;
 }
 
 /** What one release by intent removed, and where its record goes. */

@@ -501,7 +501,9 @@ describe("cfc-owner-release-by-intent", () => {
       });
 
       describe("refusals", () => {
-        /** Expects `signed` refused for `reason`, and the document untouched. */
+        /**
+         * Expects `signed` refused for `reason`, and the document untouched.
+         */
         const expectRefused = async (
           signed: SignedOwnerReleaseByIntentRequest,
           reason: string | RegExp,
@@ -605,12 +607,7 @@ describe("cfc-owner-release-by-intent", () => {
         it("refuses a transaction without the release-by-intent writer's identity", async () => {
           const signed = await sign(await requestAt(result, [], tenDigests));
           const tx = runtime.edit();
-          expect(() =>
-            tx.releaseCfcConfidentialityByIntent({
-              signed,
-              acl: { stored: false },
-            })
-          )
+          expect(() => tx.releaseCfcConfidentialityByIntent({ signed }))
             .toThrow(OWNER_RELEASE_BY_INTENT_WRITER);
           tx.abort();
         });
@@ -635,12 +632,7 @@ describe("cfc-owner-release-by-intent", () => {
               kind: "builtin",
               builtinId: OWNER_RELEASE_BY_INTENT_WRITER,
             });
-            expect(() =>
-              tx.releaseCfcConfidentialityByIntent({
-                signed,
-                acl: { stored: false },
-              })
-            )
+            expect(() => tx.releaseCfcConfidentialityByIntent({ signed }))
               .toThrow(reason);
             tx.abort();
           }

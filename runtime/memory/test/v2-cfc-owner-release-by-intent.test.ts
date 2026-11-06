@@ -10,7 +10,7 @@ import { encodeDagCbor } from "@commonfabric/identity/dag-cbor";
 
 import { cfcCanonicalClauseDigest } from "../v2/cfc-clause-identity.ts";
 import {
-  clauseDigestsStoredAt,
+  clauseDigestsByEntryAt,
   OWNER_RELEASE_BY_INTENT_PURPOSE,
   ownerReleaseByIntentEnvelopeDigest,
   ownerReleaseByIntentRecord,
@@ -186,12 +186,13 @@ describe("cfc-owner-release-by-intent", () => {
     });
   });
 
-  describe("clauseDigestsStoredAt()", () => {
-    it("returns the clauses of every entry at exactly the path, label-metadata templates aside", () => {
-      const stored = clauseDigestsStoredAt(
+  describe("clauseDigestsByEntryAt()", () => {
+    it("returns the clauses of every entry at exactly the path by component and class, label-metadata templates aside", () => {
+      const byEntry = clauseDigestsByEntryAt(
         envelope([
           entry([], "derived", [personalSpace(OWNER)], "shape"),
           entry([], "structure", [personalSpace(OTHER)], "enumerate"),
+          entry([], "structure", [personalSpace(OWNER)], "enumerate"),
           entry(["rooms"], "declared", ["elsewhere"]),
           entry(["cfc", "labels"], "label-metadata", ["template"]),
           entry([], "label-metadata", ["template"]),
@@ -199,19 +200,39 @@ describe("cfc-owner-release-by-intent", () => {
         [],
         () => undefined,
       );
-      expect([...stored!.keys()].sort()).toEqual(
-        [digest(personalSpace(OWNER)), digest(personalSpace(OTHER))].sort(),
-      );
+      expect(
+        Object.fromEntries(
+          [...byEntry!].map((
+            [key, clauses],
+          ) => [key, [...clauses.keys()].sort()]),
+        ),
+      ).toEqual({
+        [JSON.stringify(["derived", "shape"])]: [digest(personalSpace(OWNER))],
+        [JSON.stringify(["structure", "enumerate"])]: [
+          digest(personalSpace(OWNER)),
+          digest(personalSpace(OTHER)),
+        ].sort(),
+      });
     });
 
-    it("returns `undefined` when an entry at the path holds a label that doesn't resolve", () => {
+    it("resolves a label held by reference, and returns `undefined` when one at the path doesn't resolve", () => {
+      const byRef = envelope([
+        { path: [], origin: "derived", label: { $ref: "cid:known" } },
+      ]);
       expect(
-        clauseDigestsStoredAt(
-          envelope([{ path: [], origin: "derived", label: { $ref: "cid:x" } }]),
-          [],
-          () => undefined,
-        ),
-      ).toBeUndefined();
+        [
+          ...clauseDigestsByEntryAt(
+            byRef,
+            [],
+            (ref) =>
+              ref === "cid:known"
+                ? { confidentiality: [personalSpace(OTHER)] }
+                : undefined,
+          )!.values(),
+        ].flatMap((clauses) => [...clauses.keys()]),
+      ).toEqual([digest(personalSpace(OTHER))]);
+      expect(clauseDigestsByEntryAt(byRef, [], () => undefined))
+        .toBeUndefined();
     });
   });
 
@@ -448,7 +469,9 @@ describe("cfc-owner-release-by-intent", () => {
     });
 
     describe("refusals", () => {
-      /** Applies `operations` and expects the commit refused, naming `reason`. */
+      /**
+       * Applies `operations` and expects the commit refused, naming `reason`.
+       */
       const expectRefused = (
         operations: unknown[],
         reason: RegExp,

@@ -19,11 +19,9 @@
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { debugStr } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
-import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { aclDocId } from "@commonfabric/memory/acl";
 import {
-  type OwnerReleaseByIntentAcl,
   ownerReleaseByIntentEnvelopeDigest,
   ownerReleaseByIntentRecord,
   ownerReleaseByIntentRecordId,
@@ -38,7 +36,10 @@ import { type LastNode, resolveLink } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { Runtime } from "../runtime.ts";
 import { DEFAULT_CELL_SCOPE, normalizeCellScope } from "../scope.ts";
-import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
+import {
+  releaseAccessListOf,
+  setCfcImplementationIdentity,
+} from "../storage/extended-storage-transaction.ts";
 import {
   type CfcConfidentialityRelease,
   type CfcConfidentialityReleaseByIntent,
@@ -329,29 +330,6 @@ const syncDocuments = async (
   }
 };
 
-/**
- * The access list of `space` as `tx` reads it, which a caller has loaded with
- * {@link syncDocuments}: not stored where the store holds no list document,
- * and stored, with the document's `value`, which may be absent, where it holds
- * one.
- */
-const accessListOf = (
-  tx: ReturnType<Runtime["edit"]>,
-  space: MemorySpace,
-): OwnerReleaseByIntentAcl => {
-  const document = tx.read({
-    space,
-    id: aclDocId(space) as URI,
-    scope: DEFAULT_CELL_SCOPE,
-    type: "application/json",
-    path: [],
-  }).ok?.value;
-  return document === undefined ? { stored: false } : {
-    stored: true,
-    value: isObjectNotArray(document) ? document.value : undefined,
-  };
-};
-
 /** What a release by intent at a target can name, and the envelope it names. */
 export interface StoredClausesForRelease {
   /** The clauses stored at the path, with their digests and positions. */
@@ -396,7 +374,7 @@ export async function storedClausesForRelease(
   try {
     const owner = ownerReleaseByIntentSpaceOwner(
       target.space,
-      accessListOf(tx, target.space),
+      releaseAccessListOf(tx, target.space),
     );
     const stored = loadStoredCfcEnvelope(tx, {
       space: target.space,
@@ -455,12 +433,11 @@ export interface ConfidentialityReleaseByIntent
  * document directly, so no link is followed to find it.
  *
  * The space's access list, the document and the record's id are loaded from
- * the store first, so the checks below read what the store holds. The
- * transaction runs under the release-by-intent writer's builtin identity;
- * `IExtendedStorageTransaction.releaseCfcConfidentialityByIntent()` verifies
- * the request before writing, against the access list loaded here, and the
- * store verifies it again at the commit, against the access list as it stands
- * then.
+ * the store first, so the checks the transaction makes read what the store
+ * holds. The transaction runs under the release-by-intent writer's builtin
+ * identity; `IExtendedStorageTransaction.releaseCfcConfidentialityByIntent()`
+ * verifies the request before writing, and the store verifies it again at the
+ * commit, against the access list as it stands then.
  *
  * @throws When the request is refused (see
  *   `IExtendedStorageTransaction.releaseCfcConfidentialityByIntent()`), or
@@ -485,10 +462,7 @@ export async function releaseConfidentialityByIntent(
       kind: "builtin",
       builtinId: OWNER_RELEASE_BY_INTENT_WRITER,
     });
-    const release = tx.releaseCfcConfidentialityByIntent({
-      signed,
-      acl: accessListOf(tx, space),
-    });
+    const release = tx.releaseCfcConfidentialityByIntent({ signed });
     const record = runtime.getCellFromLink({
       space: signed.request.space as MemorySpace,
       id: release.recordId as URI,

@@ -351,12 +351,13 @@ request, its signed bytes, the record and the store's judgment are in
 - **What it removes.** The clauses the request names by canonical clause
   digest, and only those: a clause is identified by its digest throughout, so
   a field's plaintext and committed spellings are two clauses, each named on
-  its own. It removes them from every component at exactly the path — the declared entries and
-  the stored schema's declaration there, the derived `shape` and membership
-  entries, and a link's own label — and nothing at any other path, no value,
-  and no integrity label. The envelope's label-metadata templates are derived
-  again from the payload entries the release leaves. A clause the stored
-  schema declares is declared again by the next write through that schema.
+  its own. It removes them from every component at exactly the path — the
+  declared entries and the stored schema's declaration there, the derived
+  `shape` and membership entries, and a link's own label — and nothing at any
+  other path, no value, and no integrity label. The envelope's label-metadata
+  templates are derived again from the payload entries the release leaves. A
+  clause the stored schema declares is declared again by the next write
+  through that schema.
 - **What may be named.** A clause the label map holds at the path, which is
   what the store reads too. A declaration of the stored schema that no
   label-map entry holds, at a property the value lacks or the elements of an

@@ -5344,7 +5344,10 @@ export const resolveClauseSelectors = (
   return [...resolved];
 };
 
-/** Helper for {@link releaseCellConfidentialityByIntent}, rendering one clause. */
+/**
+ * Helper for {@link releaseCellConfidentialityByIntent}, which renders one
+ * clause.
+ */
 const describeClause = (clause: ReleasableClause): string =>
   `  ${clause.digest}  ${JSON.stringify(clause.clause)}\n    stored in ` +
   clause.positions.map((position) =>
@@ -5388,17 +5391,17 @@ const readTerminalLine = async (prompt: string): Promise<string | null> => {
  * stored positions holding any of them, and the space's owner. With
  * selectors, it refuses before building or signing anything unless standard
  * input and standard error are both terminals, and unless the identity is the
- * owner the space's access list names; it shows
- * the owner the document, the path, each clause that would come off and
- * stay, and the other positions still holding a released clause, asks them to type {@link RELEASE_BY_INTENT_CONFIRMATION}, and signs
- * with the identity only once they have. Nothing bypasses the confirmation:
- * the signature stands for the owner's own decision, which is the one thing
- * the store cannot check.
+ * owner the space's access list names; it shows the owner the document, the
+ * path, each clause that would come off and stay, and the other positions
+ * still holding a released clause, asks them to type
+ * {@link RELEASE_BY_INTENT_CONFIRMATION}, and signs with the identity only
+ * once they have. Nothing bypasses the confirmation: the signature stands for
+ * the owner's own decision, which is the one thing the store cannot check.
  *
  * @throws If standard input or standard error is not a terminal when a clause
- *   is named, if the identity is not the space's owner, if a
- *   selector names no stored clause or several, if the owner does not
- *   confirm, or if the release is refused, by the runtime or the store.
+ *   is named, if the identity is not the space's owner, if a selector names no
+ *   stored clause or several, if the owner does not confirm, or if the release
+ *   is refused, by the runtime or the store.
  */
 export async function releaseCellConfidentialityByIntent(
   config: PieceConfig,
