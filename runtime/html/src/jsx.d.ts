@@ -4391,6 +4391,8 @@ interface CFShareSnapshotAttributes<T> extends CFHTMLAttributes<T> {
   "$received"?: CellLike<unknown>;
   /** Matches the element property; JSX props are assigned as properties. */
   audienceKind?: "user" | "space";
+  /** Text of the button that opens the review; the dialog never shows it. */
+  label?: string;
   "oncf-shared"?: EventHandler<{}>;
 }
 

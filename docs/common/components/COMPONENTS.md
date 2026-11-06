@@ -1239,8 +1239,12 @@ own `User` ceiling. This permits the default shell to share the user's private
 draft while refusing a source labeled only for another user.
 
 The host displays the exact snapshot and the audience verified by the runtime in
-a native modal dialog. Its disclosure and preview are fixed host UI. The user
-must confirm with a trusted browser gesture; a scripted click cannot publish.
+a native modal dialog. Its disclosure and preview are fixed host UI: each field
+appears as a labelled line, with empty fields named rather than dropped, and the
+exact JSON sits under "Exact data". The dialog takes no words or theme from the
+pattern. The button that opens it follows the ambient theme, and a pattern may
+set its text with `label` (default "Review and share"), since opening the review
+releases nothing. The user must confirm with a trusted browser gesture; a scripted click cannot publish.
 The source stays private, and future changes are not included in the copy. JSON
 values containing links are refused.
 

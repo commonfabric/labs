@@ -7,6 +7,12 @@ import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { runtimeContext } from "../../runtime-context.ts";
+import {
+  audienceId,
+  audienceWords,
+  type SnapshotLine,
+  snapshotLines,
+} from "./snapshot-view.ts";
 
 type SnapshotPreview = Awaited<
   ReturnType<RuntimeClient["prepareSnapshotShare"]>
@@ -26,8 +32,15 @@ type ReviewBinding = {
  * Reviews an exact JSON snapshot and its runtime-verified audience in host UI.
  * Only a trusted native confirmation click can publish the reviewed snapshot.
  *
+ * The opening button carries the ambient theme and the pattern's own label,
+ * since it only opens the dialog. The dialog takes nothing from the pattern
+ * or the page: its styles name fixed colors and no theme variables, and every word
+ * in it comes from the runtime's preview, so a pattern cannot restyle or
+ * reword what the person confirms.
+ *
  * @element cf-share-snapshot
  * @attr {"user"|"space"} audience-kind - Kind of verified recipient
+ * @attr {string} label - Text of the button that opens the review
  * @fires cf-shared - The released cell link has been stored in the result cell
  */
 export class CFShareSnapshot extends BaseElement {
@@ -44,16 +57,21 @@ export class CFShareSnapshot extends BaseElement {
       }
       button {
         font: inherit;
-        padding: .7rem 1rem;
-        border: 1px solid #53655c;
-        border-radius: .5rem;
-        background: #fff;
-        color: #203b2e;
         cursor: pointer;
       }
       button:disabled {
         opacity: .5;
         cursor: default;
+      }
+      .open {
+        min-height: 2.5rem;
+        padding: .5rem 1rem;
+        border: 1px solid transparent;
+        border-radius: var(--cf-theme-border-radius, .5rem);
+        background: var(--cf-theme-color-primary, #244938);
+        color: var(--cf-theme-color-primary-foreground, #fff);
+        font-family: var(--cf-theme-font-family, inherit);
+        font-weight: 600;
       }
       dialog {
         all: initial;
@@ -83,6 +101,45 @@ export class CFShareSnapshot extends BaseElement {
       }
       .audience {
         overflow-wrap: anywhere;
+      }
+      .lede {
+        margin: 0 0 1rem;
+        color: #4a5a50;
+      }
+      .who {
+        margin: 0 0 1rem;
+        padding: .75rem 1rem;
+        border-radius: .5rem;
+        background: #eef3ef;
+      }
+      .id {
+        display: block;
+        font: 12px/1.4 monospace;
+        color: #4a5a50;
+      }
+      dl {
+        margin: 0 0 1rem;
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: .35rem 1rem;
+      }
+      dl dl {
+        grid-column: 1 / -1;
+        margin: 0 0 0 1rem;
+      }
+      dt {
+        color: #4a5a50;
+      }
+      dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      details {
+        margin: 0 0 1rem;
+      }
+      summary {
+        cursor: pointer;
+        color: #4a5a50;
       }
       pre {
         white-space: pre-wrap;
@@ -136,6 +193,10 @@ export class CFShareSnapshot extends BaseElement {
   @property({ attribute: "audience-kind" })
   accessor audienceKind: "user" | "space" = "user";
 
+  /** Text of the button that opens the review; the dialog never uses it. */
+  @property()
+  accessor label = "Review and share";
+
   #preview: SnapshotPreview | undefined;
   #binding: ReviewBinding | undefined;
   #busy = false;
@@ -186,31 +247,33 @@ export class CFShareSnapshot extends BaseElement {
   }
 
   override render() {
+    const preview = this.#preview;
     return html`
-      <button type="button" ?disabled=${this.#busy || !this.source ||
-        !this.recipient ||
+      <button class="open" type="button" ?disabled=${this.#busy ||
+        !this.source || !this.recipient ||
         !(this.result || (this.recommended && this.received)) || !this.runtime}
-        @click=${this.#prepare}>Review sharing</button>
+        @click=${this.#prepare}>${this.label}</button>
       ${this.#error ? html`<p role="alert">${this.#error}</p>` : nothing}
       <dialog aria-labelledby="share-title" @cancel=${this.#cancel}>
-        <h2 id="share-title" tabindex="-1" autofocus>Share this exact snapshot?</h2>
-        <p>This is a copy of the data below. The source stays private.
-          The copy will be readable by you and the audience shown here.</p>
-        <p class="audience"><strong>Verified audience</strong><br />
-          ${this.#preview
-            ? JSON.stringify(this.#preview.audience, null, 2)
-            : ""}</p>
-        <pre>${this.#preview
-          ? JSON.stringify(this.#preview.value, null, 2)
-          : ""}</pre>
-        <p>Only the displayed fields are shared. Links and future changes to the source are not included.</p>
+        <h2 id="share-title" tabindex="-1" autofocus>Share a copy of this?</h2>
+        <p class="lede">They get a copy of what you see here. Later changes
+          stay with you until you share again.</p>
+        <p class="who audience"><strong>Who sees it</strong><br />
+          ${preview ? audienceWords(preview.audience) : ""}
+          <span class="id">${preview
+            ? audienceId(preview.audience)
+            : ""}</span></p>
+        ${preview ? renderLines(snapshotLines(preview.value)) : nothing}
+        <details>
+          <summary>Exact data</summary>
+          <pre>${preview ? JSON.stringify(preview.value, null, 2) : ""}</pre>
+        </details>
         <div class="actions">
           <button type="button" ?disabled=${this.#busy}
-            @click=${this
-              .#cancel}>Cancel</button>
+            @click=${this.#cancel}>Cancel</button>
           <button class="confirm" type="button" ?disabled=${this.#busy ||
-            !this.#preview}
-            @click=${this.#confirm}>Share snapshot</button>
+            !preview}
+            @click=${this.#confirm}>Share</button>
         </div>
       </dialog>
     `;
@@ -357,4 +420,18 @@ export class CFShareSnapshot extends BaseElement {
       this.requestUpdate();
     }
   }
+}
+
+/** Reviewed fields as a definition list, nested objects indented. */
+function renderLines(lines: SnapshotLine[]): unknown {
+  return html`<dl>${
+    lines.map((line) =>
+      line.children
+        ? html`<dt>${line.label}</dt><dd></dd>${renderLines(line.children)}`
+        : html`
+          <dt>${line.label}</dt>
+          <dd>${line.text}</dd>
+        `
+    )
+  }</dl>`;
 }
