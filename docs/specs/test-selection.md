@@ -418,6 +418,14 @@ past that anchor until `MAX_EXECUTIONS` stops it. So a test that has been
 seen to disagree at all is run at least twice, because one execution
 cannot tell a pass from a lucky pass.
 
+That count is the most a lane runs it. A lane stops repeating a unit once
+each test that asked for the unit's repeats has settled: it has passed and
+failed at this commit, which is the disagreement a flake is read from, or it
+has failed twice running, which is a test failing at this commit, whose
+further runs would each measure how long its failure takes. Every run the
+lane makes is recorded as it would be otherwise, and the lane's summary says
+how many runs of each unit it did not need and why, which is not a failure.
+
 Zero is the one point the count steps at, between running a test once and
 running it at least twice, which is why the manifest records a share as
 it was measured rather than to a few places. A share written to four
