@@ -5171,8 +5171,9 @@ const requireOperationCodec = (engine: Engine, id: string): OperationCodec => {
  * What the codec `codecId` returned for the anchors `prior`, checked before
  * the engine stores it: anchors, under the ids `prior` holds and no others.
  * The next edit to the field reads what is stored here, so a codec's mistake
- * is refused with the edit that exposed it. A codec is not trusted to return
- * what its type declares, so `mapped` is checked as a value of any shape.
+ * is refused with the edit that exposed it. The type is what a codec
+ * promises; the check is for one that breaks the promise, since what it
+ * returns is stored and every later edit of the field reads it.
  *
  * @throws OpCodecError when `mapped` is anything else.
  */
