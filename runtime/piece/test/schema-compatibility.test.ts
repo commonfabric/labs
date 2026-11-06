@@ -2908,6 +2908,85 @@ describe("piece schema compatibility", () => {
           reason: "existing result field was removed",
         }]);
       });
+
+      it("refuses dropping an optional field whose verb sits beyond its named properties", () => {
+        // A verb `additionalProperties` declares has no name the binding can
+        // be followed by, so nothing shows a handler's stream behind it.
+
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({
+                doubled: { type: "number" },
+                ui: {
+                  type: "object",
+                  properties: { label: { type: "string" } },
+                  additionalProperties: tick,
+                },
+              }, ["doubled"]),
+              { ui: { label: "Tick" } },
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([{
+          path: "result.ui",
+          reason: "existing result field was removed",
+        }]);
+      });
+
+      it("refuses dropping a nested verb whose field the previous pattern binds whole", () => {
+        // `ui` keeps publishing; its verb goes. The walk to `ui.tick` stops at
+        // `ui`'s alias, which could be forwarding a builtin's key.
+
+        const withUi = (properties: Record<string, JSONSchema>) =>
+          verbs({
+            doubled: { type: "number" },
+            ui: {
+              type: "object",
+              properties: { label: { type: "string" }, ...properties },
+            },
+          }, ["doubled"]);
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              withUi({ tick }),
+              { ui: { $alias: { partialCause: "picked", path: [] } } },
+              [{
+                module: { type: "ref", implementation: "ifElse" },
+                inputs: {},
+                outputs: { $alias: { partialCause: "picked", path: [] } },
+              }],
+            ),
+            withUi({}),
+          ),
+        ).toEqual([{
+          path: "result.ui.tick",
+          reason: "existing result field was removed",
+        }]);
+      });
+
+      it("refuses dropping an optional verb whose stream a node lists among its outputs", () => {
+        // A node that writes the stream's cell, here inside a list beside a
+        // count, makes it something other than a handler's own stream.
+
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({ doubled: { type: "number" }, tick }, ["doubled"]),
+              { tick: handlerStream },
+              [{
+                module: { type: "javascript" },
+                inputs: {},
+                outputs: { streams: [handlerStream], count: 0 },
+              }],
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([{
+          path: "result.tick",
+          reason: "existing result field was removed",
+        }]);
+      });
     });
 
     it("refuses dropping an optional verb whose marker its reference carries", () => {
@@ -2932,6 +3011,33 @@ describe("piece schema compatibility", () => {
         path: "result.tick",
         reason: "existing result field was removed",
       }]);
+    });
+
+    it("accepts dropping an optional field whose recursive schema holds no verb", () => {
+      // The search for a verb follows `child` back to `Node` once and stops
+      // there, so a recursive data field is judged as the data it is.
+
+      const withTree = (properties: Record<string, JSONSchema>): Pattern =>
+        pattern(oldPattern.argumentSchema, {
+          type: "object",
+          properties: { doubled: { type: "number" }, ...properties },
+          required: ["doubled"],
+          $defs: {
+            Node: {
+              type: "object",
+              properties: {
+                label: { type: "string" },
+                child: { $ref: "#/$defs/Node" },
+              },
+            },
+          },
+        });
+      expect(
+        patternSchemaIncompatibilities(
+          withTree({ tree: { $ref: "#/$defs/Node" } }),
+          withTree({}),
+        ),
+      ).toEqual([]);
     });
 
     it("refuses dropping an optional field that holds a verb", () => {
