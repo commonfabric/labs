@@ -43,7 +43,9 @@
  * The whole rehearsal runs twice: once with the manager's and the group room's
  * views never read before the update, and once with a client showing Home and
  * reading them first. Which of the two a deployed piece is in decides what it
- * has stored for those views, and so what the update finds there.
+ * has stored for those views, and so what the update finds there. It runs a
+ * third time with the manager's result stamped with a clause naming someone
+ * whose data it doesn't hold, which the update has to take off.
  *
  * The copy is only a rehearsal while it matches what is deployed, which is
  * `main`. `deno task refresh-fabrichat-rehearsal` replaces it with
