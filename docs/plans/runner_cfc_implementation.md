@@ -378,7 +378,12 @@ therefore carries its own guard:
   write carries the chokepoint's mark (below): an address naming the field, a
   root write carrying another value or leaving a stored one out, or a root
   delete. A root write carrying every stored meta field forward unchanged
-  passes there, as it changes nothing.
+  passes there, as it changes nothing. Both guards decide "stored" by the
+  writing transaction's own view, so this holds for the meta fields that view
+  holds. A root write from a transaction that never loaded the document sees
+  no stored field, and can leave every one out; the reserved siblings' guard
+  has the same bound, below. No store check covers the meta fields: the
+  memory engine's envelope check judges declared CFC labels only.
 - The reserved siblings — the `cfc` label map and `source` — are the runtime's,
   and a write reaching either from outside the privileged persistence scope is
   recorded, with the commit boundary turning each record into a fail-closed
