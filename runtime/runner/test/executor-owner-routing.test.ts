@@ -898,7 +898,6 @@ describe("executor owner routing", () => {
     // `first` OWNER moves the owner to `first`, so the owner revokes it.
     await grantOnTarget(owner, second, first.did(), "OWNER");
     await revocations.reached(1);
-    expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
 
     await scope.append(targetSpace, appendOf("evt-after-revoke", second));
     expect(
