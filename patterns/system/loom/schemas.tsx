@@ -11,6 +11,7 @@ import type {
   SpaceAccessLevel,
   Stream,
   UI,
+  VIEWS,
   VNode,
   Writable,
 } from "commonfabric";
@@ -294,8 +295,46 @@ export interface ViewerState {
   actingProfile?: ParticipantProfile;
 }
 
+/**
+ * Who may remove a panel for everyone, as `removePanel` decides it: `anyone`
+ * for an occurrence that records no adder, `owner` for one whose adder cannot
+ * be read, and otherwise the principal who added it, whom an OWNER may stand
+ * in for once `adderLeft`.
+ */
+export type PanelRemoval =
+  | { by: "anyone" }
+  | { by: "owner" }
+  | { by: "adder"; adder: string; adderLeft: boolean };
+
+/** One panel as a host drawing its own deck needs it. */
+export interface LoomDeckPanel {
+  panel: Writable<Panel>;
+  /** The panel's body, without a title or links: a host frames it itself. */
+  view: { [UI]: VNode };
+  /** What it holds: a `piece` a host may open on its own, a `document`, a `url`. */
+  kind?: Panel["kind"];
+  /** Its title, URL or document's name; a piece's own name is not read. */
+  heading?: string;
+}
+
+/**
+ * The Loom as a host draws it with its own toolkit instead of rendering
+ * `[UI]`, which stays complete for every other host. `shared` holds each of
+ * the Loom's panels with who may remove it, in the Loom's order; `private`
+ * the viewer's private panels. Which the viewer is shown, and where, is
+ * `viewerPanels`, and what they hid `hiddenPanels`. `access` is the viewer's
+ * access to the Loom's space. The root's streams still decide every event a
+ * host sends.
+ */
+export interface LoomDeck {
+  access: PerSession<SpaceAccessLevel | undefined>;
+  shared: (LoomDeckPanel & { removal: PanelRemoval })[];
+  private: LoomDeckPanel[];
+}
+
 /** Standard default-pattern exports and the public composition actions. */
 export interface LoomOutput {
+  [VIEWS]: { deck: LoomDeck };
   [NAME]: string;
   [UI]: VNode;
   title: string;
@@ -343,14 +382,6 @@ export interface LoomOutput {
   hiddenPanels: PerUser<Writable<Writable<Panel>[]>>;
   privatePanels: PerUser<Writable<PrivatePanel[]>>;
   viewerPanels: Writable<Panel>[];
-  /**
-   * The viewer's access to the Loom's space, for a host that draws its own
-   * arranging: READ may only hide and show panels for itself, WRITE may
-   * arrange and remove the panels it added, and OWNER may also remove panels
-   * of members who have left. `removePanel` still decides each removal.
-   * `undefined` until the session has derived it.
-   */
-  viewerAccess: PerSession<SpaceAccessLevel | undefined>;
   hidePanel: Stream<{ panel: Writable<Panel> }>;
   unhidePanel: Stream<{ panel: Writable<Panel> }>;
   addPrivatePanel: Stream<PanelPosition>;

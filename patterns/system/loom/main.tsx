@@ -13,6 +13,7 @@ import {
   spaceOf,
   type Stream,
   UI,
+  VIEWS,
   type VNode,
   wish,
   Writable,
@@ -24,6 +25,7 @@ import {
   assertRemovable,
   externalUrl,
   insertionIndex,
+  panelRemoval,
   validatePanel,
 } from "./admission.tsx";
 import type {
@@ -572,10 +574,15 @@ const unhidePanel = handler<
   hiddenPanels.removeByValue(panel);
 });
 
-/** Present one linked occurrence without reading a piece's protected fields. */
-function renderPanel(panel: Writable<Panel>) {
+/**
+ * Present one linked occurrence without reading a piece's protected fields.
+ * `bare` leaves out its title and the link to open it, for a host that frames
+ * the panel itself.
+ */
+function renderPanel(panel: Writable<Panel>, bare = false) {
   const value = panel.get();
   if (value.kind === "piece") {
+    if (bare) return <cf-render $cell={value.piece} />;
     return (
       <cf-vstack gap="2">
         {value.titleOverride ? <h3>{value.titleOverride}</h3> : null}
@@ -591,7 +598,7 @@ function renderPanel(panel: Writable<Panel>) {
     }
     return (
       <cf-vstack gap="2">
-        <h3>{value.titleOverride || url}</h3>
+        {bare ? null : <h3>{value.titleOverride || url}</h3>}
         <a href={url} target="_blank" rel="noopener noreferrer">
           Open in new tab
         </a>
@@ -613,7 +620,7 @@ function renderPanel(panel: Writable<Panel>) {
   if (document.kind === "page-excerpt") {
     return (
       <cf-vstack gap="2">
-        <h3>{value.titleOverride || document.title}</h3>
+        {bare ? null : <h3>{value.titleOverride || document.title}</h3>}
         <div style={{ whiteSpace: "pre-wrap" }}>{document.body}</div>
         <cf-textarea
           $value={value.content.key("notes")}
@@ -624,7 +631,7 @@ function renderPanel(panel: Writable<Panel>) {
   }
   return (
     <cf-vstack gap="2">
-      <h3>{value.titleOverride || document.name}</h3>
+      {bare ? null : <h3>{value.titleOverride || document.name}</h3>}
       {document.photo
         ? <img src={document.photo} alt="" style={{ maxWidth: "96px" }} />
         : null}
@@ -649,6 +656,27 @@ function panelLabel(panel: Writable<Panel>): string {
   if (value.titleOverride) return `Hidden: ${value.titleOverride}`;
   return value.kind === "url" ? `Hidden: ${value.url}` : `Hidden ${value.kind}`;
 }
+
+/**
+ * What a host drawing its own deck calls a panel: its title, else its URL,
+ * else its document's title or name. A piece's own name is its to show.
+ */
+function panelHeading(panel: Writable<Panel>): string | undefined {
+  const value = panel.get();
+  if (value === undefined) return undefined;
+  if (value.titleOverride) return value.titleOverride;
+  if (value.kind === "url") return value.url;
+  if (value.kind === "piece") return undefined;
+  const document = value.content.get()?.source;
+  return document?.kind === "page-excerpt" ? document.title : document?.name;
+}
+
+/** One linked panel occurrence's body, for a host that frames it itself. */
+export const PanelBody = pattern<{ panel: Writable<Panel> }, { [UI]: VNode }>((
+  { panel },
+) => ({
+  [UI]: computed(() => renderPanel(panel, true)),
+}));
 
 /** Standalone view of one linked panel occurrence. */
 export const PanelView = pattern<{ panel: Writable<Panel> }, { [UI]: VNode }>((
@@ -730,11 +758,32 @@ export default pattern<LoomInput, LoomOutput>(
         privatePanels.get(),
       )
     );
-    // What this viewer may do here, so a host that draws its own arranging
-    // offers only that. The handlers stay the gate.
-    const viewerAccess = computed(
+    // The Loom as a host that draws its own deck reads it: each shared panel
+    // with its body and who may remove it, each of the viewer's private ones
+    // with its body, and the viewer's access, so the host offers only what
+    // the root's streams would accept. The streams stay the gate. Order and
+    // what the viewer hid are `viewerPanels` and `hiddenPanels`.
+    const access = computed(
       (): PerSession<SpaceAccessLevel | undefined> => spaceAccess(panels),
     );
+    const deckShared = panels.map((panel) => ({
+      panel,
+      view: PanelBody({ panel }),
+      kind: computed(() => panel.get()?.kind),
+      heading: computed(() => panelHeading(panel)),
+      removal: computed(() => panelRemoval(panel.resolveAsCell(), panels)),
+    }));
+    // Mapped from a list of the links, not the per-user list itself, whose
+    // entries a shared output may not hold.
+    const privateList = computed(() =>
+      (privatePanels.get() ?? []).map((entry) => entry.panel)
+    );
+    const deckPrivate = privateList.map((panel) => ({
+      panel,
+      view: PanelBody({ panel }),
+      kind: computed(() => panel.get()?.kind),
+      heading: computed(() => panelHeading(panel)),
+    }));
     const state = { panels, presentation };
     const viewerState = new Writable.perSession<ViewerState>({});
     const remove = removePanel(state);
@@ -746,6 +795,9 @@ export default pattern<LoomInput, LoomOutput>(
     const unhide = unhidePanel({ hiddenPanels });
     const removePrivate = removePrivatePanel({ privatePanels });
     return {
+      [VIEWS]: {
+        deck: { access, shared: deckShared, private: deckPrivate },
+      },
       [NAME]: title,
       [UI]: (
         <cf-theme>
@@ -914,7 +966,6 @@ export default pattern<LoomInput, LoomOutput>(
       retargetPanel: retargetPanel({ panels }),
       hiddenPanels,
       viewerPanels,
-      viewerAccess,
       hidePanel: hide,
       unhidePanel: unhide,
       privatePanels,

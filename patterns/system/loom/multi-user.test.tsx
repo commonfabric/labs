@@ -8,6 +8,7 @@ import {
   pattern,
   TESTS,
   UI,
+  VIEWS,
   Writable,
 } from "commonfabric";
 import {
@@ -67,8 +68,19 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
           setup.loom.viewerState.key("selectedPanel").equals(panel)
         ),
       },
-      // The first participant owns the space.
-      { assertion: assert(() => setup.loom.viewerAccess === "OWNER") },
+      // The first participant owns the space. A host drawing its own deck
+      // reads each shared panel with who may remove it: these were linked
+      // without an adder, so anyone may.
+      { assertion: assert(() => setup.loom[VIEWS].deck.access === "OWNER") },
+      {
+        assertion: assert(() =>
+          setup.loom[VIEWS].deck.shared.length === 2 &&
+          setup.loom[VIEWS].deck.shared.every((entry) =>
+            entry.removal.by === "anyone" &&
+            entry.heading?.startsWith("https://example.com/")
+          )
+        ),
+      },
       { render: setup.loom[UI] },
       { action: stage },
       { label: "alice-staged" },
@@ -128,7 +140,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       { action: add },
       { action: select },
       { label: "bob-added" },
-      { assertion: assert(() => setup.loom.viewerAccess === "WRITE") },
+      { assertion: assert(() => setup.loom[VIEWS].deck.access === "WRITE") },
       { await: "alice-added" },
       { assertion: assert(() => setup.loom.panels.length === 2) },
       {
@@ -194,7 +206,7 @@ export const aliceTab2 = pattern<{ setup: Setup }>(({ setup }) => {
 export const carol = pattern<{ setup: Setup }>(({ setup }) => ({
   [TESTS]: [
     { await: "bob-added" },
-    { assertion: assert(() => setup.loom.viewerAccess === "READ") },
+    { assertion: assert(() => setup.loom[VIEWS].deck.access === "READ") },
   ],
 }));
 

@@ -526,7 +526,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "BZKUJLwo7xLaHN4265pGo9NnIXbJFvmaWR3wJzgs4A0",
+              "moduleIdentity": "ISKO27ZMaFYoMXpxijSmlhMJ5wrbk5xu-UR3aKFeEsg",
               "path": [
                 "admitPanel"
               ]
@@ -554,7 +554,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "BZKUJLwo7xLaHN4265pGo9NnIXbJFvmaWR3wJzgs4A0",
+              "moduleIdentity": "ISKO27ZMaFYoMXpxijSmlhMJ5wrbk5xu-UR3aKFeEsg",
               "path": [
                 "admitPanel"
               ]
@@ -1385,6 +1385,119 @@
         },
         "type": "object"
       },
+      "LoomDeck": {
+        "properties": {
+          "access": {
+            "anyOf": [
+              {
+                "type": "undefined"
+              },
+              {
+                "enum": [
+                  "OWNER",
+                  "READ",
+                  "WRITE",
+                  "none"
+                ],
+                "type": "string"
+              }
+            ],
+            "scope": "session"
+          },
+          "private": {
+            "items": {
+              "$ref": "#/$defs/LoomDeckPanel"
+            },
+            "type": "array"
+          },
+          "shared": {
+            "items": {
+              "description": "One panel as a host drawing its own deck needs it.",
+              "properties": {
+                "heading": {
+                  "description": "Its title, URL or document's name; a piece's own name is not read.",
+                  "type": "string"
+                },
+                "kind": {
+                  "description": "What it holds: a `piece` a host may open on its own, a `document`, a `url`.",
+                  "enum": [
+                    "piece",
+                    "document",
+                    "url"
+                  ]
+                },
+                "panel": {
+                  "$ref": "#/$defs/Panel"
+                },
+                "removal": {
+                  "$ref": "#/$defs/PanelRemoval"
+                },
+                "view": {
+                  "description": "The panel's body, without a title or links: a host frames it itself.",
+                  "properties": {
+                    "$UI": {
+                      "$ref": "https://commonfabric.org/schemas/vnode.json"
+                    }
+                  },
+                  "required": [
+                    "$UI"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "panel",
+                "view",
+                "removal"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "access",
+          "shared",
+          "private"
+        ],
+        "type": "object"
+      },
+      "LoomDeckPanel": {
+        "properties": {
+          "heading": {
+            "description": "Its title, URL or document's name; a piece's own name is not read.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What it holds: a `piece` a host may open on its own, a `document`, a `url`.",
+            "enum": [
+              "piece",
+              "document",
+              "url"
+            ]
+          },
+          "panel": {
+            "$ref": "#/$defs/Panel"
+          },
+          "view": {
+            "description": "The panel's body, without a title or links: a host frames it itself.",
+            "properties": {
+              "$UI": {
+                "$ref": "https://commonfabric.org/schemas/vnode.json"
+              }
+            },
+            "required": [
+              "$UI"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "panel",
+          "view"
+        ],
+        "type": "object"
+      },
       "LoomStyle": {
         "anyOf": [
           {
@@ -1533,7 +1646,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "BZKUJLwo7xLaHN4265pGo9NnIXbJFvmaWR3wJzgs4A0",
+              "moduleIdentity": "ISKO27ZMaFYoMXpxijSmlhMJ5wrbk5xu-UR3aKFeEsg",
               "path": [
                 "admitPanel"
               ]
@@ -1558,7 +1671,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "BZKUJLwo7xLaHN4265pGo9NnIXbJFvmaWR3wJzgs4A0",
+              "moduleIdentity": "ISKO27ZMaFYoMXpxijSmlhMJ5wrbk5xu-UR3aKFeEsg",
               "path": [
                 "admitPanel"
               ]
@@ -1614,6 +1727,60 @@
           "panel"
         ],
         "type": "object"
+      },
+      "PanelRemoval": {
+        "anyOf": [
+          {
+            "properties": {
+              "by": {
+                "enum": [
+                  "anyone"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "by"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "by": {
+                "enum": [
+                  "owner"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "by"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "adder": {
+                "type": "string"
+              },
+              "adderLeft": {
+                "type": "boolean"
+              },
+              "by": {
+                "enum": [
+                  "adder"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "by",
+              "adder",
+              "adderLeft"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "PanelRetarget": {
         "properties": {
@@ -1894,6 +2061,17 @@
       "$UI": {
         "$ref": "https://commonfabric.org/schemas/vnode.json"
       },
+      "$VIEWS": {
+        "properties": {
+          "deck": {
+            "$ref": "#/$defs/LoomDeck"
+          }
+        },
+        "required": [
+          "deck"
+        ],
+        "type": "object"
+      },
       "addPanel": {
         "$ref": "#/$defs/PanelAdmission",
         "asCell": [
@@ -2156,24 +2334,6 @@
         ],
         "type": "object"
       },
-      "viewerAccess": {
-        "anyOf": [
-          {
-            "type": "undefined"
-          },
-          {
-            "enum": [
-              "OWNER",
-              "READ",
-              "WRITE",
-              "none"
-            ],
-            "type": "string"
-          }
-        ],
-        "description": "The viewer's access to the Loom's space, for a host that draws its own\narranging: READ may only hide and show panels for itself, WRITE may\narrange and remove the panels it added, and OWNER may also remove panels\nof members who have left. `removePanel` still decides each removal.\n`undefined` until the session has derived it.",
-        "scope": "session"
-      },
       "viewerPanels": {
         "items": {
           "$ref": "#/$defs/Panel"
@@ -2213,12 +2373,12 @@
       "hiddenPanels",
       "privatePanels",
       "viewerPanels",
-      "viewerAccess",
       "hidePanel",
       "unhidePanel",
       "addPrivatePanel",
       "removePrivatePanel",
       "movePrivatePanel",
+      "$VIEWS",
       "$NAME",
       "$UI"
     ],

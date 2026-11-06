@@ -18,7 +18,7 @@ import {
   type WriteAuthorizedBy,
 } from "commonfabric";
 import type { ParticipantProfile } from "./participants.tsx";
-import type { Panel, PanelAdmission } from "./schemas.tsx";
+import type { Panel, PanelAdmission, PanelRemoval } from "./schemas.tsx";
 
 /**
  * The DID of the principal who added a panel.
@@ -216,6 +216,36 @@ export function assertRemovable(
   panel: Writable<Panel>,
   panels: Writable<Writable<Panel>[]>,
 ): void {
+  const removal = panelRemoval(panel, panels);
+  if (removal.by === "anyone") return;
+  if (removal.by === "owner") {
+    if (spaceAccess(panels) === "OWNER") return;
+    throw new Error(
+      "A panel whose label does not settle on one adder can be removed only by an OWNER of the Loom",
+    );
+  }
+  if (removal.adder === currentPrincipal()) return;
+  // An owner clears up after a participant who has left: one the Loom's list
+  // grants nothing, as the list stands on this replica. A list not yet read
+  // admits nobody's removal of another's panel.
+  if (spaceAccess(panels) === "OWNER" && removal.adderLeft) return;
+  throw new Error(
+    "Only the principal who added a panel can remove it, unless they have left the Loom and an OWNER removes it",
+  );
+}
+
+/**
+ * Who may remove `panel` for everyone, by the rule {@link assertRemovable}
+ * enforces, read from the same stamps and the same list: `anyone` for an
+ * occurrence that records no adder, `owner` for one whose stamps do not settle
+ * on one adder, and otherwise its `adder`, whom an OWNER may stand in for once
+ * the adder has left. It reads no acting principal, so a reactive
+ * computation can offer a viewer only the removals it would be granted.
+ */
+export function panelRemoval(
+  panel: Writable<Panel>,
+  panels: Writable<Writable<Panel>[]>,
+): PanelRemoval {
   const byDid = attestedAdders(panel);
   const byProfile = principalsOf(
     panel.key("addedByProfile"),
@@ -226,26 +256,15 @@ export function assertRemovable(
     ? undefined
     : [...new Set([...byDid, ...byProfile])];
   if (adders?.length === 0 && panel.get().addedByProfile === undefined) {
-    return;
+    return { by: "anyone" };
   }
-  if (adders?.length !== 1) {
-    if (spaceAccess(panels) === "OWNER") return;
-    throw new Error(
-      "A panel whose label does not settle on one adder can be removed only by an OWNER of the Loom",
-    );
-  }
+  if (adders?.length !== 1) return { by: "owner" };
   const [adder] = adders;
-  const actor = currentPrincipal();
-  if (adder === actor) return;
-  // An owner clears up after a participant who has left: one the Loom's list
-  // grants nothing, as the list stands on this replica. A list not yet read
-  // admits nobody's removal of another's panel.
-  if (
-    spaceAccess(panels) === "OWNER" && spaceAccessOf(panels, adder) === "none"
-  ) return;
-  throw new Error(
-    "Only the principal who added a panel can remove it, unless they have left the Loom and an OWNER removes it",
-  );
+  return {
+    by: "adder",
+    adder,
+    adderLeft: spaceAccessOf(panels, adder) === "none",
+  };
 }
 
 /** A copy of `source` that keeps its target and title and takes a new adder. */

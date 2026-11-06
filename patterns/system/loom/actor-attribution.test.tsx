@@ -14,6 +14,7 @@ import {
   principalOf,
   type Stream,
   TESTS,
+  VIEWS,
   Writable,
   type WriteAuthorizedBy,
 } from "commonfabric";
@@ -202,6 +203,24 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           setup.loom.panels.filter((panel) => panel.get().addedBy === me.get())
               .length === 1
         ),
+      },
+      // A host drawing its own deck is told the same adder, so it offers each
+      // participant the removal of their own panels.
+      {
+        assertion: assert(() => {
+          const shared = setup.loom[VIEWS].deck.shared;
+          const adders = shared.map((entry) =>
+            entry.removal.by === "adder" && !entry.removal.adderLeft
+              ? entry.removal.adder
+              : undefined
+          );
+          return shared.length === 3 &&
+            shared.every((entry, at) =>
+              adders[at] !== undefined &&
+              adders[at] === entry.panel.get().addedBy
+            ) &&
+            adders.filter((adder) => adder === me.get()).length === 1;
+        }),
       },
       { action: linkAlicesElsewhere },
       { assertion: assert(() => setup.elsewhere.panels.length === 0) },

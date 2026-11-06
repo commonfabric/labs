@@ -244,13 +244,17 @@ loom's root, so several social looms can each show one private loom.
 
 A host may draw a Loom's panels and arranging with its own toolkit instead of
 rendering the root's `[UI]`, which stays complete for every other host. It reads
-the same outputs: `viewerPanels`, `presentation`, `hiddenPanels`,
-`privatePanels`, and the streams above. `viewerAccess` is the viewer's access to
-the Loom's space, derived for each session, so such a host offers only what the
-viewer may do: `READ` hides and shows panels for itself, `WRITE` also arranges
-and removes the panels it added, and `OWNER` also removes those of members who
-have left. The streams still decide each event, so a host's offer is a
-convenience, never the check.
+`[VIEWS].deck`: `shared` holds each of the Loom's panels, in its order, with its
+`view` (the panel's body without a title or links, for the host to frame), its
+`kind`, a `heading` (its title, URL or document's name, never a piece's own
+fields), and `removal`, who may remove it as `removePanel` decides it
+(`panelRemoval()`): `anyone` for an occurrence that records no adder, `owner`
+for one whose adder cannot be read, or the `adder`, whom an OWNER may stand in
+for once `adderLeft`. `private` holds the viewer's private panels the same way,
+without `removal`. `access` is the viewer's access to the Loom's space, derived
+for each session. Which panels the viewer is shown, and in what order, is
+`viewerPanels`; what they hid is `hiddenPanels`. The streams still decide every
+event, so what a host offers is a convenience, never the check.
 
 `participants` lists the Fabric profiles of the Loom's participants, each as the
 live profile cell in its own space. It records no DID and no name: a profile
