@@ -41,11 +41,15 @@ two anchors are.
 - Each mark is a span with the class `cm-highlight` and a `data-highlight-id`
   attribute holding the entry's `id`. A `kind` made of lowercase letters, digits
   and hyphens adds the class `cm-highlight-<kind>`. The editor styles
-  `cm-highlight-active` more strongly than the others.
+  `cm-highlight-active` more strongly than the others. Any other `kind` is
+  reported through `cf-error`, and the mark is drawn without it.
 - An entry marks nothing when the field holds no anchor under `fromAnchor` or
-  under `toAnchor`, and when the second anchor is not after the first. The
-  second case is how deleted text shows: an edit that deletes the text of a
-  highlight leaves both anchors at one offset.
+  under `toAnchor`, and when the second anchor is not after the first. Both
+  anchors at one offset is how deleted text shows: an edit that deletes the text
+  of a highlight leaves them there. An edit never puts the second anchor before
+  the first, so the editor reports an entry whose anchors are that way round
+  through `cf-error`, as something its host wrote. Each such report is sent once
+  while the entry stays that way.
 - An anchor's offset can lie past the end of the text, because Memory does not
   check an offset against the field when a pattern writes it. The editor treats
   such an anchor as one at the end of the text.

@@ -15,6 +15,7 @@ import {
   highlightAnchors,
   highlightAt,
   highlightClickHandler,
+  highlightFaults,
   highlightField,
   highlights,
   localAnchors,
@@ -511,6 +512,42 @@ describe("highlights", () => {
       expect(highlightAnchors(state)).toEqual({ from: 6, to: 11 });
       expect(markedRanges(state)).toEqual([[6, 11]]);
       expect(highlightAt(state, 8)).toBe("h");
+    });
+  });
+
+  describe("highlightFaults", () => {
+    it("returns a message for a kind that cannot be part of a class name", () => {
+      const state = stateWith("hello", { from: 1, to: 3 }, [
+        { id: "h", fromAnchor: "from", toAnchor: "to", kind: "Big Mark" },
+        { id: "ok", fromAnchor: "from", toAnchor: "to", kind: "active" },
+      ]);
+
+      const faults = highlightFaults(state);
+
+      expect(faults).toHaveLength(1);
+      expect(faults[0]).toContain("has the kind");
+      expect(faults[0]).toContain("Big Mark");
+    });
+
+    it("returns a message for a highlight whose end anchor lies before its start", () => {
+      const state = stateWith("hello", { from: 3, to: 1 }, [
+        { id: "h", fromAnchor: "from", toAnchor: "to" },
+      ]);
+
+      const faults = highlightFaults(state);
+
+      expect(faults).toHaveLength(1);
+      expect(faults[0]).toContain("ends at the anchor");
+      expect(faults[0]).toContain("drawn as nothing");
+    });
+
+    it("returns nothing for a highlight missing an anchor, or with both anchors at one offset", () => {
+      const state = stateWith("hello", { from: 2, to: 2 }, [
+        { id: "gone", fromAnchor: "from", toAnchor: "to" },
+        { id: "unanchored", fromAnchor: "from", toAnchor: "missing" },
+      ]);
+
+      expect(highlightFaults(state)).toEqual([]);
     });
   });
 

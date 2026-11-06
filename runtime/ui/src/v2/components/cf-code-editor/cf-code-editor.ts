@@ -116,6 +116,7 @@ import {
 import {
   type EditorHighlight,
   highlightAnchors,
+  highlightFaults,
   highlights as highlightsExtension,
   localAnchors,
   sameSelection,
@@ -505,6 +506,13 @@ export class CFCodeEditor extends BaseElement {
       cursor: CodeMirrorSynchronizationSnapshot["confirmedCursor"];
     }
     | undefined;
+
+  /**
+   * The highlight faults last reported through `cf-error`, so that a fault is
+   * reported once while it lasts rather than on every change to the editor.
+   */
+  #reportedHighlightFaults: ReadonlySet<string> = new Set();
+
   private _presence: PresenceRoomHandle | undefined;
   private _presenceUnsubscribe: (() => void) | undefined;
   private _presenceJoining = false;
@@ -2338,6 +2346,22 @@ export class CFCodeEditor extends BaseElement {
   }
 
   /**
+   * Emits `cf-error` for each highlight the host asked for that the editor
+   * cannot draw as asked ({@link highlightFaults}), once while it lasts.
+   */
+  private _reportHighlightFaults(): void {
+    const view = this._editorView;
+    if (!view) return;
+    const faults = highlightFaults(view.state);
+    const reported = this.#reportedHighlightFaults;
+    this.#reportedHighlightFaults = new Set(faults);
+    for (const message of faults) {
+      if (reported.has(message)) continue;
+      this.emit("cf-error", { error: new Error(message), message });
+    }
+  }
+
+  /**
    * Restates the highlight field's anchors from Memory's when the anchors or
    * the version they are stated at have changed. Between restatements the
    * highlight field moves each anchor through each edit by the same rule, so
@@ -2363,6 +2387,7 @@ export class CFCodeEditor extends BaseElement {
     };
     if (sameAnchors(anchors, highlightAnchors(view.state))) return;
     view.dispatch({ effects: setHighlightAnchorsEffect.of(anchors) });
+    this._reportHighlightFaults();
   }
 
   /** Reports the main selection, against the editor's document. */
@@ -2826,6 +2851,7 @@ export class CFCodeEditor extends BaseElement {
       this._editorView.dispatch({
         effects: setHighlightsEffect.of(this.highlights ?? []),
       });
+      this._reportHighlightFaults();
     }
 
     // Update language
@@ -3372,6 +3398,7 @@ export class CFCodeEditor extends BaseElement {
     this._editorView.dispatch({
       effects: setHighlightsEffect.of(this.highlights ?? []),
     });
+    this._reportHighlightFaults();
     this._refusedShown = this._readsWithheld;
     // A host may hold the last selection an earlier view reported, so a new
     // view says what is selected in it, which at first is nothing.

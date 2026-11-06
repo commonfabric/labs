@@ -454,6 +454,24 @@ describe("CFCodeEditor collaboration", () => {
     expect(events).toEqual([]);
   });
 
+  it("emits `cf-error` once for a highlight it cannot draw as asked, while the fault lasts", () => {
+    const errors: string[] = [];
+    const element = new CFCodeEditor();
+    (element as any)._editorView = statefulView([highlightField]);
+    (element as any).emit = (name: string, detail: { message: string }) => {
+      if (name === "cf-error") errors.push(detail.message);
+    };
+    element.highlights = [
+      { id: "h", fromAnchor: "from", toAnchor: "to", kind: "Not A Class" },
+    ];
+
+    (element as any).updated(new Map([["highlights", []]]));
+    (element as any).updated(new Map([["highlights", []]]));
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("has the kind");
+  });
+
   it("hands a changed highlights property to the editor", () => {
     const element = new CFCodeEditor();
     const view = statefulView([highlightField]);

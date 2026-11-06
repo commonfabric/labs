@@ -14,6 +14,7 @@ import {
   StateField,
 } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
+import { debugStr } from "@commonfabric/data-model";
 import {
   type FieldAnchors,
   mapFieldAnchors,
@@ -40,8 +41,9 @@ export interface EditorHighlight {
   toAnchor: string;
 
   /**
-   * Adds the class `cm-highlight-<kind>` to the mark. Only lowercase letters,
-   * digits and hyphens are used; anything else is ignored.
+   * Adds the class `cm-highlight-<kind>` to the mark. A kind made of anything
+   * but lowercase letters, digits and hyphens is reported through
+   * `cf-error`, and the mark is drawn without it.
    */
   kind?: string;
 }
@@ -152,6 +154,42 @@ export const highlightField = StateField.define<HighlightState>({
 /** The anchors the editor holds, as offsets in its own document. */
 export const highlightAnchors = (state: EditorState): FieldAnchors =>
   state.field(highlightField, false)?.anchors ?? {};
+
+/**
+ * What is wrong with the highlights `state` holds, one message each: a
+ * highlight whose `kind` cannot be part of a class name, which is drawn
+ * without one, and a highlight whose end anchor lies before its start
+ * anchor, which is drawn as nothing. A highlight missing an anchor, or whose
+ * two anchors are at one offset, is not wrong: the first is text not yet
+ * anchored or anchors since removed, and the second text an edit deleted.
+ * Edits move both anchors of a pair by one rule and never put the end before
+ * the start, so such a pair comes from what the host wrote.
+ */
+export function highlightFaults(state: EditorState): string[] {
+  const field = state.field(highlightField, false);
+  if (field === undefined) return [];
+  const length = state.doc.length;
+  const faults: string[] = [];
+  for (const { id, fromAnchor, toAnchor, kind } of field.highlights) {
+    if (kind !== undefined && !KIND.test(kind)) {
+      faults.push(
+        debugStr`The highlight $quote${id} has the kind $quote${kind}, ` +
+          "which is not made of lowercase letters, digits and hyphens; it " +
+          "is drawn without one.",
+      );
+    }
+    const from = offsetOf(field.anchors, fromAnchor, length);
+    const to = offsetOf(field.anchors, toAnchor, length);
+    if (from !== undefined && to !== undefined && to < from) {
+      faults.push(
+        debugStr`The highlight $quote${id} ends at the anchor ` +
+          debugStr`$quote${toAnchor}, before the anchor $quote${fromAnchor} ` +
+          "it starts at; it is drawn as nothing.",
+      );
+    }
+  }
+  return faults;
+}
 
 const highlightTheme = EditorView.baseTheme({
   ".cm-highlight": {
