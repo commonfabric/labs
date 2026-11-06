@@ -15,6 +15,11 @@
  * test builds from a `MessageChannel` are the same thing here.
  */
 
+import {
+  bundledBuild,
+  comparePeerBuilds,
+  normalizeBuildMarker,
+} from "@commonfabric/platform/peer-build";
 import { debugStr } from "@commonfabric/data-model";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -328,6 +333,16 @@ export class RuntimeClients {
       }
       const { msgId, data: request } = message;
       ipcLogger.debug(`received/${request.type}`, () => []);
+      if (
+        request.type === RequestType.Initialize ||
+        request.type === RequestType.Attach
+      ) {
+        const peerBuild = normalizeBuildMarker(message.runtimeBuild);
+        ipcLogger.debug(
+          "peer-build",
+          () => [client.id, comparePeerBuilds(bundledBuild, peerBuild)],
+        );
+      }
       const receivedAt = performance.now();
       const sentEpochMs = (message as { sentEpochMs?: number }).sentEpochMs;
       if (typeof sentEpochMs === "number") {
@@ -518,6 +533,10 @@ export class RuntimeClients {
         msgId,
         error: describeFailure(error),
         ...(code ? { code } : {}),
+        ...((type === RequestType.Initialize || type === RequestType.Attach) &&
+            bundledBuild
+          ? { runtimeBuild: bundledBuild }
+          : {}),
       });
 
       // A refused attach is terminal for this client: the reply has gone, and
@@ -579,6 +598,12 @@ export class RuntimeClients {
     type: RequestType,
     client: WorkerClient,
   ): void {
+    if (
+      (type === RequestType.Initialize || type === RequestType.Attach) &&
+      bundledBuild
+    ) {
+      payload = { ...payload, runtimeBuild: bundledBuild };
+    }
     const delivered = client.post(payload as IPCRemotePost);
     ipcLogger.debug(
       `${delivered ? "responded" : "responded-error"}/${type}`,

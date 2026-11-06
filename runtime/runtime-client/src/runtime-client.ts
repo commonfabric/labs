@@ -1534,6 +1534,11 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     return this.#conn.getRequestTimelineDiagnostics();
   }
 
+  /** Provenance of the client library and the worker it joined. */
+  get buildDiagnostics() {
+    return this.#conn.buildDiagnostics;
+  }
+
   resetSubscriptionDiagnostics(): void {
     this.#conn.resetSubscriptionDiagnostics();
   }

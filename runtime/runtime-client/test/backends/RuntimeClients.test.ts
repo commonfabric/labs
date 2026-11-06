@@ -234,6 +234,28 @@ async function attachedClient(
 }
 
 describe("RuntimeClients", () => {
+  it("accepts optional client markers at initialize and attach without echoing them", async () => {
+    const h = harness();
+    await h.deliver(h.owner.client, {
+      msgId: 1,
+      runtimeBuild: "a".repeat(40),
+      data: { type: RequestType.Initialize, data: initializationData },
+    });
+    expect(h.owner.posted).toEqual([{ msgId: 1 }]);
+    const peer = attachDirect(h);
+    await h.deliver(peer.client, {
+      msgId: 2,
+      runtimeBuild: "b".repeat(40),
+      data: { type: RequestType.Attach, data: runningContext },
+    });
+    expect(peer.posted).toEqual([{ msgId: 2 }]);
+    await h.deliver(peer.client, {
+      msgId: 3,
+      data: { type: RequestType.Idle },
+    });
+    expect(peer.posted).toHaveLength(2);
+  });
+
   describe("instance members", () => {
     describe("handleMessage()", () => {
       it("acks the owner's `Initialize` and stands the runtime up", async () => {

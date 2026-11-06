@@ -10,6 +10,7 @@
     "deno-test": "deno test --shuffle=$(deno task -q test-seed) --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST --allow-read=src,test --no-check"
   },
   "exports": {
+    "./peer-build": "./src/peer-build.ts",
     "./build-info": "./src/build-info.ts",
     "./env": "./src/env.ts",
     "./loopback": "./src/loopback.ts",

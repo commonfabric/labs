@@ -1,7 +1,9 @@
 {
   "name": "@commonfabric/ui",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./runtime-context": "./src/v2/runtime-context.ts",
+    "./embedded-components": "./src/embedded-components.ts"
   },
   "tasks": {
     "bundle": "../../scripts/bundle.ts src/index.ts",
