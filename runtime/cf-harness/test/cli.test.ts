@@ -4350,7 +4350,7 @@ Deno.test("runCfHarnessCli validates a top-level structured result sidecar", asy
   assertEquals(stderr, []);
   assertEquals(
     runPromptOptions?.systemPrompt?.includes(
-      "Writing a JSON file at /workspace/capture.results.json",
+      "Write a JSON file at /workspace/capture.results.json",
     ),
     false,
   );
@@ -4874,7 +4874,7 @@ Deno.test("buildCfHarnessBatchSystemPrompt omits submit_result guidance when the
   assertEquals(prompt.includes("submit_result"), false);
   assertStringIncludes(
     prompt,
-    "Writing a JSON file at /workspace/result.json",
+    "Write a JSON file at /workspace/result.json",
   );
 });
 

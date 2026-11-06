@@ -21,7 +21,6 @@ import {
   type ReadonlyRecord,
 } from "@commonfabric/js-values/types";
 
-import { boundCatalogForModel } from "../client-actions/command-result.ts";
 import {
   HARNESS_COMMAND_ARGS_MAX_BYTES,
   HARNESS_COMMAND_CATALOG_DETAIL_LIMIT,
@@ -124,7 +123,7 @@ const BAD_ARGS_HOST_CODE = "bad-args";
 const notGrantedHint = (command: string): string =>
   `This run may not run \`${command}\`. Do not retry it; if the person should run it, name it in your result as an offer for them.`;
 
-/** What `list_commands` takes: command names to keep whole when bounded. */
+/** What `list_commands` takes: commands whose description and schema to show. */
 export interface ListCommandsInput {
   detail?: string[];
 }
@@ -163,13 +162,7 @@ export type ListCommandsOutput =
     outputId: ToolOutputId;
     status: "ok";
     notice: typeof LOOM_COMMANDS_EFFECT_NOTICE;
-    entries: (
-      | LoomCommandListing
-      | Omit<LoomCommandListing, "inputSchema" | "description">
-    )[];
-
-    /** Entries shown without their schema and description, past the bound. */
-    compacted?: number;
+    entries: LoomCommandListing[];
 
     /** Rows left out because they could not be read. */
     omitted?: number;
@@ -419,29 +412,20 @@ export const listCommandsTool: HarnessToolDefinition<
         ? input.detail.filter((name) => typeof name === "string")
         : [],
     );
-    // The commands the host names as relevant lead, so a listing past the
-    // model bound keeps them whole.
+    // The commands the host names as relevant lead the listing.
     const relevant = new Set(context.loomCommands?.relevant ?? []);
     const ordered = [
       ...catalog.entries.filter((entry) => relevant.has(entry.name)),
       ...catalog.entries.filter((entry) => !relevant.has(entry.name)),
     ];
-    const bounded = boundCatalogForModel(
-      ordered.map((entry) =>
-        listingOf(entry, detail.has(entry.name), relevant.has(entry.name))
-      ),
-      (entry) => entry.name,
-      [...detail],
-    );
     const omitted = catalog.malformed;
     return {
       outputId,
       status: "ok",
       notice: LOOM_COMMANDS_EFFECT_NOTICE,
-      entries: bounded.entries,
-      ...(bounded.compacted !== undefined
-        ? { compacted: bounded.compacted }
-        : {}),
+      entries: ordered.map((entry) =>
+        listingOf(entry, detail.has(entry.name), relevant.has(entry.name))
+      ),
       ...(omitted > 0 ? { omitted } : {}),
     };
   },
@@ -708,7 +692,9 @@ const measureAnswer = async (
   const [entry] = measured.entries;
   return {
     ...answered.skeleton,
-    ...(entry !== undefined ? { entry } : { hint: OMITTED_BODY_HINT }),
+    ...(entry !== undefined
+      ? { entry }
+      : { hint: answered.skeleton.hint ?? OMITTED_BODY_HINT }),
     truncated: measured.truncated,
     cfc: {
       version: 1,
@@ -904,8 +890,8 @@ const readCatalog = async (
 /**
  * Helper for batches, which returns the forms an executed call's summary may
  * take: the `larger` ones, largest first, and the `smallest`. The compact
- * form replaces `completed` with the count of its ids and leaves out the
- * hint, keeping the signature a `bad-args` refusal carries; the next leaves
+ * form replaces `completed` with the count of its ids, keeping the refusal
+ * hint and the signature a `bad-args` refusal carries; the next leaves
  * out the signature too; the smallest keeps only the outcome's `ok`, `code`,
  * and size, marked `summaryOmitted`.
  */
@@ -915,7 +901,7 @@ const skeletonForms = (
   larger: AnsweredCall["skeleton"][];
   smallest: AnsweredCall["skeleton"];
 } => {
-  const { hint: _hint, signature, outcome, ...rest } = skeleton;
+  const { signature, outcome, ...rest } = skeleton;
   const { completed, ...kept } = outcome;
   const compact = {
     ...rest,
@@ -957,9 +943,10 @@ const measureBatch = async (
 ): Promise<RunCommandBatchOutput> => {
   // Each result costs its serialized size, escapes included, the comma
   // that separates it from the next, and an answered one its `truncated`
-  // turning from `true` to `false`. Reserve room for an omission hint too.
-  const charge = (result: object) =>
-    JSON.stringify(result).length + 2 + OMITTED_BODY_HINT_SIZE;
+  // turning from `true` to `false`. Only answered calls can need an omission hint.
+  const charge = (result: RunCommandCallOutput | AnsweredCall["skeleton"]) =>
+    JSON.stringify(result).length + 2 +
+    (result.status === "executed" ? OMITTED_BODY_HINT_SIZE : 0);
   const smallest = (call: AnsweredCall | RunCommandCallOutput) =>
     isAnswered(call) ? skeletonForms(call.skeleton).smallest : call;
   let later = sent.reduce((sum, call) => sum + charge(smallest(call)), 0);
