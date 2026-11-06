@@ -1046,7 +1046,9 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * A space whose first connection never completed a handshake, such as one
    * on a host that was down or out of the network's reach, counts as refused
    * here: its `spaceSessionError()` stays that failure, and its loads fail
-   * with it at once without dialing again, until this call dials once more.
+   * with it at once without dialing again, until this call makes one more
+   * round of connection attempts. An ACL notice does not. The loads that
+   * failed in the meantime are made again once it connects.
    * A host calls it when it has reason to think the host is reachable now,
    * such as a person asking to try again or a change of network. A dial that
    * fails again rejects with the new failure and leaves the space as it was.

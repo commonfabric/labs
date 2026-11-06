@@ -205,6 +205,75 @@ describe("storage-first-handshake", () => {
       expect(dialed).toHaveLength(2 * MEMORY_FIRST_HANDSHAKE_ATTEMPTS);
     });
 
+    for (const asked of ["by the load that failed", "after it failed"]) {
+      it(`loads again, on a retry that connects, a document asked for ${asked}`, async () => {
+        const server = StandaloneMemoryServer.start({
+          namesInstances: namesInstancesByDefault,
+          connectionAuth: true,
+        });
+        cleanups.push(() => server.close());
+        // The user's own space, whose access-list document its first open
+        // writes: a document there for the retry to load.
+        const own = user.did() as MemorySpace;
+        const seeder = new TestStorageManager(
+          refusingFactory(server.url, 0, false).factory,
+        );
+        cleanups.push(() => seeder.close());
+        expect((await seeder.open(own).sync(`of:${own}`)).error)
+          .toBeUndefined();
+        const seeded = seeder.open(own).replica.getDocument(`of:${own}`);
+        expect(seeded).toBeDefined();
+
+        const { factory } = refusingFactory(
+          server.url,
+          MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
+          false,
+        );
+        const manager = new TestStorageManager(factory);
+        cleanups.push(() => manager.close());
+        const replica = manager.open(own).replica;
+        // The load whose open fails the handshake, and then, for the second
+        // case, a load the failed space refuses without dialing.
+        const first: `of:${string}` = asked === "by the load that failed"
+          ? `of:${own}`
+          : "of:first-handshake-other";
+        expect((await manager.open(own).sync(first)).error).toBeDefined();
+        if (first !== `of:${own}`) {
+          expect((await manager.open(own).sync(`of:${own}`)).error)
+            .toBeDefined();
+        }
+        expect(replica.getDocument(`of:${own}`)).toBeUndefined();
+
+        // No load after the retry: the retry itself loads it.
+        await manager.retrySpaceAccess(own);
+        expect(replica.getDocument(`of:${own}`)?.value).toEqual(
+          seeded?.value,
+        );
+      });
+    }
+
+    it("leaves a space that never connected alone on an ACL notice", async () => {
+      const server = StandaloneMemoryServer.start({
+        namesInstances: namesInstancesByDefault,
+        connectionAuth: true,
+      });
+      cleanups.push(() => server.close());
+      const { factory, dialed } = refusingFactory(
+        server.url,
+        MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
+        false,
+      );
+      const manager = new TestStorageManager(factory);
+      cleanups.push(() => manager.close());
+      await manager.open(SPACE).sync(`of:${SPACE}`);
+      manager.noteSpaceAclChanged(SPACE);
+      const after = await manager.open(SPACE).sync(`of:${SPACE}`);
+      expect(after.error).toBeDefined();
+      expect(dialed).toHaveLength(MEMORY_FIRST_HANDSHAKE_ATTEMPTS);
+      expect(isFirstHandshakeFailure(manager.spaceSessionError(SPACE)))
+        .toBe(true);
+    });
+
     it("leaves a space that connected alone on a retry", async () => {
       const server = StandaloneMemoryServer.start({
         namesInstances: namesInstancesByDefault,
