@@ -530,8 +530,9 @@ enforce`. [`cfc-template-population.md`](cfc-template-population.md),
 [`cfc-label-metadata-confidentiality.md`](cfc-label-metadata-confidentiality.md)
 are the designs.
 
-An owner release (§8.12.7 route 2c) is the one operation that lowers a
-still-existing path's existence entry. `releaseCellConfidentiality` in
+The two owner releases of §8.12.7, routes 2c and 2d, are the operations that
+lower a still-existing path's existence entry. For route 2c,
+`releaseCellConfidentiality` in
 `cfc/confidentiality-release.ts` is the host operation, the transaction's
 `releaseCfcConfidentiality` in `storage/extended-storage-transaction.ts` the
 privileged write, and `planConfidentialityRelease` in
@@ -571,6 +572,58 @@ nonconforming semantic gap and does not satisfy the correspondence procedure's
 step 4. @danfuzz's authorization to proceed ahead of unresolved specs
 dependencies does not supply a ruling; the gap still needs one and a
 reconciled pin.
+
+An owner release by intent (§8.12.7 route 2d) removes the clauses a request
+the space's owner signed names, whoever they stand for, from every component
+and observation class at one concrete path of one document, the existence and
+membership entries included. `releaseConfidentialityByIntent` in
+`cfc/confidentiality-release.ts` is the host operation, the transaction's
+`releaseCfcConfidentialityByIntent` in
+`storage/extended-storage-transaction.ts` the privileged write, under its own
+builtin identity, and `planConfidentialityReleaseByIntent` in
+`cfc/confidentiality-release-plan.ts` the removal, which shares route 2c's
+core. What the store and the runtime share is
+`runtime/memory/v2/cfc-owner-release-by-intent.ts`: the purpose
+`cfc.owner-release-by-intent/1`, the request, the DAG-CBOR bytes signed, the
+record and its identity, derived from the document's id and the request's
+digest, and the digest of the envelope, taken over the `cfc` member as the
+store holds it. The canonical clause digest both sides name a clause by is
+`cfcCanonicalClauseDigest` in `runtime/memory/v2/cfc-clause-identity.ts`. The
+specification's `ownerReleaseByIntentAt` is decided twice: by the transaction
+operation before it writes, and by `judgeOwnerReleaseByIntent` in that memory
+module, which `applyCommitTransaction` in `runtime/memory/v2/engine.ts` calls
+for every record a commit creates, against the space's access list at the
+commit (`ownerReleaseByIntentSpaceOwner`, the list's `aclOwner`, or the
+space's own DID where it stores none). The store refuses the commit whole on
+any of the refusals the route lists, on a record whose content does not match
+its request, on any other write under the record id scheme, and on two
+releases of one document in one commit; and the interim admission rule of
+[specs#89](https://github.com/commonfabric/specs/pull/89) admits a dropped
+declared path that a verified release names (`admitsDroppedDeclaredPaths` in
+`runtime/memory/v2/envelope-admission.ts`). What the commit does to the rest of
+the envelope, at other paths and in the components the store does not judge,
+is the runtime's to get right, as it is for every write. The intent is
+obtained by `cf cell release-by-intent` in `runtime/cli`, which signs only
+after the owner, at a terminal, is shown the request's target and its clauses
+and types a confirmation; nothing else in this repository signs under the
+purpose, and that obligation rests on the host holding the owner's key, as the
+route says. The route names one concrete path: a `*` segment is refused, and
+the request names its document directly, so no link is followed to choose it.
+The release re-derives the envelope's label-metadata templates from the
+payload entries it leaves, as every persist does; a route 2c release leaves
+them as they were.
+
+Route 2d is pending ruling in
+[specs#90](https://github.com/commonfabric/specs/pull/90), which the pin does
+not incorporate, and the snapshot defines no `ownerReleaseByIntentAt` for the
+kernel manifest to carry a row for; the next regeneration after the ruling adds
+one. It lowers clauses at strict, with no default-off dial, which @danfuzz
+directed, so it does not satisfy the correspondence procedure's step 4; the
+deciding sites, in the store and in the runtime, carry its `SPEC-PENDING`
+marker. Against the pin it errs toward under-taint, in the way the route itself
+describes: a release removes a clause that stands for someone other than the
+owner, which no route under the pin removes, and every such removal is signed
+by the owner and recorded.
 
 **Residuals, with direction.**
 

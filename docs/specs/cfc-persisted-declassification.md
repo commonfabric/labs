@@ -331,6 +331,51 @@ consumed intent, the reduced-evidence form §4 item 1 describes.
 [`cfc-conformance-statement.md`](cfc-conformance-statement.md) §8 records how
 the runtime answers the route.
 
+### 3.4 Owner releases by intent in place
+
+`cf cell release-by-intent` releases named confidentiality clauses stored at
+one path of a document in a space, whoever they stand for, on a request the
+space's owner signs: §8.12.7 route 2d. It is the recourse for a label no code
+may lower and that route 2c leaves in place because it is not the owner's
+alone, such as membership stamps naming other principals on a result that
+holds none of their data. The host operation is
+`releaseConfidentialityByIntent()` in `cfc/confidentiality-release.ts`; the
+transaction method that writes it is `releaseCfcConfidentialityByIntent()`,
+and the removal is `planConfidentialityReleaseByIntent()` in
+`cfc/confidentiality-release-plan.ts`, which shares route 2c's core. The
+request, its signed bytes, the record and the store's judgment are in
+`runtime/memory/v2/cfc-owner-release-by-intent.ts`.
+
+- **What it removes.** The clauses the request names by canonical clause
+  digest, from every component at exactly the path — the declared entries and
+  the stored schema's declaration there, the derived `shape` and membership
+  entries, and a link's own label — and nothing at any other path, no value,
+  and no integrity label. The envelope's label-metadata templates are derived
+  again from the payload entries the release leaves. A clause the stored
+  schema declares is declared again by the next write through that schema.
+- **Which path.** The request names its document directly and one concrete
+  path; a `*` segment is refused. The CLI resolves a cell path by following
+  the links it crosses and not a link stored at the path, so a link slot's own
+  label is what it releases, and shows the owner the document it resolved to.
+- **Who may.** The request is signed under the purpose
+  `cfc.owner-release-by-intent/1` by the owner the space's access list names
+  (for a space with no list, the principal whose DID is the space's). The
+  runtime refuses a transaction without the `cfc-owner-release-by-intent`
+  builtin identity, and verifies the signature, the owner, the envelope
+  digest and the record's absence before it writes; the store verifies them
+  again at the commit, the owner against the access list as it stands then.
+  The signature stands for the owner's own decision: the CLI signs only after
+  showing the owner the target and the clauses that come off and stay, at a
+  terminal, and on their typed confirmation, and nothing else signs under the
+  purpose.
+- **The record.** Each release commits with a create-only record, at an id
+  derived from the document's id and the request's digest, so a request is
+  used once and a document's releases share an id prefix. It holds the signed
+  request, the owner, the document and path, the removed clauses' digests,
+  and digests of the stored envelope before and after, and is labeled
+  `User(owner)` and writable only by the release-by-intent writer. Reads
+  journaled before the release keep the label they consumed.
+
 ## 4. The rewrite event (specify now, build later)
 
 When a widening must survive without evaluation (§2.4), route 2 proper: an

@@ -164,10 +164,10 @@ declared entry at that path, the whole `cfc` member erased included
 ([envelope-admission.ts](../../runtime/memory/v2/envelope-admission.ts),
 called from `applyCommitTransaction` in
 [engine.ts](../../runtime/memory/v2/engine.ts)). The runtime writes that
-shape in one case only, an owner release
-([confidentiality-release.ts](../../runtime/runner/src/cfc/confidentiality-release.ts),
-§8.12.7 route 2c), so a commit the space's owner signs, every clause of
-whose dropped entries is the owner's alone to release, is admitted. That
+shape only in the two owner releases of
+[confidentiality-release.ts](../../runtime/runner/src/cfc/confidentiality-release.ts).
+In the first, §8.12.7 route 2c, a commit the space's owner signs, every clause
+of whose dropped entries is the owner's alone to release, is admitted. That
 decision is `clauseReleasableBy()`, which the runtime's release makes too
 and which lives in the memory package
 ([cfc-release-authority.ts](../../runtime/memory/v2/cfc-release-authority.ts))
@@ -176,6 +176,21 @@ document the space stores; one that doesn't resolve can't be released. A
 commit leaving the document deleted is admitted, and a later commit writing
 it is a creation; a commit that deletes the document and writes it again is
 judged by what it writes.
+
+In the second, a release by intent (§8.12.7 route 2d), the dropped clauses
+need not be the owner's alone, and the store admits the drop on the record the
+commit creates beside it
+([cfc-owner-release-by-intent.ts](../../runtime/memory/v2/cfc-owner-release-by-intent.ts)).
+The record holds the request the space's owner signed, and the store verifies
+it at the commit: the signature, that the signer is the owner the space's
+access list names, that the request names this space and a document the commit
+writes an envelope of, that the stored envelope's digest is the one the
+request names, that every clause it releases is stored at its path and gone
+from it afterwards, and that its record is new, at the id the document's id and
+the request's digest derive. A dropped declared path that such a release names
+is admitted. Any write to an id under the record scheme other than that one
+creation is refused, so a record is never forged, altered or removed by a
+commit.
 
 This is the interim rule of
 [specs#89](https://github.com/commonfabric/specs/pull/89), which this
