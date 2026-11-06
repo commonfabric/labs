@@ -2001,6 +2001,15 @@ type SetupValidationOptions = {
   /** See `RunnerRunOptions.parentPieceRootId`. */
   parentPieceRootId?: string;
 
+  /**
+   * Whether the setup restates a result wiring it finds unchanged
+   * (§8.9.1.3). `false` for a setup deferred out of the transaction that
+   * asked for it, which holds none of the reads that decided it: re-minting
+   * there would drop a clause those reads carried, so the stored membership
+   * is left as it is.
+   */
+  restatesResultWiring?: boolean;
+
   /** Optional invariant over the argument stored before setup changes it. */
   validateCurrentArgument?: (argumentCell: Cell<unknown>) => void;
 
@@ -4151,7 +4160,7 @@ export class Runner {
     tx: IExtendedStorageTransaction,
     pattern: Pattern,
     resultCell: Cell<R>,
-    options: { preserveName: boolean; setupBegan: number },
+    options: { preserveName: boolean; setupBegan: number; restates: boolean },
   ): void {
     const { result, fabricResult, changed, nameCarried } = this
       .#nextResultProjection(
@@ -4168,17 +4177,19 @@ export class Runner {
     // name carried over from the stored result, which is a reference the
     // stored document chose.
     const resultLink = resultCell.getAsNormalizedFullLink();
-    tx.recordCfcWritePolicyInput({
-      kind: "result-wiring",
-      target: {
-        space: resultLink.space,
-        id: resultLink.id,
-        scope: resultLink.scope,
-        path: [...resultLink.path],
-      },
-      buildDecided: !nameCarried,
-      setupBegan: options.setupBegan,
-    }, runtimeWritePolicyAuthorization);
+    if (changed || options.restates) {
+      tx.recordCfcWritePolicyInput({
+        kind: "result-wiring",
+        target: {
+          space: resultLink.space,
+          id: resultLink.id,
+          scope: resultLink.scope,
+          path: [...resultLink.path],
+        },
+        buildDecided: !nameCarried,
+        setupBegan: options.setupBegan,
+      }, runtimeWritePolicyAuthorization);
+    }
     if (changed) {
       // A result field the setup projects to one of the piece's internal
       // cells is the setup's own initialization of that cell. Those cells are
@@ -4554,7 +4565,7 @@ export class Runner {
     setupState: SetupStateReuse,
     argument: T,
     resultCell: Cell<R>,
-    setupBegan: number,
+    wiringSetup: { began: number; restates: boolean },
     referencedArgumentFields: readonly string[] = [],
     capturedArgumentFields: readonly string[] = [],
     droppedArgumentFields: readonly string[] = [],
@@ -4860,7 +4871,8 @@ export class Runner {
 
     this.#updateResultProjection(tx, pattern, resultCell.withTx(tx), {
       preserveName: sameStoredSetup,
-      setupBegan,
+      setupBegan: wiringSetup.began,
+      restates: wiringSetup.restates,
     });
 
     // This completion marker records the identity whose schema, arguments,
@@ -5326,7 +5338,10 @@ export class Runner {
       setupState,
       argument,
       resultCell,
-      setupBegan,
+      {
+        began: setupBegan,
+        restates: validationOptions.restatesResultWiring !== false,
+      },
       validationOptions.referencedArgumentFields,
       validationOptions.capturedArgumentFields,
       validationOptions.droppedArgumentFields,
@@ -6842,7 +6857,7 @@ export class Runner {
               },
               undefined,
               resultCell,
-              setupBegan,
+              { began: setupBegan, restates: true },
             );
             this.#runtime.prepareTxForCommit(setupTx);
             const committed = await setupTx.commit().settled;
@@ -7440,7 +7455,7 @@ export class Runner {
               },
               undefined,
               resultCell,
-              setupBegan,
+              { began: setupBegan, restates: true },
             );
           },
         };
@@ -9056,6 +9071,8 @@ export class Runner {
             argument,
             startCell,
             { ...options, attributeInitialization: false },
+            true,
+            true,
           );
           if (ownership.markInstalled(started.installedCancel)) {
             startTx.abort("Deferred runner start was cancelled");
@@ -9551,6 +9568,8 @@ export class Runner {
           inputs,
           committedResultCell,
           parentPieceRootId === undefined ? {} : { parentPieceRootId },
+          true,
+          true,
         ).installedCancel;
         if (ownership.markInstalled(installedRegistration)) {
           startTx.abort("Deferred runner start was cancelled");
@@ -9709,6 +9728,10 @@ export class Runner {
    * stores what the patterns nested in it set up, and stopping leaves nothing
    * of the piece running here. Such a run leaves a piece whose setup is
    * stored already as it is.
+   *
+   * With `deferred`, the run is one this runner deferred out of the
+   * transaction that asked for it, so its setup restates no unchanged result
+   * wiring (`SetupValidationOptions.restatesResultWiring`).
    */
   #runWithStartOwnership<T, R = any>(
     providedTx: IExtendedStorageTransaction | undefined,
@@ -9717,6 +9740,7 @@ export class Runner {
     resultCell: Cell<R>,
     options: RunnerRunOptions = {},
     retain = true,
+    deferred = false,
   ): RunResult<R> {
     // Before anything this run stages: retiring a registration cancels any
     // start pending for the result, and one staged here would take this
@@ -9809,6 +9833,7 @@ export class Runner {
         droppedArgumentFields: options.droppedArgumentFields,
         attributeInitialization: options.attributeInitialization,
         parentPieceRootId: options.parentPieceRootId,
+        ...(deferred ? { restatesResultWiring: false } : {}),
         ...(creatingPiece
           ? {
             initializePieceSourceHistory: true,

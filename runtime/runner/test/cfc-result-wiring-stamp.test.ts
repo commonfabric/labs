@@ -336,6 +336,34 @@ describe("cfc-result-wiring-stamp", () => {
       expect(existenceOf(result)).toEqual([BOB]);
     });
 
+    it("stays where a run deferred out of the transaction that read the data finds the wiring unchanged", async () => {
+      // A pattern the runtime has not named yet is set up later, in a
+      // transaction of its own that holds none of the reads that asked for
+      // it. The clause those reads carried stays.
+
+      const { plain } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("deferred", plain);
+      await plantStamp(result, BOB);
+
+      const tx = runtime.edit();
+      runtime.getCellFromLink(bobs, undefined, tx).get();
+      const deferred = runtime.run(
+        tx,
+        patterns().plain,
+        { x: 1 },
+        runtime.getCell(space, "deferred", undefined, tx),
+      );
+      tx.prepareCfc();
+      expect((await tx.commit().settled).ok).toBeDefined();
+      await deferred.pull();
+      await runtime.idle();
+      runtime.runner.stop(result);
+
+      expect(membershipOf(result)).toContain(BOB);
+      expect(existenceOf(result)).toEqual([CAROL]);
+    });
+
     it("comes off at a setup that finds the wiring unchanged", async () => {
       const { plain } = patterns();
       const result = await setUp("restated", plain);
