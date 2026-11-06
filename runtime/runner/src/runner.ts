@@ -5157,8 +5157,14 @@ export class Runner {
     const tx = providedTx ?? this.#runtime.edit();
     // Where in the transaction's journal this setup begins, before it reads
     // anything of its own: what was read before it chose the pattern and the
-    // argument the setup builds from (§8.9.1.3).
-    const setupBegan = nextJournalPosition(tx);
+    // argument the setup builds from (§8.9.1.3). A transaction carrying a
+    // deferred run's decision holds that decision as trigger reads
+    // (`#runDecisionOf()`), and its own earlier reads are the runner's work
+    // on the run, such as the instantiation of the nodes beside a nested
+    // pattern, which chose nothing, so its setups begin at its start.
+    const setupBegan = this.#carriedStanding.has(tx)
+      ? 0
+      : nextJournalPosition(tx);
 
     logger.debug("cell-info", () => [
       `resultCell: ${resultCell.getAsNormalizedFullLink().id}`,
