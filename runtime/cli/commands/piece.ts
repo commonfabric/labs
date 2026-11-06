@@ -114,6 +114,7 @@ import {
   PieceResultProjectionError,
   PieceVerbReadError,
   recreateSpaceRootPattern,
+  releaseCellConfidentialityByIntent,
   removePiece,
   savePiecePattern,
   searchPieces,
@@ -2307,6 +2308,83 @@ where it leads.`,
   });
 }
 
+/**
+ * `release-by-intent`, which releases named confidentiality clauses stored at
+ * a cell path on the signed request of the space's owner (spec §8.12.7 route
+ * 2d).
+ *
+ * `spelling` carries the meaning it has in {@link buildRecreateRootCommand}.
+ */
+// deno-lint-ignore no-explicit-any
+export function buildReleaseByIntentCommand(spelling: string): Command<any> {
+  // deno-lint-ignore no-explicit-any
+  const command: Command<any> = new Command()
+    .description(
+      cliText(
+        `Release CFC clauses stored at a piece data path, as its space's owner.
+
+Without --clause, the command lists every confidentiality clause stored at the
+path, each with its canonical clause digest and the labels holding it, and the
+document's other stored positions holding any of them, and changes nothing.
+
+With --clause, it releases the clauses named, whoever they stand for: each
+comes off every label stored at the path, the declared label, the labels
+derived from what was written there (existence and membership included), and
+a link's own label. Labels at other paths, an ancestor's included, the value,
+and integrity labels are not changed. The path names one stored position: the
+links it crosses are followed to the document it lands in, a link stored at
+the path is not, and a "*" segment names the wildcard position stored there,
+such as a list's per-element templates, and none of the elements it covers.
+Each other position holding a clause is a release of its own, and the command
+names them.
+
+The command shows the document, the path, and each clause that comes off and
+stays, and asks you to type "release". Only then does it sign the request
+with the identity, which must be the space's owner, and commit the release
+together with a record of it, holding the signed request. The space's owner is
+the owner its access list names; with no access list stored, it is the space's
+own DID, as in a home space; and a stored list naming no valid owner has none,
+so no release is possible there. With --clause it runs only with standard
+input and standard error at a terminal, and only for the space's owner, and
+nothing skips the confirmation. The store checks the signature, the owner,
+and that the labels are still the ones you were shown; a request is used
+once.`,
+      ),
+    )
+    .usage(`${pieceUsage} [path]`)
+    .example(
+      cliText(`cf ${spelling} ${EX_ID} ${EX_COMP_PIECE}`),
+      "List the clauses stored at a result's root, with their digests.",
+    )
+    .example(
+      cliText(
+        `cf ${spelling} ${EX_ID} ${EX_COMP_PIECE} --clause 3gYWzS --clause oYjOtO`,
+      ),
+      "Release two clauses at the root, named by digest prefixes.",
+    )
+    .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_PATH_HELP)
+    .option(
+      "--input",
+      "Release at the piece's input cell instead of result cell (the " +
+        '"#argument" reference suffix spells the same selection)',
+    )
+    .option(
+      "--clause <digest:string>",
+      "The canonical clause digest of a clause to release, or a prefix of " +
+        "it that names one stored clause alone. Repeat for each clause.",
+      { collect: true },
+    )
+    .option(
+      "--json",
+      "Select JSON output explicitly. This command always outputs JSON.",
+    )
+    .arguments("[path:string]");
+  return targetOptions(
+    command.action(releaseCellConfidentialityByIntentFromCommand),
+    { global: false },
+  );
+}
+
 export const piece = targetOptions(
   new Command()
     .name("piece")
@@ -3774,6 +3852,43 @@ export async function setCellCfcLabelFromCommand(
     },
   );
   (deps.render ?? render)(label, { json: true });
+}
+
+/** The options `release-by-intent` takes beyond those `get-label` takes. */
+export interface PieceReleaseByIntentCLIOptions extends PieceLabelCLIOptions {
+  /** The digests, or digest prefixes, of the clauses to release. */
+  clause?: string[];
+}
+
+/** The collaborators the `release-by-intent` action goes through. */
+export interface PieceReleaseByIntentCommandDependencies {
+  releaseCellConfidentialityByIntent?:
+    typeof releaseCellConfidentialityByIntent;
+  render?: typeof render;
+}
+
+export async function releaseCellConfidentialityByIntentFromCommand(
+  options: PieceReleaseByIntentCLIOptions,
+  pathString?: string,
+  deps: PieceReleaseByIntentCommandDependencies = {},
+): Promise<void> {
+  setQuietMode(!!options.quiet);
+  const initialConfig = {
+    ...parsePieceOptions(options, { acceptsPath: true, acceptsArgument: true }),
+    jsonOutput: true,
+  };
+  const { pieceConfig, pathSegments } = resolvePiecePath(
+    options.input ? { ...initialConfig, pieceInput: true } : initialConfig,
+    pathString,
+  );
+  const outcome = await (deps.releaseCellConfidentialityByIntent ??
+    releaseCellConfidentialityByIntent)(
+      pieceConfig,
+      pathSegments,
+      options.clause ?? [],
+      { input: pieceConfig.pieceInput },
+    );
+  (deps.render ?? render)(outcome, { json: true });
 }
 
 export interface PieceListCommandDependencies {

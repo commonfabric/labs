@@ -71,6 +71,8 @@ import type { Cancel } from "../cancel.ts";
 import type { Cell } from "../cell.ts";
 import type {
   CfcConfidentialityRelease,
+  CfcConfidentialityReleaseByIntent,
+  CfcConfidentialityReleaseByIntentInput,
   CfcConfidentialityReleaseInput,
 } from "../cfc/confidentiality-release-plan.ts";
 import type {
@@ -3085,6 +3087,29 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   releaseCfcConfidentiality(
     input: CfcConfidentialityReleaseInput,
   ): CfcConfidentialityRelease;
+
+  /**
+   * The trusted writer path for an owner's release by intent of the
+   * confidentiality stored at one path of a document (§8.12.7 route 2d,
+   * `cfc/confidentiality-release-plan.ts`). Requires the transaction's
+   * current implementation identity to be the `cfc-owner-release-by-intent`
+   * builtin. Verifies the signed request first: its signature, that its
+   * signer is the space's owner by the access list it reads, which the caller
+   * loads from the store first (`releaseAccessListOf()`),
+   * that the document's stored envelope is the one it names, and that its
+   * record does not exist yet. Then removes the clauses it names from every
+   * component of the label at its path and from the stored schema, re-derives
+   * the envelope's label-metadata templates, and writes the envelope inside
+   * the privileged system-write scope. The record is the caller's to write,
+   * at the returned id, in the same transaction; the store refuses the
+   * release without it.
+   *
+   * @throws On any of the requirements above, on an unreadable envelope, and
+   *   on everything `planConfidentialityReleaseByIntent()` refuses.
+   */
+  releaseCfcConfidentialityByIntent(
+    input: CfcConfidentialityReleaseByIntentInput,
+  ): CfcConfidentialityReleaseByIntent;
 
   /**
    * Surfaces a post-commit sink-request release rejection (the effect is fail-

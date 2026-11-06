@@ -1195,6 +1195,7 @@ const ARGUMENT_PROVIDERS: Readonly<
   "agent remove:run": agentRunCandidates,
   "cell get-label:path": cellPathCandidates,
   "cell set-label:path": cellPathCandidates,
+  "cell release-by-intent:path": cellPathCandidates,
   "piece call:callable": callableCandidates,
   // The first positional of `cf cell get`/`cf cell set` is a cell path unless the caller
   // writes a canonical address there, and an address is pasted rather than

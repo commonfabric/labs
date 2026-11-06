@@ -7,6 +7,7 @@ import { hashStringOf, taggedHashStringOf } from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 
 import { applyCommit, close, type Engine, open, read } from "../v2/engine.ts";
+import { cfcCanonicalClauseDigest } from "../v2/cfc-clause-identity.ts";
 import {
   admitsDroppedDeclaredPaths,
   droppedDeclaredPaths,
@@ -181,6 +182,51 @@ describe("envelope-admission", () => {
       const dropped = [{ path: [], clauses: [personalSpace(OWNER)] }];
       expect(admitsDroppedDeclaredPaths(dropped, "did:key:space", OWNER))
         .toBe(false);
+    });
+
+    describe("with a verified release by intent", () => {
+      const clause = personalSpace(OTHER);
+      const second = personalSpace("did:key:z6MksecondSecondSecondSecond");
+      const release = (path: string[], clauses: unknown[]) => ({
+        document: "of:manager-result",
+        path,
+        releasedClauseDigests: new Set(
+          clauses.map((each) => cfcCanonicalClauseDigest(each as never)),
+        ),
+      });
+
+      it("returns `true` for a drop of the clauses the release names at its path", () => {
+        expect(
+          admitsDroppedDeclaredPaths(
+            [{ path: ["rooms"], clauses: [clause, second] }],
+            OWNER,
+            undefined,
+            [release(["rooms"], [clause, second])],
+          ),
+        ).toBe(true);
+      });
+
+      it("returns `false` for a drop at a path other than the release's", () => {
+        expect(
+          admitsDroppedDeclaredPaths(
+            [{ path: ["rooms"], clauses: [clause] }],
+            OWNER,
+            undefined,
+            [release([], [clause])],
+          ),
+        ).toBe(false);
+      });
+
+      it("returns `false` for a drop at the release's path of a clause it does not name", () => {
+        expect(
+          admitsDroppedDeclaredPaths(
+            [{ path: ["rooms"], clauses: [clause, second] }],
+            OWNER,
+            undefined,
+            [release(["rooms"], [clause])],
+          ),
+        ).toBe(false);
+      });
     });
 
     it("returns `false` for a drop whose clauses didn't resolve, or with no actor", () => {

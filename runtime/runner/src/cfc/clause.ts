@@ -6,40 +6,12 @@ import {
   type CfcConfClause,
   clauseAlternatives,
   isCfcFieldCommitment,
-  isOrClause,
 } from "@commonfabric/memory/v2/cfc-release-authority";
+import { normalizeClause } from "@commonfabric/memory/v2/cfc-clause-identity";
 
 import { atomEntails } from "./atom-pattern.ts";
-import { compareByCanonicalHash, uniqueCfcAtoms } from "./atoms.ts";
 
-/**
- * Canonical form of a clause:
- * - a non-clause value (bare atom) is returned unchanged (identity — flat
- *   labels are byte-identical through canonicalization);
- * - an OR-clause gets its alternatives structurally deduped and sorted by
- *   canonical value hash, so two clauses that differ only in alternative
- *   insertion order canonicalize (and hash) identically;
- * - a singleton `{anyOf: [a]}` unwraps to the bare atom `a` (semantically
- *   identical, so the two spellings must not hash differently) — UNLESS `a`
- *   is itself clause-shaped: `{anyOf: [{anyOf: […]}]}` is malformed (the
- *   reserved key must not appear in atom position), and its sole alternative
- *   is an opaque, unsatisfiable atom. Unwrapping would PROMOTE that inner
- *   value into an active OR-clause, loosening what the raw label admits —
- *   the wrong direction. Malformed nesting stays wrapped and opaque;
- * - an empty `{anyOf: []}` is kept as-is: it is an unsatisfiable clause
- *   (see `clauseSubsumes` for how both positions treat it fail-closed).
- *
- * Canonicalization never merges clauses, never unions alternative sets
- * across clauses, and never dedups an atom across a singleton clause and an
- * OR-clause containing it — `[A]` and `[A ∨ B]` are different constraints
- * (spec §3.1.8 normalization prohibitions).
- */
-export const normalizeClause = (clause: CfcConfClause): CfcConfClause => {
-  if (!isOrClause(clause)) return clause;
-  const unique = uniqueCfcAtoms(clause.anyOf);
-  if (unique.length === 1 && !isOrClause(unique[0])) return unique[0];
-  return { anyOf: unique.sort(compareByCanonicalHash) };
-};
+export { normalizeClause };
 
 /** Structural clause equality, insensitive to alternative order. */
 export const clausesEqual = (

@@ -375,6 +375,18 @@ two functions; the next regeneration after the ruling repins it to specs
 `main`. @danfuzz directed landing it this way. The conformance statement's §9
 records the gap.
 
+The owner release by intent (§8.12.7 route 2d) implements
+[specs#90](https://github.com/commonfabric/specs/pull/90) ahead of its ruling.
+A space's owner, on a request they sign and the store verifies, removes named
+clauses stored at one path of a document in their space, other principals'
+clauses included. It lowers what is stored at strict, with no default-off dial,
+so it does not satisfy step 4 above; its deciding sites, in the memory
+engine's admission and in the runtime's transaction, carry the `SPEC-PENDING`
+marker. The snapshot stays pinned at specs#88's head, which does not define
+the route's pseudocode, so the kernel manifest carries no row for it until the
+next regeneration after the ruling. @danfuzz directed landing it this way. The
+conformance statement's §8 records the gap.
+
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
 `runtime/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's

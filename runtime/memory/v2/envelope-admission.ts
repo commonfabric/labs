@@ -13,7 +13,10 @@
  * entries hold a confidentiality clause with no declared entry at all, which
  * the runtime never writes except in an owner release. A commit that the
  * space's owner signs, every clause of whose dropped entries is the owner's
- * alone to release, is that release, and is admitted. A lowering that keeps
+ * alone to release, is that release (§8.12.7 route 2c), and is admitted. So
+ * is a commit holding a release by intent the store has verified
+ * (`cfc-owner-release-by-intent.ts`, route 2d) that releases every clause of
+ * the dropped entries at that path of that document. A lowering that keeps
  * some declared entry at the path, and any change to a path's existence
  * entry, are left to the runtime.
  */
@@ -25,12 +28,17 @@
 // subset of what the proposed rule does, and the runtime's own writes never
 // make what it refuses.
 
-import { isObjectNotArray } from "@commonfabric/js-values/types";
-
+import { cfcCanonicalClauseDigest } from "./cfc-clause-identity.ts";
+import type { VerifiedOwnerReleaseByIntent } from "./cfc-owner-release-by-intent.ts";
 import {
   type CfcConfClause,
   clauseReleasableBy,
 } from "./cfc-release-authority.ts";
+import {
+  resolveStoredLabel,
+  storedConfidentiality,
+  storedLabelMapEntries,
+} from "./cfc-stored-label-map.ts";
 
 /** A path whose stored declared entries a proposed envelope leaves out. */
 export interface DroppedDeclaredPath {
@@ -61,10 +69,10 @@ export const droppedDeclaredPaths = (
   proposed: unknown,
   resolveLabel: (ref: string) => unknown,
 ): readonly DroppedDeclaredPath[] => {
-  const storedEntries = labelMapEntriesOf(stored);
+  const storedEntries = storedLabelMapEntries(stored);
   if (storedEntries.length === 0) return [];
   const proposedPaths = new Set(
-    labelMapEntriesOf(proposed)
+    storedLabelMapEntries(proposed)
       .filter((entry) => entry.origin === "declared")
       .map((entry) => JSON.stringify(entry.path)),
   );
@@ -76,8 +84,10 @@ export const droppedDeclaredPaths = (
     if (entry.origin !== "declared") continue;
     const key = JSON.stringify(entry.path);
     if (proposedPaths.has(key)) continue;
-    const label = resolvedLabel(entry.label, resolveLabel);
-    const clauses = label === undefined ? undefined : confidentialityOf(label);
+    const label = resolveStoredLabel(entry.label, resolveLabel);
+    const clauses = label === undefined
+      ? undefined
+      : storedConfidentiality(label) ?? [];
     if (clauses !== undefined && clauses.length === 0) continue;
     const known = dropped.get(key);
     if (known === undefined) {
@@ -96,65 +106,48 @@ export const droppedDeclaredPaths = (
 
 /**
  * Whether a commit `actor` signs for a document in `space` may drop the
- * declared paths `dropped`: it drops none, or it is an owner release, the
- * space being the actor's home space and every dropped clause the actor's
- * alone to release. A commit naming no actor, or no space, releases nothing.
+ * declared paths `dropped`. Each drop must be one of two releases. In an owner
+ * release, the space is the actor's home space and every dropped clause is
+ * the actor's alone to release. In a release by intent, one of `releases`,
+ * the verified releases by intent of this document the commit holds, is at
+ * the drop's path and releases every clause dropped there. A commit naming no
+ * actor, or no space, makes no owner release.
  */
 export const admitsDroppedDeclaredPaths = (
   dropped: readonly DroppedDeclaredPath[],
   space: string | undefined,
   actor: string | undefined,
+  releases: readonly VerifiedOwnerReleaseByIntent[] = [],
 ): boolean =>
-  dropped.length === 0 ||
-  (actor !== undefined && space === actor &&
-    dropped.every((drop) =>
-      drop.clauses !== undefined &&
+  dropped.every((drop) =>
+    drop.clauses !== undefined &&
+    ((actor !== undefined && space === actor &&
       drop.clauses.every((clause) =>
         clauseReleasableBy(clause as CfcConfClause, actor)
-      )
-    ));
-
-/** One stored or proposed label-map entry, as far as this rule reads it. */
-interface EntryView {
-  readonly path: unknown;
-  readonly origin: unknown;
-  readonly label: unknown;
-}
-
-/** The entries of the label map `cfc` holds, or none. */
-const labelMapEntriesOf = (cfc: unknown): readonly EntryView[] => {
-  if (!isObjectNotArray(cfc)) return [];
-  const labelMap = cfc.labelMap;
-  if (!isObjectNotArray(labelMap) || !Array.isArray(labelMap.entries)) {
-    return [];
-  }
-  return labelMap.entries.filter(isObjectNotArray).map((entry) => ({
-    path: entry.path,
-    origin: entry.origin,
-    label: entry.label,
-  }));
-};
+      )) ||
+      releasesByIntent(drop, releases))
+  );
 
 /**
- * `label` itself, or the content of the label document a single-member
- * `{ $ref: "cid:…" }` record names, or `undefined` when that document isn't
- * there, or when the reference names anything but a `cid:` document.
+ * Helper for {@link admitsDroppedDeclaredPaths}, which returns whether one of
+ * `releases` is at `drop`'s path and names every clause dropped there.
  */
-const resolvedLabel = (
-  label: unknown,
-  resolveLabel: (ref: string) => unknown,
-): unknown => {
-  if (
-    isObjectNotArray(label) && Object.keys(label).length === 1 &&
-    typeof label.$ref === "string"
-  ) {
-    return label.$ref.startsWith("cid:") ? resolveLabel(label.$ref) : undefined;
-  }
-  return label;
+const releasesByIntent = (
+  drop: DroppedDeclaredPath,
+  releases: readonly VerifiedOwnerReleaseByIntent[],
+): boolean => {
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/90 A verified
+  // route-2d release admits the drop of clauses that are not the owner's
+  // alone.
+  const clauses = drop.clauses;
+  return clauses !== undefined &&
+    releases.some((release) =>
+      release.path.length === drop.path.length &&
+      release.path.every((segment, index) => segment === drop.path[index]) &&
+      clauses.every((clause) =>
+        release.releasedClauseDigests.has(
+          cfcCanonicalClauseDigest(clause as CfcConfClause),
+        )
+      )
+    );
 };
-
-/** The confidentiality clauses a resolved label holds. */
-const confidentialityOf = (label: unknown): readonly unknown[] =>
-  isObjectNotArray(label) && Array.isArray(label.confidentiality)
-    ? label.confidentiality
-    : [];
