@@ -2001,15 +2001,6 @@ type SetupValidationOptions = {
   /** See `RunnerRunOptions.parentPieceRootId`. */
   parentPieceRootId?: string;
 
-  /**
-   * Whether the setup restates a result wiring it finds unchanged
-   * (§8.9.1.3). `false` for a setup deferred out of the transaction that
-   * asked for it, which holds none of the reads that decided it: re-minting
-   * there would drop a clause those reads carried, so the stored membership
-   * is left as it is.
-   */
-  restatesResultWiring?: boolean;
-
   /** Optional invariant over the argument stored before setup changes it. */
   validateCurrentArgument?: (argumentCell: Cell<unknown>) => void;
 
@@ -2803,6 +2794,20 @@ type WatcherFollows = {
 export class Runner {
   /** Scoped defaults in a caller-owned setup share its commit or abort. */
   readonly #callerOwnedSetupTransactions = new WeakSet<
+    IExtendedStorageTransaction
+  >();
+
+  /**
+   * The transactions a setup runs in that are the ones it was asked in: the
+   * transaction a caller hands `run`, `setup`, `runSynced` or
+   * `runInTransaction`, or one the runner makes for that call as it is made.
+   * Only a setup in one of these restates a result wiring it finds unchanged
+   * (§8.9.1.3). Every other setup transaction is one the runner makes later,
+   * for a start deferred out of the asking transaction, a swap or a repair,
+   * and holds none of the reads that decided the setup, so re-minting the
+   * stored membership there would drop a clause those reads carried.
+   */
+  readonly #askingSetupTransactions = new WeakSet<
     IExtendedStorageTransaction
   >();
 
@@ -3713,6 +3718,7 @@ export class Runner {
   ): Promise<Cell<R>> {
     if (providedTx) {
       this.#callerOwnedSetupTransactions.add(providedTx);
+      this.#askingSetupTransactions.add(providedTx);
       this.#setupInternal(
         providedTx,
         patternOrModule,
@@ -3731,6 +3737,7 @@ export class Runner {
       // setup.
       return this.#runtime.editWithRetry((tx) => {
         this.#callerOwnedSetupTransactions.add(tx);
+        this.#askingSetupTransactions.add(tx);
         this.#setupInternal(tx, patternOrModule, argument, resultCell, options);
       }).then(({ error }) => {
         if (error) {
@@ -4160,7 +4167,7 @@ export class Runner {
     tx: IExtendedStorageTransaction,
     pattern: Pattern,
     resultCell: Cell<R>,
-    options: { preserveName: boolean; setupBegan: number; restates: boolean },
+    options: { preserveName: boolean; setupBegan: number },
   ): void {
     const { result, fabricResult, changed, nameCarried } = this
       .#nextResultProjection(
@@ -4177,7 +4184,7 @@ export class Runner {
     // name carried over from the stored result, which is a reference the
     // stored document chose.
     const resultLink = resultCell.getAsNormalizedFullLink();
-    if (changed || options.restates) {
+    if (changed || this.#askingSetupTransactions.has(tx)) {
       tx.recordCfcWritePolicyInput({
         kind: "result-wiring",
         target: {
@@ -4565,7 +4572,7 @@ export class Runner {
     setupState: SetupStateReuse,
     argument: T,
     resultCell: Cell<R>,
-    wiringSetup: { began: number; restates: boolean },
+    setupBegan: number,
     referencedArgumentFields: readonly string[] = [],
     capturedArgumentFields: readonly string[] = [],
     droppedArgumentFields: readonly string[] = [],
@@ -4871,8 +4878,7 @@ export class Runner {
 
     this.#updateResultProjection(tx, pattern, resultCell.withTx(tx), {
       preserveName: sameStoredSetup,
-      setupBegan: wiringSetup.began,
-      restates: wiringSetup.restates,
+      setupBegan,
     });
 
     // This completion marker records the identity whose schema, arguments,
@@ -5338,10 +5344,7 @@ export class Runner {
       setupState,
       argument,
       resultCell,
-      {
-        began: setupBegan,
-        restates: validationOptions.restatesResultWiring !== false,
-      },
+      setupBegan,
       validationOptions.referencedArgumentFields,
       validationOptions.capturedArgumentFields,
       validationOptions.droppedArgumentFields,
@@ -6857,7 +6860,7 @@ export class Runner {
               },
               undefined,
               resultCell,
-              { began: setupBegan, restates: true },
+              setupBegan,
             );
             this.#runtime.prepareTxForCommit(setupTx);
             const committed = await setupTx.commit().settled;
@@ -7455,7 +7458,7 @@ export class Runner {
               },
               undefined,
               resultCell,
-              { began: setupBegan, restates: true },
+              setupBegan,
             );
           },
         };
@@ -9730,8 +9733,8 @@ export class Runner {
    * stored already as it is.
    *
    * With `deferred`, the run is one this runner deferred out of the
-   * transaction that asked for it, so its setup restates no unchanged result
-   * wiring (`SetupValidationOptions.restatesResultWiring`).
+   * transaction that asked for it, so the transaction it sets up in is not an
+   * asking one (`#askingSetupTransactions`).
    */
   #runWithStartOwnership<T, R = any>(
     providedTx: IExtendedStorageTransaction | undefined,
@@ -9822,6 +9825,7 @@ export class Runner {
     // piece whose pattern moved underneath it is an ordinary in-place swap.
     const creatingPiece = options.sourceOrigin !== undefined &&
       getPatternIdentityRef(resultCell.withTx(tx)) === undefined;
+    if (!deferred) this.#askingSetupTransactions.add(tx);
     const { needsStart, pattern } = this.#setupInternal(
       tx,
       patternOrModule,
@@ -9833,7 +9837,6 @@ export class Runner {
         droppedArgumentFields: options.droppedArgumentFields,
         attributeInitialization: options.attributeInitialization,
         parentPieceRootId: options.parentPieceRootId,
-        ...(deferred ? { restatesResultWiring: false } : {}),
         ...(creatingPiece
           ? {
             initializePieceSourceHistory: true,
@@ -10120,6 +10123,7 @@ export class Runner {
     };
     if (givenTx) {
       this.#callerOwnedSetupTransactions.add(givenTx);
+      this.#askingSetupTransactions.add(givenTx);
       if (sourceUpdate !== undefined) {
         throw new Error(
           "source update authority requires an owned setup transaction",
@@ -10182,6 +10186,7 @@ export class Runner {
             setCfcTrustSnapshot(tx, options.cfcTrustSnapshot);
           }
           assertExpectedPatternIdentity(resultCell.withTx(tx));
+          this.#askingSetupTransactions.add(tx);
           return this.#setupInternal(
             tx,
             pattern,

@@ -364,6 +364,67 @@ describe("cfc-result-wiring-stamp", () => {
       expect(existenceOf(result)).toEqual([CAROL]);
     });
 
+    it("stays where a running piece is swapped to the same wiring by a transaction that read the data", async () => {
+      // The swap of a running piece sets up in a transaction of its own,
+      // made after the one that asked for it.
+
+      const { plain } = patterns();
+      const bobs = await seedBobsDocument();
+      const first = runtime.edit();
+      const running = runtime.run(
+        first,
+        plain,
+        { x: 1 },
+        runtime.getCell(space, "swapped", undefined, first),
+      );
+      first.prepareCfc();
+      expect((await first.commit().settled).ok).toBeDefined();
+      await runtime.idle();
+      await plantStamp(running, BOB);
+
+      const tx = runtime.edit();
+      runtime.getCellFromLink(bobs, undefined, tx).get();
+      runtime.run(
+        tx,
+        patterns().plain,
+        { x: 1 },
+        runtime.getCell(space, "swapped", undefined, tx),
+      );
+      tx.prepareCfc();
+      expect((await tx.commit().settled).ok).toBeDefined();
+      await runtime.idle();
+      runtime.runner.stop(running);
+
+      expect(membershipOf(running)).toContain(BOB);
+      expect(existenceOf(running)).toEqual([CAROL]);
+    });
+
+    it("stays where a pattern started after the asking transaction commits finds the wiring unchanged", async () => {
+      // A start that waits for the asking transaction to commit sets up in a
+      // transaction of its own, which holds none of the asking one's reads.
+
+      const { plain } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("after-commit", plain);
+      await plantStamp(result, BOB);
+
+      const tx = runtime.edit();
+      runtime.getCellFromLink(bobs, undefined, tx).get();
+      runtime.runner.accessForTestingOnly.runPatternAfterSuccessfulCommit(
+        tx,
+        runtime.getCell(space, "after-commit", undefined, tx),
+        plain,
+        { x: 1 },
+      );
+      tx.prepareCfc();
+      expect((await tx.commit().settled).ok).toBeDefined();
+      await runtime.idle();
+      runtime.runner.stop(result);
+
+      expect(membershipOf(result)).toContain(BOB);
+      expect(existenceOf(result)).toEqual([CAROL]);
+    });
+
     it("comes off at a setup that finds the wiring unchanged", async () => {
       const { plain } = patterns();
       const result = await setUp("restated", plain);
