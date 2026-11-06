@@ -259,9 +259,12 @@ const render = async (piece: Cell<unknown>): Promise<void> => {
 };
 
 /**
- * Writes the tree's `system/fabrichat/` into `directory` with one export added
- * to the manager's module, so that a release of it sets the manager up again
- * even where the tree's FabriChat is the one deployed.
+ * Writes the tree's `system/fabrichat/` into `directory` with the manager's
+ * name rewired to a cell of its own, so that a release of it sets the manager
+ * up again with a changed result wiring even where the tree's FabriChat is the
+ * one deployed.
+ *
+ * @throws If the manager's result no longer names `core[NAME]` once.
  */
 const writeChangedManagerRelease = async (directory: string): Promise<void> => {
   const fabrichat = join(PATTERNS, "system", "fabrichat");
@@ -270,11 +273,17 @@ const writeChangedManagerRelease = async (directory: string): Promise<void> => {
     const target = join(directory, relative(fabrichat, path));
     await Deno.mkdir(posix.dirname(target), { recursive: true });
     const source = await Deno.readTextFile(path);
+    if (relative(fabrichat, path) !== "manager.tsx") {
+      await Deno.writeTextFile(target, source);
+      continue;
+    }
+    const named = "    [NAME]: core[NAME],\n";
+    if (source.split(named).length !== 2) {
+      throw new Error("the manager's result no longer names `core[NAME]` once");
+    }
     await Deno.writeTextFile(
       target,
-      relative(fabrichat, path) === "manager.tsx"
-        ? `${source}\nexport const rehearsalRelease = "changed manager";\n`
-        : source,
+      source.replace(named, "    [NAME]: computed(() => core[NAME]),\n"),
     );
   }
 };
@@ -356,8 +365,12 @@ const recipientsOf = (notices: unknown): string[] | undefined =>
  *
  * With `stamped`, the manager's result carries, before the update, a
  * membership stamp naming someone whose data it does not hold, as an earlier
- * setup can leave one (spec §8.9.1.3), and the update releases a manager
- * changed from the deployed one, so that the update sets the manager up again.
+ * setup can leave one (spec §8.9.1.3), and the update releases a manager whose
+ * result wiring differs from the deployed one, so that the update sets the
+ * manager up again and writes its wiring. An update that leaves the wiring
+ * unchanged keeps the stamp: the manager is set up in Home's start, a
+ * transaction the runner makes, which restates no unchanged wiring until it
+ * carries the reads that decided the update.
  */
 const rehearse = (
   title: string,
@@ -967,6 +980,10 @@ const rehearse = (
 
     if (stamped) {
       it("takes a stamp naming someone whose data it does not hold off the manager's result at the update", () => {
+        // The release changes the manager's result wiring. One that leaves it
+        // unchanged keeps the stamp, until the start that sets the manager up
+        // carries the reads that decided the update (#9650).
+
         expect(stampedBefore).toBe(true);
         expect(stampedAfter).toBe(false);
       });

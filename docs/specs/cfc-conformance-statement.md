@@ -637,7 +637,13 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
   transactions the runner makes later, and leave an unchanged wiring's
   stored membership as a setup that wrote nothing would. One of them that
   changes the wiring writes it, and is stamped from its own transaction, as
-  before.
+  before. A source update is one of these routes: the piece is set up again in
+  the start that follows the update, so an update that leaves a result's
+  wiring unchanged leaves an earlier attempt's stamp on its membership, and
+  only one that changes the wiring re-mints it. Carrying the asking
+  transaction's reads into those starts, which
+  [labs#9650](https://github.com/commonfabric/labs/pull/9650) does, is what
+  lets a same-wiring update restate.
 - The pre-setup bound applies to journaled reads with a position. A read
   without one, and every label-metadata or external-content observation,
   which carry none, joins the narrowed stamp whenever it happened: an
