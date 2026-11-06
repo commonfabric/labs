@@ -301,10 +301,20 @@ describe("cfc-owner-release-by-intent", () => {
      * `proposed`, its record at the id `signed` derives unless `recordId`
      * names another, holding `record` when given.
      */
+    /** The envelope a record labeled for `owner` alone stores. */
+    const recordLabel = (did: string) =>
+      envelope([
+        entry([], "declared", [{ type: CFC_ATOM_TYPE.User, subject: did }]),
+      ]);
+
     const releaseOps = (
       signed: SignedOwnerReleaseByIntentRequest,
       proposed: unknown,
-      options: { recordId?: string; record?: unknown } = {},
+      options: {
+        recordId?: string;
+        record?: unknown;
+        recordCfc?: unknown;
+      } = {},
     ) => [
       { op: "set", id, value: { value: { rooms: [] }, cfc: proposed } },
       {
@@ -320,6 +330,9 @@ describe("cfc-owner-release-by-intent", () => {
               signed,
               ownerReleaseByIntentEnvelopeDigest(proposed),
             ),
+          cfc: "recordCfc" in options
+            ? options.recordCfc
+            : recordLabel(signed.request.signer),
         },
       },
     ];
@@ -619,6 +632,16 @@ describe("cfc-owner-release-by-intent", () => {
         );
       });
 
+      it("throws on a record not labeled for its owner alone", async () => {
+        const signed = await sign(owner, requestFor());
+        for (const recordCfc of [undefined, recordLabel(OTHER)]) {
+          expectRefused(
+            releaseOps(signed, RELEASED, { recordCfc }),
+            /not labeled for its owner alone/,
+          );
+        }
+      });
+
       it("throws on a record whose fields disagree with its request", async () => {
         const signed = await sign(owner, requestFor());
         expectRefused(
@@ -674,6 +697,27 @@ describe("cfc-owner-release-by-intent", () => {
             ownerReleaseByIntentEnvelopeDigest(RELEASED),
           ),
         );
+      });
+
+      it("throws on a record created by two sets, at user scope, or by a patch carrying its value", async () => {
+        const signed = await sign(owner, requestFor());
+        const [envelopeOp, recordOp] = releaseOps(signed, RELEASED) as [
+          unknown,
+          { op: string; id: string; value: { value: unknown; cfc: unknown } },
+        ];
+        for (
+          const operations of [
+            [envelopeOp, recordOp, recordOp],
+            [envelopeOp, { ...recordOp, scope: "user" }],
+            [envelopeOp, {
+              ...recordOp,
+              op: "patch",
+              patches: [{ op: "add", path: "", value: recordOp.value }],
+            }],
+          ]
+        ) {
+          expectRefused(operations, /other than by creating it once/);
+        }
       });
 
       it("throws on two releases of one document in one commit", async () => {

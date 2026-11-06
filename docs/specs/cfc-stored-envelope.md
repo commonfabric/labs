@@ -187,7 +187,8 @@ access list names, that the request names this space and a document the commit
 writes an envelope of, that the stored envelope's digest is the one the
 request names, that every clause it releases is stored at its path and gone
 from it afterwards while every other clause there stays, in an entry of the
-same component and class, and that its record is new, at the id the document's id and
+same component and class, that the record's stored label holds a declared
+`User(owner)` clause at its root, and that its record is new, at the id the document's id and
 the request's digest derive. A dropped declared path that such a release names
 is admitted. Any write to an id under the record scheme other than that one
 creation is refused, so a record is never forged, altered or removed by a

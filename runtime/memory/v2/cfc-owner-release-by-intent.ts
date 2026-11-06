@@ -26,6 +26,7 @@
  * the concrete positions it covers.
  */
 
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import {
   fromBase64url,
   toUnpaddedBase64url,
@@ -39,11 +40,17 @@ import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { aclOwner, hasConcreteOwner, isACL } from "../acl.ts";
 import { cfcCanonicalClauseDigest } from "./cfc-clause-identity.ts";
 import { type CfcConfClause, hasExactKeys } from "./cfc-release-authority.ts";
+import {
+  resolveStoredLabel,
+  storedConfidentiality,
+  storedLabelMapEntries,
+} from "./cfc-stored-label-map.ts";
 
 /**
- * The purpose reserved for a release by intent. It is the first field of the
- * bytes signed, so a signature made for any other purpose, over any other
- * format, does not verify as one of these.
+ * The purpose reserved for a release by intent. It is a field of the map the
+ * signer signs, so bytes signed under any other purpose, or for any other
+ * format, are other bytes, and their signature does not verify as one of
+ * these.
  */
 export const OWNER_RELEASE_BY_INTENT_PURPOSE = "cfc.owner-release-by-intent/1";
 
@@ -241,8 +248,8 @@ export const ownerReleaseByIntentRequest = (fields: {
 
 /**
  * The bytes a signer signs for `request`: its fields as one DAG-CBOR map,
- * whose deterministic encoding gives a request one byte form, the purpose
- * among them.
+ * the purpose among them, whose deterministic encoding gives a request one
+ * byte form.
  */
 export const ownerReleaseByIntentSignedBytes = (
   request: OwnerReleaseByIntentRequest,
@@ -421,6 +428,16 @@ export const parseOwnerReleaseByIntentRecord = (
 };
 
 /**
+ * A space's access list as the store holds it: no list document at all, or a
+ * list document, whose `value` may be anything, absent included. A reader
+ * that has not loaded the document from the store cannot say which, so it has
+ * none of these to give.
+ */
+export type OwnerReleaseByIntentAcl =
+  | { readonly stored: false }
+  | { readonly stored: true; readonly value: unknown };
+
+/**
  * The owner a release in `space` must be signed by, per the access list the
  * store holds for it: the list's owner (`aclOwner()`), or, where the space
  * stores no access list at all, the principal whose DID the space's is, its
@@ -430,10 +447,7 @@ export const parseOwnerReleaseByIntentRecord = (
  */
 export const ownerReleaseByIntentSpaceOwner = (
   space: string,
-  acl: { readonly stored: false } | {
-    readonly stored: true;
-    readonly value: unknown;
-  },
+  acl: OwnerReleaseByIntentAcl,
 ): string | undefined => {
   if (!acl.stored) return space;
   const value = acl.value;
@@ -466,32 +480,16 @@ export const clauseDigestsByEntryAt = (
   resolveLabel: (ref: string) => unknown,
 ): ReadonlyMap<string, ReadonlyMap<string, CfcConfClause>> | undefined => {
   const byEntry = new Map<string, Map<string, CfcConfClause>>();
-  if (!isObjectNotArray(cfc) || !isObjectNotArray(cfc.labelMap)) {
-    return byEntry;
-  }
-  const entries = cfc.labelMap.entries;
-  if (!Array.isArray(entries)) return byEntry;
-  for (const entry of entries) {
-    if (
-      !isObjectNotArray(entry) || entry.origin === "label-metadata" ||
-      !isStoredPath(path, entry.path)
-    ) {
+  for (const entry of storedLabelMapEntries(cfc)) {
+    if (entry.origin === "label-metadata" || !isStoredPath(path, entry.path)) {
       continue;
     }
-    let label: unknown = entry.label;
-    if (
-      isObjectNotArray(label) && Object.keys(label).length === 1 &&
-      typeof label.$ref === "string"
-    ) {
-      label = label.$ref.startsWith("cid:")
-        ? resolveLabel(label.$ref)
-        : undefined;
-      if (label === undefined) return undefined;
-    }
-    if (!isObjectNotArray(label)) return undefined;
-    const confidentiality = label.confidentiality;
-    if (confidentiality === undefined) continue;
-    if (!Array.isArray(confidentiality)) return undefined;
+    const label = resolveStoredLabel(entry.label, resolveLabel);
+    const confidentiality = label === undefined
+      ? undefined
+      : storedConfidentiality(label);
+    if (confidentiality === undefined) return undefined;
+    if (confidentiality.length === 0) continue;
     const key = JSON.stringify([entry.origin ?? null, entry.observes ?? null]);
     const clauses = byEntry.get(key) ?? new Map<string, CfcConfClause>();
     byEntry.set(key, clauses);
@@ -525,6 +523,34 @@ export const clauseDigestsStoredAt = (
   return stored;
 };
 
+/**
+ * Whether `cfc`, the `cfc` member of a record's document, labels the record
+ * for `owner`: a declared entry at its root holds the clause naming `owner` as
+ * a `User`, so a reader other than the owner does not read it.
+ */
+const labeledForOwner = (
+  owner: string,
+  cfc: unknown,
+  resolveLabel: (ref: string) => unknown,
+): boolean => {
+  const ownerClause = cfcCanonicalClauseDigest({
+    type: CFC_ATOM_TYPE.User,
+    subject: owner,
+  });
+  return storedLabelMapEntries(cfc).some((entry) => {
+    if (
+      entry.origin !== "declared" || !Array.isArray(entry.path) ||
+      entry.path.length !== 0
+    ) {
+      return false;
+    }
+    const label = resolveStoredLabel(entry.label, resolveLabel);
+    return (storedConfidentiality(label) ?? []).some((clause) =>
+      cfcCanonicalClauseDigest(clause as CfcConfClause) === ownerClause
+    );
+  });
+};
+
 /** What a store holds and a commit proposes, for one record it creates. */
 export interface OwnerReleaseByIntentCommit {
   /** The space the commit is in. */
@@ -536,14 +562,14 @@ export interface OwnerReleaseByIntentCommit {
   /** The value the commit leaves at the record's id. */
   readonly record: unknown;
 
+  /** The `cfc` member the commit leaves the record's document with. */
+  readonly recordCfc: unknown;
+
   /** Whether the store holds any state at the record's id, deleted or not. */
   readonly recordStored: boolean;
 
   /** The space's access list as the store holds it at the commit. */
-  readonly acl: { readonly stored: false } | {
-    readonly stored: true;
-    readonly value: unknown;
-  };
+  readonly acl: OwnerReleaseByIntentAcl;
 
   /**
    * The request's document as the commit treats it: the `cfc` member the
@@ -588,8 +614,9 @@ export interface VerifiedOwnerReleaseByIntent {
  * envelope of the document it names, the stored envelope's digest is not the
  * one it names, a clause it releases is not stored at the path, the proposed
  * envelope still holds one there or no longer holds a clause the request does
- * not name in an entry of the same component and class at the path, or the
- * record's `after` is not the proposed envelope's digest.
+ * not name in an entry of the same component and class at the path, the record
+ * is not labeled for its owner, or the record's `after` is not the proposed
+ * envelope's digest.
  *
  * At the path, the confidentiality clauses of every entry are compared,
  * component and class by component and class. What the commit does elsewhere
@@ -696,6 +723,18 @@ export const judgeOwnerReleaseByIntent = (
         );
       }
     }
+  }
+  if (
+    !labeledForOwner(
+      record.owner,
+      commit.recordCfc,
+      commit.resolveProposedLabel,
+    )
+  ) {
+    return refused(
+      "it is not labeled for its owner alone: its root holds no declared " +
+        "`User` clause naming the owner",
+    );
   }
   if (
     record.after !==

@@ -6144,7 +6144,7 @@ const verifyOwnerReleasesByIntent = (input: {
     id: string,
   ) => { readonly stored: unknown; readonly proposed: unknown } | undefined;
 }): ReadonlyMap<string, readonly VerifiedOwnerReleaseByIntent[]> => {
-  const records = new Map<string, unknown>();
+  const records = new Map<string, { value: unknown; cfc: unknown }>();
   const committedLabels = new Map<string, unknown>();
   for (const [opIndex, operation] of input.operations.entries()) {
     if (operation.op === "sqlite") continue;
@@ -6174,7 +6174,10 @@ const verifyOwnerReleasesByIntent = (input: {
           "by creating it once, at space scope, with one `set`",
       );
     }
-    records.set(operation.id, operation.value.value);
+    records.set(operation.id, {
+      value: operation.value.value,
+      cfc: operation.value.cfc,
+    });
   }
   const verified = new Map<string, VerifiedOwnerReleaseByIntent[]>();
   if (records.size === 0) return verified;
@@ -6188,12 +6191,13 @@ const verifyOwnerReleasesByIntent = (input: {
   const acl = aclState === null
     ? { stored: false as const }
     : { stored: true as const, value: aclState.document?.value };
-  for (const [recordId, record] of records) {
+  for (const [recordId, { value: record, cfc: recordCfc }] of records) {
     const document = parseOwnerReleaseByIntentRecord(record)?.document;
     const judged = judgeOwnerReleaseByIntent({
       space,
       recordId,
       record,
+      recordCfc,
       recordStored:
         readState(input.engine, { id: recordId, branch: input.branch }) !==
           null,

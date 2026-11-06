@@ -28,14 +28,17 @@
 // subset of what the proposed rule does, and the runtime's own writes never
 // make what it refuses.
 
-import { isObjectNotArray } from "@commonfabric/js-values/types";
-
 import { cfcCanonicalClauseDigest } from "./cfc-clause-identity.ts";
 import type { VerifiedOwnerReleaseByIntent } from "./cfc-owner-release-by-intent.ts";
 import {
   type CfcConfClause,
   clauseReleasableBy,
 } from "./cfc-release-authority.ts";
+import {
+  resolveStoredLabel,
+  storedConfidentiality,
+  storedLabelMapEntries,
+} from "./cfc-stored-label-map.ts";
 
 /** A path whose stored declared entries a proposed envelope leaves out. */
 export interface DroppedDeclaredPath {
@@ -66,10 +69,10 @@ export const droppedDeclaredPaths = (
   proposed: unknown,
   resolveLabel: (ref: string) => unknown,
 ): readonly DroppedDeclaredPath[] => {
-  const storedEntries = labelMapEntriesOf(stored);
+  const storedEntries = storedLabelMapEntries(stored);
   if (storedEntries.length === 0) return [];
   const proposedPaths = new Set(
-    labelMapEntriesOf(proposed)
+    storedLabelMapEntries(proposed)
       .filter((entry) => entry.origin === "declared")
       .map((entry) => JSON.stringify(entry.path)),
   );
@@ -81,8 +84,10 @@ export const droppedDeclaredPaths = (
     if (entry.origin !== "declared") continue;
     const key = JSON.stringify(entry.path);
     if (proposedPaths.has(key)) continue;
-    const label = resolvedLabel(entry.label, resolveLabel);
-    const clauses = label === undefined ? undefined : confidentialityOf(label);
+    const label = resolveStoredLabel(entry.label, resolveLabel);
+    const clauses = label === undefined
+      ? undefined
+      : storedConfidentiality(label) ?? [];
     if (clauses !== undefined && clauses.length === 0) continue;
     const known = dropped.get(key);
     if (known === undefined) {
@@ -146,48 +151,3 @@ const releasesByIntent = (
       )
     );
 };
-
-/** One stored or proposed label-map entry, as far as this rule reads it. */
-interface EntryView {
-  readonly path: unknown;
-  readonly origin: unknown;
-  readonly label: unknown;
-}
-
-/** The entries of the label map `cfc` holds, or none. */
-const labelMapEntriesOf = (cfc: unknown): readonly EntryView[] => {
-  if (!isObjectNotArray(cfc)) return [];
-  const labelMap = cfc.labelMap;
-  if (!isObjectNotArray(labelMap) || !Array.isArray(labelMap.entries)) {
-    return [];
-  }
-  return labelMap.entries.filter(isObjectNotArray).map((entry) => ({
-    path: entry.path,
-    origin: entry.origin,
-    label: entry.label,
-  }));
-};
-
-/**
- * `label` itself, or the content of the label document a single-member
- * `{ $ref: "cid:…" }` record names, or `undefined` when that document isn't
- * there, or when the reference names anything but a `cid:` document.
- */
-const resolvedLabel = (
-  label: unknown,
-  resolveLabel: (ref: string) => unknown,
-): unknown => {
-  if (
-    isObjectNotArray(label) && Object.keys(label).length === 1 &&
-    typeof label.$ref === "string"
-  ) {
-    return label.$ref.startsWith("cid:") ? resolveLabel(label.$ref) : undefined;
-  }
-  return label;
-};
-
-/** The confidentiality clauses a resolved label holds. */
-const confidentialityOf = (label: unknown): readonly unknown[] =>
-  isObjectNotArray(label) && Array.isArray(label.confidentiality)
-    ? label.confidentiality
-    : [];
