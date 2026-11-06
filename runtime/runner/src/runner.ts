@@ -7895,7 +7895,17 @@ export class Runner {
           "rootCellSync",
         );
         if (rootCell.getRaw() === undefined) {
-          return Promise.reject(new Error("No data at cell"));
+          // A space whose session failed reads as empty too, since a sync
+          // resolves either way; say why, by the rule `Cell.pull()` uses. A
+          // refused space stays an empty read, as its loads are.
+          const sessionError = this.#runtime.storageManager
+            .spaceSessionError?.(rootCell.space);
+          return Promise.reject(
+            sessionError !== undefined &&
+              sessionError.name !== "AuthorizationError"
+              ? sessionError
+              : new Error("No data at cell"),
+          );
         } else {
           return this.#doStart(rootCell, seenCells, attempt);
         }

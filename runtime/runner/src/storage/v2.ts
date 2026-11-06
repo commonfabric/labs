@@ -2574,13 +2574,21 @@ export class StorageManager implements IStorageManager {
   }
 
   /** @inheritDoc */
+  unreachableSpaces(): MemorySpace[] {
+    return [...this.#providers.keys()].filter((space) =>
+      MemoryV2Client.isFirstHandshakeFailure(this.spaceSessionError(space))
+    );
+  }
+
+  /** @inheritDoc */
   async retrySpaceAccess(space: MemorySpace): Promise<void> {
     // Already-open providers only, as in `noteSpaceAclChanged()`: a space
     // this manager has never opened has no refusal to retry.
     const provider = this.#providers.get(space);
     await provider?.retryAccess(() =>
       this.#spaceAccessErrors.has(space) ||
-      provider.authorizationError() !== undefined
+      provider.authorizationError() !== undefined ||
+      MemoryV2Client.isFirstHandshakeFailure(this.spaceSessionError(space))
     );
   }
 
@@ -5273,7 +5281,8 @@ class Provider
 
   /**
    * Opens a session on this space again, as an ACL change would, when
-   * `refused()` says the memory server refused the last one, and then makes
+   * `owed()` says the memory server refused the last one or its connection
+   * never completed a first handshake, and then makes
    * again the loads it refused for want of access. Resolves once the server
    * has decided. A refusal is recorded where the first one was, and does not
    * reject; any other failure, of the open or of a load, rejects, and leaves
@@ -5282,16 +5291,16 @@ class Provider
    * two that start together open the session once: the later decides after
    * the earlier, on the session it left.
    */
-  retryAccess(refused: () => boolean): Promise<void> {
+  retryAccess(owed: () => boolean): Promise<void> {
     const retry = this.#retrying.catch(() => {}).then(() =>
-      this.#retryAccessOnce(refused)
+      this.#retryAccessOnce(owed)
     );
     this.#retrying = retry;
     return retry;
   }
 
   /** Helper for `retryAccess()`, which makes one retry. */
-  async #retryAccessOnce(refused: () => boolean): Promise<void> {
+  async #retryAccessOnce(owed: () => boolean): Promise<void> {
     // An open already in flight may be decided on the access list as it
     // stood before this call, so the retry waits for it before deciding
     // anything.
@@ -5299,8 +5308,8 @@ class Provider
     if (this.#destroyed) return;
     // Arming the latch on a session that stands would remount it the next
     // time some other verdict ended it.
-    if (refused()) {
-      this.replica.noteAclChanged();
+    if (owed()) {
+      this.replica.noteRetryRequested();
       try {
         await this.ensureSession();
       } catch (error) {
@@ -5638,8 +5647,10 @@ export class SpaceReplica
   #sessionSession?: MemoryV2Client.SpaceSession;
 
   /**
-   * The loads the memory server refused this replica for want of access, by
-   * watch id, which `repullRefused()` makes again once a retry is admitted.
+   * The loads the memory server refused this replica for want of access, and
+   * the loads that failed because the space's first connection never
+   * completed a handshake, by watch id, which `repullRefused()` makes again
+   * once a retry is admitted.
    * Nothing else re-asks for them: a refused load leaves no selector behind
    * to cover it, and its readers see no change to run again on.
    */
@@ -5655,6 +5666,12 @@ export class SpaceReplica
    *  consumed — or immediately, when there is no memoized mount to
    *  replace. */
   #aclChangedSinceMount = false;
+
+  /** Set with the latch above when a host asked for a retry
+   *  (`noteRetryRequested`): the one reason the latch also releases a first
+   *  connection that never completed a handshake. An ACL notice alone does
+   *  not, so that only a host's retry dials such a space again. */
+  #retryRequestedSinceMount = false;
 
   #restoringWatches = false;
 
@@ -6648,6 +6665,17 @@ export class SpaceReplica
   }
 
   /**
+   * Records that a host asked for this space again, as `noteAclChanged()`
+   * does, and that the ask also covers a first connection that never
+   * completed a handshake: the remount it owes dials such a space again.
+   */
+  noteRetryRequested(): void {
+    if (this.#closed) return;
+    this.#retryRequestedSinceMount = true;
+    this.noteAclChanged();
+  }
+
+  /**
    * Records that an ACL change may admit a session whose authorization ended.
    *
    * The notice and termination may arrive in either order. Once both have
@@ -6901,21 +6929,32 @@ export class SpaceReplica
 
   /**
    * Reconsiders a permanent admission or ACL refusal after word of an ACL
-   * change. Runtime incompatibility requires a new runtime and stays latched.
+   * change, and a first connection that never completed a handshake after a
+   * host asked for a retry. Runtime incompatibility requires a new runtime
+   * and stays latched.
    */
   #consumeOwedSessionRemount(): void {
     if (!this.#aclChangedSinceMount) return;
+    const retryRequested = this.#retryRequestedSinceMount;
+    this.#retryRequestedSinceMount = false;
     const stale = this.#sessionHandle;
     if (stale === undefined) {
       // Nothing memoized to replace: the next open already re-decides.
       this.#aclChangedSinceMount = false;
       return;
     }
-    // ONLY an ACL verdict. A handle still opening, a live session, a
-    // graceful close ("memory session closed"), and a transport drop (which
-    // the client's own `reconnect()`/`restore()` already heals) must all be
-    // left alone: this arm exists for the one termination class no other
-    // path recovers from.
+    // ONLY an ACL verdict, or a first connection that never opened. A handle
+    // still opening, a live session, a graceful close ("memory session
+    // closed"), and a transport drop (which the client's own
+    // `reconnect()`/`restore()` already heals) must all be left alone: this
+    // arm exists for the termination classes no other path recovers from.
+    // A first-handshake failure is one of them because it is latched on
+    // purpose (`#memoizedSessionHandle()`), so that loads of a host that is
+    // down fail at once instead of each dialing it again; the latch is
+    // released here only on a host's explicit retry (`noteRetryRequested`),
+    // never on a load or an ACL notice. The retry's ask is spent on this
+    // consume whatever it decides, so it cannot linger and release the
+    // latch on a later load.
     const closeError = this.#sessionAdmissionError ??
       this.#sessionSession?.closeError;
     if (MemoryV2Client.isClientUpdateRequiredError(closeError)) {
@@ -6925,7 +6964,8 @@ export class SpaceReplica
     if (
       closeError === undefined ||
       (closeError.name !== "SessionRevokedError" &&
-        closeError.name !== "AuthorizationError")
+        closeError.name !== "AuthorizationError" &&
+        !(retryRequested && MemoryV2Client.isFirstHandshakeFailure(closeError)))
     ) {
       // The latch is deliberately LEFT SET here, and clearing it would be a
       // race rather than a tidy-up. The notice arrives BEFORE the revocation
@@ -6966,12 +7006,15 @@ export class SpaceReplica
     // connection per revocation.
     stale.then(({ client }) => client.close()).catch(() => {});
     sessionRemountLogger.warn("session-remount", () => [
-      `space ${this.#space}: the memoized session was terminated by ` +
-      `${closeError.name} and its ACL may have changed; remounting. ` +
-      "A fresh session.open re-runs the server's admission against the " +
-      "ACL as it now stands (OW31: a serving mount's READ decisions " +
-      "resolve as the space's OWNER), so a genuine de-authorization is " +
-      "denied there rather than healed here.",
+      MemoryV2Client.isFirstHandshakeFailure(closeError)
+        ? `space ${this.#space}: the memoized session never connected ` +
+          `(${closeError.message}) and a host asked for a retry; remounting.`
+        : `space ${this.#space}: the memoized session was terminated by ` +
+          `${closeError.name} and its ACL may have changed; remounting. ` +
+          "A fresh session.open re-runs the server's admission against the " +
+          "ACL as it now stands (OW31: a serving mount's READ decisions " +
+          "resolve as the space's OWNER), so a genuine de-authorization is " +
+          "denied there rather than healed here.",
     ]);
     // DROP THE WATCH-SELECTOR TRACKER. The fresh session carries no
     // watches — `terminateSession` cleared `#watchSpecs` and the server
@@ -8107,6 +8150,13 @@ export class SpaceReplica
       (sessionError.name !== "AuthorizationError" ||
         MemoryV2Client.isClientUpdateRequiredError(sessionError))
     ) {
+      // A space that never connected owes these loads to the retry that
+      // connects it, as a refused space owes its refused loads.
+      if (MemoryV2Client.isFirstHandshakeFailure(sessionError)) {
+        for (const entry of normalizeSyncEntries(entries)) {
+          this.#refusedPulls.set(watchIdForEntry(entry[0], entry[1]), entry);
+        }
+      }
       return { error: toPullError(sessionError) };
     }
 
@@ -8257,7 +8307,10 @@ export class SpaceReplica
       // and must not invalidate selectors whose fetch succeeded here.
       const result = await fetchPromise;
       if (result.error) {
-        if (isPermanentAuthorizationFailure(result.error)) {
+        if (
+          isPermanentAuthorizationFailure(result.error) ||
+          MemoryV2Client.isFirstHandshakeFailure(this.sessionError())
+        ) {
           for (const entry of newEntries) {
             this.#refusedPulls.set(watchIdForEntry(entry[0], entry[1]), entry);
           }

@@ -724,7 +724,8 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * `spaceSessionError()` reports from then on: for example a takeover, an
    * authorization denial, or a client that gives up reconnecting. The space's
    * documents receive no further updates unless a reopen after an access
-   * change (see `subscribeSpaceAccessChange()`) replaces the session, after
+   * change (see `subscribeSpaceAccessChange()`), or a `retrySpaceAccess()` of
+   * a space that never connected, replaces the session, after
    * which `spaceSessionError()` returns undefined again. An authorization
    * denial also reaches `subscribeSpaceAccessLoss()` observers. Ordinary
    * reconnects, normal closure, and spaces whose reads an authoritative local
@@ -1043,8 +1044,26 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * or of a repeated load, rejects, and a later call repeats the loads that
    * have not yet succeeded. Does nothing for a space this manager has not
    * opened, or one it holds no refusal for.
+   *
+   * A space whose first connection never completed a handshake, such as one
+   * on a host that was down or out of the network's reach, counts as refused
+   * here: its `spaceSessionError()` stays that failure, and its loads fail
+   * with it at once without dialing again, until this call makes one more
+   * round of connection attempts. An ACL notice does not. The loads that
+   * failed in the meantime are made again once it connects.
+   * A host calls it when it has reason to think the host is reachable now,
+   * such as a person asking to try again or a change of network. A dial that
+   * fails again rejects with the new failure and leaves the space as it was.
    */
   retrySpaceAccess?(space: MemorySpace): Promise<void>;
+
+  /**
+   * The spaces this manager has opened whose first connection never
+   * completed a handshake, which `retrySpaceAccess()` would dial again. For a
+   * host that learns the network changed and cannot know which spaces were
+   * out of its reach. Opens nothing.
+   */
+  unreachableSpaces?(): MemorySpace[];
 
   /**
    * Load cell from storage. Will also subscribe to new changes.
