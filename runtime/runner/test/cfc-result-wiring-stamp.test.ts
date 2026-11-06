@@ -503,65 +503,116 @@ describe("cfc-result-wiring-stamp", () => {
       expect(existenceOf(result)).toEqual([CAROL]);
     });
 
-    it("comes off where a source update restates a nested wiring unchanged", async () => {
+    describe("a source update that leaves a nested wiring unchanged", () => {
       // A source update stages its setup for resume, and the running piece
       // then instantiates the updated pattern in a transaction of its own,
       // where the nested piece is set up again. That transaction carries the
       // update's reads and its standing, so the nested setup restates the
       // wiring it finds unchanged.
 
-      const nesting = (factor: number) => ({
+      /**
+       * A piece whose `inner` is a nested piece from a module of its own,
+       * the same in every version, and which differs between versions by
+       * `version` alone. With `named`, the nested piece names itself, so a
+       * setup of the same nested pattern carries its stored name over.
+       */
+      const nesting = (version: number, named: boolean) => ({
         main: "/main.tsx",
         files: [{
           name: "/main.tsx",
           contents: `
-            import { computed, pattern, Writable } from "commonfabric";
-            const inner = pattern<{ input: Writable<number> }>(
-              ({ input }) => ({ v: computed(() => input.get() * ${factor}) }),
-            );
+            import { pattern, Writable } from "commonfabric";
+            import { inner } from "./inner.tsx";
             export default pattern<{ input: Writable<number> }>(
-              ({ input }) => ({ inner: inner({ input }) }),
+              ({ input }) => ({ inner: inner({ input }), version: ${version} }),
+            );
+          `,
+        }, {
+          name: "/inner.tsx",
+          contents: `
+            import { computed, ${
+            named ? "NAME, " : ""
+          }pattern, Writable } from "commonfabric";
+            export const inner = pattern<{ input: Writable<number> }>(
+              ({ input }) => ({
+                ${
+            named ? "[NAME]: computed(() => `Inner ${input.get()}`)," : ""
+          }
+                v: computed(() => input.get() * 2),
+              }),
             );
           `,
         }],
       });
-      const v1 = await runtime.patternManager.compilePattern(nesting(2), {
-        space,
-      });
-      const v2 = await runtime.patternManager.compilePattern(nesting(3), {
-        space,
-      });
-      const input = runtime.getCell<number>(space, "update-input");
-      const piece = runtime.getCell<{ inner: unknown }>(space, "update-piece");
-      const seed = runtime.edit();
-      input.withTx(seed).set(1);
-      await runtime.setup(seed, v1, { input }, piece);
-      expect((await seed.commit().settled).error).toBeUndefined();
-      expect(await runtime.start(piece)).toBe(true);
-      const stopReading = piece.sink(() => {});
-      try {
-        await runtime.idle();
-        await runtime.runner.idlePieceInstantiationSettlements();
-        const inner = piece.key("inner").resolveAsCell();
-        await plantStamp(inner, BOB);
-        expect(membershipOf(inner)).toContain(BOB);
 
-        const tx = runtime.edit();
-        await runtime.setup(tx, v2, undefined, piece.withTx(tx), {
-          prepareForResume: true,
-        });
-        expect((await tx.commit().settled).error).toBeUndefined();
-        await runtime.idle();
-        await runtime.runner.idlePieceInstantiationSettlements();
-        await runtime.idle();
+      /**
+       * Sets a piece of `nesting(1, named)` running, plants a stamp naming
+       * Bob on its nested piece's membership, updates it to
+       * `nesting(2, named)` with a setup for resume in a transaction that
+       * reads nothing labeled, and returns the nested piece's membership.
+       */
+      const update = async (named: boolean): Promise<unknown[]> => {
+        const v1 = await runtime.patternManager.compilePattern(
+          nesting(1, named),
+          { space },
+        );
+        const v2 = await runtime.patternManager.compilePattern(
+          nesting(2, named),
+          { space },
+        );
+        const input = runtime.getCell<number>(space, `update-input-${named}`);
+        const piece = runtime.getCell<{ inner: unknown; version: number }>(
+          space,
+          `update-piece-${named}`,
+        );
+        const seed = runtime.edit();
+        input.withTx(seed).set(1);
+        await runtime.setup(seed, v1, { input }, piece);
+        expect((await seed.commit().settled).error).toBeUndefined();
+        expect(await runtime.start(piece)).toBe(true);
+        const stopReading = piece.sink(() => {});
+        try {
+          await runtime.idle();
+          await runtime.runner.idlePieceInstantiationSettlements();
+          const inner = piece.key("inner").resolveAsCell();
+          await plantStamp(inner, BOB);
+          expect(membershipOf(inner)).toContain(BOB);
 
-        expect(piece.key("inner").resolveAsCell().getAsNormalizedFullLink().id)
-          .toBe(inner.getAsNormalizedFullLink().id);
-        expect(piece.key("inner").key("v").get()).toBe(3);
-        expect(membershipOf(inner)).not.toContain(BOB);
-      } finally {
-        stopReading();
-      }
+          const tx = runtime.edit();
+          await runtime.setup(tx, v2, undefined, piece.withTx(tx), {
+            prepareForResume: true,
+          });
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await runtime.idle();
+          await runtime.runner.idlePieceInstantiationSettlements();
+          await runtime.idle();
+
+          expect(piece.key("version").get()).toBe(2);
+          expect(
+            piece.key("inner").resolveAsCell().getAsNormalizedFullLink().id,
+          ).toBe(inner.getAsNormalizedFullLink().id);
+          if (named) {
+            expect(
+              (inner.getRaw() as Record<string, unknown> | undefined)?.[NAME],
+            ).toBeDefined();
+          }
+          return membershipOf(inner);
+        } finally {
+          stopReading();
+        }
+      };
+
+      it("takes the stamp off where the nested piece has no name", async () => {
+        expect(await update(false)).not.toContain(BOB);
+      });
+
+      it("keeps the stamp where the nested piece carries its stored name over", async () => {
+        // The stored name is a reference the stored document chose, so a
+        // restatement keeps the stored membership, as a setup in the asking
+        // transaction does.
+
+        expect(await update(true)).toContain(BOB);
+      });
     });
 
     it("comes off at a setup that finds the wiring unchanged", async () => {
