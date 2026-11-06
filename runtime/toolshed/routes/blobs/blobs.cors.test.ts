@@ -12,7 +12,7 @@ import { hashOf } from "@commonfabric/data-model";
 import { newDefaultJsonCodecEngine } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
-import type { URI } from "@commonfabric/memory/interface";
+import type { DID, URI } from "@commonfabric/memory/interface";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import app from "@/app.ts";
@@ -30,7 +30,7 @@ const blobUploadCodec = newDefaultJsonCodecEngine();
 describe("blobs.index", () => {
   let server: Deno.HttpServer;
   let base: URL;
-  let space: string;
+  let space: DID;
 
   beforeAll(async () => {
     server = Deno.serve({ port: 0, onListen: () => {} }, app.fetch);
