@@ -15,6 +15,13 @@ import {
 } from "./input-timing-controller.ts";
 
 /**
+ * A value the person edited, shown over bound state until its write has
+ * committed and the cell has been read (`committed` marks the first), or the
+ * write is refused.
+ */
+type LocalEdit<T> = { value: T; committed: boolean };
+
+/**
  * Configuration options for CellController
  */
 export interface CellControllerOptions<T> {
@@ -35,7 +42,8 @@ export interface CellControllerOptions<T> {
 
   /**
    * Custom setter function for updating CellHandle<T> | T values
-   * Defaults to standard transaction-based Cell.set() or direct assignment
+   * Defaults to `CellHandle.setForUI()`, whose commit the controller
+   * observes, or direct assignment
    */
   setValue?: (value: CellHandle<T> | T, newValue: T, oldValue: T) => void;
 
@@ -112,14 +120,15 @@ export class CellController<T> implements ReactiveController {
    * Pending-local-edit tracking (early-boot wipe guard)
    * A locally-edited value that bound state has not yet confirmed. While set,
    * it wins over stale bound state in getValue(), so a re-render cannot
-   * repaint a pre-write snapshot over what the user just typed. Released when
-   * the echo confirms it (a delivery equal to the edit), when a post-settle
-   * delivery supersedes it, or when the binding moves to a different cell.
+   * repaint a pre-write snapshot over what the user just typed. A delivery
+   * equal to the edit does not confirm it: before the commit it may be the
+   * write's echo or an older value that matches. The edit is released once
+   * its write has committed and a read of the cell has answered, when the
+   * write is refused, when it is made through a custom setter, whose outcome
+   * the controller cannot observe, or when the binding moves to a different
+   * cell.
    */
-  private _localEdit: { value: T } | undefined;
-
-  /** Number of in-flight cell writes started by the default setter. */
-  private _inFlightWrites = 0;
+  private _localEdit: LocalEdit<T> | undefined;
 
   /**
    * Re-entrancy marker: a subscription delivery firing synchronously from our
@@ -146,11 +155,11 @@ export class CellController<T> implements ReactiveController {
   private _writesAsked = 0;
 
   /**
-   * All writes settled but bound state never converged (e.g. a rebind swapped
-   * in a pre-write snapshot first): deliveries are FIFO, so the next one
-   * reflects post-write state and is authoritative.
+   * The read reconciling the pending edit with the cell, once the edit has
+   * committed, while it is in flight. A newer edit, a rebind, or a refusal
+   * abandons it: its answer then releases nothing.
    */
-  private _settledAwaitingRelease = false;
+  #reconciliation: object | undefined;
 
   /**
    * Last authoritative user-visible value. Survives same-cell rebinds so a
@@ -229,13 +238,15 @@ export class CellController<T> implements ReactiveController {
       const samePersistentCell = this._currentValue instanceof CellHandle &&
         value instanceof CellHandle &&
         sameCellDoc(this._currentValue.ref(), value.ref());
+      // A read of the handle bound so far answers for that handle; the new
+      // one is read again where the edit has committed.
+      this.#reconciliation = undefined;
       if (!samePersistentCell) {
         this._bindEpoch++;
         // A write waiting on its timing was made for the cell bound when it
         // was asked for; run later, it would go to whatever is bound then.
         this._inputTiming?.cancel();
         this._localEdit = undefined;
-        this._settledAwaitingRelease = false;
         this._lastKnownValue = undefined;
         this._bindingHydrated = false;
         this._refusal = undefined;
@@ -260,6 +271,7 @@ export class CellController<T> implements ReactiveController {
       }
       this._setupCellSubscription();
       if (this._refusal !== undefined) void this._askWorker();
+      this.#reconcileBoundValue();
     }
   }
 
@@ -362,7 +374,7 @@ export class CellController<T> implements ReactiveController {
     this._inputTiming?.flush();
     const asked = this._askWrite();
     const turn = Promise.withResolvers<void>();
-    let inFlight = false;
+    let edit: LocalEdit<T> | undefined;
     let computing = false;
     handle.update((held) => {
       const current = this.options.getValue(held as T | undefined);
@@ -377,10 +389,8 @@ export class CellController<T> implements ReactiveController {
         turn.resolve();
         return next;
       }
-      this._beginLocalEdit(next);
+      edit = this._beginLocalEdit(next);
       this._computedEcho = { value: next };
-      this._inFlightWrites++;
-      inFlight = true;
       try {
         this.options.onChange(next, current as T);
         turn.resolve();
@@ -390,10 +400,10 @@ export class CellController<T> implements ReactiveController {
         turn.reject(error);
       }
       return next;
-    }).then(
-      () => this._settleComputed(inFlight, epoch),
+    }, { awaitCommit: true }).then(
+      () => this._settleComputed(edit, epoch, true),
       (error) => {
-        this._settleComputed(inFlight, epoch);
+        this._settleComputed(edit, epoch, false);
         if (computing) {
           turn.reject(error);
           return;
@@ -413,13 +423,17 @@ export class CellController<T> implements ReactiveController {
     return ++this._writesAsked;
   }
 
-  /** A computed write settled, or was passed over. */
-  private _settleComputed(inFlight: boolean, epoch: number): void {
+  /**
+   * Like {@link _settleWrite}, for a computed write, which may have been
+   * passed over and begun no `edit`: its echo is no longer expected.
+   */
+  private _settleComputed(
+    edit: LocalEdit<T> | undefined,
+    epoch: number,
+    committed: boolean,
+  ): void {
     this._computedEcho = undefined;
-    if (!inFlight) return;
-    this._inFlightWrites--;
-    if (epoch !== this._bindEpoch || this._inFlightWrites > 0) return;
-    this._releaseLocalEditAfterSettle();
+    this._settleWrite(edit, epoch, committed);
   }
 
   /** Writes what `compute` makes of the current value, where it changes it. */
@@ -433,13 +447,16 @@ export class CellController<T> implements ReactiveController {
   }
 
   /**
-   * Shows `value`, a local edit, over bound state until bound state confirms
-   * it or a post-settle delivery supersedes it.
+   * Shows `value`, a local edit, over bound state until its write commits
+   * and the cell is read. Returns the edit, so that the write's settlement
+   * can tell whether it is still the one shown.
    */
-  private _beginLocalEdit(value: T): void {
-    this._localEdit = { value };
-    this._settledAwaitingRelease = false;
+  private _beginLocalEdit(value: T): LocalEdit<T> {
+    const edit = { value, committed: false };
+    this._localEdit = edit;
+    this.#reconciliation = undefined;
     this._lastKnownValue = value;
+    return edit;
   }
 
   /**
@@ -499,11 +516,10 @@ export class CellController<T> implements ReactiveController {
         this._applyingLocalWrite = false;
       }
 
-      // A custom setter gives no in-flight signal, so the local apply is all
-      // the confirmation we will get — release the edit right away (status
-      // quo behavior for such components). The default setter tracks its
-      // write and releases on settle instead.
-      if (this._inFlightWrites === 0) {
+      // A custom setter gives no commit signal, so the local apply is all
+      // the confirmation there is: the edit is released at once. The default
+      // setter keeps it until its write commits and the cell is read.
+      if (this._customSetter) {
         this._localEdit = undefined;
       }
 
@@ -551,7 +567,7 @@ export class CellController<T> implements ReactiveController {
     // A cancelled pending write abandons its local edit; bound state is
     // authoritative again.
     this._localEdit = undefined;
-    this._settledAwaitingRelease = false;
+    this.#reconciliation = undefined;
   }
 
   /**
@@ -584,6 +600,7 @@ export class CellController<T> implements ReactiveController {
 
   hostConnected(): void {
     this._setupCellSubscription();
+    this.#reconcileBoundValue();
   }
 
   hostDisconnected(): void {
@@ -610,14 +627,22 @@ export class CellController<T> implements ReactiveController {
   ): void {
     if (isCellHandle(value)) {
       const epoch = this._bindEpoch;
-      this._inFlightWrites++;
-      // set() resolves once the write round-trip completes (it never rejects;
-      // failures are logged and swallowed inside set()).
-      value.set(newValue).finally(() => {
-        this._inFlightWrites--;
-        if (epoch !== this._bindEpoch || this._inFlightWrites > 0) return;
-        this._releaseLocalEditAfterSettle();
-      });
+      const edit = this._localEdit;
+      // The controller shows the edit while the handle observes the commit.
+      // The outcome belongs to this edit on this binding: a newer edit, even
+      // one still waiting on its timing, keeps its own display.
+      (value as CellHandle<T>).setForUI(newValue).then(
+        () => this._settleWrite(edit, epoch, true),
+        (error) => {
+          if (
+            !(error instanceof CellReadRefusedError) &&
+            !(value as CellHandle<T>).runtime().signal.aborted
+          ) {
+            console.error("[CellController] Write failed:", error);
+          }
+          this._settleWrite(edit, epoch, false);
+        },
+      );
     } else {
       // For non-Cell values, we can't directly modify them
       // This should be handled by the component's property system
@@ -626,23 +651,77 @@ export class CellController<T> implements ReactiveController {
   }
 
   /**
-   * All in-flight writes settled: release the pending local edit if bound
-   * state converged on it. If it did not (a same-cell rebind may have swapped
-   * in a pre-write snapshot first), keep the edit but mark that the next
-   * delivery is authoritative — deliveries are FIFO, so anything arriving
-   * after the write settled reflects post-write state.
+   * The write of `edit`, made on the binding of `epoch`, committed, where
+   * `committed`, or was refused. Where the edit is still the one shown on
+   * that binding, it is reconciled with the cell or released.
    */
-  private _releaseLocalEditAfterSettle(): void {
-    if (this._localEdit === undefined) return;
-    const read = isCellHandle(this._currentValue)
-      ? (this._currentValue as CellHandle<T>).lastRead()
-      : undefined;
-    const raw = read !== undefined && "value" in read ? read.value : undefined;
-    if (raw !== undefined && deepValueEqual(raw, this._localEdit.value)) {
-      this._localEdit = undefined;
+  private _settleWrite(
+    edit: LocalEdit<T> | undefined,
+    epoch: number,
+    committed: boolean,
+  ): void {
+    if (!edit || epoch !== this._bindEpoch || this._localEdit !== edit) return;
+    if (committed) {
+      edit.committed = true;
+      this.#reconcileBoundValue();
     } else {
-      this._settledAwaitingRelease = true;
+      this.#releaseEdit();
     }
+  }
+
+  /**
+   * Reads the bound cell once the pending edit has committed, and shows what
+   * the handle then holds in the edit's place: the committed value, a write a
+   * handler made after it, or a delivery that overtook the read, which the
+   * handle keeps over the read's answer. A subscription's deliveries alone
+   * cannot release the edit: one equal to it may predate the commit, and a
+   * handler's write delivered before the commit's acknowledgment is followed
+   * by no other. Only the edit and binding the commit belongs to are
+   * reconciled; a newer edit keeps its display, as does a refusal's empty
+   * value. Each committed, still-current edit costs one read of the worker.
+   */
+  #reconcileBoundValue(): void {
+    const edit = this._localEdit;
+    const cell = this.getCell();
+    if (!cell || !edit?.committed || this.#reconciliation !== undefined) {
+      return;
+    }
+    const reconciliation = this.#reconciliation = {};
+    const finish = () => {
+      if (
+        this.#reconciliation !== reconciliation ||
+        this._localEdit !== edit || this._currentValue !== cell
+      ) return;
+      this.#reconciliation = undefined;
+      this.#releaseEdit();
+    };
+    cell.pull({ awaitDurability: false }).then(finish, (error) => {
+      if (
+        !(error instanceof CellReadRefusedError) &&
+        !cell.runtime().signal.aborted
+      ) {
+        console.error("[CellController] Reconciliation failed:", error);
+      }
+      // A read that fails must not pin the edit's display.
+      finish();
+    });
+  }
+
+  /**
+   * Shows the bound value in the pending edit's place, telling `onChange`
+   * and the host where that changes what is shown.
+   */
+  #releaseEdit(): void {
+    if (this._localEdit === undefined) return;
+    const shown = this.getValue();
+    this._localEdit = undefined;
+    this.#reconciliation = undefined;
+    this._lastKnownValue = this.defaultGetValue(this._currentValue);
+    const restored = this.getValue();
+    if (!deepValueEqual(restored, shown)) {
+      this.options.onChange(restored as T, shown as T);
+    }
+    if (this.options.triggerUpdate) this.host.requestUpdate();
   }
 
   private _setupCellSubscription(): void {
@@ -685,7 +764,7 @@ export class CellController<T> implements ReactiveController {
             this._refusal = refusal;
             this._inputTiming?.cancel();
             this._localEdit = undefined;
-            this._settledAwaitingRelease = false;
+            this.#reconciliation = undefined;
             this._lastKnownValue = undefined;
             previousValue = undefined;
             if (this.options.triggerUpdate) {
@@ -729,29 +808,15 @@ export class CellController<T> implements ReactiveController {
       return false;
     }
     if (value !== undefined && deepValueEqual(value, this._localEdit.value)) {
-      // Bound state caught up with the edit — the echo confirmed it.
-      this._localEdit = undefined;
-      this._settledAwaitingRelease = false;
+      // What the edit shows, delivered: the write's echo, or an older value
+      // that matches it. Neither confirms the edit before its commit, which
+      // the read after the commit does, and neither is news to announce.
       this._lastKnownValue = value;
-      return false;
-    }
-    if (
-      this._settledAwaitingRelease &&
-      (value !== undefined || this._bindingHydrated)
-    ) {
-      // Writes settled without converging; deliveries are FIFO, so this one
-      // reflects post-write state and supersedes the local edit — whether a
-      // genuinely newer remote edit or an authoritative clear (the edit was
-      // lost). A fresh rebound handle's initial undefined echo carries no
-      // information and does not release.
-      this._localEdit = undefined;
-      this._settledAwaitingRelease = false;
-      this._lastKnownValue = value;
-      return false;
+      return true;
     }
     // Stale pre-write snapshot: late hydration, the partial echo of an
     // earlier keystroke, or a rebound handle's initial state. The local edit
-    // wins until the echo confirms or a post-settle value supersedes it.
+    // wins until its commit and the read that follows.
     return true;
   }
 

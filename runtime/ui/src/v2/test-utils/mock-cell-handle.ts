@@ -6,7 +6,11 @@
  *
  * ## Features
  *
- * - `createMockCellHandle(value)` — basic mock, same as before
+ * - `createMockCellHandle(value)` — basic mock, same as before;
+ *   `createMockCellHandle(value, ref, source)` makes a handle on the network
+ *   `source` was made on, as a rebind to the same cell does
+ * - Reads (`cell:get`, `cell:pull`) answer with what the network's root
+ *   handle holds at the asked path, as a worker that took every write does
  * - Parent-child propagation: when a child from `cell.key("foo")` calls
  *   `.set(v)`, the parent's value is updated and its subscribers fire
  * - `pushUpdate(cell, value)` — simulate a backend push via `$onCellUpdate`,
@@ -30,6 +34,7 @@ import {
   CellHandle,
   type CellReadRefusal,
   type CellRef,
+  type ClientCellValue,
   type InitializedRuntimeConnection,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
@@ -60,10 +65,10 @@ class MockCellNetwork {
   readonly writes: { type: string; cell?: CellRef; value?: unknown }[] = [];
 
   /**
-   * How reads (`cell:get`, `cell:pull`) are answered: as finding nothing,
-   * not at all, or with a refusal.
+   * How reads (`cell:get`, `cell:pull`) are answered: with what the root
+   * holds, not at all, or with a refusal.
    */
-  reads: "nothing" | "held" | { refused: CellReadRefusal } = "nothing";
+  reads: "current" | "held" | { refused: CellReadRefusal } = "current";
 
   /** Whether each `cell:set` is left unanswered until it is let through. */
   writesHeld = false;
@@ -115,6 +120,19 @@ class MockCellNetwork {
       } as CellRef;
     }
     return ref;
+  }
+
+  /** What a worker read of `ref` answers: the root's value at its path. */
+  getValue(ref: CellRef): unknown {
+    const read = this.#roots.get(this.#rootKey(ref))?.lastRead();
+    let value: unknown = read !== undefined && "value" in read
+      ? read.value
+      : undefined;
+    for (const segment of ref.path) {
+      if (!isObjectOrArray(value)) return undefined;
+      value = (value as Record<string, unknown>)[segment];
+    }
+    return value;
   }
 
   /**
@@ -175,7 +193,8 @@ function deepSet(
  * - `request()` intercepts CellSet to propagate child→parent writes,
  *   answers CellResolveAsCell by following a stored `$link` at the asked
  *   path (echoing the asking ref when there is none to follow — already
- *   canonical), and resolves everything else with `{}`.
+ *   canonical), answers CellGet and CellPull from the root's value, and
+ *   resolves everything else with `{}`.
  * - `subscribe()` / `unsubscribe()` are no-ops.
  * - Includes EventEmitter stubs (`on`, `off`, `emit`) to satisfy the type.
  */
@@ -210,7 +229,12 @@ function createMockConnection(
             network.heldReads.push({ answer, fail })
           );
         }
-        if (reads !== "nothing") return Promise.resolve(reads);
+        if (reads !== "current") return Promise.resolve(reads);
+        return Promise.resolve({
+          value: CellHandle.serialize(
+            network.getValue(data.cell!) as ClientCellValue,
+          ),
+        });
       }
       return Promise.resolve({} as any);
     },
@@ -255,21 +279,33 @@ function createMockRuntimeClient(
  * - `.key("foo")` returns a child CellHandle
  * - child `.set()` propagates back to the parent (and fires parent subscribers)
  * - can receive simulated backend pushes via `pushUpdate(handle, value)`
+ *
+ * With `source`, the handle is made on the network `source` was made on and
+ * at `source`'s address under `ref`, holding `value`: the handle a rebind to
+ * the same cell installs, whose reads the network answers from its root,
+ * `source`, while `pushUpdate()` delivers to it alone.
  */
 export function createMockCellHandle<T>(
   value?: T,
   ref?: Partial<CellRef>,
+  source?: CellHandle<T>,
 ): CellHandle<T> {
+  // One made with no value has read nothing yet.
+  const initial = value === undefined ? { unread: true } as const : { value };
+  if (source !== undefined) {
+    const handle = new CellHandle<T>(
+      source.runtime(),
+      { ...source.ref(), ...ref },
+      initial,
+    );
+    networks.set(handle, networkOf(source, "createMockCellHandle"));
+    return handle;
+  }
   const network = new MockCellNetwork();
   const conn = createMockConnection(network);
   const rt = createMockRuntimeClient(conn);
   const cellRef: CellRef = { ...DEFAULT_REF, ...ref };
-  // One made with no value has read nothing yet.
-  const handle = new CellHandle<T>(
-    rt,
-    cellRef,
-    value === undefined ? { unread: true } : { value },
-  );
+  const handle = new CellHandle<T>(rt, cellRef, initial);
   network.register(handle as CellHandle<unknown>);
   networks.set(handle, network);
   return handle;
@@ -296,8 +332,7 @@ export function writesSent<T>(
  * Leaves every read (`cell:get`, `cell:pull`) the network `handle` was made
  * on is asked for unanswered, as a worker that has not answered yet does,
  * until the function it returns answers them, as the worker would, or fails
- * them with an error, and lets later reads through. A read the mock answers otherwise finds the cell
- * holding nothing.
+ * them with an error, and lets later reads through.
  */
 export function holdReads<T>(
   handle: CellHandle<T>,
@@ -307,7 +342,7 @@ export function holdReads<T>(
   const network = networkOf(handle, "holdReads");
   network.reads = "held";
   return (answer) => {
-    network.reads = "nothing";
+    network.reads = "current";
     for (const read of network.heldReads.splice(0)) {
       if (answer instanceof Error) read.fail(answer);
       else read.answer(answer);
