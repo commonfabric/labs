@@ -784,19 +784,8 @@ describe("RealmCodecEngine", () => {
         .toThrow(/malformed tag/);
       expect(() => fabricFromRealmValue(wire(tagged(Symbol("s"), "x"))))
         .toThrow(/malformed tag/);
-      expect(() => fabricFromRealmValue(wire(tagged("sys.Boop", "x"))))
+      expect(() => fabricFromRealmValue(wire(tagged("hole", "x"))))
         .toThrow(/malformed tag/);
-    });
-
-    it("returns an `UnknownValue` for a tag the JSON format reserves", () => {
-      // The JSON format's reservation of `quote`, `object` and `hole` is that
-      // format's alone, so here each is a tag no codec claims.
-
-      for (const tag of ["quote", "object", "hole"]) {
-        const result = fabricFromRealmValue(wire(tagged(tag, "x")));
-        expect(result).toBeInstanceOf(UnknownValue);
-        expect((result as UnknownValue).wireTypeTag).toBe(tag);
-      }
     });
 
     it("keeps the offending key in a lenient refusal", () => {

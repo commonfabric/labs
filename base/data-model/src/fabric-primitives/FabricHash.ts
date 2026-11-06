@@ -13,7 +13,7 @@ import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
 import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
-import { isCodecTypeTag, ProblematicValue } from "@/codec-common";
+import { isInterchangeTag, ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
@@ -167,7 +167,7 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
       /**
        * @inheritDoc
        *
-       * @throws If the algorithm tag is outside the tag syntax.
+       * @throws If the algorithm tag is outside the general tag syntax.
        */
       encode(value: FabricHash, _env: LiveEnvironment): FabricHashState {
         FabricHash.#assertInterchangeTag(value.tag);
@@ -177,12 +177,12 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
       /**
        * @inheritDoc
        *
-       * An algorithm tag outside the tag syntax is refused along with the
-       * rest of a malformed state.
+       * An algorithm tag outside the general tag syntax is refused along with
+       * the rest of a malformed state.
        */
       canDecode(state: FabricValue): state is FabricHashState {
         return isPlainObject(state) && Object.hasOwn(state, "tag") &&
-          Object.hasOwn(state, "hash") && isCodecTypeTag(state.tag) &&
+          Object.hasOwn(state, "hash") && isInterchangeTag(state.tag) &&
           (typeof state.hash === "string");
       }
 
@@ -224,7 +224,7 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
        * the value would cede bytes that are not part of it, and one shared
        * with this instance would leave a transferred value hollow.
        *
-       * @throws If the algorithm tag is outside the tag syntax.
+       * @throws If the algorithm tag is outside the general tag syntax.
        */
       encode(value: FabricHash, _env: LiveEnvironment): RealmCodecValue {
         FabricHash.#assertInterchangeTag(value.tag);
@@ -237,15 +237,15 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
       /**
        * @inheritDoc
        *
-       * An algorithm tag outside the tag syntax is refused along with the
-       * rest of a malformed state.
+       * An algorithm tag outside the general tag syntax is refused along with
+       * the rest of a malformed state.
        */
       canDecode(
         state: RealmCodecValue,
       ): state is { readonly tag: string; readonly hash: ArrayBuffer } {
         return isPlainObject(state) && Object.hasOwn(state, "tag") &&
           Object.hasOwn(state, "hash") &&
-          isCodecTypeTag((state as { tag?: unknown }).tag) &&
+          isInterchangeTag((state as { tag?: unknown }).tag) &&
           ((state as { hash?: unknown }).hash instanceof ArrayBuffer);
       }
 
@@ -330,16 +330,16 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
   }
 
   /**
-   * Refuses to write an algorithm tag outside the tag syntax to an interchange
-   * format. An instance may hold any string as its tag, but one carried in a
-   * `Hash@1` state is in the syntax every interchange format shares
-   * (`1-fabric-values.md` Section 1.4.9), and a decoder refuses one that is
-   * not.
+   * Refuses to write an algorithm tag outside the general tag syntax to an
+   * interchange format. An instance may hold any string as its tag, but one
+   * carried in a `Hash@1` state is in the syntax every interchange format
+   * shares (`1-fabric-values.md` Section 1.4.9), and a decoder refuses one that
+   * is not.
    *
-   * @throws If `tag` is outside the tag syntax.
+   * @throws If `tag` is outside the general tag syntax.
    */
   static #assertInterchangeTag(tag: string): void {
-    if (!isCodecTypeTag(tag)) {
+    if (!isInterchangeTag(tag)) {
       throw new Error(
         `Cannot encode a hash under the algorithm tag ${
           backtickQuote(tag)

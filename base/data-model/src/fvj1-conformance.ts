@@ -156,7 +156,6 @@ const SECTION_BASE64 = "3-json-encoding.md section 3, base64url convention";
 const SECTION_UNKNOWN = "3-json-encoding.md section 8";
 const SECTION_TAG_SYNTAX = "1-fabric-values.md section 2.5.1";
 const SECTION_RESERVATION = "3-json-encoding.md section 9";
-const SECTION_RESERVED_FORMS = "3-json-encoding.md section 2";
 const SECTION_TYPES = "3-json-encoding.md section 3";
 const SECTION_TEMPORAL = "3-json-encoding.md section 3, temporal quantities";
 const SECTION_ERROR = "3-json-encoding.md section 3, `Error@1`";
@@ -598,30 +597,19 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: SECTION_TAG_SYNTAX,
     text: 'fvj1:{"/core.Thing@1":null}',
   },
-  // Tags in any case, and with no version where there is no prefix.
-  ...[
-    "bytes@1",
-    "Sys.Boop@1",
-    "sys.boop@1",
-    "SYS.BEEP.boop@7",
-    "Bytes",
-    "widget",
-    "fid1",
-  ].map((tag): Fvj1ConformanceCase => ({
+  // Type tags in any case.
+  ...["bytes@1", "Sys.Boop@1", "sys.boop@1", "SYS.BEEP.boop@7"].map((
+    tag,
+  ): Fvj1ConformanceCase => ({
     name: `unknown tag ${JSON.stringify(tag)}`,
     section: SECTION_TAG_SYNTAX,
     text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
   })),
-  {
-    name: "unknown tag that is a type's tag without its version",
-    section: SECTION_TAG_SYNTAX,
-    text: 'fvj1:{"/EpochNsec":"AA"}',
-  },
-  // A special form's name with a version is an ordinary tag, the reservation
-  // being of the bare name.
+  // A special form's name with a version is a type tag like any other, even
+  // among an array's elements.
   ...["quote@1", "object@1", "hole@1"].map((tag): Fvj1ConformanceCase => ({
     name: `unknown tag ${JSON.stringify(tag)}`,
-    section: SECTION_RESERVED_FORMS,
+    section: SECTION_TAG_SYNTAX,
     text: `fvj1:${JSON.stringify([{ [`/${tag}`]: 1 }])}`,
   })),
 
@@ -650,6 +638,9 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     "sys.Boop",
     "core.Globals",
     "sys.Boop@01",
+    "Bytes",
+    "widget",
+    "fid1",
   ].map((tag): Fvj1ConformanceCase => ({
     name: `malformed tag ${JSON.stringify(tag)}`,
     section: SECTION_TAG_SYNTAX,
@@ -1045,6 +1036,11 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "regular expression with the empty state",
     section: SECTION_REGEXP,
     text: 'fvj1:{"/RegExp@1":{}}',
+  },
+  {
+    name: "tag with no version",
+    section: SECTION_TAG_SYNTAX,
+    text: 'fvj1:{"/EpochNsec":"AA"}',
   },
   {
     name: "special number with a numeric state",

@@ -18,8 +18,8 @@ This spec covers:
   `encode()`/`decode()` boundary
 - **Wire formats and boundaries** (Section 5) -- the boundary inventory, and
   the two wire formats, each specified in a document of its own:
-  - **JSON encoding** -- the `fvj1:` encoding prefix, the `/<tag>` wire
-    format for special types, escaping, detection rules, the `/`-key
+  - **JSON encoding** -- the `fvj1:` encoding prefix, the `/<Type>@<Version>`
+    wire format for special types, escaping, detection rules, the `/`-key
     reservation rule, the canonical text an encoder writes, and the floors on
     the size guarantees an implementation states
   - **Realm-crossing encoding** -- the wire format for a structured-clone
@@ -43,7 +43,7 @@ system, schemas.
 - [2-hash-byte-format.md](./2-hash-byte-format.md) -- Byte-level encoding for
   the hash algorithm.
 - [3-json-encoding.md](./3-json-encoding.md) -- The JSON wire format for
-  `FabricValue`s: the `fvj1:` encoding prefix, `/<tag>` tagged
+  `FabricValue`s: the `fvj1:` encoding prefix, `/<Type>@<Version>` tagged
   objects, standard type encodings, detection, escaping, the `/`-key
   reservation rule, the canonical text an encoder writes (key order, numbers,
   strings, and whitespace), and the floors on the size guarantees an

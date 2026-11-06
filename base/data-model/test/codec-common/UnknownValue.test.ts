@@ -44,18 +44,15 @@ describe("UnknownValue", () => {
     it("throws given a tag that is not a codec type tag", () => {
       // This class encodes back to the tag it holds, so a tag a decoder would
       // refuse would make an instance that encodes and cannot be read back.
-      for (const tag of ["", "sys.Boop", "By-tes@1"]) {
+      for (const tag of ["", "hole", "Bytes"]) {
         expect(() => new UnknownValue(tag, "state")).toThrow(
           /Not a codec type tag/,
         );
       }
     });
 
-    it("constructs given a tag in any case, or with no prefix and no version", () => {
-      // Each is a tag, the JSON format's reserved names among them: which
-      // tags that format can write is its encoder's business.
-
-      for (const tag of ["bytes@1", "Sys.Boop@1", "Bytes", "fid1", "quote"]) {
+    it("constructs given a type tag in any case", () => {
+      for (const tag of ["bytes@1", "Sys.Boop@1", "quote@1"]) {
         expect(new UnknownValue(tag, "state").wireTypeTag).toBe(tag);
       }
     });
@@ -64,11 +61,11 @@ describe("UnknownValue", () => {
       // The same vocabulary a strict decode fails in, so a caller gets the
       // offending tag and state structurally rather than out of prose.
       try {
-        new UnknownValue("sys.Boop", "state");
+        new UnknownValue("hole", "state");
         throw new Error("Should have thrown.");
       } catch (e) {
         expect(e).toBeInstanceOf(ProblematicStateError);
-        expect((e as ProblematicStateError).wireTypeTag).toBe("sys.Boop");
+        expect((e as ProblematicStateError).wireTypeTag).toBe("hole");
         expect((e as ProblematicStateError).state).toBe("state");
       }
     });

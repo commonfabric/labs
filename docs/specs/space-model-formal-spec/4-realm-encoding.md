@@ -284,10 +284,8 @@ A value that a codec claims is encoded as a three-element array:
 ```
 
 `tag` is the wire type tag, of the syntax every interchange format shares
-(`1-fabric-values.md` Section 2.5). This format reserves no name in it, so a
-name another format reserves for a form of its own, such as JSON's `quote`, is
-a tag like any other here. `state` is the codec's encoded state — final for a
-terminal codec, and itself walked for a nonterminal one.
+(`1-fabric-values.md` Section 2.5). `state` is the codec's encoded state —
+final for a terminal codec, and itself walked for a nonterminal one.
 
 **A terminal state is opaque, and that bounds every other rule here.** The walk
 hands it to its codec without descending, so nothing inside one is traversed
@@ -322,9 +320,10 @@ form.
 | `FabricUnavailable` | `Unavailable@1` | `{ reason }`, or for reason `error` `{ reason, errorKind }` or `{ reason, errorKind, errorMessage }` |
 | `symbol` | `Symbol@1` | `string` (the registry key) |
 
-The `tag` of a `Hash@1` state is the hash's algorithm tag, which is in the tag
-syntax (`1-fabric-values.md` Section 1.4.9): an encoder does not write one
-outside it, and a decoder refuses such a state as malformed (Section 7.1).
+The `tag` of a `Hash@1` state is the hash's algorithm tag, which is in the
+general tag syntax (`1-fabric-values.md` Section 1.4.9): an encoder does not
+write one outside it, and a decoder refuses such a state as malformed (Section
+7.1).
 
 Bytes travel as a bare `ArrayBuffer` rather than as a view onto one, that being
 what `postMessage()` can *transfer*: a caller assembling a transfer list finds
@@ -531,11 +530,11 @@ for.
 
 A codec **validates the state it is handed and rejects what it will not
 accept**, rather than coercing it: a `Bytes@1` whose state is a string, a
-`Hash@1` whose `tag` is not a string in the tag syntax, a `Symbol@1` whose state
-is not a string — each is a malformation, settled against leniency like any
-other, and never a value built from whatever arrived. Such a state means the two
-ends disagree about the type, which is a version difference or a bug, and either
-way is something to report rather than to guess at.
+`Hash@1` whose `tag` is not a string in the general tag syntax, a `Symbol@1`
+whose state is not a string — each is a malformation, settled against leniency
+like any other, and never a value built from whatever arrived. Such a state
+means the two ends disagree about the type, which is a version difference or a
+bug, and either way is something to report rather than to guess at.
 
 This is a requirement rather than an observation. An implementation that
 coerced instead would satisfy every other claim in this document while

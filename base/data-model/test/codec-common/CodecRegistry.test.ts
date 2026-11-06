@@ -236,28 +236,17 @@ describe("CodecRegistry", () => {
       );
     });
 
-    it("throws given a codec whose recognized tag has a prefix and no version", () => {
-      // The register-time counterpart of the decoder's check: a tag with a
-      // prefix has a version, so a decoder refuses `sys.Boop`, and a codec
+    it("throws given a codec whose recognized tag has no version", () => {
+      // The register-time counterpart of the decoder's check: `hole` is a
+      // meta-tag rather than a type, so a decoder refuses it, and a codec
       // indexed under it would emit exactly what the decoder refuses.
 
-      const codec = new TestCodec("sys.Boop", FabricRegExp);
+      const codec = new TestCodec("hole", FabricRegExp);
       const registry = new CodecRegistry(TEST_FORMAT);
 
       expect(() => registry.register(codec)).toThrow(
         /not a codec type tag/,
       );
-    });
-
-    it("registers a codec whose recognized tag has no prefix and no version", () => {
-      // `hole` among them: the JSON format reserves that name for a form of
-      // its own, which its encoder enforces, and a registry serves every
-      // format alike.
-
-      const codec = new TestCodec("hole", FabricRegExp);
-      const registry = new CodecRegistry(TEST_FORMAT).extend(codec);
-
-      expect(registry.codecFromTag("hole")).toBe(codec);
     });
 
     it("registers a codec whose recognized tag is `undefined`", () => {

@@ -311,26 +311,15 @@ describe("BaseCodecEngine", () => {
         .toThrow(/malformed tag/);
     });
 
-    it("rejects a prefixed tag with no version rather than calling it unknown", () => {
-      // An unrecognized tag becomes an `UnknownValue` only if it is a tag,
-      // and a tag with a prefix has a version.
+    it("rejects a tag with no version rather than calling it unknown", () => {
+      // An unrecognized tag becomes an `UnknownValue` only if it is a tag.
+      // `hole` is a meta-tag, well-formed only in the context that defines
+      // it, and nowhere else a type this or any registry could carry.
 
       const { engine } = newProbeEngine();
 
-      expect(() => engine.decode(new Tagged("sys.Boop", 5), ENV))
+      expect(() => engine.decode(new Tagged("hole", 5), ENV))
         .toThrow(/malformed tag/);
-    });
-
-    it("wraps an unrecognized tag with no prefix and no version in an `UnknownValue`", () => {
-      // `hole` is a name the JSON format reserves in tag position for a form
-      // of its own, which is that format's business; to the engine it is a
-      // tag like any other.
-
-      const { engine } = newProbeEngine();
-      const result = engine.decode(new Tagged("hole", 5), ENV);
-
-      expect(result).toBeInstanceOf(UnknownValue);
-      expect((result as UnknownValue).wireTypeTag).toBe("hole");
     });
 
     it("rejects a tag that is not a string at all", () => {

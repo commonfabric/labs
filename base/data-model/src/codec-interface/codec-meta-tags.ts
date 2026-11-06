@@ -2,11 +2,9 @@
  * Canonical "meta" tags for use in wire formats. It is in the form of a frozen
  * `const` to help prevent inadvertent skew.
  *
- * Each of these is syntactically a tag, and the JSON format reserves it in tag
- * position for a form of its own (`3-json-encoding.md` Section 2): its decoder
- * reads a `/`-prefixed key with one of these names as that form, so its
- * encoder refuses a value whose type tag is one of them. The reservation is
- * that format's alone; elsewhere these are tags like any other.
+ * Each of these is in the general syntax of an interchange tag, but has no
+ * version and so is not a type tag: a key under one of them is a form of the
+ * format's own, never a type a codec encodes (`3-json-encoding.md` Section 2).
  */
 export const CODEC_META_TAGS = Object.freeze(
   {
