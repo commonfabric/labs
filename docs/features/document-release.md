@@ -39,6 +39,14 @@ A replica keeps a document while any of these holds:
 - A sink registered on the replica itself (`SpaceReplica.sinkDocument()`) names
   it.
 - A local write to it is still pending.
+- It is the stream sidecar of an event this runtime sent under server
+  execution whose consequence has not yet arrived. The speculation overlay
+  reads the sidecar for the event's consequence mark, so the sidecar stays
+  watched until the mark arrives (`SpeculationOverlayDestination.trackIntent()`
+  in `runtime/runner/src/speculation/overlay-destination.ts`; the
+  requirement is in
+  [`../specs/server-side-execution/speculation.md`](../specs/server-side-execution/speculation.md),
+  section 4).
 
 A release pass also keeps the watches rooted at a document that was loaded, or
 read through the replica, since the previous pass began. A value read lazily,

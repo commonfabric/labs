@@ -1775,6 +1775,60 @@ describe("intent listener — end to end (design (e) pins 6, 10, 11)", () => {
     cancelDemand();
   });
 
+  it("keeps the sidecar of an outstanding intent watched through a release of unread documents, so the served mark still resolves it, and releases the sidecar once nothing is outstanding on it", async () => {
+    const { manager, runtime } = openClient({ serverExecution: true });
+    const engine = await server.engineForSpace(space);
+    const { result } = await standUp(runtime, "release");
+    const cancelDemand = result.sink(() => {});
+    await runtime.idle();
+    await manager.synced();
+
+    const acks = new ArrivalLog<string>();
+    sendEvent(result.key("bump"), {}, (ackTx) => {
+      acks.record(ackTx.status().status);
+    });
+    const overlay = runtime.speculationOverlay!;
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
+    const sidecarId = sidecarIdsIn(engine)[0] as never;
+    const replica = manager.open(space).replica;
+    await awaitReplica(
+      manager,
+      () =>
+        ((replica.getDocument(sidecarId, "space")?.value as
+          | StreamEventsDocValue
+          | undefined)?.entries?.length ?? 0) === 1,
+    );
+    // Whether the replica holds the sidecar, asked without reading it, since
+    // a read keeps a document through the pass that follows.
+    const loaded = () => replica.hasLocalDocumentCoverage?.(sidecarId) === true;
+    const releaseTwice = async () => {
+      await runtime.idle();
+      await manager.releaseUnreadDocuments();
+      await manager.releaseUnreadDocuments();
+    };
+
+    await releaseTwice();
+    expect(overlay.pendingIntentCount).toBe(1);
+    expect(loaded()).toBe(true);
+
+    // The host starts serving the space at the next commit admitted to it,
+    // and then takes up the event appended before it existed.
+    host = newServingHost();
+    {
+      const wake = runtime.edit();
+      runtime.getCell<number>(space, "release-wake", undefined, wake).set(1);
+      expect((await wake.commit().settled).error).toBeUndefined();
+    }
+    await acks.reached(1);
+    expect(acks.entries).toHaveLength(1);
+    expect(acks.entries[0]).not.toBe("error");
+    expect(overlay.pendingIntentCount).toBe(0);
+
+    await releaseTwice();
+    expect(loaded()).toBe(false);
+    cancelDemand();
+  });
+
   it("pin 10 (+1 e2e): the served mark resolves the intent through the REAL notification path — the check has run by the time `synced()` / `idle()` armed at the mark's frame resolve, and by the time the mark is visible on a macrotask poll (no extra turn), with O(1) visits on that check; the echo retires and the durable ack settles (mutation: defer the check to a macrotask)", async () => {
     const { manager, runtime } = openClient({ serverExecution: true });
     const engine = await server.engineForSpace(space);
