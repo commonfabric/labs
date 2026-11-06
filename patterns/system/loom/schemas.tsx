@@ -346,7 +346,11 @@ export interface LoomOffers {
 /** One panel as a host drawing its own deck needs it. */
 export interface LoomDeckPanel {
   panel: Writable<Panel>;
-  /** The panel's body, without a title or links: a host frames it itself. */
+  /**
+   * The panel's body, without its title or a link to open its piece: a host
+   * frames it itself. A URL panel keeps its link to open the page, which may
+   * refuse to be embedded.
+   */
   view: { [UI]: VNode };
   /** What it holds: a `piece` a host may open on its own, a `document`, a `url`. */
   kind?: Panel["kind"];

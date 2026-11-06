@@ -63,9 +63,10 @@ export function loomOffers(facts: OfferFacts): LoomOffers {
   });
   const loom: LoomAction[] = [];
   if (writes) {
-    // Staging is everyone's: every shared panel, those this viewer hid too.
+    // Staging is everyone's: every shared panel, those this viewer hid too,
+    // and, as the root's own Stage all does, no focus.
     if (shared.some((panel) => !has(staged, panel))) {
-      loom.push(present("stage-all", [...shared], focused));
+      loom.push(present("stage-all", [...shared]));
     }
     if (focused) loom.push(present("clear-focus", [...staged]));
     if (staged.length) loom.push(present("clear-stage", []));
@@ -74,14 +75,14 @@ export function loomOffers(facts: OfferFacts): LoomOffers {
     const actions: LoomAction[] = [];
     if (reads && panel.get()?.kind === "piece") actions.push({ id: "open" });
     const at = shared.findIndex((one) => one.equals(panel));
+    // What changes only the viewer's own lists is theirs whatever their
+    // access to the Loom's space, as the root's own page offers it.
     if (at < 0) {
-      if (reads) {
-        actions.push({
-          id: "remove-from-my-view",
-          stream: "removePrivatePanel",
-          event: { panel },
-        });
-      }
+      actions.push({
+        id: "remove-from-my-view",
+        stream: "removePrivatePanel",
+        event: { panel },
+      });
       return { panel, actions };
     }
     if (writes) {
@@ -115,9 +116,7 @@ export function loomOffers(facts: OfferFacts): LoomOffers {
         event: profile === undefined ? { panel } : { panel, as: profile },
       });
     }
-    if (reads) {
-      actions.push({ id: "hide", stream: "hidePanel", event: { panel } });
-    }
+    actions.push({ id: "hide", stream: "hidePanel", event: { panel } });
     if (!writes) return { panel, actions };
     const remove = { id: "remove", stream: "removePanel", event: { panel } };
     const removal = facts.removal(panel);
@@ -140,11 +139,9 @@ export function loomOffers(facts: OfferFacts): LoomOffers {
   return {
     loom,
     shown: shown.map(offer),
-    hidden: reads
-      ? hidden.map((panel) => ({
-        panel,
-        actions: [{ id: "show", stream: "unhidePanel", event: { panel } }],
-      }))
-      : [],
+    hidden: hidden.map((panel) => ({
+      panel,
+      actions: [{ id: "show", stream: "unhidePanel", event: { panel } }],
+    })),
   };
 }

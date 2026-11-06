@@ -526,7 +526,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "f6PSy1tiQAEWtQ8NLUsuTGnY8aMuhsWW3GkCT-M3rIA",
+              "moduleIdentity": "lGAA70Ivd-hQxT0BdRXO363TAhvGS468HNqsFj4EF4Y",
               "path": [
                 "admitPanel"
               ]
@@ -554,7 +554,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "f6PSy1tiQAEWtQ8NLUsuTGnY8aMuhsWW3GkCT-M3rIA",
+              "moduleIdentity": "lGAA70Ivd-hQxT0BdRXO363TAhvGS468HNqsFj4EF4Y",
               "path": [
                 "admitPanel"
               ]
@@ -1484,7 +1484,7 @@
                   "$ref": "#/$defs/PanelRemoval"
                 },
                 "view": {
-                  "description": "The panel's body, without a title or links: a host frames it itself.",
+                  "description": "The panel's body, without its title or a link to open its piece: a host\nframes it itself. A URL panel keeps its link to open the page, which may\nrefuse to be embedded.",
                   "properties": {
                     "$UI": {
                       "$ref": "https://commonfabric.org/schemas/vnode.json"
@@ -1532,7 +1532,7 @@
             "$ref": "#/$defs/Panel"
           },
           "view": {
-            "description": "The panel's body, without a title or links: a host frames it itself.",
+            "description": "The panel's body, without its title or a link to open its piece: a host\nframes it itself. A URL panel keeps its link to open the page, which may\nrefuse to be embedded.",
             "properties": {
               "$UI": {
                 "$ref": "https://commonfabric.org/schemas/vnode.json"
@@ -1726,7 +1726,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "f6PSy1tiQAEWtQ8NLUsuTGnY8aMuhsWW3GkCT-M3rIA",
+              "moduleIdentity": "lGAA70Ivd-hQxT0BdRXO363TAhvGS468HNqsFj4EF4Y",
               "path": [
                 "admitPanel"
               ]
@@ -1751,7 +1751,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "f6PSy1tiQAEWtQ8NLUsuTGnY8aMuhsWW3GkCT-M3rIA",
+              "moduleIdentity": "lGAA70Ivd-hQxT0BdRXO363TAhvGS468HNqsFj4EF4Y",
               "path": [
                 "admitPanel"
               ]

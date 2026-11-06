@@ -104,6 +104,9 @@ export default pattern(() => {
   const clearStage = action(() =>
     send(loom, offered(loom[VIEWS].deck.offers, "loom", "clear-stage"))
   );
+  const moveFirstLast = action(() =>
+    send(loom, offered(loom[VIEWS].deck.offers, 0, "move-last"))
+  );
   const duplicateLast = action(() =>
     send(loom, offered(loom[VIEWS].deck.offers, 1, "duplicate"))
   );
@@ -134,16 +137,19 @@ export default pattern(() => {
       },
       { action: moveSecondFirst },
       { assertion: assert(() => loom.panels[0].equals(second)) },
-      { action: stageAll },
-      { assertion: assert(() => loom.presentation.stagedPanels.length === 2) },
       { action: clearFocus },
       {
         assertion: assert(() =>
           !loom[VIEWS].deck.offers.loom.some((one) => one.id === "clear-focus")
         ),
       },
+      // Stage all stages every panel, as the root's own button does.
+      { action: stageAll },
+      { assertion: assert(() => loom.presentation.stagedPanels.length === 2) },
       { action: clearStage },
       { assertion: assert(() => loom.presentation.stagedPanels.length === 0) },
+      { action: moveFirstLast },
+      { assertion: assert(() => loom.panels[1].equals(second)) },
       { action: duplicateLast },
       { assertion: assert(() => loom.panels.length === 3) },
       { action: hideFirst },

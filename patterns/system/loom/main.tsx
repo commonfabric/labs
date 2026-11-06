@@ -578,8 +578,9 @@ const unhidePanel = handler<
 
 /**
  * Present one linked occurrence without reading a piece's protected fields.
- * `bare` leaves out its title and the link to open it, for a host that frames
- * the panel itself.
+ * `bare` leaves out its title and a piece's link to open it, for a host that
+ * frames the panel itself; a URL keeps its link, since the page may refuse to
+ * be embedded.
  */
 function renderPanel(panel: Writable<Panel>, bare = false) {
   const value = panel.get();
