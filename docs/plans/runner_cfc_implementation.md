@@ -420,8 +420,11 @@ therefore carries its own guard:
   transaction beneath it is reachable as its `.tx`. So that storage
   transaction holds the line itself: it throws on a write, a batch write, or a
   mergeable op that changes a reserved sibling, as the three shapes above
-  define a change, unless the write carries the mark the extended transaction
-  puts on every write it forwards. A write made there directly skipped the
+  define a change, a delete counting as a write of nothing. The one exception
+  is a single write carrying the mark the extended transaction puts on every
+  write it forwards; a batch request and a mergeable op carry no options, so
+  no mark, and the extended transaction issues both on the value surface
+  only. A write made there directly skipped the
   record, and so left the commit boundary nothing to refuse over, whether the
   transaction is then committed through the extended transaction or directly;
   this refusal therefore holds whatever the enforcement mode. The mark is a

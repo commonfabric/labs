@@ -2384,7 +2384,11 @@ export class V2StorageTransaction implements IStorageTransaction {
       return { error: ready.error };
     }
     if (!reservedSiblingWriteRecorded(options)) {
-      this.#refuseReservedSiblingChange(ready.ok, address, value);
+      this.#refuseReservedSiblingChange(
+        ready.ok,
+        address,
+        options?.delete === true ? undefined : value,
+      );
     }
     return this.#writeWithinBranch(
       ready.ok,
@@ -2413,7 +2417,11 @@ export class V2StorageTransaction implements IStorageTransaction {
       // A batch request carries no options, so it carries no mark either. The
       // whole run is checked before any of it is applied.
       for (const write of run) {
-        this.#refuseReservedSiblingChange(ready.ok, write.address, write.value);
+        this.#refuseReservedSiblingChange(
+          ready.ok,
+          write.address,
+          write.delete === true ? undefined : write.value,
+        );
       }
       const result = this.#writeBatchRun(address.space, ready.ok, run);
       run = [];
@@ -2449,6 +2457,8 @@ export class V2StorageTransaction implements IStorageTransaction {
   /**
    * Throws when a write at `address` carrying `value` changes a reserved
    * sibling of the document, as `reservedSiblingChanges()` defines a change.
+   * A delete carries `undefined`, whatever value it names, since applying it
+   * stores nothing there: a root delete erases every stored sibling.
    * The extended transaction's write chokepoint is where such a write is
    * judged: it records one from outside the runtime's privileged persistence
    * scope, the commit boundary refuses over the record, and the chokepoint

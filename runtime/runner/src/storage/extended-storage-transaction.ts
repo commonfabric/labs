@@ -1715,7 +1715,12 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         }
       }
     }
-    this.#noteReservedSiblingWrite(address, value);
+    // A delete stores nothing, whatever value it names, so a root delete
+    // erases every stored sibling.
+    this.#noteReservedSiblingWrite(
+      address,
+      options?.delete === true ? undefined : value,
+    );
   }
 
   /**

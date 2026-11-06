@@ -129,8 +129,9 @@ export function reservedSiblingWriteRecorded(options: unknown): boolean {
  * sibling, as the sibling's own reader accounts for it.
  *
  * `cfc` has such a reader, and `cfcMetadataPresent` is its account: `null` and
- * a record with no `version` are values a document reads as carrying no label
- * map. Nothing interprets `source`, so definedness is the whole account there,
+ * the scalars are values a document reads as carrying no label map, and any
+ * record is a map. Nothing interprets `source`, so definedness is the whole
+ * account there,
  * which is how the meta seam reads its own fields.
  */
 function reservedSiblingPresent(
