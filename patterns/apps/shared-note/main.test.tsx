@@ -7,15 +7,17 @@
 
 import {
   action,
-  type AddIntegrity,
   assert,
   equals,
   type FieldAnchors,
   FS,
+  handler,
   NAME,
   pattern,
+  type RepresentsCurrentUser,
   TESTS,
   TILE_UI,
+  type TrustedActionWrite,
   UI,
   Writable,
 } from "commonfabric";
@@ -45,13 +47,43 @@ import { normalizePresenceParticipantName } from "./participant-name.ts";
 const MARKDOWN =
   "---\ntitle: Preserve this\n---\n# Team 😀\n\n- [ ] task\n\n```ts\nconst x = `${literal}`;\n```\n";
 
-// A stand-in for a viewer's `#profile`, which a pattern test cannot resolve.
-// It is labeled, as a Fabric profile is, because a comment may link only a
-// document that carries a label.
-type TestProfile = AddIntegrity<
-  NoteProfile,
-  readonly ["shared-note-test-profile"]
+/** The reviewed surface and action a person writes their own profile from. */
+const PROFILE_SURFACE = "SharedNoteTestProfileSurface";
+const PROFILE_ACTION = "SharedNoteTestWriteProfile";
+
+/** The gesture writing a profile takes. */
+const profileGesture = { surface: PROFILE_SURFACE, action: PROFILE_ACTION };
+
+/**
+ * A stand-in for a viewer's `#profile`, which a pattern test cannot resolve:
+ * a profile of the person who wrote it, as a Fabric profile is, and which
+ * only `writeOwnProfile` writes, from its reviewed surface.
+ */
+type TestProfile = RepresentsCurrentUser<
+  TrustedActionWrite<
+    NoteProfile,
+    typeof writeOwnProfile,
+    typeof PROFILE_ACTION,
+    typeof PROFILE_SURFACE
+  >
 >;
+
+/** What `writeOwnProfile` is bound to. */
+interface ProfileWriteState {
+  /** The profile to write. */
+  profile: Writable<TestProfile>;
+
+  /** The name to write into it. */
+  name: string;
+}
+
+/** Writes `name` into `profile`, as its owner does. */
+const writeOwnProfile = handler<unknown, ProfileWriteState>((
+  _event,
+  { profile, name },
+) => {
+  profile.set({ name } as TestProfile);
+});
 
 /**
  * A `cf-selection-change` event for `quote` at `from`, from an editor whose
@@ -281,7 +313,11 @@ export default pattern(() => {
   // Comments are driven on the core, whose viewer is a profile the test
   // holds. The default export resolves the viewer's `#profile`, which a
   // pattern test cannot.
-  const adaProfile = Writable.of<TestProfile>({ name: "Ada" });
+  const adaProfile = Writable.of<TestProfile>();
+  const action_write_adas_profile = writeOwnProfile({
+    profile: adaProfile,
+    name: "Ada",
+  });
   const content = Writable.of<string>(MARKDOWN);
   const comments = Writable.of<StoredComment[]>([]);
   const note = SharedNoteCore({
@@ -297,6 +333,14 @@ export default pattern(() => {
     content,
     comments,
     myProfile: adaProfile,
+    participantName: "Ada",
+  });
+  // The same note as Ada sees it holding a profile that is not hers, as a
+  // pattern embedding the core could hand it: one whose label names no one.
+  const borrowed = SharedNoteCore({
+    content,
+    comments,
+    myProfile: Writable.of<NoteProfile>({ name: "Grace" }),
     participantName: "Ada",
   });
   const QUOTE = "- [ ] task";
@@ -399,6 +443,26 @@ export default pattern(() => {
   );
   const action_open_composer_on_stale_text = action(() =>
     clickButton(note[UI], "Comment")
+  );
+  // A comment written under a profile that is not the writer's own is
+  // refused, so its row cannot show someone else as its author.
+  const action_select_quote_under_a_borrowed_profile = action(() =>
+    fireEvent(
+      editorOf(borrowed[UI]),
+      "oncf-selection-change",
+      selectionIn(content.get(), QUOTE),
+    )
+  );
+  const action_comment_under_a_borrowed_profile = action(() =>
+    clickButton(borrowed[UI], "Comment")
+  );
+  const assert_borrowed_profile_refused = assert(() =>
+    listed(comments.get()).length === 1 &&
+    hasText(
+      findNodeById(borrowed[UI], "shared-note-comment-notice"),
+      "Choose a Fabric profile of your own",
+    ) &&
+    displayOf(findNodeById(borrowed[UI], "shared-note-composer")) === "none"
   );
   const assert_stale_selection_refused = assert(() =>
     listed(comments.get()).length === 1 &&
@@ -808,6 +872,11 @@ export default pattern(() => {
       { action: action_prepend_line_to_blank },
       { action: action_append_line_to_blank },
       { assertion: assert_blank_lines },
+      {
+        action: action_write_adas_profile,
+        event: {},
+        trustedUi: profileGesture,
+      },
       { assertion: assert_comment_needs_a_selection },
       { action: action_select_quote },
       { assertion: assert_selection_enables_comment },
@@ -825,6 +894,9 @@ export default pattern(() => {
       { action: action_select_stale_text },
       { action: action_open_composer_on_stale_text },
       { assertion: assert_stale_selection_refused },
+      { action: action_select_quote_under_a_borrowed_profile },
+      { action: action_comment_under_a_borrowed_profile },
+      { assertion: assert_borrowed_profile_refused },
       {
         action: note.addComment,
         event: { quote: "Not in the note", body: "Lost" },

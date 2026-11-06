@@ -182,8 +182,12 @@ export function highlightAt(
     at,
     (from, to, value) => {
       if (from > at || to <= at) return;
+      // A mark's spec is CodeMirror's `any`; every mark this field draws
+      // carries its highlight's id as a string.
+      const id: unknown = value.spec.attributes?.["data-highlight-id"];
+      if (typeof id !== "string") return;
       if (found === undefined || to - from < found.to - found.from) {
-        found = { id: value.spec.attributes["data-highlight-id"], from, to };
+        found = { id, from, to };
       }
     },
   );

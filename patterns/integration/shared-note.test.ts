@@ -171,6 +171,12 @@ const anchoredRange = (
 };
 
 /** Whether the comments panel shows `text`. */
+/** Whether the comment composer is shown. */
+const composerShown = (probe: ProbeApi): boolean =>
+  probe.collect("#shared-note-composer").some((composer) =>
+    getComputedStyle(composer).display !== "none"
+  );
+
 const commentShown = (probe: ProbeApi, text: string): boolean =>
   probe.collect("#shared-note-comments").some((panel) =>
     probe.deepText(panel).includes(text)
@@ -425,6 +431,9 @@ describe("shared-note", () => {
     await editorState(adaPage, { anchor: cafe, head: cafe + "Café".length });
     await waitForDisabled(adaPage, "#shared-note-comment-button", false);
     await clickCfButton(adaPage, "#shared-note-comment-button");
+    // A person types once the composer is shown; typing before then writes
+    // the draft ahead of the handler that opens the composer.
+    await waitForCondition(adaPage, composerShown);
     await fillCfTextarea(
       adaPage,
       "#shared-note-comment-draft",

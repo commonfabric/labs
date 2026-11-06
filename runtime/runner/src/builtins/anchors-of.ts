@@ -4,12 +4,16 @@
  * any cell.
  */
 
+import { debugStr } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 
 import type { Cell } from "../cell.ts";
 import { anchorsDocumentLink } from "../field-anchors.ts";
+import { hasInlineCellScheme } from "../immutable-cell.ts";
+import { resolveLink } from "../link-resolution.ts";
 import type { Runtime } from "../runtime.ts";
 import type { Action } from "../scheduler.ts";
+import { UnresolvedInputError } from "../schema-view.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 
 /**
@@ -30,6 +34,13 @@ export const ANCHORS_OF_ARGUMENT_SCHEMA = internSchema({
  * The node reads where the field is stored and nothing of what it holds, so
  * it runs again only when the input names a different field. What a reader of
  * the anchors may learn is decided by the document's own label.
+ *
+ * @throws `UnresolvedInputError` while the link chain to the field passes a
+ *   document this replica has not received, so the node runs again once it
+ *   arrives. Throws when the input is a value stored in no document, such as
+ *   a constant, which has no edits to move anchors through. Since the node
+ *   reads nothing of the field, a stored value that is not a string is not
+ *   refused here.
  */
 export function anchorsOf(
   inputsCell: Cell<{ field: unknown }>,
@@ -41,9 +52,23 @@ export function anchorsOf(
 ): Action {
   return (tx: IExtendedStorageTransaction) => {
     // Resolution follows the link chain from the input to the stored field,
-    // whose address the document's id is derived from.
-    const stored = inputsCell.withTx(tx).key("field").resolveAsCell()
-      .getAsNormalizedFullLink();
+    // whose address the document's id is derived from. A chain that stops at
+    // a document still loading names that document, not the field.
+    const field = inputsCell.withTx(tx).key("field");
+    const reached = resolveLink(runtime, tx, field.getAsNormalizedFullLink());
+    if (reached.pendingHopDoc) {
+      tx.readValueOrThrow(reached);
+      const refusal = new UnresolvedInputError(reached);
+      tx.noteSchemaRefusal(refusal);
+      throw refusal;
+    }
+    const stored = field.resolveAsCell().getAsNormalizedFullLink();
+    if (hasInlineCellScheme(stored.id)) {
+      throw new Error(
+        debugStr`\`anchorsOf()\` needs a field stored in a document; its ` +
+          debugStr`input is the inline value $quote${stored.id}`,
+      );
+    }
     sendResult(
       tx,
       runtime.getCellFromLink(anchorsDocumentLink(stored), undefined, tx)

@@ -5171,14 +5171,15 @@ const requireOperationCodec = (engine: Engine, id: string): OperationCodec => {
  * What the codec `codecId` returned for the anchors `prior`, checked before
  * the engine stores it: anchors, under the ids `prior` holds and no others.
  * The next edit to the field reads what is stored here, so a codec's mistake
- * is refused with the edit that exposed it.
+ * is refused with the edit that exposed it. A codec is not trusted to return
+ * what its type declares, so `mapped` is checked as a value of any shape.
  *
  * @throws OpCodecError when `mapped` is anything else.
  */
 const mappedAnchors = (
   codecId: string,
   prior: FieldAnchors,
-  mapped: unknown,
+  mapped: FieldAnchors,
 ): FieldAnchors => {
   const parsed = parseFieldAnchors(mapped);
   if ("fault" in parsed) {
@@ -5632,7 +5633,7 @@ const applyOperation = (
   if (
     Object.keys(priorAnchors).length > 0 && result.operations.length > 0
   ) {
-    let mapped: unknown;
+    let mapped: FieldAnchors;
     try {
       mapped = codec.mapAnchors({
         anchors: priorAnchors,

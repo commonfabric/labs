@@ -450,8 +450,11 @@ interface ActionsDisplay {
  */
 const PLACES_PER_COMMENT = 2;
 
-/** Why an act from a viewer whose profile hasn't resolved is refused. */
-const NO_PROFILE = "Choose a Fabric profile to comment.";
+/**
+ * Why an act from a viewer whose profile hasn't resolved, or isn't their own,
+ * is refused.
+ */
+const NO_PROFILE = "Choose a Fabric profile of your own to comment.";
 
 /** How long a quote shown beside a comment may run before it is cut. */
 const EXCERPT_LENGTH = 80;
@@ -466,14 +469,20 @@ const excerptOf = (text: string): string => {
 };
 
 /**
- * The profile `myProfile` resolves to, once it holds a value; `undefined`
- * until it does.
+ * The profile `myProfile` resolves to, once it holds a value and is the
+ * profile of the person the handler runs for; `undefined` otherwise. A
+ * comment or reply is labeled as written by that person and shows the profile
+ * it stores, so a profile of someone else's would show them as its author.
  */
-const resolvedProfile = (
+const ownProfile = (
   myProfile: ProfileCell | undefined,
 ): ProfileCell | undefined => {
   const profile = myProfile?.resolveAsCell();
-  return profile?.get() === undefined ? undefined : profile;
+  if (profile?.get() === undefined) return undefined;
+  const actor = currentPrincipal();
+  return actor !== undefined && profileOwnerOf(profile) === actor
+    ? profile
+    : undefined;
 };
 
 /**
@@ -571,7 +580,7 @@ interface OpenComposerState {
  * or discard if they leave.
  */
 const openComposer = handler<unknown, OpenComposerState>((_, state) => {
-  const profile = resolvedProfile(state.myProfile);
+  const profile = ownProfile(state.myProfile);
   if (profile === undefined) {
     state.notice.set(NO_PROFILE);
     return;
@@ -599,6 +608,25 @@ const openComposer = handler<unknown, OpenComposerState>((_, state) => {
   state.notice.set("");
 });
 
+/** Whether the comment `record` is labeled as written by the caller. */
+const writtenByCaller = (record: Writable<StoredComment>): boolean => {
+  const actor = currentPrincipal();
+  return actor !== undefined && principalOf(record, "authored-by") === actor;
+};
+
+/** Removes the comment `record`, stored under `id`, with its anchors. */
+const removeComment = (
+  anchors: AnchorsCell,
+  comments: CommentsCell,
+  record: Writable<StoredComment>,
+  id: string,
+): void => {
+  comments.removeByValue(record);
+  const cleared: Writable<StoredComment | undefined> = comments.elementById(id);
+  cleared.set(undefined);
+  unanchorComment(anchors, id);
+};
+
 /**
  * Deletes the draft `id` with its anchors, if it is still a draft and the
  * caller wrote it; a draft posted or discarded meanwhile, from another tab,
@@ -611,17 +639,8 @@ const discardDraftRecord = (
 ): void => {
   const record = comments.elementById(id);
   const current: StoredComment | undefined = record.get();
-  const actor = currentPrincipal();
-  if (
-    current?.draft !== true || actor === undefined ||
-    principalOf(record, "authored-by") !== actor
-  ) {
-    return;
-  }
-  comments.removeByValue(record);
-  const cleared: Writable<StoredComment | undefined> = comments.elementById(id);
-  cleared.set(undefined);
-  unanchorComment(anchors, id);
+  if (current?.draft !== true || !writtenByCaller(record)) return;
+  removeComment(anchors, comments, record, id);
 };
 
 /** What continuing a draft works on. */
@@ -704,7 +723,7 @@ interface PostCommentState {
  * the text, which Cancel then closes.
  */
 const postComment = handler<unknown, PostCommentState>((_, state) => {
-  if (resolvedProfile(state.myProfile) === undefined) {
+  if (ownProfile(state.myProfile) === undefined) {
     state.notice.set(NO_PROFILE);
     return;
   }
@@ -715,11 +734,7 @@ const postComment = handler<unknown, PostCommentState>((_, state) => {
     return;
   }
   const record = state.comments.elementById(id);
-  const actor = currentPrincipal();
-  if (
-    record.get()?.draft !== true || actor === undefined ||
-    principalOf(record, "authored-by") !== actor
-  ) {
+  if (record.get()?.draft !== true || !writtenByCaller(record)) {
     // The composer stays open, so the text can still be copied; Cancel
     // closes it.
     state.notice.set("This draft was posted or discarded in another tab.");
@@ -744,7 +759,7 @@ interface AddCommentState {
 
 const addComment = handler<AddCommentEvent, AddCommentState>(
   (event, { content, anchors, comments, myProfile }) => {
-    const profile = resolvedProfile(myProfile);
+    const profile = ownProfile(myProfile);
     if (profile === undefined) throw new Error(NO_PROFILE);
     const body = event.body.trim();
     if (body === "") throw new Error("addComment needs a `body` with text");
@@ -768,7 +783,7 @@ interface ReplyState {
 
 const commitReply = handler<CommentReplyEvent, ReplyState>(
   (event, { comments, myProfile }) => {
-    const profile = resolvedProfile(myProfile);
+    const profile = ownProfile(myProfile);
     if (profile === undefined) throw new Error(NO_PROFILE);
     const record = commentNamed(comments, event.id);
     const body = event.body.trim();
@@ -811,16 +826,10 @@ interface DeleteCommentState {
 const deleteComment = handler<CommentIdEvent, DeleteCommentState>(
   (event, { anchors, comments }) => {
     const record = commentNamed(comments, event.id);
-    const actor = currentPrincipal();
-    if (actor === undefined || principalOf(record, "authored-by") !== actor) {
+    if (!writtenByCaller(record)) {
       throw new Error("Only its author can delete a comment.");
     }
-    comments.removeByValue(record);
-    const cleared: Writable<StoredComment | undefined> = comments.elementById(
-      event.id,
-    );
-    cleared.set(undefined);
-    unanchorComment(anchors, event.id);
+    removeComment(anchors, comments, record, event.id);
   },
 );
 
@@ -844,19 +853,25 @@ const actOnSelected = handler<
 
 /**
  * Sends the reply draft to `replyToComment` for the selected comment, and
- * clears the draft.
+ * clears the draft. A reply the verb would refuse, from a viewer with no
+ * profile of their own or to a comment no longer posted, is refused here
+ * first, so the draft stays.
+ *
+ * @throws If the verb would refuse the reply.
  */
 const replyToSelected = handler<
   unknown,
-  {
+  ReplyState & {
     verb: Stream<CommentReplyEvent>;
     selectedId: Writable<string>;
     replyDraft: Writable<string>;
   }
->((_, { verb, selectedId, replyDraft }) => {
+>((_, { comments, myProfile, verb, selectedId, replyDraft }) => {
   const id = selectedId.get();
   const body = replyDraft.get().trim();
   if (id === "" || body === "") return;
+  if (ownProfile(myProfile) === undefined) throw new Error(NO_PROFILE);
+  commentNamed(comments, id);
   verb.send({ id, body });
   replyDraft.set("");
 });
@@ -1372,6 +1387,8 @@ export const SharedNoteCore = pattern<
                 disabled={noProfile}
                 timingStrategy="immediate"
                 oncf-submit={replyToSelected({
+                  comments,
+                  myProfile,
                   verb: replyVerb,
                   selectedId,
                   replyDraft,
@@ -1382,6 +1399,8 @@ export const SharedNoteCore = pattern<
                 size="sm"
                 disabled={noProfile}
                 onClick={replyToSelected({
+                  comments,
+                  myProfile,
                   verb: replyVerb,
                   selectedId,
                   replyDraft,

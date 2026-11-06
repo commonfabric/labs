@@ -24,6 +24,7 @@ import {
   hasOperationStorageCapability,
   type IExtendedStorageTransaction,
 } from "../src/storage/interface.ts";
+import { getDirectTransactionNativeCommit } from "../src/storage/transaction-inspection.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { toURI } from "../src/uri-utils.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
@@ -318,6 +319,36 @@ describe("collaborative-field-anchors", () => {
       expect(await readAnchors(server, note)).toBeUndefined();
     });
 
+    it("throws when building a commit that writes the anchors after editing the field", async () => {
+      // The commit would carry the write ahead of the edit, so Memory would
+      // move anchors stated against the edited text through the edit again.
+
+      const note = await seed();
+      await openAsEditor(note);
+      const tx = rt.edit();
+      note.withTx(tx).key("body").applyChanges({ from: 0, insert: "XYZ" });
+      anchorsOf(note, tx).set({ from: 0, to: 3 });
+
+      expect(() => getDirectTransactionNativeCommit(tx, space)).toThrow(
+        "after editing it; write them before the edit",
+      );
+      tx.abort();
+    });
+
+    it("moves the anchors a transaction writes before editing the field through that edit", async () => {
+      const note = await seed();
+      await openAsEditor(note);
+
+      const committed = await commit(note, (body, anchors) => {
+        anchors.set({ from: 1, to: 2 });
+        body.applyChanges({ from: 0, insert: "XYZ" });
+      });
+
+      expect(committed.error).toBeUndefined();
+      expect(await readBody(server)).toBe("XYZabc");
+      expect(await readAnchors(server, note)).toEqual({ from: 4, to: 5 });
+    });
+
     it("adds one anchor under its id beside those the document holds", async () => {
       const note = await seed();
       await openAsEditor(note);
@@ -446,6 +477,28 @@ describe("collaborative-field-anchors", () => {
       anchorsOf(note, tx).set(anchors);
       return await tx.commit({ holdSyncedUntilCovered: false }).verdict;
     };
+
+    it("throws for a constant, which no document stores", async () => {
+      const failed = Promise.withResolvers<Error>();
+      rt.scheduler.onError((error: Error) => failed.resolve(error));
+      const { commonfabric } = createTrustedBuilder(rt);
+      const anchored = commonfabric.pattern<Record<string, never>>(() => ({
+        anchors: commonfabric.anchorsOf("constant text"),
+      }));
+      const setup = rt.edit();
+      const result = rt.run(
+        setup,
+        anchored,
+        {},
+        rt.getCell(space, "collaborative-anchors-constant", undefined, setup),
+      );
+      await setup.commit().verdict;
+      void result.pull();
+
+      expect((await failed.promise).message).toContain(
+        "`anchorsOf()` needs a field stored in a document",
+      );
+    });
 
     it("returns `undefined` for a field with no anchors, and then the anchors written", async () => {
       const note = await seed();

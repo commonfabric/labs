@@ -222,6 +222,12 @@ text. When an edit deletes the text of a range, both anchors land on the same
 offset; show that as a comment on text no longer in the field.
 
 Anchors move only with edits made in an editor or through `.applyChanges()`.
+A handler that edits a field with `.applyChanges()` and also writes its
+anchors writes the anchors first, against the text it read; Memory moves them
+through the edit. A commit that writes the anchors after the edit is refused,
+because within the handler the anchors have not yet moved with its edit, so
+offsets written against the edited text would be moved through it again.
+Anchors meant for the edited text go in a commit of their own.
 A `.set()` of a field that is not open for collaboration, because no editor
 has edited it or because it has been released, replaces the text and moves no
 anchor. A handler that rewrites the text that way, as an agent rewording a

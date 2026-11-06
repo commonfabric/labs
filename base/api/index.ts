@@ -3788,13 +3788,17 @@ export type NavigateToFunction = (cell: Reactive<any>) => Reactive<boolean>;
  * read returns the field's anchors, or `undefined` until something writes
  * them, and a write replaces them. Memory moves every anchor through every
  * collaborative edit of the field. A `set()` of the field moves none, so a
- * handler that replaces the text that way writes the anchors too.
+ * handler that replaces the text that way writes the anchors too. `field` is
+ * a field stored in a document; a constant, which has no edits, is refused.
  *
  * A handler that changes the anchors reads the field and the anchors, then
  * writes the anchors it wants the field to hold. Its commit lands only while
  * the field and the anchors are still what it read; where either moved, the
- * handler runs again against what they hold now. Give a handler the result as
- * a `Writable<FieldAnchors | undefined>`.
+ * handler runs again against what they hold now. A handler that also edits
+ * the field with `.applyChanges()` writes the anchors before the edit,
+ * against the text it read, and Memory moves them through the edit; a commit
+ * that writes them after the edit is refused. Give a handler the result as a
+ * `Writable<FieldAnchors | undefined>`.
  */
 export type AnchorsOfFunction = (
   field: FactoryInput<string>,
