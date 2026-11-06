@@ -12017,6 +12017,15 @@ export class Runner {
     return this.#cancels.has(this.#getDocKey(rootCell));
   }
 
+  /** Whether a piece whose result document is in `space` is running. */
+  runsPieceIn(space: MemorySpace): boolean {
+    const prefix = `${space}/`;
+    for (const key of this.#cancels.keys()) {
+      if (key.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+
   /**
    * Seeds the defaults owed to `identity`'s instances of the cells the piece
    * running at `resultCell` owns, as the piece's own start seeds them for the

@@ -8705,6 +8705,227 @@ describe("runtime-processor", () => {
       });
     });
 
+    describe("an idle space's context", () => {
+      const counterSchema = {
+        type: "object",
+        properties: { n: { type: "number" } },
+      } as const satisfies JSONSchema;
+      const client = (id: number): WorkerClient => ({ id, post: () => true });
+
+      /** A processor whose runtime holds a cell in a second space. */
+      async function spaceState() {
+        const state = makeProcessorState();
+        const spaceB = (await Identity.fromPassphrase(
+          "runtime-processor-idle-space",
+        )).did();
+        const cell = createCellRef(
+          state.runtime.getCell(spaceB, "idle-space-counter", counterSchema),
+        );
+        const subscribe = (subscriber: WorkerClient) =>
+          state.processor.handleCellSubscribe(
+            { type: RequestType.CellSubscribe, cell },
+            subscriber,
+          );
+        const unsubscribe = (subscriber: WorkerClient) =>
+          state.processor.handleCellUnsubscribe(
+            { type: RequestType.CellUnsubscribe, cell },
+            subscriber,
+          );
+        return { ...state, spaceB, subscribe, unsubscribe };
+      }
+
+      it("drops the context once its space's last subscription is cancelled, and makes a new one when the space is named again", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        try {
+          const first = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.has(spaceB)).toBe(false);
+          const again = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          expect(again).not.toBe(first);
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(again);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the context while another subscription in its space stands", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+          subscribe(client(2));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the context while a view mount of a cell in its space stands", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          processor.accessForTestingOnly.vdomMounts = new Map([["2 1", {
+            reconciler: { unmount: () => {} },
+            cancel: () => {},
+            client: client(2),
+            space: spaceB,
+          }]]) as never;
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the context while a piece in its space runs", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        using _running = stub(
+          runtime.runner,
+          "runsPieceIn",
+          (space) => space === spaceB,
+        );
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("drops the context once the last piece running in its space stops", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        let running = true;
+        using _running = stub(
+          runtime.runner,
+          "runsPieceIn",
+          (space) => running && space === spaceB,
+        );
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          using _stop = stub(ctx, "stopPiece", () => {
+            running = false;
+            return Promise.resolve();
+          });
+          subscribe(client(1));
+          unsubscribe(client(1));
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+
+          await processor.handlePieceStop({
+            type: RequestType.PieceStop,
+            pieceId: fid("idle-space-piece"),
+            space: spaceB,
+          });
+
+          expect(processor.accessForTestingOnly.spaces.has(spaceB)).toBe(false);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the context across a view mount replaced under the same id", async () => {
+        const { processor, runtime, spaceB } = await spaceState();
+        try {
+          const view = createCellRef(
+            runtime.getCell(spaceB, "idle-space-view", counterSchema),
+          );
+          const mount = () =>
+            processor.handleVDomMount(
+              { type: RequestType.VDomMount, mountId: 1, cell: view },
+              client(1),
+            );
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          await mount();
+
+          await mount();
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("finds a context for the pieces a running piece creates, after its space's was dropped", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        let running = false;
+        using _running = stub(
+          runtime.runner,
+          "runsPieceIn",
+          (space) => running && space === spaceB,
+        );
+        try {
+          processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+          unsubscribe(client(1));
+          expect(processor.piecesFor(spaceB)).toBeUndefined();
+
+          // The piece's start was under way when the context went.
+          running = true;
+
+          const found = processor.piecesFor(spaceB);
+          expect(found).toBeDefined();
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(found);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the home space's context when nothing in it is open", async () => {
+        const {
+          processor,
+          runtime,
+          homeSpace,
+          spaceB,
+          subscribe,
+          unsubscribe,
+        } = await spaceState();
+        try {
+          processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(homeSpace)).toBe(
+            processor.accessForTestingOnly.cc,
+          );
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("drops the context of a space a departing client alone had open", async () => {
+        const { processor, runtime, spaceB, subscribe } = await spaceState();
+        try {
+          processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          processor.disposeClient(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.has(spaceB)).toBe(false);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+    });
+
     describe("handleRuntimeSynced()", () => {
       it("awaits every opened space, naming none", async () => {
         const { processor, runtime } = makeProcessorState();
