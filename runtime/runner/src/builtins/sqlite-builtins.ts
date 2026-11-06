@@ -21,6 +21,7 @@
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import { settleAbandonedRequest } from "./abandoned-request.ts";
 import {
   enrollRuntimeOwnedStore,
@@ -96,7 +97,6 @@ import {
   encodeSqliteParams,
 } from "../cell.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
-import type { CfcConfClause } from "../cfc/clause.ts";
 import { runtimeWritePolicyAuthorization } from "../cfc/types.ts";
 import { createRef } from "../create-ref.ts";
 import { stripEntityUriScheme } from "../entity-kind.ts";

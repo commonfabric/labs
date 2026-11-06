@@ -2,20 +2,15 @@ import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
 import { parseDID } from "@commonfabric/identity/did";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
-import { atomEntails } from "./atom-pattern.ts";
-import { isCfcFieldCommitment } from "./label-representation.ts";
 import {
   type CfcConfClause,
-  type CfcOrClause,
   clauseAlternatives,
+  isCfcFieldCommitment,
   isOrClause,
 } from "@commonfabric/memory/v2/cfc-release-authority";
-import { compareByCanonicalHash, uniqueCfcAtoms } from "./atoms.ts";
 
-// The clause forms are defined in the memory package, where the store reads
-// them too.
-export type { CfcConfClause, CfcOrClause };
-export { clauseAlternatives, isOrClause };
+import { atomEntails } from "./atom-pattern.ts";
+import { compareByCanonicalHash, uniqueCfcAtoms } from "./atoms.ts";
 
 /**
  * Canonical form of a clause:

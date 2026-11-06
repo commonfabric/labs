@@ -1,11 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { isOrClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import { ContextualFlowControl } from "../src/cfc.ts";
 import {
   isPromptInjectionMaterialRiskAtom,
   schemaWithInjectionSafeAnnotations,
 } from "../src/cfc/schema-sanitization.ts";
-import { isOrClause } from "../src/cfc/clause.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 
 // Epic A5 (docs/history/plans/cfc-future-work-implementation.md): the flat-assumption

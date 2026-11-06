@@ -3,8 +3,7 @@
  * specification's `canReleaseStoredClause` (§8.12.7 route 2c), with the clause
  * and commitment forms it reads. It lives here, below the runner, so that the
  * store recognizes the owner release §8.12.9 admits by the same decision the
- * runtime's release makes. The runner's CFC modules re-export each name
- * their callers import it by.
+ * runtime's release makes. The runner imports each name from here.
  */
 
 import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
@@ -55,7 +54,7 @@ export const clauseAlternatives = (
  * docs/specs/cfc-label-metadata-confidentiality.md §2/§5; spec §4.6.4.1).
  *
  * At the cross-space persist seam, every commitment-classified source-bearing
- * atom field (per `label-field-classification.ts`) is replaced by its
+ * atom field (per `cfc-label-fields.ts`) is replaced by its
  * unsalted canonical digest, wrapped in the self-describing marker
  * `{digestOf: "<hash>"}` so consumers dispatch on SHAPE — transformed and
  * verbatim envelopes coexist without migration (a pre-Stage-1 envelope is

@@ -219,11 +219,16 @@ export const MANIFEST: readonly ManifestRow[] = [
     lean: "`Cfc/StoreRelease.lean`: `releasableBy`, `standsForActor`",
     relation: "missing",
     decidedToday: [
+      // The memory package holds it, so that the store's owner-release
+      // exception decides what the runtime's release decides.
       {
-        file: "cfc/confidentiality-release-plan.ts",
+        file: "../../memory/v2/cfc-release-authority.ts",
         symbol: "clauseReleasableBy",
       },
-      { file: "cfc/host-review.ts", symbol: "isActorOwnedAlternative" },
+      {
+        file: "../../memory/v2/cfc-release-authority.ts",
+        symbol: "isActorOwnedAlternative",
+      },
     ],
     note: "reads a field committed to the actor's DID as the DID, then asks " +
       "`isActorOwnedAlternative` of each alternative; that is the " +

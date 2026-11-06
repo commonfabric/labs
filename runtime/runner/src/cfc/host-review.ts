@@ -16,10 +16,6 @@ import { hashStringOf } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
-import {
-  hasExactKeys,
-  isActorOwnedAlternative,
-} from "@commonfabric/memory/v2/cfc-release-authority";
 
 import type { Cell } from "../cell.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
@@ -95,10 +91,6 @@ export const syncResolved = async (cell: Cell<unknown>): Promise<void> => {
   await cell.sync();
   await cell.resolveAsCell().sync();
 };
-
-// The actor-ownership test is defined in the memory package, where the
-// store reads it too.
-export { hasExactKeys, isActorOwnedAlternative };
 
 /**
  * `value` as JSON text with every object's keys in UTF-8 order, so that equal

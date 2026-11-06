@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { isOrClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
-import { isOrClause } from "../../src/cfc/clause.ts";
 import {
   type CfcLabelView,
   cloneCfcLabelView,

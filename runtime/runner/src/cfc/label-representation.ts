@@ -1,24 +1,17 @@
 import type { CfcAtom, CfcJsonValue } from "@commonfabric/api/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
-
-import {
-  type CfcFieldCommitment,
-  commitmentAwareEquals,
-  isCfcFieldCommitment,
-} from "@commonfabric/memory/v2/cfc-release-authority";
-
-import type { CfcConfClause } from "./clause.ts";
 import {
   CLASSIFIED_KIND_FAMILIES,
   classifyAtomField,
-} from "./label-field-classification.ts";
-import type { IFCLabel } from "./label-view-core.ts";
+} from "@commonfabric/memory/v2/cfc-label-fields";
+import {
+  type CfcConfClause,
+  type CfcFieldCommitment,
+  isCfcFieldCommitment,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 
-// The commitment form and its equality are defined in the memory package,
-// where the store reads them too.
-export type { CfcFieldCommitment };
-export { commitmentAwareEquals, isCfcFieldCommitment };
+import type { IFCLabel } from "./label-view-core.ts";
 
 /** The commitment form of one atom field value: its canonical digest, marked. */
 export const commitCfcFieldValue = (

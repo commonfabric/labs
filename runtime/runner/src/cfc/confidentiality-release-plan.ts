@@ -17,14 +17,17 @@
 import { debugStr } from "@commonfabric/data-model";
 import type { DID } from "@commonfabric/identity/did";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
-import { clauseReleasableBy } from "@commonfabric/memory/v2/cfc-release-authority";
+import {
+  type CfcConfClause,
+  clauseReleasableBy,
+  commitmentAwareEquals,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { canonicalizeLogicalPath } from "./canonical.ts";
-import { type CfcConfClause, normalizeClause } from "./clause.ts";
-import { commitmentAwareEquals } from "./label-representation.ts";
+import { normalizeClause } from "./clause.ts";
 import { cfcSchemaEntries } from "./schema-label-view.ts";
 import type { IFCLabel, LabelMapEntry } from "./types.ts";
 
@@ -78,10 +81,6 @@ const nonEmptyLabel = (
   };
   return Object.keys(label).length === 0 ? undefined : label;
 };
-
-// The release authority is defined in the memory package, where the store
-// reads it too.
-export { clauseReleasableBy };
 
 /**
  * Whether `path`, the path a release names, names the stored position

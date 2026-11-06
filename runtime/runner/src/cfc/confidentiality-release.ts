@@ -11,13 +11,13 @@
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { debugStr } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import { type Cell, cellRuntime } from "../cell.ts";
 import { type LastNode, resolveLink } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import { normalizeCellScope } from "../scope.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
-import type { CfcConfClause } from "./clause.ts";
 import {
   type CfcConfidentialityRelease,
   CONFIDENTIALITY_RELEASE_WRITER,
