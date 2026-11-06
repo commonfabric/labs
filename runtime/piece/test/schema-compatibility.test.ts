@@ -2688,21 +2688,30 @@ describe("piece schema compatibility", () => {
 
     describe("against the previous pattern's bindings", () => {
       /**
-       * `base` with `result` bound in its graph, among `nodes`, the graph
-       * declaring one handler stream, under the cause `{ stream: "own" }`.
+       * `base` with `result` bound in its graph, among `nodes` and the
+       * derived cells `cells`. The graph also holds one handler, whose
+       * `$event` is the stream under the cause `{ stream: "own" }`.
        */
       const bound = (
         base: Pattern,
         result: Record<string, unknown>,
         nodes: unknown[] = [],
+        cells: unknown[] = [],
       ): Pattern => ({
         ...base,
         result,
-        nodes,
+        nodes: [{
+          module: { type: "javascript", wrapper: "handler" },
+          inputs: {
+            $ctx: {},
+            $event: { $alias: { partialCause: { stream: "own" }, path: [] } },
+          },
+          outputs: {},
+        }, ...nodes],
         derivedInternalCells: [{
           partialCause: { stream: "own" },
           schema: { asCell: ["stream"] },
-        }],
+        }, ...cells],
       } as Pattern);
       const handlerStream = {
         $alias: { partialCause: { stream: "own" }, path: [] },
@@ -2767,16 +2776,26 @@ describe("piece schema compatibility", () => {
         }]);
       });
 
-      it("refuses dropping an optional verb a computation forwards", () => {
+      it("refuses dropping an optional verb a computation returns", () => {
+        // `cancel: computed(() => dialog.cancelGeneration)` mints the
+        // computation a stream-marked cell of its own. The marker says what
+        // the value is; no handler listens there.
+
+        const lifted = { stream: ["__patternResult", "tick"] };
         expect(
           patternSchemaIncompatibilities(
             bound(
               verbs({ doubled: { type: "number" }, tick }, ["doubled"]),
-              { tick: { $alias: { partialCause: "lifted", path: [] } } },
+              { tick: { $alias: { partialCause: lifted, path: [] } } },
               [{
                 module: { type: "javascript" },
                 inputs: {},
-                outputs: { $alias: { partialCause: "lifted", path: [] } },
+                outputs: { $alias: { partialCause: lifted, path: [] } },
+              }],
+              [{
+                partialCause: lifted,
+                kind: "computed",
+                schema: { asCell: ["stream", "opaque"] },
               }],
             ),
             verbs({ doubled: { type: "number" } }, ["doubled"]),

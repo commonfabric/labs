@@ -1864,10 +1864,13 @@ function publishesVerb(schema: JSONSchema, root: JSONSchema): boolean {
  * when the verb listened at the root of its own stream's document, which is
  * where a pattern's handler listens. So each place the field's previous
  * contract declares a verb has to be bound straight to one of the pattern's
- * own handler streams: an alias, at no path, to a derived cell whose
- * descriptor declares a stream. A verb forwarded through anything else, a
- * builtin, a computation, a sub-pattern or an input, may stand for a builtin's
- * key, which records no owner a read could consult, and keeps the field. So
+ * own handler streams: an alias, at no path, to the cell a handler node of the
+ * graph takes as its `$event`, and that no node produces as an output. A
+ * stream marker on a cell says what its value is, not that a handler listens
+ * there: a computation returning a builtin's verb is minted a stream-marked
+ * cell of its own. A verb forwarded through anything else, a builtin, a
+ * computation, a sub-pattern or an input, may stand for a builtin's key, which
+ * records no owner a read could consult, and keeps the field. So
  * does a verb below a binding the walk cannot see into, and a field whose
  * names disagree with the readable path, as they do past a list or a record.
  * Data the field holds beside its verbs is not judged.
@@ -1878,19 +1881,30 @@ function verbRemovalJudge(previous: Pattern): (
   schema: JSONSchema,
   root: JSONSchema,
 ) => boolean {
-  const handlerStreams = (previous.derivedInternalCells ?? []).filter(
-    (descriptor) => declaresVerbStream(descriptor.schema as JSONSchema),
-  );
+  const handlerEvents: unknown[] = [];
+  const produced: unknown[] = [];
+  for (const node of previous.nodes ?? []) {
+    for (const alias of aliasesIn(node.outputs)) {
+      produced.push(alias.partialCause);
+    }
+    if (node.module?.wrapper !== "handler") continue;
+    const event = aliasOf(
+      isObjectNotArray(node.inputs)
+        ? (node.inputs as Record<string, unknown>).$event
+        : undefined,
+    );
+    if (
+      event !== undefined && event.cell === undefined && event.path.length === 0
+    ) handlerEvents.push(event.partialCause);
+  }
+  const names = (causes: unknown[], cause: unknown): boolean =>
+    causes.some((each) => fabricAwareEqual(each as never, cause as never));
   const isHandlerStream = (binding: unknown): boolean => {
     const alias = aliasOf(binding);
     return alias !== undefined && alias.cell === undefined &&
       alias.path.length === 0 &&
-      handlerStreams.some((descriptor) =>
-        fabricAwareEqual(
-          descriptor.partialCause as never,
-          alias.partialCause as never,
-        )
-      );
+      names(handlerEvents, alias.partialCause) &&
+      !names(produced, alias.partialCause);
   };
   const verbsBound = (
     schema: JSONSchema,
@@ -1942,6 +1956,15 @@ interface AliasTarget {
   readonly path: readonly unknown[];
   readonly partialCause?: unknown;
   readonly cell?: unknown;
+}
+
+/** Every alias in a graph binding, not looking past one into its target. */
+function aliasesIn(value: unknown): AliasTarget[] {
+  const alias = aliasOf(value);
+  if (alias !== undefined) return [alias];
+  if (Array.isArray(value)) return value.flatMap(aliasesIn);
+  if (isObjectNotArray(value)) return Object.values(value).flatMap(aliasesIn);
+  return [];
 }
 
 function aliasOf(value: unknown): AliasTarget | undefined {

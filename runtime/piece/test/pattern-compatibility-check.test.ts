@@ -292,6 +292,39 @@ function forwardingProducerProgram(withUi: boolean): RuntimeProgram {
 }
 
 /**
+ * A producer that publishes `cancel`, a computation returning llm-dialog's
+ * verb, or, with `withCancel` false, the next revision, which does not.
+ */
+function returnedVerbProducerProgram(withCancel: boolean): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [{
+      name: "/main.tsx",
+      contents: [
+        "import { NAME, Writable, computed, llmDialog, pattern, type Stream } from 'commonfabric';",
+        "export default pattern<",
+        "  Record<string, never>,",
+        withCancel
+          ? "  { label: string; cancel?: Stream<void> }"
+          : "  { label: string }",
+        ">(() => {",
+        "  const messages = new Writable<any[]>([]).for('messages');",
+        "  const dialog = llmDialog({ messages });",
+        "  return {",
+        "    [NAME]: 'Returning producer',",
+        "    label: 'producer',",
+        ...(withCancel
+          ? ["    cancel: computed(() => dialog.cancelGeneration),"]
+          : []),
+        "  };",
+        "});",
+        "",
+      ].join("\n"),
+    }],
+  };
+}
+
+/**
  * The CFC-labeled variants below exist because the three rules above all
  * reason about DECLARED types, and a fourth thing decides whether the setup
  * commit lands: the CFC schema envelope physically stored on the piece's
@@ -748,6 +781,20 @@ describe("setsrc compatibility preflight", () => {
 
     expect(report.issues.schema).toContain(
       "result.ui: existing result field was removed",
+    );
+  });
+
+  it("refuses a source that stops publishing a builtin's verb a computation returns", async () => {
+    // The computation's output cell is marked a stream, but no handler takes
+    // it as its event.
+
+    const producer = await pieces.create(returnedVerbProducerProgram(true));
+    const report = await producer.checkPattern(
+      returnedVerbProducerProgram(false),
+    );
+
+    expect(report.issues.schema).toContain(
+      "result.cancel: existing result field was removed",
     );
   });
 
