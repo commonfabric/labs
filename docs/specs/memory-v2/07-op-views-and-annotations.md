@@ -504,8 +504,10 @@ value:  { [anchorId: string]: number }   // each anchor's offset
 ```
 
 The id is derived from the field's address with no scope key in it, so every
-party, a pattern, a served handler, the runtime-client, computes it with no
-coordination; in the field's scope, a per-user field's anchors are per-user.
+runtime that addresses the document, a served handler's and a client's alike,
+computes it with no coordination; in the field's scope, a per-user field's
+anchors are per-user. A pattern never sees the id: it reaches the document
+through `anchorsOf()`, which computes the id for it.
 The id is a hash, so the engine cannot tell from a write of the document which
 field it belongs to; an operation on the field finds the document, never the
 reverse.
