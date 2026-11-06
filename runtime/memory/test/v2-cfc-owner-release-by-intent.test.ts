@@ -564,6 +564,30 @@ describe("cfc-owner-release-by-intent", () => {
         );
       });
 
+      it("throws on a release leaving a malformed label map, which would read as holding nothing", async () => {
+        // The request names every clause stored at `rooms`, so a map that
+        // read as empty would pass every other check.
+        const signed = await sign(
+          owner,
+          requestFor({
+            path: ["rooms"],
+            releasedClauseDigests: [digest(personalSpace(OTHER))],
+          }),
+        );
+        for (
+          const proposed of [
+            { ...RELEASED, labelMap: "entries" },
+            { ...RELEASED, labelMap: { version: 1, entries: "none" } },
+            "not-an-envelope",
+          ]
+        ) {
+          expectRefused(
+            releaseOps(signed, proposed),
+            /holds a label map that is not one/,
+          );
+        }
+      });
+
       it("throws on a clause not stored at the path", async () => {
         const signed = await sign(
           owner,

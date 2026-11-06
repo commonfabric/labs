@@ -531,6 +531,20 @@ const labeledForOwner = (
   });
 };
 
+/**
+ * Whether `cfc`, a `cfc` member a commit leaves, is absent, or a record whose
+ * `labelMap`, where it has one, is a record holding a list of entries. A
+ * malformed map would read as holding nothing at a path, which a release would
+ * then take for every clause there gone; the runtime never writes one.
+ */
+const wellFormedEnvelope = (cfc: unknown): boolean => {
+  if (cfc === undefined) return true;
+  if (!isObjectNotArray(cfc)) return false;
+  if (!Object.hasOwn(cfc, "labelMap")) return true;
+  const labelMap = cfc.labelMap;
+  return isObjectNotArray(labelMap) && Array.isArray(labelMap.entries);
+};
+
 /** What a store holds and a commit proposes, for one record it creates. */
 export interface OwnerReleaseByIntentCommit {
   /** The space the commit is in. */
@@ -595,10 +609,10 @@ export interface VerifiedOwnerReleaseByIntent {
  * not at the id it derives or is already stored, the commit writes no
  * envelope of the document it names, the stored envelope's digest is not the
  * one it names, a clause it releases is not stored at the path, the proposed
- * envelope still holds one there or no longer holds a clause the request does
- * not name in an entry of the same component and class at the path, the record
- * is not labeled for its owner, or the record's `after` is not the proposed
- * envelope's digest.
+ * envelope holds a malformed label map, still holds a released clause there or
+ * no longer holds a clause the request does not name in an entry of the same
+ * component and class at the path, the record is not labeled for its owner, or
+ * the record's `after` is not the proposed envelope's digest.
  *
  * At the path, the confidentiality clauses of every entry are compared,
  * component and class by component and class. What the commit does elsewhere
@@ -681,6 +695,11 @@ export const judgeOwnerReleaseByIntent = (
     )
   ) {
     return refused("a clause its request releases is not stored at the path");
+  }
+  if (!wellFormedEnvelope(commit.document.proposed)) {
+    return refused(
+      "the envelope the commit leaves holds a label map that is not one",
+    );
   }
   const left = clauseDigestsByEntryAt(
     commit.document.proposed,
