@@ -5,13 +5,15 @@ import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { hashStringOf } from "@commonfabric/data-model";
 import {
+  type CfcConfClause,
+  clauseAlternatives,
+  commitmentAwareEquals,
+} from "@commonfabric/memory/v2/cfc-release-authority";
+import {
   cfcLabelPathPrefixMatches,
   type CfcLabelView,
 } from "./label-view-core.ts";
-import {
-  cfcCommitmentNormalForm,
-  commitmentAwareEquals,
-} from "./label-representation.ts";
+import { cfcCommitmentNormalForm } from "./label-representation.ts";
 import {
   atomEntails,
   type AtomPattern,
@@ -20,12 +22,7 @@ import {
 } from "./atom-pattern.ts";
 import type { TrustResolver } from "./trust.ts";
 import { uniqueCfcAtoms } from "./atoms.ts";
-import {
-  type CfcConfClause,
-  clauseAlternatives,
-  clauseSubsumes,
-  normalizeClause,
-} from "./clause.ts";
+import { clauseSubsumes, normalizeClause } from "./clause.ts";
 
 export type CfcObservedConfidentiality = readonly CfcConfClause[];
 export type CfcObservationMaxConfidentiality =

@@ -92,7 +92,7 @@ them.
 
 1. **CFC labels name the space.** `CfcSpaceAtom` and `HasRole` carry a space
    DID (`base/api/cfc.ts`), and `space` is a *commitment* field —
-   equality-consumed (`runtime/runner/src/cfc/label-field-classification.ts`).
+   equality-consumed (`runtime/memory/v2/cfc-label-fields.ts`).
    At render the runtime mints `HasRole(actingPrincipal, space, reader)` from
    the **actual** space and correlates it against the stored label
    (`render-ceiling.ts`, `space-membership.ts`). A stored `Space(did:PROD)` atom

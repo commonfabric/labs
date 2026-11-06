@@ -460,7 +460,12 @@ therefore carries its own guard:
   the writer supplied. Closing the erasure half means forcing the document into
   view before deciding, which turns every blind root write into a
   read-modify-write, or making the commit boundary establish what the space
-  holds; both are open.
+  holds. The store does the second for declared entries: it refuses a commit
+  that leaves a stored declared confidentiality clause's path with no
+  declared entry, unless the space's owner signs it and the clauses are
+  theirs alone to release ("What the store refuses of a handed envelope" in
+  [`cfc-stored-envelope.md`](../specs/cfc-stored-envelope.md)). An unsynced
+  writer can still erase the other components.
 - A guard on a seam governs writes to it, not the runtime entry points that
   write it while doing their own work. The same reach that hands a handler
   the storage transaction hands it the runtime: `runtime.run` instantiates a

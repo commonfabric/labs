@@ -1,11 +1,8 @@
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { hashStringOf } from "@commonfabric/data-model";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import {
-  type CfcConfClause,
-  clauseSubsumes,
-  normalizeClause,
-} from "./clause.ts";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import { clauseSubsumes, normalizeClause } from "./clause.ts";
 import { canonicalizeLogicalPath } from "./canonical.ts";
 import type { CfcDeclaredWideningExemption, LabelMapEntry } from "./types.ts";
 

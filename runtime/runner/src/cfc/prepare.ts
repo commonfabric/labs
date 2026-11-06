@@ -45,6 +45,12 @@ import {
   toDocumentPath,
   type ValuePath,
 } from "@commonfabric/memory/v2";
+import {
+  type CfcConfClause,
+  clauseAlternatives,
+  commitmentAwareEquals,
+  isOrClause,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { deepEqual, deepEqualKey } from "@commonfabric/js-values/deep-equal";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -145,10 +151,7 @@ import {
   canonicalizeLogicalPath,
 } from "./canonical.ts";
 import {
-  type CfcConfClause,
-  clauseAlternatives,
   FORBIDDEN_OR_CLAUSE_ALTERNATIVE_TYPES,
-  isOrClause,
   normalizeClause,
 } from "./clause.ts";
 import {
@@ -182,7 +185,6 @@ import {
 } from "./grants.ts";
 import { deriveLabelMetadataTemplateEntries } from "./label-metadata-population.ts";
 import {
-  commitmentAwareEquals,
   containsCfcFieldCommitment,
   transformCfcLabelForCrossSpacePersist,
 } from "./label-representation.ts";

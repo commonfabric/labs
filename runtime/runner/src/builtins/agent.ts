@@ -19,12 +19,12 @@ import type { Schema } from "@commonfabric/api/schema";
 import { hashOf } from "@commonfabric/data-model";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import { INVALID_INPUT, REFUSED } from "../agent-error-codes.ts";
 import type { JSONSchema } from "../builder/types.ts";
 import { type Cell, isCell } from "../cell.ts";
 import { renderCellReference } from "../cell-reference.ts";
-import type { CfcConfClause } from "../cfc/clause.ts";
 import { atomsOutsideCeiling } from "../cfc/observation.ts";
 import { collectConsumedLabel } from "../cfc/prepare.ts";
 import { createFrozenRequestSnapshot } from "../cfc/request-snapshot.ts";

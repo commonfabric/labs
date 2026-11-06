@@ -13,6 +13,7 @@
  */
 
 import { readCeilingShapeError, toDocumentPath } from "@commonfabric/memory/v2";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type {
@@ -30,7 +31,6 @@ import {
   isWriteDestinationRead,
 } from "../storage/reactivity-log.ts";
 import { canonicalizeDocumentPath } from "./canonical.ts";
-import type { CfcConfClause } from "./clause.ts";
 import {
   cfcLabelViewFromMetadata,
   rebaseCfcLabelView,

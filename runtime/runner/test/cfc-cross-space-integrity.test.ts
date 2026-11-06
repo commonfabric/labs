@@ -5,6 +5,7 @@ import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -12,7 +13,7 @@ import {
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
-import { type CfcConfClause, clausesEqual } from "../src/cfc/clause.ts";
+import { clausesEqual } from "../src/cfc/clause.ts";
 import { evaluateExchangeRules } from "../src/cfc/exchange-eval.ts";
 import { cfcLabelViewForDereference } from "../src/cfc/label-view-state.ts";
 import type { IFCLabel } from "../src/cfc/mod.ts";

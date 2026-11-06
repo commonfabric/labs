@@ -486,7 +486,7 @@ region of `prepareBoundaryCommit` in `cfc/prepare.ts` re-mints an existence
 entry when a deleted path is re-created. Cross-space persistence commits the
 source-bearing fields of atoms through `transformCfcLabelForCrossSpacePersist`
 in `cfc/label-representation.ts`, classified by
-`cfc/label-field-classification.ts`, under `cfcLabelMetadataProtection:
+`runtime/memory/v2/cfc-label-fields.ts`, under `cfcLabelMetadataProtection:
 enforce`. [`cfc-template-population.md`](cfc-template-population.md),
 [`cfc-observation-classes.md`](cfc-observation-classes.md) and
 [`cfc-label-metadata-confidentiality.md`](cfc-label-metadata-confidentiality.md)

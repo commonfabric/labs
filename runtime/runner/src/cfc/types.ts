@@ -1,6 +1,7 @@
 import type { FabricValue } from "@commonfabric/api";
 import type { CfcModulePolicyRefAtom } from "@commonfabric/api/cfc";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import type { Immutable } from "@commonfabric/js-values/types";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
@@ -8,7 +9,6 @@ import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type { Metadata } from "../storage/interface.ts";
 import type { ConsumedLocation } from "./access-integrity.ts";
-import type { CfcConfClause } from "./clause.ts";
 import type {
   CfcLabelView,
   IFCLabel,

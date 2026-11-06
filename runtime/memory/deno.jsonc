@@ -20,6 +20,8 @@
     "./v2/invites": "./v2/invites.ts",
     "./space-invites": "./space-invites.ts",
     "./acl": "./acl.ts",
+    "./v2/cfc-label-fields": "./v2/cfc-label-fields.ts",
+    "./v2/cfc-release-authority": "./v2/cfc-release-authority.ts",
     "./interface": "./interface.ts",
     "./v2": "./v2.ts",
     "./v2/patch": "./v2/patch.ts",

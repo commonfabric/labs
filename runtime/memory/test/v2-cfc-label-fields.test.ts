@@ -5,7 +5,7 @@ import {
   classifyAtomField,
   classifyLabelField,
   LABEL_FIELD_CLASSIFICATION,
-} from "../src/cfc/label-field-classification.ts";
+} from "@commonfabric/memory/v2/cfc-label-fields";
 
 describe("CFC label-field classification (inv-12 / SC-25)", () => {
   // The design §2 initial-assignment table

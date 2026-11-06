@@ -3,18 +3,20 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
+import {
+  type CfcConfClause,
+  clauseReleasableBy,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import { releaseCellConfidentiality } from "../src/cfc/confidentiality-release.ts";
 import {
-  clauseReleasableBy,
   CONFIDENTIALITY_RELEASE_WRITER,
   planConfidentialityRelease,
 } from "../src/cfc/confidentiality-release-plan.ts";
 import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
 import { cfcLabelViewForResolvedCell } from "../src/cfc/label-view.ts";
-import type { CfcConfClause } from "../src/cfc/clause.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import type { LabelMapEntry } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
