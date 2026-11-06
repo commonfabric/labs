@@ -627,11 +627,15 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
   the deferred transaction carries no trace of what decided it. Carrying the
   caller's reads into it, as trigger reads of the deferred transaction, would
   close it; this runtime does not do that.
-  So that the re-mint does not widen this, a deferred setup does not restate
-  an unchanged wiring (`restatesResultWiring` in `runner.ts`): it leaves the
-  stored membership as a setup that wrote nothing would. A deferred setup
-  that changes the wiring writes it, and is stamped from its own
-  transaction, as before.
+  So that the re-mint does not widen this, only a setup in the transaction
+  it was asked in restates an unchanged wiring (`#askingSetupTransactions`
+  in `runner.ts`: the transaction a caller hands `run`, `setup`,
+  `runSynced` or `runInTransaction`, or the one made for that call). A
+  deferred start, the swap of a running piece and a setup repair run in
+  transactions the runner makes later, and leave an unchanged wiring's
+  stored membership as a setup that wrote nothing would. One of them that
+  changes the wiring writes it, and is stamped from its own transaction, as
+  before.
 - The pre-setup bound applies to journaled reads with a position. A read
   without one, and every label-metadata or external-content observation,
   which carry none, joins the narrowed stamp whenever it happened: an
