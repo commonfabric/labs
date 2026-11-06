@@ -138,7 +138,7 @@ const labelMapEntriesOf = (cfc: unknown): readonly EntryView[] => {
 /**
  * `label` itself, or the content of the label document a single-member
  * `{ $ref: "cid:…" }` record names, or `undefined` when that document isn't
- * there.
+ * there, or when the reference names anything but a `cid:` document.
  */
 const resolvedLabel = (
   label: unknown,
@@ -148,7 +148,7 @@ const resolvedLabel = (
     isObjectNotArray(label) && Object.keys(label).length === 1 &&
     typeof label.$ref === "string"
   ) {
-    return resolveLabel(label.$ref);
+    return label.$ref.startsWith("cid:") ? resolveLabel(label.$ref) : undefined;
   }
   return label;
 };

@@ -7444,7 +7444,6 @@ const applyCommitTransaction = (
   // retries, and an operation the validation elided is not judged.
   const actor = delegated?.actingPrincipal ?? principal;
   const storedLabel = (ref: string): unknown => {
-    if (!ref.startsWith("cid:")) return undefined;
     const document = readState(engine, { id: ref, branch })?.document;
     return document === null || document === undefined
       ? undefined

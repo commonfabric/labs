@@ -112,21 +112,24 @@ describe("envelope-admission", () => {
         .toEqual([]);
     });
 
-    it("returns the clauses of a label held by reference, and `undefined` for one that doesn't resolve", () => {
+    it("returns the clauses of a label held by reference, and `undefined` for one that doesn't resolve or names no `cid:` document", () => {
       const label = { confidentiality: [personalSpace(OTHER)] };
       const stored = envelope([
         { path: ["a"], origin: "declared", label: { $ref: "cid:known" } },
         { path: ["b"], origin: "declared", label: { $ref: "cid:missing" } },
+        { path: ["c"], origin: "declared", label: { $ref: "of:not-a-label" } },
       ]);
       expect(
         droppedDeclaredPaths(
           stored,
           undefined,
-          (ref) => ref === "cid:known" ? label : undefined,
+          (ref) =>
+            ref === "cid:known" || ref === "of:not-a-label" ? label : undefined,
         ),
       ).toEqual([
         { path: ["a"], clauses: [personalSpace(OTHER)] },
         { path: ["b"], clauses: undefined },
+        { path: ["c"], clauses: undefined },
       ]);
     });
   });
