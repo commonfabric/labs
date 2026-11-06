@@ -147,6 +147,11 @@ import { toTransactionDocumentValue } from "./v2-document.ts";
 import { hasValueAtPath, readValueAtPath } from "./v2-path.ts";
 import { recordWriteStackTrace } from "./write-stack-trace.ts";
 import { hasInlineCellScheme } from "../immutable-cell.ts";
+import {
+  isReservedSibling,
+  reservedSiblingChanges,
+  reservedSiblingWriteRecorded,
+} from "../reserved-sibling-seam.ts";
 
 type RootAttestation = IAttestation;
 
@@ -1445,6 +1450,14 @@ export class V2StorageTransaction implements IStorageTransaction {
     delta: MergeableOpDelta,
   ): void {
     this.#assertWritable("recordMergeableOp()");
+    // An intent stands in for a diff at its path, so one at a reserved
+    // sibling would change it with no write to refuse. The extended
+    // transaction records intents only on the value surface.
+    if (isReservedSibling(address.path[0] ?? "")) {
+      throw new Error(
+        debugStr`${address.id}: refusing a mergeable op at $quote${address.path}, which is runtime state rather than user data.`,
+      );
+    }
     const ready = this.#editable();
     if (ready.error) throw ready.error;
     if (isNoopMergeableDelta(delta)) {
@@ -2370,6 +2383,13 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (ready.error) {
       return { error: ready.error };
     }
+    if (!reservedSiblingWriteRecorded(options)) {
+      this.#refuseReservedSiblingChange(
+        ready.ok,
+        address,
+        options?.delete === true ? undefined : value,
+      );
+    }
     return this.#writeWithinBranch(
       ready.ok,
       address.space,
@@ -2393,6 +2413,15 @@ export class V2StorageTransaction implements IStorageTransaction {
       const ready = this.#prepareWriteSpace(address.space);
       if (ready.error) {
         return { error: ready.error };
+      }
+      // A batch request carries no options, so it carries no mark either. The
+      // whole run is checked before any of it is applied.
+      for (const write of run) {
+        this.#refuseReservedSiblingChange(
+          ready.ok,
+          write.address,
+          write.delete === true ? undefined : write.value,
+        );
       }
       const result = this.#writeBatchRun(address.space, ready.ok, run);
       run = [];
@@ -2423,6 +2452,39 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
 
     return flushRun();
+  }
+
+  /**
+   * Throws when a write at `address` carrying `value` changes a reserved
+   * sibling of the document, as `reservedSiblingChanges()` defines a change.
+   * A delete carries `undefined`, whatever value it names, since applying it
+   * stores nothing there: a root delete erases every stored sibling.
+   * The extended transaction's write chokepoint is where such a write is
+   * judged: it records one from outside the runtime's privileged persistence
+   * scope, the commit boundary refuses over the record, and the chokepoint
+   * marks every write it forwards here. A write without that mark came from
+   * whatever holds this transaction directly, skipping the chokepoint, and
+   * left nothing for the boundary to judge, so it is refused whatever the CFC
+   * enforcement mode. A root write is decided against the document as this
+   * transaction holds it in `branch`, read from the entry the write itself
+   * lands in, so deciding records no read.
+   */
+  #refuseReservedSiblingChange(
+    branch: SpaceBranch,
+    address: IMemorySpaceAddress,
+    value: FabricValue | undefined,
+  ): void {
+    const changes = reservedSiblingChanges(address.path, value, (sibling) => {
+      const { doc } = this.#document(branch, address);
+      const root = (doc.current ?? doc.initial).value;
+      return isObjectNotArray(root) ? root[sibling] : undefined;
+    });
+    if (changes.length === 0) return;
+    throw new Error(
+      debugStr`${address.id}: refusing a write that changes reserved members of the document (${
+        changes.map(([sibling]) => `\`${sibling}\``).join(", ")
+      }). They hold runtime state, which the runtime writes through an extended transaction's write chokepoint.`,
+    );
   }
 
   #writeWithinSpace(

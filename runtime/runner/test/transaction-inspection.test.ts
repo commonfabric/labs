@@ -8,6 +8,7 @@ import { toDocumentPath } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { NormalizedFullLink } from "../src/link-utils.ts";
+import { reservedSiblingWriteRecordedMark } from "../src/reserved-sibling-seam.ts";
 import { txToReactivityLog } from "../src/scheduler.ts";
 import {
   ExtendedStorageTransaction,
@@ -200,6 +201,8 @@ describe("transaction inspection", () => {
       const id =
         "test:transaction-inspection-direct-v2-document-paths" as const;
 
+      // The seed writes a `source` member beneath any extended transaction,
+      // so it carries the mark the write chokepoint puts on what it forwards.
       const seed = storageManager.edit();
       seed.write({
         space,
@@ -210,7 +213,7 @@ describe("transaction inspection", () => {
         value: { count: 1 },
         source: { "/": "origin" },
         meta: { updatedAt: "before" },
-      });
+      }, reservedSiblingWriteRecordedMark());
       await seed.commit().settled;
 
       const tx = storageManager.edit();
