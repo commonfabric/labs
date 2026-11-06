@@ -700,7 +700,9 @@ export type WritePolicyInput =
      * where `buildDecided` holds, mints them from what it had read before
      * `setupBegan`, the journal position the setup began at: the program
      * chosen by that and the piece's identity fixed every reference the
-     * wiring places. Authority is the runtime's mark.
+     * wiring places. A read the journal holds no position for counts as read
+     * before it, so a transaction with no activity clock stamps from all of
+     * its reads, which over-taints. Authority is the runtime's mark.
      */
     readonly kind: "result-wiring";
     readonly target: CfcAddress;

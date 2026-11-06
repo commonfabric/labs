@@ -616,6 +616,11 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
 
 - A wiring whose stored name is carried over is stamped from the attempt's
   join, an over-taint where the name was itself build-decided.
+- The pre-setup bound applies to journaled reads with a position. A read
+  without one, and every label-metadata or external-content observation,
+  which carry none, joins the narrowed stamp whenever it happened: an
+  over-taint, which on a transaction with no activity clock leaves the stamp
+  the attempt's whole join.
 - A result wiring at a path below its document's root is restated and
   narrowed only at the root.
 - A result document holding data beside its references is not restated, so

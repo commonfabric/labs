@@ -4827,7 +4827,9 @@ const deriveFlowJoinImpl = (
      * trigger reads (§8.9.2) and the transaction's other observations: what
      * the transaction had read when a setup it runs began, which decided
      * what that setup builds. A result wiring's membership is stamped from
-     * this (§8.9.1.3).
+     * this (§8.9.1.3). A read with no position, and the label-metadata and
+     * external-content observations, which carry none, are all joined
+     * whenever they happened, which over-taints.
      */
     journalBefore?: number;
   },
