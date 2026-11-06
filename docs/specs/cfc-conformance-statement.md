@@ -655,33 +655,18 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
 
 - A wiring whose stored name is carried over is stamped from the attempt's
   join, an over-taint where the name was itself build-decided.
-- A `runtime.run` of a pattern the runtime has not yet named is deferred:
-  the pattern's family is named first, and the setup runs later in a fresh
-  transaction (`#runWithStartOwnership`'s deferred start in `runner.ts`),
-  which holds none of the caller's reads. So a caller that reads data and
-  sets up a pattern chosen by it, when that pattern is not yet named, leaves
-  that data off the membership, and off every other entry the deferred setup
-  writes. That is an under-taint, and it predates the result-wiring stamp:
-  the deferred transaction carries no trace of what decided it. Carrying the
-  caller's reads into it, as trigger reads of the deferred transaction, would
-  close it; this runtime does not do that.
-  So that the re-mint does not widen this, only a setup in the transaction
-  it was asked in restates an unchanged wiring (`#askingSetupTransactions`
-  in `runner.ts`: the transaction a caller hands `run`, `setup`,
-  `runSynced` or `runInTransaction`, or the one made for that call; a
-  setup nested in another, such as a pattern node its parent instantiates,
-  takes that transaction's standing). A
-  deferred start, the swap of a running piece and a setup repair run in
-  transactions the runner makes later, and leave an unchanged wiring's
-  stored membership as a setup that wrote nothing would. One of them that
-  changes the wiring writes it, and is stamped from its own transaction, as
-  before. A source update is one of these routes: the piece is set up again in
-  the start that follows the update, so an update that leaves a result's
-  wiring unchanged leaves an earlier attempt's stamp on its membership, and
-  only one that changes the wiring re-mints it. Carrying the asking
-  transaction's reads into those starts, which
-  [labs#9650](https://github.com/commonfabric/labs/pull/9650) does, is what
-  lets a same-wiring update restate.
+- Only a setup in the transaction it was asked in restates an unchanged
+  wiring (`#askingSetupTransactions` in `runner.ts`: the transaction a caller
+  hands `run`, `setup`, `runSynced` or `runInTransaction`, or the one made
+  for that call; a setup nested in another, such as a pattern node its
+  parent instantiates, takes that transaction's standing). A transaction the
+  runner makes later for a deferred start or a swap takes that standing when
+  it carries the reads that decided it (§7), so a source update that leaves
+  a result's wiring unchanged restates it in the start that follows the
+  update. A setup repair, and a swap to a pattern no setup in this runtime
+  staged, carry no such reads, and leave an unchanged wiring's stored
+  membership as a setup that wrote nothing would. One of them that changes
+  the wiring writes it, and is stamped from its own transaction.
 - The pre-setup bound applies to journaled reads with a position. A read
   without one, and every label-metadata or external-content observation,
   which carry none, joins the narrowed stamp whenever it happened: an

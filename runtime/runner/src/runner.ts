@@ -2828,11 +2828,12 @@ export class Runner {
    * Only these are added, at those entry points; a setup nested in another,
    * such as a pattern node instantiated with its parent, takes whatever
    * standing the transaction already has. Only a setup in one of these
-   * restates a result wiring it finds unchanged (§8.9.1.3). Every other setup
-   * transaction is one the runner makes later, for a start deferred out of
-   * the asking transaction, a swap or a repair, and holds none of the reads
-   * that decided the setup, so re-minting the stored membership there would
-   * drop a clause those reads carried.
+   * restates a result wiring it finds unchanged (§8.9.1.3). A transaction
+   * the runner makes later, for a start deferred out of the asking
+   * transaction or a swap, joins them when it carries the reads that decided
+   * it (`#carryDecision()`). Every other setup transaction, a repair's or a
+   * swap's that no setup here staged, holds none of those reads, so
+   * re-minting the stored membership there would drop a clause they carried.
    */
   readonly #askingSetupTransactions = new WeakSet<
     IExtendedStorageTransaction
@@ -6349,7 +6350,9 @@ export class Runner {
 
       // Instantiate nodes
       const actualTx = useTx ?? this.#runtime.edit();
-      if (useTx === undefined) carryDecision?.(actualTx);
+      if (useTx === undefined && carryDecision !== undefined) {
+        this.#carryDecision(carryDecision, actualTx);
+      }
       enrollPieceOwnedStores(actualTx, resultCell, pattern);
       // A transaction that also carries the cold-start setup repair is named
       // for it, so its seal and any refusal of it are attributed to the repair
@@ -6896,7 +6899,9 @@ export class Runner {
           }/${pieceLink.id}`,
           kind: "bookkeeping",
         });
-        carryDecision?.(setupTx);
+        if (carryDecision !== undefined) {
+          this.#carryDecision(carryDecision, setupTx);
+        }
         const finishSwap = (
           setupDecision: (to: IExtendedStorageTransaction) => void,
         ) => {
@@ -8196,6 +8201,21 @@ export class Runner {
   }
 
   /**
+   * Hands `to`, a transaction the runner makes for a run deferred out of the
+   * transaction it was asked in, what decided the run (`carry`, from
+   * `carryRunDecision()`), and with it that transaction's standing
+   * (`#askingSetupTransactions`): holding the reads that decided the setup,
+   * it restates a wiring it finds unchanged as the asking transaction would.
+   */
+  #carryDecision(
+    carry: (to: IExtendedStorageTransaction) => void,
+    to: IExtendedStorageTransaction,
+  ): void {
+    carry(to);
+    this.#askingSetupTransactions.add(to);
+  }
+
+  /**
    * Helper for the pattern watcher's swap, which takes what decided the setup
    * that staged `ref` on the piece `key` names (`#runDecisions`), or nothing
    * when the latest committed setup there staged another pattern.
@@ -8321,7 +8341,7 @@ export class Runner {
       if (ownership.isCancelled()) return;
 
       const startTx = this.#runtime.edit();
-      carryDecision(startTx);
+      this.#carryDecision(carryDecision, startTx);
       // A start deferred from a handler run initializes on that run's behalf.
       carryAttributionMarks(tx, startTx);
       // Minted inside a commit callback — by definition outside any scheduler
@@ -9129,7 +9149,7 @@ export class Runner {
         }
         if (ownership.isCancelled()) return;
         const startTx = this.#runtime.edit();
-        carryDecision(startTx);
+        this.#carryDecision(carryDecision, startTx);
         // Speculative starts keep defaults in their overlay transaction. A
         // bookkeeping seed here would escape the parent's destination, and a
         // later authored start still needs its own durable preparation.
@@ -9647,7 +9667,7 @@ export class Runner {
       if (ownership.isCancelled()) return;
 
       const startTx = this.#runtime.edit();
-      carryDecision(startTx);
+      this.#carryDecision(carryDecision, startTx);
       // A result pattern deferred from a handler run initializes on that
       // run's behalf, as the deferred start above does.
       carryAttributionMarks(tx, startTx);

@@ -340,8 +340,8 @@ describe("cfc-result-wiring-stamp", () => {
 
     it("stays where a run deferred out of the transaction that read the data finds the wiring unchanged", async () => {
       // A pattern the runtime has not named yet is set up later, in a
-      // transaction of its own that holds none of the reads that asked for
-      // it. The clause those reads carried stays.
+      // transaction of its own that carries the reads that asked for it, so
+      // its re-mint keeps the clause those reads carried.
 
       const { plain } = patterns();
       const bobs = await seedBobsDocument();
@@ -368,7 +368,7 @@ describe("cfc-result-wiring-stamp", () => {
 
     it("stays where a running piece is swapped to the same wiring by a transaction that read the data", async () => {
       // The swap of a running piece sets up in a transaction of its own,
-      // made after the one that asked for it.
+      // made after the one that asked for it and carrying its reads.
 
       const { plain } = patterns();
       const bobs = await seedBobsDocument();
@@ -403,7 +403,7 @@ describe("cfc-result-wiring-stamp", () => {
 
     it("stays where a pattern started after the asking transaction commits finds the wiring unchanged", async () => {
       // A start that waits for the asking transaction to commit sets up in a
-      // transaction of its own, which holds none of the asking one's reads.
+      // transaction of its own, which carries the asking one's reads.
 
       const { plain } = patterns();
       const bobs = await seedBobsDocument();
@@ -425,6 +425,143 @@ describe("cfc-result-wiring-stamp", () => {
 
       expect(membershipOf(result)).toContain(BOB);
       expect(existenceOf(result)).toEqual([CAROL]);
+    });
+
+    it("comes off where a run deferred out of a transaction that read nothing labeled finds the wiring unchanged", async () => {
+      // The deferred setup carries the asking transaction's standing with
+      // its reads, so it restates the wiring.
+
+      const { plain } = patterns();
+      const result = await setUp("deferred-public", plain);
+      await plantStamp(result, BOB);
+
+      const tx = runtime.edit();
+      const deferred = runtime.run(
+        tx,
+        patterns().plain,
+        { x: 1 },
+        runtime.getCell(space, "deferred-public", undefined, tx),
+      );
+      tx.prepareCfc();
+      expect((await tx.commit().settled).ok).toBeDefined();
+      await deferred.pull();
+      await runtime.idle();
+      runtime.runner.stop(result);
+
+      expect(membershipOf(result)).not.toContain(BOB);
+      expect(existenceOf(result)).toEqual([CAROL]);
+    });
+
+    it("comes off where a running piece is swapped to the same wiring by a transaction that read nothing labeled", async () => {
+      const { plain } = patterns();
+      const first = runtime.edit();
+      const running = runtime.run(
+        first,
+        plain,
+        { x: 1 },
+        runtime.getCell(space, "swapped-public", undefined, first),
+      );
+      first.prepareCfc();
+      expect((await first.commit().settled).ok).toBeDefined();
+      await runtime.idle();
+      await plantStamp(running, BOB);
+
+      const tx = runtime.edit();
+      runtime.run(
+        tx,
+        patterns().plain,
+        { x: 1 },
+        runtime.getCell(space, "swapped-public", undefined, tx),
+      );
+      tx.prepareCfc();
+      expect((await tx.commit().settled).ok).toBeDefined();
+      await runtime.idle();
+      runtime.runner.stop(running);
+
+      expect(membershipOf(running)).not.toContain(BOB);
+      expect(existenceOf(running)).toEqual([CAROL]);
+    });
+
+    it("comes off where a pattern started after the commit of a transaction that read nothing labeled finds the wiring unchanged", async () => {
+      const { plain } = patterns();
+      const result = await setUp("after-commit-public", plain);
+      await plantStamp(result, BOB);
+
+      const tx = runtime.edit();
+      runtime.runner.accessForTestingOnly.runPatternAfterSuccessfulCommit(
+        tx,
+        runtime.getCell(space, "after-commit-public", undefined, tx),
+        plain,
+        { x: 1 },
+      );
+      tx.prepareCfc();
+      expect((await tx.commit().settled).ok).toBeDefined();
+      await runtime.idle();
+      runtime.runner.stop(result);
+
+      expect(membershipOf(result)).not.toContain(BOB);
+      expect(existenceOf(result)).toEqual([CAROL]);
+    });
+
+    it("comes off where a source update restates a nested wiring unchanged", async () => {
+      // A source update stages its setup for resume, and the running piece
+      // then instantiates the updated pattern in a transaction of its own,
+      // where the nested piece is set up again. That transaction carries the
+      // update's reads and its standing, so the nested setup restates the
+      // wiring it finds unchanged.
+
+      const nesting = (factor: number) => ({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `
+            import { computed, pattern, Writable } from "commonfabric";
+            const inner = pattern<{ input: Writable<number> }>(
+              ({ input }) => ({ v: computed(() => input.get() * ${factor}) }),
+            );
+            export default pattern<{ input: Writable<number> }>(
+              ({ input }) => ({ inner: inner({ input }) }),
+            );
+          `,
+        }],
+      });
+      const v1 = await runtime.patternManager.compilePattern(nesting(2), {
+        space,
+      });
+      const v2 = await runtime.patternManager.compilePattern(nesting(3), {
+        space,
+      });
+      const input = runtime.getCell<number>(space, "update-input");
+      const piece = runtime.getCell<{ inner: unknown }>(space, "update-piece");
+      const seed = runtime.edit();
+      input.withTx(seed).set(1);
+      await runtime.setup(seed, v1, { input }, piece);
+      expect((await seed.commit().settled).error).toBeUndefined();
+      expect(await runtime.start(piece)).toBe(true);
+      const stopReading = piece.sink(() => {});
+      try {
+        await runtime.idle();
+        await runtime.runner.idlePieceInstantiationSettlements();
+        const inner = piece.key("inner").resolveAsCell();
+        await plantStamp(inner, BOB);
+        expect(membershipOf(inner)).toContain(BOB);
+
+        const tx = runtime.edit();
+        await runtime.setup(tx, v2, undefined, piece.withTx(tx), {
+          prepareForResume: true,
+        });
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        await runtime.runner.idlePieceInstantiationSettlements();
+        await runtime.idle();
+
+        expect(piece.key("inner").resolveAsCell().getAsNormalizedFullLink().id)
+          .toBe(inner.getAsNormalizedFullLink().id);
+        expect(piece.key("inner").key("v").get()).toBe(3);
+        expect(membershipOf(inner)).not.toContain(BOB);
+      } finally {
+        stopReading();
+      }
     });
 
     it("comes off at a setup that finds the wiring unchanged", async () => {
