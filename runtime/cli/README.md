@@ -1060,7 +1060,8 @@ see whether the write committed.
 ## Cell references
 
 `cf cell` holds the commands that act on a cell: `get` and `set` for its value,
-`get-label` and `set-label` for the CFC label on it. Each takes a reference.
+`get-label`, `set-label` and `release-by-intent` for the CFC label on it. Each
+takes a reference.
 
 A reference names a cell, and one grammar covers every part of the name:
 
@@ -1891,6 +1892,59 @@ Each lowering commits with a create-only receipt in that space, readable by the
 identity alone, recording the clauses removed, the paths they were removed at,
 and digests of the stored metadata before and after. Reads served before the
 lowering keep the label they were served under.
+
+`cf cell release-by-intent` is the owner's release of clauses that are not
+theirs alone, such as the stamps an earlier setup left on a result's membership
+naming other principals whose data the result does not hold. A lowering with
+`set-label` refuses those; this command releases them on a request the space's
+owner signs, the owner release by intent of the CFC specification's §8.12.7.
+Without `--clause` it only lists the confidentiality clauses stored at the path,
+each with its canonical clause digest and the labels holding it (component and
+observation class), and changes nothing:
+
+```bash
+cf cell release-by-intent --cell ID
+```
+
+Each `--clause` names a clause to release by its digest, or by a prefix of it
+that begins no other stored clause's digest; an ambiguous prefix is refused,
+naming the digests it begins. A named clause comes off every label stored at the
+path, whoever it stands for: the declared label and the stored schema's
+declaration, the labels derived from what was written there (the existence entry
+and the membership entries included), and a link's own label. Labels at other
+paths, an ancestor's included, the value, and integrity labels are not changed.
+A clause the stored schema declares is declared again by the next write through
+that schema.
+
+```bash
+cf cell release-by-intent --cell ID --clause 3gYWzS --clause oYjOtO
+```
+
+The path names one stored position. The links it crosses are followed to the
+document it lands in, a link stored at the path is not, so a link slot's own
+label is what it releases, and a `*` segment is refused: a wildcard label is not
+a path this command names.
+
+Before anything is signed, the command shows the document, the path, the signer,
+and each clause that comes off and each that stays, and asks for the word
+`release` to be typed. Only then does it sign the request with the identity and
+commit the release together with its record, a create-only document in the space
+holding the signed request, the owner, the document and path, the released
+clauses' digests, and digests of the stored labels before and after; the record
+is readable by the owner. The command runs only with standard input at a
+terminal, refusing before it builds or signs anything otherwise, and no option
+skips the confirmation: the signature stands for the owner's own decision, made
+in person, which is the one thing the store cannot check.
+
+The store checks the rest at the commit: that the signature verifies, that the
+signer is the owner the space's access list names (the identity whose DID is the
+space's, for a home space with no list), that the request names the space,
+document and path the commit changes, that every clause it names is stored
+there, that the stored labels are still the ones the request was made against,
+and that the request has not been used before. Any failure refuses the release
+whole. A request is used once: running the command again builds a new request
+against the labels as they are then. Reads served before the release keep the
+label they were served under.
 
 ## Invocation sessions
 
