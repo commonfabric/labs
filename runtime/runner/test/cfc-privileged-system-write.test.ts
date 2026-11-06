@@ -1336,7 +1336,11 @@ describe("CFC privileged system write (S18)", () => {
           cfc: personalSpaceMetadata(otherPerson),
         });
 
+        // A value write makes the document writable, which an op needs.
         const inner = runtime.edit().tx;
+        expect(
+          inner.write({ ...address, path: ["value", "note"] }, "two").ok,
+        ).toBeDefined();
         expect(() =>
           inner.recordMergeableOp!(
             { ...address, path: ["cfc", "labelMap", "entries"] },
