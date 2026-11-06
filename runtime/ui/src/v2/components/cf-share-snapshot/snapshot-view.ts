@@ -1,5 +1,6 @@
 /** Plain-language rendering of a reviewed snapshot for the trusted dialog. */
 
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { JSONValue } from "@commonfabric/runtime-client";
 
 /**
@@ -27,14 +28,10 @@ function leaf(value: JSONValue): { text: string; empty: boolean } {
   return { text: String(value), empty: false };
 }
 
-function isRecord(value: JSONValue): value is { [key: string]: JSONValue } {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /** One field as a line; objects and non-empty lists nest, one line per
  * entry, so no two values can read as one. */
 function line(key: string, value: JSONValue): SnapshotLine {
-  if (isRecord(value)) {
+  if (isObjectNotArray(value)) {
     if (Object.keys(value).length === 0) {
       return { key, text: "none", empty: true };
     }
@@ -56,7 +53,7 @@ function line(key: string, value: JSONValue): SnapshotLine {
  * (number-like keys first, as in the exact data). A value
  * that is not an object reads as one line with an empty key. */
 export function snapshotLines(value: JSONValue): SnapshotLine[] {
-  if (isRecord(value)) {
+  if (isObjectNotArray(value)) {
     return Object.entries(value).map(([key, item]) => line(key, item));
   }
   return [line("", value)];
@@ -64,7 +61,7 @@ export function snapshotLines(value: JSONValue): SnapshotLine[] {
 
 /** Who a verified audience atom names, in words. */
 export function audienceWords(audience: JSONValue): string {
-  const type = isRecord(audience) && typeof audience.type === "string"
+  const type = isObjectNotArray(audience) && typeof audience.type === "string"
     ? audience.type
     : "";
   if (type.endsWith("/User")) return "One verified person";
@@ -74,7 +71,7 @@ export function audienceWords(audience: JSONValue): string {
 
 /** The DID a verified audience atom names, or "" when it names none. */
 export function audienceId(audience: JSONValue): string {
-  return isRecord(audience) && typeof audience.subject === "string"
+  return isObjectNotArray(audience) && typeof audience.subject === "string"
     ? audience.subject
     : "";
 }
