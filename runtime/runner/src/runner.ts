@@ -2833,14 +2833,28 @@ export class Runner {
    * whatever standing the transaction already has. Only a setup in one of
    * these restates a result wiring it finds unchanged (§8.9.1.3). A
    * transaction the runner makes later, for a start deferred out of an asking
-   * transaction or a swap, joins them when it carries the reads that decided
-   * it from an asking one (`#runDecisionOf()`). Every other setup
-   * transaction, a repair's or a swap's that no setup here staged, holds none
-   * of those reads, so re-minting the stored membership there would drop a
-   * clause they carried.
+   * transaction or a swap, has that standing too when it carries the reads
+   * that decided it from an asking one that is committing or committed
+   * (`#carriedStanding`).
+   * Every other setup transaction, a repair's or a swap's that no setup here
+   * staged, holds none of those reads, so re-minting the stored membership
+   * there would drop a clause they carried.
    */
   readonly #askingSetupTransactions = new WeakSet<
     IExtendedStorageTransaction
+  >();
+
+  /**
+   * For a transaction the runner made to carry a deferred run's decision
+   * (`#runDecisionOf()`), whether it has the asking standing now: whether the
+   * transaction whose reads it carries had that standing and has committed
+   * or is committing. While that transaction is still open, and for good if
+   * it is aborted or refused, the carrying transaction is not an asking one,
+   * so a caller that aborts changes no stored label through it.
+   */
+  readonly #carriedStanding = new WeakMap<
+    IExtendedStorageTransaction,
+    () => boolean
   >();
 
   #runtime: Runtime;
@@ -4229,7 +4243,7 @@ export class Runner {
     // name carried over from the stored result, which is a reference the
     // stored document chose.
     const resultLink = resultCell.getAsNormalizedFullLink();
-    if (changed || this.#askingSetupTransactions.has(tx)) {
+    if (changed || this.#isAsking(tx)) {
       tx.recordCfcWritePolicyInput({
         kind: "result-wiring",
         target: {
@@ -8205,21 +8219,42 @@ export class Runner {
   }
 
   /**
+   * Whether `tx` is an asking transaction, one a setup in which restates a
+   * wiring it finds unchanged: one it was asked in
+   * (`#askingSetupTransactions`), or one carrying the reads of such a
+   * transaction that has committed (`#carriedStanding`).
+   */
+  #isAsking(tx: IExtendedStorageTransaction): boolean {
+    return this.#askingSetupTransactions.has(tx) ||
+      this.#carriedStanding.get(tx)?.() === true;
+  }
+
+  /**
    * Takes what decided a run `from` deferred into a transaction the runner
    * makes later (`carryRunDecision()`), and returns the step that hands it to
-   * that transaction, along with `from`'s standing: a transaction carrying an
-   * asking transaction's reads is an asking one (`#askingSetupTransactions`),
-   * and restates a wiring it finds unchanged as that transaction would. One
-   * carrying the reads of a transaction that was not asking is not.
+   * that transaction, along with `from`'s standing once `from` commits: a
+   * transaction carrying the reads of an asking transaction that has
+   * committed, or is committing, is an asking one (`#carriedStanding`), and
+   * restates a wiring it finds unchanged as that transaction would. One
+   * carrying the reads of a transaction that was not asking, that is still
+   * open, or that was aborted or refused by the time the setup consults it,
+   * is not. A commit still in flight counts, since a running piece swaps to
+   * the pattern a setup staged as soon as its writes apply here, before the
+   * commit settles; a transaction that read those writes is refused with
+   * them.
    */
   #runDecisionOf(
     from: IExtendedStorageTransaction,
   ): (to: IExtendedStorageTransaction) => void {
     const carry = carryRunDecision(from);
-    const asking = this.#askingSetupTransactions.has(from);
+    const standing = () => {
+      const { status } = from.status();
+      return (status === "pending" || status === "done") &&
+        this.#isAsking(from);
+    };
     return (to) => {
       carry(to);
-      if (asking) this.#askingSetupTransactions.add(to);
+      this.#carriedStanding.set(to, standing);
     };
   }
 

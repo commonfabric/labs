@@ -662,8 +662,11 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
   pattern node its parent instantiates, takes that transaction's standing).
   A `run` given no transaction is not one. A transaction the runner makes
   later for a deferred start or a swap takes the standing of the transaction
-  whose reads it carries (§7), so a source update that leaves a result's
-  wiring unchanged restates it in the start that follows the update. Where
+  whose reads it carries (§7) while that transaction is committing or has
+  committed, and not while it is open or once it is aborted or refused, so a
+  source update that leaves a result's wiring unchanged restates it in the
+  start that follows the update. The standing is read when the deferred
+  setup runs, so a refusal that arrives after that does not take it back. Where
   the nested piece carries its stored name over, that restatement keeps the
   stored membership, as the carried-name rule above has any setup do, so
   such an update leaves an earlier attempt's stamp in place. A setup repair,
@@ -671,6 +674,11 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
   reads, and leave an unchanged wiring's stored membership as a setup that
   wrote nothing would. One of them that changes the wiring writes it, and is
   stamped from its own transaction.
+- A `run` given no transaction carries no earlier transaction's reads.
+  `wish.ts`'s suggestion fetch sets up the pattern an earlier transaction
+  chose this way, once the suggestion surface opens, so what that setup
+  writes, a changed wiring's membership stamp included, carries none of the
+  reads that chose the pattern: an under-taint.
 - The pre-setup bound applies to journaled reads with a position. A read
   without one, and every label-metadata or external-content observation,
   which carry none, joins the narrowed stamp whenever it happened: an

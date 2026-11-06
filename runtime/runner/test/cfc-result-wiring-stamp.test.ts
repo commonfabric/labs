@@ -482,6 +482,61 @@ describe("cfc-result-wiring-stamp", () => {
       expect(existenceOf(running)).toEqual([CAROL]);
     });
 
+    describe("a run its asking transaction aborts", () => {
+      // The run still goes ahead in a transaction of its own, carrying the
+      // aborted transaction's reads, but not its standing: a transaction that
+      // never committed changes no stored label.
+
+      it("stays where the deferred setup finds the wiring unchanged", async () => {
+        const { plain } = patterns();
+        const result = await setUp("aborted", plain);
+        await plantStamp(result, BOB);
+
+        const tx = runtime.edit();
+        runtime.run(
+          tx,
+          patterns().plain,
+          { x: 1 },
+          runtime.getCell(space, "aborted", undefined, tx),
+        );
+        tx.abort("caller aborted");
+        await runtime.idle();
+        runtime.runner.stop(result);
+
+        expect(membershipOf(result)).toContain(BOB);
+        expect(existenceOf(result)).toEqual([CAROL]);
+      });
+
+      it("stays where a running piece swaps to the same wiring", async () => {
+        const { plain } = patterns();
+        const first = runtime.edit();
+        const running = runtime.run(
+          first,
+          plain,
+          { x: 1 },
+          runtime.getCell(space, "aborted-running", undefined, first),
+        );
+        first.prepareCfc();
+        expect((await first.commit().settled).ok).toBeDefined();
+        await runtime.idle();
+        await plantStamp(running, BOB);
+
+        const tx = runtime.edit();
+        runtime.run(
+          tx,
+          patterns().plain,
+          { x: 1 },
+          runtime.getCell(space, "aborted-running", undefined, tx),
+        );
+        tx.abort("caller aborted");
+        await runtime.idle();
+        runtime.runner.stop(running);
+
+        expect(membershipOf(running)).toContain(BOB);
+        expect(existenceOf(running)).toEqual([CAROL]);
+      });
+    });
+
     it("stays where a pattern started after the commit of a transaction no caller asked it in finds the wiring unchanged", async () => {
       // The start carries the reads of the transaction it was deferred from,
       // and that transaction's standing with them: one no caller handed the
