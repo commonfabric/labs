@@ -100,9 +100,12 @@ describe("cfc-owner-release-by-intent", () => {
       });
     });
 
-    it("throws on a `*` segment, a repeated digest, no digest, or a document under the record scheme", () => {
-      expect(() => ownerReleaseByIntentRequest({ ...fields, path: ["*"] }))
-        .toThrow("`*` segment");
+    it("returns a request naming a wildcard position as its literal path", () => {
+      expect(ownerReleaseByIntentRequest({ ...fields, path: ["a", "*"] }).path)
+        .toEqual(["a", "*"]);
+    });
+
+    it("throws on a repeated digest, no digest, or a document under the record scheme", () => {
       expect(() =>
         ownerReleaseByIntentRequest({
           ...fields,
@@ -393,6 +396,44 @@ describe("cfc-owner-release-by-intent", () => {
       expect(storedCfc()).toEqual(STAMPED);
     });
 
+    it("commits a release at a wildcard position, which reaches that position alone", async () => {
+      const template = (clauses: unknown[]) =>
+        entry(["*"], "structure", clauses, "shape");
+      const slot = entry(["rooms"], "derived", FOREIGN, "value");
+      const stored = envelope([
+        template([personalSpace(OWNER), ...FOREIGN]),
+        slot,
+      ]);
+      const released = envelope([template([personalSpace(OWNER)]), slot]);
+      seed(OWNER, stored);
+      const signed = await sign(
+        owner,
+        requestFor({
+          path: ["*"],
+          envelopeDigest: ownerReleaseByIntentEnvelopeDigest(stored),
+        }),
+      );
+      commitIn(OWNER, OWNER, releaseOps(signed, released));
+      expect(storedCfc()).toEqual(released);
+    });
+
+    it("throws on a release at a concrete path that names clauses only a wildcard position covering it holds", async () => {
+      const stored = envelope([
+        entry(["*"], "structure", [personalSpace(OWNER), ...FOREIGN], "shape"),
+      ]);
+      seed(OWNER, stored);
+      const signed = await sign(
+        owner,
+        requestFor({
+          path: ["rooms"],
+          envelopeDigest: ownerReleaseByIntentEnvelopeDigest(stored),
+        }),
+      );
+      expect(() => commitIn(OWNER, OWNER, releaseOps(signed, stored)))
+        .toThrow(/not stored at the path/);
+      expect(storedCfc()).toEqual(stored);
+    });
+
     describe("refusals", () => {
       /** Applies `operations` and expects the commit refused, naming `reason`. */
       const expectRefused = (
@@ -545,24 +586,6 @@ describe("cfc-owner-release-by-intent", () => {
         expectRefused(
           releaseOps(signed, RELEASED).slice(1),
           /writes no envelope of the document/,
-        );
-      });
-
-      it("throws on a record of a `*` path", async () => {
-        const signed = await sign(owner, requestFor());
-        const wildcard = { ...signed.request, path: ["*"] };
-        expectRefused(
-          releaseOps(signed, RELEASED, {
-            record: {
-              ...ownerReleaseByIntentRecord(
-                signed,
-                ownerReleaseByIntentEnvelopeDigest(RELEASED),
-              ),
-              request: wildcard,
-              path: ["*"],
-            },
-          }),
-          /not a release record/,
         );
       });
 

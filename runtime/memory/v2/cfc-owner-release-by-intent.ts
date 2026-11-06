@@ -19,9 +19,11 @@
  * handed to code should.
  *
  * The request names its document directly, by space and id at space scope,
- * and one concrete stored path, so a release follows no link to choose what it
- * lowers. A path segment `*` is refused: a request does not name a wildcard
- * position.
+ * and one stored path, matched literally against the paths the envelope's
+ * label-map entries hold, so a release follows no link to choose what it
+ * lowers and reaches one stored position. A `*` segment names the wildcard
+ * position stored there, such as a container's class templates, and none of
+ * the concrete positions it covers.
  */
 
 import {
@@ -63,7 +65,10 @@ export interface OwnerReleaseByIntentRequest {
   /** The document's id, at space scope. */
   readonly document: string;
 
-  /** The one stored path the clauses come off, with no `*` segment. */
+  /**
+   * The one stored path the clauses come off, matched literally: a `*`
+   * segment names the wildcard position.
+   */
   readonly path: readonly string[];
 
   /**
@@ -171,9 +176,8 @@ const sameStrings = (
 
 /**
  * The problem with `request`'s fields as a request names them, or `undefined`
- * when there is none: a document id under the record scheme, an empty or
- * wildcard path segment, an empty, repeated or unordered digest list, or a
- * space or signer that is not a DID.
+ * when there is none: a document id under the record scheme, an empty,
+ * repeated or unordered digest list, or a space or signer that is not a DID.
  */
 const requestProblem = (
   request: OwnerReleaseByIntentRequest,
@@ -189,10 +193,6 @@ const requestProblem = (
     request.document.startsWith("cid:")
   ) {
     return "its document is not one a release can name";
-  }
-  if (request.path.some((segment) => segment === "*")) {
-    return "its path holds a `*` segment, and a release names one concrete " +
-      "path";
   }
   if (request.releasedClauseDigests.length === 0) {
     return "it releases no clause";
@@ -210,8 +210,8 @@ const requestProblem = (
  * digest is `envelopeDigest`, to be signed by `signer`. The digests are put in
  * the request's one order.
  *
- * @throws An {@link OwnerReleaseByIntentError} if a digest is named twice, the
- *   path holds a `*` segment, or another field is not one a request can hold.
+ * @throws An {@link OwnerReleaseByIntentError} if a digest is named twice, or
+ *   another field is not one a request can hold.
  */
 export const ownerReleaseByIntentRequest = (fields: {
   readonly space: string;

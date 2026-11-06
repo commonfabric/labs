@@ -353,10 +353,15 @@ request, its signed bytes, the record and the store's judgment are in
   and no integrity label. The envelope's label-metadata templates are derived
   again from the payload entries the release leaves. A clause the stored
   schema declares is declared again by the next write through that schema.
-- **Which path.** The request names its document directly and one concrete
-  path; a `*` segment is refused. The CLI resolves a cell path by following
-  the links it crosses and not a link stored at the path, so a link slot's own
-  label is what it releases, and shows the owner the document it resolved to.
+- **Which path.** The request names its document directly and one stored
+  path, matched literally against the paths the label map holds: a `*`
+  segment names the wildcard position, such as a container's class
+  templates, and none of the positions it covers, so a request reaches one
+  stored position. The CLI resolves a cell path by following the links it
+  crosses and not a link stored at the path, so a link slot's own label is
+  what it releases, shows the owner the document it resolved to, and names
+  the document's other positions holding a clause it releases, each a
+  release of its own.
 - **Who may.** The request is signed under the purpose
   `cfc.owner-release-by-intent/1` by the owner the space's access list names
   (for a space with no list, the principal whose DID is the space's). The

@@ -575,7 +575,7 @@ reconciled pin.
 
 An owner release by intent (§8.12.7 route 2d) removes the clauses a request
 the space's owner signed names, whoever they stand for, from every component
-and observation class at one concrete path of one document, the existence and
+and observation class at one stored path of one document, the existence and
 membership entries included. `releaseConfidentialityByIntent` in
 `cfc/confidentiality-release.ts` is the host operation, the transaction's
 `releaseCfcConfidentialityByIntent` in
@@ -607,8 +607,16 @@ obtained by `cf cell release-by-intent` in `runtime/cli`, which signs only
 after the owner, at a terminal, is shown the request's target and its clauses
 and types a confirmation; nothing else in this repository signs under the
 purpose, and that obligation rests on the host holding the owner's key, as the
-route says. The route names one concrete path: a `*` segment is refused, and
-the request names its document directly, so no link is followed to choose it.
+route says. The request names its document directly, so no link is followed
+to choose it, and one stored path, matched literally against the stored
+entries' paths: a `*` segment names the wildcard position itself, such as a
+container's class templates, and none of the concrete positions it covers, so
+one request reaches one stored position. A membership stamp sits at the
+container's path and at its `*` position, so its full removal is a request for
+each, and the CLI names the other positions holding a clause it releases.
+Whether a request may name a wildcard position is not stated by the pending
+route, which says "exactly the one path"; this runtime reads a wildcard
+position as a path of its own.
 The release re-derives the envelope's label-metadata templates from the
 payload entries it leaves, as every persist does; a route 2c release leaves
 them as they were.

@@ -5258,6 +5258,17 @@ export interface ReleaseByIntentOutcome {
   readonly clauses: readonly ReleasableClause[];
 
   /**
+   * The document's other stored positions holding any of `.clauses`, with the
+   * digests each holds: each is a further release, of its own path, for a
+   * clause to be gone from the document. Named only; a release reaches none
+   * of them.
+   */
+  readonly otherPositions: readonly {
+    readonly path: readonly string[];
+    readonly digests: readonly string[];
+  }[];
+
+  /**
    * The digests of the clauses released, or absent when no clause was named
    * and the outcome only lists what is stored.
    */
@@ -5362,11 +5373,13 @@ const readTerminalLine = async (prompt: string): Promise<string | null> => {
  * for, on a request the identity signs as the space's owner.
  *
  * The path is resolved to the document it lands in, the links it crosses
- * followed and a link stored at the path itself not. With no selector, this
- * only lists the clauses stored there. With selectors, it refuses before
+ * followed and a link stored at the path itself not, and names one stored
+ * position, matched literally: a `*` segment names the wildcard position. With
+ * no selector, this only lists the clauses stored there, and the document's
+ * other stored positions holding any of them. With selectors, it refuses before
  * building or signing anything unless standard input is a terminal; it shows
- * the owner the document, the path and each clause that would come off and
- * stay, asks them to type {@link RELEASE_BY_INTENT_CONFIRMATION}, and signs
+ * the owner the document, the path, each clause that would come off and
+ * stay, and the other positions still holding a released clause, asks them to type {@link RELEASE_BY_INTENT_CONFIRMATION}, and signs
  * with the identity only once they have. Nothing bypasses the confirmation:
  * the signature stands for the owner's own decision, which is the one thing
  * the store cannot check.
@@ -5418,6 +5431,7 @@ export async function releaseCellConfidentialityByIntent(
     document: target.id,
     path: [...target.path],
     clauses,
+    otherPositions: stored.otherPositions,
   };
   if (!naming) return listed;
 
@@ -5444,6 +5458,25 @@ export async function releaseCellConfidentialityByIntent(
   const kept = clauses.filter((clause) => !released.includes(clause.digest));
   if (kept.length === 0) show("  (none)");
   for (const clause of kept) show(describeClause(clause));
+  const elsewhere = stored.otherPositions.flatMap((position) => {
+    const digests = position.digests.filter((digest) =>
+      released.includes(digest)
+    );
+    return digests.length === 0 ? [] : [{ path: position.path, digests }];
+  });
+  if (elsewhere.length > 0) {
+    show(
+      "Other stored positions of the document hold a clause being released, " +
+        "and keep it; each takes a release of its own path:",
+    );
+    for (const position of elsewhere) {
+      show(
+        `  ${
+          position.path.length === 0 ? "<root>" : position.path.join("/")
+        }: ${position.digests.join(", ")}`,
+      );
+    }
+  }
   show(
     "Labels at other paths, the value, and integrity are not changed. The " +
       "release is recorded, with your signature, in the space.",

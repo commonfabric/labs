@@ -1921,20 +1921,30 @@ cf cell release-by-intent --cell ID --clause 3gYWzS --clause oYjOtO
 ```
 
 The path names one stored position. The links it crosses are followed to the
-document it lands in, a link stored at the path is not, so a link slot's own
-label is what it releases, and a `*` segment is refused: a wildcard label is not
-a path this command names.
+document it lands in, and a link stored at the path is not, so a link slot's own
+label is what it releases. A `*` segment names the wildcard position stored
+there, such as the per-element templates a list's membership is stamped on, and
+none of the elements or fields it covers. A clause stamped across a container is
+usually stored at several positions, the container's own path and its `*`
+position among them, so the listing names, beside the clauses at the path, the
+document's other positions holding any of them; each is a release of its own,
+and a release reaches none of them.
+
+```bash
+cf cell release-by-intent --cell ID '*' --clause 3gYWzS --clause oYjOtO
+```
 
 Before anything is signed, the command shows the document, the path, the signer,
-and each clause that comes off and each that stays, and asks for the word
-`release` to be typed. Only then does it sign the request with the identity and
-commit the release together with its record, a create-only document in the space
-holding the signed request, the owner, the document and path, the released
-clauses' digests, and digests of the stored labels before and after; the record
-is readable by the owner. The command runs only with standard input at a
-terminal, refusing before it builds or signs anything otherwise, and no option
-skips the confirmation: the signature stands for the owner's own decision, made
-in person, which is the one thing the store cannot check.
+each clause that comes off and each that stays, and the other positions still
+holding a clause it releases, and asks for the word `release` to be typed. Only
+then does it sign the request with the identity and commit the release together
+with its record, a create-only document in the space holding the signed request,
+the owner, the document and path, the released clauses' digests, and digests of
+the stored labels before and after; the record is readable by the owner. The
+command runs only with standard input at a terminal, refusing before it builds
+or signs anything otherwise, and no option skips the confirmation: the signature
+stands for the owner's own decision, made in person, which is the one thing the
+store cannot check.
 
 The store checks the rest at the commit: that the signature verifies, that the
 signer is the owner the space's access list names (the identity whose DID is the

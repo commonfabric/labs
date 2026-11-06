@@ -36,6 +36,14 @@ const others = [
   cfcAtom.personalSpace("did:key:z6MkReleaseOtherB"),
 ];
 
+/** The slot template beside the membership, holding the others too. */
+const template = {
+  path: ["*"],
+  origin: "structure",
+  observes: "shape",
+  label: { confidentiality: others },
+};
+
 describe("cf cell release-by-intent", () => {
   describe("resolveClauseSelectors()", () => {
     const clause = (digest: string): ReleasableClause => ({
@@ -134,6 +142,7 @@ describe("cf cell release-by-intent", () => {
                 observes: "enumerate",
                 label: { confidentiality: [own, ...others] },
               },
+              template,
             ],
           },
         },
@@ -188,6 +197,10 @@ describe("cf cell release-by-intent", () => {
       expect(outcome.clauses[1].positions).toEqual([
         { origin: "structure", observes: "enumerate" },
       ]);
+      expect(outcome.otherPositions).toEqual([{
+        path: ["*"],
+        digests: others.map(cfcCanonicalClauseDigest),
+      }]);
       expect(outcome.released).toBeUndefined();
       expect(signed).toBe(0);
       expect(storedEntries()).toEqual(before);
@@ -197,12 +210,17 @@ describe("cf cell release-by-intent", () => {
       const prefixes = others.map((clause) =>
         cfcCanonicalClauseDigest(clause).slice(0, 6)
       );
+      const shown: string[] = [];
       const outcome = await releaseCellConfidentialityByIntent(
         pieceConfig,
         [],
         prefixes,
         {},
-        { ...deps, readConfirmation: () => Promise.resolve("release") },
+        {
+          ...deps,
+          readConfirmation: () => Promise.resolve("release"),
+          show: (line: string) => shown.push(line),
+        },
       );
 
       expect(signed).toBe(1);
@@ -214,7 +232,10 @@ describe("cf cell release-by-intent", () => {
         origin: "structure",
         observes: "enumerate",
         label: { confidentiality: [own] },
-      }]);
+      }, template]);
+      expect(shown.join("\n")).toContain(
+        "Other stored positions of the document hold a clause being released",
+      );
       const tx = runtime.edit();
       const record = tx.readOrThrow({
         space: owner,

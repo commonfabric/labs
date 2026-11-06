@@ -38,6 +38,8 @@ import {
   type CfcConfidentialityReleaseByIntent,
   clausesStoredForRelease,
   CONFIDENTIALITY_RELEASE_WRITER,
+  otherPositionsHolding,
+  type OtherStoredPosition,
   OWNER_RELEASE_BY_INTENT_WRITER,
   sameClause,
   type StoredClause,
@@ -256,7 +258,10 @@ export interface ReleaseByIntentTarget {
   /** The document, at space scope. */
   readonly id: URI;
 
-  /** The stored path, with no `*` segment. */
+  /**
+   * The stored path, matched literally: a `*` segment names a wildcard
+   * position.
+   */
   readonly path: readonly string[];
 }
 
@@ -298,19 +303,25 @@ export interface StoredClausesForRelease {
   /** The clauses stored at the path, with their digests and positions. */
   readonly clauses: readonly StoredClause[];
 
+  /**
+   * Every other stored position of the document holding one of `.clauses`,
+   * with the digests it holds: where further releases are needed for a
+   * clause to be gone from the document.
+   */
+  readonly otherPositions: readonly OtherStoredPosition[];
+
   /** The digest of the stored envelope, which a request names. */
   readonly envelopeDigest: string;
 }
 
 /**
  * The confidentiality clauses stored at `target`, each with its canonical
- * clause digest and the entries holding it, and the digest of the document's
- * stored envelope: what an owner reads before signing a release by intent
- * there. Read as the runtime's replica holds the document, so a caller syncs
+ * clause digest and the entries holding it, the other stored positions of the
+ * document holding any of them, and the digest of the document's stored
+ * envelope: what an owner reads before signing a release by intent there. Read as the runtime's replica holds the document, so a caller syncs
  * it first.
  *
- * @throws If the document's labels cannot be read, or the path holds a `*`
- *   segment.
+ * @throws If the document's labels cannot be read.
  */
 export function storedClausesForRelease(
   runtime: Runtime,
@@ -335,14 +346,25 @@ export function storedClausesForRelease(
       type: "application/json",
       path: ["cfc"],
     }).ok?.value;
+    if (stored.status !== "loaded") {
+      return {
+        clauses: [],
+        otherPositions: [],
+        envelopeDigest: ownerReleaseByIntentEnvelopeDigest(cfc),
+      };
+    }
+    const labels = {
+      path: target.path,
+      entries: stored.metadata.labelMap.entries,
+      schema: stored.schema,
+    };
+    const clauses = clausesStoredForRelease(labels);
     return {
-      clauses: stored.status === "loaded"
-        ? clausesStoredForRelease({
-          path: target.path,
-          entries: stored.metadata.labelMap.entries,
-          schema: stored.schema,
-        })
-        : [],
+      clauses,
+      otherPositions: otherPositionsHolding({
+        ...labels,
+        digests: clauses.map((clause) => clause.digest),
+      }),
       envelopeDigest: ownerReleaseByIntentEnvelopeDigest(cfc),
     };
   } finally {

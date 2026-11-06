@@ -21,12 +21,14 @@ import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authorit
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import {
+  releaseByIntentTargetOf,
   releaseCellConfidentiality,
   releaseConfidentialityByIntent,
   storedClausesForRelease,
 } from "../src/cfc/confidentiality-release.ts";
 import {
   clausesStoredForRelease,
+  otherPositionsHolding,
   OWNER_RELEASE_BY_INTENT_WRITER,
   planConfidentialityReleaseByIntent,
 } from "../src/cfc/confidentiality-release-plan.ts";
@@ -124,23 +126,65 @@ describe("owner release by intent", () => {
       ).toThrow("no clause stored there has the digest");
     });
 
-    it("throws for a `*` segment, and leaves a wildcard entry to its own path", () => {
+    it("names a `*` segment's wildcard position literally, and reaches none of the positions it covers", () => {
       const wildcard = entry(["*"], "structure", { confidentiality: TEN });
+      const covered = entry(["a"], "derived", { confidentiality: TEN });
+      const plan = planConfidentialityReleaseByIntent({
+        path: ["*"],
+        entries: [wildcard, covered],
+        schema: undefined,
+        releasedClauseDigests: tenDigests,
+      });
+      expect(plan.paths).toEqual([["*"]]);
+      expect(plan.entries).toEqual([covered]);
       expect(() =>
         planConfidentialityReleaseByIntent({
-          path: ["*"],
+          path: ["b"],
           entries: [wildcard],
           schema: undefined,
-          releasedClauseDigests: tenDigests,
+          releasedClauseDigests: [tenDigests[0]],
         })
-      ).toThrow("names one concrete path");
+      ).toThrow("no clause stored there has the digest");
+    });
+
+    it("removes a wildcard position's schema declaration through `items` alone", () => {
+      const schema = {
+        type: "array",
+        items: { type: "string", ifc: { confidentiality: [TEN[0]] } },
+      } as const satisfies JSONSchema;
+      const plan = planConfidentialityReleaseByIntent({
+        path: ["*"],
+        entries: [],
+        schema,
+        releasedClauseDigests: [tenDigests[0]],
+      });
+      expect(plan.schema).toEqual({ type: "array", items: { type: "string" } });
+    });
+  });
+
+  describe("otherPositionsHolding()", () => {
+    it("returns every other stored position holding a named clause, with the digests there, in path order", () => {
       expect(
-        clausesStoredForRelease({
-          path: ["a"],
-          entries: [wildcard],
-          schema: undefined,
+        otherPositionsHolding({
+          path: [],
+          entries: [
+            entry([], "structure", { confidentiality: TEN }, "enumerate"),
+            entry(["*"], "structure", { confidentiality: [TEN[1]] }, "shape"),
+            entry(["*"], "structure", { confidentiality: [TEN[0]] }, "value"),
+            entry(["items"], "link", { confidentiality: [own] }),
+          ],
+          schema: {
+            type: "object",
+            properties: {
+              items: { type: "array", ifc: { confidentiality: [TEN[1]] } },
+            },
+          } as JSONSchema,
+          digests: [tenDigests[0], tenDigests[1]],
         }),
-      ).toEqual([]);
+      ).toEqual([
+        { path: ["*"], digests: [tenDigests[0], tenDigests[1]] },
+        { path: ["items"], digests: [tenDigests[1]] },
+      ]);
     });
   });
 
@@ -502,17 +546,6 @@ describe("owner release by intent", () => {
           expect(storedMetadata(reseeded)).toEqual(before);
         });
 
-        it("refuses a `*` path in a request, signed or not", async () => {
-          const request = requestAt(result, [], tenDigests);
-          expect(() => ownerReleaseByIntentRequest({ ...request, path: ["*"] }))
-            .toThrow("`*` segment");
-          const wildcard = { ...request, path: ["*"] };
-          await expectRefused(
-            await sign(wildcard as OwnerReleaseByIntentRequest),
-            "not a well-formed signed release request",
-          );
-        });
-
         it("refuses a transaction without the release-by-intent writer's identity", async () => {
           const signed = await sign(requestAt(result, [], tenDigests));
           const tx = runtime.edit();
@@ -576,6 +609,107 @@ describe("owner release by intent", () => {
           );
           expect(documentValue(recordId)).toBeUndefined();
         });
+      });
+    });
+
+    describe("a links-only result a setup stamped", () => {
+      // A setup that reads the owner's data and ten other principals', then
+      // writes a result holding nothing but references to them, as the
+      // runtime stamps it rather than as a fixture would. Its membership and
+      // existence carry all eleven clauses at each container, and the slot
+      // templates beside each carry them too.
+
+      /** Seeds the eleven sources and stamps the result, returning its cell. */
+      const stampResult = async () => {
+        const clauses = [own, ...TEN];
+        for (const [index, clause] of clauses.entries()) {
+          await seedDocument(`runner-cfc-intent-source-${index}`, {
+            n: index,
+          }, [entry([], "derived", { confidentiality: [clause] })]);
+        }
+        const setup = runtime.edit();
+        const sources = clauses.map((_, index) =>
+          runtime.getCell<unknown>(
+            actor,
+            `runner-cfc-intent-source-${index}`,
+            undefined,
+            setup,
+          )
+        );
+        for (const source of sources) source.get();
+        const result = runtime.getCell<unknown>(
+          actor,
+          "runner-cfc-intent-stamped",
+          {
+            type: "object",
+            properties: {
+              items: { type: "array", items: { asCell: ["cell"] } },
+              first: { asCell: ["cell"] },
+            },
+          } as JSONSchema,
+          setup,
+        );
+        result.set({ items: sources, first: sources[0] });
+        runtime.prepareTxForCommit(setup);
+        expect((await setup.commit().settled).error).toBeUndefined();
+        return runtime.getCell<unknown>(actor, "runner-cfc-intent-stamped");
+      };
+
+      /** The digests of `clauses` held anywhere in `cell`'s stored labels. */
+      const heldAnywhere = (
+        cell: Cell<unknown>,
+        digests: readonly string[],
+      ) => {
+        const metadata = storedMetadata(cell);
+        return [
+          ...(metadata?.labelMap.entries ?? []),
+          ...(metadata?.labelMap.documentEntries ?? []),
+        ].flatMap((entry) =>
+          (entry.label.confidentiality ?? []).map(cfcCanonicalClauseDigest)
+        ).filter((digest) => digests.includes(digest));
+      };
+
+      it("names the positions holding the ten, and once each is released they are gone from every label of the document", async () => {
+        const result = await stampResult();
+        const id = result.getAsNormalizedFullLink().id;
+        const value = storedValue(result);
+        expect(heldAnywhere(result, tenDigests)).not.toEqual([]);
+
+        const atRoot = storedClausesForRelease(runtime, {
+          space: actor,
+          id,
+          path: [],
+        });
+        const positions = [
+          [],
+          ...atRoot.otherPositions
+            .filter((position) =>
+              tenDigests.every((digest) => position.digests.includes(digest))
+            )
+            .map((position) => [...position.path]),
+        ];
+        expect(positions).toEqual([[], ["*"], ["items"], ["items", "*"]]);
+        expect(
+          releaseByIntentTargetOf(result.key("items", "*")),
+        ).toEqual({ space: actor, id, path: ["items", "*"] });
+
+        for (const path of positions) {
+          await releaseConfidentialityByIntent(
+            runtime,
+            await sign(requestAt(result, path, tenDigests)),
+          );
+        }
+
+        expect(heldAnywhere(result, tenDigests)).toEqual([]);
+        expect(heldAnywhere(result, [cfcCanonicalClauseDigest(own)]))
+          .not.toEqual([]);
+        expect(
+          storedClausesForRelease(runtime, { space: actor, id, path: [] })
+            .otherPositions.filter((position) =>
+              position.digests.some((digest) => tenDigests.includes(digest))
+            ),
+        ).toEqual([]);
+        expect(storedValue(result)).toEqual(value);
       });
     });
 

@@ -2324,8 +2324,8 @@ export function buildReleaseByIntentCommand(spelling: string): Command<any> {
         `Release confidentiality clauses stored at a piece data path, as the owner of its space.
 
 Without --clause, the command lists every confidentiality clause stored at the
-path, each with its canonical clause digest and the labels holding it, and
-changes nothing.
+path, each with its canonical clause digest and the labels holding it, and the
+document's other stored positions holding any of them, and changes nothing.
 
 With --clause, it releases the clauses named, whoever they stand for: each
 comes off every label stored at the path, the declared label, the labels
@@ -2333,7 +2333,10 @@ derived from what was written there (existence and membership included), and
 a link's own label. Labels at other paths, an ancestor's included, the value,
 and integrity labels are not changed. The path names one stored position: the
 links it crosses are followed to the document it lands in, a link stored at
-the path is not, and a "*" segment is refused.
+the path is not, and a "*" segment names the wildcard position stored there,
+such as a list's per-element templates, and none of the elements it covers.
+Each other position holding a clause is a release of its own, and the command
+names them.
 
 The command shows the document, the path, and each clause that comes off and
 stays, and asks you to type "release". Only then does it sign the request
@@ -2344,7 +2347,7 @@ confirmation. The store checks the signature, the owner, and that the labels
 are still the ones you were shown; a request is used once.`,
       ),
     )
-    .usage(`${pieceUsage} [path] [--clause <digest>...]`)
+    .usage(`${pieceUsage} [path]`)
     .example(
       cliText(`cf ${spelling} ${EX_ID} ${EX_COMP_PIECE}`),
       "List the clauses stored at a result's root, with their digests.",

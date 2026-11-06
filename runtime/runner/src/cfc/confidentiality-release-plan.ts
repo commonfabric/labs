@@ -17,8 +17,9 @@
  * An owner release by intent (route 2d,
  * {@link planConfidentialityReleaseByIntent}) removes the stored clauses its
  * request names by canonical clause digest, whoever they stand for, from the
- * same components at one concrete path. Its gate is the space owner's signed
- * request, which the caller verifies.
+ * same components at one stored position, its path matched literally, so a
+ * `*` segment names the wildcard position and nothing it covers. Its gate is
+ * the space owner's signed request, which the caller verifies.
  */
 
 import { debugStr } from "@commonfabric/data-model";
@@ -98,6 +99,14 @@ const nonEmptyLabel = (
 };
 
 /**
+ * How a release's path names the stored positions it reaches: `wildcard`,
+ * where a `*` segment stands for any segment (route 2c, {@link pathNames}),
+ * or `literal`, where a path names the one stored position spelled the same,
+ * a `*` segment naming the wildcard position itself (route 2d).
+ */
+type PathMatching = "wildcard" | "literal";
+
+/**
  * Whether `path`, the path a release names, names the stored position
  * `position`: the two are of one depth, and each segment of `path` is `*` or
  * the segment of `position` beside it.
@@ -111,6 +120,13 @@ const pathNames = (
     segment === "*" || segment === position[index]
   );
 
+/** The test of whether a release's path names a stored position, by `matching`. */
+const namesPosition = (matching: PathMatching) =>
+  matching === "wildcard"
+    ? pathNames
+    : (path: readonly string[], position: readonly string[]) =>
+      deepEqual(path, position);
+
 /**
  * Helper for {@link planConfidentialityRelease}, which returns `schema` with
  * the clauses `released` selects taken out of the `ifc` at each position
@@ -121,18 +137,22 @@ const pathNames = (
  * `observes` class with no label beside it goes with it. Returns `undefined`
  * where a concrete segment leads through anything else, such as a reference or
  * a branch; a `*` segment leaves such a child as it is, for the caller's check
- * of the result to find.
+ * of the result to find. Under `literal` matching a `*` segment names the
+ * wildcard position alone, so it reaches `items` and the
+ * `additionalProperties` of a schema naming no property, and no named
+ * property or tuple position.
  */
 const lowerSchemaAt = (
   schema: JSONSchema,
   path: readonly string[],
   released: (clause: CfcConfClause) => boolean,
+  matching: PathMatching,
 ): JSONSchema | undefined => {
   if (!isObjectNotArray(schema) || schema.$ref !== undefined) return undefined;
   if (path.length > 0) {
     const [head, ...rest] = path;
     const lowerChild = (child: JSONSchema) =>
-      lowerSchemaAt(child, rest, released);
+      lowerSchemaAt(child, rest, released, matching);
     const properties = isObjectNotArray(schema.properties)
       ? schema.properties
       : undefined;
@@ -143,16 +163,17 @@ const lowerSchemaAt = (
       const lowerOrKeep = (child: JSONSchema) => lowerChild(child) ?? child;
       const recordOnly = properties === undefined ||
         Object.keys(properties).length === 0;
+      const literal = matching === "literal";
       return {
         ...schema,
-        ...(properties === undefined ? {} : {
+        ...(literal || properties === undefined ? {} : {
           properties: Object.fromEntries(
             Object.entries(properties).map((
               [key, child],
             ) => [key, lowerOrKeep(child)]),
           ),
         }),
-        ...(prefixItems === undefined
+        ...(literal || prefixItems === undefined
           ? {}
           : { prefixItems: prefixItems.map(lowerOrKeep) }),
         ...(schema.items === undefined
@@ -193,7 +214,7 @@ const lowerSchemaAt = (
 
 /**
  * The confidentiality clauses stored at `path`, each once, as stored: those of
- * every payload label-map entry at a position `path` names (`pathNames()`),
+ * every payload label-map entry at a position `path` names by `matching`,
  * whatever its origin or observation class, together with those the stored
  * schema declares there (`schemaEntries`, `cfcSchemaEntries()` of it).
  */
@@ -201,11 +222,13 @@ const clausesStoredAt = (
   path: readonly string[],
   entries: readonly LabelMapEntry[],
   schemaEntries: ReturnType<typeof cfcSchemaEntries>,
+  matching: PathMatching,
 ): CfcConfClause[] => {
+  const names = namesPosition(matching);
   const stored: CfcConfClause[] = [];
   for (
     const clause of [...entries, ...schemaEntries]
-      .filter((entry) => pathNames(path, canonicalizeLogicalPath(entry.path)))
+      .filter((entry) => names(path, canonicalizeLogicalPath(entry.path)))
       .flatMap((entry) => entry.label.confidentiality ?? [])
   ) {
     if (!stored.some((known) => sameClause(known, clause))) {
@@ -219,8 +242,9 @@ const clausesStoredAt = (
  * Helper for {@link planConfidentialityRelease} and
  * {@link planConfidentialityReleaseByIntent}, which returns what the document
  * holds once the clauses `released` are removed from every payload label-map
- * entry and stored-schema declaration at a position `path` names, and from
- * nothing else. `path` is canonical, and `location` is how a refusal names it.
+ * entry and stored-schema declaration at a position `path` names by
+ * `matching`, and from nothing else. `path` is canonical, and `location` is
+ * how a refusal names it.
  *
  * @throws If the stored schema declares a released clause at a position the
  *   path names through a reference or an `allOf`, `anyOf` or `oneOf` branch,
@@ -233,10 +257,12 @@ const planClauseRemoval = (input: {
   readonly schema: JSONSchema | undefined;
   readonly schemaEntries: ReturnType<typeof cfcSchemaEntries>;
   readonly released: readonly CfcConfClause[];
+  readonly matching: PathMatching;
 }): ConfidentialityReleasePlan => {
-  const { path, location, released, schemaEntries } = input;
+  const { path, location, released, schemaEntries, matching } = input;
+  const names = namesPosition(matching);
   const atPath = (entryPath: readonly string[]) =>
-    pathNames(path, canonicalizeLogicalPath(entryPath));
+    names(path, canonicalizeLogicalPath(entryPath));
   if (released.length === 0) {
     return {
       released,
@@ -282,7 +308,7 @@ const planClauseRemoval = (input: {
   // held to what it was meant to change: every declaration the schema makes, with the
   // released clauses gone from the positions the path names and nothing else
   // different.
-  const schema = lowerSchemaAt(input.schema, path, isReleased);
+  const schema = lowerSchemaAt(input.schema, path, isReleased, matching);
   const declarations = (
     entries: ReturnType<typeof cfcSchemaEntries>,
     change: (label: IFCLabel) => IFCLabel | undefined,
@@ -350,7 +376,12 @@ export const planConfidentialityRelease = (input: {
   const schemaEntries = input.schema === undefined
     ? []
     : cfcSchemaEntries(input.schema);
-  const stored = clausesStoredAt(path, input.entries, schemaEntries);
+  const stored = clausesStoredAt(
+    path,
+    input.entries,
+    schemaEntries,
+    "wildcard",
+  );
   for (const clause of input.keep) {
     if (!stored.some((known) => sameClause(known, clause))) {
       throw new Error(
@@ -383,6 +414,7 @@ export const planConfidentialityRelease = (input: {
     schema: input.schema,
     schemaEntries,
     released,
+    matching: "wildcard",
   });
 };
 
@@ -405,45 +437,57 @@ export interface StoredClause {
   }[];
 }
 
+/** A stored payload or schema position, with its label and component. */
+interface StoredPosition {
+  readonly path: readonly string[];
+  readonly label: IFCLabel;
+  readonly origin: string;
+  readonly observes?: string;
+}
+
 /**
- * The confidentiality clauses stored at exactly `path`, each once with its
- * canonical clause digest and the entries holding it, in the order they are
- * first found: what a release by intent at `path` can name. `path` is
- * matched as a stored position, so it holds no `*` segment.
- *
- * @throws If `path` holds a `*` segment.
+ * Every position the payload label map of `entries` and the stored schema's
+ * declarations hold a label at, its path canonical, a schema declaration's
+ * component being `declared` and an entry with no origin `legacy`.
+ */
+const storedPositions = (
+  entries: readonly LabelMapEntry[],
+  schema: JSONSchema | undefined,
+): StoredPosition[] => [
+  ...entries.map((entry) => ({
+    path: canonicalizeLogicalPath(entry.path),
+    label: entry.label,
+    origin: entry.origin ?? "legacy",
+    ...(entry.observes === undefined ? {} : { observes: entry.observes }),
+  })),
+  ...(schema === undefined ? [] : cfcSchemaEntries(schema)).map((entry) => ({
+    path: canonicalizeLogicalPath(entry.path),
+    label: entry.label,
+    origin: "declared",
+  })),
+];
+
+/**
+ * The confidentiality clauses stored at exactly the stored position `path`,
+ * each once with its canonical clause digest and the entries holding it, in
+ * the order they are first found: what a release by intent at `path` can
+ * name. `path` is matched literally, so `["*"]` names the wildcard position
+ * and none of the positions it covers.
  */
 export const clausesStoredForRelease = (input: {
   readonly path: readonly string[];
   readonly entries: readonly LabelMapEntry[];
   readonly schema: JSONSchema | undefined;
 }): StoredClause[] => {
-  const path = concretePath(input.path);
-  const schemaEntries = input.schema === undefined
-    ? []
-    : cfcSchemaEntries(input.schema);
+  const path = canonicalizeLogicalPath(input.path);
   const found: {
     clause: CfcConfClause;
     digest: string;
     positions: { origin: string; observes?: string }[];
   }[] = [];
-  const positions = [
-    ...input.entries.map((entry) => ({
-      path: entry.path,
-      label: entry.label,
-      origin: entry.origin ?? "legacy",
-      observes: entry.observes,
-    })),
-    ...schemaEntries.map((entry) => ({
-      path: entry.path,
-      label: entry.label,
-      origin: "declared",
-      observes: undefined,
-    })),
-  ];
-  for (const { path: at, label, origin, observes } of positions) {
-    if (!pathNames(path, canonicalizeLogicalPath(at))) continue;
-    for (const clause of label.confidentiality ?? []) {
+  for (const position of storedPositions(input.entries, input.schema)) {
+    if (!deepEqual(position.path, path)) continue;
+    for (const clause of position.label.confidentiality ?? []) {
       let known = found.find((item) => sameClause(item.clause, clause));
       if (known === undefined) {
         known = {
@@ -454,29 +498,77 @@ export const clausesStoredForRelease = (input: {
         found.push(known);
       }
       known.positions.push({
-        origin,
-        ...(observes === undefined ? {} : { observes }),
+        origin: position.origin,
+        ...(position.observes === undefined
+          ? {}
+          : { observes: position.observes }),
       });
     }
   }
   return found;
 };
 
+/** A stored position other than the one a release names, and what it holds. */
+export interface OtherStoredPosition {
+  /** The stored path. */
+  readonly path: readonly string[];
+
+  /** The digests, among those asked about, of the clauses stored there. */
+  readonly digests: readonly string[];
+}
+
 /**
- * `path` canonicalized, as a release by intent names it.
- *
- * @throws If it holds a `*` segment: a release by intent names one concrete
- *   stored path.
+ * Every stored position of the document other than `path` whose label holds
+ * a clause one of `digests` names, with the digests it holds, in path order:
+ * the further releases by intent it takes for those clauses to be gone from
+ * the document, one request per position. The label-metadata templates are
+ * not positions here, being derived again from the payload by each release.
  */
-const concretePath = (path: readonly string[]): readonly string[] => {
-  const canonical = canonicalizeLogicalPath(path);
-  if (canonical.includes("*")) {
-    throw new Error(
-      `Cannot release by intent at ${locationOf(canonical)}: a release by ` +
-        "intent names one concrete path, and `*` is not one.",
-    );
+export const otherPositionsHolding = (input: {
+  readonly path: readonly string[];
+  readonly entries: readonly LabelMapEntry[];
+  readonly schema: JSONSchema | undefined;
+  readonly digests: readonly string[];
+}): OtherStoredPosition[] => {
+  const path = canonicalizeLogicalPath(input.path);
+  const byPath = new Map<
+    string,
+    { path: readonly string[]; digests: Set<string> }
+  >();
+  for (const position of storedPositions(input.entries, input.schema)) {
+    if (deepEqual(position.path, path)) continue;
+    for (const clause of position.label.confidentiality ?? []) {
+      const digest = cfcCanonicalClauseDigest(clause);
+      if (!input.digests.includes(digest)) continue;
+      const key = JSON.stringify(position.path);
+      const known = byPath.get(key) ??
+        { path: position.path, digests: new Set<string>() };
+      known.digests.add(digest);
+      byPath.set(key, known);
+    }
   }
-  return canonical;
+  return [...byPath.values()]
+    .sort((left, right) => comparePaths(left.path, right.path))
+    .map(({ path, digests }) => ({
+      path,
+      digests: input.digests.filter((digest) => digests.has(digest)),
+    }));
+};
+
+/**
+ * Orders two paths segment by segment, a path before every path it is a
+ * proper prefix of.
+ */
+const comparePaths = (
+  left: readonly string[],
+  right: readonly string[],
+): number => {
+  for (let index = 0; index < Math.min(left.length, right.length); index++) {
+    if (left[index] !== right[index]) {
+      return left[index] < right[index] ? -1 : 1;
+    }
+  }
+  return left.length - right.length;
 };
 
 /**
@@ -486,11 +578,14 @@ const concretePath = (path: readonly string[]): readonly string[] => {
  * from the stored schema's declaration there, and from nothing at any other
  * path. Unlike {@link planConfidentialityRelease}, it asks nothing of who may
  * release a clause: the gate is the owner's signed request, which the caller
- * verifies. `path` names one stored position, so it holds no `*` segment.
+ * verifies. `path` names one stored position, matched literally: a `*`
+ * segment names the wildcard position there, the class templates and the
+ * schema's `items` among it, and reaches none of the concrete positions the
+ * wildcard covers, each of which is a release of its own.
  *
- * @throws If `path` holds a `*` segment; if a digest names no clause stored at
- *   the path; or if the stored schema declares a released clause through a
- *   reference or a branch, as {@link planConfidentialityRelease} throws.
+ * @throws If a digest names no clause stored at the path, or if the stored
+ *   schema declares a released clause through a reference or a branch, as
+ *   {@link planConfidentialityRelease} throws.
  */
 export const planConfidentialityReleaseByIntent = (input: {
   readonly path: readonly string[];
@@ -498,12 +593,17 @@ export const planConfidentialityReleaseByIntent = (input: {
   readonly schema: JSONSchema | undefined;
   readonly releasedClauseDigests: readonly string[];
 }): ConfidentialityReleasePlan => {
-  const path = concretePath(input.path);
+  const path = canonicalizeLogicalPath(input.path);
   const location = locationOf(path);
   const schemaEntries = input.schema === undefined
     ? []
     : cfcSchemaEntries(input.schema);
-  const stored = clausesStoredAt(path, input.entries, schemaEntries);
+  const stored = clausesStoredAt(
+    path,
+    input.entries,
+    schemaEntries,
+    "literal",
+  );
   const released = input.releasedClauseDigests.map((digest) => {
     const clause = stored.find((known) =>
       cfcCanonicalClauseDigest(known) === digest
@@ -523,6 +623,7 @@ export const planConfidentialityReleaseByIntent = (input: {
     schema: input.schema,
     schemaEntries,
     released,
+    matching: "literal",
   });
 };
 
