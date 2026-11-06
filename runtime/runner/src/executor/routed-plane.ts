@@ -199,6 +199,13 @@ export class RoutedPlane {
   /** Closes in flight, which `close()` waits out. */
   readonly #closing = new Set<Promise<void>>();
 
+  /**
+   * The watchers of each document watched on a target space's session that
+   * ended, while no session the plane opened since holds them: the next
+   * session opened for the space adds their watches.
+   */
+  readonly #unplaced = new Map<string, Map<string, Set<() => void>>>();
+
   #closed = false;
 
   constructor(options: RouteOptions) {
@@ -206,9 +213,22 @@ export class RoutedPlane {
     this.#clientInfo = createClientInfo(options.clientBuild);
   }
 
-  /** DIAGNOSTIC (tests): the spaces a session is open or opening to. */
-  get accessForTestingOnly(): { readonly sessionSpaces: readonly string[] } {
-    return { sessionSpaces: [...this.#sessions.keys()] };
+  /**
+   * DIAGNOSTIC (tests): the spaces a session is open or opening to, and the
+   * documents watched on a space's session once it is open, none where it
+   * has no session.
+   */
+  get accessForTestingOnly(): {
+    readonly sessionSpaces: readonly string[];
+    watchedDocuments(space: string): Promise<readonly string[]>;
+  } {
+    return {
+      sessionSpaces: [...this.#sessions.keys()],
+      watchedDocuments: async (space) => {
+        const routed = await this.#sessions.get(space)?.catch(() => undefined);
+        return [...routed?.watchers.keys() ?? []];
+      },
+    };
   }
 
   /** A new user of the plane's sessions, to be disposed once it is done. */
@@ -232,6 +252,7 @@ export class RoutedPlane {
     this.#closed = true;
     for (const space of [...this.#sessions.keys()]) this.#closeSession(space);
     this.#users.clear();
+    this.#unplaced.clear();
     await Promise.all([...this.#closing]);
   }
 
@@ -321,10 +342,24 @@ export class RoutedPlane {
   #replace(space: MemorySpace, routed: RoutedSession): void {
     this.#closeSession(space);
     if (routed.watchers.size === 0) return;
-    const next = this.#open(space).then(async (session) => {
+    this.#hold(space, this.#openWatching(space, routed.watchers));
+  }
+
+  /**
+   * Opens `space`'s session with the watches of `watchers` added, each
+   * watcher set moving to it as it is. Where the open fails, the sets wait
+   * in `#unplaced` for the next session opened for the space.
+   */
+  async #openWatching(
+    space: MemorySpace,
+    watchers: Map<string, Set<() => void>>,
+  ): Promise<RoutedSession> {
+    if (this.#unplaced.get(space) === watchers) this.#unplaced.delete(space);
+    try {
+      const session = await this.#open(space);
       try {
-        for (const [id, watchers] of routed.watchers) {
-          session.watchers.set(id, watchers);
+        for (const [id, set] of watchers) {
+          session.watchers.set(id, set);
           await this.#addWatch(session, id);
         }
         return session;
@@ -332,8 +367,12 @@ export class RoutedPlane {
         await session.client.close().catch(() => {});
         throw error;
       }
-    });
-    this.#hold(space, next);
+    } catch (error) {
+      if (!this.#closed && this.#users.has(space)) {
+        this.#unplaced.set(space, watchers);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -366,6 +405,11 @@ export class RoutedPlane {
     // same time.
     return () => {
       if (!watchers.delete(onChange) || watchers.size > 0) return;
+      const unplaced = this.#unplaced.get(space);
+      if (unplaced?.get(id) === watchers) {
+        unplaced.delete(id);
+        if (unplaced.size === 0) this.#unplaced.delete(space);
+      }
       void this.#sessions.get(space)?.then((current) => {
         if (current.watchers.get(id) !== watchers) return;
         current.watchers.delete(id);
@@ -442,7 +486,10 @@ export class RoutedPlane {
     users.add(scope);
     let session = this.#sessions.get(space);
     if (session === undefined) {
-      session = this.#open(space);
+      const unplaced = this.#unplaced.get(space);
+      session = unplaced === undefined
+        ? this.#open(space)
+        : this.#openWatching(space, unplaced);
       this.#hold(space, session);
     }
     return session;
@@ -503,6 +550,7 @@ export class RoutedPlane {
     for (const [space, users] of [...this.#users]) {
       if (!users.delete(scope) || users.size > 0) continue;
       this.#users.delete(space);
+      this.#unplaced.delete(space);
       this.#closeSession(space);
     }
   }

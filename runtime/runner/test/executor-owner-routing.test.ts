@@ -946,6 +946,43 @@ describe("executor owner routing", () => {
     expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
   });
 
+  it("keeps a document's watch while the owner refuses the session replacing a revoked one, and adds it to the session opened once a later change to the list admits one", async () => {
+    const owner = enforcingOwner();
+    // As in the outbox's case below: the target's becoming its own owner
+    // binds a routed session to no user, and the list grants the service
+    // nothing, so the owner refuses the replacing session's open.
+    await seedTarget(owner, { [aliceSigner.did()]: "OWNER" }, "profile");
+    await createStreamDoc(owner, targetSpace, stream.id);
+    const revocations = new ArrivalLog<void>();
+    const plane = new RoutedPlane(revocationRecordingRoute(revocations));
+    planes.push(plane);
+    const scope = plane.scope();
+    const woken = new ArrivalLog<string>();
+    const cancel = await scope.watchDocument(targetSpace, sidecar, () => {
+      void entriesOn(owner, targetSpace, sidecar).then((entries) => {
+        for (const entry of entries) woken.record(entry.eventId);
+      });
+    });
+    await editTargetAcl(
+      owner,
+      aliceSigner,
+      (acl) => acl.set(targetSpace as never, "OWNER"),
+    );
+    await revocations.reached(1);
+    await expect(
+      scope.append(targetSpace, appendOf("evt-refused-open", aliceSigner)),
+    ).rejects.toThrow("lacks READ");
+
+    await editTargetAcl(owner, aliceSigner, (acl) => acl.remove(targetSpace));
+    await scope.append(targetSpace, appendOf("evt-readmitted", aliceSigner));
+    expect(await plane.accessForTestingOnly.watchedDocuments(targetSpace))
+      .toEqual([sidecar]);
+    await woken.matching((eventId) => eventId === "evt-readmitted");
+    cancel();
+    scope.dispose();
+    expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
+  });
+
   it("retires a row into a target its owner deleted while the row's session was open, as a deterministic refusal with the notice on the source entry", async () => {
     const revocations = new ArrivalLog<void>();
     const plane = new RoutedPlane(revocationRecordingRoute(revocations));
