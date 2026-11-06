@@ -49,8 +49,8 @@ export interface SharedNoteInput {
   content?: PerSpace<string | Default<"">>;
 
   /**
-   * Comments on the body, one keyed record per comment. A record with
-   * `draft` set is a comment its author is still writing.
+   * Comments on the body, one keyed record per comment. A record whose
+   * `status` is `"draft"` is a comment its author is still writing.
    */
   comments?: PerSpace<StoredComment[] | Default<[]>>;
 }
@@ -297,6 +297,11 @@ export type StoredReply = AuthoredByCurrentUser<
 /** The replies to one comment, in the order they were written. */
 export type RepliesValue = StoredReply[] | Default<[]>;
 
+/**
+ * Where a comment is in its life: still being written, posted, or deleted.
+ */
+export type CommentStatus = "draft" | "posted" | "deleted";
+
 /** A comment on a range of the body. */
 export interface CommentRecord {
   /** The comment's id, which its two anchors on the body are named for. */
@@ -309,12 +314,12 @@ export interface CommentRecord {
   body: string;
 
   /**
-   * Whether the comment is still being written. A draft holds its anchors
-   * from the moment its author opens the composer; it is listed only to its
-   * author, who can continue or discard it, and marks no text for anyone
-   * else.
+   * Where the comment is in its life. A draft holds its anchors from the
+   * moment its author opens the composer; it is listed only to its author,
+   * who can continue or discard it, and marks no text for anyone else. A
+   * deleted comment is linked from no list, and has no anchors.
    */
-  draft: boolean;
+  status: CommentStatus;
 
   /**
    * The text between the anchors when the comment was written, shown once
@@ -510,7 +515,7 @@ const storeComment = (
   profile: ProfileCell,
   body: string,
   quote: string,
-  draft: boolean,
+  status: "draft" | "posted",
 ): void => {
   // A comment may link only lists and cells that exist, so they are made
   // before the comment links them.
@@ -521,7 +526,7 @@ const storeComment = (
     id,
     authorProfile: profile,
     body,
-    draft,
+    status,
     quote,
     postedAt: Date.now(),
     replies,
@@ -542,7 +547,7 @@ const commentNamed = (
 ): Writable<StoredComment> => {
   const record = id === "" ? undefined : comments.elementById(id);
   const current: StoredComment | undefined = record?.get();
-  if (record === undefined || current === undefined || current.draft) {
+  if (record === undefined || current?.status !== "posted") {
     throw new Error(`No comment has the id \`${id}\`.`);
   }
   return record;
@@ -625,7 +630,7 @@ const openComposer = handler<unknown, OpenComposerState>((_, state) => {
   }
   const id = mintCommentId();
   anchorComment(state.anchors, id, from, to);
-  storeComment(state.comments, id, profile, "", text, true);
+  storeComment(state.comments, id, profile, "", text, "draft");
   state.composing.set({ id, text });
   state.draft.set("");
   state.notice.set("");
@@ -640,11 +645,9 @@ const writtenByCaller = (record: Writable<StoredComment>): boolean => {
 /**
  * Removes the comment `record`, stored under `id`, with its anchors. Dropping
  * the record's link from the list is what removes the comment from the note.
- * The record is also left holding `undefined`, a pattern having no way to
- * delete the document itself, so that a handler finding a comment by its id,
- * as the verbs and the draft checks do, sees that it is gone without reading
- * the list. Such reads are typed `StoredComment | undefined` for that reason;
- * the list's entries are not, since the list never links a deleted comment.
+ * The record is also marked deleted, so that a handler finding a comment by
+ * its id, as the verbs and the draft checks do, sees that it is gone without
+ * reading the list.
  */
 const removeComment = (
   anchors: AnchorsCell,
@@ -653,8 +656,7 @@ const removeComment = (
   id: string,
 ): void => {
   comments.removeByValue(record);
-  const cleared: Writable<StoredComment | undefined> = comments.elementById(id);
-  cleared.set(undefined);
+  record.key("status").set("deleted");
   unanchorComment(anchors, id);
 };
 
@@ -670,7 +672,7 @@ const discardDraftRecord = (
 ): void => {
   const record = comments.elementById(id);
   const current: StoredComment | undefined = record.get();
-  if (current?.draft !== true || !writtenByCaller(record)) return;
+  if (current?.status !== "draft" || !writtenByCaller(record)) return;
   removeComment(anchors, comments, record, id);
 };
 
@@ -695,7 +697,7 @@ const resumeDraft = handler<unknown, ResumeState>(
       return;
     }
     const current: StoredComment | undefined = comments.elementById(id).get();
-    if (current?.draft !== true) {
+    if (current?.status !== "draft") {
       notice.set("This draft was posted or discarded in another tab.");
       return;
     }
@@ -765,14 +767,14 @@ const postComment = handler<unknown, PostCommentState>((_, state) => {
     return;
   }
   const record = state.comments.elementById(id);
-  if (record.get()?.draft !== true || !writtenByCaller(record)) {
+  if (record.get()?.status !== "draft" || !writtenByCaller(record)) {
     // The composer stays open, so the text can still be copied; Cancel
     // closes it.
     state.notice.set("This draft was posted or discarded in another tab.");
     return;
   }
   record.key("body").set(body);
-  record.key("draft").set(false);
+  record.key("status").set("posted");
   record.key("postedAt").set(Date.now());
   state.composing.set(NOT_COMPOSING);
   state.draft.set("");
@@ -802,7 +804,7 @@ const addComment = handler<AddCommentEvent, AddCommentState>(
     );
     const id = mintCommentId();
     anchorComment(anchors, id, from, from + event.quote.length);
-    storeComment(comments, id, profile, body, event.quote, false);
+    storeComment(comments, id, profile, body, event.quote, "posted");
   },
 );
 
@@ -905,7 +907,7 @@ const replyToSelected = handler<
     return;
   }
   const current: StoredComment | undefined = comments.elementById(id).get();
-  if (current === undefined || current.draft) {
+  if (current?.status !== "posted") {
     notice.set("This comment is no longer posted.");
     return;
   }
@@ -1054,7 +1056,8 @@ export const SharedNoteCore = pattern<
   const openIds = computed(() =>
     comments.get()
       .filter((comment) =>
-        comment !== undefined && !comment.draft && !comment.resolved.get()
+        comment !== undefined && comment.status === "posted" &&
+        !comment.resolved.get()
       )
       .map((comment) => comment.id)
   );
@@ -1103,7 +1106,7 @@ export const SharedNoteCore = pattern<
     const id = selectedId.get();
     const record = comments.get().find((comment) => comment?.id === id);
     const resolved = record?.resolved.get() ?? false;
-    const listed = record !== undefined && !record.draft &&
+    const listed = record?.status === "posted" &&
       (!resolved || showResolved.get());
     const mine = record !== undefined && viewer !== "" &&
       principalOf(comments.elementById(id), "authored-by") === viewer;
@@ -1239,7 +1242,7 @@ export const SharedNoteCore = pattern<
               const placed = computed(() => {
                 const range = rangeOf[comment.id];
                 const gone = range !== undefined && range.to <= range.from;
-                const draftDisplay: NoteDisplay = comment.draft
+                const draftDisplay: NoteDisplay = comment.status === "draft"
                   ? "flex"
                   : "none";
                 // The quote is the author's; the text between the anchors
@@ -1269,7 +1272,7 @@ export const SharedNoteCore = pattern<
                 return {
                   // A draft is listed only to its author, and not while the
                   // composer is writing it.
-                  row: comment.draft
+                  row: comment.status === "draft"
                     ? mine && composing.get().id !== comment.id
                       ? "flex"
                       : "none"

@@ -14,10 +14,6 @@
             "description": "The comment; empty while it is a draft.",
             "type": "string"
           },
-          "draft": {
-            "description": "Whether the comment is still being written. A draft holds its anchors\nfrom the moment its author opens the composer; it is listed only to its\nauthor, who can continue or discard it, and marks no text for anyone\nelse.",
-            "type": "boolean"
-          },
           "id": {
             "description": "The comment's id, which its two anchors on the body are named for.",
             "type": "string"
@@ -44,19 +40,30 @@
             "default": false,
             "description": "Whether the comment is settled, a cell of its own that anyone may set. A\nresolved comment marks no text.",
             "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/$defs/CommentStatus",
+            "description": "Where the comment is in its life. A draft holds its anchors from the\nmoment its author opens the composer; it is listed only to its author,\nwho can continue or discard it, and marks no text for anyone else. A\ndeleted comment is linked from no list, and has no anchors."
           }
         },
         "required": [
           "id",
           "authorProfile",
           "body",
-          "draft",
+          "status",
           "quote",
           "postedAt",
           "replies",
           "resolved"
         ],
         "type": "object"
+      },
+      "CommentStatus": {
+        "enum": [
+          "draft",
+          "posted",
+          "deleted"
+        ]
       },
       "NoteProfile": {
         "properties": {
@@ -117,7 +124,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "25wV8t7iI-lCpyVhnMznq6PnthIroQTnbzxfa0qX9OE",
+                  "moduleIdentity": "Uka_rbNuo_fv8rAAO8QgBQYuvpRx2MnG_dDiJ9nAL8E",
                   "path": [
                     "openComposer"
                   ]
@@ -128,7 +135,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "25wV8t7iI-lCpyVhnMznq6PnthIroQTnbzxfa0qX9OE",
+                  "moduleIdentity": "Uka_rbNuo_fv8rAAO8QgBQYuvpRx2MnG_dDiJ9nAL8E",
                   "path": [
                     "postComment"
                   ]
@@ -139,7 +146,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "25wV8t7iI-lCpyVhnMznq6PnthIroQTnbzxfa0qX9OE",
+                  "moduleIdentity": "Uka_rbNuo_fv8rAAO8QgBQYuvpRx2MnG_dDiJ9nAL8E",
                   "path": [
                     "addComment"
                   ]
@@ -150,7 +157,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "25wV8t7iI-lCpyVhnMznq6PnthIroQTnbzxfa0qX9OE",
+                  "moduleIdentity": "Uka_rbNuo_fv8rAAO8QgBQYuvpRx2MnG_dDiJ9nAL8E",
                   "path": [
                     "deleteComment"
                   ]
@@ -161,7 +168,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "25wV8t7iI-lCpyVhnMznq6PnthIroQTnbzxfa0qX9OE",
+                  "moduleIdentity": "Uka_rbNuo_fv8rAAO8QgBQYuvpRx2MnG_dDiJ9nAL8E",
                   "path": [
                     "discardDraft"
                   ]
@@ -185,7 +192,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/apps/shared-note/main.tsx",
-              "moduleIdentity": "25wV8t7iI-lCpyVhnMznq6PnthIroQTnbzxfa0qX9OE",
+              "moduleIdentity": "Uka_rbNuo_fv8rAAO8QgBQYuvpRx2MnG_dDiJ9nAL8E",
               "path": [
                 "commitReply"
               ]
@@ -198,7 +205,7 @@
     "properties": {
       "comments": {
         "default": [],
-        "description": "Comments on the body, one keyed record per comment. A record with\n`draft` set is a comment its author is still writing.",
+        "description": "Comments on the body, one keyed record per comment. A record whose\n`status` is `\"draft\"` is a comment its author is still writing.",
         "items": {
           "$ref": "#/$defs/StoredComment"
         },
@@ -262,10 +269,6 @@
             "description": "The comment; empty while it is a draft.",
             "type": "string"
           },
-          "draft": {
-            "description": "Whether the comment is still being written. A draft holds its anchors\nfrom the moment its author opens the composer; it is listed only to its\nauthor, who can continue or discard it, and marks no text for anyone\nelse.",
-            "type": "boolean"
-          },
           "id": {
             "description": "The comment's id, which its two anchors on the body are named for.",
             "type": "string"
@@ -286,13 +289,17 @@
             "default": false,
             "description": "Whether the comment is settled, a cell of its own that anyone may set. A\nresolved comment marks no text.",
             "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/$defs/CommentStatus",
+            "description": "Where the comment is in its life. A draft holds its anchors from the\nmoment its author opens the composer; it is listed only to its author,\nwho can continue or discard it, and marks no text for anyone else. A\ndeleted comment is linked from no list, and has no anchors."
           }
         },
         "required": [
           "id",
           "authorProfile",
           "body",
-          "draft",
+          "status",
           "quote",
           "postedAt",
           "replies",
@@ -316,6 +323,13 @@
           "id"
         ],
         "type": "object"
+      },
+      "CommentStatus": {
+        "enum": [
+          "draft",
+          "posted",
+          "deleted"
+        ]
       },
       "FieldAnchors": {
         "additionalProperties": {
@@ -409,7 +423,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "25wV8t7iI-lCpyVhnMznq6PnthIroQTnbzxfa0qX9OE",
+                  "moduleIdentity": "Uka_rbNuo_fv8rAAO8QgBQYuvpRx2MnG_dDiJ9nAL8E",
                   "path": [
                     "openComposer"
                   ]
@@ -420,7 +434,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "25wV8t7iI-lCpyVhnMznq6PnthIroQTnbzxfa0qX9OE",
+                  "moduleIdentity": "Uka_rbNuo_fv8rAAO8QgBQYuvpRx2MnG_dDiJ9nAL8E",
                   "path": [
                     "postComment"
                   ]
@@ -431,7 +445,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "25wV8t7iI-lCpyVhnMznq6PnthIroQTnbzxfa0qX9OE",
+                  "moduleIdentity": "Uka_rbNuo_fv8rAAO8QgBQYuvpRx2MnG_dDiJ9nAL8E",
                   "path": [
                     "addComment"
                   ]
@@ -442,7 +456,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "25wV8t7iI-lCpyVhnMznq6PnthIroQTnbzxfa0qX9OE",
+                  "moduleIdentity": "Uka_rbNuo_fv8rAAO8QgBQYuvpRx2MnG_dDiJ9nAL8E",
                   "path": [
                     "deleteComment"
                   ]
@@ -453,7 +467,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/apps/shared-note/main.tsx",
-                  "moduleIdentity": "25wV8t7iI-lCpyVhnMznq6PnthIroQTnbzxfa0qX9OE",
+                  "moduleIdentity": "Uka_rbNuo_fv8rAAO8QgBQYuvpRx2MnG_dDiJ9nAL8E",
                   "path": [
                     "discardDraft"
                   ]
@@ -477,7 +491,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/apps/shared-note/main.tsx",
-              "moduleIdentity": "25wV8t7iI-lCpyVhnMznq6PnthIroQTnbzxfa0qX9OE",
+              "moduleIdentity": "Uka_rbNuo_fv8rAAO8QgBQYuvpRx2MnG_dDiJ9nAL8E",
               "path": [
                 "commitReply"
               ]

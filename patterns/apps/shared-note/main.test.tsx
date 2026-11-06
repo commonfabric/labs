@@ -152,7 +152,8 @@ const listed = (
 /** The id of the one draft among `comments`, or empty for none. */
 const draftIdIn = (
   comments: readonly (StoredComment | undefined)[],
-): string => listed(comments).find((comment) => comment.draft)?.id ?? "";
+): string =>
+  listed(comments).find((comment) => comment.status === "draft")?.id ?? "";
 
 /** The range between the two anchors of the comment `id` among `anchors`. */
 const rangeIn = (
@@ -615,6 +616,7 @@ export default pattern(() => {
     })
   );
   const assert_deleted_with_its_anchor = assert(() =>
+    !comments.get().some((c) => c?.status === "deleted") &&
     listed(comments.get()).length === 1 &&
     listed(comments.get())[0].body === "Needs a date" &&
     anchoredCount(note.commentAnchors) === 1 &&
@@ -671,7 +673,7 @@ export default pattern(() => {
   const assert_moved_selection_refused = assert(() =>
     commentDisabled(note[UI]) === true &&
     displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
-    !listed(comments.get()).some((c) => c.draft)
+    !listed(comments.get()).some((c) => c.status === "draft")
   );
   const action_editor_restates_the_selection = action(() =>
     fireEvent(
@@ -708,7 +710,7 @@ export default pattern(() => {
       findNodeById(note[UI], "shared-note-comment-notice"),
       "The note changed under your selection",
     ) &&
-    !listed(comments.get()).some((c) => c.draft)
+    !listed(comments.get()).some((c) => c.status === "draft")
   );
   const assert_restated_selection_posts = assert(() => {
     const pinned = listed(comments.get()).find((c) => c.body === "Why pin?");
@@ -743,13 +745,15 @@ export default pattern(() => {
       !hasText(composer, PINNED) &&
       highlightsOf(note[UI])?.some((h) =>
           h.kind === "active" &&
-          listed(comments.get()).some((c) => c.id === h.id && c.draft)
+          listed(comments.get()).some((c) =>
+            c.id === h.id && c.status === "draft"
+          )
         ) === true;
   });
   // The draft is a record of its own, which nobody else sees, and the button
   // that would start another is disabled while it is open.
   const assert_draft_is_hidden_from_others = assert(() => {
-    const drafted = listed(comments.get()).find((c) => c.draft);
+    const drafted = listed(comments.get()).find((c) => c.status === "draft");
     return drafted !== undefined && drafted.body === "" &&
       drafted.quote === HEADING &&
       displayOf(findNodeByProp(guest[UI], "data-comment-id", drafted.id)) ===
@@ -764,9 +768,9 @@ export default pattern(() => {
   const assert_post_lands_on_the_composer_text = assert(() => {
     const again = listed(comments.get()).find((c) => c.body === "Again?");
     const range = rangeIn(note.commentAnchors, again?.id);
-    return range !== undefined && again?.draft === false &&
+    return range !== undefined && again?.status === "posted" &&
       content.get().slice(range.from, range.to) === HEADING &&
-      !listed(comments.get()).some((c) => c.draft);
+      !listed(comments.get()).some((c) => c.status === "draft");
   });
   const action_open_composer_on_pinned_again = action(() =>
     clickButton(note[UI], "Comment")
@@ -775,7 +779,7 @@ export default pattern(() => {
   const assert_cancel_removes_the_anchor = assert(() =>
     displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
     anchoredCount(note.commentAnchors) === listed(comments.get()).length &&
-    !listed(comments.get()).some((c) => c.draft)
+    !listed(comments.get()).some((c) => c.status === "draft")
   );
   // A draft continued and posted in another tab: the first tab's Post is
   // refused, and the comment keeps the other tab's text.
@@ -812,7 +816,7 @@ export default pattern(() => {
     const posted = listed(comments.get()).find((c) =>
       c.body === "From tab two"
     );
-    return posted !== undefined && posted.draft === false &&
+    return posted !== undefined && posted.status === "posted" &&
       !listed(comments.get()).some((c) => c.body === "Tab one") &&
       displayOf(findNodeById(note[UI], "shared-note-composer")) === "flex" &&
       hasText(
@@ -826,7 +830,7 @@ export default pattern(() => {
   );
   const assert_cancel_leaves_the_posted_comment = assert(() =>
     listed(comments.get()).some((c) =>
-      c.body === "From tab two" && c.draft === false
+      c.body === "From tab two" && c.status === "posted"
     ) &&
     displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
     anchoredCount(note.commentAnchors) === listed(comments.get()).length
@@ -844,7 +848,9 @@ export default pattern(() => {
     })
   );
   const assert_draft_takes_no_reply = assert(() =>
-    listed(comments.get()).some((c) => c.draft && c.replies.get().length === 0)
+    listed(comments.get()).some((c) =>
+      c.status === "draft" && c.replies.get().length === 0
+    )
   );
   const action_discard_in_another_tab = action(() =>
     fireClick(
@@ -860,7 +866,8 @@ export default pattern(() => {
     )
   );
   const assert_discarded_draft_is_gone = assert(() =>
-    !listed(comments.get()).some((c) => c.draft) &&
+    !comments.get().some((c) => c?.status === "deleted") &&
+    !listed(comments.get()).some((c) => c.status === "draft") &&
     anchoredCount(note.commentAnchors) === listed(comments.get()).length
   );
   const action_cancel_after_discard = action(() =>
