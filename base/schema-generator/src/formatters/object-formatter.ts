@@ -410,20 +410,12 @@ export class ObjectFormatter implements TypeFormatter {
       }
 
       // Delegate to the main generator (specific formatters handle wrappers/defaults)
-      const readsOptionalBound = readsBoundNode && isOptionalSymbol(prop);
-      const generated = readsOptionalBound
-        ? this.#schemaGenerator.formatOptionalProperty(
-          resolvedPropType,
-          context,
-          propTypeNode!,
-          instantiatedPropType,
-        )
-        : this.#schemaGenerator.formatChildType(
-          resolvedPropType,
-          context,
-          propTypeNode,
-          instantiatedPropType,
-        );
+      const generated = this.#schemaGenerator.formatChildType(
+        resolvedPropType,
+        context,
+        propTypeNode,
+        instantiatedPropType,
+      );
       if (isObjectOrArray(generated)) {
         attachDeprecatedStreamMark(
           generated as Record<string, unknown>,

@@ -263,7 +263,7 @@ export default pattern<Input<Box<number>>>(({ c }) => ({
         anyOf: [
           {
             type: "object",
-            properties: { value: { type: ["number", "undefined"] } },
+            properties: { value: { type: "number" } },
           },
           { type: "object", properties: {} },
         ],

@@ -2456,19 +2456,6 @@ export class SchemaGenerator {
     );
   }
 
-  /** Keeps an optional property's semantic alternative beside its bound value. */
-  public formatOptionalProperty(
-    type: ts.Type,
-    context: GenerationContext,
-    typeNode: ts.TypeNode,
-    instantiatedAs?: ts.Type,
-  ): MutableJSONSchema {
-    return this.#unionFormatter.withUndefined(
-      this.formatChildType(type, context, typeNode, instantiatedAs),
-      context,
-    );
-  }
-
   /**
    * `type` as the formatters after `CommonFabricFormatter` read it: for a type
    * that formatter claims for the labels it adds, whose value is the type as

@@ -132,6 +132,35 @@ candidate pattern generates it during setup. This admits the forward migration;
 add a result default as well when an older concurrently running generation must
 still be able to write its previous result shape.
 
+An `undefined` alternative of a property's schema, as an `anyOf` arm or a
+`type` list member, is outside the proof at a property the reading side does
+not require. `undefined` is a value, and a property holding it is present
+(`json_schema.md`, "Handling of `undefined`"), but what a reader sees is
+decided by the schema it reads through: a present `undefined` read through a
+schema that leaves the alternative out reads as absent, with no error, and a
+reader of a property it does not require already handles that absence. The
+reading side is the proof's target: the candidate argument schema, through
+which the candidate reads a stored argument, and the previous result schema,
+through which existing readers read the candidate's result. At such a
+property the proof compares both sides with the alternative left out
+(`withoutUndefinedAlternative` in `runtime/piece/src/schema-compatibility.ts`),
+reading an `anyOf` left with one alternative as that alternative: a candidate
+argument need not keep admitting it, and a candidate result that comes to
+admit it promises nothing its readers do not already handle. What that
+narrowing leaves visible is outside the proof: `in`, `hasOwn`, `Object.keys`
+and deep equality tell a present `undefined` from an absent key.
+
+At a property the reading side requires, the alternative is compared as any
+other. A required property holding `undefined` is not an absence its reader
+handles but a value its schema must describe, so a candidate argument that
+stops admitting it there, or a candidate result that comes to admit it, is
+refused as narrowing. Beside `asCell`, the alternatives describe the cell's
+value, which may be `undefined`, and are kept.
+
+An optional property's schema carries `undefined` only where its type names
+it (`json_schema.md`), so a contract whose optional property admits it and one
+whose does not are applicable over each other, whichever is recorded first.
+
 Cell wrappers (`asCell`), storage scopes (`scope`), and the write markers
 (`readOnly`, `writeOnly`) are default-stable: they say how a value is
 delivered, stored, or written, not what shape it has, so a default beneath one
