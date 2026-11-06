@@ -918,10 +918,13 @@ export default add(5, "5");`,
     // which it sees as `T | undefined`, to another factory. The type cannot
     // tell that reference from a literal `undefined` or a computation that
     // returns one, so those are admitted too; the table says so, as what is
-    // accepted. An optional property's indexed type includes `undefined`,
-    // so `key().set()` admits it too. Required inputs, index-signature values,
-    // required `patternTool()` prefills, and optional-property writes through
-    // `update()` keep the stricter rule.
+    // accepted. `db.query`'s options admit it for the same reason, as the
+    // `sqliteQuery` factory's inputs do, except `scope`, which is read when
+    // the pattern is built, so no forwarded input can supply it. An optional
+    // property's indexed type includes `undefined`, so `key().set()` admits it
+    // too. Required inputs, index-signature values, required `patternTool()`
+    // prefills, and optional-property writes through `update()` keep the
+    // stricter rule.
 
     const SUB = [
       "import { computed, pattern, patternTool, UI } from 'commonfabric';",
@@ -982,6 +985,35 @@ export default add(5, "5");`,
         name:
           "admits undefined at an optional key of patternTool's extraParams",
         body: "export default patternTool(Sub, { index: undefined });",
+      },
+      {
+        name: "admits an optional input forwarded to a `db.query` option",
+        body: [
+          "import { type SqliteDb } from 'commonfabric';",
+          "export default pattern<{ db: SqliteDb; requestKey?: string }>(",
+          "  ({ db, requestKey }) => db.query('SELECT 1', { requestKey }),",
+          ");",
+        ].join("\n"),
+      },
+      {
+        name: "refuses a value of another type at a `db.query` option",
+        body: [
+          "import { type SqliteDb } from 'commonfabric';",
+          "export default pattern<{ db: SqliteDb }>(",
+          "  ({ db }) => db.query('SELECT 1', { requestKey: 1 }),",
+          ");",
+        ].join("\n"),
+        refused: "not assignable",
+      },
+      {
+        name: "refuses an optional input forwarded to `db.query`'s `scope`",
+        body: [
+          "import { type CellScope, type SqliteDb } from 'commonfabric';",
+          "export default pattern<{ db: SqliteDb; scope?: CellScope }>(",
+          "  ({ db, scope }) => db.query('SELECT 1', { scope }),",
+          ");",
+        ].join("\n"),
+        refused: "'{ scope: CellScope | undefined; }' is not assignable",
       },
       {
         name: "refuses undefined at a required input",

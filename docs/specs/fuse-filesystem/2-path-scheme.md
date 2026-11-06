@@ -177,15 +177,15 @@ home/pieces/my-note/
 ```markdown
 ---
 entityId: of:ba4jcbvpq3k5soo...
-title: My Note Title
+title: "My Note Title"
 ---
 
 The note body content goes here.
 ```
 
-Primitive frontmatter fields appear in YAML. Complex values (arrays of
-entities, nested objects) become sibling directories alongside `index.md`,
-using the same directory-tree rules as the default layout.
+Primitive frontmatter fields appear in YAML, strings quoted. Complex values
+(arrays of entities, nested objects) become sibling directories alongside
+`index.md`, using the same directory-tree rules as the default layout.
 
 **JSON projection** (`type: "application/json"` or plain object):
 

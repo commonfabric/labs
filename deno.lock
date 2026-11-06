@@ -2885,6 +2885,7 @@
       "base/identity": {
         "dependencies": [
           "npm:@noble/ed25519@^3.1.0",
+          "npm:@noble/hashes@^2.2.0",
           "npm:@scure/bip39@^2.2.0"
         ]
       },

@@ -89,6 +89,7 @@ import {
   newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "../../runner/test/memory-v2-test-utils.ts";
+import { isInertAnnotationKey } from "../src/schema-compatibility.ts";
 import {
   companionFileName,
   companionSpace,
@@ -635,10 +636,30 @@ function isVNode(value: object): boolean {
 }
 
 /**
+ * How a note on inherited docs opens. A schema a vintage holds can carry one:
+ * an earlier schema generator wrote it into the `$comment` of an intersection
+ * its constituents documented, after any comment already there. The note
+ * names those constituents as the checker printed them, so it changed with
+ * the checker's options rather than with the schema.
+ */
+const INHERITED_DOCS_NOTE = "Docs inherited from intersection constituents.";
+
+/**
+ * `comment`, a `$comment`'s value, cut where a note on inherited docs opens,
+ * or `undefined` when nothing comes before the note.
+ */
+function withoutInheritedDocsNote(comment: string): string | undefined {
+  const note = comment.indexOf(INHERITED_DOCS_NOTE);
+  if (note === -1) return comment;
+  const kept = comment.slice(0, note).trimEnd();
+  return kept === "" ? undefined : kept;
+}
+
+/**
  * A materialized root, detached and reduced to something two of can be
  * COMPARED.
  *
- * A materialized root is not plain data, and three of the things in it defeat a
+ * A materialized root is not plain data, and these things in it defeat a
  * structural comparison outright:
  *
  * - **A live cell.** At every `asCell`/`asStream` position — the six handler
@@ -675,6 +696,14 @@ function isVNode(value: object): boolean {
  *   recorded hoist roots and took the gate to exit 1, for a change that stores
  *   nothing. Reduced by SHAPE here, so a rendering is out of the comparison
  *   wherever it sits rather than only where it is named.
+ * - **A note on inherited docs.** A schema the state holds written out, as a
+ *   stored pattern's `argumentSchema` is, can carry one in a `$comment`
+ *   ({@link INHERITED_DOCS_NOTE}), and the same schema compiled again carries
+ *   none. Measured on the committed `default-app.tsx` fixture:
+ *   `summaryIndex.search` holds such a pattern, and an update compiled without
+ *   the note reported `summaryIndex` and `search` stranded, a `$comment` having
+ *   gone from something to nothing. Cut here from where the note opens, so a
+ *   `$comment` compares by what it held before the note.
  *
  * Everything else is copied plainly, and `bigint` and `undefined` pass through
  * as themselves — the two values a JSON round-trip could not carry.
@@ -709,7 +738,13 @@ export function comparableState(value: unknown): unknown {
       if (Array.isArray(current)) return current.map(walk);
       const copy: Record<string, unknown> = {};
       for (const key of Object.keys(current)) {
-        copy[key] = walk((current as Record<string, unknown>)[key]);
+        const value = (current as Record<string, unknown>)[key];
+        if (key === "$comment" && typeof value === "string") {
+          const comment = withoutInheritedDocsNote(value);
+          if (comment !== undefined) copy[key] = comment;
+          continue;
+        }
+        copy[key] = walk(value);
       }
       return copy;
     } finally {
@@ -971,26 +1006,29 @@ export function isReduction(value: unknown): boolean {
  *   the two must not be allowed to collapse again.
  */
 
-/** How the schema generator's note on inherited docs opens. */
-const INHERITED_DOCS_NOTE = "Docs inherited from intersection constituents.";
-
 /**
- * `schema` without the schema generator's note on inherited docs, at any
- * depth. The note prints a TypeScript type the way the checker's options have
- * it print, and constrains no value. Every other `$comment` stays, because a
+ * `schema` without what only describes it, at any depth: the keywords
+ * {@link isInertAnnotationKey} names, and a note on inherited docs
+ * ({@link INHERITED_DOCS_NOTE}). The note is cut from where it opens. What a
+ * `$comment` held before it stays, as does every other `$comment`, because a
  * reader of a schema can act on one: `rejectedProperty` is one such.
  */
-function withoutInheritedDocsNotes(schema: JSONSchemaObj): JSONSchemaObj {
-  const { $comment, ...rest } = schema;
-  const kept = typeof $comment === "string" &&
-      $comment.startsWith(INHERITED_DOCS_NOTE)
-    ? rest
-    : schema;
+function withoutDescriptiveAnnotations(schema: JSONSchemaObj): JSONSchemaObj {
+  const kept: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (isInertAnnotationKey(key)) continue;
+    if (key === "$comment" && typeof value === "string") {
+      const comment = withoutInheritedDocsNote(value);
+      if (comment !== undefined) kept[key] = comment;
+      continue;
+    }
+    kept[key] = value;
+  }
   return mapSubschemas(
-    kept,
+    kept as JSONSchemaObj,
     (child) =>
       isObjectNotArray(child)
-        ? withoutInheritedDocsNotes(child as JSONSchemaObj)
+        ? withoutDescriptiveAnnotations(child as JSONSchemaObj)
         : child,
     { includeDefs: true, includeUnused: true },
   );
@@ -1004,12 +1042,13 @@ function withoutInheritedDocsNotes(schema: JSONSchemaObj): JSONSchemaObj {
  * comparing structurally does not settle this — recomposition derives `$defs`
  * names from content hashes where the inline side carries the author's — so
  * the INLINE side is decomposed instead, and the two canonical root
- * references either match or they do not. A difference in the schema
- * generator's note on inherited docs is not a difference in content, so when
- * the two do not match they are compared again without it, which reads the
- * reference's documents from the registry. `undefined` means neither side is
- * a bare reference and the ordinary walk decides; a bare reference paired
- * with anything that does not decompose to it is a change.
+ * references either match or they do not. A difference in what only describes
+ * a schema, as {@link withoutDescriptiveAnnotations} removes it, is not a
+ * difference in content, so when the two do not match they are compared again
+ * without it, which reads the reference's documents from the registry.
+ * `undefined` means neither side is a bare reference and the ordinary walk
+ * decides; a bare reference paired with anything that does not decompose to
+ * it is a change.
  */
 function externalSchemaRefEquivalent(
   before: unknown,
@@ -1045,16 +1084,17 @@ function externalSchemaRefEquivalent(
   const afterRef = canonicalRefOf(after);
   if (beforeRef === undefined || afterRef === undefined) return false;
   if (beforeRef === afterRef) return true;
-  const refWithoutNotesOf = (value: unknown): string => {
+  const refWithoutAnnotationsOf = (value: unknown): string => {
     const own = bareRefOf(value);
     const schema = own === undefined
       ? value
       : recomposeSchema(own, lookupSchemaDocument);
-    return decomposeSchema(withoutInheritedDocsNotes(schema as JSONSchemaObj))
-      .rootRef;
+    return decomposeSchema(
+      withoutDescriptiveAnnotations(schema as JSONSchemaObj),
+    ).rootRef;
   };
   try {
-    return refWithoutNotesOf(before) === refWithoutNotesOf(after);
+    return refWithoutAnnotationsOf(before) === refWithoutAnnotationsOf(after);
   } catch {
     return false;
   }

@@ -2574,13 +2574,21 @@ export class StorageManager implements IStorageManager {
   }
 
   /** @inheritDoc */
+  unreachableSpaces(): MemorySpace[] {
+    return [...this.#providers.keys()].filter((space) =>
+      MemoryV2Client.isFirstHandshakeFailure(this.spaceSessionError(space))
+    );
+  }
+
+  /** @inheritDoc */
   async retrySpaceAccess(space: MemorySpace): Promise<void> {
     // Already-open providers only, as in `noteSpaceAclChanged()`: a space
     // this manager has never opened has no refusal to retry.
     const provider = this.#providers.get(space);
     await provider?.retryAccess(() =>
       this.#spaceAccessErrors.has(space) ||
-      provider.authorizationError() !== undefined
+      provider.authorizationError() !== undefined ||
+      MemoryV2Client.isFirstHandshakeFailure(this.spaceSessionError(space))
     );
   }
 
@@ -3926,6 +3934,13 @@ export class StorageManager implements IStorageManager {
         }).get?.(id, scope),
       );
       loadFailure ??= schemaFailure;
+      // A document held back by a quarantine exists, so it does not load as
+      // absent: the load waits for the re-delivery, and fails if there is none.
+      loadFailure ??= await provider.replica.quarantineFailure?.(
+        id,
+        scope,
+        instance,
+      );
       // A pull that "succeeds" while carrying an error (an ACL denial, a
       // transport failure) otherwise resolves this sync() normally and the
       // caller reads the doc as absent — deny, error, and absent all collapse
@@ -5266,7 +5281,8 @@ class Provider
 
   /**
    * Opens a session on this space again, as an ACL change would, when
-   * `refused()` says the memory server refused the last one, and then makes
+   * `owed()` says the memory server refused the last one or its connection
+   * never completed a first handshake, and then makes
    * again the loads it refused for want of access. Resolves once the server
    * has decided. A refusal is recorded where the first one was, and does not
    * reject; any other failure, of the open or of a load, rejects, and leaves
@@ -5275,16 +5291,16 @@ class Provider
    * two that start together open the session once: the later decides after
    * the earlier, on the session it left.
    */
-  retryAccess(refused: () => boolean): Promise<void> {
+  retryAccess(owed: () => boolean): Promise<void> {
     const retry = this.#retrying.catch(() => {}).then(() =>
-      this.#retryAccessOnce(refused)
+      this.#retryAccessOnce(owed)
     );
     this.#retrying = retry;
     return retry;
   }
 
   /** Helper for `retryAccess()`, which makes one retry. */
-  async #retryAccessOnce(refused: () => boolean): Promise<void> {
+  async #retryAccessOnce(owed: () => boolean): Promise<void> {
     // An open already in flight may be decided on the access list as it
     // stood before this call, so the retry waits for it before deciding
     // anything.
@@ -5292,8 +5308,8 @@ class Provider
     if (this.#destroyed) return;
     // Arming the latch on a session that stands would remount it the next
     // time some other verdict ended it.
-    if (refused()) {
-      this.replica.noteAclChanged();
+    if (owed()) {
+      this.replica.noteRetryRequested();
       try {
         await this.ensureSession();
       } catch (error) {
@@ -5548,6 +5564,47 @@ type ForeignScopedReadVerdictEntry = {
   promise: ReturnType<ForeignScopedReadGrant>;
 };
 
+/** What a replica holds about a document it quarantined. */
+type QuarantinedDocument = {
+  readonly id: string;
+
+  /** The seq of the copy that was quarantined. */
+  readonly seq: number;
+
+  /**
+   * `healing` while a re-delivery is due or under way, and `unhealed` once
+   * there will be none for this copy.
+   */
+  status: "healing" | "unhealed";
+
+  /** Whether the server has been asked to re-deliver this copy. */
+  requested: boolean;
+
+  /** The refusal that ended the re-delivery, if one did. */
+  refusal?: PullError;
+};
+
+/** The document `upsert` delivers. */
+const upsertAddress = (
+  upsert: SessionSync["upserts"][number],
+): LocalDocAddress => ({
+  id: upsert.id as URI,
+  scope: upsert.scope,
+  ...(upsert.scopeKey !== undefined ? { scopeKey: upsert.scopeKey } : {}),
+});
+
+/**
+ * Why a document's load failed: the server holds the document, and this replica
+ * could not apply the copy it delivered.
+ */
+class DocumentQuarantinedError extends Error {
+  /** Constructs an instance about the document `id`. */
+  constructor(id: string) {
+    super(`Document ${id} is quarantined, so its load has no value to give`);
+    this.name = "DocumentQuarantinedError";
+  }
+}
+
 /**
  * One space's local replica: the documents the server has confirmed, the
  * local writes pending on them, and the session that keeps the two in step.
@@ -5590,8 +5647,10 @@ export class SpaceReplica
   #sessionSession?: MemoryV2Client.SpaceSession;
 
   /**
-   * The loads the memory server refused this replica for want of access, by
-   * watch id, which `repullRefused()` makes again once a retry is admitted.
+   * The loads the memory server refused this replica for want of access, and
+   * the loads that failed because the space's first connection never
+   * completed a handshake, by watch id, which `repullRefused()` makes again
+   * once a retry is admitted.
    * Nothing else re-asks for them: a refused load leaves no selector behind
    * to cover it, and its readers see no change to run again on.
    */
@@ -5607,6 +5666,12 @@ export class SpaceReplica
    *  consumed — or immediately, when there is no memoized mount to
    *  replace. */
   #aclChangedSinceMount = false;
+
+  /** Set with the latch above when a host asked for a retry
+   *  (`noteRetryRequested`): the one reason the latch also releases a first
+   *  connection that never completed a handshake. An ACL notice alone does
+   *  not, so that only a host's retry dials such a space again. */
+  #retryRequestedSinceMount = false;
 
   #restoringWatches = false;
 
@@ -5816,6 +5881,15 @@ export class SpaceReplica
    * stay behind and no push makes the replica current again until a reset.
    */
   #completeThroughLost = false;
+
+  /**
+   * The documents quarantined and not yet applied since, by document key. What
+   * `#quarantineHeal` works through, and what `quarantineFailure()` reads.
+   */
+  readonly #quarantined = new Map<string, QuarantinedDocument>();
+
+  /** The re-delivery of quarantined documents under way, if any. */
+  #quarantineHeal: Promise<void> | undefined;
 
   #nextLocalSeq = 1;
 
@@ -6456,11 +6530,14 @@ export class SpaceReplica
    * handed over: applied it, its subscribers told, or dropped it as failing to
    * apply, which `#consumeUpdates()` logs. The consumer of the watch view does
    * either in one synchronous stretch and then comes back for the next frame,
-   * so that coming back is the signal.
+   * so that coming back is the signal. A frame dealt with can have left a
+   * quarantine that sets off a re-delivery, which this waits for too, since the
+   * barriers on input can have passed before that frame applied.
    */
   async framesApplied(): Promise<void> {
     await this.#sessionClient?.delivered();
     await this.#subscribedWatchView?.whenSyncsConsumed();
+    await this.#quarantineHeal;
   }
 
   /**
@@ -6585,6 +6662,17 @@ export class SpaceReplica
     for (const [id, entry] of replayed) {
       if (this.#refusedPulls.get(id) === entry) this.#refusedPulls.delete(id);
     }
+  }
+
+  /**
+   * Records that a host asked for this space again, as `noteAclChanged()`
+   * does, and that the ask also covers a first connection that never
+   * completed a handshake: the remount it owes dials such a space again.
+   */
+  noteRetryRequested(): void {
+    if (this.#closed) return;
+    this.#retryRequestedSinceMount = true;
+    this.noteAclChanged();
   }
 
   /**
@@ -6841,21 +6929,32 @@ export class SpaceReplica
 
   /**
    * Reconsiders a permanent admission or ACL refusal after word of an ACL
-   * change. Runtime incompatibility requires a new runtime and stays latched.
+   * change, and a first connection that never completed a handshake after a
+   * host asked for a retry. Runtime incompatibility requires a new runtime
+   * and stays latched.
    */
   #consumeOwedSessionRemount(): void {
     if (!this.#aclChangedSinceMount) return;
+    const retryRequested = this.#retryRequestedSinceMount;
+    this.#retryRequestedSinceMount = false;
     const stale = this.#sessionHandle;
     if (stale === undefined) {
       // Nothing memoized to replace: the next open already re-decides.
       this.#aclChangedSinceMount = false;
       return;
     }
-    // ONLY an ACL verdict. A handle still opening, a live session, a
-    // graceful close ("memory session closed"), and a transport drop (which
-    // the client's own `reconnect()`/`restore()` already heals) must all be
-    // left alone: this arm exists for the one termination class no other
-    // path recovers from.
+    // ONLY an ACL verdict, or a first connection that never opened. A handle
+    // still opening, a live session, a graceful close ("memory session
+    // closed"), and a transport drop (which the client's own
+    // `reconnect()`/`restore()` already heals) must all be left alone: this
+    // arm exists for the termination classes no other path recovers from.
+    // A first-handshake failure is one of them because it is latched on
+    // purpose (`#memoizedSessionHandle()`), so that loads of a host that is
+    // down fail at once instead of each dialing it again; the latch is
+    // released here only on a host's explicit retry (`noteRetryRequested`),
+    // never on a load or an ACL notice. The retry's ask is spent on this
+    // consume whatever it decides, so it cannot linger and release the
+    // latch on a later load.
     const closeError = this.#sessionAdmissionError ??
       this.#sessionSession?.closeError;
     if (MemoryV2Client.isClientUpdateRequiredError(closeError)) {
@@ -6865,7 +6964,8 @@ export class SpaceReplica
     if (
       closeError === undefined ||
       (closeError.name !== "SessionRevokedError" &&
-        closeError.name !== "AuthorizationError")
+        closeError.name !== "AuthorizationError" &&
+        !(retryRequested && MemoryV2Client.isFirstHandshakeFailure(closeError)))
     ) {
       // The latch is deliberately LEFT SET here, and clearing it would be a
       // race rather than a tidy-up. The notice arrives BEFORE the revocation
@@ -6906,12 +7006,15 @@ export class SpaceReplica
     // connection per revocation.
     stale.then(({ client }) => client.close()).catch(() => {});
     sessionRemountLogger.warn("session-remount", () => [
-      `space ${this.#space}: the memoized session was terminated by ` +
-      `${closeError.name} and its ACL may have changed; remounting. ` +
-      "A fresh session.open re-runs the server's admission against the " +
-      "ACL as it now stands (OW31: a serving mount's READ decisions " +
-      "resolve as the space's OWNER), so a genuine de-authorization is " +
-      "denied there rather than healed here.",
+      MemoryV2Client.isFirstHandshakeFailure(closeError)
+        ? `space ${this.#space}: the memoized session never connected ` +
+          `(${closeError.message}) and a host asked for a retry; remounting.`
+        : `space ${this.#space}: the memoized session was terminated by ` +
+          `${closeError.name} and its ACL may have changed; remounting. ` +
+          "A fresh session.open re-runs the server's admission against the " +
+          "ACL as it now stands (OW31: a serving mount's READ decisions " +
+          "resolve as the space's OWNER), so a genuine de-authorization is " +
+          "denied there rather than healed here.",
     ]);
     // DROP THE WATCH-SELECTOR TRACKER. The fresh session carries no
     // watches — `terminateSession` cleared `#watchSpecs` and the server
@@ -7407,6 +7510,45 @@ export class SpaceReplica
         scope,
       },
     );
+  }
+
+  /** ISpaceReplica.isQuarantined. */
+  isQuarantined(
+    id: URI,
+    scope?: CellScope,
+    identity?: ScopeKeyIdentity,
+  ): boolean {
+    return this.#quarantined.has(this.#docKeyOf({ id, scope }, identity));
+  }
+
+  /** ISpaceReplica.quarantineFailure. */
+  async quarantineFailure(
+    id: URI,
+    scope?: CellScope,
+    instance?: ScopeKey,
+  ): Promise<Error | PullError | undefined> {
+    const key = this.#docKeyOf({
+      id,
+      scope,
+      ...(instance === undefined ? {} : { scopeKey: instance }),
+    });
+    while (
+      this.#quarantined.get(key)?.status === "healing" &&
+      this.#quarantineHeal !== undefined
+    ) {
+      await this.#quarantineHeal;
+    }
+    const document = this.#quarantined.get(key);
+    if (document === undefined) return undefined;
+    // A replica holding a value still has that to give, however it came by it:
+    // a delivery or its own accepted write. A deletion leaves it nothing.
+    if (
+      this.#visibleVersion(id, scope, undefined, instance)?.version.value !==
+        undefined
+    ) {
+      return undefined;
+    }
+    return document.refusal ?? new DocumentQuarantinedError(id);
   }
 
   /** ISpaceReplica.completeThroughSeq. */
@@ -8008,6 +8150,13 @@ export class SpaceReplica
       (sessionError.name !== "AuthorizationError" ||
         MemoryV2Client.isClientUpdateRequiredError(sessionError))
     ) {
+      // A space that never connected owes these loads to the retry that
+      // connects it, as a refused space owes its refused loads.
+      if (MemoryV2Client.isFirstHandshakeFailure(sessionError)) {
+        for (const entry of normalizeSyncEntries(entries)) {
+          this.#refusedPulls.set(watchIdForEntry(entry[0], entry[1]), entry);
+        }
+      }
       return { error: toPullError(sessionError) };
     }
 
@@ -8158,7 +8307,10 @@ export class SpaceReplica
       // and must not invalidate selectors whose fetch succeeded here.
       const result = await fetchPromise;
       if (result.error) {
-        if (isPermanentAuthorizationFailure(result.error)) {
+        if (
+          isPermanentAuthorizationFailure(result.error) ||
+          MemoryV2Client.isFirstHandshakeFailure(this.sessionError())
+        ) {
           for (const entry of newEntries) {
             this.#refusedPulls.set(watchIdForEntry(entry[0], entry[1]), entry);
           }
@@ -8466,18 +8618,21 @@ export class SpaceReplica
 
   /**
    * Integrates the answer to a watch mutation: the frames that arrived ahead
-   * of it, then its own, then the view's later frames as they come.
+   * of it, then its own by way of `applyResponse`, then the view's later frames
+   * as they come.
    */
   #integrateWatchMutation(
     view: MemoryV2Client.WatchView,
     precedingSyncs: readonly SessionSync[],
     sync: SessionSync,
+    applyResponse: (frame: SessionSync) => void = (frame) =>
+      this.#applySessionSync(frame, "integrate"),
   ): void {
     this.#watchView = view;
     for (const precedingSync of precedingSyncs) {
       this.#applySessionSync(precedingSync, "integrate");
     }
-    this.#applySessionSync(sync, "integrate");
+    applyResponse(sync);
     this.#consumeWatchView(view);
   }
 
@@ -8973,6 +9128,7 @@ export class SpaceReplica
     this.#delivered.clear();
     this.#completeThroughSeq = 0;
     this.#completeThroughLost = false;
+    this.#quarantined.clear();
     this.#resetConflictAdmissionState();
     this.#rejectCaughtUpLocalSeqWaiters(new Error("memory replica reset"));
     this.#cancelQueuedWatchRefresh();
@@ -9260,25 +9416,7 @@ export class SpaceReplica
       }
       const applyStart = performance.now();
       try {
-        // A pushed frame retracts what a re-walk stopped reaching, and
-        // the retraction stands: the document leaves the watch list. One
-        // the replica holds keeps its value for its holder until the pass
-        // after the holder lets go; the rest are emptied and dropped, so a
-        // later read loads them again.
-        const { sync, held } = this.#keepHeld(
-          this.#withoutLocalSessionDocuments(next.value),
-        );
-        // Recorded before the frame applies, so a frame that fails to
-        // apply leaves no held document kept without the pass that drops
-        // it. The retraction supersedes a re-watch a release still owes
-        // the document.
-        for (const remove of held) {
-          const key = this.#docKeyOf(removedAddress(remove));
-          this.#owedWatches.delete(key);
-          this.#retractedHeld.set(key, remove);
-        }
-        this.#applySessionSync(sync, "integrate");
-        if (sync.removes.length > 0) this.#forgetRemoved(sync.removes);
+        this.#applyPushedFrame(next.value);
       } catch (error) {
         // The background consumer must never die wholesale on one bad
         // frame (OW61: a validation throw here was an unhandled rejection
@@ -9302,6 +9440,29 @@ export class SpaceReplica
         logger.time(applyStart, "watchPush", "applySessionSync");
       }
     }
+  }
+
+  /**
+   * Helper for `#consumeUpdates()` and `#redeliverQuarantined()`, which applies
+   * a frame whose removals the server decided. A retraction stands: the
+   * document leaves the watch list. One the replica holds keeps its value for
+   * its holder until the pass after the holder lets go; the rest are emptied
+   * and dropped, so a later read loads them again.
+   */
+  #applyPushedFrame(frame: SessionSync): void {
+    const { sync, held } = this.#keepHeld(
+      this.#withoutLocalSessionDocuments(frame),
+    );
+    // Recorded before the frame applies, so a frame that fails to apply leaves
+    // no held document kept without the pass that drops it. The retraction
+    // supersedes a re-watch a release still owes the document.
+    for (const remove of held) {
+      const key = this.#docKeyOf(removedAddress(remove));
+      this.#owedWatches.delete(key);
+      this.#retractedHeld.set(key, remove);
+    }
+    this.#applySessionSync(sync, "integrate");
+    if (sync.removes.length > 0) this.#forgetRemoved(sync.removes);
   }
 
   /**
@@ -10892,12 +11053,12 @@ export class SpaceReplica
    * a ref that fails to resolve here therefore indicates a CLIENT-side
    * absorb/ordering defect (a dropped, reordered, or un-retained
    * earlier delivery — the defect class OW61's investigation owns).
-   * Quarantine contains that defect loudly; the heal arrives with the
-   * next reconnect — the replica declares its holdings then (`holdings`),
-   * a quarantined doc is not among them, and the server re-delivers it
-   * with its closure — or with the next `watch.set`, whose frame carries
-   * the whole assembled closure. Under elision an unchanged quarantined
-   * doc is rightly never re-delivered mid-session on its own.
+   * Quarantine contains that defect loudly; the heal is a re-delivery the
+   * replica asks for (`#redeliverQuarantined()`): a `watch.set` declaring its
+   * holdings (`holdings`), among which a quarantined doc is not, so the server
+   * re-delivers it with its closure. A reconnect declares them too. Under
+   * elision an unchanged quarantined doc is rightly never re-delivered
+   * mid-session on its own.
    *
    * Direct refs suffice: a stored verified dependency was itself validated
    * when it arrived, and a locally written one carried its closure in its
@@ -11042,10 +11203,8 @@ export class SpaceReplica
               `within the delivered set ` +
               `(docs/specs/content-addressed-schemas.md). The document ` +
               `is quarantined — this replica keeps its previous state ` +
-              `for it until the next reconnect (which declares this ` +
-              `replica's holdings, so the server re-delivers it) or ` +
-              `watch.set re-delivers it with its closure. This ` +
-              `indicates a client-side absorb/ordering defect ` +
+              `for it and asks the server to re-deliver it with its ` +
+              `closure. This indicates an absorb or ordering defect ` +
               `(verification-coverage.md OW61).`,
             ]);
           }
@@ -11141,6 +11300,158 @@ export class SpaceReplica
     }
   }
 
+  /**
+   * Helper for `#applySessionSyncFrame()`, which brings the record of
+   * quarantined documents up to date with a frame whose upserts named in
+   * `quarantined` it is about to drop. A document the frame applies or removes
+   * is no longer held back. A copy not seen before is due a re-delivery. A copy
+   * seen before is left as it stands, whichever frame carries it again:
+   * `#redeliverQuarantined()` decides how a re-delivery ended from its own
+   * response.
+   */
+  #noteQuarantinesOf(
+    sync: SessionSync,
+    quarantined: ReadonlySet<string>,
+  ): void {
+    let healDue = false;
+    for (const upsert of sync.upserts) {
+      if (typeof upsert.id !== "string") continue;
+      const key = this.#docKeyOf(upsertAddress(upsert));
+      if (!quarantined.has(upsert.id)) {
+        this.#quarantined.delete(key);
+        continue;
+      }
+      const known = this.#quarantined.get(key);
+      if (known?.seq !== upsert.seq) {
+        this.#quarantined.set(key, {
+          id: upsert.id,
+          seq: upsert.seq,
+          status: "healing",
+          requested: false,
+        });
+        healDue = true;
+      }
+    }
+    for (const remove of sync.removes) {
+      this.#quarantined.delete(this.#docKeyOf(removedAddress(remove)));
+    }
+    if (healDue) this.#healQuarantined();
+  }
+
+  /**
+   * Records that nothing more will be done to bring `document` here, until a
+   * newer copy arrives, which only a write can make. A read of it fails, with
+   * `refusal` if a refusal is why.
+   */
+  #endQuarantineHeal(
+    document: QuarantinedDocument,
+    reason: string,
+    refusal?: PullError,
+  ): void {
+    document.status = "unhealed";
+    document.refusal = refusal;
+    logger.error("schema-doc-quarantine-unhealed", () => [
+      `Document ${document.id} stays quarantined at seq ${document.seq}: ` +
+      `${reason}. A read of it fails until a newer copy applies.`,
+    ]);
+  }
+
+  /** Starts working through the quarantined documents, unless it is under way. */
+  #healQuarantined(): void {
+    if (this.#quarantineHeal !== undefined || this.#closed) return;
+    const heal = this.#redeliverQuarantined();
+    this.#quarantineHeal = heal;
+    // Input this replica asked for, as a pull's is, so the barriers on input
+    // wait for it with or without a reader. A settle rests on them: what the
+    // answer applies can set off work.
+    const counted = heal.then((): Result<Unit, PullError> => ({ ok: {} }));
+    this.#syncPromises.add(counted);
+    void counted.finally(() => this.#syncPromises.delete(counted));
+  }
+
+  #quarantinesAwaitingRequest(): QuarantinedDocument[] {
+    return [...this.#quarantined.values()].filter((document) =>
+      document.status === "healing" && !document.requested
+    );
+  }
+
+  /**
+   * Helper for `#healQuarantined()`, which asks the server for the documents
+   * awaiting a re-delivery: a `session.watch.set` of the session's own watches
+   * declaring this replica's holdings, which leave them and any `cid:` document
+   * they need unlisted, so its one response delivers them together
+   * (docs/specs/memory-v2/04-protocol.md, section 4.3.5). Each copy is asked for
+   * once while it stays quarantined. A copy the response carries and that is
+   * still quarantined after it cannot be applied by any further delivery. One
+   * the response leaves out is no longer watched, so it is absent. A close ends
+   * this with nothing to report: it is no finding about any document.
+   */
+  async #redeliverQuarantined(): Promise<void> {
+    // Called from inside a frame's integration, which this must not interleave.
+    await Promise.resolve();
+    try {
+      while (true) {
+        const requested = this.#quarantinesAwaitingRequest();
+        if (requested.length === 0 || this.#closed) return;
+        for (const document of requested) document.requested = true;
+        const carried = new Set<string>();
+        let failure: string | undefined;
+        let refusal: PullError | undefined;
+        try {
+          const { client, session } = await this.#activeSessionHandle();
+          if (client.serverFlags?.sessionHoldings !== true) {
+            throw new Error("the server takes no declared holdings");
+          }
+          // Read when the request goes out, since an earlier mutation can hold
+          // it back while a frame changes what this replica holds.
+          const { view, precedingSyncs, sync } = await session.watchSetSync(
+            undefined,
+            () => this.holdings(),
+          );
+          if (this.#closed) {
+            view.close();
+            return;
+          }
+          this.#noteAuthorizationStatus({ ok: {} });
+          for (const upsert of sync.upserts) {
+            carried.add(this.#docKeyOf(upsertAddress(upsert)));
+          }
+          this.#integrateWatchMutation(
+            view,
+            precedingSyncs,
+            sync,
+            (frame) => this.#applyPushedFrame(frame),
+          );
+        } catch (error) {
+          if (this.#closed) return;
+          const pullError = toPullError(error);
+          this.#noteAuthorizationStatus({ error: pullError });
+          if (isPermanentAuthorizationFailure(pullError)) refusal = pullError;
+          failure = `its re-delivery failed: ${describeFailure(error)}`;
+        }
+        for (const [key, document] of this.#quarantined) {
+          if (!requested.includes(document) || document.status !== "healing") {
+            continue;
+          }
+          if (failure !== undefined) {
+            this.#endQuarantineHeal(document, failure, refusal);
+          } else if (carried.has(key)) {
+            this.#endQuarantineHeal(
+              document,
+              "its re-delivery was quarantined as well",
+            );
+          } else {
+            this.#quarantined.delete(key);
+          }
+        }
+      }
+    } finally {
+      // In the step that finds nothing left to ask for, so a quarantine arriving
+      // after it starts a heal of its own.
+      this.#quarantineHeal = undefined;
+    }
+  }
+
   /** Helper for `#applySessionSync()`, which carries the integration
    * itself. */
   #applySessionSyncFrame(
@@ -11171,6 +11482,9 @@ export class SpaceReplica
     // #validateArrivedSchemaDocuments), and the rest of the frame
     // applies.
     const quarantined = this.#validateArrivedSchemaDocuments(sync);
+    if (quarantined.size > 0 || this.#quarantined.size > 0) {
+      this.#noteQuarantinesOf(sync, quarantined);
+    }
     if (quarantined.size > 0) {
       this.#completeThroughLost = true;
       const suspendedPlans = (sync.viewPlans ?? this.#viewPlans).map((

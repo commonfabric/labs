@@ -20,6 +20,16 @@ import {
   isObjectNotArray,
   isObjectOrArray,
 } from "@commonfabric/js-values/types";
+import {
+  judgeOwnerReleaseByIntent,
+  OWNER_RELEASE_BY_INTENT_RECORD_PREFIX,
+  parseOwnerReleaseByIntentRecord,
+  type VerifiedOwnerReleaseByIntent,
+} from "./cfc-owner-release-by-intent.ts";
+import {
+  admitsDroppedDeclaredPaths,
+  droppedDeclaredPaths,
+} from "./envelope-admission.ts";
 import { findNumericLabelField } from "./label-metadata-table.ts";
 import { mapLinkSchemas } from "./schema-table-links.ts";
 import {
@@ -5937,6 +5947,114 @@ const releaseOperationField = (
 };
 
 /**
+ * Verifies every release record (`cfc-owner-release-by-intent.ts`, §8.12.7
+ * route 2d) `operations` create, and returns the releases they verify, by the
+ * document released at. A record is created by one `set` at space scope; any
+ * other write to an id under the record scheme, a record the judgment
+ * refuses, and a second release of one document in one commit are refused,
+ * which refuses the commit whole. `documentEnvelope` returns the envelope the
+ * commit leaves a document with at space scope and the one the store holds,
+ * or `undefined` when the commit writes none or deletes the document.
+ *
+ * @throws A {@link ProtocolError} naming the refusal.
+ */
+const verifyOwnerReleasesByIntent = (input: {
+  readonly engine: Engine;
+  readonly branch: BranchName;
+  readonly space: string | undefined;
+  readonly operations: readonly Operation[];
+  readonly elidedOpIndexes: ReadonlySet<number>;
+  readonly storedLabel: (ref: string) => unknown;
+  readonly documentEnvelope: (
+    id: string,
+  ) => { readonly stored: unknown; readonly proposed: unknown } | undefined;
+}): ReadonlyMap<string, readonly VerifiedOwnerReleaseByIntent[]> => {
+  const records = new Map<string, { value: unknown; cfc: unknown }>();
+  const committedLabels = new Map<string, unknown>();
+  for (const [opIndex, operation] of input.operations.entries()) {
+    if (operation.op === "sqlite") continue;
+    if (operation.id.startsWith("cid:")) {
+      if (operation.op === "set" && isEntityDocument(operation.value)) {
+        committedLabels.set(operation.id, operation.value.value);
+      }
+      continue;
+    }
+    if (!operation.id.startsWith(OWNER_RELEASE_BY_INTENT_RECORD_PREFIX)) {
+      continue;
+    }
+    // An elided record is one of an identity commit, whose every operation
+    // leaves the store as it is: the record is already stored with this
+    // content, and the document's envelope is already what the commit
+    // proposes. Such a commit releases nothing, so it uses no request again,
+    // and it is judged as the no-op it is. A commit that would change
+    // anything is not an identity commit, and its record is judged below.
+    if (input.elidedOpIndexes.has(opIndex)) continue;
+    if (
+      operation.op !== "set" || records.has(operation.id) ||
+      normalizeScope(operation.scope) !== DEFAULT_SCOPE ||
+      !isEntityDocument(operation.value)
+    ) {
+      throw new ProtocolError(
+        `memory v2 commit writes release record ${operation.id} other than ` +
+          "by creating it once, at space scope, with one `set`",
+      );
+    }
+    records.set(operation.id, {
+      value: operation.value.value,
+      cfc: operation.value.cfc,
+    });
+  }
+  const verified = new Map<string, VerifiedOwnerReleaseByIntent[]>();
+  if (records.size === 0) return verified;
+  const space = input.space;
+  if (space === undefined) {
+    throw new ProtocolError(
+      "memory v2 commit names no space, and creates a release record",
+    );
+  }
+  const aclState = readState(input.engine, { id: aclDocId(space) });
+  const acl = aclState === null
+    ? { stored: false as const }
+    : { stored: true as const, value: aclState.document?.value };
+  for (const [recordId, { value: record, cfc: recordCfc }] of records) {
+    const document = parseOwnerReleaseByIntentRecord(record)?.document;
+    const judged = judgeOwnerReleaseByIntent({
+      space,
+      recordId,
+      record,
+      recordCfc,
+      recordStored:
+        readState(input.engine, { id: recordId, branch: input.branch }) !==
+          null,
+      acl,
+      document: document === undefined
+        ? undefined
+        : input.documentEnvelope(document),
+      resolveStoredLabel: input.storedLabel,
+      resolveProposedLabel: (ref) =>
+        committedLabels.has(ref)
+          ? committedLabels.get(ref)
+          : input.storedLabel(ref),
+    });
+    if ("refused" in judged) {
+      throw new ProtocolError(
+        `memory v2 commit creates release record ${recordId}, which the ` +
+          `store refuses: ${judged.refused}`,
+      );
+    }
+    const release = judged.verified;
+    if (verified.has(release.document)) {
+      throw new ProtocolError(
+        `memory v2 commit releases document ${release.document} by more ` +
+          "than one request",
+      );
+    }
+    verified.set(release.document, [release]);
+  }
+  return verified;
+};
+
+/**
  * Releases every active operation field of an entity being deleted. Their
  * anchors documents stay, as a release of one field leaves its anchors (§7.8):
  * a writer that deletes the entity and wants them gone deletes them in the
@@ -6663,6 +6781,45 @@ const applyCommitTransaction = (
         scopeKey: scopeKeyByOpIndex.get(opIndex),
       })?.document ?? undefined;
   };
+  // The `cfc` member each envelope-replacing operation leaves its document
+  // with, the last one per document winning, and the operation that first
+  // reached the document, whose address reads what is stored. A commit that
+  // leaves the document deleted leaves no member to judge; one that deletes
+  // and then writes it again is judged by what it writes. Judged below by
+  // `droppedDeclaredPaths()`.
+  const envelopeWrites = new Map<
+    string,
+    {
+      readonly opIndex: number;
+      readonly operation: { id: string; scope?: unknown };
+      lastOpIndex: number;
+      cfc: unknown;
+      deleted: boolean;
+    }
+  >();
+  const noteEnvelopeWrite = (
+    opIndex: number,
+    operation: { id: string; scope?: unknown },
+    document: unknown,
+    deleted: boolean,
+  ): void => {
+    const docKey = opDocKey(opIndex, operation);
+    const cfc = (document as { cfc?: unknown } | null | undefined)?.cfc;
+    const known = envelopeWrites.get(docKey);
+    if (known === undefined) {
+      envelopeWrites.set(docKey, {
+        opIndex,
+        operation,
+        lastOpIndex: opIndex,
+        cfc,
+        deleted,
+      });
+    } else {
+      known.lastOpIndex = opIndex;
+      known.cfc = cfc;
+      known.deleted = deleted;
+    }
+  };
   for (const [opIndex, operation] of commit.operations.entries()) {
     if (operation.op === "sqlite") continue;
     if (operation.op === "patch") {
@@ -6681,6 +6838,9 @@ const applyCommitTransaction = (
               operation.patches ?? [],
             );
             stagedMetadataDocs.set(docKey, patched);
+            if (!operation.id.startsWith("cid:")) {
+              noteEnvelopeWrite(opIndex, operation, patched, false);
+            }
             if (patchTouchesMetadata(operation.patches)) {
               requireInlineLabelMetadata(operation.id, patched, () => base);
               collectCfcEnvelopeRef((patched as { cfc?: unknown }).cfc);
@@ -6693,6 +6853,19 @@ const applyCommitTransaction = (
       }
     }
     if (!operation.id.startsWith("cid:")) {
+      // A patch that touches no metadata leaves the `cfc` member as it
+      // found it, which after a delete in this commit is no member at all.
+      if (operation.op === "patch") {
+        const known = envelopeWrites.get(opDocKey(opIndex, operation));
+        if (
+          known?.deleted === true &&
+          !metadataPatchDocKeys.has(opDocKey(opIndex, operation))
+        ) {
+          known.lastOpIndex = opIndex;
+          known.cfc = undefined;
+          known.deleted = false;
+        }
+      }
       if (operation.op === "set") {
         requireInlineLabelMetadata(
           operation.id,
@@ -6704,12 +6877,16 @@ const applyCommitTransaction = (
           (operation.value as { cfc?: unknown } | null)?.cfc,
         );
         collectSchemaMetaRefs(operation.id, operation.value);
+        noteEnvelopeWrite(opIndex, operation, operation.value, false);
         if (metadataPatchDocKeys.size > 0) {
           const docKey = opDocKey(opIndex, operation);
           if (metadataPatchDocKeys.has(docKey)) {
             stagedMetadataDocs.set(docKey, operation.value);
           }
         }
+      }
+      if (operation.op === "delete") {
+        noteEnvelopeWrite(opIndex, operation, undefined, true);
       }
       if (operation.op === "delete" && metadataPatchDocKeys.size > 0) {
         const docKey = opDocKey(opIndex, operation);
@@ -7175,6 +7352,81 @@ const applyCommitTransaction = (
       commit,
       { checkStaleness: false },
     );
+  }
+
+  // A commit may not leave a path whose stored declared CFC label holds a
+  // confidentiality clause with no declared entry, unless it is the owner
+  // release that `admitsDroppedDeclaredPaths()` recognizes
+  // (`envelope-admission.ts`). The stored envelope's label documents were
+  // backed when it was stored, so a reference resolves against the space.
+  // It runs after the read validation, so a commit made against a stale view
+  // of the document is refused as the conflict it is, which its writer
+  // retries, and an operation the validation elided is not judged.
+  const actor = delegated?.actingPrincipal ?? principal;
+  const storedLabel = (ref: string): unknown => {
+    const document = readState(engine, { id: ref, branch })?.document;
+    return document === null || document === undefined
+      ? undefined
+      : document.value;
+  };
+  const storedCfcOf = (
+    write: {
+      readonly opIndex: number;
+      readonly operation: { id: string; scope?: unknown };
+    },
+  ): unknown =>
+    (readState(engine, {
+      id: write.operation.id,
+      branch,
+      scope: write.operation.scope as Parameters<typeof readState>[1]["scope"],
+      principal: scanPrincipal,
+      sessionId: scanSession,
+      scopeKey: scopeKeyByOpIndex.get(write.opIndex),
+    })?.document as { cfc?: unknown } | null | undefined)?.cfc;
+  const releasesByIntent = verifyOwnerReleasesByIntent({
+    engine,
+    branch,
+    space,
+    operations: commit.operations,
+    elidedOpIndexes,
+    storedLabel,
+    // The envelope a commit leaves the request's document with at space
+    // scope, as the drop check below judges it, and what the store holds.
+    documentEnvelope: (id) => {
+      for (const write of envelopeWrites.values()) {
+        if (
+          write.operation.id !== id ||
+          normalizeScope(write.operation.scope as CellScope | undefined) !==
+            DEFAULT_SCOPE
+        ) continue;
+        if (write.deleted || elidedOpIndexes.has(write.lastOpIndex)) {
+          return undefined;
+        }
+        return { stored: storedCfcOf(write), proposed: write.cfc };
+      }
+      return undefined;
+    },
+  });
+  for (const write of envelopeWrites.values()) {
+    if (write.deleted || elidedOpIndexes.has(write.lastOpIndex)) continue;
+    const storedCfc = storedCfcOf(write);
+    if (
+      storedCfc === undefined ||
+      valueEqual(storedCfc as FabricValue, write.cfc as FabricValue)
+    ) continue;
+    const dropped = droppedDeclaredPaths(storedCfc, write.cfc, storedLabel);
+    const releases = normalizeScope(
+        write.operation.scope as CellScope | undefined,
+      ) === DEFAULT_SCOPE
+      ? releasesByIntent.get(write.operation.id) ?? []
+      : [];
+    if (!admitsDroppedDeclaredPaths(dropped, space, actor, releases)) {
+      throw new ProtocolError(
+        `memory v2 commit leaves document ${write.operation.id} with no declared CFC label at ${
+          dropped.map((drop) => JSON.stringify(drop.path)).join(", ")
+        }, where it stores one; only the space's owner, releasing clauses that are theirs alone, may drop a declared label`,
+      );
+    }
   }
 
   // Event-append admission (Phase 3, events.md §1/§4): the dedupe-horizon

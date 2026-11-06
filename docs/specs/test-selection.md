@@ -418,6 +418,14 @@ past that anchor until `MAX_EXECUTIONS` stops it. So a test that has been
 seen to disagree at all is run at least twice, because one execution
 cannot tell a pass from a lucky pass.
 
+That count is the most a lane runs it. A lane stops repeating a unit once
+each test that asked for the unit's repeats has settled: it has passed and
+failed at this commit, which is the disagreement a flake is read from, or it
+has failed twice running, which is a test failing at this commit, whose
+further runs would each measure how long its failure takes. Every run the
+lane makes is recorded as it would be otherwise, and the lane's summary says
+how many runs of each unit it did not need and why, which is not a failure.
+
 Zero is the one point the count steps at, between running a test once and
 running it at least twice, which is why the manifest records a share as
 it was measured rather than to a few places. A share written to four
@@ -802,8 +810,8 @@ same answer.
 A pull request's plan has a discretionary target: `DISCRETIONARY_SECONDS`
 times the run's scale, which is the seconds the value, density and
 exploration passes are to fill between them. The full run's target is zero,
-since it chooses nothing. A run takes the fewest lanes, up to `LANES_MAX`,
-whose plan holds it. A plan holds a run where:
+since it chooses nothing. A run takes the fewest lanes, up to `LANES_MAX`, or
+`FULL_LANES_MAX` for the full run, whose plan holds it. A plan holds a run where:
 
 - no mandatory identity overflows, which is to say each one either fits
   inside a lane's budget or runs alone in a lane of its own; and
@@ -812,11 +820,12 @@ whose plan holds it. A plan holds a run where:
   holding every identity the passes could choose would be charged where
   that is less.
 
-The count is found by bisection between one lane and `LANES_MAX`. It
-takes an added lane to leave nothing overflowing that did not before, and
-no less room. Where that fails the count may be more lanes than the run
-needs, never fewer. A run whose plan holds it at no count up to
-`LANES_MAX` takes `LANES_MAX` lanes: its passes fill what room is left,
+The count is found by bisection between one lane and the run's cap,
+`LANES_MAX`, or `FULL_LANES_MAX` for the full run. It takes an added lane
+to leave nothing overflowing that did not before, and no less room. Where
+that fails the count may be more lanes than the run needs, never fewer. A
+run whose plan holds it at no count up to its cap takes that many lanes:
+its passes fill what room is left,
 and its mandatory work may put a lane past its budget. Where nothing in the
 tree has a measured cost, the count is the larger of the number of suites
 with anything to run and what the packing of the stand-ins asks for.

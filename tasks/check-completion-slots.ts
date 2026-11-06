@@ -158,6 +158,11 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   // Numbers, durations and bounds. Nothing enumerates a count.
   ["space compact:verify-sample", "an every-nth stride over the documents"],
   [
+    "cell release-by-intent:clause",
+    "a clause digest the owner reads from the command's own listing and " +
+    "names on purpose",
+  ],
+  [
     "space delete:confirm",
     "the space's DID, typed out on purpose: offering one would undo the check",
   ],

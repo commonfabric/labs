@@ -157,6 +157,7 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.RegisterSpaceHost]: lifecycle,
   [RequestType.RegisterSpaceHostDetailed]: lifecycle,
   [RequestType.RetrySpaceAccess]: lifecycle,
+  [RequestType.RetryUnreachableSpaces]: lifecycle,
   [RequestType.FlushCompileCacheWrites]: lifecycle,
   [RequestType.GetGraphSnapshot]: {
     kind: "no-cell-value",

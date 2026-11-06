@@ -55,7 +55,11 @@ export const writeFileToolDescriptor: HarnessToolDescriptor = {
       path: { type: "string" },
       content: { type: "string" },
       mode: { type: "string", enum: [...WRITE_FILE_MODES] },
-      createParents: { type: "boolean" },
+      createParents: {
+        type: "boolean",
+        description:
+          "Create missing parent directories before writing. Set true when saving a new file whose parent directory may not exist.",
+      },
     },
     required: ["path", "content"],
     additionalProperties: false,

@@ -97,6 +97,9 @@ interface HomeSurface {
     createGroup: { requestId: string; title: string; members: string[] };
     openDirect: { requestId: string; counterpart: string };
     forget: { requestId: string; room: unknown; revision: string };
+    joinRoom: { requestId: string; room: unknown };
+    accept: { requestId: string; room: unknown };
+    offerRoom: { requestId: string; room: unknown; member: string };
     requests: Record<
       string,
       { status: string; reason?: string; entry?: { room: unknown } }
@@ -591,6 +594,9 @@ interface ChatManagerCase {
 
   /** Has Home's catalog mark each of `spaces` deleted. */
   markDeleted(spaces: string[]): Promise<void>;
+
+  /** Has the memory server refuse each of `spaces`, which go on existing. */
+  refuseSpaces(spaces: string[]): void;
 }
 
 /**
@@ -679,6 +685,9 @@ async function withChatManager(
             );
           }
           for (const space of spaces) refuse!(space, "deleted");
+        },
+        refuseSpaces(spaces) {
+          for (const space of spaces) refuse!(space, "unauthorized");
         },
         async markDeleted(spaces) {
           const { entries } = await home.key("sharedSpaceCatalog").pull();
@@ -2530,6 +2539,121 @@ describe("Home chat manager and a deleted room", () => {
         expect(await manager.key("deletedRooms").pull()).toEqual([
           expect.objectContaining({ kind: "direct", counterpart: BOB }),
         ]);
+      });
+    });
+  }
+
+  for (const serving of [false, true]) {
+    it(`refuses to join, accept or offer a deleted room, and leaves its entry as it is, with serving ${serving}`, async () => {
+      await withChatManager(serving, async (chats) => {
+        const { runtime, manager, home } = chats;
+        const listed = await chats.start("createGroup", "g-listed", {
+          title: "Listed",
+          members: [],
+        });
+        const forgotten = await chats.start("createGroup", "g-forgotten", {
+          title: "Forgotten",
+          members: [],
+        });
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("rooms"),
+          (value) => value?.length === 2,
+          { stuckLabel: "both rooms listed" },
+        );
+        await chats.forget("forget-it", forgotten);
+        await chats.deleteSpaces([listed.space, forgotten.space]);
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("deletedRooms"),
+          (value) => value?.length === 2,
+          { stuckLabel: "both rooms listed as deleted" },
+        );
+
+        for (
+          const [requestId, stream, room] of [
+            ["join-listed", "joinRoom", listed],
+            ["join-forgotten", "joinRoom", forgotten],
+            ["accept-listed", "accept", listed],
+            ["accept-forgotten", "accept", forgotten],
+          ] as const
+        ) {
+          // `invoke` returns once the handling has committed, a served one
+          // included, so what the request says is not the client's own
+          // speculative run.
+          await invoke(
+            runtime,
+            manager.key(stream),
+            { requestId, room },
+            requestId,
+          );
+          expect(await manager.key("requests").key(requestId).pull())
+            .toMatchObject({ status: "refused" });
+        }
+
+        // The offer is sent without waiting on its send's callback, which
+        // doesn't always settle for a served offer naming a deleted room. A
+        // start sent after it is handled after it, in Home's own order.
+        sendEvent(manager.key("offerRoom"), {
+          requestId: "offer-listed",
+          room: listed,
+          member: BOB,
+        });
+        await chats.start("createGroup", "g-after", {
+          title: "After",
+          members: [],
+        });
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("rooms"),
+          (value) => value?.length === 1,
+          { stuckLabel: "the room started after the offer" },
+        );
+        expect(await manager.key("requests").key("offer-listed").pull())
+          .toMatchObject({ status: "refused" });
+
+        const { entries } = await home.key("sharedSpaceCatalog").pull();
+        expect(entries[forgotten.space].state).toBe("archived");
+      });
+    });
+  }
+
+  for (const serving of [false, true]) {
+    it(`takes a room the memory server merely refuses for no deleted room, with serving ${serving}`, async () => {
+      await withChatManager(serving, async (chats) => {
+        const { runtime, manager, home } = chats;
+        const refused = await chats.start("createGroup", "g-refused", {
+          title: "Refused",
+          members: [],
+        });
+        const deleted = await chats.start("createGroup", "g-deleted", {
+          title: "Deleted",
+          members: [],
+        });
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("rooms"),
+          (value) => value?.length === 2,
+          { stuckLabel: "both rooms listed" },
+        );
+
+        chats.refuseSpaces([refused.space]);
+        // The deleted room is the control: `deletedRooms` is read once it has
+        // taken this room in, so it has had its chance to take in the other.
+        await chats.deleteSpaces([deleted.space]);
+        const gone = await waitForCellValue<{ room: unknown }[]>(
+          runtime,
+          manager.key("deletedRooms"),
+          (value) => (value?.length ?? 0) > 0,
+          { stuckLabel: "the deleted room listed as deleted" },
+        );
+        await runtime.idle();
+        await runtime.storageManager.synced();
+
+        expect(gone.length).toBe(1);
+        expect((await manager.key("deletedRooms").pull()).length).toBe(1);
+        const { entries } = await home.key("sharedSpaceCatalog").pull();
+        expect(entries[refused.space].state).toBe("saved");
       });
     });
   }

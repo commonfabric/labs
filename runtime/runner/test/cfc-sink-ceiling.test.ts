@@ -3,9 +3,9 @@ import { describe, it } from "@std/testing/bdd";
 
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import type { JSONSchema } from "../src/builder/types.ts";
-import type { CfcConfClause } from "../src/cfc/clause.ts";
 import type { SinkMaxConfidentiality } from "../src/cfc/mod.ts";
 import { CFC_LABEL_READ_FAILED_ATOM } from "../src/cfc/observation.ts";
 import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";

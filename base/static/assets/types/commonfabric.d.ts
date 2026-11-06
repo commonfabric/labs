@@ -4129,32 +4129,39 @@ export type SqliteQueryRow<Row> = string extends keyof Row
 export interface ISqliteQueryable {
   query<Row = Record<string, unknown>>(
     sql: string,
+    // Each option but `scope` admits `undefined`, as the `sqliteQuery`
+    // factory's optional inputs do, so a pattern can forward an optional field
+    // of its own input.
     options?: {
-      params?: ReadonlyArray<unknown> | Record<string, unknown>;
+      params?: ReadonlyArray<unknown> | Record<string, unknown> | undefined;
       reactOn?: unknown;
 
       /** Application key echoed on this request's pending and settled states.
        * Changing it issues a new request even when SQL and params match. */
-      requestKey?: string;
+      requestKey?: string | undefined;
 
       /** CFC Phase 3: declared output ceiling (see SqliteQueryParams). */
-      maxConfidentiality?: ReadonlyArray<unknown>;
+      maxConfidentiality?: ReadonlyArray<unknown> | undefined;
 
       /** `"fail"` (default) | `"skip"` when a row exceeds the ceiling. */
-      onExceed?: "fail" | "skip";
+      onExceed?: "fail" | "skip" | undefined;
 
       /** CFC Phase 3.b: filter rows to those the acting reader may read (a
        *  declared existence release). Requires the table to opt in via
        *  `table(…, { allowReadClearance: true })`; never for aggregates. The
        *  count of withheld rows is reported as `withheld`. */
-      readClearance?: boolean;
+      readClearance?: boolean | undefined;
 
       /** Scope of the result cell. A `session`-scoped result is one each
        *  session reads alone and filters under its runtime read ceiling. Shared
        *  results retain their labels for cell-read enforcement. Absent, the
        *  result takes the narrowest of the db's scope, the pattern's output
        *  scope, and — when `readClearance` is set — `user`, since a cleared
-       *  result is one reader's view. */
+       *  result is one reader's view.
+       *
+       *  It is read when the pattern is built, before any input has a value,
+       *  so it is written in the pattern: a pattern input or a computed value
+       *  cannot supply it. */
       scope?: CellScope;
     },
   ): Reactive<

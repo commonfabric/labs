@@ -24,6 +24,7 @@ import { ORDER_JOB_NAME } from "./test-order-tomorrow.ts";
 import { measuredSetDirectory } from "./test-topology/coverage-gates.ts";
 import {
   FULL_LANE_BOUND_SECONDS,
+  FULL_LANES_MAX,
   LANE_BOUND_SECONDS,
   LANES_MAX,
   RERUN_BUDGET_SECONDS,
@@ -289,8 +290,20 @@ Deno.test("the first CI wave leaves runner capacity for another run", async () =
       `two overlapping runs must fit within GitHub's ` +
       `${githubParallelRunnerLimit}-runner limit`,
   );
-  // Every run's lanes are held to the same limit by the cap on them.
-  assert(LANES_MAX <= githubParallelRunnerLimit / 2);
+  // A run's lanes wait for the job counting them, so what holds them is the
+  // cap: half the limit for a pull request's run, and two thirds for the full
+  // run.
+  assert(
+    LANES_MAX <= githubParallelRunnerLimit / 2,
+    `a run may take ${LANES_MAX} lanes, more than half of GitHub's ` +
+      `${githubParallelRunnerLimit}-runner limit`,
+  );
+  assert(
+    FULL_LANES_MAX <= githubParallelRunnerLimit * 2 / 3,
+    `the full run may take ${FULL_LANES_MAX} lanes, which leaves less than a ` +
+      `third of GitHub's ${githubParallelRunnerLimit}-runner limit for ` +
+      `anything else`,
+  );
 });
 
 Deno.test("every step we name carries a phase marker", async () => {

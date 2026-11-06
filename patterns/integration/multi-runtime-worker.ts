@@ -43,6 +43,7 @@ import type {
   NormalizedFullLink,
 } from "@commonfabric/runner";
 import {
+  ACLManager,
   cellRuntime,
   convertCellsToLinks,
   createSpaceRootIfAbsent,
@@ -62,7 +63,10 @@ import {
   markRendererTrustedEvent,
   reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
-import { MemoryWebSocketForTestingOnly } from "@commonfabric/runner/for-testing-only";
+import {
+  ExtendedStorageTransactionForTestingOnly,
+  MemoryWebSocketForTestingOnly,
+} from "@commonfabric/runner/for-testing-only";
 import { type DID, Identity } from "@commonfabric/identity";
 import {
   ensurePrivateInboxOf,
@@ -1121,6 +1125,32 @@ const handlers: Record<
     return {};
   },
 
+  /** Removes `user` from the access list of `space`, as an OWNER of it. */
+  async removeFromAccessList({ space, user }) {
+    if (typeof space !== "string" || typeof user !== "string") {
+      throw new TypeError(
+        "removeFromAccessList takes a space DID and a list entry.",
+      );
+    }
+    const { runtime } = controller();
+    await new ACLManager(runtime, space as DID).remove(user as DID | "*");
+    await idle();
+    return {};
+  },
+
+  /** Deletes `space`, whose sole member this session's identity is. */
+  async deleteSpace({ space }) {
+    if (typeof space !== "string") {
+      throw new TypeError("deleteSpace takes a space DID.");
+    }
+    const { runtime } = controller();
+    await new ACLManager(runtime, space as DID).delete(
+      runtime.userIdentityDID,
+    );
+    await idle();
+    return {};
+  },
+
   /** Whether this runtime retains a refusal of `space`, without opening it. */
   async spaceRefused({ space }) {
     if (typeof space !== "string") {
@@ -1183,21 +1213,22 @@ const handlers: Record<
   /**
    * Stores `value` whole as the document at an explicit storage address, in a
    * commit nothing prepares, which holds what no pattern here writes. `value`
-   * is the document as `rawRead` returns it.
+   * is the document as `rawRead` returns it. The write has the runtime's own
+   * authority, so it can change the document's `cfc` label map.
    */
   async rawWrite({ id, space, scope, value }) {
-    const tx = controller().runtime.edit().tx;
-    const { error } = tx.write({
+    const outer = controller().runtime.edit();
+    if (!(outer instanceof ExtendedStorageTransactionForTestingOnly)) {
+      throw new TypeError("rawWrite needs the runtime's own transaction");
+    }
+    outer.accessForTestingOnly.privilegedSystemWrite({
       space: space as never,
       id: id as never,
       type: "application/json",
       path: [],
       ...(scope !== undefined ? { scope: scope as never } : {}),
-    } as never, value as never) as { error?: { message?: string } };
-    if (error !== undefined) {
-      throw new Error(`rawWrite failed: ${error.message}`);
-    }
-    const committed = await tx.commit().settled;
+    } as never, value as never);
+    const committed = await outer.tx.commit().settled;
     if (committed.error !== undefined) {
       throw new Error(`rawWrite failed: ${committed.error.message}`);
     }

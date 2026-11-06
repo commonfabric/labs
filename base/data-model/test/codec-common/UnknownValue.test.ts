@@ -51,6 +51,12 @@ describe("UnknownValue", () => {
       }
     });
 
+    it("constructs given a type tag in any case", () => {
+      for (const tag of ["bytes@1", "Sys.Boop@1", "quote@1"]) {
+        expect(new UnknownValue(tag, "state").wireTypeTag).toBe(tag);
+      }
+    });
+
     it("throws a `ProblematicStateError` carrying the tag and state", () => {
       // The same vocabulary a strict decode fails in, so a caller gets the
       // offending tag and state structurally rather than out of prose.

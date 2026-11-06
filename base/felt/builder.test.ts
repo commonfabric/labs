@@ -116,14 +116,17 @@ Deno.test("Builder: a split entry peels its dynamic import into a co-located chu
       "the plain entry's module must not appear in the split pass's chunk",
     );
 
-    // The manifest still hashes entries only; the chunk is content-addressed by
-    // its own name and needs no manifest entry.
+    // A consumer can retain the complete graph, including deferred chunks.
     const manifest = JSON.parse(
       await Deno.readTextFile(join(root, "dist", "build-manifest.json")),
     );
     assertEquals(
       Object.keys(manifest).sort(),
-      ["scripts/plain.js", "scripts/split.js"],
+      [
+        "scripts/plain.js",
+        "scripts/split.js",
+        ...chunks.map((name) => `scripts/${name}`),
+      ].sort(),
     );
   } finally {
     await Deno.remove(root, { recursive: true });

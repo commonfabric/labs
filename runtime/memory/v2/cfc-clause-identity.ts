@@ -1,13 +1,20 @@
 /**
- * Atom-list primitives every CFC module shares: structural deduplication and
- * a canonical order. They depend on nothing else in `cfc/`, so the clause,
- * observation, and input-witness modules can all import them without a cycle.
+ * The identity of CFC atoms and clauses: structural deduplication of atoms, a
+ * canonical order over them, the canonical form of a clause, and the
+ * canonical clause digest that names a stored clause across evaluations
+ * (§8.12.7 identifies a released or widened clause by it). It lives here,
+ * below the runner, so that the store judges a release by intent
+ * (`cfc-owner-release-by-intent.ts`) by the same digest the runtime records;
+ * the runner imports each name from here.
  */
+
 import type { JSONValue } from "@commonfabric/api";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
 import { deepEqual, deepEqualKey } from "@commonfabric/js-values/deep-equal";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+
+import { type CfcConfClause, isOrClause } from "./cfc-release-authority.ts";
 
 // How many kept atoms a candidate is compared against before the kept set is
 // grouped instead. Keying an atom walks the whole of it, while a comparison
@@ -99,3 +106,42 @@ export const uniqueCfcAtoms = (
   }
   return unique;
 };
+
+/**
+ * Canonical form of a clause:
+ * - a non-clause value (bare atom) is returned unchanged (identity — flat
+ *   labels are byte-identical through canonicalization);
+ * - an OR-clause gets its alternatives structurally deduped and sorted by
+ *   canonical value hash, so two clauses that differ only in alternative
+ *   insertion order canonicalize (and hash) identically;
+ * - a singleton `{anyOf: [a]}` unwraps to the bare atom `a` (semantically
+ *   identical, so the two spellings must not hash differently) — UNLESS `a`
+ *   is itself clause-shaped: `{anyOf: [{anyOf: […]}]}` is malformed (the
+ *   reserved key must not appear in atom position), and its sole alternative
+ *   is an opaque, unsatisfiable atom. Unwrapping would PROMOTE that inner
+ *   value into an active OR-clause, loosening what the raw label admits —
+ *   the wrong direction. Malformed nesting stays wrapped and opaque;
+ * - an empty `{anyOf: []}` is kept as-is: it is an unsatisfiable clause
+ *   (see `clauseSubsumes` for how both positions treat it fail-closed).
+ *
+ * Canonicalization never merges clauses, never unions alternative sets
+ * across clauses, and never dedups an atom across a singleton clause and an
+ * OR-clause containing it — `[A]` and `[A ∨ B]` are different constraints
+ * (spec §3.1.8 normalization prohibitions).
+ */
+export const normalizeClause = (clause: CfcConfClause): CfcConfClause => {
+  if (!isOrClause(clause)) return clause;
+  const unique = uniqueCfcAtoms(clause.anyOf);
+  if (unique.length === 1 && !isOrClause(unique[0])) return unique[0];
+  return { anyOf: unique.sort(compareByCanonicalHash) };
+};
+
+/**
+ * Canonical clause digest: the identity of a stored clause for a route-2b
+ * exemption, an owner release's receipt, and a release by intent's request
+ * and record. Clause indices are evaluation-ephemeral; the digest of the
+ * canonicalized clause (alternatives deduped and hash-sorted, singleton
+ * unwrapped) is not.
+ */
+export const cfcCanonicalClauseDigest = (clause: CfcConfClause): string =>
+  hashStringOf(normalizeClause(clause));

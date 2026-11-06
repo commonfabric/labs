@@ -9,6 +9,7 @@ import {
 } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -17,7 +18,6 @@ import {
 } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { AtomPattern } from "../src/cfc/atom-pattern.ts";
-import type { CfcConfClause } from "../src/cfc/clause.ts";
 import type { CfcPolicyRecordInput } from "../src/cfc/policy.ts";
 import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";

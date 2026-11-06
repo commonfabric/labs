@@ -4934,6 +4934,105 @@ describe("runtime-processor", () => {
         }
       });
 
+      it("asks the runtime to release what nothing reads once the housekeeping it started has settled", async () => {
+        const readable = Promise.withResolvers<void>();
+        const ensureSent = Promise.withResolvers<void>();
+        await using worker = await homeWorker(
+          [],
+          () => ensureSent.resolve(),
+          readable.promise,
+        );
+        // How many inbox ensures had been sent each time a release was asked
+        // for.
+        const releases: number[] = [];
+        const release = worker.runtime.releaseUnreadDocuments.bind(
+          worker.runtime,
+        );
+        worker.runtime.releaseUnreadDocuments = () => {
+          releases.push(worker.privateInboxSends());
+          return release();
+        };
+
+        await worker.processor.handleGetSpaceRootPattern({
+          type: RequestType.GetSpaceRootPattern,
+          space: worker.homeSpace,
+        });
+        await worker.runtime.idle();
+
+        expect(releases).toEqual([]);
+        readable.resolve();
+        await ensureSent.promise;
+        await worker.processor.accessForTestingOnly.homeBringUpReleased;
+        expect(releases).toEqual([1]);
+      });
+
+      it("asks for that release once however often Home is brought up", async () => {
+        await using worker = await homeWorker([]);
+        let releases = 0;
+        const release = worker.runtime.releaseUnreadDocuments.bind(
+          worker.runtime,
+        );
+        worker.runtime.releaseUnreadDocuments = () => {
+          releases++;
+          return release();
+        };
+
+        await worker.processor.handleGetSpaceRootPattern({
+          type: RequestType.GetSpaceRootPattern,
+          space: worker.homeSpace,
+        });
+        await worker.processor.handleEnsureHomePatternRunning({
+          type: RequestType.EnsureHomePatternRunning,
+        });
+        await worker.processor.accessForTestingOnly.homeBringUpReleased;
+        await worker.processor.handleIdle();
+
+        expect(releases).toBe(1);
+      });
+
+      it("reports a failure of the release Home's bring-up asks for", async () => {
+        await using worker = await homeWorker([]);
+        worker.runtime.releaseUnreadDocuments = () =>
+          Promise.reject(new Error("release failure"));
+        const warn = stub(console, "warn", () => {});
+        try {
+          await worker.processor.handleGetSpaceRootPattern({
+            type: RequestType.GetSpaceRootPattern,
+            space: worker.homeSpace,
+          });
+          await worker.processor.handleIdle();
+          await worker.processor.accessForTestingOnly.homeBringUpReleased;
+
+          expect(warn.calls.map(({ args }) => args[0])).toEqual([
+            "[RuntimeProcessor] Releasing what Home's bring-up loaded:",
+          ]);
+        } finally {
+          warn.restore();
+        }
+      });
+
+      it("reports no failure of that release once the processor is disposed", async () => {
+        await using worker = await homeWorker([]);
+        worker.runtime.releaseUnreadDocuments = () => {
+          worker.processor.accessForTestingOnly.isDisposed = true;
+          return Promise.reject(new Error("release failure"));
+        };
+        const warn = stub(console, "warn", () => {});
+        try {
+          await worker.processor.handleGetSpaceRootPattern({
+            type: RequestType.GetSpaceRootPattern,
+            space: worker.homeSpace,
+          });
+          await worker.processor.handleIdle();
+          await worker.processor.accessForTestingOnly.homeBringUpReleased;
+
+          expect(warn.calls).toEqual([]);
+        } finally {
+          warn.restore();
+          worker.processor.accessForTestingOnly.isDisposed = false;
+        }
+      });
+
       it("starts no housekeeping when the root is read with `start` `false`", async () => {
         await using worker = await homeWorker([{ name: "team-lunch" }]);
         using housekeeping = stubHousekeeping();
@@ -7586,6 +7685,7 @@ describe("runtime-processor", () => {
           patternManager: { getCompileCacheStats: () => compileCacheStats },
           getSizes: () => runtimeSizes,
           getCellFromLink: () => ({ sink: () => () => {} }),
+          releaseUnreadDocuments: () => Promise.resolve(),
         },
       });
     }
@@ -8605,6 +8705,227 @@ describe("runtime-processor", () => {
       });
     });
 
+    describe("an idle space's context", () => {
+      const counterSchema = {
+        type: "object",
+        properties: { n: { type: "number" } },
+      } as const satisfies JSONSchema;
+      const client = (id: number): WorkerClient => ({ id, post: () => true });
+
+      /** A processor whose runtime holds a cell in a second space. */
+      async function spaceState() {
+        const state = makeProcessorState();
+        const spaceB = (await Identity.fromPassphrase(
+          "runtime-processor-idle-space",
+        )).did();
+        const cell = createCellRef(
+          state.runtime.getCell(spaceB, "idle-space-counter", counterSchema),
+        );
+        const subscribe = (subscriber: WorkerClient) =>
+          state.processor.handleCellSubscribe(
+            { type: RequestType.CellSubscribe, cell },
+            subscriber,
+          );
+        const unsubscribe = (subscriber: WorkerClient) =>
+          state.processor.handleCellUnsubscribe(
+            { type: RequestType.CellUnsubscribe, cell },
+            subscriber,
+          );
+        return { ...state, spaceB, subscribe, unsubscribe };
+      }
+
+      it("drops the context once its space's last subscription is cancelled, and makes a new one when the space is named again", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        try {
+          const first = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.has(spaceB)).toBe(false);
+          const again = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          expect(again).not.toBe(first);
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(again);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the context while another subscription in its space stands", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+          subscribe(client(2));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the context while a view mount of a cell in its space stands", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          processor.accessForTestingOnly.vdomMounts = new Map([["2 1", {
+            reconciler: { unmount: () => {} },
+            cancel: () => {},
+            client: client(2),
+            space: spaceB,
+          }]]) as never;
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the context while a piece in its space runs", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        using _running = stub(
+          runtime.runner,
+          "runsPieceIn",
+          (space) => space === spaceB,
+        );
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("drops the context once the last piece running in its space stops", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        let running = true;
+        using _running = stub(
+          runtime.runner,
+          "runsPieceIn",
+          (space) => running && space === spaceB,
+        );
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          using _stop = stub(ctx, "stopPiece", () => {
+            running = false;
+            return Promise.resolve();
+          });
+          subscribe(client(1));
+          unsubscribe(client(1));
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+
+          await processor.handlePieceStop({
+            type: RequestType.PieceStop,
+            pieceId: fid("idle-space-piece"),
+            space: spaceB,
+          });
+
+          expect(processor.accessForTestingOnly.spaces.has(spaceB)).toBe(false);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the context across a view mount replaced under the same id", async () => {
+        const { processor, runtime, spaceB } = await spaceState();
+        try {
+          const view = createCellRef(
+            runtime.getCell(spaceB, "idle-space-view", counterSchema),
+          );
+          const mount = () =>
+            processor.handleVDomMount(
+              { type: RequestType.VDomMount, mountId: 1, cell: view },
+              client(1),
+            );
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          await mount();
+
+          await mount();
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("finds a context for the pieces a running piece creates, after its space's was dropped", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        let running = false;
+        using _running = stub(
+          runtime.runner,
+          "runsPieceIn",
+          (space) => running && space === spaceB,
+        );
+        try {
+          processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+          unsubscribe(client(1));
+          expect(processor.piecesFor(spaceB)).toBeUndefined();
+
+          // The piece's start was under way when the context went.
+          running = true;
+
+          const found = processor.piecesFor(spaceB);
+          expect(found).toBeDefined();
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(found);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the home space's context when nothing in it is open", async () => {
+        const {
+          processor,
+          runtime,
+          homeSpace,
+          spaceB,
+          subscribe,
+          unsubscribe,
+        } = await spaceState();
+        try {
+          processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(homeSpace)).toBe(
+            processor.accessForTestingOnly.cc,
+          );
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("drops the context of a space a departing client alone had open", async () => {
+        const { processor, runtime, spaceB, subscribe } = await spaceState();
+        try {
+          processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          processor.disposeClient(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.has(spaceB)).toBe(false);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+    });
+
     describe("handleRuntimeSynced()", () => {
       it("awaits every opened space, naming none", async () => {
         const { processor, runtime } = makeProcessorState();
@@ -9421,6 +9742,64 @@ describe("runtime-processor", () => {
         expect(calls.map(([, host]) => host)).toEqual(
           Object.keys(registrations),
         );
+      });
+    });
+
+    describe("`RequestType.RetryUnreachableSpaces`", () => {
+      it("retries each space the storage manager could not reach, and resolves once every retry has settled, failed ones included", async () => {
+        const calls: string[] = [];
+        const gates = new Map<string, PromiseWithResolvers<void>>();
+        let handled = false;
+        const processor = buildProcessor({
+          runtime: {
+            retrySpaceAccess: (space: string) => {
+              calls.push(space);
+              const gate = Promise.withResolvers<void>();
+              gates.set(space, gate);
+              return gate.promise;
+            },
+            storageManager: {
+              unreachableSpaces: () => [
+                "did:key:z6Mk-ipc-unreachable-a",
+                "did:key:z6Mk-ipc-unreachable-b",
+              ],
+            },
+          },
+        });
+        const request = processor.handleRequest({
+          type: RequestType.RetryUnreachableSpaces,
+        }).then(() => {
+          handled = true;
+        });
+        expect(calls).toEqual([
+          "did:key:z6Mk-ipc-unreachable-a",
+          "did:key:z6Mk-ipc-unreachable-b",
+        ]);
+        gates.get("did:key:z6Mk-ipc-unreachable-a")?.resolve();
+        await Promise.resolve();
+        expect(handled).toBe(false);
+        gates.get("did:key:z6Mk-ipc-unreachable-b")?.reject(
+          new Error("still out of reach"),
+        );
+        await request;
+        expect(handled).toBe(true);
+      });
+
+      it("retries nothing where no space is out of reach", async () => {
+        const calls: string[] = [];
+        const processor = buildProcessor({
+          runtime: {
+            retrySpaceAccess: (space: string) => {
+              calls.push(space);
+              return Promise.resolve();
+            },
+            storageManager: { unreachableSpaces: () => [] },
+          },
+        });
+        await processor.handleRequest({
+          type: RequestType.RetryUnreachableSpaces,
+        });
+        expect(calls).toEqual([]);
       });
     });
 
@@ -10499,6 +10878,8 @@ describe("runtime-processor", () => {
       function subscriptionHarness() {
         const cancelled: number[] = [];
         const sinks: Array<(value: unknown, cfcLabel: unknown) => void> = [];
+        // What had been cancelled each time a release was asked for.
+        const releases: number[][] = [];
         const processor = buildProcessor({
           runtime: {
             getCellFromLink: () => ({
@@ -10509,9 +10890,13 @@ describe("runtime-processor", () => {
                 return () => cancelled.push(nth);
               },
             }),
+            releaseUnreadDocuments: () => {
+              releases.push([...cancelled]);
+              return Promise.resolve();
+            },
           },
         });
-        return { processor, sinks, cancelled };
+        return { processor, sinks, cancelled, releases };
       }
 
       const subscribe = (
@@ -10578,6 +10963,25 @@ describe("runtime-processor", () => {
           value: false,
         });
         expect(cancelled).toEqual([]);
+      });
+
+      it("asks the runtime to release what nothing reads once the unsubscribed feed is gone", () => {
+        const { processor, releases } = subscriptionHarness();
+        subscribe(processor, testClient(1).client);
+        subscribe(processor, testClient(2).client);
+
+        unsubscribe(processor, testClient(1).client);
+
+        expect(releases).toEqual([[1]]);
+      });
+
+      it("asks for no release for an unsubscribe that cancels nothing", () => {
+        const { processor, releases } = subscriptionHarness();
+        subscribe(processor, testClient(1).client);
+
+        unsubscribe(processor, testClient(2).client);
+
+        expect(releases).toEqual([]);
       });
     });
 

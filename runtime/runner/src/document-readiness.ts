@@ -73,7 +73,13 @@ export async function loadDocument(
 type Confirmation =
   | { status: "pending"; waiters: Set<ScopeKeyIdentity | undefined> }
   | { status: "confirmed" }
-  | { status: "failed"; error: DocumentLoadError };
+  | {
+    status: "failed";
+    error: DocumentLoadError;
+
+    /** Whether a quarantine held the document back when the load failed. */
+    quarantined: boolean;
+  };
 
 /**
  * The outcome of work an action waits on through `requireSettled()`: still
@@ -190,6 +196,23 @@ export function createDocumentReadiness(
         return true;
       }
 
+      const quarantined = () =>
+        runtime.storageManager.open(link.space).replica.isQuarantined?.(
+          link.id,
+          link.scope,
+          identity,
+        ) ?? false;
+      // A finding a quarantine has overtaken does not stand, so the load runs
+      // again: a document confirmed absent that has since arrived, held back by
+      // a quarantine, and a load that failed on a quarantine since ended.
+      const standing = confirmations.get(key);
+      if (
+        (standing?.status === "confirmed" && quarantined()) ||
+        (standing?.status === "failed" && standing.quarantined &&
+          !quarantined())
+      ) {
+        confirmations.delete(key);
+      }
       const prior = confirmations.get(key);
       if (prior?.status === "confirmed") return false;
       if (prior?.status === "failed") throw prior.error;
@@ -231,7 +254,8 @@ export function createDocumentReadiness(
         runtime.storageManager.trackUntilSettled(
           documentLoad(runtime, root, identity).then(
             () => finish({ status: "confirmed" }),
-            (error: DocumentLoadError) => finish({ status: "failed", error }),
+            (error: DocumentLoadError) =>
+              finish({ status: "failed", error, quarantined: quarantined() }),
           ),
         );
       }

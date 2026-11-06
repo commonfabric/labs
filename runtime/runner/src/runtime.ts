@@ -1455,8 +1455,14 @@ export type CommitRetryPullFailure = {
 export class Runtime {
   #tearingDownWrites = false;
 
-  /** The release pass waiting for the scheduler to go idle, if any. */
+  /**
+   * The release pass not yet under way, if any: waiting for the one under
+   * way to finish, or for the scheduler to go idle.
+   */
   #documentRelease: Promise<void> | undefined;
+
+  /** The release pass under way, if any, settled whether or not it failed. */
+  #documentReleaseRunning: Promise<void> | undefined;
 
   /** Undoes what `#installDocumentRelease()` registered. */
   readonly #documentReleaseCancels: Cancel[] = [];
@@ -3332,8 +3338,10 @@ export class Runtime {
    * (`IStorageManager.releaseUnreadDocuments()`), and resolves when that
    * pass has run. Stopping a piece asks for one. A host asks for one when
    * something that read documents through this runtime has gone, such as a
-   * client whose subscriptions it cancelled. Calls made while a pass waits
-   * for the scheduler share it.
+   * client whose subscriptions it cancelled. Calls made before a pass begins
+   * share it. A call made while a pass is under way is answered by the next
+   * one, which waits for that one to finish and then for the scheduler. So at
+   * most one pass waits at a time, however many calls are made.
    *
    * A pass keeps a document loaded or read since the previous pass began, so
    * that a read still under way finishes with it. Where it kept one for that
@@ -3345,15 +3353,28 @@ export class Runtime {
   releaseUnreadDocuments(): Promise<void> {
     this.#documentRelease ??= (async () => {
       try {
+        // The pass under way may have begun before what this call is about
+        // let go of its documents, so it cannot answer the call.
+        await this.#documentReleaseRunning;
         await this.scheduler.idle();
       } finally {
         // A request made from here on asks for a pass of its own.
         this.#documentRelease = undefined;
       }
-      const deferred = await this.storageManager.releaseUnreadDocuments?.();
-      if (deferred !== true) return;
-      await this.scheduler.idle();
-      await this.storageManager.releaseUnreadDocuments?.();
+      const running = (async () => {
+        const deferred = await this.storageManager.releaseUnreadDocuments?.();
+        if (deferred !== true) return;
+        await this.scheduler.idle();
+        await this.storageManager.releaseUnreadDocuments?.();
+      })();
+      const settled = running.catch(() => {});
+      this.#documentReleaseRunning = settled;
+      settled.then(() => {
+        if (this.#documentReleaseRunning === settled) {
+          this.#documentReleaseRunning = undefined;
+        }
+      });
+      await running;
     })().catch((error) => {
       documentReleaseLogger.warn("release-failed", () => [
         "releasing the documents nothing reads failed:",
@@ -4984,15 +5005,21 @@ export class Runtime {
     const provider = this.storageManager.open(space);
     const aclUri = aclDocId(space) as URI;
     const spaceCell = this.getSpaceCell(space);
+    const spaceId = spaceCell.getAsNormalizedFullLink().id;
     const loads = await Promise.all([
       provider.sync(aclUri),
-      provider.sync(spaceCell.getAsNormalizedFullLink().id),
+      provider.sync(spaceId),
     ]);
     const denied = this.storageManager.spaceAccessError?.(space) ??
       this.storageManager.authorizationError?.(space);
     if (denied !== undefined) return true;
     for (const { error } of loads) {
       if (error !== undefined) throw error;
+    }
+    // Neither reads as absent while a quarantine holds it back.
+    for (const id of [aclUri, spaceId]) {
+      const failure = await provider.replica.quarantineFailure?.(id);
+      if (failure !== undefined) throw failure;
     }
     const tx = this.edit();
     try {

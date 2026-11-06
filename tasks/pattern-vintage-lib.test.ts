@@ -867,6 +867,36 @@ describe("stranded-state comparison", () => {
       expect(strandedKeys({ schema: after }, { schema: before })).toEqual([]);
     });
 
+    it("reports nothing when the note differs after a comment the schema already held", () => {
+      const held = "Conflicting docs across declarations; using first";
+      const before = rowsWith(row, `${held} ${note}`);
+      const after = refTo(
+        rowsWith(row, `${held} ${NOTE} for: { summary?: string; }.`),
+      );
+      expect(strandedKeys({ schema: before }, { schema: after })).toEqual([]);
+    });
+
+    it("grades a difference in the comment before the note as lost", () => {
+      const after = refTo(
+        rowsWith(row, `Conflicting docs for index signatures; ${note}`),
+      );
+      const findings = strandedKeys({
+        schema: rowsWith(row, `Conflicting docs across declarations; ${note}`),
+      }, {
+        schema: after,
+      });
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
+
+    it("reports nothing when only a `description` differs", () => {
+      const before = { ...rowsWith(row), description: "Glazed rows." };
+      const after = refTo({ ...rowsWith(row), description: "Frosted rows." });
+      expect(strandedKeys({ schema: before }, { schema: after })).toEqual([]);
+      expect(strandedKeys({ schema: after }, { schema: before })).toEqual([]);
+    });
+
     it("grades a dropped field as lost, with the note differing as well", () => {
       const { note: _note, ...fewer } = row;
       const after = refTo(
@@ -908,6 +938,45 @@ describe("stranded-state comparison", () => {
       const findings = strandedKeys({ schema: refTo(rowsWith(row)) }, {});
       expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
         ["schema", true],
+      ]);
+    });
+  });
+
+  describe("a schema held inline on both sides", () => {
+    // A stored pattern carries its schemas written out, as `summaryIndex`'s
+    // `search` does in the committed `default-app.tsx` fixture.
+
+    const NOTE = "Docs inherited from intersection constituents. Missing docs";
+    const searchWith = (comment?: string) => ({
+      search: {
+        pattern: {
+          argumentSchema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            ...(comment === undefined ? {} : { $comment: comment }),
+          },
+        },
+      },
+    });
+
+    it("reports nothing when only the generator's inherited-docs note differs or goes", () => {
+      const before = searchWith(
+        `${NOTE} for: { summary?: string | undefined; }.`,
+      );
+      const after = searchWith(`${NOTE} for: { summary?: string; }.`);
+      expect(strandedKeys(before, after)).toEqual([]);
+      expect(strandedKeys(before, searchWith())).toEqual([]);
+    });
+
+    it("grades the comment before the note as lost when it goes", () => {
+      const held =
+        "Conflicting docs across intersection constituents; using first";
+      const findings = strandedKeys(
+        searchWith(`${held} ${NOTE} for: { summary?: string; }.`),
+        searchWith(),
+      );
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["search", true],
       ]);
     });
   });

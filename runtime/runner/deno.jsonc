@@ -37,6 +37,7 @@
     "ws": "npm:ws@^8.21.3"
   },
   "exports": {
+    "./cell-reference": "./src/cell-reference.ts",
     "./native-ui": "./src/native-ui.ts",
     "./hashtags": "./src/hashtags.ts",
     "./space-invites": "./src/space-invites.ts",
@@ -85,7 +86,6 @@
     "./cfc/kernel/manifest": "./src/cfc/kernel/manifest.ts",
     "./cfc/kernel/spec-header": "./src/cfc/kernel/spec-header.ts",
     "./cfc/trust": "./src/cfc/trust.ts",
-    "./cfc/atoms": "./src/cfc/atoms.ts",
     "./cfc/consumed-label": "./src/cfc/consumed-label.ts",
     "./cfc/label-view-core": "./src/cfc/label-view-core.ts",
     "./cfc/label-view-state": "./src/cfc/label-view-state.ts",

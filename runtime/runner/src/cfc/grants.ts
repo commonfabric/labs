@@ -12,13 +12,14 @@ import {
 } from "@commonfabric/js-values/types";
 import type { URI } from "@commonfabric/memory/interface";
 import { getCommitPreconditionsConfig } from "@commonfabric/memory/v2";
+import { isOrClause } from "@commonfabric/memory/v2/cfc-release-authority";
 import type {
   IExtendedStorageTransaction,
   MemorySpace,
 } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import { type AtomPattern, isAtomPattern } from "./atom-pattern.ts";
-import { FORBIDDEN_OR_CLAUSE_ALTERNATIVE_TYPES, isOrClause } from "./clause.ts";
+import { FORBIDDEN_OR_CLAUSE_ALTERNATIVE_TYPES } from "./clause.ts";
 import type {
   CfcGrantResolver,
   CfcGrantResolverQuery,

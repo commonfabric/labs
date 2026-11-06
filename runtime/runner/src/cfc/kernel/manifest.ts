@@ -146,6 +146,7 @@ export const CRITICAL_SECTIONS: readonly { file: string; section: string }[] = [
   { file: LABELS, section: "4.3.4" },
   { file: LABELS, section: "4.4.5" },
   { file: LABELS, section: "4.6.4.1" },
+  { file: PROPAGATION, section: "8.9.1.3" },
   { file: PROPAGATION, section: "8.9.2" },
   { file: PROPAGATION, section: "8.9.3" },
   { file: BOUNDARIES, section: "8.10.1.1" },
@@ -219,11 +220,16 @@ export const MANIFEST: readonly ManifestRow[] = [
     lean: "`Cfc/StoreRelease.lean`: `releasableBy`, `standsForActor`",
     relation: "missing",
     decidedToday: [
+      // The memory package holds it, so that the store's owner-release
+      // exception decides what the runtime's release decides.
       {
-        file: "cfc/confidentiality-release-plan.ts",
+        file: "../../memory/v2/cfc-release-authority.ts",
         symbol: "clauseReleasableBy",
       },
-      { file: "cfc/host-review.ts", symbol: "isActorOwnedAlternative" },
+      {
+        file: "../../memory/v2/cfc-release-authority.ts",
+        symbol: "isActorOwnedAlternative",
+      },
     ],
     note: "reads a field committed to the actor's DID as the DID, then asks " +
       "`isActorOwnedAlternative` of each alternative; that is the " +
@@ -461,6 +467,43 @@ export const MANIFEST: readonly ManifestRow[] = [
       "atoms through default transforms, and `reconcileMintedEntries` in " +
       "`cfc/minted-integrity.ts` withdraws schema-minted stamps when the " +
       "value at the path changes",
+  },
+  {
+    file: PROPAGATION,
+    section: "8.9.1.3",
+    name: "resultWiringStamp",
+    lean: "`Cfc/ResultWiring.lean`: `wiringStamp`, `attemptStamp`, " +
+      "`BuildDecided`",
+    relation: "missing",
+    decidedToday: [
+      { file: PREPARE, symbol: "resultWiringsByTarget" },
+      { file: PREPARE, symbol: "deriveFlowJoin" },
+    ],
+    note: "setup records a `result-wiring` input naming the result " +
+      "document and whether the wiring is build-decided, which it is " +
+      "unless a stored name was carried over, and the journal position " +
+      "the setup began at; the membership stamp of such a document joins " +
+      "what the transaction read before that position, the trigger reads " +
+      "among it (`deriveFlowJoin` with `journalBefore`), which is at least " +
+      "the pseudocode's triggers, its scope of wiring, write-destination " +
+      "and runtime-internal reads contributing nothing to a join; placing " +
+      "the wiring follows no reference, so the scope holds no dereference " +
+      "whose slot restriction the join would keep",
+  },
+  {
+    file: PROPAGATION,
+    section: "8.9.1.3",
+    name: "restateResultWiring",
+    lean: "`Cfc/ResultWiring.lean`: `create`, `restate`",
+    relation: "missing",
+    decidedToday: [
+      { file: PREPARE, symbol: "withRestatedResultWirings" },
+      { file: PREPARE, symbol: "ownRestampContainerPaths" },
+    ],
+    note: "a setup's result wiring is taken as written at the root of its " +
+      "document whether or not the setup wrote it, so the root's " +
+      "membership is re-minted each setup; a container reached only so " +
+      "mints no existence entry",
   },
   {
     file: PROPAGATION,
