@@ -67,13 +67,14 @@ each slot holding a link the read followed, which a dereference retains
 - A `$` binding is made only while the ceiling admits the worker's read of
   the bound cell, under the cell's schema. A binding whose component read
   contract entry (`runtime/runner/src/component-read-contract.ts`) is
-  `projected` and lists no `renders` is decided on the read its component
-  makes instead, with the entry's `schema` whatever schema the handle carries,
-  so a field the component does not read does not withhold it and a field it
-  reads decides it however narrowly the handle is typed. `cf-profile-badge`
-  `profile` is one: the badge shows a profile's name and picture, which a
-  viewer may see even when the profile's private share inbox pointer is
-  refused. A nested render root is decided on
+  `complete`, its `schema` reading everything the component shows from it, is
+  decided on that read instead, so a field the component does not read does
+  not withhold it and a field it reads decides it however the handle is
+  typed. `cf-profile-badge` `profile` is one: the badge shows a profile's name
+  and picture, which a viewer may see even when the profile's private share
+  inbox pointer is refused. `cf-code-editor`'s mention lists are not, since
+  the editor reads each mention's destination, a cell its read hands it, for
+  the name it shows. A nested render root is decided on
   the reads its component makes as well, as the nested-render paragraphs
   below describe. The worker keeps reading the bound cell and removes the
   binding when a write leaves that read consuming a label the ceiling

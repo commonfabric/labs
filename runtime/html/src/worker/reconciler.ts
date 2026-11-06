@@ -1103,12 +1103,11 @@ export class WorkerReconciler {
    * `cf-render` cell is. A reference's read stops at the document it lands on
    * and leaves that document's contents to the render mounted from it.
    * Elsewhere a nested render root is decided on everything the bound cell
-   * reaches. A binding whose entry is `projected` and lists no `renders` is
-   * decided on the read its component makes, with the entry's `schema`
-   * whatever schema the handle carries: a field the component does not read
-   * does not decide it, and a field it reads does, however narrowly the
-   * handle is typed. The entry is reviewed like the component itself, as
-   * {@link ComponentPropRead} says.
+   * reaches. A binding whose entry is `complete` is decided on the read its
+   * component makes, `schema` as `componentReadSchema()` resolves it: a field
+   * the component does not read does not decide it, and a field it reads
+   * does, however the handle is typed. The entry is reviewed like the
+   * component itself, as {@link ComponentPropRead} says.
    * A read that could not complete, one
    * whose space is out of reach or whose labels or links could not be read,
    * withholds the binding and is never taken for an empty read. While a
@@ -1209,7 +1208,7 @@ export class WorkerReconciler {
     // root the policy does not cover is decided on everything it reaches.
     const hostRead = renders !== undefined && !covered
       ? read.asSchema(true)
-      : covered || contract?.projected === true
+      : covered || contract?.complete === true
       ? read.asSchema(
         componentReadSchema(
           state.tagName,
