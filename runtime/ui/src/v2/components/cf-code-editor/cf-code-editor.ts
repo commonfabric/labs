@@ -3391,18 +3391,13 @@ export class CFCodeEditor extends BaseElement {
     });
 
     // Create editor view
+    // The highlights reach the view from `updated()`, which runs after
+    // `firstUpdated()` with `highlights` among the changed properties.
     this._editorView = new EditorView({
       state,
       parent: editorElement,
     });
-    this._editorView.dispatch({
-      effects: setHighlightsEffect.of(this.highlights ?? []),
-    });
-    this._reportHighlightFaults();
     this._refusedShown = this._readsWithheld;
-    // A host may hold the last selection an earlier view reported, so a new
-    // view says what is selected in it, which at first is nothing.
-    this._lastSelectionReport = undefined;
     this._reportSelection();
   }
 

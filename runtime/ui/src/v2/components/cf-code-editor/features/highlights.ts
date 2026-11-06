@@ -197,7 +197,6 @@ const highlightTheme = EditorView.baseTheme({
       "var(--cf-code-editor-highlight, hsla(45, 100%, 50%, 0.25))",
     borderBottom: "2px solid var(--cf-code-editor-highlight-edge, " +
       "hsla(45, 100%, 40%, 0.7))",
-    cursor: "pointer",
   },
   ".cm-highlight-active": {
     backgroundColor:
