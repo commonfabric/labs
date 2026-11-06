@@ -9745,6 +9745,64 @@ describe("runtime-processor", () => {
       });
     });
 
+    describe("`RequestType.RetryUnreachableSpaces`", () => {
+      it("retries each space the storage manager could not reach, and resolves once every retry has settled, failed ones included", async () => {
+        const calls: string[] = [];
+        const gates = new Map<string, PromiseWithResolvers<void>>();
+        let handled = false;
+        const processor = buildProcessor({
+          runtime: {
+            retrySpaceAccess: (space: string) => {
+              calls.push(space);
+              const gate = Promise.withResolvers<void>();
+              gates.set(space, gate);
+              return gate.promise;
+            },
+            storageManager: {
+              unreachableSpaces: () => [
+                "did:key:z6Mk-ipc-unreachable-a",
+                "did:key:z6Mk-ipc-unreachable-b",
+              ],
+            },
+          },
+        });
+        const request = processor.handleRequest({
+          type: RequestType.RetryUnreachableSpaces,
+        }).then(() => {
+          handled = true;
+        });
+        expect(calls).toEqual([
+          "did:key:z6Mk-ipc-unreachable-a",
+          "did:key:z6Mk-ipc-unreachable-b",
+        ]);
+        gates.get("did:key:z6Mk-ipc-unreachable-a")?.resolve();
+        await Promise.resolve();
+        expect(handled).toBe(false);
+        gates.get("did:key:z6Mk-ipc-unreachable-b")?.reject(
+          new Error("still out of reach"),
+        );
+        await request;
+        expect(handled).toBe(true);
+      });
+
+      it("retries nothing where no space is out of reach", async () => {
+        const calls: string[] = [];
+        const processor = buildProcessor({
+          runtime: {
+            retrySpaceAccess: (space: string) => {
+              calls.push(space);
+              return Promise.resolve();
+            },
+            storageManager: { unreachableSpaces: () => [] },
+          },
+        });
+        await processor.handleRequest({
+          type: RequestType.RetryUnreachableSpaces,
+        });
+        expect(calls).toEqual([]);
+      });
+    });
+
     describe("`RequestType.RetrySpaceAccess`", () => {
       it("forwards the space to the runtime and resolves after the runtime's retry does", async () => {
         const events: string[] = [];

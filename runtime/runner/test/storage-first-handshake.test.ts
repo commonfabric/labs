@@ -177,9 +177,11 @@ describe("storage-first-handshake", () => {
       expect(latched.error).toBeDefined();
       expect(dialed).toHaveLength(MEMORY_FIRST_HANDSHAKE_ATTEMPTS);
 
+      expect(manager.unreachableSpaces()).toEqual([SPACE]);
       await manager.retrySpaceAccess(SPACE);
       expect(dialed).toHaveLength(MEMORY_FIRST_HANDSHAKE_ATTEMPTS + 1);
       expect(manager.spaceSessionError(SPACE)).toBeUndefined();
+      expect(manager.unreachableSpaces()).toEqual([]);
       const after = await manager.open(SPACE).sync(`of:${SPACE}`);
       expect(after.error).toBeUndefined();
     });

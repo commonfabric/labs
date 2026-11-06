@@ -1493,6 +1493,20 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   }
 
   /**
+   * Asks again, as `retrySpaceAccess()` does, for every space the runtime
+   * could not reach: those whose first connection never completed a
+   * handshake. It is for a host that learns the network changed, such as from
+   * the platform's path monitor, and so cannot know which spaces were out of
+   * reach. Resolves once each retry has settled, whatever it decided; a space
+   * still out of reach stays as it was, and its loads keep failing at once.
+   */
+  async retryUnreachableSpaces(): Promise<void> {
+    await this.#conn.request<RequestType.RetryUnreachableSpaces>({
+      type: RequestType.RetryUnreachableSpaces,
+    });
+  }
+
+  /**
    * Wait for convergence across EVERY space this worker has opened.
    * Spaceless by design (like idle) — for quiescence checks that don't
    * care about any particular space, e.g. test/debug harnesses.

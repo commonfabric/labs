@@ -280,6 +280,7 @@ import {
   RequestType,
   type ResolveEventAttentionRequest,
   type RetrySpaceAccessRequest,
+  type RetryUnreachableSpacesRequest,
   RuntimeErrorCode,
   type RuntimeSecurityContext,
   type SetActionRunTraceEnabledRequest,
@@ -3904,6 +3905,21 @@ export class RuntimeProcessor {
     return this.#spaceAccessRetries.retry(request.space);
   }
 
+  /**
+   * Retries, as `handleRetrySpaceAccess()` does, every space whose first
+   * connection never completed a handshake, and resolves once each retry has
+   * settled. A space still out of reach is the expected answer to a network
+   * change, not a failure, so this does not reject.
+   */
+  async handleRetryUnreachableSpaces(
+    _request: RetryUnreachableSpacesRequest,
+  ): Promise<void> {
+    const spaces = this.#runtime.storageManager.unreachableSpaces?.() ?? [];
+    await Promise.allSettled(
+      spaces.map((space) => this.#spaceAccessRetries.retry(space)),
+    );
+  }
+
   async handleCreateSpace(
     request: CreateSpaceRequest,
   ): Promise<SpaceResponse> {
@@ -4358,6 +4374,8 @@ export class RuntimeProcessor {
         return await this.handleRegisterSpaceHostDetailed(request);
       case RequestType.RetrySpaceAccess:
         return await this.handleRetrySpaceAccess(request);
+      case RequestType.RetryUnreachableSpaces:
+        return await this.handleRetryUnreachableSpaces(request);
       case RequestType.GetGraphSnapshot:
         return this.getGraphSnapshot(request);
       case RequestType.GetStorageDiagnostics:

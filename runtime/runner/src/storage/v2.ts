@@ -2574,6 +2574,13 @@ export class StorageManager implements IStorageManager {
   }
 
   /** @inheritDoc */
+  unreachableSpaces(): MemorySpace[] {
+    return [...this.#providers.keys()].filter((space) =>
+      MemoryV2Client.isFirstHandshakeFailure(this.spaceSessionError(space))
+    );
+  }
+
+  /** @inheritDoc */
   async retrySpaceAccess(space: MemorySpace): Promise<void> {
     // Already-open providers only, as in `noteSpaceAclChanged()`: a space
     // this manager has never opened has no refusal to retry.

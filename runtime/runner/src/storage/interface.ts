@@ -1056,6 +1056,14 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   retrySpaceAccess?(space: MemorySpace): Promise<void>;
 
   /**
+   * The spaces this manager has opened whose first connection never
+   * completed a handshake, which `retrySpaceAccess()` would dial again. For a
+   * host that learns the network changed and cannot know which spaces were
+   * out of its reach. Opens nothing.
+   */
+  unreachableSpaces?(): MemorySpace[];
+
+  /**
    * Load cell from storage. Will also subscribe to new changes.
    *
    * @returns Promise that resolves when the cell sync is complete.

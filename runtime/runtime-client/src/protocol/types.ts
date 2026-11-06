@@ -341,6 +341,14 @@ export enum RequestType {
    */
   RetrySpaceAccess = "runtime:retrySpaceAccess",
 
+  /**
+   * Asks again, as `RetrySpaceAccess` does, for every space whose first
+   * connection never completed a handshake, and is done once each retry has
+   * settled. It is for a host that learns the network changed, and does
+   * nothing where no space is out of reach.
+   */
+  RetryUnreachableSpaces = "runtime:retryUnreachableSpaces",
+
   /** Waits for the pattern manager's compile-cache writes to land. */
   FlushCompileCacheWrites = "runtime:flushCompileCacheWrites",
 
@@ -2063,6 +2071,11 @@ export type RegisterSpaceHostDetailedRequest = BaseRequest & {
   host: string;
 };
 
+/** The {@link RequestType.RetryUnreachableSpaces} request. */
+export type RetryUnreachableSpacesRequest = BaseRequest & {
+  type: RequestType.RetryUnreachableSpaces;
+};
+
 /** The {@link RequestType.RetrySpaceAccess} request. */
 export type RetrySpaceAccessRequest = BaseRequest & {
   type: RequestType.RetrySpaceAccess;
@@ -3558,6 +3571,7 @@ export type IPCClientRequest =
   | RegisterSpaceHostRequest
   | RegisterSpaceHostDetailedRequest
   | RetrySpaceAccessRequest
+  | RetryUnreachableSpacesRequest
   | VDomMountRequest
   | VDomUnmountRequest
   | DetectNonIdempotentRequest
@@ -4797,6 +4811,10 @@ export type Commands = {
   };
   [RequestType.RetrySpaceAccess]: {
     request: RetrySpaceAccessRequest;
+    response: EmptyResponse;
+  };
+  [RequestType.RetryUnreachableSpaces]: {
+    request: RetryUnreachableSpacesRequest;
     response: EmptyResponse;
   };
   [RequestType.PieceGet]: {
