@@ -1059,11 +1059,10 @@ export const SharedNoteCore = pattern<
     return selected.from === selected.to || !hasProfile ||
       composing.get().id !== "";
   });
-  // What differs by session is shown or hidden through a prop, never by
-  // building a different tree: a branch chosen per session is stored once for
-  // everyone, and runtimes that chose differently overwrite each other
-  // without end. Each element shown this way also carries a static `hidden`,
-  // which keeps it out of view until its display has a value.
+  // Per-session differences in the composer, the notice and the rows are
+  // shown or hidden through a per-session `display` prop. Each element shown
+  // this way also carries a static `hidden`, which keeps it out of view until
+  // its display has a value.
   const composerDisplay = computed((): PerSession<NoteDisplay> =>
     composing.get().id === "" ? "none" : "flex"
   );
