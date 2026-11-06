@@ -6872,6 +6872,7 @@ const applyCommitTransaction = (
     {
       readonly opIndex: number;
       readonly operation: { id: string; scope?: unknown };
+      lastOpIndex: number;
       cfc: unknown;
       deleted: boolean;
     }
@@ -6886,8 +6887,15 @@ const applyCommitTransaction = (
     const cfc = (document as { cfc?: unknown } | null | undefined)?.cfc;
     const known = envelopeWrites.get(docKey);
     if (known === undefined) {
-      envelopeWrites.set(docKey, { opIndex, operation, cfc, deleted });
+      envelopeWrites.set(docKey, {
+        opIndex,
+        operation,
+        lastOpIndex: opIndex,
+        cfc,
+        deleted,
+      });
     } else {
+      known.lastOpIndex = opIndex;
       known.cfc = cfc;
       known.deleted = deleted;
     }
@@ -6933,6 +6941,7 @@ const applyCommitTransaction = (
           known?.deleted === true &&
           !metadataPatchDocKeys.has(opDocKey(opIndex, operation))
         ) {
+          known.lastOpIndex = opIndex;
           known.cfc = undefined;
           known.deleted = false;
         }
@@ -7167,43 +7176,6 @@ const applyCommitTransaction = (
     if (!isLabelDocumentShape(content)) {
       throw new ProtocolError(
         `memory v2 commit references CFC label document ${id} whose content does not hold a label`,
-      );
-    }
-  }
-
-  // A commit may not leave a path whose stored declared CFC label holds a
-  // confidentiality clause with no declared entry, unless it is the owner
-  // release that `admitsDroppedDeclaredPaths()` recognizes
-  // (`envelope-admission.ts`). The stored envelope's label documents were
-  // backed when it was stored, so a reference resolves against the space.
-  const actor = delegated?.actingPrincipal ?? principal;
-  const storedLabel = (ref: string): unknown => {
-    if (!ref.startsWith("cid:")) return undefined;
-    const document = readState(engine, { id: ref, branch })?.document;
-    return document === null || document === undefined
-      ? undefined
-      : document.value;
-  };
-  for (const write of envelopeWrites.values()) {
-    if (write.deleted) continue;
-    const storedCfc = (readState(engine, {
-      id: write.operation.id,
-      branch,
-      scope: write.operation.scope as Parameters<typeof readState>[1]["scope"],
-      principal: scanPrincipal,
-      sessionId: scanSession,
-      scopeKey: scopeKeyByOpIndex.get(write.opIndex),
-    })?.document as { cfc?: unknown } | null | undefined)?.cfc;
-    if (
-      storedCfc === undefined ||
-      valueEqual(storedCfc as FabricValue, write.cfc as FabricValue)
-    ) continue;
-    const dropped = droppedDeclaredPaths(storedCfc, write.cfc, storedLabel);
-    if (!admitsDroppedDeclaredPaths(dropped, space, actor)) {
-      throw new ProtocolError(
-        `memory v2 commit leaves document ${write.operation.id} with no declared CFC label at ${
-          dropped.map((drop) => JSON.stringify(drop.path)).join(", ")
-        }, where it stores one; only the space's owner, releasing clauses that are theirs alone, may drop a declared label`,
       );
     }
   }
@@ -7460,6 +7432,46 @@ const applyCommitTransaction = (
       commit,
       { checkStaleness: false },
     );
+  }
+
+  // A commit may not leave a path whose stored declared CFC label holds a
+  // confidentiality clause with no declared entry, unless it is the owner
+  // release that `admitsDroppedDeclaredPaths()` recognizes
+  // (`envelope-admission.ts`). The stored envelope's label documents were
+  // backed when it was stored, so a reference resolves against the space.
+  // It runs after the read validation, so a commit made against a stale view
+  // of the document is refused as the conflict it is, which its writer
+  // retries, and an operation the validation elided is not judged.
+  const actor = delegated?.actingPrincipal ?? principal;
+  const storedLabel = (ref: string): unknown => {
+    if (!ref.startsWith("cid:")) return undefined;
+    const document = readState(engine, { id: ref, branch })?.document;
+    return document === null || document === undefined
+      ? undefined
+      : document.value;
+  };
+  for (const write of envelopeWrites.values()) {
+    if (write.deleted || elidedOpIndexes.has(write.lastOpIndex)) continue;
+    const storedCfc = (readState(engine, {
+      id: write.operation.id,
+      branch,
+      scope: write.operation.scope as Parameters<typeof readState>[1]["scope"],
+      principal: scanPrincipal,
+      sessionId: scanSession,
+      scopeKey: scopeKeyByOpIndex.get(write.opIndex),
+    })?.document as { cfc?: unknown } | null | undefined)?.cfc;
+    if (
+      storedCfc === undefined ||
+      valueEqual(storedCfc as FabricValue, write.cfc as FabricValue)
+    ) continue;
+    const dropped = droppedDeclaredPaths(storedCfc, write.cfc, storedLabel);
+    if (!admitsDroppedDeclaredPaths(dropped, space, actor)) {
+      throw new ProtocolError(
+        `memory v2 commit leaves document ${write.operation.id} with no declared CFC label at ${
+          dropped.map((drop) => JSON.stringify(drop.path)).join(", ")
+        }, where it stores one; only the space's owner, releasing clauses that are theirs alone, may drop a declared label`,
+      );
+    }
   }
 
   // Event-append admission (Phase 3, events.md §1/§4): the dedupe-horizon
