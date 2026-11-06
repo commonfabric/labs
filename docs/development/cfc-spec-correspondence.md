@@ -345,12 +345,14 @@ authorization does not establish specification conformance or amend this
 procedure. The conformance statement's §8 records the gap until a ruling and
 a reconciled pin address it.
 
-The result-wiring stamp (§8.9.1.3), a setup's membership stamp re-minted at
-every setup and, where the wiring is build-decided, narrowed to the setup's
-trigger reads, implements
+The result-wiring stamp (§8.9.1.3) implements
 [specs#88](https://github.com/commonfabric/specs/pull/88) ahead of its ruling.
-A setup that carries the stored result's name over is not build-decided, so its
-membership keeps the full join.
+Where the wiring is build-decided, a setup's membership stamp on its result
+document is narrowed to the setup's trigger reads; a setup that carries the
+stored result's name over is not build-decided, so its membership keeps the
+full join. On a result document holding nothing but references, the stamp is
+re-minted at every setup, whether or not the setup writes the value; on one
+holding data as well, only a setup that writes the root re-mints it.
 It narrows what is stored at strict, with no default-off dial, so it does not
 satisfy step 4 above; its two deciding sites carry the `SPEC-PENDING` marker.
 The snapshot is pinned at that pull request's head, the one place the pin
