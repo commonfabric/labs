@@ -638,12 +638,13 @@ const writtenByCaller = (record: Writable<StoredComment>): boolean => {
 };
 
 /**
- * Removes the comment `record`, stored under `id`, with its anchors. The list
- * stops linking the record, and the record is left holding `undefined`, which
- * is how a deleted comment is represented: a pattern cannot delete the
- * document itself. The list therefore never holds a deleted comment, while a
- * read of a record by its id can find one, which is why such reads are typed
- * `StoredComment | undefined`.
+ * Removes the comment `record`, stored under `id`, with its anchors. Dropping
+ * the record's link from the list is what removes the comment from the note.
+ * The record is also left holding `undefined`, a pattern having no way to
+ * delete the document itself, so that a handler finding a comment by its id,
+ * as the verbs and the draft checks do, sees that it is gone without reading
+ * the list. Such reads are typed `StoredComment | undefined` for that reason;
+ * the list's entries are not, since the list never links a deleted comment.
  */
 const removeComment = (
   anchors: AnchorsCell,
