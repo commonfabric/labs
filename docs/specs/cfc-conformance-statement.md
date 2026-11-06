@@ -457,8 +457,46 @@ to the egress and sink consumed set and to the `requiredIntegrity` input gate
 as well. `cfc-enforcement-matrix.md` §2, item 4, records that multi-hop closure
 is complete at `persist`, the shipped default.
 
+**A run deferred into a transaction of its own carries what decided it.** The
+runner sets up or starts some runs in a fresh transaction rather than the one
+that asked for them: a piece whose execution family has to be named first
+(`#runAfterNamedFamilyLands` in `runner.ts`), a start held until the asking
+transaction commits (`#startAfterSuccessfulCommit`), and a handler's
+navigate-bearing result pattern (`#runPatternAfterSuccessfulCommit`). When the
+run is deferred, `flowJoinObservationsOf` in `cfc/prepare.ts` takes the
+addresses of what the asking transaction has observed so far that its flow
+join weighs, its own trigger reads among them, and the fresh transaction
+receives them as trigger reads, with the asking transaction's label-metadata
+observations. So what decided that the run happens joins the PC of everything
+the run writes, at its labels when the run commits, and under
+`cfcTriggerReadGating` it enters the run's consumed sets and input gate too.
+A piece already running here takes the pattern a setup staged by swapping to
+it, in transactions of the pattern watcher's own (`swapToPattern`): a setup
+transaction, unless the setup that moved the pointer staged the pattern
+already, and an instantiation transaction. Those carry the same observations
+of the transaction that ran the setup, a source update's setup for resume
+included (`#runDecisions`, recorded when the setup stages), and the
+instantiation carries the swap setup's own along with them. This is how the
+pattern a lift returns reaches a result that is running already, and how a
+source update reaches the patterns the updated piece nests.
+`runInTransaction` defers by throwing `RetryImmediately`, and the scheduler
+then reruns the asking action, which reads again.
+
 **Residuals.**
 
+- A read the asking transaction took shallowly is carried as a recursive
+  trigger read of its address: an over-taint. So is a read it declared
+  onward, whose membership the asking transaction's own join leaves to the
+  declared target.
+- External content the asking transaction observed is not carried, since its
+  receipt binds it to that transaction. An action that both records external
+  content and defers a run leaves that content off the run, an under-taint;
+  whether any action does both is not established.
+- A swap to a pattern that no setup in this runtime staged, such as one whose
+  pointer another runtime moved, receives no carried observations: its
+  transactions weigh only what they read themselves. The pointer is one of
+  the document's own members, which carries no payload label (§4.6.5), so a
+  trigger read of it would join nothing either.
 - The SQLite and fetch destination snapshots are read under
   `ignoreReadForScheduling`, so those addresses never become trigger reads;
   `cfc-write-destination-reads.md` under "The SQLite publication comparison"
@@ -617,33 +655,30 @@ step 4, which asks for a default-off dial; the two deciding sites carry its
 
 - A wiring whose stored name is carried over is stamped from the attempt's
   join, an over-taint where the name was itself build-decided.
-- A `runtime.run` of a pattern the runtime has not yet named is deferred:
-  the pattern's family is named first, and the setup runs later in a fresh
-  transaction (`#runWithStartOwnership`'s deferred start in `runner.ts`),
-  which holds none of the caller's reads. So a caller that reads data and
-  sets up a pattern chosen by it, when that pattern is not yet named, leaves
-  that data off the membership, and off every other entry the deferred setup
-  writes. That is an under-taint, and it predates the result-wiring stamp:
-  the deferred transaction carries no trace of what decided it. Carrying the
-  caller's reads into it, as trigger reads of the deferred transaction, would
-  close it; this runtime does not do that.
-  So that the re-mint does not widen this, only a setup in the transaction
-  it was asked in restates an unchanged wiring (`#askingSetupTransactions`
-  in `runner.ts`: the transaction a caller hands `run`, `setup`,
-  `runSynced` or `runInTransaction`, or the one made for that call; a
-  setup nested in another, such as a pattern node its parent instantiates,
-  takes that transaction's standing). A
-  deferred start, the swap of a running piece and a setup repair run in
-  transactions the runner makes later, and leave an unchanged wiring's
-  stored membership as a setup that wrote nothing would. One of them that
-  changes the wiring writes it, and is stamped from its own transaction, as
-  before. A source update is one of these routes: the piece is set up again in
-  the start that follows the update, so an update that leaves a result's
-  wiring unchanged leaves an earlier attempt's stamp on its membership, and
-  only one that changes the wiring re-mints it. Carrying the asking
-  transaction's reads into those starts, which
-  [labs#9650](https://github.com/commonfabric/labs/pull/9650) does, is what
-  lets a same-wiring update restate.
+- Only a setup in the transaction it was asked in restates an unchanged
+  wiring (`#askingSetupTransactions` in `runner.ts`: the transaction a caller
+  hands `run`, `setup`, `runSynced` or `runInTransaction`, or the one `setup`
+  or `runSynced` makes for that call; a setup nested in another, such as a
+  pattern node its parent instantiates, takes that transaction's standing).
+  A `run` given no transaction is not one. A transaction the runner makes
+  later for a deferred start or a swap takes the standing of the transaction
+  whose reads it carries (§7) while that transaction is committing or has
+  committed, and not while it is open or once it is aborted or refused, so a
+  source update that leaves a result's wiring unchanged restates it in the
+  start that follows the update. The standing is read when the deferred
+  setup runs, so a refusal that arrives after that does not take it back. Where
+  the nested piece carries its stored name over, that restatement keeps the
+  stored membership, as the carried-name rule above has any setup do, so
+  such an update leaves an earlier attempt's stamp in place. A setup repair,
+  and a swap to a pattern no setup in this runtime staged, carry no such
+  reads, and leave an unchanged wiring's stored membership as a setup that
+  wrote nothing would. One of them that changes the wiring writes it, and is
+  stamped from its own transaction.
+- A `run` given no transaction carries no earlier transaction's reads.
+  `wish.ts`'s suggestion fetch sets up the pattern an earlier transaction
+  chose this way, once the suggestion surface opens, so what that setup
+  writes, a changed wiring's membership stamp included, carries none of the
+  reads that chose the pattern: an under-taint.
 - The pre-setup bound applies to journaled reads with a position. A read
   without one, and every label-metadata or external-content observation,
   which carry none, joins the narrowed stamp whenever it happened: an

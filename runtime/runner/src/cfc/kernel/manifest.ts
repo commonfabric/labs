@@ -486,7 +486,9 @@ export const MANIFEST: readonly ManifestRow[] = [
       "what the transaction read before that position, the trigger reads " +
       "among it (`deriveFlowJoin` with `journalBefore`), which is at least " +
       "the pseudocode's triggers, its scope of wiring, write-destination " +
-      "and runtime-internal reads contributing nothing to a join",
+      "and runtime-internal reads contributing nothing to a join; placing " +
+      "the wiring follows no reference, so the scope holds no dereference " +
+      "whose slot restriction the join would keep",
   },
   {
     file: PROPAGATION,

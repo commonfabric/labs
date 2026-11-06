@@ -340,8 +340,8 @@ describe("cfc-result-wiring-stamp", () => {
 
     it("stays where a run deferred out of the transaction that read the data finds the wiring unchanged", async () => {
       // A pattern the runtime has not named yet is set up later, in a
-      // transaction of its own that holds none of the reads that asked for
-      // it. The clause those reads carried stays.
+      // transaction of its own that carries the reads that asked for it, so
+      // its re-mint keeps the clause those reads carried.
 
       const { plain } = patterns();
       const bobs = await seedBobsDocument();
@@ -368,7 +368,7 @@ describe("cfc-result-wiring-stamp", () => {
 
     it("stays where a running piece is swapped to the same wiring by a transaction that read the data", async () => {
       // The swap of a running piece sets up in a transaction of its own,
-      // made after the one that asked for it.
+      // made after the one that asked for it and carrying its reads.
 
       const { plain } = patterns();
       const bobs = await seedBobsDocument();
@@ -403,7 +403,7 @@ describe("cfc-result-wiring-stamp", () => {
 
     it("stays where a pattern started after the asking transaction commits finds the wiring unchanged", async () => {
       // A start that waits for the asking transaction to commit sets up in a
-      // transaction of its own, which holds none of the asking one's reads.
+      // transaction of its own, which carries the asking one's reads.
 
       const { plain } = patterns();
       const bobs = await seedBobsDocument();
@@ -425,6 +425,254 @@ describe("cfc-result-wiring-stamp", () => {
 
       expect(membershipOf(result)).toContain(BOB);
       expect(existenceOf(result)).toEqual([CAROL]);
+    });
+
+    it("comes off where a run deferred out of a transaction that read nothing labeled finds the wiring unchanged", async () => {
+      // The deferred setup carries the asking transaction's standing with
+      // its reads, so it restates the wiring.
+
+      const { plain } = patterns();
+      const result = await setUp("deferred-public", plain);
+      await plantStamp(result, BOB);
+
+      const tx = runtime.edit();
+      const deferred = runtime.run(
+        tx,
+        patterns().plain,
+        { x: 1 },
+        runtime.getCell(space, "deferred-public", undefined, tx),
+      );
+      tx.prepareCfc();
+      expect((await tx.commit().settled).ok).toBeDefined();
+      await deferred.pull();
+      await runtime.idle();
+      runtime.runner.stop(result);
+
+      expect(membershipOf(result)).not.toContain(BOB);
+      expect(existenceOf(result)).toEqual([CAROL]);
+    });
+
+    it("comes off where a running piece is swapped to the same wiring by a transaction that read nothing labeled", async () => {
+      const { plain } = patterns();
+      const first = runtime.edit();
+      const running = runtime.run(
+        first,
+        plain,
+        { x: 1 },
+        runtime.getCell(space, "swapped-public", undefined, first),
+      );
+      first.prepareCfc();
+      expect((await first.commit().settled).ok).toBeDefined();
+      await runtime.idle();
+      await plantStamp(running, BOB);
+
+      const tx = runtime.edit();
+      runtime.run(
+        tx,
+        patterns().plain,
+        { x: 1 },
+        runtime.getCell(space, "swapped-public", undefined, tx),
+      );
+      tx.prepareCfc();
+      expect((await tx.commit().settled).ok).toBeDefined();
+      await runtime.idle();
+      runtime.runner.stop(running);
+
+      expect(membershipOf(running)).not.toContain(BOB);
+      expect(existenceOf(running)).toEqual([CAROL]);
+    });
+
+    describe("a run its asking transaction aborts", () => {
+      // The run still goes ahead in a transaction of its own, carrying the
+      // aborted transaction's reads, but not its standing: a transaction that
+      // never committed changes no stored label.
+
+      it("stays where the deferred setup finds the wiring unchanged", async () => {
+        const { plain } = patterns();
+        const result = await setUp("aborted", plain);
+        await plantStamp(result, BOB);
+
+        const tx = runtime.edit();
+        runtime.run(
+          tx,
+          patterns().plain,
+          { x: 1 },
+          runtime.getCell(space, "aborted", undefined, tx),
+        );
+        tx.abort("caller aborted");
+        await runtime.idle();
+        runtime.runner.stop(result);
+
+        expect(membershipOf(result)).toContain(BOB);
+        expect(existenceOf(result)).toEqual([CAROL]);
+      });
+
+      it("stays where a running piece swaps to the same wiring", async () => {
+        const { plain } = patterns();
+        const first = runtime.edit();
+        const running = runtime.run(
+          first,
+          plain,
+          { x: 1 },
+          runtime.getCell(space, "aborted-running", undefined, first),
+        );
+        first.prepareCfc();
+        expect((await first.commit().settled).ok).toBeDefined();
+        await runtime.idle();
+        await plantStamp(running, BOB);
+
+        const tx = runtime.edit();
+        runtime.run(
+          tx,
+          patterns().plain,
+          { x: 1 },
+          runtime.getCell(space, "aborted-running", undefined, tx),
+        );
+        tx.abort("caller aborted");
+        await runtime.idle();
+        runtime.runner.stop(running);
+
+        expect(membershipOf(running)).toContain(BOB);
+        expect(existenceOf(running)).toEqual([CAROL]);
+      });
+    });
+
+    it("stays where a pattern started after the commit of a transaction no caller asked it in finds the wiring unchanged", async () => {
+      // The start carries the reads of the transaction it was deferred from,
+      // and that transaction's standing with them: one no caller handed the
+      // runner to set the pattern up in is not an asking one, so neither is
+      // the start, though it read nothing labeled.
+
+      const { plain } = patterns();
+      const result = await setUp("after-commit-public", plain);
+      await plantStamp(result, BOB);
+
+      const tx = runtime.edit();
+      runtime.runner.accessForTestingOnly.runPatternAfterSuccessfulCommit(
+        tx,
+        runtime.getCell(space, "after-commit-public", undefined, tx),
+        plain,
+        { x: 1 },
+      );
+      tx.prepareCfc();
+      expect((await tx.commit().settled).ok).toBeDefined();
+      await runtime.idle();
+      runtime.runner.stop(result);
+
+      expect(membershipOf(result)).toContain(BOB);
+      expect(existenceOf(result)).toEqual([CAROL]);
+    });
+
+    describe("a source update that leaves a nested wiring unchanged", () => {
+      // A source update stages its setup for resume, and the running piece
+      // then instantiates the updated pattern in a transaction of its own,
+      // where the nested piece is set up again. That transaction carries the
+      // update's reads and its standing, so the nested setup restates the
+      // wiring it finds unchanged.
+
+      /**
+       * A piece whose `inner` is a nested piece from a module of its own,
+       * the same in every version, and which differs between versions by
+       * `version` alone. With `named`, the nested piece names itself, so a
+       * setup of the same nested pattern carries its stored name over.
+       */
+      const nesting = (version: number, named: boolean) => ({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `
+            import { pattern, Writable } from "commonfabric";
+            import { inner } from "./inner.tsx";
+            export default pattern<{ input: Writable<number> }>(
+              ({ input }) => ({ inner: inner({ input }), version: ${version} }),
+            );
+          `,
+        }, {
+          name: "/inner.tsx",
+          contents: `
+            import { computed, ${
+            named ? "NAME, " : ""
+          }pattern, Writable } from "commonfabric";
+            export const inner = pattern<{ input: Writable<number> }>(
+              ({ input }) => ({
+                ${
+            named ? "[NAME]: computed(() => `Inner ${input.get()}`)," : ""
+          }
+                v: computed(() => input.get() * 2),
+              }),
+            );
+          `,
+        }],
+      });
+
+      /**
+       * Sets a piece of `nesting(1, named)` running, plants a stamp naming
+       * Bob on its nested piece's membership, updates it to
+       * `nesting(2, named)` with a setup for resume in a transaction that
+       * reads nothing labeled, and returns the nested piece's membership.
+       */
+      const update = async (named: boolean): Promise<unknown[]> => {
+        const v1 = await runtime.patternManager.compilePattern(
+          nesting(1, named),
+          { space },
+        );
+        const v2 = await runtime.patternManager.compilePattern(
+          nesting(2, named),
+          { space },
+        );
+        const input = runtime.getCell<number>(space, `update-input-${named}`);
+        const piece = runtime.getCell<{ inner: unknown; version: number }>(
+          space,
+          `update-piece-${named}`,
+        );
+        const seed = runtime.edit();
+        input.withTx(seed).set(1);
+        await runtime.setup(seed, v1, { input }, piece);
+        expect((await seed.commit().settled).error).toBeUndefined();
+        expect(await runtime.start(piece)).toBe(true);
+        const stopReading = piece.sink(() => {});
+        try {
+          await runtime.idle();
+          await runtime.runner.idlePieceInstantiationSettlements();
+          const inner = piece.key("inner").resolveAsCell();
+          await plantStamp(inner, BOB);
+          expect(membershipOf(inner)).toContain(BOB);
+
+          const tx = runtime.edit();
+          await runtime.setup(tx, v2, undefined, piece.withTx(tx), {
+            prepareForResume: true,
+          });
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await runtime.idle();
+          await runtime.runner.idlePieceInstantiationSettlements();
+          await runtime.idle();
+
+          expect(piece.key("version").get()).toBe(2);
+          expect(
+            piece.key("inner").resolveAsCell().getAsNormalizedFullLink().id,
+          ).toBe(inner.getAsNormalizedFullLink().id);
+          if (named) {
+            expect(
+              (inner.getRaw() as Record<string, unknown> | undefined)?.[NAME],
+            ).toBeDefined();
+          }
+          return membershipOf(inner);
+        } finally {
+          stopReading();
+        }
+      };
+
+      it("takes the stamp off where the nested piece has no name", async () => {
+        expect(await update(false)).not.toContain(BOB);
+      });
+
+      it("keeps the stamp where the nested piece carries its stored name over", async () => {
+        // The stored name is a reference the stored document chose, so a
+        // restatement keeps the stored membership, as a setup in the asking
+        // transaction does.
+
+        expect(await update(true)).toContain(BOB);
+      });
     });
 
     it("comes off at a setup that finds the wiring unchanged", async () => {
@@ -549,6 +797,11 @@ describe("cfc-result-wiring-stamp", () => {
           );
           return undefined;
         },
+      },
+      {
+        name: "a run given no transaction",
+        running: false,
+        run: (_tx, cell, same) => runtime.run(undefined, same, { x: 1 }, cell),
       },
       {
         name: "a swap of the running piece",
