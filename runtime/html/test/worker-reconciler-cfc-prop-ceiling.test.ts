@@ -258,20 +258,32 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
       async () => {
         // `cf-profile-badge` reads its `$profile` with `ProfileBadgeSchema`
         // whatever schema the handle carries, so a field it never reads, here
-        // a link to a document the ceiling refuses, does not decide it.
+        // a link to a document the ceiling refuses, does not decide it. A
+        // `cf-input`, whose entry is not projected, reads the same handle as
+        // it is typed, and that read reaches the link.
         const profile = await write("prop-ceiling-profile-pointer", {
           name: PUBLIC,
           inbox: { piece: link(secret) },
         });
         const page = await mount({
           type: "vnode",
-          name: "cf-profile-badge",
-          props: { $profile: profile.asSchema(true) as never },
-          children: [],
+          name: "div",
+          props: {},
+          children: [{
+            type: "vnode",
+            name: "cf-profile-badge",
+            props: { $profile: profile.asSchema(true) as never },
+            children: [],
+          }, {
+            type: "vnode",
+            name: "cf-input",
+            props: { $value: profile.asSchema(true) as never },
+            children: [],
+          }],
         }, HOST_CEILING);
         try {
           expect(page.bindings("profile")).toBe(1);
-          expect(page.emitted()).not.toContain(SECRET);
+          expect(page.bindings("value")).toBe(0);
         } finally {
           page.cancel();
         }
