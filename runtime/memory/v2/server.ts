@@ -7880,7 +7880,10 @@ export class Server {
             committedWrites.push({ id: revision.id, scopeKey });
             // A revision the engine derived, a field's anchors document
             // rewritten for an edit, is no write of the committing session's,
-            // which holds nothing of it to promote.
+            // which holds nothing of it to promote. With own-write echo on, a
+            // `patch` head reaches its writer anyway; with it off, a `patch`
+            // head is withheld from its writer, so only the `derived` kind
+            // gets the rewrite to the session whose edit moved the anchors.
             dirtyOps.set(
               toDirtyKey(revision.id, scopeKey),
               revision.derived === true ? "derived" : revision.op,
