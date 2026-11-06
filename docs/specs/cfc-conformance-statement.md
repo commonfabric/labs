@@ -454,8 +454,30 @@ to the egress and sink consumed set and to the `requiredIntegrity` input gate
 as well. `cfc-enforcement-matrix.md` §2, item 4, records that multi-hop closure
 is complete at `persist`, the shipped default.
 
+**A run deferred into a transaction of its own carries what decided it.** The
+runner sets up or starts some runs in a fresh transaction rather than the one
+that asked for them: a piece whose execution family has to be named first
+(`#runAfterNamedFamilyLands` in `runner.ts`), a start held until the asking
+transaction commits (`#startAfterSuccessfulCommit`), and a handler's
+navigate-bearing result pattern (`#runPatternAfterSuccessfulCommit`). When the
+run is deferred, `flowJoinObservationsOf` in `cfc/prepare.ts` takes the
+addresses of what the asking transaction has observed so far that its flow
+join weighs, its own trigger reads among them, and the fresh transaction
+receives them as trigger reads, with the asking transaction's label-metadata
+observations. So what decided that the run happens joins the PC of everything
+the run writes, at its labels when the run commits, and under
+`cfcTriggerReadGating` it enters the run's consumed sets and input gate too.
+`runInTransaction` defers by throwing `RetryImmediately`, and the scheduler
+then reruns the asking action, which reads again.
+
 **Residuals.**
 
+- A read the asking transaction took shallowly is carried as a recursive
+  trigger read of its address: an over-taint.
+- External content the asking transaction observed is not carried, since its
+  receipt binds it to that transaction. An action that both records external
+  content and defers a run leaves that content off the run, an under-taint;
+  whether any action does both is not established.
 - The SQLite and fetch destination snapshots are read under
   `ignoreReadForScheduling`, so those addresses never become trigger reads;
   `cfc-write-destination-reads.md` under "The SQLite publication comparison"

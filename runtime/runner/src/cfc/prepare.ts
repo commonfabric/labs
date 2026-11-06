@@ -255,6 +255,7 @@ import {
   type CfcDocumentAddress,
   cfcDocumentKey,
   cfcEnforcementStrictness,
+  type CfcLabelMetadataObservation,
   type CfcLabelView,
   type CfcMetadata,
   type IFCLabel,
@@ -14643,4 +14644,57 @@ export const collectConsumedLabel: typeof collectConsumedLabelImpl = (
   } finally {
     cfcLogger.time(started, "collectConsumedLabel");
   }
+};
+
+/**
+ * What `tx` has observed so far that its flow join weighs (spec §8.9.2): the
+ * addresses of its journal reads and its trigger reads, each once and rooted
+ * at the stored document as `addCfcTriggerReads()` takes them, and its
+ * label-metadata observations. A read whose content `tx` declared onward is
+ * left out, as is the write path's read of its own destination, since the
+ * join weighs neither's confidentiality.
+ *
+ * A run that `tx` decided on, set up or started later in a transaction of its
+ * own, carries these, because what `tx` observed decided that the run
+ * happens. Given to that transaction as trigger reads, the addresses are read
+ * where `triggerReadAt()` says, at their labels when it runs: a probe as the
+ * probe observed it, and any other read recursively, which for a read `tx`
+ * took shallowly is an over-taint. External content `tx` observed is not
+ * among them, since only the transaction its receipt names may record it.
+ */
+export const flowJoinObservationsOf = (
+  tx: IExtendedStorageTransaction,
+): {
+  reads: IMemorySpaceAddress[];
+  labelMetadata: CfcLabelMetadataObservation[];
+} => {
+  const reads = new Map<string, IMemorySpaceAddress>();
+  forEachFlowObservation(
+    tx,
+    (space, id, scope, _type, logicalPath, observation) => {
+      if (
+        observation.writeDestination ||
+        observation.declaredOnward !== undefined
+      ) {
+        return false;
+      }
+      const key = stringTupleKey([
+        targetKey({ space, id, scope }),
+        pathKey(logicalPath),
+      ]);
+      if (!reads.has(key)) {
+        reads.set(key, {
+          space,
+          id,
+          scope,
+          path: ["value", ...logicalPath],
+        });
+      }
+      return false;
+    },
+  );
+  return {
+    reads: [...reads.values()],
+    labelMetadata: [...tx.getCfcState().labelMetadataObservations],
+  };
 };

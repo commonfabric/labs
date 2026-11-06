@@ -120,7 +120,10 @@ import {
   recordReplayedArgumentSlots,
 } from "./cfc/reference-initialization.ts";
 import { legacyPieceCreatorEvidence } from "./cfc/piece-creator-evidence.ts";
-import { servedRunActsForNoOne } from "./cfc/prepare.ts";
+import {
+  flowJoinObservationsOf,
+  servedRunActsForNoOne,
+} from "./cfc/prepare.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { spaceReaderRole } from "./cfc/space-membership.ts";
 import { isTrustedGesture } from "./cfc/ui-contract.ts";
@@ -1747,6 +1750,27 @@ const carryAttributionMarks = (
   for (const piece of state.attributedPieces) {
     to.markCfcAttributedInitialization(runtimeWritePolicyAuthorization, piece);
   }
+};
+
+/**
+ * Takes what `from` has observed so far that its flow join weighs
+ * (`flowJoinObservationsOf()`), and returns the step that hands it to a
+ * transaction a run `from` decided runs in later, as trigger reads and
+ * label-metadata observations of its own. What decided that the run happens
+ * then joins the flow label of everything the run writes (CFC §8.9.2), as it
+ * would had the run been part of `from`. The observations are taken when the
+ * run is deferred, since `from` reads on and commits on its own after that.
+ */
+const carryRunDecision = (
+  from: IExtendedStorageTransaction,
+): (to: IExtendedStorageTransaction) => void => {
+  const { reads, labelMetadata } = flowJoinObservationsOf(from);
+  return (to) => {
+    if (reads.length > 0) to.addCfcTriggerReads(reads);
+    for (const observation of labelMetadata) {
+      to.recordCfcLabelMetadataObservation(observation);
+    }
+  };
 };
 
 /** The document a piece's attribution mark names: its result document. */
@@ -8124,6 +8148,7 @@ export class Runner {
     const resultLink = resultCell.getAsNormalizedFullLink();
     const startLifecycleEpoch = this.#lifecycleEpoch;
     const ownership = this.#createDeferredStartOwnership(resultCell);
+    const carryDecision = carryRunDecision(tx);
     tx.addCommitCallback((_committedTx, result) => {
       if (result.error) {
         // The callback that would install this start is the one running now,
@@ -8136,6 +8161,7 @@ export class Runner {
       if (ownership.isCancelled()) return;
 
       const startTx = this.#runtime.edit();
+      carryDecision(startTx);
       // A start deferred from a handler run initializes on that run's behalf.
       carryAttributionMarks(tx, startTx);
       // Minted inside a commit callback — by definition outside any scheduler
@@ -8919,6 +8945,7 @@ export class Runner {
     const navigateContext = navigateEventContextFromRunInfo(
       waveRunContextOf(tx) ?? speculationContext,
     );
+    const carryDecision = carryRunDecision(tx);
     const work = (async () => {
       let toName = named;
       let retriesLeft = PIECE_RUN_START_MAX_RETRIES;
@@ -8942,6 +8969,7 @@ export class Runner {
         }
         if (ownership.isCancelled()) return;
         const startTx = this.#runtime.edit();
+        carryDecision(startTx);
         // Speculative starts keep defaults in their overlay transaction. A
         // bookkeeping seed here would escape the parent's destination, and a
         // later authored start still needs its own durable preparation.
@@ -9447,6 +9475,7 @@ export class Runner {
     // (`#ancestorSystemOrigin`), so the chain is recorded ahead of the start
     // exactly as the immediate path's start records it.
     this.#demandRootChainFor(resultLink.id, parentPieceRootId);
+    const carryDecision = carryRunDecision(tx);
     tx.addCommitCallback((_committedTx, result) => {
       if (result.error) {
         // Settled here for the same reason as the start above: this callback
@@ -9458,6 +9487,7 @@ export class Runner {
       if (ownership.isCancelled()) return;
 
       const startTx = this.#runtime.edit();
+      carryDecision(startTx);
       // A result pattern deferred from a handler run initializes on that
       // run's behalf, as the deferred start above does.
       carryAttributionMarks(tx, startTx);
