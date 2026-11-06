@@ -376,5 +376,43 @@ describe("cfc-result-wiring-stamp", () => {
       expect(membershipOf(result)).toContain(BOB);
       expect(existenceOf(result)).toEqual([CAROL]);
     });
+
+    it("stays where the setup carries over the stored name it guards, and rewrites another slot", async () => {
+      const { named } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("name-carried-rewritten", named);
+      const tx = runtime.edit();
+      const link = result.getAsNormalizedFullLink();
+      writeSeedEnvelopeDoc(tx, space);
+      seedStoredEnvelope(tx, {
+        space: link.space,
+        scope: link.scope,
+        id: link.id,
+        path: ["value", NAME],
+      }, {
+        "/": {
+          "link@1": { id: bobs.id, path: [], space, scope: "space" },
+        },
+      } as FabricValue);
+      // A slot the setup writes again, so that it writes the root.
+      seedStoredEnvelope(tx, {
+        space: link.space,
+        scope: link.scope,
+        id: link.id,
+        path: ["value", "a"],
+      }, {
+        "/": {
+          "link@1": { id: bobs.id, path: [], space, scope: "space" },
+        },
+      } as FabricValue);
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).ok).toBeDefined();
+      await plantStamp(result, BOB);
+
+      await setUp("name-carried-rewritten", named);
+
+      expect(membershipOf(result)).toContain(BOB);
+      expect(existenceOf(result)).toEqual([CAROL]);
+    });
   });
 });

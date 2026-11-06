@@ -4545,7 +4545,8 @@ const forEachFlowObservation = (
  * build and the piece's identity alone decided which reference sits at each
  * slot, and the journal position the setup began at. A document set up more
  * than once is build-decided only where every setup says so, and takes the
- * earliest position. Only a wiring at the document's root is taken.
+ * latest position, so that what every setup's choice rested on joins. Only a
+ * wiring at the document's root is taken.
  */
 const resultWiringsByTarget = (
   tx: IExtendedStorageTransaction,
@@ -4569,7 +4570,7 @@ const resultWiringsByTarget = (
     const known = result.get(key);
     result.set(key, {
       buildDecided: input.buildDecided && (known?.buildDecided ?? true),
-      setupBegan: Math.min(input.setupBegan, known?.setupBegan ?? Infinity),
+      setupBegan: Math.max(input.setupBegan, known?.setupBegan ?? 0),
     });
   }
   return result;
@@ -4592,13 +4593,11 @@ const resultWiringsByTarget = (
 const withRestatedResultWirings = (
   tx: IExtendedStorageTransaction,
   targets: ReturnType<typeof valueWriteTargets>,
-  options?: { buildDecidedOnly?: boolean },
 ): ReturnType<typeof valueWriteTargets> => {
   const wirings = resultWiringsByTarget(tx);
   if (wirings.size === 0) return targets;
   const result: ReturnType<typeof valueWriteTargets> = new Map(targets);
-  for (const [key, wiring] of wirings) {
-    if (options?.buildDecidedOnly === true && !wiring.buildDecided) continue;
+  for (const key of wirings.keys()) {
     const written = targets.get(key);
     if (written?.paths.some((path) => path.length === 0)) continue;
     const { space, id, scope } = targetFromKey(key);
@@ -4673,16 +4672,14 @@ const ownRestampContainerPaths = (
       canonicalizeLogicalPath(addr.path),
     );
   }
-  // A restated wiring that carries a reference over from the stored result is
+  // A result wiring that carries a reference over from the stored result is
   // not build-decided: what the setup read there decided what it writes, so
-  // its readback joins.
+  // its readback joins, whether the setup restates the wiring or writes it.
+  const wirings = resultWiringsByTarget(tx);
   for (
-    const [key, target] of withRestatedResultWirings(
-      tx,
-      valueWriteTargets(tx),
-      { buildDecidedOnly: true },
-    )
+    const [key, target] of withRestatedResultWirings(tx, valueWriteTargets(tx))
   ) {
+    if (wirings.get(key)?.buildDecided === false) continue;
     for (const path of target.paths) {
       const written = target.valuesByPath.get(pathKey(path));
       if (written === undefined || !isPureLinkStructure(written)) {
