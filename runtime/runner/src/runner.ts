@@ -2824,17 +2824,20 @@ export class Runner {
   /**
    * The transactions a setup runs in that are the ones it was asked in: the
    * transaction a caller hands `run`, `setup`, `runSynced` or
-   * `runInTransaction`, or one the runner makes for that call as it is made.
-   * Only these are added, at those entry points; a setup nested in another,
-   * such as a pattern node instantiated with its parent, takes whatever
-   * standing the transaction already has. Only a setup in one of these
-   * restates a result wiring it finds unchanged (§8.9.1.3). A transaction
-   * the runner makes later, for a start deferred out of the asking
+   * `runInTransaction`, or one `setup` or `runSynced` makes for that call as
+   * it is made. A `run` given no transaction is not one: that is how a
+   * continuation starts a pattern an earlier transaction chose, such as
+   * wish's suggestion fetch, so the reads that decided it are in that earlier
+   * transaction. Only these are added, at those entry points; a setup nested
+   * in another, such as a pattern node instantiated with its parent, takes
+   * whatever standing the transaction already has. Only a setup in one of
+   * these restates a result wiring it finds unchanged (§8.9.1.3). A
+   * transaction the runner makes later, for a start deferred out of an asking
    * transaction or a swap, joins them when it carries the reads that decided
    * it from an asking one (`#runDecisionOf()`). Every other setup
-   * transaction, a repair's or a
-   * swap's that no setup here staged, holds none of those reads, so
-   * re-minting the stored membership there would drop a clause they carried.
+   * transaction, a repair's or a swap's that no setup here staged, holds none
+   * of those reads, so re-minting the stored membership there would drop a
+   * clause they carried.
    */
   readonly #askingSetupTransactions = new WeakSet<
     IExtendedStorageTransaction
@@ -9812,7 +9815,7 @@ export class Runner {
     options: RunnerRunOptions = {},
   ): Cell<R> {
     // A run given no transaction starts in one the runner makes, which holds
-    // none of its caller's reads, so it restates no unchanged wiring.
+    // none of the reads that chose the pattern, so it is not an asking one.
     if (providedTx !== undefined) {
       this.#askingSetupTransactions.add(providedTx);
     }

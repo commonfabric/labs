@@ -482,7 +482,12 @@ describe("cfc-result-wiring-stamp", () => {
       expect(existenceOf(running)).toEqual([CAROL]);
     });
 
-    it("comes off where a pattern started after the commit of a transaction that read nothing labeled finds the wiring unchanged", async () => {
+    it("stays where a pattern started after the commit of a transaction no caller asked it in finds the wiring unchanged", async () => {
+      // The start carries the reads of the transaction it was deferred from,
+      // and that transaction's standing with them: one no caller handed the
+      // runner to set the pattern up in is not an asking one, so neither is
+      // the start, though it read nothing labeled.
+
       const { plain } = patterns();
       const result = await setUp("after-commit-public", plain);
       await plantStamp(result, BOB);
@@ -499,7 +504,7 @@ describe("cfc-result-wiring-stamp", () => {
       await runtime.idle();
       runtime.runner.stop(result);
 
-      expect(membershipOf(result)).not.toContain(BOB);
+      expect(membershipOf(result)).toContain(BOB);
       expect(existenceOf(result)).toEqual([CAROL]);
     });
 
@@ -737,6 +742,11 @@ describe("cfc-result-wiring-stamp", () => {
           );
           return undefined;
         },
+      },
+      {
+        name: "a run given no transaction",
+        running: false,
+        run: (_tx, cell, same) => runtime.run(undefined, same, { x: 1 }, cell),
       },
       {
         name: "a swap of the running piece",
