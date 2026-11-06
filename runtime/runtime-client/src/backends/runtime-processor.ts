@@ -2755,6 +2755,8 @@ export class RuntimeProcessor {
    * @throws When the record's space refused the worker access: a load it
    *   refused resolves as one that found nothing, and a record the worker
    *   could not read is not one that holds no record.
+   * @throws The failure to reach the record's space when its first connection
+   *   never completed a handshake, for the same reason.
    */
   async handleCellFields(
     request: CellFieldsRequest,

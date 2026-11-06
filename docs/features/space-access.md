@@ -197,7 +197,8 @@ above through the same access-change observer, and repeats every load the
 refusal failed, so a computation that read a document of the space without
 calling `spaceAccess(target)` runs again too. A refusal leaves the answer
 `"none"`. It acts only on a space the runtime has opened, and asks for admission
-only while that space's session is refused, one attempt per call. A session that
+only while that space's session is refused, or while its first connection never
+completed a handshake (described below), one attempt per call. A session that
 stands is left alone, except that loads a failed repeat left recorded are
 repeated. The session also opens again when something reads a document of that
 space that the replica has not asked for.

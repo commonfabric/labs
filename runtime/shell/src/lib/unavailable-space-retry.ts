@@ -40,10 +40,10 @@ interface RetryingRuntime {
  * dialing the host again for each.
  *
  * The refused spaces are the ones the runtime's `spaceaccesslost` notices
- * named, and a space stays among them once readmitted, since nothing reports
- * a readmission to the host. Retrying one that is no longer refused is a no-op
- * the runtime decides without the server, and a retry asked for while one of
- * the same space is in flight shares it. A space a notice marked deleted is
+ * named, and a space stays among them once readmitted, since this does not
+ * listen for `spaceaccessrestored`. Retrying one that is no longer refused is
+ * a no-op the runtime decides without the server, and a retry asked for while
+ * one of the same space is in flight shares it. A space a notice marked deleted is
  * never asked for again, since no retry can admit anyone to it.
  *
  * The unreachable spaces are not named to the host at all, since no notice
