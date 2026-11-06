@@ -4554,13 +4554,11 @@ export class Runner {
     setupState: SetupStateReuse,
     argument: T,
     resultCell: Cell<R>,
+    setupBegan: number,
     referencedArgumentFields: readonly string[] = [],
     capturedArgumentFields: readonly string[] = [],
     droppedArgumentFields: readonly string[] = [],
   ): void {
-    // Where in the transaction's journal this setup begins: what was read
-    // before it chose the pattern and the argument the setup builds from.
-    const setupBegan = nextJournalPosition(tx);
     // A setup of the version a piece's record names, over cells holding
     // state that the record says another build numbered differently, would
     // stage this build's projection over that state and record it as agreed.
@@ -5080,6 +5078,10 @@ export class Runner {
     validationOptions: SetupValidationOptions = {},
   ): SetupResult<R> {
     const tx = providedTx ?? this.#runtime.edit();
+    // Where in the transaction's journal this setup begins, before it reads
+    // anything of its own: what was read before it chose the pattern and the
+    // argument the setup builds from (§8.9.1.3).
+    const setupBegan = nextJournalPosition(tx);
 
     logger.debug("cell-info", () => [
       `resultCell: ${resultCell.getAsNormalizedFullLink().id}`,
@@ -5324,6 +5326,7 @@ export class Runner {
       setupState,
       argument,
       resultCell,
+      setupBegan,
       validationOptions.referencedArgumentFields,
       validationOptions.capturedArgumentFields,
       validationOptions.droppedArgumentFields,
@@ -6780,6 +6783,8 @@ export class Runner {
           return;
         }
         const setupTx = this.#runtime.edit();
+        // The swap's setup reads nothing before this, so it begins here.
+        const setupBegan = nextJournalPosition(setupTx);
         // Under an installed seal destination (serving-loop.md §3d) every
         // commit path declares its run context; the swap's setup write is
         // runtime-internal bookkeeping. A no-op everywhere else. The action
@@ -6837,6 +6842,7 @@ export class Runner {
               },
               undefined,
               resultCell,
+              setupBegan,
             );
             this.#runtime.prepareTxForCommit(setupTx);
             const committed = await setupTx.commit().settled;
@@ -7377,6 +7383,8 @@ export class Runner {
           pattern,
           ref,
           stage: (repairTx) => {
+            // The repair's setup begins with this stage, before its own reads.
+            const setupBegan = nextJournalPosition(repairTx);
             // A retry re-stages what a refused commit rolled back; once a
             // commit has landed the stored setup agrees with the pattern and
             // there is nothing left to stage.
@@ -7432,6 +7440,7 @@ export class Runner {
               },
               undefined,
               resultCell,
+              setupBegan,
             );
           },
         };

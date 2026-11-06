@@ -17,6 +17,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { NAME } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import type { LabelMapEntry } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -264,6 +265,36 @@ describe("cfc-result-wiring-stamp", () => {
       await runtime.idle();
 
       expect(membershipOf(result)).toContain(BOB);
+    });
+
+    it("leaves it off the membership where the setup's own check of the stored argument read it", async () => {
+      // A setup validates the argument it finds stored before anything else
+      // it does, through whatever links that argument holds; what that reads
+      // decided nothing about which pattern is set up.
+
+      const { plain } = patterns();
+      const bobs = await seedBobsDocument();
+      const result = await setUp("validated", plain);
+
+      const tx = runtime.edit();
+      await runtime.runSynced(
+        runtime.getCell(space, "validated", undefined, tx),
+        plain,
+        { x: 1 },
+        {
+          validateCurrentArgument: () => {
+            runtime.getCellFromLink(bobs, undefined, tx).get();
+          },
+        },
+      );
+      // The validation read Bob's data in the setup's transaction.
+      expect(deriveFlowJoin(tx).confidentiality).toContain(BOB);
+      tx.prepareCfc();
+      expect((await tx.commit().settled).ok).toBeDefined();
+      await runtime.idle();
+      runtime.runner.stop(result);
+
+      expect(membershipOf(result)).not.toContain(BOB);
     });
 
     it("stamps it on the membership of a wiring that carries its stored name", async () => {
