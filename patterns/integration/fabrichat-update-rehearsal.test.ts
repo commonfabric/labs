@@ -307,9 +307,10 @@ const namesPersonalSpace = (
   owner: string,
 ): boolean =>
   entries.some((entry) =>
-    (entry.label?.confidentiality ?? []).some((clause) =>
-      JSON.stringify(clause) === JSON.stringify(personalSpace(owner))
-    )
+    (entry.label?.confidentiality ?? []).some((clause) => {
+      const atom = clause as { type?: unknown; owner?: unknown };
+      return atom.type === personalSpace(owner).type && atom.owner === owner;
+    })
   );
 
 /** The slots of `after` that `before` holds too, in `after`'s order. */
