@@ -227,12 +227,14 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       {
         assertion: assert(() => {
           const shared = setup.loom[VIEWS].deck.shared;
-          const offers = setup.loom[VIEWS].deck.offers.panels;
+          const offers = setup.loom[VIEWS].deck.offers.shown;
           return offers.length === 3 &&
             offers.every((offer, at) =>
-              !offer.actions.includes("remove") &&
+              !offer.actions.some((one) => one.id === "remove") &&
               shared[at].removal.by === "adder" &&
-              offer.removableBy === shared[at].removal.adder
+              offer.ifViewerIs?.principal === shared[at].removal.adder &&
+              offer.ifViewerIs.actions.length === 1 &&
+              offer.ifViewerIs.actions[0].stream === "removePanel"
             );
         }),
       },

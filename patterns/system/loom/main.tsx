@@ -782,26 +782,28 @@ export default pattern<LoomInput, LoomOutput>(
       kind: computed(() => panel.get()?.kind),
       heading: computed(() => panelHeading(panel)),
     }));
-    const offers = computed((): PerSession<LoomOffers> =>
-      loomOffers({
-        access: spaceAccess(panels),
-        shared: panels.get(),
-        shown: viewerList(
-          panels.get(),
-          hiddenPanels.get(),
-          privatePanels.get(),
-        ),
-        hidden: hiddenPanels.get() ?? [],
-        presentation: presentation.get(),
-        removal: (panel) => removalFact(panel, panels),
-      })
-    );
     const state = { panels, presentation };
     const viewerState = new Writable.perSession<ViewerState>({});
     const remove = removePanel(state);
     const move = movePanel(state);
     const duplicate = admitPanel({ panels, mode: "duplicate" });
     const viewerProfile = wish<ParticipantProfile>({ query: "#profile" });
+    const offers = computed((): PerSession<LoomOffers> =>
+      loomOffers({
+        access: spaceAccess(panels),
+        shared: panels.get(),
+        shown: viewerList(
+          panels.get() ?? [],
+          hiddenPanels.get(),
+          privatePanels.get(),
+        ),
+        hidden: hiddenPanels.get() ?? [],
+        presentation: presentation.get(),
+        profile: resolvedProfile(viewerState.key("actingProfile").get()) ??
+          resolvedProfile(viewerProfile.result),
+        removal: (panel) => removalFact(panel, panels),
+      })
+    );
     const present = setPresentation(state);
     const hide = hidePanel({ panels, hiddenPanels });
     const unhide = unhidePanel({ hiddenPanels });

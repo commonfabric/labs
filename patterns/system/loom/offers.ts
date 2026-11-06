@@ -1,27 +1,35 @@
 /**
- * What a viewer may do to a Loom, as ids a host draws in its own words, so
- * that every host offers the same actions and learns of a new one from the
- * Loom rather than from a copy of its rules. Each id names one stream event
- * the root accepts from this viewer as things stand; the streams still decide.
+ * What a viewer may do to a Loom, as the Loom states it to a host that draws
+ * its own deck: each action an id, which the host names in its own words and
+ * ignores when it does not know it, with the stream it sends to and the event
+ * it sends, so every host does the same thing for the same id and learns of a
+ * new one from the Loom rather than from a copy of its rules. `open` alone
+ * names no stream: the host opens the panel's piece itself. Each event is one
+ * the root's streams accept from this viewer as things stand; they still
+ * decide.
  */
 import type { SpaceAccessLevel, Writable } from "commonfabric";
 import type {
+  LoomAction,
   LoomOffers,
   Panel,
   PanelOffer,
   PanelRemoval,
+  ParticipantProfile,
   Presentation,
 } from "./schemas.tsx";
 
 /** What the offers are worked out from, read by the caller's computation. */
 export interface OfferFacts {
   access: SpaceAccessLevel | undefined;
-  /** The Loom's panels, in its order. */
-  shared: readonly Writable<Panel>[];
+  /** The Loom's panels, in its order; `undefined` before the first read. */
+  shared: readonly Writable<Panel>[] | undefined;
   /** The viewer's list: shared panels not hidden, and private ones. */
   shown: readonly Writable<Panel>[];
   hidden: readonly Writable<Panel>[];
-  presentation: Presentation;
+  presentation: Presentation | undefined;
+  /** The profile the viewer adds panels under, as the root's own UI does. */
+  profile: ParticipantProfile | undefined;
   removal: (panel: Writable<Panel>) => PanelRemoval;
 }
 
@@ -30,40 +38,88 @@ export interface OfferFacts {
  * `clear-focus` and `clear-stage`; on a shown shared panel, `open` (a piece),
  * `focus`, `move-first`, `move-last`, `duplicate`, `hide` and `remove`; on a
  * private panel, `open` and `remove-from-my-view`; on a hidden one, `show`.
- * Removal by a panel's adder is the one offer the Loom cannot make itself,
- * since a computation cannot yet ask who the viewer is: such a panel names its
- * adder in `removableBy` instead.
+ * Removal by a panel's adder, while it is not otherwise offered, is the one
+ * action the Loom cannot offer outright, since a computation cannot yet ask who
+ * the viewer is: it comes under `ifViewerIs`, for a host to offer when it acts
+ * as that principal.
  */
 export function loomOffers(facts: OfferFacts): LoomOffers {
-  const { access, shared, shown, hidden, presentation } = facts;
+  const { access, shown, hidden, profile } = facts;
+  const shared = facts.shared ?? [];
+  const staged = facts.presentation?.stagedPanels ?? [];
+  const focused = facts.presentation?.focusedPanel;
   const writes = access === "OWNER" || access === "WRITE";
   const reads = writes || access === "READ";
-  const { stagedPanels: staged, focusedPanel: focused } = presentation;
   const has = (list: readonly Writable<Panel>[], panel: Writable<Panel>) =>
     list.some((one) => one.equals(panel));
-  const loom: string[] = [];
+  const present = (
+    id: string,
+    stagedPanels: Writable<Panel>[],
+    focusedPanel?: Writable<Panel>,
+  ): LoomAction => ({
+    id,
+    stream: "setPresentation",
+    event: focusedPanel ? { stagedPanels, focusedPanel } : { stagedPanels },
+  });
+  const loom: LoomAction[] = [];
   if (writes) {
-    if (shared.some((panel) => !has(staged, panel))) loom.push("stage-all");
-    if (focused) loom.push("clear-focus");
-    if (staged.length) loom.push("clear-stage");
+    // Staging is everyone's: every shared panel, those this viewer hid too.
+    if (shared.some((panel) => !has(staged, panel))) {
+      loom.push(present("stage-all", [...shared], focused));
+    }
+    if (focused) loom.push(present("clear-focus", [...staged]));
+    if (staged.length) loom.push(present("clear-stage", []));
   }
-  const panels = shown.map((panel): PanelOffer => {
-    const actions: string[] = [];
-    const piece = panel.get()?.kind === "piece";
-    if (reads && piece) actions.push("open");
+  const offer = (panel: Writable<Panel>): PanelOffer => {
+    const actions: LoomAction[] = [];
+    if (reads && panel.get()?.kind === "piece") actions.push({ id: "open" });
     const at = shared.findIndex((one) => one.equals(panel));
     if (at < 0) {
-      if (reads) actions.push("remove-from-my-view");
+      if (reads) {
+        actions.push({
+          id: "remove-from-my-view",
+          stream: "removePrivatePanel",
+          event: { panel },
+        });
+      }
       return { panel, actions };
     }
     if (writes) {
-      if (!focused?.equals(panel)) actions.push("focus");
-      if (at > 0) actions.push("move-first");
-      if (at < shared.length - 1) actions.push("move-last");
-      actions.push("duplicate");
+      // A panel is focused among the staged ones, so focusing stages it too.
+      if (!focused?.equals(panel)) {
+        actions.push(
+          present(
+            "focus",
+            has(staged, panel) ? [...staged] : [...staged, panel],
+            panel,
+          ),
+        );
+      }
+      if (at > 0) {
+        actions.push({
+          id: "move-first",
+          stream: "movePanel",
+          event: { panel, before: shared[0] },
+        });
+      }
+      if (at < shared.length - 1) {
+        actions.push({
+          id: "move-last",
+          stream: "movePanel",
+          event: { panel },
+        });
+      }
+      actions.push({
+        id: "duplicate",
+        stream: "duplicatePanel",
+        event: profile === undefined ? { panel } : { panel, as: profile },
+      });
     }
-    if (reads) actions.push("hide");
+    if (reads) {
+      actions.push({ id: "hide", stream: "hidePanel", event: { panel } });
+    }
     if (!writes) return { panel, actions };
+    const remove = { id: "remove", stream: "removePanel", event: { panel } };
     const removal = facts.removal(panel);
     if (
       removal.by === "anyone" ||
@@ -71,15 +127,24 @@ export function loomOffers(facts: OfferFacts): LoomOffers {
         (removal.by === "owner" ||
           (removal.by === "adder" && removal.adderLeft)))
     ) {
-      actions.push("remove");
-      return { panel, actions };
+      return { panel, actions: [...actions, remove] };
     }
     return removal.by === "adder"
-      ? { panel, actions, removableBy: removal.adder }
+      ? {
+        panel,
+        actions,
+        ifViewerIs: { principal: removal.adder, actions: [remove] },
+      }
       : { panel, actions };
-  });
-  for (const panel of hidden) {
-    if (reads) panels.push({ panel, actions: ["show"] });
-  }
-  return { loom, panels };
+  };
+  return {
+    loom,
+    shown: shown.map(offer),
+    hidden: reads
+      ? hidden.map((panel) => ({
+        panel,
+        actions: [{ id: "show", stream: "unhidePanel", event: { panel } }],
+      }))
+      : [],
+  };
 }

@@ -309,21 +309,38 @@ export type PanelRemoval =
   | { by: "adder"; adder: string; adderLeft: boolean };
 
 /**
- * The actions one panel admits from this viewer, as ids a host draws in its
- * own words and ignores when it does not know them. `removableBy` names the
- * one principal whose `remove` the Loom accepts besides those `actions`
- * already offer it to: its adder, whom only the host can tell is the viewer.
+ * One action a viewer may take, as `offers.ts` states it: an `id` a host names
+ * in its own words, and the `stream` of the root's it sends `event` to. `open`
+ * names no stream; the host opens the panel's piece.
+ */
+export interface LoomAction {
+  id: string;
+  stream?: string;
+  event?: {
+    panel?: Writable<Panel>;
+    before?: Writable<Panel>;
+    as?: ParticipantProfile;
+    stagedPanels?: Writable<Panel>[];
+    focusedPanel?: Writable<Panel>;
+  };
+}
+
+/**
+ * The actions one panel admits from this viewer. `ifViewerIs` holds actions
+ * the root accepts only from one principal, for a host to offer when it acts
+ * as that principal.
  */
 export interface PanelOffer {
   panel: Writable<Panel>;
-  actions: string[];
-  removableBy?: string;
+  actions: LoomAction[];
+  ifViewerIs?: { principal: string; actions: LoomAction[] };
 }
 
-/** The actions on the Loom itself, and on each panel shown or hidden. */
+/** The actions on the Loom itself, on each panel shown, and on each hidden. */
 export interface LoomOffers {
-  loom: string[];
-  panels: PanelOffer[];
+  loom: LoomAction[];
+  shown: PanelOffer[];
+  hidden: PanelOffer[];
 }
 
 /** One panel as a host drawing its own deck needs it. */

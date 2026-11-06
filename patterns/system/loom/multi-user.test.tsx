@@ -33,6 +33,13 @@ interface Setup {
   // recipient's profile is a profile its own session did not create.
   handoff: Writable<Handoff>;
 }
+/** The ids of `actions`, in order, as one string. */
+function idsOf(actions: readonly { id: string }[]): string {
+  let joined = "";
+  for (const one of actions) joined += joined ? `,${one.id}` : one.id;
+  return joined;
+}
+
 export const setup = pattern(() => ({
   loom: Loom({}),
   handoff: Writable.of<Handoff>({}),
@@ -73,11 +80,11 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       {
         assertion: assert(() => {
           const offers = setup.loom[VIEWS].deck.offers;
-          const [first, second] = offers.panels;
-          return offers.loom.length === 1 && offers.loom[0] === "stage-all" &&
-            offers.panels.length === 2 &&
-            first.actions.join() === "focus,move-last,duplicate,hide,remove" &&
-            second.actions.join() === "focus,move-first,duplicate,hide,remove";
+          const [first, second] = offers.shown;
+          return idsOf(offers.loom) === "stage-all" &&
+            offers.shown.length === 2 && offers.hidden.length === 0 &&
+            idsOf(first.actions) === "focus,move-last,duplicate,hide,remove" &&
+            idsOf(second.actions) === "focus,move-first,duplicate,hide,remove";
         }),
       },
       // The first participant owns the space. A host drawing its own deck
@@ -216,10 +223,16 @@ export const aliceTab2 = pattern<{ setup: Setup }>(({ setup }) => {
 
 // A reader: what the Loom tells a host it may do here.
 export const carol = pattern<{ setup: Setup }>(({ setup }) => {
-  // What the deck offers a reader, the reader can do.
-  const hideFirst = action(() =>
-    setup.loom.hidePanel.send({ panel: setup.loom.panels[0] })
-  );
+  // What the deck offers a reader, the reader can do: it sends the offered
+  // event to the stream the offer names.
+  const hideFirst = action(() => {
+    const hide = setup.loom[VIEWS].deck.offers.shown[0].actions[0];
+    const panel = hide.event?.panel;
+    if (hide.stream !== "hidePanel" || !panel) {
+      throw new Error("Hide is not offered on the first panel");
+    }
+    setup.loom.hidePanel.send({ panel });
+  });
   return {
     [TESTS]: [
       { await: "bob-added" },
@@ -237,10 +250,10 @@ export const carol = pattern<{ setup: Setup }>(({ setup }) => {
       {
         assertion: assert(() => {
           const offers = setup.loom[VIEWS].deck.offers;
-          return offers.loom.length === 0 && offers.panels.length === 2 &&
-            offers.panels.every((offer) =>
-              offer.actions.length === 1 && offer.actions[0] === "hide" &&
-              offer.removableBy === undefined
+          return offers.loom.length === 0 && offers.shown.length === 2 &&
+            offers.shown.every((offer) =>
+              offer.actions.length === 1 && offer.actions[0].id === "hide" &&
+              offer.ifViewerIs === undefined
             );
         }),
       },
@@ -248,11 +261,9 @@ export const carol = pattern<{ setup: Setup }>(({ setup }) => {
       {
         assertion: assert(() => {
           const offers = setup.loom[VIEWS].deck.offers;
-          return offers.panels.filter((offer) => offer.actions[0] === "show")
-                .length === 1 &&
-            offers.panels.length === 2 &&
-            offers.panels[1].actions.length === 1 &&
-            offers.panels[1].actions[0] === "show";
+          return offers.shown.length === 1 && offers.hidden.length === 1 &&
+            offers.hidden[0].actions.length === 1 &&
+            offers.hidden[0].actions[0].id === "show";
         }),
       },
     ],

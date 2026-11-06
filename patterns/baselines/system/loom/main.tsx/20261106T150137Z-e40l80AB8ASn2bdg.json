@@ -526,7 +526,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "kuw3xAByyEHQXtM6g7iEKRm06k2mUYwdJg2lLYxfc5g",
+              "moduleIdentity": "f6PSy1tiQAEWtQ8NLUsuTGnY8aMuhsWW3GkCT-M3rIA",
               "path": [
                 "admitPanel"
               ]
@@ -554,7 +554,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "kuw3xAByyEHQXtM6g7iEKRm06k2mUYwdJg2lLYxfc5g",
+              "moduleIdentity": "f6PSy1tiQAEWtQ8NLUsuTGnY8aMuhsWW3GkCT-M3rIA",
               "path": [
                 "admitPanel"
               ]
@@ -1385,6 +1385,51 @@
         },
         "type": "object"
       },
+      "LoomAction": {
+        "properties": {
+          "event": {
+            "properties": {
+              "as": {
+                "properties": {
+                  "avatar": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "before": {
+                "$ref": "#/$defs/Panel"
+              },
+              "focusedPanel": {
+                "$ref": "#/$defs/Panel"
+              },
+              "panel": {
+                "$ref": "#/$defs/Panel"
+              },
+              "stagedPanels": {
+                "items": {
+                  "$ref": "#/$defs/Panel"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "stream": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
       "LoomDeck": {
         "properties": {
           "access": {
@@ -1507,13 +1552,19 @@
       },
       "LoomOffers": {
         "properties": {
-          "loom": {
+          "hidden": {
             "items": {
-              "type": "string"
+              "$ref": "#/$defs/PanelOffer"
             },
             "type": "array"
           },
-          "panels": {
+          "loom": {
+            "items": {
+              "$ref": "#/$defs/LoomAction"
+            },
+            "type": "array"
+          },
+          "shown": {
             "items": {
               "$ref": "#/$defs/PanelOffer"
             },
@@ -1522,7 +1573,8 @@
         },
         "required": [
           "loom",
-          "panels"
+          "shown",
+          "hidden"
         ],
         "type": "object"
       },
@@ -1674,7 +1726,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "kuw3xAByyEHQXtM6g7iEKRm06k2mUYwdJg2lLYxfc5g",
+              "moduleIdentity": "f6PSy1tiQAEWtQ8NLUsuTGnY8aMuhsWW3GkCT-M3rIA",
               "path": [
                 "admitPanel"
               ]
@@ -1699,7 +1751,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "kuw3xAByyEHQXtM6g7iEKRm06k2mUYwdJg2lLYxfc5g",
+              "moduleIdentity": "f6PSy1tiQAEWtQ8NLUsuTGnY8aMuhsWW3GkCT-M3rIA",
               "path": [
                 "admitPanel"
               ]
@@ -1746,15 +1798,30 @@
         "properties": {
           "actions": {
             "items": {
-              "type": "string"
+              "$ref": "#/$defs/LoomAction"
             },
             "type": "array"
           },
+          "ifViewerIs": {
+            "properties": {
+              "actions": {
+                "items": {
+                  "$ref": "#/$defs/LoomAction"
+                },
+                "type": "array"
+              },
+              "principal": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "principal",
+              "actions"
+            ],
+            "type": "object"
+          },
           "panel": {
             "$ref": "#/$defs/Panel"
-          },
-          "removableBy": {
-            "type": "string"
           }
         },
         "required": [
