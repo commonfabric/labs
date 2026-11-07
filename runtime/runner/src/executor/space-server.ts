@@ -5685,7 +5685,8 @@ export class SpaceServer implements TransactionSealDestination {
     // key, session), grouped by session. The registry (`#demandersByKey`)
     // is keyed by the instance key — `toDirtyKey(id, scopeKey)` =
     // `${scopeKey}\0${id}` — over EVERY demanded row; the structure load
-    // stays ROOT-scoped (flag 4); there is NO demand walk (nothing reads
+    // takes the watch roots and the rows the server marks as carrying a
+    // piece's metadata (flag 4); there is NO demand walk (nothing reads
     // here). The pass reconciles DELTAS: `#demandMirror` holds the rows the
     // last pass read and reports the keys whose rows changed, and only
     // those keys are reconciled — entered keys mark their writers demand
@@ -5870,9 +5871,10 @@ export class SpaceServer implements TransactionSealDestination {
       // Ahead of the loop, and so ahead of the demand-root bookkeeping it
       // does, which is what lets it read `firstDemand` the way the loop will.
       await this.#loadStructureRootDocs(runtime, rootKeys);
-      // The STRUCTURE LOAD, per watch ROOT — unchanged in scope (flag 4)
-      // and in mechanism (stage P2-F, the OW19 terminal state, the
-      // commit-triggered re-arm); only the demand-walk install is gone.
+      // The STRUCTURE LOAD, per watch ROOT and per row marked as a piece's
+      // (flag 4), unchanged in mechanism (stage P2-F, the OW19 terminal
+      // state, the commit-triggered re-arm); only the demand-walk install is
+      // gone.
       for (const [key, root] of rootKeys) {
         const firstDemand = !this.#demandedRoots.has(key);
         // A known root re-enters this loop ONLY while its structure load
@@ -6210,12 +6212,9 @@ export class SpaceServer implements TransactionSealDestination {
     // `demandedInstances` the registry size and `demandedPairs` the pair
     // count, all O(1) reads of counts the reconcile keeps (W0 obligation
     // (i)). No `walkRuns` — the
-    // walk is deleted; T9′ pins its absence. The flag-4 no-writer count
-    // (a demanded piece doc with no server-registered writer) needs a
-    // per-row engine read for the pattern-meta test, so it is NOT computed
-    // here; W0 measured it once (chat 2 / note 19 / lunch 0) and the
-    // register carries the id-class-filtered structure-load extension as a
-    // future option (flag 4).
+    // walk is deleted; T9′ pins its absence. A demanded piece doc with no
+    // server-registered writer is structure-loaded when the server marks
+    // its row as a piece's (flag 4), so it is not counted apart here.
     const d = stats.demand;
     d.demandedRows = this.#demandMirror.rowCount;
     d.demandedInstances = this.#demandersByKey.size;

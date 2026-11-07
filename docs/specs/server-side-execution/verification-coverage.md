@@ -5132,16 +5132,24 @@ supply; OW29/OW32/OW34 closed):
     coarse over-demand's compute cost is shown to matter (W0's drift was
     not tens of thousands: note union 0 → 1 721 over 20 notes, one
     session, dropping to 3 when the sessions leave).
+  - **flag 4 — the structure load for demanded NON-root docs with
+    pattern meta: BUILT.** The closure surfaces a piece reachable only
+    through a DATA link whose writer is not registered on the server; W0
+    counted the rows: chat 2 / note 19 / lunch 0. Its trigger, a workload
+    where a data-linked piece's value must land server-side, is a FabriChat
+    room's file store: the room's `ensureFileStore` handler creates the
+    store and the room reaches it only through its record's link, so with
+    server execution on the store's `entries` were never computed. The
+    pattern-meta test needs no engine read: the memory server marks a
+    demand row `piece` when the document the session was sent for it
+    carries `patternIdentity` or `result` (`trackedAndPieceKeysFromEntries`
+    in `server-sync.ts`, read in `#buildSessionDemand`), and the demand
+    pass structure-loads a marked row as it does a root
+    (`SpaceServer`'s demand pass). Pinned by
+    `patterns/integration/fabrichat-file-store-multi-runtime.test.ts` and
+    `patterns/system/fabrichat/file-store.test.tsx` with server execution
+    on.
   - **FUTURE / owed rows the build surfaced (none binding):**
-    - **flag 4 — the structure load for demanded NON-root docs with
-      pattern meta.** The closure surfaces a piece reachable only through
-      a DATA link whose writer is not registered on the server (parity
-      with the walk, which never started pieces either); W0 counted the
-      rows: chat 2 / note 19 / lunch 0. The id-class-filtered
-      `#attemptStructureLoad` per such row is the OPTION; not built (the
-      count is small and the pattern-meta test needs a per-row engine read
-      the pass must not do). Trigger: a workload where a data-linked
-      piece's value must land server-side.
     - **flag 5 — the output-doc-demanders union.** `#demandersFor`
       matches keys by ROOT id; a session whose closure reaches piece P2's
       computed doc but not P2's root supplies no demander to P2's writer →
