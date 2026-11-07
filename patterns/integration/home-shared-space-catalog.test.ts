@@ -406,6 +406,8 @@ async function withHome(
         decorateWaveCommitSink,
         serviceIdentity: service.did(),
         createRuntime: (space) => {
+          // The service identity signs these sessions; the server's
+          // `delegatingDids` entry binds their reads to the space's owner.
           const storage = EmulatedStorageManager.connectTo(reachable, {
             as: service,
             servingHomeSpace: space,
