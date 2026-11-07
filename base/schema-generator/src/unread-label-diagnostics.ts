@@ -75,8 +75,11 @@ export function readingOfMetadataLabels(
     : "read";
 }
 
-/** Whether `value`, an atom or a part of one, holds an `undefined`. */
-const holdsUnreadValue = (value: unknown): boolean =>
+/**
+ * Whether `value`, a label, a policy's metadata, or a part of either as the
+ * lowering read it, holds an `undefined` anywhere in it.
+ */
+export const holdsUnreadValue = (value: unknown): boolean =>
   value === undefined ||
   (isObjectOrArray(value) &&
     (Array.isArray(value) ? value : Object.values(value)).some(

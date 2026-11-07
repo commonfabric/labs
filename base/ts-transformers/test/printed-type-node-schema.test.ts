@@ -2498,6 +2498,28 @@ interface Meta { confidentiality: [{ type: "https://commonfabric.org/cfc/atom/Us
       const secret = { confidentiality: ["secret"] };
       const x = { type: "string" };
       const y = { type: "number" };
+
+      /**
+       * The input and result schemas of `a` in a pattern returning its
+       * input, with `declarations` beside `Sec`.
+       */
+      const schemasOf = async (declarations: string, a: string) => {
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Sec<T> = Confidential<T, readonly ["a"]>;
+${declarations}
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+        }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+        return {
+          input: (input.properties as Schema).a,
+          output: (output.properties as Schema).a,
+        };
+      };
+
       for (
         const [a, expected] of [
           [
@@ -2550,23 +2572,6 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
         // is given, so both sides read it as the alias it names written out
         // with those arguments in place.
 
-        const schemasOf = async (declarations: string, a: string) => {
-          const files = await transformFiles({
-            "/main.tsx": `/// <cts-enable />
-import { Confidential, pattern } from "commonfabric";
-type Sec<T> = Confidential<T, readonly ["a"]>;
-${declarations}
-export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
-          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
-          const { input, output } = patternSchemas(
-            parseModule(files["/main.tsx"]!),
-          );
-          return {
-            input: (input.properties as Schema).a,
-            output: (output.properties as Schema).a,
-          };
-        };
-
         for (
           const [declarations, a, written, ifc] of [
             [
@@ -2614,6 +2619,314 @@ type Outer<T extends { x: string }> = Select<Sec<T>>;`,
             expect(await schemasOf(declarations, written)).toEqual(read);
           });
         }
+      });
+
+      for (
+        const [alias, atom, ifc] of [
+          ["Confidential", "c", { confidentiality: ["c"] }],
+          ["Integrity", "i", { integrity: ["i"] }],
+        ] as const
+      ) {
+        it(`labels the whole of an \`Omit\` over \`${alias}<T & { y: number }, …>\` at \`T = { x: string }\`, on both sides`, async () => {
+          // The policy was written around `T & { y: number }`, read with `T`
+          // bound to its argument, so it reaches `x` as well as `y`.
+          const read = await schemasOf(
+            `import type { Integrity } from "commonfabric";
+type View<T> = Omit<${alias}<T & { y: number }, readonly ["${atom}"]>, never>;`,
+            "View<{ x: string }>",
+          );
+          for (const side of [read.input, read.output]) {
+            expect((side as Schema).ifc).toEqual(ifc);
+            for (
+              const property of Object.values(
+                (side as Schema).properties as Record<string, Schema>,
+              )
+            ) {
+              expect(property.ifc).toBeUndefined();
+            }
+          }
+        });
+      }
+
+      for (
+        const [wrapper, alias, atom, ifc] of [
+          ["Readonly<T>", "Confidential", "c", { confidentiality: ["c"] }],
+          ["Readonly<T>", "Integrity", "i", { integrity: ["i"] }],
+          ["Partial<T>", "Confidential", "c", { confidentiality: ["c"] }],
+          ["Required<T>", "Confidential", "c", { confidentiality: ["c"] }],
+          ["Pick<T, keyof T>", "Confidential", "c", {
+            confidentiality: ["c"],
+          }],
+        ] as const
+      ) {
+        it(`labels the whole of an \`Omit\` over \`${alias}<${wrapper} & { y: number }, …>\` at \`T = { x: string }\`, on both sides`, async () => {
+          // The policy was written around `T` mapped and `{ y: number }`, so
+          // it reaches `x` as well as `y`.
+          const read = await schemasOf(
+            `import type { Integrity } from "commonfabric";
+type View<T> = Omit<${alias}<${wrapper} & { y: number }, readonly ["${atom}"]>, never>;`,
+            "View<{ x: string }>",
+          );
+          for (const side of [read.input, read.output]) {
+            expect((side as Schema).ifc).toEqual(ifc);
+          }
+        });
+      }
+
+      for (
+        const conditional of [
+          "(T extends object ? T : never)",
+          "Same<T>",
+          "Extract<T, object>",
+          "Exclude<T, undefined>",
+          "Awaited<T>",
+        ]
+      ) {
+        it(`labels the whole of an \`Omit\` over a union a member of which intersects \`${conditional}\`, at \`T = { x: string }\`, on both sides`, async () => {
+          // The conditional type lists none of its instantiation's members, so
+          // the member's payload is not read, and its restriction goes on the
+          // whole value rather than on `y` alone.
+
+          const read = await schemasOf(
+            `type Same<T> = T extends object ? T : never;
+type View<T> = Omit<
+  | Confidential<${conditional} & { y: number }, readonly ["c"]>
+  | Confidential<{ x: string; y: number }, readonly ["a"]>,
+  never
+>;`,
+            "View<{ x: string }>",
+          );
+          for (const side of [read.input, read.output]) {
+            const { confidentiality } = (side as Schema).ifc as {
+              confidentiality: string[];
+            };
+            expect([...confidentiality].sort()).toEqual(["a", "c"]);
+            for (
+              const property of Object.values(
+                (side as Schema).properties as Record<string, Schema>,
+              )
+            ) {
+              expect(property.ifc).toBeUndefined();
+            }
+          }
+        });
+      }
+
+      it("labels the whole of an `Omit` over a union of `Integrity<Readonly<T> & { y: number }, …>` and a member with its keys, at `T = { x: string }`, on both sides", async () => {
+        // Evidence lands only where the payload's data must be: `Readonly<T>`
+        // read as `T` bound to its argument is where `x` must be, so `i`
+        // reaches all of the object in each member.
+        const read = await schemasOf(
+          `import type { Integrity } from "commonfabric";
+type View<T> = Omit<
+  | Integrity<Readonly<T> & { y: number }, readonly ["i"]>
+  | Integrity<{ x: string; y: number }, readonly ["i"]>,
+  never
+>;`,
+          "View<{ x: string }>",
+        );
+        for (const side of [read.input, read.output]) {
+          expect((side as Schema).ifc).toEqual({ integrity: ["i"] });
+        }
+      });
+
+      it("labels the whole of an `Omit` over a union a member of which renames the keys of `T`, at `T = { x: string }`, on both sides", async () => {
+        // The bindings name the keys of `T`, not those the `as` clause
+        // gives the member, so its restriction reaches all of the object.
+        const read = await schemasOf(
+          `type View<T> = Omit<
+  | Confidential<{ [K in keyof T as \`get_\${K & string}\`]: T[K] } & { y: number }, readonly ["c"]>
+  | Sec<{ get_x: string; y: number }>,
+  never
+>;`,
+          "View<{ x: string }>",
+        );
+        for (const side of [read.input, read.output]) {
+          const { confidentiality } = (side as Schema).ifc as {
+            confidentiality: string[];
+          };
+          expect([...confidentiality].sort()).toEqual(["a", "c"]);
+          for (
+            const property of Object.values(
+              (side as Schema).properties as Record<string, Schema>,
+            )
+          ) {
+            expect(property.ifc).toBeUndefined();
+          }
+        }
+      });
+
+      it("labels the whole of a `Pick` under bindings that selects a key the payload's index signature supplies, on both sides", async () => {
+        // The payload may hold its data under `y` through its index
+        // signature, so the restriction reaches `y` as well as `x`.
+        const read = await schemasOf(
+          `type Outer<T extends Record<string, unknown>> = Confidential<{ inner: Pick<Confidential<T, readonly ["c"]>, "x" | "y"> }, readonly ["outer"]>;`,
+          "Outer<{ x: string; [key: string]: unknown }>",
+        );
+        for (const side of [read.input, read.output]) {
+          const inner = ((side as Schema).properties as Record<string, Schema>)
+            .inner!;
+          expect(inner.ifc).toEqual({ confidentiality: ["c"] });
+          for (
+            const property of Object.values(
+              inner.properties as Record<string, Schema>,
+            )
+          ) {
+            expect(property.ifc).toBeUndefined();
+          }
+        }
+      });
+
+      describe("a union operand", () => {
+        // `Pick` and `Omit` build one object from whichever member of a union
+        // operand the value is, so both sides keep the labels of every member
+        // joined, and read a user's alias as the alias written out.
+
+        const DECLARATIONS = `type One = { x: string };
+type Two = { x: string; z: 1 };
+type Select<T extends { x: string }> = Pick<T, "x">;
+type SelectSec<T extends { x: string }> = Pick<Sec<T>, "x">;`;
+        const value = {
+          type: "object",
+          properties: { x: { type: "string" } },
+          required: ["x"],
+        };
+        const picked = (confidentiality: readonly string[]) => ({
+          ...value,
+          ifc: { confidentiality },
+        });
+
+        for (
+          const [a, written, confidentiality] of [
+            ['Pick<Sec<One | Two>, "x">', undefined, ["a"]],
+            [
+              'Omit<Sec<One> | Confidential<Two, readonly ["c"]>, "z">',
+              undefined,
+              ["a", "c"],
+            ],
+            [
+              "Select<Sec<One> | Sec<Two>>",
+              'Pick<Sec<One> | Sec<Two>, "x">',
+              ["a"],
+            ],
+            [
+              'SelectSec<Confidential<One, readonly ["c"]> | Two>',
+              'Pick<Sec<Confidential<One, readonly ["c"]> | Two>, "x">',
+              ["a", "c"],
+            ],
+          ] as const
+        ) {
+          it(`reads \`${a}\` with its members' labels joined, on both sides`, async () => {
+            const read = await schemasOf(DECLARATIONS, a);
+            const expected = picked(confidentiality);
+            expect(read).toEqual({ input: expected, output: expected });
+            if (written) {
+              expect(await schemasOf(DECLARATIONS, written)).toEqual(read);
+            }
+          });
+        }
+
+        for (
+          const [inner, argument] of [
+            ['Pick<Sec<T>, "x">', 'Confidential<One, readonly ["c"]> | Two'],
+            ['Pick<T | Sec<Two>, "x">', 'Confidential<One, readonly ["c"]>'],
+          ] as const
+        ) {
+          it(`joins the members' labels of \`${inner}\` in a payload read under bindings, \`T\` bound to \`${argument}\`, on both sides`, async () => {
+            // The input side reads the payload's syntax under the bindings,
+            // and the result side reads its type. Each lists the atoms in
+            // the order it reads the members in, and they are a set.
+            const { input, output } = await schemasOf(
+              `${DECLARATIONS}
+type Outer<T extends { x: string }> = Confidential<{ inner: ${inner} }, readonly ["b"]>;`,
+              `Outer<${argument}>`,
+            );
+            for (const side of [input, output]) {
+              const { ifc, ...rest } =
+                ((side as Schema).properties as Record<string, Schema>).inner!;
+              expect(rest).toEqual(value);
+              expect(
+                [...(ifc as { confidentiality: string[] }).confidentiality]
+                  .sort(),
+              ).toEqual(["a", "c"]);
+            }
+          });
+        }
+
+        for (
+          const argument of [
+            "Integrity<One, readonly [string]>",
+            "Confidential<One, readonly [string]>",
+            "ExactCopy<One, readonly [string]>",
+          ]
+        ) {
+          it(`reads \`Pick<T | Sec<Two>, "x">\` in a payload read under bindings unlabeled, \`T\` bound to \`${argument}\`, on both sides`, async () => {
+            // A member's label the lowering cannot read leaves every member
+            // unread, as the members' labels are read in full or not at all.
+            const { input, output } = await schemasOf(
+              `import type { ExactCopy, Integrity } from "commonfabric";
+${DECLARATIONS}
+type Outer<T extends { x: string }> = Confidential<{ inner: Pick<T | Sec<Two>, "x"> }, readonly ["outer"]>;`,
+              `Outer<${argument}>`,
+            );
+            for (const side of [input, output]) {
+              expect(
+                ((side as Schema).properties as Record<string, Schema>).inner,
+              ).toEqual(value);
+            }
+          });
+        }
+
+        it("reads `View<unknown>`, where `View<T>` is `Omit<T | Sec<Two>, never>`, as the alias written out, on both sides", async () => {
+          // `keyof unknown` is `never`, so the object has no members, and
+          // `a`, written around `Two`'s members, lands on none of it.
+          const declarations = `${DECLARATIONS}
+type View<T> = Omit<T | Sec<Two>, never>;`;
+          const read = await schemasOf(declarations, "View<unknown>");
+          expect(read).toEqual(
+            await schemasOf(declarations, "Omit<unknown | Sec<Two>, never>"),
+          );
+          for (const side of [read.input, read.output]) {
+            expect((side as Schema).ifc).toBeUndefined();
+          }
+        });
+
+        it("keeps the labels of the member beside the `unknown` `ViewOpen<unknown>` binds into a union, on both sides", async () => {
+          // A bare `unknown` is a member with no labels of its own, beside
+          // which `Sec<unknown>`'s label stays, written around a payload that
+          // names no members and so on the whole object.
+          const { input, output } = await schemasOf(
+            `${DECLARATIONS}
+type ViewOpen<T> = Omit<T | Sec<T>, never>;`,
+            "ViewOpen<unknown>",
+          );
+          for (const side of [input, output]) {
+            expect(side).toEqual({
+              type: "object",
+              properties: {},
+              ifc: { confidentiality: ["a"] },
+            });
+          }
+        });
+
+        it("keeps the labels of a member whose labeled payload is `unknown`, on both sides", async () => {
+          // `Omit` over the union keeps the keys every member has, here none:
+          // `c`, written around `Two`, lands on no member of the value, while
+          // `a` and `b`, written around payloads that list no members, land on
+          // all of it.
+          const { input, output } = await schemasOf(
+            `${DECLARATIONS}
+type Inner<T> = Omit<Sec<T>, never>;
+type Nested<U> = Inner<Confidential<U, readonly ["b"]> | Confidential<Two, readonly ["c"]>>;`,
+            "Nested<unknown>",
+          );
+          for (const side of [input, output]) {
+            const { confidentiality } = (side as {
+              ifc: { confidentiality: string[] };
+            }).ifc;
+            expect([...confidentiality].sort()).toEqual(["a", "b"]);
+          }
+        });
       });
     });
 
