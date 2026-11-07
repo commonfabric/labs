@@ -51,6 +51,7 @@ import {
 } from "../typescript/value-annotation.ts";
 import { usesParameterUnreachably } from "../type-parameter-bindings.ts";
 import { CFC_CARRIER_PROPERTY } from "../typescript/cfc-carrier.ts";
+import { writesWrapperErasedByAny } from "./common-fabric-formatter.ts";
 import { withIndexKeys, withValueRecordsOf } from "../schema-origins.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
 
@@ -236,10 +237,211 @@ function shouldSkipInternalProperty(
 }
 
 /**
+ * A mapped type as the checker holds it once it resolves its members:
+ * `modifiersType` is `T` in `{ [K in keyof T]: T[K] }`, the type it maps over,
+ * and `declaration` is the node that writes it.
+ */
+type MappedTypeWithInternals = ts.ObjectType & {
+  readonly modifiersType?: ts.Type;
+  readonly declaration?: ts.MappedTypeNode;
+};
+
+/**
+ * The annotation `declaration` writes, where it declares a property of a type
+ * literal, an interface, or a class.
+ */
+const annotationOf = (
+  declaration: ts.Declaration,
+): ts.TypeNode | undefined =>
+  ts.isPropertySignature(declaration) || ts.isPropertyDeclaration(declaration)
+    ? declaration.type
+    : undefined;
+
+/** Whether `type` is a mapped type, as `Pick<T, K>` is. */
+const isMappedType = (type: ts.Type): boolean =>
+  ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) !== 0;
+
+/**
+ * The type `type`, a mapped type, maps its property `name` from
+ * (`MappedTypeWithInternals`), where it gives `name` the value that type has
+ * there: its template is `T[P]`, for `T` that type and `P` its own key, as in
+ * `Pick`, `Omit`, `Partial` and `Readonly`, and the property keeps the
+ * declarations of the one it maps, as a key an `as` clause renames does not.
+ * `undefined` where `type` gives `name` a value of its own, as
+ * `{ [P in keyof T]: { v: T[P] } }` does.
+ */
+const valueSourceOf = (
+  type: ts.Type,
+  name: string,
+  checker: ts.TypeChecker,
+): ts.Type | undefined => {
+  const kept = checker.getPropertyOfType(type, name)?.declarations;
+  const { declaration, modifiersType } = type as MappedTypeWithInternals;
+  const template = declaration?.type && unwrapTypeParentheses(declaration.type);
+  const constraint = declaration?.typeParameter.constraint;
+  if (
+    !kept?.length || !template || !constraint ||
+    !ts.isIndexedAccessTypeNode(template) ||
+    !ts.isTypeReferenceNode(template.indexType) ||
+    template.indexType.typeArguments ||
+    checker.getSymbolAtLocation(template.indexType.typeName) !==
+      checker.getSymbolAtLocation(declaration.typeParameter.name)
+  ) {
+    return undefined;
+  }
+  // `Pick` maps `K`, a parameter whose constraint is `keyof T`.
+  let keys: ts.Type | undefined = checker.getTypeFromTypeNode(constraint);
+  if ((keys.flags & ts.TypeFlags.TypeParameter) !== 0) {
+    const declared = keys.symbol?.declarations?.find(
+      ts.isTypeParameterDeclaration,
+    )?.constraint;
+    keys = declared && checker.getTypeFromTypeNode(declared);
+  }
+  return keys !== undefined && (keys.flags & ts.TypeFlags.Index) !== 0 &&
+      (keys as ts.IndexType).type ===
+        checker.getTypeFromTypeNode(template.objectType)
+    ? modifiersType
+    : undefined;
+};
+
+/**
+ * Whether every mapped type between `source` and the declarations of its
+ * property `name` gives it the value it is declared with (`valueSourceOf()`),
+ * so that those declarations state its value, following each member of a
+ * union or an intersection that declares it.
+ */
+const valueDeclaredWithin = (
+  source: ts.Type,
+  name: string,
+  checker: ts.TypeChecker,
+): boolean => {
+  if (source.isUnionOrIntersection()) {
+    return source.types.every((part) =>
+      checker.getPropertyOfType(part, name) === undefined ||
+      valueDeclaredWithin(part, name, checker)
+    );
+  }
+  if (!isMappedType(source)) return true;
+  const from = valueSourceOf(source, name, checker);
+  return from !== undefined && valueDeclaredWithin(from, name, checker);
+};
+
+/**
+ * Refuses `prop`, a property a mapped type gives a value of its own
+ * (`valueDeclaredWithin()`), where a declaration it keeps writes a wrapper
+ * the checker erases around `any` (`writesWrapperErasedByAny()`), as
+ * `Confidential<any, C>` is: the property is read by its type, which does not
+ * hold that wrapper, so its label, scope, or default would be lost.
+ */
+const refuseWrapperLeftBehind = (
+  prop: ts.Symbol,
+  checker: ts.TypeChecker,
+): void => {
+  for (const declaration of prop.declarations ?? []) {
+    const annotation = annotationOf(declaration);
+    if (
+      annotation &&
+      (checker.getTypeFromTypeNode(annotation).flags & ts.TypeFlags.Any) !==
+        0 &&
+      writesWrapperErasedByAny(annotation, checker)
+    ) {
+      const name = prop.getName();
+      throw new Error(
+        `A mapped type gives \`${name}\` a value of its own, but ` +
+          `\`${name}\` is declared as \`${annotation.getText()}\`, a wrapper ` +
+          `around \`any\` that only its declaration holds, which that value ` +
+          `does not keep. Map \`${name}\` to the value it is declared with, ` +
+          `as \`T[K]\` does, or declare it without \`any\`.`,
+      );
+    }
+  }
+};
+
+/**
+ * What the annotations of a property several members of a type declare say
+ * (`membersAnnotation()`): `node`, those written without a type parameter,
+ * combined as the type combines its members, `undefined` where there are
+ * none, and `generic`, the type each member whose annotation is written in a
+ * type parameter gives the property.
+ */
+type MembersAnnotation = {
+  readonly node: ts.TypeNode | undefined;
+  readonly generic: readonly ts.Type[];
+};
+
+/**
+ * The annotations the members of `source` that declare the property `name`
+ * write it with (`MembersAnnotation`), combined as `source` combines those
+ * members: a union of a union's, an intersection of an intersection's, and,
+ * through a mapped type giving it the value it is declared with
+ * (`valueSourceOf()`), those of the type it maps from. An annotation written
+ * in a type parameter is read only under the bindings of its member's own
+ * reading, which this one does not have, so the type its member gives the
+ * property is kept instead. `undefined` where a member declares the property
+ * with no annotation, or a mapped type gives it a value of its own.
+ */
+const membersAnnotation = (
+  source: ts.Type,
+  name: string,
+  checker: ts.TypeChecker,
+): MembersAnnotation | undefined => {
+  if (source.isUnionOrIntersection()) {
+    const nodes: ts.TypeNode[] = [];
+    const generic: ts.Type[] = [];
+    for (const part of source.types) {
+      if (checker.getPropertyOfType(part, name) === undefined) continue;
+      const read = membersAnnotation(part, name, checker);
+      if (read === undefined) return undefined;
+      if (read.node !== undefined) nodes.push(read.node);
+      for (const member of read.generic) generic.push(member);
+    }
+    return {
+      node: nodes.length <= 1
+        ? nodes[0]
+        : source.isUnion()
+        ? ts.factory.createUnionTypeNode(nodes)
+        : ts.factory.createIntersectionTypeNode(nodes),
+      generic,
+    };
+  }
+  if (isMappedType(source)) {
+    const from = valueSourceOf(source, name, checker);
+    return from && membersAnnotation(from, name, checker);
+  }
+  const prop = checker.getPropertyOfType(source, name);
+  const declarations = prop?.declarations ?? [];
+  const declaration = prop?.valueDeclaration ??
+    (declarations.length === 1 ? declarations[0] : undefined);
+  const node = declaration && annotationOf(declaration);
+  if (prop === undefined || node === undefined) return undefined;
+  return holdsTypeParameter(node, checker)
+    ? { node: undefined, generic: [checker.getTypeOfSymbol(prop)] }
+    : { node, generic: [] };
+};
+
+/**
+ * Whether `type` is a primitive type, or a union of them, which holds no
+ * label: a labeled one intersects a carrier.
+ */
+const holdsNoLabel = (type: ts.Type): boolean =>
+  type.isUnion() ? type.types.every(holdsNoLabel) : (type.flags &
+    (ts.TypeFlags.StringLike | ts.TypeFlags.NumberLike |
+      ts.TypeFlags.BigIntLike | ts.TypeFlags.BooleanLike |
+      ts.TypeFlags.ESSymbolLike | ts.TypeFlags.Null |
+      ts.TypeFlags.Undefined | ts.TypeFlags.Void)) !== 0;
+
+/**
  * Formatter for object types (interfaces, type literals, etc.)
  */
 export class ObjectFormatter implements TypeFormatter {
   #schemaGenerator: SchemaGenerator;
+
+  /**
+   * The annotation read for each property several members of a type declare
+   * (`#annotationOfMembers()`), kept so every read of the property reads the
+   * same node.
+   */
+  #membersAnnotations = new WeakMap<ts.Symbol, ts.TypeNode | undefined>();
 
   constructor(schemaGenerator: SchemaGenerator) {
     this.#schemaGenerator = schemaGenerator;
@@ -302,6 +504,24 @@ export class ObjectFormatter implements TypeFormatter {
       );
       const propDecl = prop.valueDeclaration ??
         (prop.declarations?.[0] as ts.Declaration | undefined);
+      // A mapped type's property has no declaration of its own: it keeps
+      // those of the property it maps, which state its value only where every
+      // mapping between them copies it (`valueDeclaredWithin()`). One given a
+      // value of its own is read by its type.
+      const declaresValue = !isMappedType(type) ||
+        valueDeclaredWithin(type, propName, checker);
+      if (!declaresValue) refuseWrapperLeftBehind(prop, checker);
+      // A property several members of a union or an intersection declare, as
+      // a `Pick` or an `Omit` over one makes, is never read by one member's
+      // annotation, which says what it is in that member alone: it is read by
+      // every member's (`#annotationOfMembers()`), or else by the type the
+      // checker gives it, which is all of them.
+      const annotated = declaresValue &&
+        (prop.valueDeclaration !== undefined ||
+          prop.declarations?.length === 1);
+      propTypeNode ??= declaresValue && !annotated
+        ? this.#annotationOfMembers(prop, type, checker)
+        : undefined;
 
       if (propDecl) {
         if (
@@ -312,11 +532,11 @@ export class ObjectFormatter implements TypeFormatter {
         if (
           ts.isPropertySignature(propDecl) || ts.isPropertyDeclaration(propDecl)
         ) {
-          if (!propTypeNode && propDecl.type) {
+          if (!propTypeNode && annotated && propDecl.type) {
             propTypeNode = propDecl.type as ts.TypeNode;
           }
         } else if (
-          !propTypeNode &&
+          !propTypeNode && annotated &&
           (ts.isPropertyAssignment(propDecl) ||
             ts.isShorthandPropertyAssignment(propDecl))
         ) {
@@ -548,6 +768,50 @@ export class ObjectFormatter implements TypeFormatter {
         context,
       )
       : schema;
+  }
+
+  /**
+   * The annotation of `prop`, a property of `type` that several members of a
+   * union or an intersection declare (`membersAnnotation()`). Where some write
+   * it in a type parameter, which only its member's own reading binds, the
+   * property is read by the type the checker gives it, which holds every
+   * member's labels, unless that type is `any`, which holds none. Then the
+   * others' annotations are read, where each member written in a type
+   * parameter gives the property a primitive type, which holds no label, and
+   * the property is refused otherwise.
+   */
+  #annotationOfMembers(
+    prop: ts.Symbol,
+    type: ts.Type,
+    checker: ts.TypeChecker,
+  ): ts.TypeNode | undefined {
+    if (this.#membersAnnotations.has(prop)) {
+      return this.#membersAnnotations.get(prop);
+    }
+    const read = membersAnnotation(type, prop.getName(), checker);
+    let node = read?.node;
+    if (read !== undefined && read.generic.length > 0) {
+      if ((checker.getTypeOfSymbol(prop).flags & ts.TypeFlags.Any) === 0) {
+        node = undefined;
+      } else {
+        const labeled = read.generic.find((member) => !holdsNoLabel(member));
+        if (labeled !== undefined) {
+          const name = prop.getName();
+          throw new Error(
+            `\`${name}\` is declared by several members of a union or an ` +
+              `intersection, one with an annotation written in a type ` +
+              `parameter that reads as \`${checker.typeToString(labeled)}\` ` +
+              `here, and the checker reads \`${name}\` as \`any\`, which ` +
+              `holds no labels. The labels of that annotation cannot be read ` +
+              `there unless it reads as a primitive type: declare ` +
+              `\`${name}\` in that member without the type parameter, or in ` +
+              `the others without \`any\`.`,
+          );
+        }
+      }
+    }
+    this.#membersAnnotations.set(prop, node);
+    return node;
   }
 
   #lookupBuiltInSchema(
