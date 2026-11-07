@@ -3,10 +3,11 @@
 Server deployments run through the bastion using binaries that CI has built
 and published. Rapids releases coordinate Labs, Loom, Weaver, gVisor, and infra
 at verified green revisions, and take Labs at the commit Loom's `main` pins
-rather than at Labs' own `main`. Estuary deploys a Labs revision named when its
-deployment is dispatched, which Loom does each time that pin changes. Both
-servers therefore follow Loom's Labs pin, and a Labs change reaches either one
-only once a Loom pull request moves the pin.
+rather than at Labs' own `main`, so a Labs change reaches Rapids only once a
+Loom pull request moves that pin. Estuary deploys the Labs revision named when
+its deployment is dispatched. Loom dispatches it with the pin each time the pin
+changes, and a person can dispatch any Labs commit on `main` by hand, which
+reaches Estuary without moving the pin.
 
 Two browser shells reach users, and they are configured in different places.
 The toolshed binary carries one and serves it from its own origin, so it is
@@ -34,9 +35,9 @@ a message naming that commit if they are absent.
 
 **Manual Production Deployment** (`deploy-production.yml`) runs from `main`.
 Loom's `deploy-labs-from-vendor-bump.yml` dispatches it with Loom's Labs pin
-whenever a push to Loom's `main` changes `vendor/config/`, and does nothing
-when Estuary's newest successful deployment is already that commit. It can also
-be dispatched by hand. It takes these inputs:
+whenever a push to Loom's `main` changes `vendor/config/`. It can also be
+dispatched by hand with any Labs commit on `main`, which Loom's pin does not
+constrain. It takes these inputs:
 
 - `ref`: the full lowercase Labs commit SHA to deploy or verify. The SHA must
   be an ancestor of `main`, verified through GitHub before the protected job
