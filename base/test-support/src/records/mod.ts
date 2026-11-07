@@ -95,11 +95,7 @@ export {
 export type { NameMap, RegistrationCapture, SkipList } from "./registration.ts";
 export type { WholeRun } from "./whole-run.ts";
 export { markWholeRun, readWholeRuns } from "./whole-run.ts";
-export {
-  preloadArgument,
-  preloadModulePath,
-  recordingArguments,
-} from "./preload-path.ts";
+export { preloadArgument, recordingArguments } from "./preload-path.ts";
 export type { RecordingPaths } from "./preload-path.ts";
 export {
   ingestJUnit,

@@ -184,6 +184,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # The lane's steps run from a second view of the checkout whose path
+      # holds a space and an emoji, so a test that turns a file URL into a
+      # path without decoding it fails here. The lane's coverage reports name
+      # each file relative to the checkout, so the jobs that read them from
+      # the workspace find the same files.
+      - name: 📥 Mount the checkout at a path with a space and an emoji
+        run: |
+          checkout="$HOME/checkout 🦆"
+          mkdir -p "$checkout"
+          sudo mount --bind "$GITHUB_WORKSPACE" "$checkout"
+          echo "CHECKOUT=$checkout" >> "$GITHUB_ENV"
+
       - name: 🦕 Setup Deno
         uses: ./.github/actions/deno-setup
 
@@ -198,6 +210,7 @@ jobs:
       # the point.
       - name: 🗺️ Plan the lane
         timeout-minutes: *work-timeout
+        working-directory: ${{ env.CHECKOUT }}
         run: |
           # shellcheck disable=SC2086
           deno run -A tasks/ci-lane.ts $LANE_ARGS --dry-run
@@ -252,6 +265,7 @@ jobs:
 
       - name: 🧪 Run the lane
         timeout-minutes: *lane-work-timeout
+        working-directory: ${{ env.CHECKOUT }}
         # The token is what the `github-api` capability hands to the suites
         # that declared it, so only this step holds it. The lane takes it out
         # of its own environment before it starts anything, so no other child
@@ -621,8 +635,7 @@ jobs:
         run: |
           deno run --allow-read --allow-write tasks/combine-coverage-lcov.ts \
             --input-dir=coverage-artifacts \
-            --output=release/labs-${{ github.sha }}.lcov \
-            --repo-name=${{ github.event.repository.name }}
+            --output=release/labs-${{ github.sha }}.lcov
 
       - name: 🔐 Process & sign binaries
         timeout-minutes: *work-timeout
