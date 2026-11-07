@@ -1,0 +1,1 @@
+{"date":"2026-10-15","from":{"k":"unit","s":"runner","n":"CFC projection claims > carries value-bound TransformedBy and Builtin scoped onto a projection and drops PromptSlotBound"},"to":{"k":"unit","s":"runner","n":"CFC projection claims > carries a value-bound Builtin scoped onto a projection, drops PromptSlotBound, and carries no TransformedBy a schema declared"}}
