@@ -15,6 +15,7 @@ import {
   resolveCfcSchemaRefRoot,
 } from "./schema-refs.ts";
 import { type CfcLabelView, mergeCfcLabelViews } from "./label-view-state.ts";
+import { declaredObservationClass } from "./observation-classes.ts";
 import type { IFCLabel, LabelObservationClass } from "./types.ts";
 
 /** One `ifc` declaration found while walking a CFC schema. */
@@ -206,17 +207,14 @@ const collectCfcSchemaEntries = (
   return entries;
 };
 
-const declaredObservationClass = (
+const schemaObservationClass = (
   schema: JSONSchema,
-): LabelObservationClass | undefined => {
-  const observes = isObjectOrArray(schema) && isObjectOrArray(schema.ifc)
-    ? schema.ifc.observes
-    : undefined;
-  return observes === "value" || observes === "shape" ||
-      observes === "enumerate" || observes === "followRef"
-    ? observes
-    : undefined;
-};
+): LabelObservationClass | undefined =>
+  declaredObservationClass(
+    isObjectOrArray(schema) && isObjectOrArray(schema.ifc)
+      ? schema.ifc.observes
+      : undefined,
+  );
 
 /** Return the label view declared by a schema. */
 export const cfcLabelViewFromSchema = (
@@ -224,7 +222,7 @@ export const cfcLabelViewFromSchema = (
 ): CfcLabelView | undefined => {
   if (schema === undefined) return undefined;
   const entries = cfcSchemaEntries(schema).map((entry) => {
-    const observes = declaredObservationClass(entry.schema);
+    const observes = schemaObservationClass(entry.schema);
     return {
       path: entry.path,
       label: entry.label,

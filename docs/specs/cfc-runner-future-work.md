@@ -59,6 +59,10 @@ numbers are the statement's.
 7. §7: whether every non-scheduler entry point carries its gating reads.
 8. §8: whether an explicit `undefined` write at a recorded deleted path counts
    as a re-creation, and so whether the un-minted join under-taints.
+9. §8: declare an anchored element document's entries from the holder
+   schema's entries at the element's path (`cfcSchemaEntries`), so an element
+   whose own label observes `followRef` keeps the label it inherits for its
+   content.
 
 ---
 
