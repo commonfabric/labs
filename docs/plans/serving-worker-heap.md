@@ -181,12 +181,75 @@ describe.
 Beyond these:
 
 - A piece a demand or an event starts keeps running until its space parks, so a
-  client that opens many Topics in turn builds up the same cost. Releasing a piece
+  client that opens many Topics in turn builds up the same cost: a first read
+  of one Topic's whole result leaves 2.9 MB on the worker at 100 Topics and
+  4.9 MB at 500 after the reading client has disconnected, and a second read of
+  it 0.2 MB (`read-worker-probe.ts`, under "The process"). Releasing a piece
   when its last demand leaves is the same change at another site, and a demanded
-  piece's writers are what `leaveDemandedEntity()` already tracks.
+  piece's writers are what `leaveDemandedEntity()` already tracks. A read of a
+  Topic whose piece is not running costs 1.5 to 2.6 s of CPU on that rig, and
+  about 0.5 s when it is, which is what the release trades for the heap.
 - A kept runtime (`parkedRuntimeRetentionMs`) holds whatever its tenure held.
 - Lower the heap limit once a day of real traffic shows what a worker needs.
 - Nothing here has run on rapids.
+
+## The order to do it in
+
+Each step is one pull request, measured on the worker rig before and after with
+the holder table, since run totals differ by 90 KB per create between runs of
+one tree.
+
+1. **Release the settled transaction of a map element's start**, 21 KB per
+   create. The three paths under "What is left" go in one change, because
+   cutting one moves the charge to the next. In order of how much reading each
+   needs:
+   - The immutable cell store's snapshots: make the query-result proxy a
+     snapshot keeps without a transaction, as `CauseContainer.cell` already
+     mints a sibling identity without one.
+   - The element's `resultCell` in `#startCore`: the nodes' `cellTx(resultCell)`
+     checks decide local-read behavior from the binding, so pass that decision
+     as a value and hand the start's closures a cell without the transaction.
+   - The raw node's `inputsCell` (`inputsCell.withTx(tx)` in
+     `#buildRawNodeInputs`): read every builtin's setup first, list the ones
+     that read `inputsCell` directly and so depend on its transaction, and
+     change those to read through the transaction their action is handed.
+     Then the node hands a cell without one.
+
+   The failing test is a new case in `start-transaction-release.test.ts` that
+   starts a pattern with a `map`, commits, collects, and asserts the start's
+   transaction is gone, in the shape of the cases there. Done means
+   `heap-removal.ts` no longer lists an `ExtendedStorageTransaction` per create.
+
+2. **A demanded computation that has run keeps its basis rows and not its
+   inputs**, about 300 KB per create: the Topic documents (135 KB), the watch
+   bookkeeping around them (80 KB), the trigger index (50 KB) and the read logs
+   (42 KB). This is the design in the introduction applied to a demanded piece,
+   and it needs a design note before code, covering three questions: what
+   dirties a computation whose inputs are not loaded (the `scheduler_basis`
+   rows against a commit's written addresses, which the serving loop already
+   matches for a stopped piece), what loads the inputs again and in which wave,
+   and which computations are exempt because a client view reads their inputs
+   anyway. Measure the cost of a listing and of an individual read before and
+   after, since this trades heap for loads. The demand that keeps these inputs
+   loaded is also what makes a create cost more as the board grows: each wave
+   re-runs the board's lifts over the whole Topic list, 1.7 s of CPU per create
+   at 400 Topics against 0.5 s on a board nothing demands
+   (`create-worker-probe.ts` beside the heap probe profiles the worker over a
+   run of creates).
+
+3. **Release a piece when its last demand leaves.** The same release as a
+   handler's result, called from where `leaveDemandedEntity()` drops the last
+   demand. It bounds what a client that opens many Topics in turn leaves.
+   `read-worker-probe.ts` gives the before figure: the worker's heap after ten
+   first reads, each from a client that has left.
+
+4. **Have each seal destination report when its last effect is retired or
+   dropped**, so a transaction with an external request releases its
+   preparation records. A Topic create leaves none, so this follows the others
+   and wants a workload that makes requests to measure it.
+
+5. **Run the rig's steps against rapids**, then lower the heap limit to what a
+   day of traffic shows a worker needs.
 
 ## The process
 
@@ -233,6 +296,18 @@ A create here is an `addTopic` event, and any verb that starts a piece will do.
    That heap also holds the memory server's session graphs, which the worker arm
    keeps on the main thread, so a holder found there is charged to the worker
    only once the worker rig shows it.
+
+   For what a read leaves, `read-worker-probe.ts` serves a board of a given
+   size from the same rig and reads the board's `index` and then some Topics
+   the way `cf cell get` does, each from a client that connects, reads, and
+   disconnects. It reports per read the process's CPU time, the documents the
+   client received, the waves the worker ran, and the worker's heap after a
+   collection. `PROBE_RESTART=1` replaces the worker after the creates, which
+   is the control of step 2 for reads.
+
+   ```bash
+   CF_MEMORY_FRAME_LOG=/tmp/read-probe/frames.jsonl deno run -A --config deno.jsonc --v8-flags=--expose-gc skills/perf-investigation/scripts/read-worker-probe.ts 100 10 /tmp/read-probe
+   ```
 
 4. **Read retained sizes.** `heap-retained.ts` charges each object to what alone
    keeps it alive. A holder that retains a lot is a fix. When several holders share
