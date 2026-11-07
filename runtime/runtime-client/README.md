@@ -269,7 +269,15 @@ principal, as `spaceaccesslost` reported, has admitted it again. It carries the
 `space`. It is sent for every admission, whoever asked for the retry that
 decided it: the runtime itself, on the memory server's `session/admissible`; the
 renderer's Retry button on a refused space's placeholder; or a host through
-`retrySpaceAccess()`.
+`retrySpaceAccess()`. It is also sent for a space whose first connection never
+completed a handshake, as when its memory host was down or out of the network's
+reach, once a retry reaches it, even when a load the retry repeats fails again.
+The runtime dials such a space again only when asked: through
+`retrySpaceAccess(space)`, or through `retryUnreachableSpaces()`, which retries
+every such space and is the call for a host that learns the network may have
+changed. A load that failed for want of the connection fails with the code
+`RuntimeErrorCode.SpaceUnreachable`, which is how a host tells it from other
+failures and offers a retry.
 
 `RuntimeInternals` in `@commonfabric/lib-shell` drops the loads it remembers as
 failed, every space's on `connectionrestored` and the one space's on

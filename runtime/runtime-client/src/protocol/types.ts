@@ -613,7 +613,9 @@ export enum NotificationType {
 
   /**
    * Reports that a space which refused the runtime principal has admitted it
-   * again, so a load that the refusal failed may succeed if asked again.
+   * again, or that a retry reached a space whose first connection never
+   * completed a handshake, so a load that the refusal or the failed
+   * connection failed may succeed if asked again.
    */
   SpaceAccessRestored = "callback:space-access-restored",
 
@@ -751,6 +753,16 @@ export enum RuntimeErrorCode {
    * tell the reader that the space was deleted.
    */
   SpaceDeleted = "space-deleted",
+
+  /**
+   * The request needed a space whose first connection to its memory host
+   * never completed a handshake, as when the host is down or out of the
+   * network's reach. The runtime does not dial it again on its own, so the
+   * client's remedy is to ask it to (`RetryUnreachableSpaces`) once the host
+   * may be reachable, such as when a person asks to try again; a retry that
+   * connects is announced as `SpaceAccessRestored`.
+   */
+  SpaceUnreachable = "space-unreachable",
 }
 
 /**
@@ -4195,9 +4207,11 @@ export type SpaceAccessLostNotification = {
 };
 
 /**
- * The runtime principal admitted again to one space that had refused it, as
- * a retry of the space's access decides: one the memory server's
- * `session/admissible` notice started, or one a client asked for.
+ * One space usable again: the runtime principal admitted to it again after
+ * it refused it, as a retry of the space's access decides (one the memory
+ * server's `session/admissible` notice started, or one a client asked for),
+ * or a space a client's retry reached after its first connection never
+ * completed a handshake.
  */
 export type SpaceAccessRestoredNotification = {
   type: NotificationType.SpaceAccessRestored;

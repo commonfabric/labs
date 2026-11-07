@@ -1,12 +1,14 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
+import { firstHandshakeFailedError } from "@commonfabric/memory/v2/client";
 import { CompilerStackLoadError } from "@commonfabric/runner";
 
 import { NotificationType, RuntimeErrorCode } from "@/protocol/mod.ts";
 import {
   postContextualRuntimeError,
   postRuntimeError,
+  runtimeErrorCode,
 } from "@/backends/runtime-error.ts";
 
 describe("runtime error notifications", () => {
@@ -70,5 +72,17 @@ describe("runtime error notifications", () => {
           originalPostMessage;
       }
     }
+  });
+
+  it("returns `SpaceUnreachable` for a space whose first connection never completed a handshake", () => {
+    const unreachable = firstHandshakeFailedError(
+      3,
+      "wss://memory.test/",
+      new Error("connection refused"),
+    );
+    expect(runtimeErrorCode(unreachable)).toBe(
+      RuntimeErrorCode.SpaceUnreachable,
+    );
+    expect(runtimeErrorCode(new Error("connection refused"))).toBe(undefined);
   });
 });

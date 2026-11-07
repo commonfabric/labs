@@ -5374,6 +5374,47 @@ describe("runtime-processor", () => {
         expect(result).toStrictEqual({});
         expect(calls).toEqual(["getDefaultPattern"]);
       });
+
+      for (const start of [true, false]) {
+        it(`rejects with the failed first handshake, and creates no root, for a Home never reached when \`start\` is \`${start}\``, async () => {
+          const unreachable = MemoryV2Client.firstHandshakeFailedError(
+            3,
+            "wss://memory.test/",
+            new Error("connection refused"),
+          );
+          const calls: string[] = [];
+          const cc = {
+            // A space never reached reads as one with nothing stored.
+            getDefaultPattern: () => {
+              calls.push("getDefaultPattern");
+              return Promise.resolve(undefined);
+            },
+            ensureDefaultPattern: () => {
+              calls.push("ensureDefaultPattern");
+              return Promise.reject(new Error("must not create the root"));
+            },
+          };
+          // The space is the identity's Home, which an owner would otherwise
+          // go on to create a root in.
+          const processor = buildProcessor({
+            runtime: {
+              userIdentityDID: "did:key:test-space",
+              storageManager: { spaceSessionError: () => unreachable },
+            },
+            cc,
+            space: "did:key:test-space",
+          });
+
+          const error = await processor.handleGetSpaceRootPattern({
+            type: RequestType.GetSpaceRootPattern,
+            space: "did:key:test-space",
+            start,
+          }).then(() => undefined, (error: unknown) => error);
+
+          expect(error).toBe(unreachable);
+          expect(calls).toEqual(["getDefaultPattern"]);
+        });
+      }
     });
   });
 
