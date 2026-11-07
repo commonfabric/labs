@@ -207,13 +207,13 @@ import {
   holdingsToCacheEntries,
   isEmptySync,
   mergeWatchesById,
-  pieceKeysFromEntries,
   sameSnapshot,
   sameWatchSpec,
   type SessionCacheEntry,
   toCacheEntry,
   toWireRemove,
   toWireUpsert,
+  trackedAndPieceKeysFromEntries,
   trackedIdsFromEntries,
   unionQuery,
 } from "./server-sync.ts";
@@ -1286,7 +1286,7 @@ export type DemandedInstanceRow = {
 
   /**
    * True when the document the session was sent for the row carries a
-   * piece's metadata (`pieceKeysFromEntries()`), so that a serving loop can
+   * piece's metadata (`trackedAndPieceKeysFromEntries()`), so that a serving loop can
    * start the piece it belongs to though no watch names it as a root: a
    * piece reached only through a data link (design §2.8 flag 4).
    */
@@ -10052,11 +10052,12 @@ export class Server {
     // wake the push loop, but they are not graph execution demand. Rebuild
     // the graph-only provenance from delivered entries plus traversal misses
     // before producing demand rows.
-    const graphEntries = session.views.length === 0
-      ? session.entities
-      : session.viewDemandEntities;
-    const graphTrackedIds = trackedIdsFromEntries(graphEntries.values());
-    const pieceKeys = pieceKeysFromEntries(graphEntries.values());
+    const { tracked: graphTrackedIds, pieces: pieceKeys } =
+      trackedAndPieceKeysFromEntries(
+        (session.views.length === 0
+          ? session.entities
+          : session.viewDemandEntities).values(),
+      );
     this.#addMissedToTrackedIds(
       graphTrackedIds,
       (session.views.length === 0 ? session.graphs : session.viewDemandGraphs)

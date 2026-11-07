@@ -146,25 +146,29 @@ export const trackedIdsFromEntries = (
 };
 
 /**
- * The instance keys of `entries` whose document carries a piece's metadata:
- * the pattern pointer of a piece's result, or the `result` link that the
- * documents of a piece's argument and internals carry to it. These are the
- * documents a structure load can start a piece from.
+ * The instance keys of `entries`, as {@link trackedIdsFromEntries} gives them,
+ * and among them the keys whose document carries a piece's metadata: the
+ * pattern pointer of a piece's result, or the `result` link that the documents
+ * of a piece's argument and internals carry to it. These are the documents a
+ * structure load can start a piece from.
  */
-export const pieceKeysFromEntries = (
+export const trackedAndPieceKeysFromEntries = (
   entries: Iterable<SessionCacheEntry>,
-): Set<string> => {
-  const keys = new Set<string>();
+): { tracked: Set<string>; pieces: Set<string> } => {
+  const tracked = new Set<string>();
+  const pieces = new Set<string>();
   for (const entry of entries) {
+    const key = toDirtyKey(entry.id, entry.scopeKey);
+    tracked.add(key);
     const doc = entry.doc;
     if (
       doc !== null && typeof doc === "object" &&
       ("patternIdentity" in doc || "result" in doc)
     ) {
-      keys.add(toDirtyKey(entry.id, entry.scopeKey));
+      pieces.add(key);
     }
   }
-  return keys;
+  return { tracked, pieces };
 };
 
 /**
