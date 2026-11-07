@@ -184,6 +184,80 @@ describe("Server", () => {
         expectKeptSharesCurrent();
       });
 
+      it("marks the rows whose documents carry a piece's metadata", async () => {
+        localSeq += 1;
+        await writer.transact({
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [
+            {
+              op: "set",
+              id: "of:piece",
+              value: {
+                value: { v: 1 },
+                patternIdentity: { identity: "a-pattern", symbol: "default" },
+              },
+            },
+            {
+              op: "set",
+              id: "of:piece-input",
+              value: { value: { v: 1 }, result: link("of:piece") },
+            },
+            {
+              op: "set",
+              id: "of:root",
+              value: {
+                value: {
+                  items: [
+                    link("of:leaf-a"),
+                    link("of:piece"),
+                    link("of:piece-input"),
+                  ],
+                },
+              },
+            },
+          ],
+        });
+        const watcher = await mount(alice);
+        await watcher.watchSet([follow("of:root")]);
+
+        const rows = shareOf(watcher).rows;
+        expect(rows.get("space\0of:piece")?.piece).toBe(true);
+        expect(rows.get("space\0of:piece-input")?.piece).toBe(true);
+        expect(rows.get("space\0of:leaf-a")?.piece).toBeUndefined();
+        expect(rows.get("space\0of:root")?.piece).toBeUndefined();
+        expectKeptSharesCurrent();
+      });
+
+      it("rebuilds a share when a push gives a held document a piece's metadata", async () => {
+        const watcher = await mount(alice);
+        const view = await watcher.watchSet([follow("of:root")]);
+        const before = shareOf(watcher);
+        expect(before.rows.get("space\0of:leaf-a")?.piece).toBeUndefined();
+
+        const updates = view.subscribe();
+        const pushed = updates.next();
+        localSeq += 1;
+        await writer.transact({
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: "of:leaf-a",
+            value: {
+              value: { v: 1 },
+              patternIdentity: { identity: "a-pattern", symbol: "default" },
+            },
+          }],
+        });
+        await pushed;
+
+        const after = shareOf(watcher);
+        expect(after).not.toBe(before);
+        expect(after.rows.get("space\0of:leaf-a")?.piece).toBe(true);
+        expectKeptSharesCurrent();
+      });
+
       it("rebuilds a share when its watches are replaced by fewer", async () => {
         const watcher = await mount(alice);
         await watcher.watchSet([follow("of:root")]);

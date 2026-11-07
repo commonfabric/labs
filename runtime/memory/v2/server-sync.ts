@@ -160,15 +160,19 @@ export const trackedAndPieceKeysFromEntries = (
   for (const entry of entries) {
     const key = toDirtyKey(entry.id, entry.scopeKey);
     tracked.add(key);
-    const doc = entry.doc;
-    if (
-      doc !== null && typeof doc === "object" &&
-      ("patternIdentity" in doc || "result" in doc)
-    ) {
-      pieces.add(key);
-    }
+    if (carriesPieceMeta(entry)) pieces.add(key);
   }
   return { tracked, pieces };
+};
+
+/**
+ * Whether `entry`'s document carries a piece's metadata, as
+ * {@link trackedAndPieceKeysFromEntries} decides it.
+ */
+export const carriesPieceMeta = (entry: SessionCacheEntry): boolean => {
+  const doc = entry.doc;
+  return doc !== null && typeof doc === "object" &&
+    ("patternIdentity" in doc || "result" in doc);
 };
 
 /**

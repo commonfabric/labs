@@ -201,6 +201,7 @@ import {
   buildDiffSync,
   buildFullSync,
   cacheKeyForEntity,
+  carriesPieceMeta,
   compareSyncAddress,
   graphWatchesByBranch,
   groupedQueries,
@@ -10075,14 +10076,15 @@ export class Server {
       } catch {
         return;
       }
-      rows.set(dirtyKey, {
+      const row: DemandedInstanceRow = {
         id: parsed.id,
         scope: parsed.scope,
         scopeKey: parsed.scopeKey,
         identity,
         root,
-        ...(pieceKeys.has(dirtyKey) ? { piece: true as const } : {}),
-      });
+      };
+      if (pieceKeys.has(dirtyKey)) row.piece = true;
+      rows.set(dirtyKey, row);
     };
     for (const dirtyKey of session.trackedIds) {
       if (graphTrackedIds.has(dirtyKey)) {
@@ -10803,10 +10805,18 @@ export class Server {
                     session.viewSupportGrown = false;
                   }
                   // A new delivered entity adds a key to the session's
-                  // demand; a changed snapshot of a held one does not.
+                  // demand, and a changed snapshot of a held one changes it
+                  // only when it gains or loses a piece's metadata, which
+                  // marks its row.
                   let enteredEntity = false;
                   for (const [key, entry] of updates) {
-                    if (!session.entities.has(key)) enteredEntity = true;
+                    const held = session.entities.get(key);
+                    if (
+                      held === undefined ||
+                      carriesPieceMeta(held) !== carriesPieceMeta(entry)
+                    ) {
+                      enteredEntity = true;
+                    }
                     session.entities.set(key, entry);
                   }
                   for (const key of removed.keys()) {
