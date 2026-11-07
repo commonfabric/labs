@@ -2066,13 +2066,22 @@ const liveDirect = (
 ): ChatIndexEntry | undefined =>
   known !== undefined && spaceDeleted(known.room) !== true ? known : undefined;
 
-/** Orders index entries newest first. */
-const newestFirst = (a: ChatIndexEntry, b: ChatIndexEntry): number =>
-  nsecOf(b.since) < nsecOf(a.since)
-    ? -1
-    : nsecOf(b.since) > nsecOf(a.since)
-    ? 1
-    : 0;
+/**
+ * `entries`, newest first. The handler clock counts whole seconds, so two rooms
+ * created in one second share a `since`, and between them the one later in
+ * `entries` comes first. That is the one recorded more recently: the manager
+ * appends a membership when it records one, and moves it to the end when a
+ * forget or a rejoin records it again. Rooms only the catalog finds follow the
+ * memberships, in the catalog's order, so the order is total.
+ */
+const newestFirst = <T extends ChatIndexEntry>(entries: readonly T[]): T[] =>
+  entries.map((entry, index) => ({ entry, index })).sort((a, b) =>
+    nsecOf(b.entry.since) < nsecOf(a.entry.since)
+      ? -1
+      : nsecOf(b.entry.since) > nsecOf(a.entry.since)
+      ? 1
+      : b.index - a.index
+  ).map(({ entry }) => entry);
 
 /**
  * The rooms the catalog's saved `entries` led to, each once it resolves and
@@ -2241,14 +2250,16 @@ export const FabriChatManagerCore = pattern<
           !memberships.some((known) => equals(known.room, entry.room))
         ),
       ].filter((entry) => !roomDeleted(catalogEntries, entry.room));
-      return listed.filter((entry, index) =>
-        listed.findIndex((known) => equals(known.room, entry.room)) === index
-      ).map((entry) => {
-        if (entry.kind !== "direct") return entry;
-        const { counterpart: _stale, ...rest } = entry;
-        const counterpart = counterpartOf(stored, entry.room, self);
-        return counterpart === undefined ? rest : { ...rest, counterpart };
-      }).sort(newestFirst);
+      return newestFirst(
+        listed.filter((entry, index) =>
+          listed.findIndex((known) => equals(known.room, entry.room)) === index
+        ).map((entry) => {
+          if (entry.kind !== "direct") return entry;
+          const { counterpart: _stale, ...rest } = entry;
+          const counterpart = counterpartOf(stored, entry.room, self);
+          return counterpart === undefined ? rest : { ...rest, counterpart };
+        }),
+      );
     });
     // The rooms `rooms` leaves out because their space is deleted, newest
     // first, among those this user holds a membership for, saved or archived.
@@ -2269,14 +2280,16 @@ export const FabriChatManagerCore = pattern<
         (entry.state === "saved" || entry.state === "archived") &&
         roomDeleted(catalogEntries, entry.room)
       );
-      return gone.filter((entry, index) =>
-        gone.findIndex((known) => equals(known.room, entry.room)) === index
-      ).map((entry) => {
-        if (entry.kind !== "direct") return entry;
-        const counterpart = entry.counterpart ??
-          counterpartOf(stored, entry.room, self);
-        return counterpart === undefined ? entry : { ...entry, counterpart };
-      }).sort(newestFirst);
+      return newestFirst(
+        gone.filter((entry, index) =>
+          gone.findIndex((known) => equals(known.room, entry.room)) === index
+        ).map((entry) => {
+          if (entry.kind !== "direct") return entry;
+          const counterpart = entry.counterpart ??
+            counterpartOf(stored, entry.room, self);
+          return counterpart === undefined ? entry : { ...entry, counterpart };
+        }),
+      );
     });
     // The people the listed rooms' rosters hold, by the principal each
     // profile's own label attests, read beside the rooms that list them, and
