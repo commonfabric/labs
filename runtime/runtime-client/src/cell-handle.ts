@@ -428,6 +428,37 @@ export class CellHandle<T = unknown> {
   }
 
   /**
+   * Writes `value` as a control's edit: shows it at once and sends it in its
+   * turn, as {@link set} does, and settles once the runtime has committed it,
+   * rejecting when the runtime refuses it or this handle's read is refused
+   * ({@link refusal}). Its turn ends as the write is sent, so input asked for
+   * after it reaches the runtime without waiting on the commit. A delivery
+   * equal to `value` before the commit may be the write's echo or an older
+   * value that matches it, so a control keeps its own display of the edit
+   * until the commit, and reads the cell then.
+   */
+  async setForUI(value: T): Promise<void> {
+    this.#requireSchema("setForUI");
+    const refused = this.#writeRefusal();
+    if (refused !== undefined) throw refused;
+    const serialized = this.#serializeWrite(value);
+    const snapshot = applyValue(
+      CellHandle.#serialize(value as ClientCellValue, "sigil"),
+      value,
+      this,
+    ) as T;
+    this.#writeGeneration = ++writeClock;
+    this.#publishWrite(snapshot);
+    const { committed } = await this.#enqueueOperation((queue) => {
+      // A refusal that arrived while the write waited its turn stands.
+      const refusedSince = this.#writeRefusal();
+      if (refusedSince !== undefined) return Promise.reject(refusedSince);
+      return this.#sendCommittedWrite(queue, serialized, snapshot);
+    });
+    await committed;
+  }
+
+  /**
    * Writes the value `updater` makes of the cell's current one, in the order
    * of the cell's operations through this runtime client: `updater` runs
    * once the reads and writes asked for before this call, through any handle
@@ -454,11 +485,16 @@ export class CellHandle<T = unknown> {
    * Not the pattern API's `Cell.update()`, which merges a partial value.
    *
    * Settles once the worker has taken the write, or once `updater` writes
-   * nothing. Rejects, writing nothing, while this handle's read is refused
-   * ({@link refusal}), when the read it makes is refused, and when `updater`
-   * throws.
+   * nothing. With `awaitCommit`, it settles once the runtime has committed
+   * the write instead, rejecting when the runtime refuses it, and its turn
+   * ends as the write is sent, as {@link setForUI}'s does. Rejects, writing
+   * nothing, while this handle's read is refused ({@link refusal}), when the
+   * read it makes is refused, and when `updater` throws.
    */
-  update(updater: (current: Readonly<T> | undefined) => T): Promise<void> {
+  update(
+    updater: (current: Readonly<T> | undefined) => T,
+    options: { awaitCommit?: boolean } = {},
+  ): Promise<void> {
     this.#requireSchema("update");
     const refused = this.#writeRefusal();
     if (refused !== undefined) return Promise.reject(refused);
@@ -466,57 +502,63 @@ export class CellHandle<T = unknown> {
     // update's own shows over a write asked for after this call.
     const writeGeneration = this.#writeGeneration = ++writeClock;
     const startedAt = writeClock;
-    return this.#enqueueOperation(async (queue) => {
-      let current = this.#base(queue, writeGeneration);
-      if (current === undefined) {
-        const request: CellPullRequest = {
-          type: RequestType.CellPull,
-          cell: this.ref(),
-          awaitDurability: false,
-        };
+    return this.#enqueueOperation(
+      async (queue): Promise<{ committed?: Promise<void> }> => {
+        let current = this.#base(queue, writeGeneration);
+        if (current === undefined) {
+          const request: CellPullRequest = {
+            type: RequestType.CellPull,
+            cell: this.ref(),
+            awaitDurability: false,
+          };
+          const updateGeneration = this.#updateGeneration;
+          const answer = await this.#ask(queue, request, updateGeneration);
+          const found = this.#takeAnswer(
+            request,
+            answer,
+            writeGeneration,
+            updateGeneration,
+            startedAt,
+          );
+          // A refusal or an update that reached the cell while the read was
+          // on its way is newer than what the read found.
+          current = this.#base(queue, writeGeneration) ?? { value: found };
+        }
+        let next: T;
+        try {
+          next = updater(current.value as Readonly<T> | undefined);
+        } catch (error) {
+          this.#showPassedOver(current.value, writeGeneration);
+          throw error;
+        }
+        if (valuesOrCellsEqual(next, current.value)) {
+          this.#showPassedOver(current.value, writeGeneration);
+          return {};
+        }
+        const serialized = this.#serializeWrite(next);
+        const snapshot = applyValue(
+          CellHandle.#serialize(next as ClientCellValue, "sigil"),
+          next,
+          this,
+        ) as T;
+        if (writeGeneration === this.#writeGeneration) {
+          this.#publishWrite(snapshot);
+        }
+        if (options.awaitCommit) {
+          return this.#sendCommittedWrite(queue, serialized, snapshot);
+        }
         const updateGeneration = this.#updateGeneration;
-        const answer = await this.#ask(queue, request, updateGeneration);
-        const found = this.#takeAnswer(
-          request,
-          answer,
-          writeGeneration,
-          updateGeneration,
-          startedAt,
-        );
-        // A refusal or an update that reached the cell while the read was
-        // on its way is newer than what the read found.
-        current = this.#base(queue, writeGeneration) ?? { value: found };
-      }
-      let next: T;
-      try {
-        next = updater(current.value as Readonly<T> | undefined);
-      } catch (error) {
-        this.#showPassedOver(current.value, writeGeneration);
-        throw error;
-      }
-      if (valuesOrCellsEqual(next, current.value)) {
-        this.#showPassedOver(current.value, writeGeneration);
-        return;
-      }
-      const serialized = this.#serializeWrite(next);
-      const snapshot = applyValue(
-        CellHandle.#serialize(next as ClientCellValue, "sigil"),
-        next,
-        this,
-      ) as T;
-      if (writeGeneration === this.#writeGeneration) {
-        this.#publishWrite(snapshot);
-      }
-      const updateGeneration = this.#updateGeneration;
-      const authoritativeGeneration = queue.authoritativeGeneration;
-      await this.#sendWrite(serialized);
-      if (
-        updateGeneration === this.#updateGeneration &&
-        authoritativeGeneration === queue.authoritativeGeneration
-      ) {
-        this.#holdInQueue(queue, snapshot);
-      }
-    });
+        const authoritativeGeneration = queue.authoritativeGeneration;
+        await this.#sendWrite(serialized);
+        if (
+          updateGeneration === this.#updateGeneration &&
+          authoritativeGeneration === queue.authoritativeGeneration
+        ) {
+          this.#holdInQueue(queue, snapshot);
+        }
+        return {};
+      },
+    ).then((sent) => sent.committed);
   }
 
   /**
@@ -772,6 +814,31 @@ export class CellHandle<T = unknown> {
       if (publish) this.#publishWrite(value);
       return publish;
     });
+  }
+
+  /**
+   * Helper for {@link setForUI} and {@link update}, which sends `serialized`,
+   * a write in `queue`'s turn, asking the worker to answer once the runtime
+   * commits it. The turn ends as the write is sent: the operations behind it
+   * compute from `snapshot`, the value it wrote, rather than wait on the
+   * commit. The commit it returns rejects when the runtime refuses the write.
+   */
+  #sendCommittedWrite(
+    queue: CellOperationQueue,
+    serialized: FabricValue,
+    snapshot: T,
+  ): Promise<{ committed: Promise<void> }> {
+    const committed = this.#conn.request<RequestType.CellSet>({
+      type: RequestType.CellSet,
+      cell: this.ref(),
+      value: serialized,
+      awaitCommit: true,
+    });
+    this.#holdInQueue(queue, snapshot);
+    // The caller awaits the commit once its turn has ended; a refusal that
+    // arrives first is not an unhandled rejection.
+    void committed.catch(() => {});
+    return Promise.resolve({ committed });
   }
 
   /**
