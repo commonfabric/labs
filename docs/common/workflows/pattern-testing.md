@@ -159,9 +159,12 @@ return {
 };
 ```
 
-Each step is either `{ action: Stream<void> }` or `{ assertion }`, where the
+Each step is most often `{ action: Stream<void> }` or `{ assertion }`, where the
 assertion is the record `assert()` produces — see
-[Write assertions with `assert()`](#write-assertions-with-assert) below.
+[Write assertions with `assert()`](#write-assertions-with-assert) below. A
+`{ press, control, within? }` step clicks a control the view renders, as
+[Firing a handler the pattern does not export](#firing-a-handler-the-pattern-does-not-export)
+describes, and `docs/specs/PATTERN_TESTING_SPEC.md` lists every kind of step.
 
 ## Walking the Rendered Tree
 

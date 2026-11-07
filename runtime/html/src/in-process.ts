@@ -10,6 +10,7 @@
  */
 
 import type { Cancel, Cell } from "@commonfabric/runner";
+import { stripSigilCfcLabelViews } from "@commonfabric/runner/cfc";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { DomApplicator } from "./main/applicator.ts";
 import type { SetPropHandler } from "./render-utils.ts";
@@ -75,7 +76,12 @@ export function renderInProcess(
     onError: options.onError,
     onEvent: options.dispatchEvents === true
       ? (message) => {
-        reconciler.dispatchEvent(message.handlerId, message.event);
+        // As a browser's worker does, the event's links lose their label
+        // views before a handler can write one.
+        reconciler.dispatchEvent(
+          message.handlerId,
+          stripSigilCfcLabelViews(message.event) as typeof message.event,
+        );
       }
       : () => {},
   });

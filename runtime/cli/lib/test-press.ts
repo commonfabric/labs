@@ -172,6 +172,12 @@ export async function pressRenderedControl(
       composedPath: () => path,
     };
     for (const node of path) node.dispatchEvent?.(click);
+    // A handler that throws on the click is reported here, as a render error.
+    if (errors.length > 0) {
+      throw new Error(`A press step's click failed: ${errors[0].message}`, {
+        cause: errors[0],
+      });
+    }
   } finally {
     render.cancel();
   }
