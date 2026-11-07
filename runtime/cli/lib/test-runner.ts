@@ -132,6 +132,7 @@ import {
   settleServed,
 } from "./served-settle.ts";
 import { pullActionEvent } from "./test-action-event.ts";
+import { pressRenderedControl, pressTargetOf } from "./test-press.ts";
 
 /**
  * How many idle-then-sync rounds a step's settle performs before it gives up
@@ -237,6 +238,11 @@ type HarnessTestStepMeta = {
   assertion?: unknown;
   trustedUi?: unknown;
   render?: unknown;
+  // `{ press, control, within? }` clicks a rendered control: `press` is the
+  // view, the other two name the control in it (`test-press.ts`).
+  press?: unknown;
+  control?: string;
+  within?: string;
   skip?: boolean;
   // `{ settle: true }` step: wait for full settlement (scheduler + storage +
   // in-flight async builtin I/O) via `runtime.settled()` before the next step.
@@ -265,6 +271,9 @@ const testStepPeekSchema = internSchema(
         },
       },
       render: { type: "unknown" },
+      press: { type: "unknown" },
+      control: { type: "string" },
+      within: { type: "string" },
       skip: { type: "boolean" },
       readBudget: true,
       settle: { type: "boolean" },
@@ -1852,8 +1861,10 @@ export async function runTestPattern(
       const stepValue = stepCell.asSchema(testStepPeekSchema)
         .get() as HarnessTestStepMeta;
 
-      // Check which discriminant this step carries.
-      const isAction = Object.hasOwn(stepValue, "action");
+      // Check which discriminant this step carries. A press is an action
+      // whose event a rendered control sends.
+      const isPress = Object.hasOwn(stepValue, "press");
+      const isAction = Object.hasOwn(stepValue, "action") || isPress;
       const isAssertion = Object.hasOwn(stepValue, "assertion");
       const isRender = Object.hasOwn(stepValue, "render");
       const isSettle = Object.hasOwn(stepValue, "settle");
@@ -1917,8 +1928,8 @@ export async function runTestPattern(
 
         if (!isAction && !isAssertion) {
           throw new Error(
-            `Test step at index ${i} must have an 'action', 'assertion', ` +
-              debugStr`'render', 'settle', 'label', or 'await' key. Got: $quote,long${
+            `Test step at index ${i} must have an 'action', 'press', ` +
+              debugStr`'assertion', 'render', 'settle', 'label', or 'await' key. Got: $quote,long${
                 Object.keys(stepCell.get() as object)
               }`,
           );
@@ -1977,24 +1988,38 @@ export async function runTestPattern(
             }
           }
 
-          // Get the action stream via .key()
-          const actionStream = await withPhase(
-            ["runTestPattern", "step", actionName, "stream"],
-            () => actionStreamForStep(stepCell),
-          );
+          if (isPress) {
+            // Click the rendered control, which sends its own event.
+            await withPhase(
+              ["runTestPattern", "step", actionName, "press"],
+              () =>
+                pressRenderedControl(
+                  stepCell.key("press") as Cell<unknown>,
+                  pressTargetOf(stepValue, i),
+                  () => settleRuntime(actionName),
+                ),
+            );
+          } else {
+            // Get the action stream via .key()
+            const actionStream = await withPhase(
+              ["runTestPattern", "step", actionName, "stream"],
+              () => actionStreamForStep(stepCell),
+            );
 
-          // Send the step's event (undefined for plain void actions), wrapped
-          // with renderer-trusted provenance when the step declares `trustedUi`.
-          await withPhase(
-            ["runTestPattern", "step", actionName, "send"],
-            async () => {
-              const event = await pullActionEvent(
-                stepCell.key("event"),
-                stepValue.trustedUi,
-              );
-              actionStream.send(event);
-            },
-          );
+            // Send the step's event (undefined for plain void actions),
+            // wrapped with renderer-trusted provenance when the step declares
+            // `trustedUi`.
+            await withPhase(
+              ["runTestPattern", "step", actionName, "send"],
+              async () => {
+                const event = await pullActionEvent(
+                  stepCell.key("event"),
+                  stepValue.trustedUi,
+                );
+                actionStream.send(event);
+              },
+            );
+          }
 
           // Wait for idle, then settle commits and re-idle.
           // Optimistic commits can fail (CAS conflicts), causing rollbacks

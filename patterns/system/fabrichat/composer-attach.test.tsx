@@ -39,9 +39,7 @@ import {
   childNodes,
   findElement,
   findNode,
-  hasText,
   isButton,
-  propsOf,
   propValue,
   readValue,
   textContent,
@@ -242,16 +240,7 @@ export default pattern(() => {
         trustedUi: sendGesture,
       },
       { assertion: assert(() => all(messages).length === 0) },
-      {
-        action: action(() => {
-          const row = collect(alice[UI], isListedRow).find((node) =>
-            hasText(node, "slow.txt")
-          );
-          const button = findNode(row, isButton("Remove"));
-          (propsOf(button)?.onClick as { send: (event: unknown) => void })
-            .send({});
-        }),
-      },
+      { press: alice[UI], control: "Remove", within: "slow.txt" },
       {
         action: alice.composerSend,
         event: typed("Here"),
