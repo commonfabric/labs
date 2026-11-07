@@ -5769,14 +5769,16 @@ export class SpaceServer implements TransactionSealDestination {
       const warm = this.#warmDemandKeys.get(key);
       if (rows === undefined && warm === undefined) continue;
       // The first row is the structure address, and the key is a ROOT (the
-      // structure load's input) when any session's row says so or it is
-      // warm.
+      // structure load's input) when any session's row says so, or it is
+      // warm, or a session's row was sent a piece's metadata: a piece reached
+      // only through a data link starts for the session that demands its
+      // values, as one it watches does (design §2.8 flag 4).
       let first: { id: string; scope: CellScope } | undefined;
       let root = warm !== undefined;
       const pairs = new Map<string, ScopeKeyIdentity>();
       for (const row of rows?.values() ?? []) {
         first ??= row;
-        if (row.root) root = true;
+        if (row.root || row.piece === true) root = true;
         // Anonymous sessions (no principal) contribute the key but own no
         // instance — not a demander (`fanOutInstances` drops principal-less
         // pairs; parity with `watchedRootsForSpace`'s identity-less rows).

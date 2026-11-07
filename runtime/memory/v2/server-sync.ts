@@ -146,6 +146,28 @@ export const trackedIdsFromEntries = (
 };
 
 /**
+ * The instance keys of `entries` whose document carries a piece's metadata:
+ * the pattern pointer of a piece's result, or the `result` link that the
+ * documents of a piece's argument and internals carry to it. These are the
+ * documents a structure load can start a piece from.
+ */
+export const pieceKeysFromEntries = (
+  entries: Iterable<SessionCacheEntry>,
+): Set<string> => {
+  const keys = new Set<string>();
+  for (const entry of entries) {
+    const doc = entry.doc;
+    if (
+      doc !== null && typeof doc === "object" &&
+      ("patternIdentity" in doc || "result" in doc)
+    ) {
+      keys.add(toDirtyKey(entry.id, entry.scopeKey));
+    }
+  }
+  return keys;
+};
+
+/**
  * The wire form of a cache entry: the server-internal `scopeKey` is
  * STRIPPED — the wire carries scope NAMES, and a client's instances
  * resolve from its authenticated session (protocol.md §1; clients never

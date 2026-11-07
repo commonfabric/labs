@@ -207,6 +207,7 @@ import {
   holdingsToCacheEntries,
   isEmptySync,
   mergeWatchesById,
+  pieceKeysFromEntries,
   sameSnapshot,
   sameWatchSpec,
   type SessionCacheEntry,
@@ -1280,8 +1281,16 @@ export type DemandedInstanceRow = {
   identity?: { readonly principal?: string; readonly sessionId?: string };
 
   /** True when the row is a watch ROOT of its session (the structure
-   * load's input, unchanged in scope — design §2.8 flag 4). */
+   * load's input). */
   root: boolean;
+
+  /**
+   * True when the document the session was sent for the row carries a
+   * piece's metadata (`pieceKeysFromEntries()`), so that a serving loop can
+   * start the piece it belongs to though no watch names it as a root: a
+   * piece reached only through a data link (design §2.8 flag 4).
+   */
+  piece?: true;
 };
 
 /**
@@ -10043,11 +10052,11 @@ export class Server {
     // wake the push loop, but they are not graph execution demand. Rebuild
     // the graph-only provenance from delivered entries plus traversal misses
     // before producing demand rows.
-    const graphTrackedIds = trackedIdsFromEntries(
-      (session.views.length === 0
-        ? session.entities
-        : session.viewDemandEntities).values(),
-    );
+    const graphEntries = session.views.length === 0
+      ? session.entities
+      : session.viewDemandEntities;
+    const graphTrackedIds = trackedIdsFromEntries(graphEntries.values());
+    const pieceKeys = pieceKeysFromEntries(graphEntries.values());
     this.#addMissedToTrackedIds(
       graphTrackedIds,
       (session.views.length === 0 ? session.graphs : session.viewDemandGraphs)
@@ -10071,6 +10080,7 @@ export class Server {
         scopeKey: parsed.scopeKey,
         identity,
         root,
+        ...(pieceKeys.has(dirtyKey) ? { piece: true as const } : {}),
       });
     };
     for (const dirtyKey of session.trackedIds) {
