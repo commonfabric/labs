@@ -3290,8 +3290,8 @@ Special path:
   argument nodes are unavailable. Mapped views such as
   `Readonly<Input<number>>` retain the input declaration's member bindings;
   synthetic generic references resolve and bind their declarations from module
-  scope. Optional declared members stay outside `required` and retain the
-  checker's `undefined` alternative beside the bound value; explicitly written
+  scope. Optional declared members stay outside `required` and read as the
+  bound value without the `undefined` their `?` adds; explicitly written
   `undefined` remains. Pinned by
   `test/generic-pattern-input.test.ts`, `test/aliased-binding-declared-type.test.ts`
   and schema-generator `test/typescript/type-arguments.test.ts`; binding terms

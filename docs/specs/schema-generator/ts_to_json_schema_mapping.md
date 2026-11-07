@@ -499,19 +499,18 @@ whole interface, including a default referring to a preceding parameter.
 A bound parameter reads as its argument. Structural member syntax retains those
 bindings through object properties, literal index signatures, arrays, tuples,
 unions and intersections, and through alias bodies such as `Array<T>`,
-`ReadonlyArray<T>`, `Record<string, T>`, `[T]` and `T | null`. Optional properties
-remain outside `required`. When the checker adds `undefined` for an optional
-property, the declared bound value retains that alternative, including an
-optional cell reference. A synthetic reference with no checker instantiation
-reads that alternative from the member's optional flag. A bound value whose
+`ReadonlyArray<T>`, `Record<string, T>`, `[T]` and `T | null`. An optional
+property stays outside `required`, and its schema is the bound value's, as a
+property declared with no parameters reads: the `?` adds no `undefined`
+alternative, whether the member is read with a checker instantiation or from
+a synthetic reference with none (`docs/specs/json_schema.md`, "Handling of
+`undefined`"). That holds for an optional cell reference, for a value whose
 schema carries CFC labels at its root, such as an optional
-`Confidential<Node<T>, …>` member, takes no `undefined` alternative: its labels
-stay on the property, because the runtime's policy merge refuses labels on one
-`anyOf` branch whose siblings it cannot prove type-disjoint, and a labeled
-`$ref` cannot be (`assertNoDivergentIfcBranches`,
-`runtime/runner/src/cfc/schema-merge.ts`). The property remains outside
-`required`. Explicit `T | undefined` and optional tuple elements also retain
-`undefined`.
+`Confidential<Node<T>, …>` member, whose labels stay on the property, and for
+a member a mapped type such as `Pick`, `Omit` or `Partial` makes from a bound
+declaration. An `undefined` the author writes, in the declaration or in the
+argument (`value?: T | undefined`, `Box<string | undefined>`), is a value the
+property admits and stays, as does an optional tuple element's.
 
 Library key arguments are read as the checker reads them, bindings included:
 `Pick<T, K>` and `Omit<T, K>` accept a `K` that is a literal key union, named

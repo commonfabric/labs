@@ -841,10 +841,7 @@ export default pattern<{ ref: Ref }>(({ ref }) => ({ ${before}ref, refs: [ref] }
     /** `level` and each `Nest` level read inside it, outermost first. */
     function levelsOf(level: Schema): Schema[] {
       const inner = (level.properties as Record<string, Schema>).inner!;
-      const next = (inner.anyOf as Schema[] | undefined)?.find((member) =>
-        member.type === "object"
-      );
-      return next ? [level, ...levelsOf(next)] : [level];
+      return inner.type === "object" ? [level, ...levelsOf(inner)] : [level];
     }
 
     /**
@@ -866,7 +863,7 @@ export default pattern<{ ref: Ref }>(({ ref }) => ({ ${before}ref, refs: [ref] }
       expect(levels.length).toBeGreaterThan(1);
       expect(values).toEqual(expectedValues);
       expect((levels.at(-1)!.properties as Record<string, Schema>).inner)
-        .toEqual({ anyOf: [{}, { type: "undefined" }] });
+        .toEqual({});
     }
 
     /** Expects `diagnostics` to report the unread remainder as a warning. */
@@ -1323,14 +1320,10 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               const link =
                 (schema.properties as Record<string, Schema>)[field]!;
               const properties = link.properties as Record<string, Schema>;
-              const next = (properties.next!.anyOf as Schema[]).find((arm) =>
-                arm.$ref
-              )!;
+              const next = properties.next!;
               const def = defs[(next.$ref as string).split("/").pop()!]!;
               const defProperties = def.properties as Record<string, Schema>;
-              const defNext = (defProperties.next!.anyOf as Schema[]).find((
-                arm,
-              ) => arm.$ref)!;
+              const defNext = defProperties.next!;
               return {
                 value: properties.value,
                 recursive: defProperties.value,
@@ -3413,9 +3406,7 @@ export default pattern<{ items: Item[] }>(({ items }) => {
             type: "object",
             properties: {
               pending: { type: "boolean" },
-              result: {
-                anyOf: [{ $ref: "#/$defs/Sentiment" }, { type: "undefined" }],
-              },
+              result: { $ref: "#/$defs/Sentiment" },
             },
           },
         },
