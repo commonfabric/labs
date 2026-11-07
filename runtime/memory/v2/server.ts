@@ -1117,8 +1117,9 @@ type SessionHandle = {
 /** Kind of the LAST operation an origin commit applied to a doc — decides the
  * own-write echo shape at flush (CT-1965): `set`/`delete` heads are elided
  * (the writer provably holds their outcome), `patch` heads ride the frame as
- * full post-apply documents. */
-type DirtyOp = "set" | "patch" | "delete";
+ * full post-apply documents, and `derived` heads, which the engine wrote from
+ * the commit rather than the writer supplying them, always ride it. */
+type DirtyOp = "set" | "patch" | "delete" | "derived";
 
 type DirtyOrigin = {
   sessionId: string;
@@ -7877,9 +7878,15 @@ export class Server {
           for (const revision of commit.revisions) {
             const scopeKey = revision.scopeKey as ScopeKey;
             committedWrites.push({ id: revision.id, scopeKey });
+            // A revision the engine derived, a field's anchors document
+            // rewritten for an edit, is no write of the committing session's,
+            // which holds nothing of it to promote. With own-write echo on, a
+            // `patch` head reaches its writer anyway; with it off, a `patch`
+            // head is withheld from its writer, so only the `derived` kind
+            // gets the rewrite to the session whose edit moved the anchors.
             dirtyOps.set(
               toDirtyKey(revision.id, scopeKey),
-              revision.op,
+              revision.derived === true ? "derived" : revision.op,
             );
           }
           if (dirtyOps.size > 0) {
@@ -10749,6 +10756,7 @@ export class Server {
                     const held = origin !== undefined &&
                       origin.sessionId === sessionId &&
                       origin.seq === entry.seq &&
+                      origin.op !== "derived" &&
                       (origin.op !== "patch" || !getOwnWriteEchoConfig());
                     if (!held) {
                       upserts.push(entry);

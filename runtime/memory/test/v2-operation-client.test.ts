@@ -457,7 +457,7 @@ describe("v2-operation-client", () => {
           cursor: { epoch: 1, version: 3 },
           baselineHash: "baseline",
           materialized: "abc",
-          anchors: [],
+          anchors: {},
           operations: [],
         },
       }],
@@ -1041,7 +1041,7 @@ describe("v2-operation-client", () => {
   it("negotiates and executes a configured non-text codec", async () => {
     const operationCodecs = new OperationCodecRegistry([{
       id: "test-counter@1",
-      mapAnchors: ({ anchors }) => [...anchors],
+      mapAnchors: ({ anchors }) => anchors,
       integrate({ materialized, submitted }) {
         const by = isObjectNotArray(submitted)
           ? (submitted as { by?: unknown }).by
@@ -1502,16 +1502,21 @@ describe("v2-operation-client", () => {
           roots: [{ id: anchorsDocId, selector: { path: [], schema: false } }],
         },
       }]);
-      expect(watched.sync.operationFields?.[0].field).toMatchObject({
-        active: false,
-        anchors: [],
-      });
+      const initial = watched.sync.operationFields?.[0].field;
+      expect(initial?.active).toBe(false);
+      expect(initial?.anchors).toEqual({});
       const syncs = watched.view.subscribeSync();
 
+      // The anchors bound `world`, and the edit in the same commit moves
+      // both.
       const applied = await writer.transact({
         localSeq: 2,
         reads: { confirmed: [], pending: [] },
         operations: [{
+          op: "set",
+          id: anchorsDocId,
+          value: { value: { from: 6, to: 11 } },
+        }, {
           op: "apply-op",
           id: "of:anchored",
           path: toValuePath(["body"]),
@@ -1525,34 +1530,26 @@ describe("v2-operation-client", () => {
               changes: ChangeSet.of({ from: 0, insert: ">> " }, 11).toJSON(),
             }],
           },
-          // Stated against the writer's document, ">> hello world".
-          anchors: { add: [{ id: "w", from: 9, to: 14 }] },
         }],
       });
       expect(applied.operationResolutions).toMatchObject([{
-        operationIndex: 0,
+        operationIndex: 1,
         to: { epoch: 1, version: 1 },
-        anchors: { added: [{ id: "w", from: 9, to: 14 }], removed: [] },
       }]);
       await server.flushSessions();
       const delivered = await syncs.next();
       expect(delivered.done).toBe(false);
-      expect(delivered.value.operationFields?.[0].field).toMatchObject({
+      const field = delivered.value.operationFields?.[0].field;
+      expect(field).toMatchObject({
         active: true,
         materialized: ">> hello world",
         cursor: { epoch: 1, version: 1 },
-        anchors: [{ id: "w", from: 9, to: 14 }],
       });
+      expect(field?.anchors).toEqual({ from: 9, to: 14 });
       expect(delivered.value.upserts).toEqual([
         expect.objectContaining({
           id: anchorsDocId,
-          doc: {
-            value: {
-              epoch: 1,
-              version: 1,
-              anchors: [{ id: "w", from: 9, to: 14 }],
-            },
-          },
+          doc: { value: { from: 9, to: 14 } },
         }),
       ]);
     } finally {
@@ -1611,34 +1608,29 @@ describe("v2-operation-client", () => {
         kind: "operation",
         query: { id: "of:anchored", path: toValuePath(["body"]) },
       }]);
-      expect(watched.sync.operationFields?.[0].field).toMatchObject({
-        cursor: { epoch: 1, version: 1 },
-        anchors: [],
-      });
+      const initial = watched.sync.operationFields?.[0].field;
+      expect(initial?.cursor).toEqual({ epoch: 1, version: 1 });
+      expect(initial?.anchors).toEqual({});
       const syncs = watched.view.subscribeSync();
 
       await writer.transact({
         localSeq: 2,
         reads: { confirmed: [], pending: [] },
         operations: [{
-          op: "apply-op",
-          id: "of:anchored",
-          path: toValuePath(["body"]),
-          codec: CODEMIRROR_CHANGESET_CODEC,
-          submissionId: "writer:2",
-          base: { epoch: 1, version: 1 },
-          payload: { updates: [] },
-          anchors: { add: [{ id: "w", from: 6, to: 11 }] },
+          op: "set",
+          id: operationAnchorsDocId({ id: "of:anchored", path: ["body"] }),
+          value: { value: { from: 6, to: 11 } },
         }],
       });
       await server.flushSessions();
       const delivered = await syncs.next();
       expect(delivered.done).toBe(false);
-      expect(delivered.value.operationFields?.[0].field).toMatchObject({
+      const field = delivered.value.operationFields?.[0].field;
+      expect(field).toMatchObject({
         cursor: { epoch: 1, version: 1 },
-        anchors: [{ id: "w", from: 6, to: 11 }],
         operations: [],
       });
+      expect(field?.anchors).toEqual({ from: 6, to: 11 });
     } finally {
       await writerClient.close();
       await watcherClient.close();

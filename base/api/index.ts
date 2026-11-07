@@ -335,6 +335,23 @@ export interface TextChange {
   readonly insert?: string;
 }
 
+/**
+ * The anchors of a collaborative field: the value of its anchors document,
+ * which `anchorsOf()` names. Each anchor is a point in the field's text,
+ * held as its offset under an id its writer chooses. An offset counts UTF-16
+ * code units, as a string index does, from 0 to the text's length.
+ *
+ * Memory carries every anchor through every collaborative edit of the field
+ * as it would a cursor: text inserted at an anchor lands after it, and an anchor inside
+ * deleted text lands where the deletion began. So a highlight from one anchor
+ * to another takes in text inserted at its start and leaves out text inserted
+ * at its end, and a highlight whose text is deleted is empty.
+ *
+ * A type alias, not an interface, because Memory stores and sends the map as
+ * a fabric value, and only an alias of an object type is assignable to one.
+ */
+export type FieldAnchors = { readonly [id: string]: number };
+
 /*
  * IAnyCell is an interface that is used by all calls and to which the runner
  * attaches the internal methods..
@@ -3772,6 +3789,28 @@ export type WishState<T> = {
 };
 
 export type NavigateToFunction = (cell: Reactive<any>) => Reactive<boolean>;
+
+/**
+ * `anchorsOf(field)` — the anchors document of a string field, as a cell: a
+ * read returns the field's anchors, or `undefined` until something writes
+ * them, and a write replaces them. Memory moves every anchor through every
+ * collaborative edit of the field. A `set()` of the field moves none, so a
+ * handler that replaces the text that way writes the anchors too. `field` is
+ * a field stored in a document; a constant, which has no edits, is refused.
+ *
+ * A handler that changes the anchors reads the field and the anchors, then
+ * writes the anchors it wants the field to hold. Its commit lands only while
+ * the field and the anchors are still what it read; where either moved, the
+ * handler runs again against what they hold now. A handler that also edits
+ * the field with `.applyChanges()` writes the anchors before the edit,
+ * against the text it read, and Memory moves them through the edit; a commit
+ * that writes them after the edit is refused. Give a handler the result as a
+ * `Writable<FieldAnchors | undefined>`.
+ */
+export type AnchorsOfFunction = (
+  field: FactoryInput<string>,
+) => Reactive<FieldAnchors | undefined>;
+
 export interface WishFunction {
   <T = unknown>(
     target: FactoryInput<WishParams>,
@@ -4195,6 +4234,7 @@ export declare const table: SqliteTableFunction;
 export declare const cfLink: SqliteCfLinkFunction;
 export declare const cfSqlite: CfSqliteHelpers;
 export declare const navigateTo: NavigateToFunction;
+export declare const anchorsOf: AnchorsOfFunction;
 export declare const inspectConfLabel: InspectConfLabelFunction;
 export declare const wish: WishFunction;
 

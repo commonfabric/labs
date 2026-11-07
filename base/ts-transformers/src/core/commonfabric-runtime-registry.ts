@@ -309,6 +309,15 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     callKind: "runtime-call",
     reactiveOrigin: true,
   },
+  // anchorsOf(field) returns a link to the field's anchors document, a
+  // Reactive result like navigateTo's: no dedicated CallKind, no schema
+  // injection.
+  {
+    exportName: "anchorsOf",
+    category: "call",
+    callKind: "runtime-call",
+    reactiveOrigin: true,
+  },
   // inspectConfLabel(target, targetPath, query) — the inv-12 Stage 2 bounded
   // label-introspection builtin (CFC spec §4.6.4.1). A plain node-factory
   // call returning a Reactive result, like navigateTo: no dedicated

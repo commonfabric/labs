@@ -140,39 +140,87 @@ queries, applies, and releases on child branches fail explicitly.
 
 ## Anchors
 
-A collaborative field carries **anchors**: ranges of its value, each under a
-client-chosen id, that Memory moves with the text. Whenever an edit integrates,
-the codec maps every anchor of the field through it in the same transaction,
-so the stored set is always the set at the field head. Text inserted at either
-end of a range stays outside it, text inserted inside grows it, a replacement
-of the covered text keeps the range over the replacement, and a deletion that
-covers it leaves a point (`from === to`) where the text was. Anchors survive
-history pruning, since they ride the field head and every checkpoint rather
-than the operation log.
+A collaborative field carries **anchors**: points in its value, each under an
+id its writer chooses, that Memory moves with the text. An anchor is an offset
+into the field. Whenever an edit integrates, the codec maps every anchor of
+the field through it in the same transaction, as an editor maps a cursor: text
+inserted at an anchor lands after it, text inserted before it moves it, and an
+anchor inside deleted text lands where the deletion began.
 
-A client adds or removes anchors on the `apply-op` that writes the field
+A range of the field is two anchors, one where it starts and one where it
+ends. Because both follow the one rule, text inserted at the start of a range
+falls inside it, text inserted at its end falls outside it, a replacement of
+exactly the range stays inside it, and a deletion that covers the range brings
+both anchors to the same offset, which is an empty range where the text was.
+
+The anchors live in the field's **anchors document** and nowhere else. It is
+an ordinary entity at an id derived from the field's address (`of:op-anchors:`
+plus a hash of the entity id, scope and path), in the field's own scope, and
+its value is a map from anchor id to offset. Anyone who may write the space
+changes the anchors by writing that document, as they would any entity, and
+Memory refuses a write that leaves anything other than such a map in it
 ([`../specs/memory-v2/07-op-views-and-annotations.md`](../specs/memory-v2/07-op-views-and-annotations.md),
-§7.7.4). The ranges it adds are stated against the document the client holds,
-the field at the operation's base with the operation's own edits applied, so
-an editor anchors text its user has just typed in the edit that inserts it,
-and Memory maps the ranges through the operations integrated since before
-storing them: a stale base is merged the way a stale edit is. An operation
-whose payload changes nothing is how a client changes anchors alone; it
-advances no version, and an anchor is not an operation: the submitted and
-integrated projections hold nothing for it.
+§7.8). When an edit moves an anchor, Memory rewrites the document's value in
+the transaction that integrates the edit and leaves the rest of the document,
+its label included, as it was. An edit that moves no anchor leaves the
+document alone.
 
-Anchors reach readers two ways. Every operation snapshot an editor receives
-carries the field's current set, which can change at a cursor the editor has
-already applied. And Memory writes an **anchors document**, an ordinary entity
-at an id derived from the field's address (`of:op-anchors:` plus a hash of the
-entity id, scope and path) in the field's own scope, holding
-`{ epoch, version, anchors }`, in the transaction that changes the set; graph
-queries, watches, point-in-time reads and server-executed handlers read
-anchors from it as plain state. The document is deleted with the field's
-release or its entity, and a client cannot write it.
+Releasing a field keeps its anchors, since the released text is the text they
+refer to, and so does deleting the field's entity, which releases its fields.
+A writer that deletes an entity and wants its fields' anchors gone deletes
+their anchors documents in the same commit; one that leaves them has them
+again if the entity is created anew. Memory moves anchors
+through collaborative edits and through nothing else, so an ordinary write
+that replaces the text of a released field, or of one no editor has opened,
+moves none of them. The writer that replaces the text, an agent rewording a
+released note for example, reads the anchors and writes them where the new
+text puts them, in the same commit.
+
+Changing anchors is therefore an ordinary transaction. A writer reads the
+field and the anchors, writes the anchors it wants the field to hold, and
+commits. The commit carries both reads, so it lands only while the field and
+the anchors are still what the writer read: an edit from another client, or
+another writer's change to the anchors, refuses it, and the writer runs again
+against what the field holds now. An anchor is not an operation: it enters no
+submitted or integrated projection and advances no version. Memory cannot tell
+which field a write to an anchors document belongs to, so it does not check an
+offset against the field's length; an offset past the end of the text is taken
+as the end.
+
+Anchors reach readers two ways. Graph queries, watches, point-in-time reads
+and server-executed handlers read the anchors document as plain state. And
+every operation snapshot an editor receives carries the field's anchors as the
+document holds them, which can change at a cursor the editor has already
+applied.
 
 An annotation on the field, a comment, a highlight or a bookmark, is an
-ordinary entity that names an anchor id and stores no position of its own.
+ordinary entity that names its anchors' ids and stores no position of its own.
+
+Pattern code reaches the anchors document with `anchorsOf(field)`, which
+returns it as a cell
+([`../common/concepts/types-and-schemas/writable.md`](../common/concepts/types-and-schemas/writable.md),
+"Anchoring text"). A handler given that cell and the field reads both and
+writes the anchors.
+
+An anchor says something about the field's text: where text is, how far apart
+two points are, and whatever its writer put in the id. Contextual Flow Control
+has no rule of its own for anchors, so the anchors document carries the label
+its writers' transactions gave it. A handler that reads the field before it
+writes the anchors writes them under the field's confidentiality, by the
+ordinary flow from what a transaction read to what it wrote, and a later
+reader of those anchors is tainted as a reader of the field is.
+
+A writer that does not read the field leaves the anchors under whatever it did
+read, and Memory adds no label when it rewrites their offsets, although the
+offsets it writes follow the field's edits. A reader of such anchors learns
+where the field was edited and by how much, and the field's length from an
+anchor written past its end, without the field's taint. Whether Memory should
+join the field's label onto the document is an open decision (the spec's
+deferred decisions, §7.17).
+
+The anchors take none of the field's integrity, and the field's write policy
+does not govern them: a pattern that wants only certain handlers to move
+anchors declares a write policy on the anchors cell.
 
 ## Checkpoints, reconnect, and reset
 
