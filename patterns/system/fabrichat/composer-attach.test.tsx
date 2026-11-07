@@ -20,7 +20,6 @@ import {
   equals,
   handler,
   pattern,
-  type Stream,
   TESTS,
   UI,
   VIEWS,
@@ -161,12 +160,6 @@ const fire = (root: unknown, name: string, event: unknown): void => {
   stream.send(event);
 };
 
-/** The stream a press of `button` sends to: its `onClick`. */
-function pressOf(button: unknown): Stream<Record<string, never>>;
-function pressOf(button: unknown): unknown {
-  return propsOf(button)?.onClick;
-}
-
 /** Every node under `root` that `matches`, in the tree's order. */
 const collect = (
   root: unknown,
@@ -219,15 +212,6 @@ export default pattern(() => {
     fileStore: bareRecord,
   } as RoomArg);
 
-  // The "Remove" control of the file still being attached, as the room's view
-  // renders it: its stream, which the step below sends to as a press does.
-  const removeSlow = computed((): Stream<Record<string, never>> => {
-    const row = collect(alice[UI], isListedRow).find((node) =>
-      hasText(node, "slow.txt")
-    );
-    return pressOf(findNode(row, isButton("Remove")));
-  });
-
   return {
     [TESTS]: [
       { action: keepStandIn },
@@ -258,7 +242,16 @@ export default pattern(() => {
         trustedUi: sendGesture,
       },
       { assertion: assert(() => all(messages).length === 0) },
-      { action: removeSlow, event: {} },
+      {
+        action: action(() => {
+          const row = collect(alice[UI], isListedRow).find((node) =>
+            hasText(node, "slow.txt")
+          );
+          const button = findNode(row, isButton("Remove"));
+          (propsOf(button)?.onClick as { send: (event: unknown) => void })
+            .send({});
+        }),
+      },
       {
         action: alice.composerSend,
         event: typed("Here"),
