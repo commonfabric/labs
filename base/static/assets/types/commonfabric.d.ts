@@ -3803,6 +3803,7 @@ export type AssertRenderPartsFunction = (
 type TestStepKey =
   | "assertion"
   | "action"
+  | "press"
   | "render"
   | "settle"
   | "label"
@@ -3833,6 +3834,13 @@ type OnlyTestStep<Own extends TestStepKey, Fields> =
  * - `{ action }` sends an event into a stream. `event` is the payload;
  *   `trustedUi` names a trusted UI surface and the control inside it when the
  *   action must originate from rendered UI under enforcement.
+ * - `{ press, control }` clicks a control rendered in the `press` view, as a
+ *   person clicks it in a browser: the runner renders the view through the
+ *   browser's reconciler and DOM applicator, finds the one element whose text,
+ *   trimmed, is `control`, and dispatches a click on it, so the handler bound
+ *   there receives the event with the provenance its rendered markers give.
+ *   `within` names text an element around the control shows, for a view that
+ *   shows `control` more than once, such as a row of a list.
  * - `{ render }` materializes a VDOM subtree.
  * - `{ settle: true }` waits for full settlement (scheduler, storage, and
  *   in-flight async builtin I/O) before the next step.
@@ -3852,6 +3860,7 @@ export type TestStep =
     event?: unknown;
     trustedUi?: { surface: string; action: string };
   }>
+  | OnlyTestStep<"press", { press: unknown; control: string; within?: string }>
   | OnlyTestStep<"render", { render: unknown }>
   | OnlyTestStep<"settle", { settle: true }>
   | OnlyTestStep<"label", { label: string }>
