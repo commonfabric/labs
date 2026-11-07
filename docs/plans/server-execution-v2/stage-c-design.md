@@ -524,7 +524,9 @@ runs K's writer for P's instance. Precisely:
    instances of its declared surface). No writer ⇒ nothing to run: an
    authored doc (the client's own data), or a doc whose owning piece is
    not running on the server (§2.8 flag 4 — the structure load stays
-   root-scoped, as today).
+   root-scoped, as today). *(Flag 4 is since BUILT: a demanded row whose
+   delivered document carries pattern meta is structure-loaded as a root —
+   `verification-coverage.md`'s flag 4 row.)*
 2. **Every writer of a demanded instance is a DEMAND ROOT** while any
    demanded row names one of its outputs (§2.4 — the liveness bracket).
 3. **Current(W, K, P):**
@@ -2279,6 +2281,9 @@ tuning-class if measured, not a row.)*
 - **(d′) — a linked piece is not running on the server** (flag 4):
   parity with today, but visible now; the id-class-filtered structure
   load for demanded rows with pattern meta is the option; W0 counts.
+  *(BUILT, with the pattern-meta test read from each session's delivered
+  entries rather than the engine — `verification-coverage.md`'s flag 4
+  row.)*
 - **(d′) — the term is elsewhere.** With the walk gone (zero walk runs
   by construction), if the settle stays ~2.6 s the 96 % attribution was
   wrong — re-attribute (wave commit / frames / `server.idle()` /

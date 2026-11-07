@@ -201,6 +201,7 @@ import {
   buildDiffSync,
   buildFullSync,
   cacheKeyForEntity,
+  carriesPieceMeta,
   compareSyncAddress,
   graphWatchesByBranch,
   groupedQueries,
@@ -213,6 +214,7 @@ import {
   toCacheEntry,
   toWireRemove,
   toWireUpsert,
+  trackedAndPieceKeysFromEntries,
   trackedIdsFromEntries,
   unionQuery,
 } from "./server-sync.ts";
@@ -1280,8 +1282,16 @@ export type DemandedInstanceRow = {
   identity?: { readonly principal?: string; readonly sessionId?: string };
 
   /** True when the row is a watch ROOT of its session (the structure
-   * load's input, unchanged in scope — design §2.8 flag 4). */
+   * load's input). */
   root: boolean;
+
+  /**
+   * True when the document the session was sent for the row carries a
+   * piece's metadata (`trackedAndPieceKeysFromEntries()`), so that a serving loop can
+   * start the piece it belongs to though no watch names it as a root: a
+   * piece reached only through a data link (design §2.8 flag 4).
+   */
+  piece?: true;
 };
 
 /**
@@ -10043,11 +10053,12 @@ export class Server {
     // wake the push loop, but they are not graph execution demand. Rebuild
     // the graph-only provenance from delivered entries plus traversal misses
     // before producing demand rows.
-    const graphTrackedIds = trackedIdsFromEntries(
-      (session.views.length === 0
-        ? session.entities
-        : session.viewDemandEntities).values(),
-    );
+    const { tracked: graphTrackedIds, pieces: pieceKeys } =
+      trackedAndPieceKeysFromEntries(
+        (session.views.length === 0
+          ? session.entities
+          : session.viewDemandEntities).values(),
+      );
     this.#addMissedToTrackedIds(
       graphTrackedIds,
       (session.views.length === 0 ? session.graphs : session.viewDemandGraphs)
@@ -10065,13 +10076,15 @@ export class Server {
       } catch {
         return;
       }
-      rows.set(dirtyKey, {
+      const row: DemandedInstanceRow = {
         id: parsed.id,
         scope: parsed.scope,
         scopeKey: parsed.scopeKey,
         identity,
         root,
-      });
+      };
+      if (pieceKeys.has(dirtyKey)) row.piece = true;
+      rows.set(dirtyKey, row);
     };
     for (const dirtyKey of session.trackedIds) {
       if (graphTrackedIds.has(dirtyKey)) {
@@ -10792,10 +10805,18 @@ export class Server {
                     session.viewSupportGrown = false;
                   }
                   // A new delivered entity adds a key to the session's
-                  // demand; a changed snapshot of a held one does not.
+                  // demand, and a changed snapshot of a held one changes it
+                  // only when it gains or loses a piece's metadata, which
+                  // marks its row.
                   let enteredEntity = false;
                   for (const [key, entry] of updates) {
-                    if (!session.entities.has(key)) enteredEntity = true;
+                    const held = session.entities.get(key);
+                    if (
+                      held === undefined ||
+                      carriesPieceMeta(held) !== carriesPieceMeta(entry)
+                    ) {
+                      enteredEntity = true;
+                    }
                     session.entities.set(key, entry);
                   }
                   for (const key of removed.keys()) {
