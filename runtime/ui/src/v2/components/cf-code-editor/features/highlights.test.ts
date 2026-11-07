@@ -73,7 +73,7 @@ const marks = (state: EditorState) => {
  * at y = 100 and its first character's left edge at x = 0. Like CodeMirror,
  * it resolves a point to the nearest position on the point's line and to the
  * side of that position the point is on, and resolves a point above or below
- * the lines to the document's start or end.
+ * the lines to the document's start or end. No line wraps.
  */
 const gridView = (state: EditorState): CharacterGeometry => ({
   state,
@@ -103,6 +103,10 @@ const gridView = (state: EditorState): CharacterGeometry => ({
   coordsAtPos: (pos) => {
     const x = 10 * (pos - state.doc.lineAt(pos).from);
     return { right: x };
+  },
+  moveToLineBoundary: (start, forward) => {
+    const line = state.doc.lineAt(start.head);
+    return EditorSelection.cursor(forward ? line.to : line.from);
   },
 });
 
@@ -394,6 +398,42 @@ describe("highlights", () => {
 
       expect(characterAt(widget, { x: 45, y: 110 })).toBe(4);
       expect(characterAt(widget, { x: 90, y: 110 })).toBeUndefined();
+    });
+
+    it("returns a widget's character for a point on the widget in a wrapped line's earlier row", () => {
+      // "abcdefgh" is one line drawn as two rows, "abcdef" from y = 100 and
+      // "gh" from y = 120, each character 10 wide from x = 0. A widget stands
+      // in for "cd", which leaves them without a box. The point is on the
+      // widget, and to the right of where the short second row ends.
+
+      const state = EditorState.create({ doc: "abcdefgh" });
+      const rowStart = (pos: number, side = 1) =>
+        pos < 6 || (pos === 6 && side < 0) ? 0 : 6;
+      const wrapped: CharacterGeometry = {
+        state,
+        documentTop: 100,
+        posAndSideAtCoords: ({ x, y }) => {
+          const from = y < 120 ? 0 : 6;
+          const length = from === 0 ? 6 : 2;
+          const column = Math.max(0, Math.min(length, Math.round(x / 10)));
+          return { pos: from + column, assoc: x < column * 10 ? -1 : 1 };
+        },
+        lineBlockAt: () => ({ top: 0, bottom: 40 }),
+        coordsForChar: (pos) => {
+          if (pos === 2 || pos === 3 || pos >= 8) return null;
+          const left = 10 * (pos - rowStart(pos));
+          return { left, right: left + 10 };
+        },
+        coordsAtPos: (pos, side = 1) => ({
+          right: 10 * (pos - rowStart(pos, side)),
+        }),
+        moveToLineBoundary: (start, forward) =>
+          EditorSelection.cursor(
+            rowStart(start.head) + (forward ? (start.head < 6 ? 6 : 2) : 0),
+          ),
+      };
+
+      expect(characterAt(wrapped, { x: 35, y: 110 })).toBe(3);
     });
 
     it("returns a character that has no box of its own", () => {

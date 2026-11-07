@@ -8,8 +8,10 @@
  */
 
 import {
+  EditorSelection,
   type EditorState,
   type Extension,
+  type SelectionRange,
   StateEffect,
   StateField,
 } from "@codemirror/state";
@@ -270,6 +272,17 @@ export interface CharacterGeometry {
    * `side` of it given, or `null` when the editor has not drawn `pos`.
    */
   coordsAtPos(pos: number, side?: -1 | 1): { readonly right: number } | null;
+
+  /**
+   * Moves `start` to the start of its line, or with `forward` to the end;
+   * with `includeWrap`, to the start or end of the row of a wrapped line it
+   * is drawn on.
+   */
+  moveToLineBoundary(
+    start: SelectionRange,
+    forward: boolean,
+    includeWrap?: boolean,
+  ): SelectionRange;
 }
 
 /**
@@ -284,8 +297,8 @@ export interface CharacterGeometry {
  * the point: the point lies within the character's line vertically and
  * within the character's box horizontally. A character with no box of its
  * own, text a widget stands in for, is taken as under the point unless the
- * point lies past the end of what its line draws; a line break, which draws
- * nothing, is not.
+ * point lies past the end of the row the widget is drawn on, one of several
+ * on a wrapped line; a line break, which draws nothing, is not.
  */
 export function characterAt(
   view: CharacterGeometry,
@@ -305,9 +318,12 @@ export function characterAt(
   const box = view.coordsForChar(at);
   if (box === null) {
     if (view.state.sliceDoc(at, at + 1) === "\n") return undefined;
-    // CodeMirror resolves a point to the right of a widget that ends a line
-    // to the widget, so such a point is checked against the line's end.
-    const end = view.coordsAtPos(view.state.doc.lineAt(at).to, -1);
+    // CodeMirror resolves a point to the right of a widget that ends a row
+    // to the widget, so such a point is checked against the end of the
+    // widget's row. Of a wrapped line's rows, only the last ends where the
+    // line does.
+    const row = view.moveToLineBoundary(EditorSelection.cursor(at), true, true);
+    const end = view.coordsAtPos(row.head, -1);
     return end !== null && point.x > end.right ? undefined : at;
   }
   return point.x >= box.left && point.x <= box.right ? at : undefined;

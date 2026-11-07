@@ -472,6 +472,31 @@ describe("CFCodeEditor collaboration", () => {
     expect(errors[0]).toContain("has the kind");
   });
 
+  it("emits `cf-error` again for an inverted pair stated again after its anchors were cleared", () => {
+    const errors: string[] = [];
+    const element = new CFCodeEditor();
+    (element as any)._editorView = statefulView([highlightField]);
+    (element as any).emit = (name: string, detail: { message: string }) => {
+      if (name === "cf-error") errors.push(detail.message);
+    };
+    element.highlights = [{ id: "h", fromAnchor: "from", toAnchor: "to" }];
+    (element as any).updated(new Map([["highlights", []]]));
+    const inverted = () => ({
+      confirmedCursor: { epoch: 1, version: 1 },
+      pendingChanges: [],
+      field: synchronizedField,
+      anchors: { from: 2, to: 1 },
+    });
+
+    (element as any)._handleCollaborationSynchronization(inverted());
+    (element as any)._handleCollaborationSynchronization(null);
+    (element as any)._handleCollaborationSynchronization(inverted());
+
+    expect(errors).toHaveLength(2);
+    expect(errors[0]).toContain("ends at the anchor");
+    expect(errors[1]).toBe(errors[0]);
+  });
+
   it("hands a changed highlights property to the editor", () => {
     const element = new CFCodeEditor();
     const view = statefulView([highlightField]);
@@ -726,7 +751,10 @@ describe("CFCodeEditor collaboration", () => {
     const events: unknown[] = [];
     const previous = { stop: () => Promise.reject("pending edit") };
     const element = new CFCodeEditor();
-    (element as any)._editorView = { dispatch: () => events.push("dispatch") };
+    (element as any)._editorView = {
+      state: EditorState.create(),
+      dispatch: () => events.push("dispatch"),
+    };
     (element as any)._collaboration = previous;
     (element as any).emit = (_name: string, detail: unknown) =>
       events.push(detail);
@@ -741,7 +769,10 @@ describe("CFCodeEditor collaboration", () => {
   it("requires a CellHandle and restores ordinary editing when disabled", async () => {
     const errors: unknown[] = [];
     const element = new CFCodeEditor();
-    (element as any)._editorView = { dispatch: () => {} };
+    (element as any)._editorView = {
+      state: EditorState.create(),
+      dispatch: () => {},
+    };
     (element as any).emit = (_name: string, detail: unknown) =>
       errors.push(detail);
     element.collaborative = true;
@@ -1891,6 +1922,7 @@ describe("CFCodeEditor collaboration", () => {
 
     const dispatches: unknown[] = [];
     (element as any)._editorView = {
+      state: EditorState.create(),
       dispatch: (value: unknown) => dispatches.push(value),
     };
     const previous = {

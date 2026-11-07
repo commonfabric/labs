@@ -2338,11 +2338,13 @@ export class CFCodeEditor extends BaseElement {
 
   /**
    * Forgets the anchors of a collaboration that has ended or is being
-   * replaced, so no mark is drawn until the next one states its own.
+   * replaced, so no mark is drawn until the next one states its own. A fault
+   * the anchors made goes with them, and is reported again if they return.
    */
   private _clearAnchors(): void {
     this._shownAnchors = undefined;
     this._editorView?.dispatch({ effects: setHighlightAnchorsEffect.of({}) });
+    this._reportHighlightFaults();
   }
 
   /**
