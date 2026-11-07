@@ -174,4 +174,38 @@ describe("cfc-field-anchors", () => {
     expect(await copyAnchor("edited-field", SECRET_FIELD_SCHEMA, 9))
       .toContain("maxConfidentiality failed at /out");
   });
+
+  it("commits anchors written before an edit in the same transaction, as confidential as the field", async () => {
+    // Preparation records the anchors' confidentiality after the edit, which
+    // is a write to their document but not to the offsets.
+
+    const seed = runtime.edit();
+    noteOf("ordered-field", SECRET_FIELD_SCHEMA, seed).set({
+      body: "hello world",
+    });
+    runtime.getCell(space, "ordered-field-copy", PUBLIC_SCHEMA, seed).set({
+      out: "",
+    });
+    expect(refusalOf(await seed.commit().settled)).toBeUndefined();
+    const moved = Promise.withResolvers<void>();
+    const cancel = anchorsOf("ordered-field", SECRET_FIELD_SCHEMA).sink(
+      (anchors) => {
+        if (anchors?.w === 9) moved.resolve();
+      },
+    );
+
+    const edit = runtime.edit();
+    const body = noteOf("ordered-field", SECRET_FIELD_SCHEMA, edit).key("body");
+    anchorsOf("ordered-field", SECRET_FIELD_SCHEMA, edit).set({
+      w: body.get().indexOf("w"),
+    });
+    body.applyChanges({ from: 0, insert: "oh " });
+    edit.prepareCfc();
+    expect(refusalOf(await edit.commit().settled)).toBeUndefined();
+    await moved.promise;
+    cancel();
+
+    expect(await copyAnchor("ordered-field", SECRET_FIELD_SCHEMA, 9))
+      .toContain("maxConfidentiality failed at /out");
+  });
 });

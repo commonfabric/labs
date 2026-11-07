@@ -1875,7 +1875,9 @@ export class V2StorageTransaction implements IStorageTransaction {
   /**
    * Helper for `getNativeCommit()`, which throws when `operations` write the
    * anchors document of a field this transaction edits in `space`, and the
-   * transaction wrote that document after recording the edit. The store maps
+   * transaction wrote the document's value after recording the edit. The
+   * runtime's own writes beside the value, such as the confidentiality
+   * `prepareCfc()` records at `["cfc"]`, state no offsets. The store maps
    * a field's anchors through each edit that follows their write in the
    * commit, and a commit hands it every document write ahead of every edit,
    * so anchors written against the edited text would be moved through the
@@ -1906,6 +1908,7 @@ export class V2StorageTransaction implements IStorageTransaction {
         const writtenAfter = this.#writeAttemptLog.some((write) =>
           write.space === space && write.id === anchors &&
           write.scope === normalizeCellScope(scope) &&
+          (write.path.length === 0 || write.path[0] === "value") &&
           write.journalIndex >= intent.recordedAt
         );
         if (writtenAfter) {

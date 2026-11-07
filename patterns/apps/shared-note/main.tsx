@@ -621,9 +621,11 @@ const openComposer = handler<unknown, OpenComposerState>((_, state) => {
     state.notice.set("Select the text to comment on first.");
     return;
   }
-  // The range was right for the body when it was kept. An edit since, which
-  // the editor has not yet reported the selection against, can leave other
-  // text there; one that leaves the same text at the range gets past this.
+  // A comment is on the selected text at the selected range, whatever the
+  // rest of the body holds. The editor reports the range again after every
+  // edit, and until it has, an edit may have left other text there, which is
+  // refused. Identical text an edit brought to the range is taken as the
+  // selection, since nothing tells two identical texts apart.
   if (state.content.get().slice(from, to) !== text) {
     state.notice.set("The note changed under your selection; try again.");
     return;
