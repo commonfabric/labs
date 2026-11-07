@@ -107,7 +107,7 @@ Deno.test("traverse replay records batched plain-schema reads", () => {
   );
   assert(
     oracle.readSet.includes(
-      `${space}|space|${rowIds[0]}|["value","label"]|nt`,
+      `${space}|space|${rowIds[0]}|["value","label"]|ntm`,
     ),
   );
 });
@@ -150,7 +150,7 @@ Deno.test("plain primitive-array traversal records indices after failure", () =>
   assert(
     oracle.readSet.some((read) =>
       read.includes(`data:${DATA_URI_MEDIA_TYPE}`) &&
-      read.endsWith('|["value","1"]|nt')
+      read.endsWith('|["value","1"]|ntm')
     ),
   );
 });
