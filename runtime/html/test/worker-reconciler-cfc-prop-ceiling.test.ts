@@ -254,6 +254,105 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
     );
 
     await t.step(
+      "decides a complete binding on what its component reads, not on what its handle reaches",
+      async () => {
+        // `cf-profile-badge` reads its `$profile` with `ProfileBadgeSchema`
+        // whatever schema the handle carries, so a field it never reads, here
+        // a link to a document the ceiling refuses, does not decide it. A
+        // `cf-input`, whose entry is not complete, reads the same handle as
+        // it is typed, and that read reaches the link. Nor is the code
+        // editor's mention list complete, since the editor reads each
+        // mention's `piece`, which its read hands it as a cell, for the name
+        // it shows, so a mention linking to a refused document withholds it.
+        const profile = await write("prop-ceiling-profile-pointer", {
+          name: PUBLIC,
+          inbox: { piece: link(secret) },
+        });
+        const mentions = await write("prop-ceiling-mentions", {
+          list: [{ name: PUBLIC, piece: link(secret) }],
+        });
+        const page = await mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [{
+            type: "vnode",
+            name: "cf-profile-badge",
+            props: { $profile: profile.asSchema(true) as never },
+            children: [],
+          }, {
+            type: "vnode",
+            name: "cf-input",
+            props: { $value: profile.asSchema(true) as never },
+            children: [],
+          }, {
+            type: "vnode",
+            name: "cf-code-editor",
+            props: {
+              $mentionable: mentions.key("list").asSchema(true) as never,
+            },
+            children: [],
+          }],
+        }, HOST_CEILING);
+        try {
+          expect(page.bindings("profile")).toBe(1);
+          expect(page.bindings("value")).toBe(0);
+          expect(page.bindings("mentionable")).toBe(0);
+        } finally {
+          page.cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "withholds a complete binding when a field its component reads is refused, however narrow the handle",
+      async () => {
+        // The badge reads `bio` whatever the handle declares, so a handle
+        // typed to the name alone does not keep a `bio` linking to a refused
+        // document out of the decision.
+        const profile = await write("prop-ceiling-profile-bio", {
+          name: PUBLIC,
+          bio: link(secret),
+        });
+        const nameOnly = {
+          type: "object",
+          properties: { name: { type: "string" } },
+          additionalProperties: false,
+        } as const;
+        const page = await mount({
+          type: "vnode",
+          name: "cf-profile-badge",
+          props: { $profile: profile.asSchema(nameOnly) as never },
+          children: [],
+        }, HOST_CEILING);
+        try {
+          expect(page.bindings("profile")).toBe(0);
+          expect(page.emitted()).not.toContain(
+            profile.getAsNormalizedFullLink().id,
+          );
+        } finally {
+          page.cancel();
+        }
+        // The same handle to a profile whose `bio` is public binds.
+        const open = await write("prop-ceiling-profile-bio-open", {
+          name: PUBLIC,
+          bio: PUBLIC,
+        });
+        const openPage = await mount({
+          type: "vnode",
+          name: "cf-profile-badge",
+          props: { $profile: open.asSchema(nameOnly) as never },
+          children: [],
+        }, HOST_CEILING);
+        try {
+          expect(openPage.bindings("profile")).toBe(1);
+        } finally {
+          openPage.cancel();
+        }
+      },
+    );
+
+    await t.step(
       "binds a cell the ceiling admits and withholds one it does not",
       async () => {
         const page = await mount({

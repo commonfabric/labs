@@ -65,8 +65,17 @@ each slot holding a link the read followed, which a dereference retains
   An object written inline in a view built outside a cell sends a cell it
   holds as a link, not as the cell's value.
 - A `$` binding is made only while the ceiling admits the worker's read of
-  the bound cell, under the cell's schema; a nested render root is decided on
-  the reads its component makes instead, as the nested-render paragraphs
+  the bound cell, under the cell's schema. A binding whose component read
+  contract entry (`runtime/runner/src/component-read-contract.ts`) is
+  `complete`, its `schema` reading everything the component shows from it, is
+  decided on that read instead, so a field the component does not read does
+  not withhold it and a field it reads decides it however the handle is
+  typed. `cf-profile-badge` `profile` is one: the badge shows a profile's name
+  and picture, which a viewer may see even when the profile's private share
+  inbox pointer is refused. `cf-code-editor`'s mention lists are not, since
+  the editor reads each mention's destination, a cell its read hands it, for
+  the name it shows. A nested render root is decided on
+  the reads its component makes as well, as the nested-render paragraphs
   below describe. The worker keeps reading the bound cell and removes the
   binding when a write leaves that read consuming a label the ceiling
   refuses, or while the read cannot complete, as when a space it reads is out
