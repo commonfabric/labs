@@ -543,13 +543,34 @@ function retainInbox(
   retained.set([...earlier, held]);
 }
 
+/**
+ * Helper for {@link ensurePrivateInbox}, which records in `retained` that Home
+ * reads `inbox` without holding it: it goes at the end, unless the list holds
+ * it already.
+ */
+function retainOnce(
+  retained: Writable<RetainedPrivateInboxes>,
+  inbox: Cell<PrivateInboxPiece>,
+): void {
+  const earlier = (retained.get() ?? []).filter((each) => each !== undefined);
+  if (earlier.some((each) => equals(each, inbox))) return;
+  retained.set([...earlier, inbox]);
+}
+
 /** What the host sends Home's `ensurePrivateInbox`. */
 export type EnsurePrivateInboxEvent = {
   /**
    * The inbox the deciding profile advertises, which the host has vetted for
-   * Home to adopt; absent when the host vetted none.
+   * Home to adopt, one Home made; absent when the host vetted none.
    */
   adopt?: Cell<PrivateInboxPiece>;
+
+  /**
+   * An inbox Home did not make, which the host has Home replace with one of
+   * its own: the inbox Home holds, or the inbox the deciding profile
+   * advertises, which the host has vetted. Absent when there is none.
+   */
+  replace?: Cell<PrivateInboxPiece>;
 
   /**
    * The deciding profile: the first, in the order `#profile` answers in, that
@@ -582,8 +603,16 @@ export type EnsurePrivateInboxEvent = {
  * An event naming no inbox leaves Home with what it holds, and Home creates an
  * inbox only when it holds none and no profile points at an inbox. So when the
  * host vetted none, or names a profile that has since moved, Home keeps what it
- * holds, or holds none. A profile pointing at another inbox keeps its pointer.
- * Running it again creates, re-points and retains nothing.
+ * holds, or holds none.
+ *
+ * An event naming an inbox to replace, one Home did not make, gives it way to
+ * an inbox of Home's own when Home holds it, or when the profile the event
+ * names is in Home's list and still points at it: Home creates its own inbox
+ * if it holds that one or none, keeps the one it holds otherwise, and puts the
+ * replaced inbox in `retainedPrivateInboxes`, so the offers delivered to it
+ * stay readable. A profile pointing at an inbox Home retains is then pointed at
+ * Home's, by the second step; a profile pointing at any other inbox keeps its
+ * pointer. Running it again creates, re-points and retains nothing.
  *
  * `privateInboxRefusal` holds the host's refusal of the deciding profile's
  * inbox. A refusal the event names is recorded, in place of a different one
@@ -644,8 +673,20 @@ export const ensurePrivateInbox = handler<
     ? pointerOfListed(profiles, event.from)
     : undefined;
   const adopt = event?.adopt;
+  const replace = event?.replace;
   let replaced = false;
-  if (adopt !== undefined) {
+  if (replace !== undefined && adopt === undefined) {
+    // An inbox Home holds, or one the profile the event names still points
+    // at, gives way to an inbox of Home's own, and Home keeps reading it.
+    const holdsIt = held !== undefined && equals(held, replace);
+    if (holdsIt || (deciding !== undefined && equals(replace, deciding))) {
+      if (held === undefined || holdsIt) {
+        privateInbox.set({ piece: createPrivateInbox() });
+        replaced = true;
+      }
+      retainOnce(retainedPrivateInboxes, replace);
+    }
+  } else if (adopt !== undefined) {
     const pointer = event?.from !== undefined
       ? deciding
       : held === undefined
@@ -706,7 +747,11 @@ export const ensurePrivateInbox = handler<
 
 /**
  * Points each profile in `profiles` that points at no inbox at Home's private
- * inbox, as `pointAtInboxIfUnset()` does.
+ * inbox, as `pointAtInboxIfUnset()` does, and each that points at an inbox in
+ * `retainedPrivateInboxes`, one Home gave up or replaced, at Home's in its
+ * place, as `pointAtInboxInPlaceOf()` does. So every profile that advertised
+ * an inbox Home held or replaced advertises the one Home holds, and a sender
+ * delivers there.
  *
  * The list is bound as a value: the runner resolves it before the body runs,
  * and withdraws the dispatch until every profile it names has loaded, so an
@@ -716,11 +761,21 @@ export const pointProfilesAtPrivateInbox = handler<
   void,
   {
     privateInbox: PrivateInboxHolder;
+    /** Absent from a binding that names none, which re-points nothing. */
+    retainedPrivateInboxes?: RetainedPrivateInboxes;
     profiles: PointTarget[];
   }
->((_event, { privateInbox, profiles }) => {
+>((_event, { privateInbox, retainedPrivateInboxes, profiles }) => {
   for (const profile of profiles ?? []) {
-    pointAtInboxIfUnset(profile, privateInbox);
+    const pointer = profile?.inbox?.piece;
+    // The retained list never holds the inbox Home holds.
+    const given = pointer === undefined
+      ? undefined
+      : (retainedPrivateInboxes ?? []).find((each) =>
+        each !== undefined && equals(each, pointer)
+      );
+    if (given === undefined) pointAtInboxIfUnset(profile, privateInbox);
+    else pointAtInboxInPlaceOf(profile, given, privateInbox);
   }
 });
 
