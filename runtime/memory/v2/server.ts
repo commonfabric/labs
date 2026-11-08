@@ -201,13 +201,13 @@ import {
   buildDiffSync,
   buildFullSync,
   cacheKeyForEntity,
-  carriesPieceMeta,
   compareSyncAddress,
   graphWatchesByBranch,
   groupedQueries,
   holdingsToCacheEntries,
   isEmptySync,
   mergeWatchesById,
+  pieceMarkInputsOf,
   sameSnapshot,
   sameWatchSpec,
   type SessionCacheEntry,
@@ -10806,14 +10806,15 @@ export class Server {
                   }
                   // A new delivered entity adds a key to the session's
                   // demand, and a changed snapshot of a held one changes it
-                  // only when it becomes or stops being one of a piece's
-                  // values, which marks its row.
+                  // only when it changes a row's mark: when it becomes or
+                  // stops being one of a piece's values, or, as a piece's
+                  // result, names another argument.
                   let enteredEntity = false;
                   for (const [key, entry] of updates) {
                     const held = session.entities.get(key);
                     if (
                       held === undefined ||
-                      carriesPieceMeta(held) !== carriesPieceMeta(entry)
+                      pieceMarkInputsOf(held) !== pieceMarkInputsOf(entry)
                     ) {
                       enteredEntity = true;
                     }

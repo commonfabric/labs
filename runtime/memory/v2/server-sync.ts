@@ -164,27 +164,41 @@ export const trackedIdsFromEntries = (
 export const trackedAndPieceKeysFromEntries = (
   entries: Iterable<SessionCacheEntry>,
 ): { tracked: Set<string>; pieces: Set<string> } => {
-  const held = [...entries];
-  const argumentKeys = new Set<string>();
-  for (const entry of held) {
-    if (!isPieceResult(entry)) continue;
-    const argument = metaLinkOf(entry, "argument");
-    if (argument === undefined) continue;
-    argumentKeys.add(scopedIdKey(argument.scope ?? entry.scope, argument.id));
-  }
   const tracked = new Set<string>();
-  const pieces = new Set<string>();
-  for (const entry of held) {
+  const candidates: Array<{ key: string; entry: SessionCacheEntry }> = [];
+  const argumentScopes = new Map<string, Set<string>>();
+  for (const entry of entries) {
     const key = toDirtyKey(entry.id, entry.scopeKey);
     tracked.add(key);
-    if (
-      carriesPieceMeta(entry) &&
-      !argumentKeys.has(scopedIdKey(entry.scope, entry.id))
-    ) {
+    const argument = pieceArgumentOf(entry);
+    if (argument !== undefined) {
+      const scopes = argumentScopes.get(argument.id) ?? new Set<string>();
+      scopes.add(argument.scope);
+      argumentScopes.set(argument.id, scopes);
+    }
+    if (carriesPieceMeta(entry)) candidates.push({ key, entry });
+  }
+  const pieces = new Set<string>();
+  for (const { key, entry } of candidates) {
+    if (argumentScopes.get(entry.id)?.has(entry.scope) !== true) {
       pieces.add(key);
     }
   }
   return { tracked, pieces };
+};
+
+/**
+ * What `entry` contributes to the marks {@link trackedAndPieceKeysFromEntries}
+ * gives: whether it is one of a piece's values, and, when it is a piece's
+ * result, the argument it names. A held entry whose new snapshot gives another
+ * answer can change the marks of its own row and of its argument's.
+ */
+export const pieceMarkInputsOf = (entry: SessionCacheEntry): string => {
+  const value = carriesPieceMeta(entry) ? "value" : "";
+  const argument = pieceArgumentOf(entry);
+  return argument === undefined
+    ? value
+    : `${value}\0${argument.scope}\0${argument.id}`;
 };
 
 /**
@@ -205,10 +219,21 @@ export const carriesPieceMeta = (entry: SessionCacheEntry): boolean => {
   return result !== undefined && !result.id.startsWith("receipt:");
 };
 
-/** Whether `entry`'s document is a piece's result, with its pattern pointer. */
-const isPieceResult = (entry: SessionCacheEntry): boolean => {
+/**
+ * The argument that `entry`'s document names when it is a piece's result, the
+ * one with the pattern pointer: its id, and the scope its link names, or the
+ * result's own when the link names none.
+ */
+const pieceArgumentOf = (
+  entry: SessionCacheEntry,
+): { id: string; scope: string } | undefined => {
   const doc = entry.doc;
-  return doc !== null && typeof doc === "object" && "patternIdentity" in doc;
+  if (doc === null || typeof doc !== "object" || !("patternIdentity" in doc)) {
+    return undefined;
+  }
+  const argument = metaLinkOf(entry, "argument");
+  if (argument === undefined) return undefined;
+  return { id: argument.id, scope: argument.scope ?? entry.scope };
 };
 
 /**
@@ -229,9 +254,6 @@ const metaLinkOf = (
   if (typeof id !== "string") return undefined;
   return typeof scope === "string" ? { id, scope } : { id };
 };
-
-/** A key naming the document `id` in the scope named `scope`. */
-const scopedIdKey = (scope: string, id: string): string => `${scope}\0${id}`;
 
 /**
  * The wire form of a cache entry: the server-internal `scopeKey` is
