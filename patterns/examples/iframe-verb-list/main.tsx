@@ -96,12 +96,14 @@ export default pattern<Record<string, never>, VerbListOutput>(() => {
     return { item, added: true };
   });
 
+  // one line per item, so an item's own line breaks become spaces
   const content = computed(() => {
     const { items, checked } = state.get();
     return items.map((item) =>
-      `- [${checked[item.id] ? "x" : " "}] ${item.text}`
-    )
-      .join("\n");
+      `- [${checked[item.id] ? "x" : " "}] ${
+        item.text.split(/[\r\n]+/).join(" ")
+      }`
+    ).join("\n");
   });
 
   return {

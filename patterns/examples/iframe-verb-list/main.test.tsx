@@ -20,6 +20,9 @@ export default pattern(() => {
   const action_add_padded_eggs = action(() => {
     list.addItem.send({ id: "eggs", text: "  Eggs  " });
   });
+  const action_add_two_line_bread = action(() => {
+    list.addItem.send({ id: "bread", text: "Bread\nand butter" });
+  });
 
   const assert_starts_empty = assert(() => list.state.items.length === 0);
   const assert_holds_milk = assert(() =>
@@ -39,6 +42,9 @@ export default pattern(() => {
   );
   const assert_text_lists_both = assert(() =>
     list[FS].content === "- [ ] Milk\n- [ ] Eggs"
+  );
+  const assert_text_keeps_bread_on_one_line = assert(() =>
+    list[FS].content === "- [ ] Milk\n- [ ] Eggs\n- [ ] Bread and butter"
   );
   const assert_nothing_is_checked_or_hidden = assert(() =>
     Object.keys(list.state.checked).length === 0 &&
@@ -60,6 +66,9 @@ export default pattern(() => {
       { action: action_add_padded_eggs },
       { assertion: assert_eggs_follow_milk_trimmed },
       { assertion: assert_text_lists_both },
+
+      { action: action_add_two_line_bread },
+      { assertion: assert_text_keeps_bread_on_one_line },
     ],
     list,
   };
