@@ -525,8 +525,8 @@ runs K's writer for P's instance. Precisely:
    authored doc (the client's own data), or a doc whose owning piece is
    not running on the server (§2.8 flag 4 — the structure load stays
    root-scoped, as today). *(Flag 4 is since BUILT: a demanded row whose
-   delivered document carries pattern meta is structure-loaded as a root —
-   `verification-coverage.md`'s flag 4 row.)*
+   delivered document is one of a piece's values is structure-loaded as a
+   root — `verification-coverage.md`'s flag 4 row.)*
 2. **Every writer of a demanded instance is a DEMAND ROOT** while any
    demanded row names one of its outputs (§2.4 — the liveness bracket).
 3. **Current(W, K, P):**

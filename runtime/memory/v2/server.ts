@@ -1286,10 +1286,10 @@ export type DemandedInstanceRow = {
   root: boolean;
 
   /**
-   * True when the document the session was sent for the row carries a
-   * piece's metadata (`trackedAndPieceKeysFromEntries()`), so that a serving loop can
-   * start the piece it belongs to though no watch names it as a root: a
-   * piece reached only through a data link (design §2.8 flag 4).
+   * True when the document the session was sent for the row is one of a
+   * piece's values (`trackedAndPieceKeysFromEntries()`), so that a serving
+   * loop can start the piece it belongs to though no watch names it as a
+   * root: a piece reached only through a data link (design §2.8 flag 4).
    */
   piece?: true;
 };
@@ -10806,8 +10806,8 @@ export class Server {
                   }
                   // A new delivered entity adds a key to the session's
                   // demand, and a changed snapshot of a held one changes it
-                  // only when it gains or loses a piece's metadata, which
-                  // marks its row.
+                  // only when it becomes or stops being one of a piece's
+                  // values, which marks its row.
                   let enteredEntity = false;
                   for (const [key, entry] of updates) {
                     const held = session.entities.get(key);

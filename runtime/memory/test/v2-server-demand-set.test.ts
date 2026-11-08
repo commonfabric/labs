@@ -184,7 +184,11 @@ describe("Server", () => {
         expectKeptSharesCurrent();
       });
 
-      it("marks the rows whose documents carry a piece's metadata", async () => {
+      it("marks the rows whose documents are a piece's values", async () => {
+        // A piece's result document is what a link to the piece names, and its
+        // argument holds its inputs, so neither is one of its values. A
+        // document a handler wrote names the handling's receipt, not a piece.
+
         localSeq += 1;
         await writer.transact({
           localSeq,
@@ -196,12 +200,23 @@ describe("Server", () => {
               value: {
                 value: { v: 1 },
                 patternIdentity: { identity: "a-pattern", symbol: "default" },
+                argument: link("of:piece-argument"),
               },
+            },
+            {
+              op: "set",
+              id: "of:piece-argument",
+              value: { value: { v: 1 }, result: link("of:piece") },
             },
             {
               op: "set",
               id: "of:piece-input",
               value: { value: { v: 1 }, result: link("of:piece") },
+            },
+            {
+              op: "set",
+              id: "of:handled",
+              value: { value: { v: 1 }, result: link("receipt:a-handling") },
             },
             {
               op: "set",
@@ -212,6 +227,8 @@ describe("Server", () => {
                     link("of:leaf-a"),
                     link("of:piece"),
                     link("of:piece-input"),
+                    link("of:piece-argument"),
+                    link("of:handled"),
                   ],
                 },
               },
@@ -222,14 +239,19 @@ describe("Server", () => {
         await watcher.watchSet([follow("of:root")]);
 
         const rows = shareOf(watcher).rows;
-        expect(rows.get("space\0of:piece")?.piece).toBe(true);
         expect(rows.get("space\0of:piece-input")?.piece).toBe(true);
+        expect(rows.has("space\0of:piece")).toBe(true);
+        expect(rows.get("space\0of:piece")?.piece).toBeUndefined();
+        expect(rows.has("space\0of:piece-argument")).toBe(true);
+        expect(rows.get("space\0of:piece-argument")?.piece).toBeUndefined();
+        expect(rows.has("space\0of:handled")).toBe(true);
+        expect(rows.get("space\0of:handled")?.piece).toBeUndefined();
         expect(rows.get("space\0of:leaf-a")?.piece).toBeUndefined();
         expect(rows.get("space\0of:root")?.piece).toBeUndefined();
         expectKeptSharesCurrent();
       });
 
-      it("rebuilds a share when a push gives a held document a piece's metadata", async () => {
+      it("rebuilds a share when a push makes a held document a piece's value", async () => {
         const watcher = await mount(alice);
         const view = await watcher.watchSet([follow("of:root")]);
         const before = shareOf(watcher);
@@ -244,10 +266,7 @@ describe("Server", () => {
           operations: [{
             op: "set",
             id: "of:leaf-a",
-            value: {
-              value: { v: 1 },
-              patternIdentity: { identity: "a-pattern", symbol: "default" },
-            },
+            value: { value: { v: 1 }, result: link("of:piece") },
           }],
         });
         await pushed;

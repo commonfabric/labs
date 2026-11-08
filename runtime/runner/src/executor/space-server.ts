@@ -5685,8 +5685,8 @@ export class SpaceServer implements TransactionSealDestination {
     // key, session), grouped by session. The registry (`#demandersByKey`)
     // is keyed by the instance key — `toDirtyKey(id, scopeKey)` =
     // `${scopeKey}\0${id}` — over EVERY demanded row; the structure load
-    // takes the watch roots and the rows the server marks as carrying a
-    // piece's metadata (flag 4); there is NO demand walk (nothing reads
+    // takes the watch roots and the rows the server marks as one of a
+    // piece's values (flag 4); there is NO demand walk (nothing reads
     // here). The pass reconciles DELTAS: `#demandMirror` holds the rows the
     // last pass read and reports the keys whose rows changed, and only
     // those keys are reconciled — entered keys mark their writers demand
@@ -5771,9 +5771,9 @@ export class SpaceServer implements TransactionSealDestination {
       if (rows === undefined && warm === undefined) continue;
       // The first row is the structure address, and the key is a ROOT (the
       // structure load's input) when any session's row says so, or it is
-      // warm, or a session's row was sent a piece's metadata: a piece reached
-      // only through a data link starts for the session that demands its
-      // values, as one it watches does (design §2.8 flag 4).
+      // warm, or a session's row was sent one of a piece's values: a piece
+      // reached only through a data link starts for the session that demands
+      // its values, as one it watches does (design §2.8 flag 4).
       let first: { id: string; scope: CellScope } | undefined;
       let root = warm !== undefined;
       const pairs = new Map<string, ScopeKeyIdentity>();

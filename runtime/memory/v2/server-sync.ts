@@ -1,3 +1,4 @@
+import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 
 import {
@@ -147,32 +148,67 @@ export const trackedIdsFromEntries = (
 
 /**
  * The instance keys of `entries`, as {@link trackedIdsFromEntries} gives them,
- * and among them the keys whose document carries a piece's metadata: the
- * pattern pointer of a piece's result, or the `result` link that the documents
- * of a piece's argument and internals carry to it. These are the documents a
- * structure load can start a piece from.
+ * and among them the keys whose document is one of a piece's values, as
+ * {@link carriesPieceMeta} decides it, other than a piece's argument. These
+ * are the documents a structure load starts a piece from when no watch names
+ * them as roots.
+ *
+ * A piece's argument holds its inputs, which are current in the store whether
+ * or not the piece runs, so a session sent one has read an input and demanded
+ * none of the piece's values. An argument is known by the `argument` link of
+ * a piece's result document among `entries`: a session that reads past a link
+ * into a piece is sent its result document first.
  */
 export const trackedAndPieceKeysFromEntries = (
   entries: Iterable<SessionCacheEntry>,
 ): { tracked: Set<string>; pieces: Set<string> } => {
+  const held = [...entries];
+  const argumentIds = new Set<string>();
+  for (const entry of held) {
+    const id = metaLinkId(entry, "argument");
+    if (id !== undefined) argumentIds.add(id);
+  }
   const tracked = new Set<string>();
   const pieces = new Set<string>();
-  for (const entry of entries) {
+  for (const entry of held) {
     const key = toDirtyKey(entry.id, entry.scopeKey);
     tracked.add(key);
-    if (carriesPieceMeta(entry)) pieces.add(key);
+    if (carriesPieceMeta(entry) && !argumentIds.has(entry.id)) pieces.add(key);
   }
   return { tracked, pieces };
 };
 
 /**
- * Whether `entry`'s document carries a piece's metadata, as
- * {@link trackedAndPieceKeysFromEntries} decides it.
+ * Whether `entry`'s document is one of a piece's values: a document whose
+ * `result` link names the piece it belongs to, as each document a piece's
+ * setup writes does. A session sent one has demanded a value of that piece,
+ * which starts it (`serving-loop.md`, "A piece a handler starts").
+ *
+ * A piece's result document, with its pattern pointer, is not one: it is what a
+ * link to the piece names, so a session reading a list of links is sent it
+ * without reading into the piece. Nor is a document whose `result` link names
+ * a handling's receipt (the `receipt:` scheme, `RECEIPT_URI_SCHEME` in the
+ * runner's `entity-kind.ts`), which is a document a handler wrote, not a value
+ * a piece derives.
  */
 export const carriesPieceMeta = (entry: SessionCacheEntry): boolean => {
+  const id = metaLinkId(entry, "result");
+  return id !== undefined && !id.startsWith("receipt:");
+};
+
+/** The id that the `field` link of `entry`'s document names, if it has one. */
+const metaLinkId = (
+  entry: SessionCacheEntry,
+  field: "argument" | "result",
+): string | undefined => {
   const doc = entry.doc;
-  return doc !== null && typeof doc === "object" &&
-    ("patternIdentity" in doc || "result" in doc);
+  if (doc === null || typeof doc !== "object" || !(field in doc)) {
+    return undefined;
+  }
+  const link = (doc as Record<string, unknown>)[field];
+  if (!isLinkRef(link)) return undefined;
+  const { id } = linkRefPayload(link);
+  return typeof id === "string" ? id : undefined;
 };
 
 /**
