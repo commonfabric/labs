@@ -3,7 +3,7 @@
  * the list back through `state.items`.
  */
 
-import { action, assert, pattern, TESTS } from "commonfabric";
+import { action, assert, FS, pattern, TESTS } from "commonfabric";
 import VerbList from "./main.tsx";
 
 export default pattern(() => {
@@ -33,6 +33,13 @@ export default pattern(() => {
     list.state.items.length === 2 && list.state.items[1].id === "eggs" &&
     list.state.items[1].text === "Eggs"
   );
+  const assert_text_is_empty = assert(() =>
+    list[FS].type === "text/markdown" &&
+    list[FS].frontmatter.title === "Verb list" && list[FS].content === ""
+  );
+  const assert_text_lists_both = assert(() =>
+    list[FS].content === "- [ ] Milk\n- [ ] Eggs"
+  );
   const assert_nothing_is_checked_or_hidden = assert(() =>
     Object.keys(list.state.checked).length === 0 &&
     list.output.hideChecked === false
@@ -42,6 +49,7 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert_starts_empty },
       { assertion: assert_nothing_is_checked_or_hidden },
+      { assertion: assert_text_is_empty },
 
       { action: action_add_milk },
       { assertion: assert_holds_milk },
@@ -51,6 +59,7 @@ export default pattern(() => {
 
       { action: action_add_padded_eggs },
       { assertion: assert_eggs_follow_milk_trimmed },
+      { assertion: assert_text_lists_both },
     ],
     list,
   };

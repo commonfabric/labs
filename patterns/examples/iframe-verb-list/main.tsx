@@ -8,7 +8,9 @@
 
 import {
   action,
+  computed,
   dataFile,
+  FS,
   NAME,
   pattern,
   type Stream,
@@ -48,6 +50,16 @@ export interface VerbListOutput {
   [NAME]: string;
   [UI]: VNode;
 
+  /**
+   * The list as text, one line per item with its check mark, for whatever
+   * reads what the pattern holds rather than its frame.
+   */
+  [FS]: {
+    type: "text/markdown";
+    frontmatter: { title: string };
+    content: string;
+  };
+
   /** The items, and which of them are checked off, by item id. */
   state: IframeStateData;
 
@@ -84,6 +96,14 @@ export default pattern<Record<string, never>, VerbListOutput>(() => {
     return { item, added: true };
   });
 
+  const content = computed(() => {
+    const { items, checked } = state.get();
+    return items.map((item) =>
+      `- [${checked[item.id] ? "x" : " "}] ${item.text}`
+    )
+      .join("\n");
+  });
+
   return {
     [NAME]: "Verb list",
     [UI]: (
@@ -101,6 +121,11 @@ export default pattern<Record<string, never>, VerbListOutput>(() => {
         />
       </div>
     ),
+    [FS]: {
+      type: "text/markdown",
+      frontmatter: { title: "Verb list" },
+      content,
+    },
     state,
     output,
     addItem,
