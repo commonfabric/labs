@@ -1,8 +1,7 @@
 /**
  * A piece a handler starts on a serving runtime stays stored and stops running
  * once the handler's transaction commits, as if the server had restarted. A read
- * of a value it derives, a client's being sent its documents, and an event sent
- * to it bring it back.
+ * of a value it derives and an event sent to it bring it back.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -196,8 +195,8 @@ describe("served-handler-child", () => {
     });
 
   it("stops running once the handler's transaction commits", async () => {
-    // A client sent the child's documents demands the child, so the serving
-    // runtime reads the link to it here, before any client reads the list.
+    // A client's read of the list can demand the child, so the serving runtime
+    // reads the link to it here, before any client reads the list.
     const pieces = await clientPieces();
     const children = await addChildUnread(pieces, "first");
 
@@ -223,13 +222,16 @@ describe("served-handler-child", () => {
     expect(onServer.id).toBe(child.getAsNormalizedFullLink().id);
   });
 
-  it("runs again once a client reads the list that links to it", async () => {
-    // Reading the parent's list sends the client the child's documents, and a
-    // session sent a piece's documents demands that piece.
+  it("runs again once a client tracks a value it derives", async () => {
     const pieces = await clientPieces();
     const child = await addChildOnServer(pieces, "first");
+    const upper = child.key("upper") as Cell<unknown>;
+    const cancel = upper.sink(() => {});
+    expect(await pullFromServer(pieces.runtime, upper)).toBe(true);
+    expect(upper.get()).toBe("FIRST");
 
     expect(await runningOnServer(child.getAsNormalizedFullLink())).toBe(true);
+    cancel();
   });
 
   it("keeps running when a client demands its document at the commit", async () => {

@@ -223,10 +223,7 @@ registers its nodes there. Nothing demands those nodes, so once the handler's
 transaction commits the result is released (`#releaseServedHandlerResult` in
 `runner.ts`), and what remains is what the store holds, with the basis rows of
 any of its actions that ran. A demand for one of its values, or an event to one
-of its streams, starts the piece as either starts a piece on a fresh runtime.
-So does sending a client session one of its documents, as a read of a parent's
-list of children sends each child's: the demand pass structure-loads a piece
-whose document a session was sent (`verification-coverage.md`'s flag 4 row). A
+of its streams, starts the piece as either starts a piece on a fresh runtime. A
 piece whose document a client session tracks at that commit keeps running,
 because that session's demand has already made its attempt to load it. The result
 pattern's index entry goes with the release, and so do the watches of the
