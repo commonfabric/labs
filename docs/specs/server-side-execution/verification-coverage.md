@@ -5141,14 +5141,23 @@ supply; OW29/OW32/OW34 closed):
     store and the room reaches it only through its record's link, so with
     server execution on the store's `entries` were never computed. The
     pattern-meta test needs no engine read: the memory server marks a
-    demand row `piece` when the document the session was sent for it
-    carries `patternIdentity` or `result` (`trackedAndPieceKeysFromEntries`
-    in `server-sync.ts`, read in `#buildSessionDemand`), and the demand
-    pass structure-loads a marked row as it does a root
-    (`SpaceServer`'s demand pass). Pinned by
+    demand row `piece` when the document the session was sent for it is
+    one of a piece's values, a document whose `result` link names a piece
+    (`carriesPieceMeta`), other than the piece's argument, which the
+    `argument` link of a result document the session holds names
+    (`trackedAndPieceKeysFromEntries` in `server-sync.ts`, read in
+    `#buildSessionDemand`). The demand pass structure-loads a marked row
+    as it does a root (`SpaceServer`'s demand pass). A piece's result
+    document is not marked, since it is what a link to the piece names: a
+    read of a list of links is sent it and starts no listed piece. Nor is
+    a document whose `result` names a handling's `receipt:`. Pinned by
     `patterns/integration/fabrichat-file-store-multi-runtime.test.ts` and
     `patterns/system/fabrichat/file-store.test.tsx` with server execution
-    on.
+    on, by `runtime/piece/test/served-handler-child.test.ts` for the list
+    reads that start nothing and the derived value that does, and by
+    `runtime/memory/test/v2-server-demand-set.test.ts` for the marking.
+    A list read whose items are `asCell` is sent each listed piece's
+    stream and derived documents as well, so it still starts each piece.
   - **FUTURE / owed rows the build surfaced (none binding):**
     - **flag 5 — the output-doc-demanders union.** `#demandersFor`
       matches keys by ROOT id; a session whose closure reaches piece P2's

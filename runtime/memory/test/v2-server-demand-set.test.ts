@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
 
-import type { WatchSpec } from "../v2.ts";
+import type { EntityDocument, WatchSpec } from "../v2.ts";
 import {
   type Client,
   connect,
@@ -80,6 +80,33 @@ describe("Server", () => {
     );
     expect(share).toBeDefined();
     return share!;
+  }
+
+  /**
+   * Writes `docs`, links each from `of:root`, and returns the rows of a session
+   * watching `of:root`, once its kept share is checked against a fresh build.
+   */
+  async function rowsWatchedThrough(
+    docs: Array<{ id: string; value: EntityDocument }>,
+  ): Promise<SessionDemand["rows"]> {
+    localSeq += 1;
+    await writer.transact({
+      localSeq,
+      reads: { confirmed: [], pending: [] },
+      operations: [
+        ...docs.map(({ id, value }) => ({ op: "set" as const, id, value })),
+        {
+          op: "set",
+          id: "of:root",
+          value: { value: { items: docs.map(({ id }) => link(id)) } },
+        },
+      ],
+    });
+    const watcher = await mount(alice);
+    await watcher.watchSet([follow("of:root")]);
+    const rows = shareOf(watcher).rows;
+    expectKeptSharesCurrent();
+    return rows;
   }
 
   /** Expects every kept share of the space to equal an uncached build. */
@@ -184,7 +211,11 @@ describe("Server", () => {
         expectKeptSharesCurrent();
       });
 
-      it("marks the rows whose documents carry a piece's metadata", async () => {
+      it("marks the rows whose documents are a piece's values", async () => {
+        // A piece's result document is what a link to the piece names, and its
+        // argument holds its inputs, so neither is one of its values. A
+        // document a handler wrote names the handling's receipt, not a piece.
+
         localSeq += 1;
         await writer.transact({
           localSeq,
@@ -196,12 +227,23 @@ describe("Server", () => {
               value: {
                 value: { v: 1 },
                 patternIdentity: { identity: "a-pattern", symbol: "default" },
+                argument: link("of:piece-argument"),
               },
+            },
+            {
+              op: "set",
+              id: "of:piece-argument",
+              value: { value: { v: 1 }, result: link("of:piece") },
             },
             {
               op: "set",
               id: "of:piece-input",
               value: { value: { v: 1 }, result: link("of:piece") },
+            },
+            {
+              op: "set",
+              id: "of:handled",
+              value: { value: { v: 1 }, result: link("receipt:a-handling") },
             },
             {
               op: "set",
@@ -212,6 +254,8 @@ describe("Server", () => {
                     link("of:leaf-a"),
                     link("of:piece"),
                     link("of:piece-input"),
+                    link("of:piece-argument"),
+                    link("of:handled"),
                   ],
                 },
               },
@@ -222,14 +266,84 @@ describe("Server", () => {
         await watcher.watchSet([follow("of:root")]);
 
         const rows = shareOf(watcher).rows;
-        expect(rows.get("space\0of:piece")?.piece).toBe(true);
         expect(rows.get("space\0of:piece-input")?.piece).toBe(true);
+        expect(rows.has("space\0of:piece")).toBe(true);
+        expect(rows.get("space\0of:piece")?.piece).toBeUndefined();
+        expect(rows.has("space\0of:piece-argument")).toBe(true);
+        expect(rows.get("space\0of:piece-argument")?.piece).toBeUndefined();
+        expect(rows.has("space\0of:handled")).toBe(true);
+        expect(rows.get("space\0of:handled")?.piece).toBeUndefined();
         expect(rows.get("space\0of:leaf-a")?.piece).toBeUndefined();
         expect(rows.get("space\0of:root")?.piece).toBeUndefined();
         expectKeptSharesCurrent();
       });
 
-      it("rebuilds a share when a push gives a held document a piece's metadata", async () => {
+      it("marks a row that a document without a pattern pointer names as its argument", async () => {
+        const rows = await rowsWatchedThrough([
+          {
+            id: "of:piece-input",
+            value: { value: { v: 1 }, result: link("of:piece") },
+          },
+          {
+            id: "of:not-a-piece",
+            value: { value: { v: 1 }, argument: link("of:piece-input") },
+          },
+        ]);
+
+        expect(rows.get("space\0of:piece-input")?.piece).toBe(true);
+      });
+
+      it("marks a row whose id a piece names as an argument in another scope", async () => {
+        const rows = await rowsWatchedThrough([
+          {
+            id: "of:piece",
+            value: {
+              value: { v: 1 },
+              patternIdentity: { identity: "a-pattern", symbol: "default" },
+              argument: {
+                "/": {
+                  "link@1": { id: "of:piece-input", path: [], scope: "user" },
+                },
+              },
+            },
+          },
+          {
+            id: "of:piece-input",
+            value: { value: { v: 1 }, result: link("of:piece") },
+          },
+        ]);
+
+        expect(rows.get("space\0of:piece-input")?.piece).toBe(true);
+      });
+
+      it("leaves unmarked a piece's result, and a row whose `result` names no document", async () => {
+        const rows = await rowsWatchedThrough([
+          {
+            id: "of:bare-piece",
+            value: {
+              value: { v: 1 },
+              patternIdentity: { identity: "a-pattern", symbol: "default" },
+            },
+          },
+          { id: "of:plain-result", value: { value: { v: 1 }, result: 1 } },
+          {
+            id: "of:relative-result",
+            value: {
+              value: { v: 1 },
+              result: { "/": { "link@1": { path: [] } } },
+            },
+          },
+        ]);
+
+        expect(rows.has("space\0of:bare-piece")).toBe(true);
+        expect(rows.get("space\0of:bare-piece")?.piece).toBeUndefined();
+        expect(rows.has("space\0of:plain-result")).toBe(true);
+        expect(rows.get("space\0of:plain-result")?.piece).toBeUndefined();
+        expect(rows.has("space\0of:relative-result")).toBe(true);
+        expect(rows.get("space\0of:relative-result")?.piece).toBeUndefined();
+      });
+
+      it("rebuilds a share when a push makes a held document a piece's value", async () => {
         const watcher = await mount(alice);
         const view = await watcher.watchSet([follow("of:root")]);
         const before = shareOf(watcher);
@@ -244,10 +358,7 @@ describe("Server", () => {
           operations: [{
             op: "set",
             id: "of:leaf-a",
-            value: {
-              value: { v: 1 },
-              patternIdentity: { identity: "a-pattern", symbol: "default" },
-            },
+            value: { value: { v: 1 }, result: link("of:piece") },
           }],
         });
         await pushed;
@@ -255,6 +366,72 @@ describe("Server", () => {
         const after = shareOf(watcher);
         expect(after).not.toBe(before);
         expect(after.rows.get("space\0of:leaf-a")?.piece).toBe(true);
+        expectKeptSharesCurrent();
+      });
+
+      it("rebuilds a share when a push gives a held piece's result another argument", async () => {
+        const piece = (argument: string) => ({
+          value: { v: 1 },
+          patternIdentity: { identity: "a-pattern", symbol: "default" },
+          argument: link(argument),
+        });
+        localSeq += 1;
+        await writer.transact({
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [
+            { op: "set", id: "of:piece", value: piece("of:first-input") },
+            {
+              op: "set",
+              id: "of:first-input",
+              value: { value: { v: 1 }, result: link("of:piece") },
+            },
+            {
+              op: "set",
+              id: "of:second-input",
+              value: { value: { v: 1 }, result: link("of:piece") },
+            },
+            {
+              op: "set",
+              id: "of:root",
+              value: {
+                value: {
+                  items: [
+                    link("of:piece"),
+                    link("of:first-input"),
+                    link("of:second-input"),
+                  ],
+                },
+              },
+            },
+          ],
+        });
+        const watcher = await mount(alice);
+        const view = await watcher.watchSet([follow("of:root")]);
+        const before = shareOf(watcher);
+        expect(before.rows.get("space\0of:first-input")?.piece)
+          .toBeUndefined();
+        expect(before.rows.get("space\0of:second-input")?.piece).toBe(true);
+
+        const updates = view.subscribe();
+        const pushed = updates.next();
+        localSeq += 1;
+        await writer.transact({
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: "of:piece",
+            value: piece("of:second-input"),
+          }],
+        });
+        await pushed;
+
+        const after = shareOf(watcher);
+        expect(after).not.toBe(before);
+        expect(after.rows.get("space\0of:first-input")?.piece).toBe(true);
+        expect(after.rows.get("space\0of:second-input")?.piece)
+          .toBeUndefined();
         expectKeptSharesCurrent();
       });
 

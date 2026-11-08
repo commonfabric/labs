@@ -222,6 +222,47 @@ describe("served-handler-child", () => {
     expect(onServer.id).toBe(child.getAsNormalizedFullLink().id);
   });
 
+  describe("after a client reads the list that links to it", () => {
+    // A link to the child names its result document, which a read of the list
+    // is sent whatever its schema. A read of each child's title is sent the
+    // child's argument too, which holds an input rather than a value the child
+    // derives, and the title, which the handler wrote.
+
+    /**
+     * Reads `children` under `schema`, and returns what the read found of the
+     * child and whether the child then runs.
+     */
+    const runsAfterReading = async (
+      schema: Record<string, unknown> | undefined,
+    ): Promise<{ running: boolean; read: unknown }> => {
+      const pieces = await clientPieces();
+      const children = await addChildUnread(pieces, "first");
+      const list =
+        (schema === undefined
+          ? children
+          : children.asSchema(schema as never)) as Cell<any>;
+      expect(await pullFromServer(pieces.runtime, list)).toBe(true);
+      const read = list.get()?.[0];
+      const child = (children as Cell<any>).key(0).resolveAsCell();
+      const running = await runningOnServer(child.getAsNormalizedFullLink());
+      return { running, read };
+    };
+
+    it("leaves the child stopped for a read with no schema of its own", async () => {
+      const { running } = await runsAfterReading(undefined);
+      expect(running).toBe(false);
+    });
+
+    it("leaves the child stopped for a read of each child's title", async () => {
+      const { running, read } = await runsAfterReading({
+        type: "array",
+        items: { type: "object", properties: { title: { type: "string" } } },
+      });
+      expect(read).toEqual({ title: "first" });
+      expect(running).toBe(false);
+    });
+  });
+
   it("runs again once a client tracks a value it derives", async () => {
     const pieces = await clientPieces();
     const child = await addChildOnServer(pieces, "first");
