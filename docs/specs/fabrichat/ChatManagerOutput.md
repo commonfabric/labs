@@ -186,9 +186,10 @@ session that has none is refused.
   [deleted](../random-space-identities.md#deleting-a-space) is left out: its
   catalog entry is in the `deleted` state, or `spaceDeleted(room)` returns
   `true`. The handler clock counts whole seconds, so two rooms created in one
-  second share a `since`; between them, the one whose membership the manager
-  recorded more recently comes first, and a room only the catalog finds comes
-  before a room with a membership.
+  second share a `since`; between them, the room created later comes first,
+  unless forgetting or rejoining the other has since moved its membership after
+  the later room's, and a room only the catalog finds comes before a room with a
+  membership.
 - **`deletedRooms`** lists, newest first with ties broken as in `rooms`, every
   room this user holds a membership for, saved or archived, whose space is
   [deleted](../random-space-identities.md#deleting-a-space): its catalog entry

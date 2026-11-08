@@ -2069,10 +2069,11 @@ const liveDirect = (
 /**
  * `entries`, newest first. The handler clock counts whole seconds, so two rooms
  * created in one second share a `since`, and between them the one later in
- * `entries` comes first. That is the one recorded more recently: the manager
- * appends a membership when it records one, and moves it to the end when a
- * forget or a rejoin records it again. Rooms only the catalog finds follow the
- * memberships, in the catalog's order, so the order is total.
+ * `entries` comes first. The manager appends a membership when it records one,
+ * so that is the room created later, unless a forget or a rejoin has since
+ * moved the other's membership to the end; a restore leaves a membership where
+ * it is. Rooms only the catalog finds follow the memberships, in the catalog's
+ * order, so the order is total.
  */
 const newestFirst = <T extends ChatIndexEntry>(entries: readonly T[]): T[] =>
   entries.map((entry, index) => ({ entry, index })).sort((a, b) =>
