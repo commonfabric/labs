@@ -156,24 +156,33 @@ export const trackedIdsFromEntries = (
  * A piece's argument holds its inputs, which are current in the store whether
  * or not the piece runs, so a session sent one has read an input and demanded
  * none of the piece's values. An argument is known by the `argument` link of
- * a piece's result document among `entries`: a session that reads past a link
- * into a piece is sent its result document first.
+ * a piece's result document, the one with the pattern pointer, among
+ * `entries`: a session that reads past a link into a piece is sent its result
+ * document first. The link names the argument's scope, or leaves it to be the
+ * result document's own.
  */
 export const trackedAndPieceKeysFromEntries = (
   entries: Iterable<SessionCacheEntry>,
 ): { tracked: Set<string>; pieces: Set<string> } => {
   const held = [...entries];
-  const argumentIds = new Set<string>();
+  const argumentKeys = new Set<string>();
   for (const entry of held) {
-    const id = metaLinkId(entry, "argument");
-    if (id !== undefined) argumentIds.add(id);
+    if (!isPieceResult(entry)) continue;
+    const argument = metaLinkOf(entry, "argument");
+    if (argument === undefined) continue;
+    argumentKeys.add(scopedIdKey(argument.scope ?? entry.scope, argument.id));
   }
   const tracked = new Set<string>();
   const pieces = new Set<string>();
   for (const entry of held) {
     const key = toDirtyKey(entry.id, entry.scopeKey);
     tracked.add(key);
-    if (carriesPieceMeta(entry) && !argumentIds.has(entry.id)) pieces.add(key);
+    if (
+      carriesPieceMeta(entry) &&
+      !argumentKeys.has(scopedIdKey(entry.scope, entry.id))
+    ) {
+      pieces.add(key);
+    }
   }
   return { tracked, pieces };
 };
@@ -192,24 +201,37 @@ export const trackedAndPieceKeysFromEntries = (
  * a piece derives.
  */
 export const carriesPieceMeta = (entry: SessionCacheEntry): boolean => {
-  const id = metaLinkId(entry, "result");
-  return id !== undefined && !id.startsWith("receipt:");
+  const result = metaLinkOf(entry, "result");
+  return result !== undefined && !result.id.startsWith("receipt:");
 };
 
-/** The id that the `field` link of `entry`'s document names, if it has one. */
-const metaLinkId = (
+/** Whether `entry`'s document is a piece's result, with its pattern pointer. */
+const isPieceResult = (entry: SessionCacheEntry): boolean => {
+  const doc = entry.doc;
+  return doc !== null && typeof doc === "object" && "patternIdentity" in doc;
+};
+
+/**
+ * The id, and the scope if it names one, that the `field` link of `entry`'s
+ * document names, or `undefined` when the document holds no such link.
+ */
+const metaLinkOf = (
   entry: SessionCacheEntry,
   field: "argument" | "result",
-): string | undefined => {
+): { id: string; scope?: string } | undefined => {
   const doc = entry.doc;
   if (doc === null || typeof doc !== "object" || !(field in doc)) {
     return undefined;
   }
   const link = (doc as Record<string, unknown>)[field];
   if (!isLinkRef(link)) return undefined;
-  const { id } = linkRefPayload(link);
-  return typeof id === "string" ? id : undefined;
+  const { id, scope } = linkRefPayload(link);
+  if (typeof id !== "string") return undefined;
+  return typeof scope === "string" ? { id, scope } : { id };
 };
+
+/** A key naming the document `id` in the scope named `scope`. */
+const scopedIdKey = (scope: string, id: string): string => `${scope}\0${id}`;
 
 /**
  * The wire form of a cache entry: the server-internal `scopeKey` is

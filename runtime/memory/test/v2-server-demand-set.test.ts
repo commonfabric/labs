@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
 
-import type { WatchSpec } from "../v2.ts";
+import type { EntityDocument, WatchSpec } from "../v2.ts";
 import {
   type Client,
   connect,
@@ -80,6 +80,33 @@ describe("Server", () => {
     );
     expect(share).toBeDefined();
     return share!;
+  }
+
+  /**
+   * Writes `docs`, links each from `of:root`, and returns the rows of a session
+   * watching `of:root`, once its kept share is checked against a fresh build.
+   */
+  async function rowsWatchedThrough(
+    docs: Array<{ id: string; value: EntityDocument }>,
+  ): Promise<SessionDemand["rows"]> {
+    localSeq += 1;
+    await writer.transact({
+      localSeq,
+      reads: { confirmed: [], pending: [] },
+      operations: [
+        ...docs.map(({ id, value }) => ({ op: "set" as const, id, value })),
+        {
+          op: "set",
+          id: "of:root",
+          value: { value: { items: docs.map(({ id }) => link(id)) } },
+        },
+      ],
+    });
+    const watcher = await mount(alice);
+    await watcher.watchSet([follow("of:root")]);
+    const rows = shareOf(watcher).rows;
+    expectKeptSharesCurrent();
+    return rows;
   }
 
   /** Expects every kept share of the space to equal an uncached build. */
@@ -249,6 +276,62 @@ describe("Server", () => {
         expect(rows.get("space\0of:leaf-a")?.piece).toBeUndefined();
         expect(rows.get("space\0of:root")?.piece).toBeUndefined();
         expectKeptSharesCurrent();
+      });
+
+      it("marks a row that a document without a pattern pointer names as its argument", async () => {
+        const rows = await rowsWatchedThrough([
+          {
+            id: "of:piece-input",
+            value: { value: { v: 1 }, result: link("of:piece") },
+          },
+          {
+            id: "of:not-a-piece",
+            value: { value: { v: 1 }, argument: link("of:piece-input") },
+          },
+        ]);
+
+        expect(rows.get("space\0of:piece-input")?.piece).toBe(true);
+      });
+
+      it("marks a row whose id a piece names as an argument in another scope", async () => {
+        const rows = await rowsWatchedThrough([
+          {
+            id: "of:piece",
+            value: {
+              value: { v: 1 },
+              patternIdentity: { identity: "a-pattern", symbol: "default" },
+              argument: {
+                "/": {
+                  "link@1": { id: "of:piece-input", path: [], scope: "user" },
+                },
+              },
+            },
+          },
+          {
+            id: "of:piece-input",
+            value: { value: { v: 1 }, result: link("of:piece") },
+          },
+        ]);
+
+        expect(rows.get("space\0of:piece-input")?.piece).toBe(true);
+      });
+
+      it("leaves unmarked a row whose `result` names no document", async () => {
+        const rows = await rowsWatchedThrough([
+          { id: "of:plain-result", value: { value: { v: 1 }, result: 1 } },
+          {
+            id: "of:relative-result",
+            value: {
+              value: { v: 1 },
+              result: { "/": { "link@1": { path: [] } } },
+            },
+          },
+        ]);
+
+        expect(rows.has("space\0of:plain-result")).toBe(true);
+        expect(rows.get("space\0of:plain-result")?.piece).toBeUndefined();
+        expect(rows.has("space\0of:relative-result")).toBe(true);
+        expect(rows.get("space\0of:relative-result")?.piece).toBeUndefined();
       });
 
       it("rebuilds a share when a push makes a held document a piece's value", async () => {
