@@ -2670,9 +2670,10 @@ describe("piece schema compatibility", () => {
       ).toEqual(["result.state.checked.ship"]);
     });
 
-    it("refuses dropping an optional verb", () => {
-      // A holder cannot read a verb's absence: its stream handle reads as
-      // itself, so it keeps sending to a handler that is gone.
+    it("refuses dropping an optional verb the previous pattern binds to nothing", () => {
+      // Only the previous pattern's binding says whether a holder could read
+      // the verb's absence. A recorded baseline, like these patterns, carries
+      // none.
 
       expect(
         patternSchemaIncompatibilities(
@@ -2683,6 +2684,309 @@ describe("piece schema compatibility", () => {
         path: "result.tick",
         reason: "existing result field was removed",
       }]);
+    });
+
+    describe("against the previous pattern's bindings", () => {
+      /**
+       * `base` with `result` bound in its graph, among `nodes` and the
+       * derived cells `cells`. The graph also holds one handler, whose
+       * `$event` is the stream under the cause `{ stream: "own" }`.
+       */
+      const bound = (
+        base: Pattern,
+        result: Record<string, unknown>,
+        nodes: unknown[] = [],
+        cells: unknown[] = [],
+      ): Pattern => ({
+        ...base,
+        result,
+        nodes: [{
+          module: { type: "javascript", wrapper: "handler" },
+          inputs: {
+            $ctx: {},
+            $event: { $alias: { partialCause: { stream: "own" }, path: [] } },
+          },
+          outputs: {},
+        }, ...nodes],
+        derivedInternalCells: [{
+          partialCause: { stream: "own" },
+          schema: { asCell: ["stream"] },
+        }, ...cells],
+      } as Pattern);
+      const handlerStream = {
+        $alias: { partialCause: { stream: "own" }, path: [] },
+      };
+      const dialog = {
+        module: { type: "ref", implementation: "llmDialog" },
+        inputs: {},
+        outputs: { $alias: { partialCause: "dialog", path: [] } },
+      };
+
+      it("accepts dropping an optional verb bound to a handler's stream", () => {
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({ doubled: { type: "number" }, tick }, ["doubled"]),
+              { tick: handlerStream },
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([]);
+      });
+
+      it("accepts dropping an optional field whose verb is bound to a handler's stream", () => {
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({
+                doubled: { type: "number" },
+                ui: { type: "object", properties: { tick } },
+              }, ["doubled"]),
+              { ui: { tick: handlerStream } },
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([]);
+      });
+
+      it("refuses dropping an optional field that forwards a verb through a builtin's whole output", () => {
+        // `ui: ifElse(on, { cancel: dialog.cancelGeneration }, undefined)`
+        // binds `ui` to the whole of `ifElse`'s output. What it forwards may
+        // be a builtin's key, which records no owner a read could consult.
+
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({
+                doubled: { type: "number" },
+                ui: { type: "object", properties: { tick } },
+              }, ["doubled"]),
+              { ui: { $alias: { partialCause: "picked", path: [] } } },
+              [{
+                module: { type: "ref", implementation: "ifElse" },
+                inputs: {},
+                outputs: { $alias: { partialCause: "picked", path: [] } },
+              }],
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([{
+          path: "result.ui",
+          reason: "existing result field was removed",
+        }]);
+      });
+
+      it("refuses dropping an optional verb a computation returns", () => {
+        // `cancel: computed(() => dialog.cancelGeneration)` mints the
+        // computation a stream-marked cell of its own. The marker says what
+        // the value is; no handler listens there.
+
+        const lifted = { stream: ["__patternResult", "tick"] };
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({ doubled: { type: "number" }, tick }, ["doubled"]),
+              { tick: { $alias: { partialCause: lifted, path: [] } } },
+              [{
+                module: { type: "javascript" },
+                inputs: {},
+                outputs: { $alias: { partialCause: lifted, path: [] } },
+              }],
+              [{
+                partialCause: lifted,
+                kind: "computed",
+                schema: { asCell: ["stream", "opaque"] },
+              }],
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([{
+          path: "result.tick",
+          reason: "existing result field was removed",
+        }]);
+      });
+
+      it("accepts dropping an optional field whose data sits beside a handler's verb", () => {
+        // `pending` is data a builtin's output holds. Removing it needs no
+        // stream's owner, so it does not keep the field.
+
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({
+                doubled: { type: "number" },
+                ui: {
+                  type: "object",
+                  properties: { tick, pending: { type: "boolean" } },
+                },
+              }, ["doubled"]),
+              {
+                ui: {
+                  tick: handlerStream,
+                  pending: {
+                    $alias: { partialCause: "dialog", path: ["pending"] },
+                  },
+                },
+              },
+              [dialog],
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([]);
+      });
+
+      it("judges a key whose name holds a dot by its own binding, not a nested one's", () => {
+        // `"ui.tick"` and `ui.tick` read the same as a path. The literal key
+        // is bound to a builtin's key, the nested one to a handler's stream.
+
+        const withBoth = (properties: Record<string, JSONSchema>) =>
+          verbs({
+            doubled: { type: "number" },
+            ui: { type: "object", properties: { tick } },
+            ...properties,
+          }, ["doubled"]);
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              withBoth({ "ui.tick": tick }),
+              {
+                "ui.tick": {
+                  $alias: {
+                    partialCause: "dialog",
+                    path: ["cancelGeneration"],
+                  },
+                },
+                ui: { tick: handlerStream },
+              },
+              [dialog],
+            ),
+            withBoth({}),
+          ),
+        ).toEqual([{
+          path: "result.ui.tick",
+          reason: "existing result field was removed",
+        }]);
+      });
+
+      it("refuses dropping an optional verb bound to a key of a builtin's output", () => {
+        // llm-dialog listens at keys of its own document, which records no
+        // owner, so a holder would read the removed verb as live.
+
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({ doubled: { type: "number" }, tick }, ["doubled"]),
+              {
+                tick: {
+                  $alias: {
+                    partialCause: "dialog",
+                    path: ["cancelGeneration"],
+                  },
+                },
+              },
+              [dialog],
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([{
+          path: "result.tick",
+          reason: "existing result field was removed",
+        }]);
+      });
+
+      it("refuses dropping a required verb bound to a handler's stream", () => {
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({ doubled: { type: "number" }, tick }, ["doubled", "tick"]),
+              { tick: handlerStream },
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([{
+          path: "result.tick",
+          reason: "existing result field was removed",
+        }]);
+      });
+
+      it("refuses dropping an optional field whose verb sits beyond its named properties", () => {
+        // A verb `additionalProperties` declares has no name the binding can
+        // be followed by, so nothing shows a handler's stream behind it.
+
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({
+                doubled: { type: "number" },
+                ui: {
+                  type: "object",
+                  properties: { label: { type: "string" } },
+                  additionalProperties: tick,
+                },
+              }, ["doubled"]),
+              { ui: { label: "Tick" } },
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([{
+          path: "result.ui",
+          reason: "existing result field was removed",
+        }]);
+      });
+
+      it("refuses dropping a nested verb whose field the previous pattern binds whole", () => {
+        // `ui` keeps publishing; its verb goes. The walk to `ui.tick` stops at
+        // `ui`'s alias, which could be forwarding a builtin's key.
+
+        const withUi = (properties: Record<string, JSONSchema>) =>
+          verbs({
+            doubled: { type: "number" },
+            ui: {
+              type: "object",
+              properties: { label: { type: "string" }, ...properties },
+            },
+          }, ["doubled"]);
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              withUi({ tick }),
+              { ui: { $alias: { partialCause: "picked", path: [] } } },
+              [{
+                module: { type: "ref", implementation: "ifElse" },
+                inputs: {},
+                outputs: { $alias: { partialCause: "picked", path: [] } },
+              }],
+            ),
+            withUi({}),
+          ),
+        ).toEqual([{
+          path: "result.ui.tick",
+          reason: "existing result field was removed",
+        }]);
+      });
+
+      it("refuses dropping an optional verb whose stream a node lists among its outputs", () => {
+        // A node that writes the stream's cell, here inside a list beside a
+        // count, makes it something other than a handler's own stream.
+
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              verbs({ doubled: { type: "number" }, tick }, ["doubled"]),
+              { tick: handlerStream },
+              [{
+                module: { type: "javascript" },
+                inputs: {},
+                outputs: { streams: [handlerStream], count: 0 },
+              }],
+            ),
+            verbs({ doubled: { type: "number" } }, ["doubled"]),
+          ),
+        ).toEqual([{
+          path: "result.tick",
+          reason: "existing result field was removed",
+        }]);
+      });
     });
 
     it("refuses dropping an optional verb whose marker its reference carries", () => {
@@ -2707,6 +3011,33 @@ describe("piece schema compatibility", () => {
         path: "result.tick",
         reason: "existing result field was removed",
       }]);
+    });
+
+    it("accepts dropping an optional field whose recursive schema holds no verb", () => {
+      // The search for a verb follows `child` back to `Node` once and stops
+      // there, so a recursive data field is judged as the data it is.
+
+      const withTree = (properties: Record<string, JSONSchema>): Pattern =>
+        pattern(oldPattern.argumentSchema, {
+          type: "object",
+          properties: { doubled: { type: "number" }, ...properties },
+          required: ["doubled"],
+          $defs: {
+            Node: {
+              type: "object",
+              properties: {
+                label: { type: "string" },
+                child: { $ref: "#/$defs/Node" },
+              },
+            },
+          },
+        });
+      expect(
+        patternSchemaIncompatibilities(
+          withTree({ tree: { $ref: "#/$defs/Node" } }),
+          withTree({}),
+        ),
+      ).toEqual([]);
     });
 
     it("refuses dropping an optional field that holds a verb", () => {
