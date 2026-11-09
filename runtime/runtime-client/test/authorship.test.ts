@@ -682,6 +682,59 @@ describe("authorship", () => {
       }
     });
 
+    it("reads the author's name once when an update arrives while the resolved profile's label is unanswered", async () => {
+      // Both reads wait on the profile's label. The first, which the update
+      // superseded, stops when its answer comes rather than reading the name.
+
+      const heldLabels: (() => void)[] = [];
+      const profile = {
+        getCfcLabel: () =>
+          new Promise((resolve) =>
+            heldLabels.push(() => resolve(representsLabel("did:key:alice")))
+          ),
+      };
+      let nameReads = 0;
+      const name = {
+        get: () => undefined,
+        sync: () => {
+          nameReads++;
+          return Promise.resolve("Alice");
+        },
+      };
+      let deliver: DeliveryCallback | undefined;
+      const author = {
+        get: () => ({ name }),
+        getCfcLabel: () => Promise.resolve(undefined),
+        resolveAsCell: () => Promise.resolve(profile),
+        subscribe(callback: DeliveryCallback) {
+          deliver = callback;
+          callback({ name }, undefined, { cfcLabelCurrent: false });
+          return () => {
+            deliver = undefined;
+          };
+        },
+      };
+      const observation = observe(
+        {
+          getCfcLabel: () => Promise.resolve(authoredByLabel("did:key:alice")),
+        },
+        author,
+      );
+
+      try {
+        await settle();
+        deliver?.({ name }, undefined, { cfcLabelCurrent: false });
+        await settle();
+        for (const answer of heldLabels.splice(0)) answer();
+        await settle();
+
+        expect(observation.states()).toEqual(["verified"]);
+        expect(nameReads).toBe(1);
+      } finally {
+        observation.cancel();
+      }
+    });
+
     it("asks the worker for nothing more on a read that is still unanswered when the observation is cancelled", async () => {
       const resolved = labelCountingCell(authoredByLabel("alice"));
       const value = unansweredCell(undefined, resolved);

@@ -460,6 +460,7 @@ const readLabelView = async (
     if (superseded()) return undefined;
     if (hasLabelQuery(resolved)) {
       resolvedLabel = await resolved.getCfcLabel();
+      if (superseded()) return undefined;
       if (resolvedLabel === undefined && hasLabelSubscription(resolved)) {
         unloadedCell = resolved;
       }
