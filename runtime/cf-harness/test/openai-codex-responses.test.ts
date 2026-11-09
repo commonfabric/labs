@@ -1434,3 +1434,271 @@ Deno.test("Codex Responses cancels the stream after malformed SSE", async () => 
   );
   assertEquals(canceled, true);
 });
+
+/**
+ * A sleep watch the test reports from by hand: `slept(ms)` reports a sleep to
+ * the watch of the attempt open now, and `stops` counts the watches stopped.
+ */
+const handSleepWatch = () => {
+  const watch = {
+    open: [] as ((sleptMs: number) => void)[],
+    started: 0,
+    stops: 0,
+  };
+  return {
+    watch,
+    watchSleep: (onSlept: (sleptMs: number) => void) => {
+      watch.started += 1;
+      watch.open.push(onSlept);
+      return () => {
+        watch.stops += 1;
+        watch.open = watch.open.filter((open) => open !== onSlept);
+      };
+    },
+    slept(ms: number) {
+      for (const onSlept of [...watch.open]) onSlept(ms);
+    },
+  };
+};
+
+const completedMessage = (text: string) =>
+  sse({
+    type: "response.completed",
+    response: {
+      id: "resp_after_sleep",
+      status: "completed",
+      output: [{
+        type: "message",
+        id: "msg_after_sleep",
+        role: "assistant",
+        content: [{ type: "output_text", text }],
+      }],
+    },
+  });
+
+Deno.test("Codex Responses issues again an attempt whose stream a machine sleep cut off", async () => {
+  const sleep = handSleepWatch();
+  const attempts: HarnessModelAttemptDiagnostic[] = [];
+  let canceled = false;
+  let requests = 0;
+  let markStreaming!: () => void;
+  const streaming = new Promise<void>((resolve) => {
+    markStreaming = resolve;
+  });
+  // a stream that never delivers another byte or an error, as a connection the
+  // provider dropped while the machine slept; it says it is streaming once a
+  // read is pending on it, so the sleep lands on that read
+  const dead = new ReadableStream<Uint8Array>({
+    pull() {
+      markStreaming();
+      return new Promise<void>(() => {});
+    },
+    cancel() {
+      canceled = true;
+    },
+  }, { highWaterMark: 0 });
+  const client = new OpenAICodexResponsesClient({
+    transportRetries: 1,
+    transportRetryDelayMs: 0,
+    watchSleep: sleep.watchSleep,
+    credentialResolver: { resolve: () => Promise.resolve(credential) },
+    fetchFn: () => {
+      requests += 1;
+      if (requests === 1) {
+        return Promise.resolve(new Response(dead, { status: 200 }));
+      }
+      return Promise.resolve(completedMessage("after the wake"));
+    },
+  });
+  const completion = client.complete({
+    model: "gpt-5.4",
+    transcript: [{ role: "user", content: "hi" }],
+    tools: [],
+    nativeModelToolIds: [],
+    runId: "run-sleep-stream",
+    onAttempt: (attempt) => {
+      attempts.push(attempt);
+    },
+  });
+  await streaming;
+  sleep.slept(600_000);
+
+  const result = await completion;
+  assertEquals(result.assistant.content, "after the wake");
+  assertEquals(requests, 2);
+  assertEquals(canceled, true, "the dead stream is let go");
+  assertEquals(attempts[0].outcome, "http_response");
+  assertEquals(attempts[0].retry?.kind, "transport_error");
+  assertStringIncludes(
+    String(attempts[0].errorDetail),
+    "the machine slept for 600 s",
+    "the attempt that was cut off says why, though the retry succeeded",
+  );
+  assertEquals(
+    [sleep.watch.started, sleep.watch.stops],
+    [2, 2],
+    "each attempt is watched, and its watch stops when it ends",
+  );
+});
+
+Deno.test("Codex Responses issues again an attempt a machine sleep cut off before the response began", async () => {
+  const sleep = handSleepWatch();
+  const attempts: HarnessModelAttemptDiagnostic[] = [];
+  let requests = 0;
+  let markRequested!: () => void;
+  const requested = new Promise<void>((resolve) => {
+    markRequested = resolve;
+  });
+  const client = new OpenAICodexResponsesClient({
+    transportRetries: 1,
+    transportRetryDelayMs: 0,
+    watchSleep: sleep.watchSleep,
+    credentialResolver: { resolve: () => Promise.resolve(credential) },
+    fetchFn: (_input, init) => {
+      requests += 1;
+      if (requests > 1) return Promise.resolve(completedMessage("answered"));
+      markRequested();
+      // headers that never arrive: only the request's signal ends the wait
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(init.signal?.reason),
+          { once: true },
+        );
+      });
+    },
+  });
+  const completion = client.complete({
+    model: "gpt-5.4",
+    transcript: [{ role: "user", content: "hi" }],
+    tools: [],
+    nativeModelToolIds: [],
+    runId: "run-sleep-request",
+    onAttempt: (attempt) => {
+      attempts.push(attempt);
+    },
+  });
+  await requested;
+  sleep.slept(600_000);
+
+  const result = await completion;
+  assertEquals(result.assistant.content, "answered");
+  assertEquals(attempts[0].outcome, "transport_error");
+  assertEquals(attempts[0].retry?.kind, "transport_error");
+  assertStringIncludes(String(attempts[0].errorDetail), "the machine slept");
+});
+
+Deno.test("Codex Responses records the sleep that cut off reading an error response's body", async () => {
+  const sleep = handSleepWatch();
+  const attempts: HarnessModelAttemptDiagnostic[] = [];
+  let requests = 0;
+  let markReading!: () => void;
+  const reading = new Promise<void>((resolve) => {
+    markReading = resolve;
+  });
+  const client = new OpenAICodexResponsesClient({
+    transportRetries: 1,
+    transportRetryDelayMs: 0,
+    watchSleep: sleep.watchSleep,
+    credentialResolver: { resolve: () => Promise.resolve(credential) },
+    fetchFn: (_input, init) => {
+      requests += 1;
+      if (requests > 1) return Promise.resolve(completedMessage("recovered"));
+      // a 503 whose body stops arriving; as with a real fetch, the request's
+      // signal ends the body's read
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          init?.signal?.addEventListener(
+            "abort",
+            () => controller.error(init.signal?.reason),
+            { once: true },
+          );
+        },
+        pull() {
+          markReading();
+          return new Promise<void>(() => {});
+        },
+      }, { highWaterMark: 0 });
+      return Promise.resolve(new Response(body, { status: 503 }));
+    },
+  });
+  const completion = client.complete({
+    model: "gpt-5.4",
+    transcript: [{ role: "user", content: "hi" }],
+    tools: [],
+    nativeModelToolIds: [],
+    runId: "run-sleep-error-body",
+    onAttempt: (attempt) => {
+      attempts.push(attempt);
+    },
+  });
+  await reading;
+  sleep.slept(600_000);
+
+  const result = await completion;
+  assertEquals(result.assistant.content, "recovered");
+  assertEquals(attempts[0].httpStatus, 503);
+  assertEquals(attempts[0].retry?.kind, "http_status", "the status decides");
+  assertStringIncludes(String(attempts[0].errorDetail), "the machine slept");
+});
+
+Deno.test("Codex Responses fails, rather than waits, when a machine sleep cuts off its last attempt", async () => {
+  const sleep = handSleepWatch();
+  let markStreaming!: () => void;
+  const streaming = new Promise<void>((resolve) => {
+    markStreaming = resolve;
+  });
+  const client = new OpenAICodexResponsesClient({
+    transportRetries: 0,
+    watchSleep: sleep.watchSleep,
+    credentialResolver: { resolve: () => Promise.resolve(credential) },
+    fetchFn: () =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            // streaming once a read is pending, so the sleep lands on that read
+            pull() {
+              markStreaming();
+              return new Promise<void>(() => {});
+            },
+          }, { highWaterMark: 0 }),
+          { status: 200 },
+        ),
+      ),
+  });
+  const completion = client.complete({
+    model: "gpt-5.4",
+    transcript: [{ role: "user", content: "hi" }],
+    tools: [],
+    nativeModelToolIds: [],
+    runId: "run-sleep-last",
+  });
+  await streaming;
+  sleep.slept(600_000);
+
+  const error = await assertRejects(() => completion, HarnessControlError);
+  assertEquals(error.code, "provider-unavailable");
+  assertStringIncludes(error.message, "the machine slept for 600 s");
+});
+
+Deno.test("Codex Responses leaves an attempt the machine did not sleep through alone, and stops its watch", async () => {
+  const sleep = handSleepWatch();
+  const client = new OpenAICodexResponsesClient({
+    transportRetries: 0,
+    watchSleep: sleep.watchSleep,
+    credentialResolver: { resolve: () => Promise.resolve(credential) },
+    fetchFn: () => Promise.resolve(completedMessage("awake throughout")),
+  });
+
+  const result = await client.complete({
+    model: "gpt-5.4",
+    transcript: [{ role: "user", content: "hi" }],
+    tools: [],
+    nativeModelToolIds: [],
+    runId: "run-awake",
+  });
+
+  assertEquals(result.assistant.content, "awake throughout");
+  assertEquals([sleep.watch.started, sleep.watch.stops], [1, 1]);
+  assertEquals(sleep.watch.open, []);
+});
