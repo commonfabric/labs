@@ -183,8 +183,8 @@ CREATE TABLE IF NOT EXISTS space_invite_rejections (
   inviteId TEXT PRIMARY KEY, rejectUntil REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS space_invite_suggestions (
-  inviteId TEXT PRIMARY KEY, name TEXT NOT NULL, picture TEXT,
-  expiresAt REAL NOT NULL
+  inviteId TEXT PRIMARY KEY, issuedBy TEXT NOT NULL, name TEXT NOT NULL,
+  picture TEXT, expiresAt REAL NOT NULL
 );`;
 
 /** Applies admission, receipts, and any ACL grant in one durable transaction. */
@@ -222,26 +222,39 @@ export function executeInvite(
         "SELECT count(*) AS count FROM space_invite_redemptions WHERE inviteId = ?",
       ).get<{ count: number }>(inviteId)!.count;
     // An invitation's suggested profile outlives the row's exhaustion, so a
-    // redeemer whose receipt was lost reads it again on retry, and is
-    // forgotten when the invitation expires, is revoked, or loses its issuer.
-    const suggestion = (inviteId: string) => {
-      const row = db.prepare(
-        "SELECT name, picture FROM space_invite_suggestions WHERE inviteId = ?",
-      ).get<{ name: string; picture: string | null }>(inviteId);
-      return row === undefined ? undefined : {
-        name: row.name,
-        ...(row.picture === null ? {} : { picture: row.picture }),
-      } satisfies InviteProfileSuggestion;
-    };
-    const withSuggestion = (receipt: RedeemReceipt): RedeemReceipt => {
-      const suggestedProfile = suggestion(receipt.redemption.inviteId);
-      return suggestedProfile === undefined
-        ? receipt
-        : { ...receipt, suggestedProfile };
-    };
+    // redeemer whose receipt was lost reads it again on retry. It is
+    // forgotten when the invitation expires or is revoked, and when the
+    // issuer it keeps for this no longer owns the space.
     const forgetSuggestion = (inviteId: string) =>
       db.prepare("DELETE FROM space_invite_suggestions WHERE inviteId = ?")
         .run(inviteId);
+    const suggestion = (inviteId: string) => {
+      const row = db.prepare(
+        "SELECT issuedBy, name, picture FROM space_invite_suggestions WHERE inviteId = ?",
+      ).get<{ issuedBy: string; name: string; picture: string | null }>(
+        inviteId,
+      );
+      return row === undefined ? undefined : {
+        issuedBy: row.issuedBy,
+        profile: {
+          name: row.name,
+          ...(row.picture === null ? {} : { picture: row.picture }),
+        } satisfies InviteProfileSuggestion,
+      };
+    };
+    const withSuggestion = (
+      receipt: RedeemReceipt,
+      acl: ACL | null,
+    ): RedeemReceipt => {
+      const { inviteId } = receipt.redemption;
+      const held = suggestion(inviteId);
+      if (held === undefined) return receipt;
+      if (acl?.[held.issuedBy as keyof ACL] !== "OWNER") {
+        forgetSuggestion(inviteId);
+        return receipt;
+      }
+      return { ...receipt, suggestedProfile: held.profile };
+    };
     const metadata = (row: ActiveRow): InviteMetadata => {
       const count = usedCount(row.inviteId);
       return {
@@ -294,7 +307,7 @@ export function executeInvite(
             outcome: "already-redeemed",
             redemption,
             currentAccess: capability(),
-          }),
+          }, acl),
         };
       }
       const row = db.prepare("SELECT * FROM space_invites WHERE inviteId = ?")
@@ -342,7 +355,7 @@ export function executeInvite(
           currentAccess: current !== null && isCapable(current, row.access)
             ? current
             : row.access,
-        }),
+        }, acl),
         ...(commit ? { commit } : {}),
       };
     }
@@ -374,7 +387,7 @@ export function executeInvite(
           "SELECT * FROM space_invites WHERE inviteId = ?",
         ).get<ActiveRow>(body.inviteId);
         if (existing) {
-          const held = suggestion(body.inviteId);
+          const held = suggestion(body.inviteId)?.profile;
           if (
             existing.issuedBy !== principal ||
             existing.codeVerifier !== body.codeVerifier ||
@@ -412,9 +425,10 @@ export function executeInvite(
           );
         if (suggestedProfile !== undefined) {
           db.prepare(
-            "INSERT INTO space_invite_suggestions VALUES (?, ?, ?, ?)",
+            "INSERT INTO space_invite_suggestions VALUES (?, ?, ?, ?, ?)",
           ).run(
             row.inviteId,
+            row.issuedBy,
             suggestedProfile.name,
             suggestedProfile.picture ?? null,
             row.expiresAt,

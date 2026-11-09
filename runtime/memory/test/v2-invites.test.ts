@@ -711,10 +711,19 @@ describe("invites", () => {
         currentAccess: "READ",
       });
       const orphaned = f.create({ suggestedProfile: sam });
+      const redeemed = f.create({ suggestedProfile: sam });
+      f.run({ operation: "redeem", body: redeemed }, f.guest);
       f.acl({ [f.second]: "OWNER" });
       unavailable(() =>
         f.run({ operation: "redeem", body: orphaned }, f.guest)
       );
+      // The redeemer's later receipt no longer carries the suggestion of an
+      // issuer who has lost the space.
+      expect(f.run({ operation: "redeem", body: redeemed }, f.guest)).toEqual({
+        outcome: "already-redeemed",
+        redemption: { inviteId: redeemed.inviteId, did: f.guest },
+        currentAccess: null,
+      });
       expect(suggestionRows(f)).toEqual([]);
     } finally {
       await f.close();
