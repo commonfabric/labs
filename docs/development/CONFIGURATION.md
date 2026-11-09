@@ -224,9 +224,9 @@ Used by `/routes/sandbox/exec` to execute untrusted pattern code.
 The executor itself is not in this repo; the toolshed only forwards to
 `SANDBOX_SERVICE_URL`. The service is `commonfabric/common-cluster` (Go): its
 `node-agent` serves `/v1/sandboxes` and runs each sandbox as a gVisor container
-on a per-node ZFS dataset. The `runsc` runtime and `sandboxexec` library come
-from `commonfabric/gvisor` (branch `cfc_v2`), and the cluster is provisioned by
-`commonfabric/infra` (Terraform).
+on a per-node ZFS dataset. Its `runsc` is upstream gVisor's, from a pinned
+`google/gvisor` release in common-cluster's `Dockerfile`, and the cluster is
+provisioned by `commonfabric/infra` (Terraform).
 
 ---
 
