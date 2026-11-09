@@ -66,6 +66,7 @@ Each construct family is classified as one of:
 | Reactive ternary control flow in supported lowered value-expression sites | Supported | Authored `cond ? x : y` should preserve JavaScript branch meaning in JSX, top-level pattern-body value sites, and callback-local values inside supported collection callbacks |
 | Callback-local value bindings inside a plain-array `map` callback | Supported | A plain-array `map` callback in a pattern body runs during pattern build and its result is collected rather than read, so its value-expression sites are pattern-body value sites: a binding such as `const isToday = weekDates?.[colIdx] === todayDate` inside `COLUMN_INDICES.map(...)` lowers to a per-iteration lift-applied computation, and reads the same as the equivalent binding written directly in the pattern body |
 | Callback-local value bindings inside a result-interpreting array callback | Unsupported | `filter`, `find`, `some`, `every`, `sort`, `flatMap`, and `reduce` read what their callback returns while they run — as a boolean, a number, an array test, or the next accumulator. A lifted binding returned from one of those is a cell rather than the value the method expects, so these callbacks carry no pattern-owned wrapper site and a reactive computation in one still moves into `computed(...)` |
+| An async or generator callback that uses a reactive value, passed to a value-returning method of an ordinary array in pattern-facing code | Unsupported | Pattern construction is synchronous. An async callback can resume after construction has finished, and an array method never runs the body of a generator callback, so a reactive value read, computed over, or created in either one is used outside construction or not at all. The compiler reports the callback. An async or generator callback that uses no reactive value is ordinary JavaScript, and one inside `computed` / `action` / `lift` / `handler` runs over resolved values; moving the whole expression into `computed(() => ...)` is the supported form |
 | Reactive logical control flow in supported lowered pattern-owned expression sites (`&&`, `||`, `??`) | Supported | Reactive short-circuiting should preserve authored JavaScript meaning where the expression-site policy admits lowering |
 | Authored helper control flow (`ifElse`, `when`, `unless`) | Supported | These are first-class reactive control-flow forms, not mere implementation helpers |
 | `map` / `filter` / `flatMap` on reactive receivers in pattern-facing contexts | Supported | These operators are core language forms and may be structurally rewritten to explicit reactive collection operators |
@@ -285,9 +286,9 @@ Why:
 ### Supported Collection Callbacks
 
 Callbacks for supported reactive collection operators are their own authored
-expression context. A plain-array `map` callback shares it: it runs during
-pattern build and `map` collects what it returns without reading it, so a value
-site in one is a pattern-body value site.
+expression context. A synchronous plain-array `map` callback shares it: it runs
+during pattern build and `map` collects what it returns without reading it, so
+a value site in one is a pattern-body value site.
 
 **Good here**
 
@@ -642,9 +643,9 @@ The intended split is:
      - statement position: `count.get();`
      - a reactive array-method callback: `rows.map((row) => row.cell.get())`,
        whose callback becomes a sub-pattern over per-element cells
-   - a plain-array `map` callback is not an example: it runs during pattern
-     build and collects what it returns, so its value sites carry the read the
-     way the pattern body's own sites do. Its result-interpreting siblings
+   - a synchronous plain-array `map` callback is not an example: it runs
+     during pattern build and collects what it returns, so its value sites carry
+     the read the way the pattern body's own sites do. Its result-interpreting siblings
      (`filter`, `find`, `sort`, and the rest) remain examples
 5. **`.get()` on ordinary opaque/reactive values**
    - not part of the target language
