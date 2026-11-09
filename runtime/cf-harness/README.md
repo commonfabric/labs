@@ -1430,6 +1430,18 @@ included, is discarded with it. A `429` from the Codex provider is its usage
 limit, which the backoff does not clear; the retry there is bounded by the same
 schedule and costs seconds, not a turn.
 
+A Codex attempt that the machine sleeps through is cut off as a transport error.
+The provider can drop the connection while the machine is asleep without either
+end being told, and a read of it would then wait forever. Deno's `fetch` has no
+keepalive that would notice, and a Deno process gets no notice of a wake, so
+each open attempt is watched by `watchMachineSleep`
+(`src/model/machine-sleep.ts`): it reads the wall and monotonic clocks every
+`SLEEP_CHECK_EVERY_MS`, and a wall clock that ran `SLEEP_GAP_MS` or more ahead
+of the monotonic one, which does not advance while the machine sleeps, is a
+sleep. The attempt's record then says so in its `errorDetail` or its error, and
+the schedule issues it again like any other transport error; the watch stops
+when the attempt ends. The gateway provider does not watch yet.
+
 The bound is `transportRetries` attempts beyond the first — three unless a
 client is configured otherwise — with a backoff of `transportRetryDelayMs`
 before the second attempt, doubling before each attempt after it. An attempt
