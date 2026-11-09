@@ -1,8 +1,11 @@
 import {
   type Cell,
   Cfc,
+  computed,
   equals,
+  type FabricBytes,
   handler,
+  ifElse,
   linksOf,
   NAME,
   pattern,
@@ -23,6 +26,7 @@ import ProfileHome, {
   pointAtInboxIfUnset,
   type ProfileInbox,
   type SetProfileNameEvent,
+  type SetProfilePictureEvent,
 } from "../profile-home/profile-home.tsx";
 
 // Trusted UI surfaces / actions. The create surface authorizes appending a new
@@ -61,14 +65,27 @@ export type SeedProfileNameEvent = {
 
 /**
  * What the seed step needs of the profile it seeds: the stored name (to write
- * only where none is stored yet) and the stream it writes through, and what
+ * only where none is stored yet) and the streams it writes through, and what
  * pointing the profile at Home's private inbox needs. The profile is the one
  * just created, so it is current-vintage by construction and carries
- * `setName`.
+ * `setName` and `setPicture`; the picture's stream is optional only so that a
+ * profile without it is still named.
  */
 export type SeedProfileTarget = InboxPointable & {
   name: string;
   setName: Stream<SetProfileNameEvent>;
+  setPicture?: Stream<SetProfilePictureEvent>;
+};
+
+/**
+ * The profile the user's host suggests for their first profile, as the
+ * runtime stores it (`offerProfileSuggestion` in
+ * `runtime/runner/src/profile-suggestion.ts`): a name to start the field
+ * with, and a picture the profile takes unless the user removes it first.
+ */
+export type ProfileSuggestion = {
+  name?: string;
+  picture?: FabricBytes;
 };
 
 // Stores the creation name in the new profile's `name` cell, through
@@ -96,10 +113,18 @@ export type SeedProfileTarget = InboxPointable & {
 // name unstored. Only a profile whose stored `name` is still empty is
 // written: a re-delivery of this event, or the same profile seeded
 // elsewhere, is left alone.
+//
+// The picture a host's profile suggestion still holds is set here too,
+// through the profile's `setPicture`, which this runtime runs as the
+// profile's creator, so the picture's label names the owner as the face
+// readers require.
 export const seedProfileName = handler<
   SeedProfileNameEvent,
-  { privateInbox?: ProfileInbox }
->((event, { privateInbox }) => {
+  {
+    privateInbox?: ProfileInbox;
+    profileSuggestion?: Writable<ProfileSuggestion | undefined>;
+  }
+>((event, { privateInbox, profileSuggestion }) => {
   if (event === undefined) {
     throw new Error(
       "Cannot seed a profile's name: the event lacks a name or a profile, " +
@@ -118,6 +143,21 @@ export const seedProfileName = handler<
   // otherwise wait for the next worker.
   pointAtInboxIfUnset(target, privateInbox);
   target.setName.send({ name });
+  const picture = profileSuggestion?.get()?.picture;
+  if (picture?.length) target.setPicture?.send({ picture });
+});
+
+// Removes the suggested picture, so the profile the surface creates has none.
+// The picture is the user's own suggestion, so removing it changes nothing
+// anyone else holds.
+export const removeSuggestedPicture = handler<
+  void,
+  { profileSuggestion?: Writable<ProfileSuggestion | undefined> }
+>((_event, { profileSuggestion }) => {
+  const suggestion = profileSuggestion?.get();
+  if (suggestion?.picture === undefined) return;
+  const { picture: _, ...rest } = suggestion;
+  profileSuggestion!.set(rest);
 });
 
 // Appends a freshly-created profile (its own `inSpace` space) to the home
@@ -623,6 +663,15 @@ export type ProfileCreateInput = {
    * points at an inbox already.
    */
   privateInbox?: ProfileInbox;
+
+  /**
+   * The profile the user's host suggests, which the `#profile` wish hands
+   * over. Its name starts the field in place of `defaultName`; its picture is
+   * shown, with a control that removes it, and the profile created takes the
+   * picture still shown. The suggestion stays as it is for the host to
+   * replace; the wish shows this surface only while the user has no profile.
+   */
+  profileSuggestion?: Writable<ProfileSuggestion | undefined>;
 };
 
 export type ProfileCreateOutput = {
@@ -632,12 +681,16 @@ export type ProfileCreateOutput = {
 };
 
 export default pattern<ProfileCreateInput, ProfileCreateOutput>(
-  ({ profiles, inputId, defaultName, privateInbox }) => {
-    const seedName = seedProfileName({ privateInbox });
+  ({ profiles, inputId, defaultName, privateInbox, profileSuggestion }) => {
+    const seedName = seedProfileName({ privateInbox, profileSuggestion });
     const createProfile = submitProfileCreation({
       profiles,
       seedName,
     });
+    const startingName = computed(() =>
+      profileSuggestion?.get()?.name ?? defaultName ?? ""
+    );
+    const suggestedPicture = computed(() => profileSuggestion?.get()?.picture);
     return {
       [NAME]: "Create Profile",
       createProfile,
@@ -656,12 +709,35 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
               uncontrolled copy inside cf-submit-input) — it does not touch the
               trusted-click path. */
           }
+          {ifElse(
+            suggestedPicture,
+            <cf-hstack
+              gap="2"
+              align="center"
+              data-ui-region="profile-create-suggested-picture"
+            >
+              <cf-avatar
+                bytes={suggestedPicture}
+                name={startingName}
+                size="lg"
+              />
+              <cf-button
+                id="profile-create-remove-picture"
+                variant="ghost"
+                size="sm"
+                onClick={removeSuggestedPicture({ profileSuggestion })}
+              >
+                Remove picture
+              </cf-button>
+            </cf-hstack>,
+            null,
+          )}
           <cf-submit-input
             inputId={inputId ?? "profile-name-input"}
             data-ui-action={TRUSTED_PROFILE_CREATE_ACTION}
             placeholder="Your name..."
             buttonText="Create profile"
-            initialValue={defaultName ?? ""}
+            initialValue={startingName}
             onClick={createProfile}
           />
         </cf-vstack>

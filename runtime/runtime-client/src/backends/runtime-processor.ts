@@ -130,6 +130,7 @@ import {
 } from "@commonfabric/runner/cfc/custody-seal";
 import { cfcSchemaGivesNoShape } from "@commonfabric/runner/cfc/schema-primitives";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
+import { offerProfileSuggestion } from "@commonfabric/runner/profile-suggestion";
 import { bindNativeUiControl } from "@commonfabric/runner/native-ui";
 import {
   NameSchema,
@@ -241,6 +242,7 @@ import {
   type LoggerMetadata,
   type LogLevel,
   NotificationType,
+  type OfferProfileSuggestionRequest,
   type OperationApplyRequest,
   type OperationApplyResponse,
   type OperationCapabilitiesRequest,
@@ -2977,6 +2979,30 @@ export class RuntimeProcessor {
   }
 
   /**
+   * Stores the profile `request` suggests for this runtime's user, as
+   * `offerProfileSuggestion()` in the runner does.
+   *
+   * @throws When the name is not a string, or a picture is given that is not
+   *   bytes.
+   */
+  async handleOfferProfileSuggestion(
+    request: OfferProfileSuggestionRequest,
+  ): Promise<void> {
+    if (typeof request.name !== "string") {
+      throw new Error("offerProfileSuggestion requires a name");
+    }
+    if (
+      request.picture !== undefined && !(request.picture instanceof FabricBytes)
+    ) {
+      throw new Error("offerProfileSuggestion requires a picture as bytes");
+    }
+    await offerProfileSuggestion(this.#runtime, {
+      name: request.name,
+      ...(request.picture === undefined ? {} : { picture: request.picture }),
+    });
+  }
+
+  /**
    * Tells the user's chat manager that the user has joined the FabriChat room
    * declared by the space `request` names, when it passes vetting, as
    * `PiecesController.joinVisitedRoom()` says, and returns what was
@@ -4318,6 +4344,8 @@ export class RuntimeProcessor {
         return await this.handleEnsureHomePatternRunning(request);
       case RequestType.JoinVisitedRoom:
         return await this.handleJoinVisitedRoom(request);
+      case RequestType.OfferProfileSuggestion:
+        return await this.handleOfferProfileSuggestion(request);
       case RequestType.Idle:
         return await this.handleIdle();
       case RequestType.ListEventAttention:

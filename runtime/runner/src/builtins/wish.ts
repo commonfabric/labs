@@ -77,6 +77,7 @@ import {
 } from "../document-readiness.ts";
 import { wishStateSchemaForResult } from "./wish-schema.ts";
 import { setResultCell } from "../result-utils.ts";
+import { profileSuggestionCell } from "../profile-suggestion.ts";
 
 const wishFlowLogger = getLogger("runner.wish-flow", {
   enabled: true,
@@ -2383,6 +2384,7 @@ export function wish(
     input?: {
       profiles: unknown;
       privateInbox: unknown;
+      profileSuggestion: unknown;
       inputId: string;
       buttonId: string;
     };
@@ -3002,6 +3004,12 @@ export function wish(
       privateInbox: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("privateInbox").getAsNormalizedFullLink(),
       ),
+      // The profile the user's host suggests, which the surface offers;
+      // nothing is stored there when the host suggests none. The link is derived from the user's home space here,
+      // so a serving runtime hands its demander's suggestion to its surface.
+      profileSuggestion: createSigilLinkFromParsedLink(
+        profileSuggestionCell(runtime, ctx.tx).getAsNormalizedFullLink(),
+      ),
       inputId: "wish-profile-name-input",
       buttonId: "wish-profile-create-button",
     };
@@ -3038,6 +3046,7 @@ export function wish(
         ...slot.input,
         profiles: bindInputCell(slot.input.profiles),
         privateInbox: bindInputCell(slot.input.privateInbox),
+        profileSuggestion: bindInputCell(slot.input.profileSuggestion),
       };
     };
 

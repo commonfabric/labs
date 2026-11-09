@@ -32,6 +32,7 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { profileSuggestionCell } from "@commonfabric/runner/profile-suggestion";
 import { siteTableCause, siteTableSchema } from "@commonfabric/home-schemas";
 import {
   PieceController,
@@ -213,6 +214,52 @@ describe("runtime-processor", () => {
       await runtime.dispose();
       await storageManager.close();
     }
+  });
+
+  describe("offering a profile suggestion", () => {
+    it("stores the suggested name and picture where the `#profile` wish reads them", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const processor = buildProcessor({ runtime });
+        await processor.handleRequest({
+          type: RequestType.OfferProfileSuggestion,
+          name: "Sam Lee",
+          picture: new FabricBytes(new Uint8Array([0x89, 0x50, 1, 2])),
+        });
+        const stored = profileSuggestionCell(runtime);
+        await stored.sync();
+        expect(stored.get()?.name).toBe("Sam Lee");
+        expect([...stored.get()?.picture?.slice() ?? []]).toEqual([
+          0x89,
+          0x50,
+          1,
+          2,
+        ]);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("throws for a picture that is not bytes, and stores nothing", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const processor = buildProcessor({ runtime });
+        await expect(
+          processor.handleOfferProfileSuggestion({
+            type: RequestType.OfferProfileSuggestion,
+            name: "Sam Lee",
+            picture: "iVBORw" as unknown as FabricBytes,
+          }),
+        ).rejects.toThrow("requires a picture as bytes");
+        const stored = profileSuggestionCell(runtime);
+        await stored.sync();
+        expect(stored.get()).toBeUndefined();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
   });
 
   it("returns `null` diagnostics for a storage manager without them", async () => {
