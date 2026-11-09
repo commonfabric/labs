@@ -374,7 +374,7 @@ export default pattern(() => {
   const action_open_composer = action(() => clickButton(note[UI], "Comment"));
   const assert_composer_open = assert(() =>
     displayOf(findNodeById(note[UI], "shared-note-composer")) === "flex" &&
-    hasText(findNodeById(note[UI], "shared-note-composer"), QUOTE)
+    !hasText(findNodeById(note[UI], "shared-note-composer"), QUOTE)
   );
   const action_type_comment = action(() =>
     typeInto(
@@ -401,7 +401,7 @@ export default pattern(() => {
       highlights[0].id === listed(comments.get())[0].id &&
       highlights[0].kind === "active" &&
       highlightsOf(guest[UI])?.[0]?.kind === undefined &&
-      hasText(rowOf(note[UI], "Needs a date"), QUOTE);
+      !hasText(rowOf(note[UI], "Needs a date"), QUOTE);
   });
   const assert_reply_needs_a_profile = assert(() =>
     propValue(
@@ -429,9 +429,8 @@ export default pattern(() => {
     return content.get().slice(movedFrom, movedFrom + QUOTE.length) ===
         QUOTE &&
       range?.from === movedFrom && range?.to === movedFrom + QUOTE.length &&
-      hasText(rowOf(note[UI], "Needs a date"), QUOTE) &&
-      !hasText(rowOf(note[UI], "Needs a date"), "text no longer in note") &&
-      !hasText(rowOf(note[UI], "Needs a date"), "now “");
+      !hasText(rowOf(note[UI], "Needs a date"), QUOTE) &&
+      !hasText(rowOf(note[UI], "Needs a date"), "text no longer in note");
   });
   // A selection reported against text the body does not hold is not kept,
   // so there is nothing to comment on.
@@ -481,8 +480,27 @@ export default pattern(() => {
       equals(agent.authorProfile, adaProfile) &&
       range !== undefined &&
       content.get().slice(range.from, range.to) === AGENT_QUOTE &&
-      hasText(rowOf(note[UI], "Agent note"), AGENT_QUOTE) &&
+      !hasText(rowOf(note[UI], "Agent note"), AGENT_QUOTE) &&
       highlightsOf(note[UI])?.length === 2;
+  });
+  // The pointer over a row marks its comment's text strongly, for the
+  // session it is in, until it leaves that row.
+  const action_hover_row = action(() =>
+    fireEvent(rowOf(note[UI], "Agent note"), "onMouseEnter", {})
+  );
+  const assert_hover_marks_the_comment = assert(() => {
+    const id = listed(comments.get()).find((c) => c.body === "Agent note")?.id;
+    return id !== undefined &&
+      highlightsOf(note[UI])?.find((h) => h.id === id)?.kind === "active" &&
+      highlightsOf(guest[UI])?.find((h) => h.id === id)?.kind === undefined;
+  });
+  const action_leave_row = action(() =>
+    fireEvent(rowOf(note[UI], "Agent note"), "onMouseLeave", {})
+  );
+  const assert_leaving_unmarks_the_comment = assert(() => {
+    const id = listed(comments.get()).find((c) => c.body === "Agent note")?.id;
+    const mark = highlightsOf(note[UI])?.find((h) => h.id === id);
+    return mark !== undefined && mark.kind === undefined;
   });
   const action_select_row = action(() =>
     fireClick(rowOf(note[UI], "Agent note"))
@@ -561,17 +579,17 @@ export default pattern(() => {
       ).get() === "Not mine"
   );
   // A verb rewrites the commented text: the anchor covers the replacement,
-  // and the row shows the author's quote and, apart from it, the text now.
+  // and the row names neither the author's quote nor the text now.
   const EDITED = "- [x] task";
   const action_verb_rewrites_the_commented_text = action(() =>
     note.replaceText.send({ old: QUOTE, new: EDITED })
   );
-  const assert_row_shows_the_quote_and_the_text_now = assert(() => {
+  const assert_row_names_no_text_after_an_edit = assert(() => {
     const range = rangeIn(note.commentAnchors, listed(comments.get())[0]?.id);
     return range !== undefined &&
       content.get().slice(range.from, range.to) === EDITED &&
-      hasText(rowOf(note[UI], "Needs a date"), QUOTE) &&
-      hasText(rowOf(note[UI], "Needs a date"), `now “${EDITED}”`);
+      !hasText(rowOf(note[UI], "Needs a date"), QUOTE) &&
+      !hasText(rowOf(note[UI], "Needs a date"), EDITED);
   });
   // A verb deletes the commented text: Memory empties the anchor, and the
   // comment stays listed, marks nothing, and quotes what it was about.
@@ -582,8 +600,7 @@ export default pattern(() => {
     const range = rangeIn(note.commentAnchors, listed(comments.get())[0]?.id);
     return range !== undefined && range.from === range.to &&
       hasText(rowOf(note[UI], "Needs a date"), "text no longer in note") &&
-      hasText(rowOf(note[UI], "Needs a date"), QUOTE) &&
-      !hasText(rowOf(note[UI], "Needs a date"), "now “");
+      hasText(rowOf(note[UI], "Needs a date"), QUOTE);
   });
   const action_resolve_comment = action(() =>
     clickButton(actionsOf(note[UI]), "Resolve")
@@ -741,12 +758,11 @@ export default pattern(() => {
   );
   const assert_composer_keeps_its_selection = assert(() => {
     const composer = findNodeById(note[UI], "shared-note-composer");
-    return displayOf(composer) === "flex" && hasText(composer, HEADING) &&
-      !hasText(composer, PINNED) &&
+    return displayOf(composer) === "flex" &&
       highlightsOf(note[UI])?.some((h) =>
           h.kind === "active" &&
           listed(comments.get()).some((c) =>
-            c.id === h.id && c.status === "draft"
+            c.id === h.id && c.status === "draft" && c.quote === HEADING
           )
         ) === true;
   });
@@ -957,6 +973,10 @@ export default pattern(() => {
         event: { quote: AGENT_QUOTE, body: "Agent note" },
       },
       { assertion: assert_agent_comment_lands },
+      { action: action_hover_row },
+      { assertion: assert_hover_marks_the_comment },
+      { action: action_leave_row },
+      { assertion: assert_leaving_unmarks_the_comment },
       { action: action_select_row },
       { assertion: assert_row_selected },
       { action: action_click_highlight },
@@ -970,7 +990,7 @@ export default pattern(() => {
       { action: action_reply_under_a_borrowed_profile },
       { assertion: assert_borrowed_reply_refused },
       { action: action_verb_rewrites_the_commented_text },
-      { assertion: assert_row_shows_the_quote_and_the_text_now },
+      { assertion: assert_row_names_no_text_after_an_edit },
       { action: action_verb_deletes_the_commented_text },
       { assertion: assert_comment_text_gone },
       { action: action_resolve_comment },

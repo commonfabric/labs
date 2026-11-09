@@ -57,8 +57,8 @@ verbs below, which the mount exposes as callable files beside `index.md`.
 A save that replaces the body moves no comment. Memory moves a comment's anchors
 through edits made in the editor or by the verbs, and a whole-body write is
 neither, so a comment placed before any editor has changed the note keeps its
-old offsets after such a save and may sit on other text. Its row then shows the
-text it sits on after "now", beside the quote its author selected.
+old offsets after such a save and may sit on other text, which its mark then
+shows.
 
 ## Editing from a handler or an agent
 
@@ -118,9 +118,11 @@ that author alone, with Continue and Discard, and marks nothing for anyone else.
 A draft keeps its place in the note; the text typed into the composer is kept
 only while the composer is open in that tab. The editor marks each open
 comment's text; clicking a mark selects its comment, and clicking a comment
-selects it and marks its text more strongly. A selected comment shows a reply
-field and Resolve or Reopen, and, to its author, Delete. Resolved comments are
-hidden unless "Show resolved" is checked, and mark no text.
+selects it and marks its text more strongly. A comment under the pointer marks
+its text more strongly too, for that viewer only, until the pointer leaves its
+row. A selected comment shows a reply field and Resolve or Reopen, and, to its
+author, Delete. Resolved comments are hidden unless "Show resolved" is checked,
+and mark no text.
 
 A comment never stores a position. Each comment has two anchors on the body,
 `<id>:from` where its text starts and `<id>:to` where it ends. An anchor is a
@@ -137,21 +139,20 @@ everything typed while the person writes moves the anchors with their text. The
 panel lists comments in the order their text appears in the body.
 `commentAnchors` gives every comment's two anchors.
 
-Each row shows the comment's quote: the text its author selected, stored in the
-comment. When the text between the anchors differs from the quote, because
-someone has edited it since, the row also shows that text after "now". A comment
-whose text an edit deleted stays listed after the rest, marks nothing, and shows
-its quote struck through, beside "text no longer in note".
+A row shows the comment, not its text: the mark in the editor shows what the
+comment is about. The comment still stores its quote, the text its author
+selected. A comment whose text an edit deleted stays listed after the rest,
+marks nothing, and shows its quote struck through, beside "text no longer in
+note".
 
 Comments and replies are labeled `authored-by` the person each was written for,
 by the runtime, and only the handlers their write policies name can write them,
 so the profile badge on a comment is the one its author wrote it under.
-`cf-cfc-authorship` checks that label against the author's profile, and shows
-the quote, the comment and each reply only when they carry it. The text between
-the anchors is the note's, which anyone who can write the note can change, so it
-is shown outside that check. Replies and the resolved state are cells of their
-own, linked from the comment, so anyone who can write the note can reply or
-resolve while the comment itself stays its author's.
+`cf-cfc-authorship` checks that label against the author's profile, and shows a
+deleted comment's quote, the comment and each reply only when they carry it.
+Replies and the resolved state are cells of their own, linked from the comment,
+so anyone who can write the note can reply or resolve while the comment itself
+stays its author's.
 
 ## Editing failures
 

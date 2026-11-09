@@ -471,18 +471,6 @@ const PLACES_PER_COMMENT = 2;
  */
 const NO_PROFILE = "Choose a Fabric profile of your own to comment.";
 
-/** How long a quote shown beside a comment may run before it is cut. */
-const EXCERPT_LENGTH = 80;
-
-/** `text` on one line, cut to `EXCERPT_LENGTH` characters. */
-const excerptOf = (text: string): string => {
-  const line = text.replace(/\s+/g, " ").trim();
-  const characters = Array.from(line);
-  return characters.length <= EXCERPT_LENGTH
-    ? line
-    : `${characters.slice(0, EXCERPT_LENGTH - 1).join("")}…`;
-};
-
 /**
  * The profile `myProfile` resolves to, once it holds a value and is the
  * profile of the person the handler runs for; `undefined` otherwise. A
@@ -942,6 +930,25 @@ const selectHighlight = handler<{ detail: { id: string } }, SelectState>(
   (event, state) => selectId(event.detail.id, state),
 );
 
+/** The comment `id` and the viewer's hovered comment, which it sets. */
+interface HoverState {
+  id: string;
+  hoveredId: Writable<string>;
+}
+
+/** The pointer is over the row of the comment `id`. */
+const hoverComment = handler<unknown, HoverState>(
+  (_, { id, hoveredId }) => hoveredId.set(id),
+);
+
+/**
+ * The pointer has left the row of the comment `id`. A row entered before
+ * this one left has already set its own comment, which stays hovered.
+ */
+const leaveComment = handler<unknown, HoverState>((_, { id, hoveredId }) => {
+  if (hoveredId.get() === id) hoveredId.set("");
+});
+
 /** What the note's body and comments are built from, with the viewer given. */
 export interface SharedNoteCoreInput {
   /** The body, which the editor and the verbs edit. */
@@ -1000,6 +1007,7 @@ export const SharedNoteCore = pattern<
   const notice = new Writable.perSession("");
   const replyDraft = new Writable.perSession("");
   const selectedId = new Writable.perSession("");
+  const hoveredId = new Writable.perSession("");
   const showResolved = new Writable.perSession(false);
   const composer = {
     content,
@@ -1064,10 +1072,15 @@ export const SharedNoteCore = pattern<
       .map((comment) => comment.id)
   );
   // The comment being written marks its text too, for the person writing it.
+  // The selected comment and the one under the pointer mark theirs strongly.
   const highlights = computed((): PerSession<NoteHighlight[]> => {
     const selected = selectedId.get();
+    const hovered = hoveredId.get();
     const marks = openIds.map((id) =>
-      highlightOf(id, id === selected ? "active" : undefined)
+      highlightOf(
+        id,
+        id === selected || id === hovered ? "active" : undefined,
+      )
     );
     const writing = composing.get().id;
     return writing === "" || openIds.includes(writing)
@@ -1088,9 +1101,6 @@ export const SharedNoteCore = pattern<
   // its display has a value.
   const composerDisplay = computed((): PerSession<NoteDisplay> =>
     composing.get().id === "" ? "none" : "flex"
-  );
-  const composerQuote = computed((): PerSession<string> =>
-    excerptOf(composing.get().text)
   );
   const noticeDisplay = computed((): PerSession<NoteDisplay> =>
     notice.get() === "" ? "none" : "block"
@@ -1194,9 +1204,6 @@ export const SharedNoteCore = pattern<
             hidden
             style={{ display: composerDisplay }}
           >
-            <cf-text variant="caption" tone="muted">
-              On “{composerQuote}”
-            </cf-text>
             <cf-textarea
               id="shared-note-comment-draft"
               aria-label="Comment"
@@ -1247,19 +1254,9 @@ export const SharedNoteCore = pattern<
                 const draftDisplay: NoteDisplay = comment.status === "draft"
                   ? "flex"
                   : "none";
-                // The quote is the author's; the text between the anchors
-                // is the note's now, which anyone who can write the note can
-                // change. It is shown apart from the quote whenever the two
-                // differ.
-                const now = range === undefined || gone
-                  ? ""
-                  : content.get().slice(range.from, range.to);
                 return {
                   order: placeOf[comment.id] ?? 0,
                   gone,
-                  quoteDecoration: gone ? "line-through" : "none",
-                  moved: now !== "" && now !== comment.quote,
-                  nowExcerpt: excerptOf(now),
                   draftDisplay,
                 };
               });
@@ -1298,6 +1295,8 @@ export const SharedNoteCore = pattern<
                     borderLeft: shown.border,
                   }}
                   onClick={selectComment({ id, selectedId, replyDraft })}
+                  onMouseEnter={hoverComment({ id, hoveredId })}
+                  onMouseLeave={leaveComment({ id, hoveredId })}
                 >
                   <cf-hstack gap="2" align="center" wrap>
                     <cf-profile-badge
@@ -1305,42 +1304,42 @@ export const SharedNoteCore = pattern<
                       size="sm"
                       $profile={comment.authorProfile}
                     />
-                    <cf-cfc-authorship
-                      $value={comment.quote}
-                      $author={comment.authorProfile}
-                      verifyTextIntegrity
-                      style={{ minWidth: "0", maxWidth: "100%" }}
-                    >
-                      <cf-text
-                        variant="caption"
-                        tone="muted"
-                        style={{
-                          display: "block",
-                          fontStyle: "italic",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                          textDecoration: placed.quoteDecoration,
-                        }}
-                      >
-                        {comment.quote}
-                      </cf-text>
-                    </cf-cfc-authorship>
-                    {placed.gone
-                      ? (
-                        <cf-text variant="caption" tone="muted">
-                          text no longer in note
-                        </cf-text>
-                      )
-                      : null}
-                    {placed.moved
-                      ? (
-                        <cf-text variant="caption" tone="muted">
-                          now “{placed.nowExcerpt}”
-                        </cf-text>
-                      )
-                      : null}
                   </cf-hstack>
+                  {
+                    // The mark in the editor shows what a comment is about,
+                    // so the row names its text only once an edit has
+                    // deleted that text and there is no mark left to show.
+                    placed.gone
+                      ? (
+                        <cf-hstack gap="2" align="center" wrap>
+                          <cf-cfc-authorship
+                            $value={comment.quote}
+                            $author={comment.authorProfile}
+                            verifyTextIntegrity
+                            style={{ minWidth: "0", maxWidth: "100%" }}
+                          >
+                            <cf-text
+                              variant="caption"
+                              tone="muted"
+                              style={{
+                                display: "block",
+                                fontStyle: "italic",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                                textDecoration: "line-through",
+                              }}
+                            >
+                              {comment.quote}
+                            </cf-text>
+                          </cf-cfc-authorship>
+                          <cf-text variant="caption" tone="muted">
+                            text no longer in note
+                          </cf-text>
+                        </cf-hstack>
+                      )
+                      : null
+                  }
                   <cf-cfc-authorship
                     $value={comment.body}
                     $author={comment.authorProfile}
