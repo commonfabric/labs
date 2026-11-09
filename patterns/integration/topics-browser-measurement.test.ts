@@ -184,10 +184,10 @@ describe("topics-browser-measurement", () => {
   }
 
   /**
-   * Opens the topmost topic in `on`, waiting for both topics' titles on its
+   * Opens the newest seeded topic in `on`, waiting for both topics' titles on its
    * page, and returns its index.
    */
-  async function openTopmostTopic(on: BoardSession = session): Promise<number> {
+  async function openNewestTopic(on: BoardSession = session): Promise<number> {
     const pieceId = await on.openTopic((opened) => {
       const index = topicIndexOf(opened);
       return [topicTitle(index), topicTitle(1 - index)];
@@ -239,7 +239,7 @@ describe("topics-browser-measurement", () => {
           posture,
           program,
           operation: async () => {
-            await openTopmostTopic();
+            await openNewestTopic();
             await returnToBoard();
           },
         });
@@ -338,7 +338,7 @@ describe("topics-browser-measurement", () => {
             posture,
             program,
             operation: async () => {
-              await openTopmostTopic(fresh);
+              await openNewestTopic(fresh);
               await returnToBoard(fresh);
             },
             mayRunNothing: true,
@@ -458,7 +458,7 @@ describe("topics-browser-measurement", () => {
             posture,
             program,
             operation: async () => {
-              await openTopmostTopic(fresh);
+              await openNewestTopic(fresh);
               await returnToBoard(fresh);
             },
           }),
@@ -506,7 +506,7 @@ describe("topics-browser-measurement", () => {
             graph.nodes.map((node) => [node.id, node.stats?.runCount ?? 0]),
           );
         }, { args: [servedViews] });
-        await openTopmostTopic(fresh);
+        await openNewestTopic(fresh);
         await returnToBoard(fresh);
         const reported = await fresh.page.evaluate(
           async (runCounts: Record<string, number>, served: boolean) => {
@@ -600,7 +600,7 @@ describe("topics-browser-measurement", () => {
           label: "open topic and return, timed",
           posture,
           operation: async () => {
-            await openTopmostTopic(fresh);
+            await openNewestTopic(fresh);
             await returnToBoard(fresh);
           },
           mayRunNothing: servedViews,
