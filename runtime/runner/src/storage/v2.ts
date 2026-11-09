@@ -7089,19 +7089,23 @@ export class SpaceReplica
       localSeq,
       reads: { confirmed: [], pending: [] },
       operations: [operation],
-    }, () => this.#markRouteWriteIssued());
+    }, () => this.#markRouteWriteIssued()).then(async (applied) => {
+      const resolution = applied.operationResolutions?.[0];
+      if (resolution === undefined) {
+        throw new Error("apply-op commit returned no operation resolution");
+      }
+      // The codec's result reaches the ordinary Cell through its covering
+      // frame. This commit has no optimistic native overlay to promote, but
+      // its caller still needs the same settlement barrier as a native write.
+      await this.#settleAccept(localSeq, [], applied, [operation]);
+      return resolution;
+    });
     this.#commitPromises.add(request);
-    let applied;
     try {
-      applied = await request;
+      return await request;
     } finally {
       this.#commitPromises.delete(request);
     }
-    const resolution = applied.operationResolutions?.[0];
-    if (resolution === undefined) {
-      throw new Error("apply-op commit returned no operation resolution");
-    }
-    return resolution;
   }
 
   async releaseOperationField(
@@ -12417,9 +12421,9 @@ export class SpaceReplica
     const parkable =
       this.#sessionClient?.serverFlags?.verdictCatchUpMarkers === true &&
       this.#subscribedWatchView !== null;
-    // Zero-operation commits (scheduler observation batches) carry no state
-    // to apply and no view consequences — parking them would only stall
-    // synced() on the batch window for nothing.
+    // Scheduler observation batches carry no operations or view consequences.
+    // Codec operations carry a wire operation without a native overlay; their
+    // materialized value still arrives through the covering frame.
     //
     // The already-caught-up check is NOT wire-reordering tolerance: since
     // the per-space publication lock (#5529) the marker frame always
@@ -12430,7 +12434,7 @@ export class SpaceReplica
     // this runs, the marker may already cover this commit and parking
     // would wait on a frame that has already been consumed.
     if (
-      !parkable || operations.length === 0 ||
+      !parkable || (operations.length === 0 && wireOperations.length === 0) ||
       this.#caughtUpLocalSeq >= localSeq
     ) {
       // A pushed transact accept: the session admission class, authored.

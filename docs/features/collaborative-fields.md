@@ -125,6 +125,14 @@ edits made while that apply is in flight go out in the next one, until none
 remain. A local update is confirmed by Memory or reported through the editor's
 error and reconciliation events; it is never dropped silently.
 
+The replica settles an accepted `applyOperation()` through the same catch-up
+barrier as an ordinary write. While its subscription is live and the server
+advertises verdict catch-up markers, the call waits for a frame covering the
+operation's local sequence, so the watched materialized value has arrived
+before the caller resumes. A duplicate submission crosses that barrier too.
+With no marker channel, or when that channel closes, the accepted result is
+returned without waiting for delivery.
+
 Disabling collaboration keeps the editor read-only while it confirms pending
 operations and refreshes the bound Cell's materialized value. The operation
 stream remains the editor's display authority until that read completes. A
