@@ -4297,6 +4297,9 @@ describe("runtime-processor", () => {
         ensurePrivateInbox.getAsNormalizedFullLink(),
       );
       const home = {
+        // Home's space, whose allocation record the inbox ensure reads for
+        // the space Home's own inboxes live in: none is recorded.
+        space: homeRef.space,
         getAsLink: () => cellRefToSigilLink(homeRef),
         // The document Home's root is, which the inbox ensure loads before
         // reading Home's lists: none is stored, so it is absent.

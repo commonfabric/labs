@@ -5215,6 +5215,24 @@ export class Runtime {
     }
   }
 
+  /**
+   * Returns the space that `space`'s allocation record names for the
+   * `PatternFactory.inSpace(name)` target `name`, once the record has loaded,
+   * or `undefined` when `space` records none, as before any run asked for
+   * that name. Reads only: unlike {@link resolveInSpaceName}, it creates no
+   * space and writes no record, so a caller can ask which space a name
+   * stands for without bringing it into being.
+   */
+  async recordedInSpaceName(
+    space: MemorySpace,
+    name: string,
+  ): Promise<MemorySpace | undefined> {
+    const record = this.#inSpaceAllocationCell(space, name);
+    await record.sync();
+    const recorded = record.get()?.did;
+    return isDID(recorded) ? recorded : undefined;
+  }
+
   #inSpaceAllocationCell(
     space: MemorySpace,
     name: string,
