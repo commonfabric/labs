@@ -2,17 +2,24 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { fromFileUrl, toFileUrl } from "@std/path";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import { Identity } from "@commonfabric/identity";
 import { type ACL, aclDocId } from "../acl.ts";
 import {
   createInviteCredentials,
   type InviteAccess,
   inviteCodeVerifier,
+  type InviteProfileSuggestion,
+  SPACE_INVITE_CAPABILITY,
   SpaceInviteError,
 } from "../space-invites.ts";
 import * as Engine from "../v2/engine.ts";
 import { snapshotSpaceStore } from "../v2/dump.ts";
-import { executeInvite, type InviteOperation } from "../v2/invites.ts";
+import {
+  executeInvite,
+  type InviteOperation,
+  parseInviteOperation,
+} from "../v2/invites.ts";
 
 const space = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8MuKWGmRfDCwAZDGBnSpXXX";
 const host = "https://invites.example";
@@ -45,6 +52,7 @@ async function fixture() {
       maxUses?: number;
       access?: InviteAccess;
       ttlSeconds?: number;
+      suggestedProfile?: InviteProfileSuggestion;
     } = {},
   ) => {
     const credentials = createInviteCredentials();
@@ -82,6 +90,17 @@ async function fixture() {
       await Deno.remove(directory, { recursive: true });
     },
   };
+}
+
+const sam: InviteProfileSuggestion = {
+  name: "Sam Lee",
+  picture: toUnpaddedBase64url(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2])),
+};
+
+function suggestionRows(f: Awaited<ReturnType<typeof fixture>>) {
+  return f.engine.database.prepare(
+    "SELECT inviteId FROM space_invite_suggestions",
+  ).all<{ inviteId: string }>();
 }
 
 function unavailable(fn: () => unknown) {
@@ -629,6 +648,173 @@ describe("invites", () => {
       expect(() =>
         f.run({ operation: "create", body: invite.request }, f.guest)
       ).toThrow("not-owner");
+    } finally {
+      await f.close();
+    }
+  });
+  it("hands an invitation's suggested profile to its redeemer on each receipt until the invitation expires", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({ ttlSeconds: 60, suggestedProfile: sam });
+      expect(invite.result).toMatchObject({ maxUses: 1, usedCount: 0 });
+      expect(f.run({ operation: "redeem", body: invite }, f.guest)).toEqual({
+        outcome: "redeemed",
+        redemption: { inviteId: invite.inviteId, did: f.guest },
+        currentAccess: "READ",
+        suggestedProfile: sam,
+      });
+      // The invitation is used up, but its redeemer can still read the
+      // suggestion when it retries for a receipt it did not receive.
+      expect(f.run({ operation: "list", body: {} })).toEqual([]);
+      await f.reopen();
+      expect(f.run({ operation: "redeem", body: invite }, f.guest)).toEqual({
+        outcome: "already-redeemed",
+        redemption: { inviteId: invite.inviteId, did: f.guest },
+        currentAccess: "READ",
+        suggestedProfile: sam,
+      });
+      unavailable(() => f.run({ operation: "redeem", body: invite }, f.second));
+      f.advance(60_000);
+      expect(f.run({ operation: "redeem", body: invite }, f.guest)).toEqual({
+        outcome: "already-redeemed",
+        redemption: { inviteId: invite.inviteId, did: f.guest },
+        currentAccess: "READ",
+      });
+      expect(suggestionRows(f)).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("suggests a name alone, and leaves a receipt without a suggestion when the invitation carries none", async () => {
+    const f = await fixture();
+    try {
+      const named = f.create({ suggestedProfile: { name: "Sam" } });
+      expect(f.run({ operation: "redeem", body: named }, f.guest))
+        .toMatchObject({ suggestedProfile: { name: "Sam" } });
+      const plain = f.create();
+      const receipt = f.run({ operation: "redeem", body: plain }, f.second);
+      expect(receipt).toMatchObject({ outcome: "redeemed" });
+      expect(receipt).not.toHaveProperty("suggestedProfile");
+    } finally {
+      await f.close();
+    }
+  });
+  it("forgets a suggested profile when its invitation is revoked or its issuer no longer owns the space", async () => {
+    const f = await fixture();
+    try {
+      const revoked = f.create({ suggestedProfile: sam });
+      f.run({ operation: "redeem", body: revoked }, f.guest);
+      f.run({ operation: "revoke", body: { inviteId: revoked.inviteId } });
+      expect(f.run({ operation: "redeem", body: revoked }, f.guest)).toEqual({
+        outcome: "already-redeemed",
+        redemption: { inviteId: revoked.inviteId, did: f.guest },
+        currentAccess: "READ",
+      });
+      const orphaned = f.create({ suggestedProfile: sam });
+      f.acl({ [f.second]: "OWNER" });
+      unavailable(() =>
+        f.run({ operation: "redeem", body: orphaned }, f.guest)
+      );
+      expect(suggestionRows(f)).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("refuses a suggested profile that is malformed or oversized, or on an invitation for several people", async () => {
+    const f = await fixture();
+    try {
+      const { maxNameLength, maxPictureBytes } =
+        SPACE_INVITE_CAPABILITY.suggestedProfile;
+      const picture = (length: number) =>
+        toUnpaddedBase64url(new Uint8Array(length).fill(7));
+      for (
+        const suggestedProfile of [
+          { name: "" },
+          { name: " Sam" },
+          { name: "Sam " },
+          { name: "Sam\nLee" },
+          { name: "S".repeat(maxNameLength + 1) },
+          { name: "Sam", picture: "" },
+          { name: "Sam", picture: "not base64url!" },
+          { name: "Sam", picture: `${picture(4)}==` },
+          { name: "Sam", picture: picture(maxPictureBytes + 1) },
+        ]
+      ) {
+        expect(() => f.create({ suggestedProfile })).toThrow(
+          "invalid-request",
+        );
+      }
+      expect(() => f.create({ suggestedProfile: sam, maxUses: 2 })).toThrow(
+        "invalid-request",
+      );
+      expect(
+        f.create({
+          suggestedProfile: {
+            name: "S".repeat(maxNameLength),
+            picture: picture(maxPictureBytes),
+          },
+        }).result,
+      ).toMatchObject({ maxUses: 1 });
+      expect(f.run({ operation: "list", body: {} })).toHaveLength(1);
+    } finally {
+      await f.close();
+    }
+  });
+  it("parses a suggested profile on create only in its own shape", () => {
+    const body = {
+      inviteId: "A".repeat(22),
+      codeVerifier: "B".repeat(43),
+      access: "READ",
+      ttlSeconds: 60,
+    };
+    expect(
+      parseInviteOperation("create", { ...body, suggestedProfile: sam }),
+    ).toEqual({
+      operation: "create",
+      body: { ...body, suggestedProfile: sam },
+    });
+    for (
+      const suggestedProfile of [
+        "Sam",
+        { picture: sam.picture },
+        { name: 7 },
+        { name: "Sam", picture: 7 },
+        { name: "Sam", email: "sam@example.com" },
+      ]
+    ) {
+      expect(parseInviteOperation("create", { ...body, suggestedProfile }))
+        .toBeNull();
+    }
+  });
+  it("treats an identical issuance retry with its suggestion as the same invitation and refuses a changed one", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create({ suggestedProfile: sam });
+      expect(f.run({ operation: "create", body: invite.request })).toEqual(
+        invite.result,
+      );
+      const { suggestedProfile: _, ...withoutSuggestion } = invite.request;
+      for (
+        const request of [
+          withoutSuggestion,
+          { ...invite.request, suggestedProfile: { name: "Sam" } },
+          {
+            ...invite.request,
+            suggestedProfile: { ...sam, name: "Samuel Lee" },
+          },
+        ]
+      ) {
+        expect(() => f.run({ operation: "create", body: request })).toThrow(
+          "invite-id-unavailable",
+        );
+      }
+      const plain = f.create();
+      expect(() =>
+        f.run({
+          operation: "create",
+          body: { ...plain.request, suggestedProfile: sam },
+        })
+      ).toThrow("invite-id-unavailable");
     } finally {
       await f.close();
     }

@@ -23,12 +23,22 @@ import type { Capability } from "./acl.ts";
  */
 export const INVITE_ACCESS = ["READ", "WRITE", "OWNER"] as const;
 
-/** Host limits for version one of the invitation protocol. */
+/**
+ * Host limits for version one of the invitation protocol.
+ *
+ * `suggestedProfile` bounds the profile an issuer may suggest for the person
+ * an invitation is for (see {@link InviteProfileSuggestion}). It was added
+ * after version one shipped, as OWNER was: a service whose response lacks the
+ * field refuses a create carrying a suggestion with `invalid-request`, since
+ * both transports refuse unknown fields, so a client reads the field before it
+ * offers a suggestion.
+ */
 export const SPACE_INVITE_CAPABILITY = {
   version: 1,
   maxUses: 1000,
   maxTtlSeconds: 30 * 24 * 60 * 60,
   access: INVITE_ACCESS,
+  suggestedProfile: { maxNameLength: 128, maxPictureBytes: 64 * 1024 },
 } as const;
 
 /**
@@ -44,13 +54,63 @@ export function isInviteAccess(value: unknown): value is InviteAccess {
   return (INVITE_ACCESS as readonly unknown[]).includes(value);
 }
 
-/** Issuance parameters, signed by a current explicit space owner. */
+/**
+ * The profile an issuer suggests for the one person an invitation is for: the
+ * name, and optionally the picture, the issuer knows them by. The person who
+ * redeems the invitation is offered it when they make their first profile, and
+ * keeps, edits, or drops it; nothing applies it on their behalf.
+ *
+ * `name` is between 1 and `SPACE_INVITE_CAPABILITY.suggestedProfile
+ * .maxNameLength` UTF-16 code units, has no leading or trailing whitespace, and
+ * holds no control character. `picture` is the bytes of a raster image, at
+ * most `maxPictureBytes` of them, in unpadded base64url.
+ */
+export type InviteProfileSuggestion = {
+  name: string;
+  picture?: string;
+};
+
+/** Whether a value is a well-formed {@link InviteProfileSuggestion}. */
+export function isInviteProfileSuggestion(
+  value: unknown,
+): value is InviteProfileSuggestion {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const { maxNameLength, maxPictureBytes } =
+    SPACE_INVITE_CAPABILITY.suggestedProfile;
+  const { name, picture, ...rest } = value as Record<string, unknown>;
+  if (Object.keys(rest).length !== 0) return false;
+  if (
+    typeof name !== "string" || name.length === 0 ||
+    name.length > maxNameLength || name.trim() !== name || /\p{Cc}/u.test(name)
+  ) return false;
+  if (picture === undefined) return true;
+  if (typeof picture !== "string" || !/^[A-Za-z0-9_-]+$/.test(picture)) {
+    return false;
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = fromBase64url(picture);
+  } catch {
+    return false;
+  }
+  return bytes.length > 0 && bytes.length <= maxPictureBytes &&
+    toUnpaddedBase64url(bytes) === picture;
+}
+
+/**
+ * Issuance parameters, signed by a current explicit space owner. An
+ * invitation that carries a `suggestedProfile` is for one person, so its
+ * `maxUses` is 1.
+ */
 export type CreateInvite = {
   inviteId: string;
   codeVerifier: string;
   ttlSeconds: number;
   access: InviteAccess;
   maxUses?: number;
+  suggestedProfile?: InviteProfileSuggestion;
 };
 
 /** Public, owner-visible metadata while an invitation remains active. */
@@ -71,11 +131,16 @@ export type InviteRedemption = {
   did: string;
 };
 
-/** A successful admission decision and current ACL observation. */
+/**
+ * A successful admission decision and current ACL observation, with the
+ * profile the issuer suggested for the redeemer, when the invitation carries
+ * one and the service still holds it.
+ */
 export type RedeemReceipt = {
   outcome: "redeemed" | "already-redeemed";
   redemption: InviteRedemption;
   currentAccess: Capability | null;
+  suggestedProfile?: InviteProfileSuggestion;
 };
 
 /**

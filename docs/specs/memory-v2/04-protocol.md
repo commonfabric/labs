@@ -582,6 +582,9 @@ interface SessionOpenResult {
     outcome: "redeemed" | "already-redeemed";
     redemption: { inviteId: string; did: string };
     currentAccess: "READ" | "WRITE" | "OWNER" | null;
+    // The profile the issuer suggested for the redeemer, while the
+    // invitation service holds one (runtime/toolshed/README.md).
+    suggestedProfile?: { name: string; picture?: string };
   };
   sessionOpen: {
     challenge: {
