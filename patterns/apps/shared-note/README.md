@@ -137,20 +137,21 @@ everything typed while the person writes moves the anchors with their text. The
 panel lists comments in the order their text appears in the body.
 `commentAnchors` gives every comment's two anchors.
 
-A row shows the comment, not its text: the mark in the editor shows what the
-comment is about. The comment still stores its quote, the text its author
-selected. A comment whose text an edit deleted stays listed after the rest,
-marks nothing, and shows its quote struck through, beside "text no longer in
-note".
+The mark in the editor shows what a comment is about, so the row of a marked
+comment shows the comment, not its text. A row whose comment marks nothing — a
+draft, a resolved comment, or a comment whose text an edit deleted — also shows
+its quote, the text its author selected, which the comment stores. A comment
+whose text an edit deleted stays listed after the rest, and shows its quote
+struck through, beside "text no longer in note".
 
 Comments and replies are labeled `authored-by` the person each was written for,
 by the runtime, and only the handlers their write policies name can write them,
 so the profile badge on a comment is the one its author wrote it under.
-`cf-cfc-authorship` checks that label against the author's profile, and shows a
-deleted comment's quote, the comment and each reply only when they carry it.
-Replies and the resolved state are cells of their own, linked from the comment,
-so anyone who can write the note can reply or resolve while the comment itself
-stays its author's.
+`cf-cfc-authorship` checks that label against the author's profile, and shows
+the quote, the comment and each reply only when they carry it. Replies and the
+resolved state are cells of their own, linked from the comment, so anyone who
+can write the note can reply or resolve while the comment itself stays its
+author's.
 
 ## Editing failures
 

@@ -608,6 +608,23 @@ export default pattern(() => {
     listed(comments.get())[0]?.resolved.get() === false &&
     highlightsOf(note[UI])?.length === 2
   );
+  // A comment resolved while its text is still in the note marks nothing,
+  // so its row, listed under "Show resolved", names the text it is about.
+  const action_resolve_agent_comment_by_verb = action(() =>
+    note.resolveComment.send({
+      id: listed(comments.get()).find((c) => c.body === "Agent note")?.id ?? "",
+    })
+  );
+  const assert_resolved_row_names_its_text = assert(() => {
+    const agent = listed(comments.get()).find((c) => c.body === "Agent note");
+    const range = rangeIn(note.commentAnchors, agent?.id);
+    return agent?.resolved.get() === true && range !== undefined &&
+      content.get().slice(range.from, range.to) === AGENT_QUOTE &&
+      !highlightsOf(note[UI])?.some((h) => h.id === agent.id) &&
+      displayOf(rowOf(note[UI], "Agent note")) === "flex" &&
+      hasText(rowOf(note[UI], "Agent note"), AGENT_QUOTE) &&
+      !hasText(rowOf(note[UI], "Agent note"), "text no longer in note");
+  });
   const action_delete_by_verb = action(() =>
     note.deleteComment.send({
       id: listed(comments.get()).find((c) => c.body === "Agent note")?.id ?? "",
@@ -783,6 +800,15 @@ export default pattern(() => {
   const action_open_composer_for_another_tab = action(() =>
     clickButton(note[UI], "Comment")
   );
+  // A draft listed to its author, in a tab not writing it, marks nothing,
+  // so its row names the text it is on.
+  const assert_listed_draft_names_its_text = assert(() => {
+    const drafted = listed(comments.get()).find((c) => c.status === "draft");
+    const row = findNodeByProp(otherTab[UI], "data-comment-id", drafted?.id);
+    return drafted !== undefined && drafted.quote !== "" &&
+      displayOf(row) === "flex" && hasText(row, drafted.quote) &&
+      !hasText(row, "text no longer in note");
+  });
   const action_continue_in_another_tab = action(() =>
     fireClick(
       findElementByText(
@@ -976,6 +1002,8 @@ export default pattern(() => {
       { assertion: assert_resolved_comment_shown },
       { action: action_reopen_by_verb },
       { assertion: assert_reopened },
+      { action: action_resolve_agent_comment_by_verb },
+      { assertion: assert_resolved_row_names_its_text },
       { action: action_delete_by_verb },
       { assertion: assert_deleted_with_its_anchor },
       { action: action_select_heading },
@@ -1003,6 +1031,7 @@ export default pattern(() => {
       { action: action_cancel_composer },
       { assertion: assert_cancel_removes_the_anchor },
       { action: action_open_composer_for_another_tab },
+      { assertion: assert_listed_draft_names_its_text },
       { action: action_continue_in_another_tab },
       { action: action_type_in_another_tab },
       { action: action_post_in_another_tab },
