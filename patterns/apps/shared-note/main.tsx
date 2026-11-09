@@ -322,8 +322,9 @@ export interface CommentRecord {
   status: CommentStatus;
 
   /**
-   * The text between the anchors when the comment was written, shown once
-   * an edit has deleted that text from the body.
+   * The text between the anchors when the comment was written, shown in its
+   * row while the editor marks nothing for it: while it is a listed draft,
+   * once it is resolved, and once an edit has deleted that text.
    */
   quote: string;
 
