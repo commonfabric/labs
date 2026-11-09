@@ -11,6 +11,7 @@ const CLI_PATH = path.join(dirname, "..", "cli.ts");
 const DenoWebTestCache: Map<string, Promise<HarnessRun>> = new Map();
 const encoder = new TextEncoder();
 const STDERR_BOUNDARY_ENV = "DENO_WEB_TEST_STDERR_BOUNDARY";
+const CLI_PATH_ENV = "DENO_WEB_TEST_CLI_PATH";
 const DOWNLOAD_HTTP_PREFIX = encoder.encode("Download http://");
 const DOWNLOAD_HTTPS_PREFIX = encoder.encode("Download https://");
 
@@ -207,8 +208,9 @@ export const runDenoWebTest = async (
   const tmpProjectPath = path.join(tmp, projectDir);
   await copy(projectPath, tmpProjectPath);
 
-  // Overwrite the test project's "test" task with the
-  // absolute path of deno-web-test's `cli.ts` export.
+  // Overwrite the test project's "test" task to run deno-web-test's `cli.ts`,
+  // whose absolute path reaches the task through `CLI_PATH_ENV` so that no
+  // character in it has to survive the task's shell parsing.
   const manifestPath = path.join(tmpProjectPath, "deno.jsonc");
   const manifest = parseJsonc(await Deno.readTextFile(manifestPath)) as {
     tasks: { test: string };
@@ -218,7 +220,7 @@ export const runDenoWebTest = async (
     throw new Error(`${projectDir}'s imports must be an object`);
   }
   manifest.tasks.test =
-    `deno run --allow-env --allow-read --allow-write --allow-run --allow-net ${CLI_PATH} *.test.ts`;
+    `deno run --allow-env --allow-read --allow-write --allow-run --allow-net "$${CLI_PATH_ENV}" *.test.ts`;
   // The copy sits outside the workspace, so the module a project's tests
   // import from this package is mapped to it explicitly — to a copy of its
   // own. Compiled under the project's configuration, the package's own file
@@ -269,6 +271,7 @@ export const runDenoWebTest = async (
     cwd: tmpProjectPath,
     env: {
       [STDERR_BOUNDARY_ENV]: stderrBoundary,
+      [CLI_PATH_ENV]: CLI_PATH,
       // The harness inside the child records one browser-kind record per
       // test it runs. These projects are fixtures of the tests in this
       // directory rather than tests of this repository, so the child is
