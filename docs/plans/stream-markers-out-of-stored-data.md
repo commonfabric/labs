@@ -1,12 +1,13 @@
 # Stream markers out of stored data
 
-**Status:** stage 1 has landed, as #7583. Stage 2 is open as #7589, rebased
-onto `main` past it. Stage 3 is not started. Investigated against `main` at `59e8a2540` (2026-09-15); line
-references are to that tree unless an item names a stage branch. A file is
-named by its repository path the first time and by its basename after
-that (`runner.ts` is `runtime/runner/src/runner.ts`, `builder/pattern.ts` is
-`runtime/runner/src/builder/pattern.ts`); `docs/` and `scripts/` paths are
-from the repository root.
+**Status:** stage 1 has landed, as #7583 (2026-09-18), and stage 2 as #7589
+(2026-09-20); one stage 2 item, the served-execution fixtures, is still open.
+Stage 3 is not started. Investigated against `main` at `59e8a2540` (2026-09-15);
+line references are to that tree unless an item names a stage branch. A file is
+named by its repository path the first time and by its basename after that
+(`runner.ts` is `runtime/runner/src/runner.ts`, `builder/pattern.ts` is
+`runtime/runner/src/builder/pattern.ts`); `docs/` and `scripts/` paths are from
+the repository root.
 
 **Summary.** A handler's event stream is stored today as a document whose value
 is the sentinel `{ "$stream": true }`. That sentinel is the only thing handler
