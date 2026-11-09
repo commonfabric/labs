@@ -91,6 +91,22 @@ describe("CFCellLink", () => {
       },
     ]]);
   });
+  it("warns, naming the link string, on a click before a link given as a string resolves", () => {
+    const element = new CFCellLink() as any;
+    element.link = "/of:fid1:abc/path";
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args);
+    try {
+      element._handleClick({ stopPropagation() {} });
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(warnings).toEqual([[
+      "cf-cell-link: the click opens nothing: the link names no cell to open.",
+      { label: undefined, link: "/of:fid1:abc/path" },
+    ]]);
+  });
   it("navigates to a nested view without losing its scoped target", () => {
     const element = new CFCellLink() as any;
     element.spaceName = "current-space";
