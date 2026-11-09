@@ -1143,7 +1143,10 @@ holds the measurements and the conditions for revisiting.
   server that does not advertise `instanceNameMark`. One storage manager
   serves runtimes of one mode, and refuses a runtime of the other; one no
   runtime has declared a mode to runs this build's default
-  (`namesInstancesByDefault()`), as a serving host's routed plane does. An
+  (`namesInstancesByDefault()`), as a serving host's routed plane does. A
+  client that opens sessions with no runtime, as the Topics client and
+  `cf space invite` do, declares the mode a runtime given the deployment's
+  settings would. An
   emulated storage manager's memory server takes the mode of the runtime it
   serves as its posture, a loopback server (`newLoopbackServer()`) given none
   takes the runtime's default, as a toolshed of the same build does, and the
