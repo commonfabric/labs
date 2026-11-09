@@ -7077,6 +7077,10 @@ export class SpaceReplica
     return client.serverFlags.operationCodecs ?? [];
   }
 
+  /**
+   * Commits a collaborative operation and waits for its watched materialization
+   * when the server advertises verdict catch-up markers.
+   */
   async applyOperation(
     operation: ApplyOpOperation,
   ): Promise<ApplyOpResolution> {
@@ -7089,7 +7093,17 @@ export class SpaceReplica
       localSeq,
       reads: { confirmed: [], pending: [] },
       operations: [operation],
-    }, () => this.#markRouteWriteIssued());
+    }, () => this.#markRouteWriteIssued()).then(async (applied) => {
+      // The verdict carries integrated operations ahead of their materialized
+      // values. The marker orders ordinary cell reads after those values arrive.
+      if (
+        client.serverFlags?.verdictCatchUpMarkers === true &&
+        this.#subscribedWatchView !== null
+      ) {
+        await this.#waitForCaughtUpLocalSeq(localSeq);
+      }
+      return applied;
+    });
     this.#commitPromises.add(request);
     let applied;
     try {
@@ -9300,6 +9314,7 @@ export class SpaceReplica
         if (this.#subscribedWatchView === view) {
           this.#subscribedWatchView = null;
           this.#applyParkedAcceptsNow();
+          this.#rejectCaughtUpLocalSeqWaiters(new Error("memory watch closed"));
         }
       });
     this.#updatePromises.add(updates);
@@ -13182,6 +13197,9 @@ export class SpaceReplica
           resolved.session.onSessionReplaced = () => {
             this.#publishViewPlans([]);
             this.#applyParkedAcceptsNow();
+            this.#rejectCaughtUpLocalSeqWaiters(
+              new Error("memory session replaced"),
+            );
             // A replaced session rejected its outstanding commits; queued
             // event intents re-submit under fresh localSeqs (the target's
             // eventId dedupe keeps a landed original sound — events.md §5).

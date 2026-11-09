@@ -23,10 +23,134 @@ import {
   StorageManager as V2StorageManager,
 } from "../src/storage/v2.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("operation storage capability");
 
 describe("operation storage capability", () => {
+  it("confirms an editor operation only after its watched value reaches the replica", async () => {
+    const server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
+    const storage = EmulatedStorageManager.connectTo(server, { as: signer });
+    const space = signer.did();
+    const id = "of:operation-read-barrier";
+    const admitted = Promise.withResolvers<void>();
+    let cancel = () => {};
+    try {
+      const seed = storage.edit();
+      expect(
+        seed.write({
+          space,
+          id,
+          type: "application/json",
+          path: [],
+        }, { value: { body: "ac" } }).error,
+      ).toBeUndefined();
+      expect((await seed.commit().settled).error).toBeUndefined();
+      const provider = storage.open(space);
+      const replica = provider.replica;
+      if (!hasOperationStorageCapability(replica)) {
+        throw new Error("The replica lacks the operation capability.");
+      }
+      expect((await provider.sync(id)).error).toBeUndefined();
+
+      cancel = server.watchAdmittedCommits(() => admitted.resolve());
+      let completed = false;
+      const applying = replica.applyOperation({
+        op: "apply-op",
+        id,
+        path: toValuePath(["body"]),
+        codec: CODEMIRROR_CHANGESET_CODEC,
+        submissionId: "read-barrier:1",
+        base: null,
+        baselineHash: operationBaselineHash("ac"),
+        payload: {
+          updates: [{ clientId: "editor", changes: [1, [0, "b"], 1] }],
+        },
+      }).then((resolution) => {
+        completed = true;
+        return resolution;
+      });
+      await admitted.promise;
+      let synced = false;
+      const syncing = storage.synced().then(() => {
+        synced = true;
+      });
+      await clock.settle();
+      expect(completed).toBe(false);
+      expect(synced).toBe(false);
+      expect(replica.getDocument(id)).toMatchObject({ value: { body: "ac" } });
+
+      await server.flushSessions();
+      expect(await applying).toMatchObject({ to: { epoch: 1, version: 1 } });
+      await syncing;
+      expect(replica.getDocument(id)).toMatchObject({ value: { body: "abc" } });
+    } finally {
+      cancel();
+      await storage.closeNow();
+      await server.close();
+    }
+  });
+
+  for (
+    const [ending, reason] of [
+      ["watch closes", "watch closed"],
+      ["session is replaced", "session replaced"],
+    ] as const
+  ) {
+    it(`rejects a confirmed operation awaiting delivery when its ${ending}`, async () => {
+      const sync: SessionSync = {
+        type: "sync",
+        fromSeq: 0,
+        toSeq: 0,
+        upserts: [],
+        removes: [],
+      };
+      const view = MemoryV2Client.WatchView.fromSync(sync);
+      const session = {
+        subscribeTermination: () => () => {},
+        watchAddSync: () => Promise.resolve({ view, sync, precedingSyncs: [] }),
+        transact: () => Promise.resolve({ operationResolutions: [{}] }),
+      } as unknown as MemoryV2Client.SpaceSession;
+      const client = {
+        serverFlags: { applyOp: true, verdictCatchUpMarkers: true },
+        close: () => Promise.resolve(),
+      } as unknown as MemoryV2Client.Client;
+      const storage = new (class extends V2StorageManager {
+        constructor() {
+          super(
+            { as: signer, memoryHost: new URL("memory://") },
+            { create: () => Promise.resolve({ client, session }) },
+          );
+        }
+      })();
+      try {
+        const provider = storage.open(signer.did());
+        const replica = provider.replica;
+        if (!hasOperationStorageCapability(replica)) {
+          throw new Error("The replica lacks the operation capability.");
+        }
+        await provider.sync("of:operation-ended");
+        const applying = replica.applyOperation({
+          op: "apply-op",
+          id: "of:operation-ended",
+          path: toValuePath([]),
+          codec: CODEMIRROR_CHANGESET_CODEC,
+          submissionId: "ending:1",
+          base: null,
+          baselineHash: operationBaselineHash("ac"),
+          payload: { updates: [] },
+        });
+        const rejected = expect(applying).rejects.toThrow(`memory ${reason}`);
+        await clock.settle();
+        if (ending === "watch closes") view.close();
+        else session.onSessionReplaced?.();
+        await rejected;
+      } finally {
+        await storage.closeNow();
+      }
+    });
+  }
+
   it("replays watches and pre-issue applies across a route replacement", async () => {
     const sync: SessionSync = {
       type: "sync",
