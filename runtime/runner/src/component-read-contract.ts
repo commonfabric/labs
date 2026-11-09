@@ -357,6 +357,16 @@ export const componentReadContracts: Readonly<
       renders: [[]],
     },
   },
+  // `cf-cell-link` follows its reference to the cell it lands on, asks the
+  // worker for that cell's `[NAME]`, and mounts a drag preview's render from
+  // it; it reads nothing of the cell through the binding itself.
+  "cf-cell-link": {
+    cell: {
+      schema: NestedRenderReferenceSchema,
+      projected: true,
+      renders: [[]],
+    },
+  },
   // `cf-picker` hands each item's reference to a `cf-render` of its own.
   "cf-picker": {
     selectedIndex: { schema: numberSchema },

@@ -6,6 +6,7 @@ import {
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
+  type ClientCommit,
   type OperationFieldSnapshot,
   type ReleaseOpFieldOperation,
   type SessionSync,
@@ -26,7 +27,167 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 
 const signer = await Identity.fromPassphrase("operation storage capability");
 
+/** Builds a verdict and materialized delivery the test releases separately. */
+async function operationSettlementFixture(
+  {
+    watched = true,
+    markers = true,
+    duplicate = false,
+    deliverAtVerdict = false,
+  } = {},
+) {
+  const id = "of:operation-settlement";
+  const sync: SessionSync = {
+    type: "sync",
+    fromSeq: 0,
+    toSeq: 1,
+    upserts: [{ branch: "", id, seq: 1, doc: { value: "toggle" } }],
+    removes: [],
+  };
+  const view = MemoryV2Client.WatchView.fromSync(sync);
+  const accepted = Promise.withResolvers<void>();
+  const resolution: ApplyOpResolution = {
+    operationIndex: 0,
+    address: { branch: "", id, scopeKey: "space", path: toValuePath([]) },
+    codec: CODEMIRROR_CHANGESET_CODEC,
+    submissionId: "settlement:1",
+    from: { epoch: 1, version: 0 },
+    to: { epoch: 1, version: 1 },
+    operations: [],
+    duplicate,
+  };
+  let localSeq = 0;
+  const deliver = () =>
+    view.emit({
+      ...sync,
+      fromSeq: 1,
+      toSeq: 2,
+      caughtUpLocalSeq: localSeq,
+      upserts: [{ branch: "", id, seq: 2, doc: { value: "toggle!" } }],
+    });
+  const session = {
+    subscribeTermination: () => () => {},
+    watchAddSync: () => Promise.resolve({ view, sync, precedingSyncs: [] }),
+    transact: (commit: ClientCommit) => {
+      localSeq = commit.localSeq;
+      if (deliverAtVerdict) deliver();
+      return Promise.resolve({
+        seq: 2,
+        branch: "",
+        revisions: [],
+        operationResolutions: [resolution],
+      });
+    },
+  } as unknown as MemoryV2Client.SpaceSession;
+  const client = {
+    serverFlags: { applyOp: true, verdictCatchUpMarkers: markers },
+    close: () => Promise.resolve(),
+  } as unknown as MemoryV2Client.Client;
+  const storage = new (class extends V2StorageManager {
+    constructor() {
+      super(
+        { as: signer, memoryHost: new URL("memory://") },
+        { create: () => Promise.resolve({ client, session }) },
+      );
+    }
+  })();
+  const replica = storage.open(signer.did()).replica;
+  replica.speculationAckObserver = () => accepted.resolve();
+  if (!hasOperationStorageCapability(replica)) {
+    throw new Error("operation capability unavailable");
+  }
+  if (watched) {
+    await replica.subscribeOperationField(
+      { id, path: toValuePath([]) },
+      () => {},
+    );
+  }
+  return {
+    storage,
+    replica,
+    view,
+    accepted: accepted.promise,
+    resolution,
+    apply: () =>
+      replica.applyOperation({
+        op: "apply-op",
+        id,
+        path: toValuePath([]),
+        codec: CODEMIRROR_CHANGESET_CODEC,
+        submissionId: resolution.submissionId,
+        base: null,
+        baselineHash: operationBaselineHash("toggle"),
+        payload: { updates: [{ clientId: "editor", changes: [6, [0, "!"]] }] },
+      }),
+    read: () => replica.getDocument(id)?.value,
+    deliver,
+  };
+}
+
 describe("operation storage capability", () => {
+  describe("applyOperation() settlement", () => {
+    for (const duplicate of [false, true]) {
+      it(`returns after its materialized delivery with duplicate=${duplicate}`, async () => {
+        const fixture = await operationSettlementFixture({ duplicate });
+        try {
+          expect(fixture.read()).toBe("toggle");
+          const applying = fixture.apply().then((resolution) => ({
+            resolution,
+            materialized: fixture.read(),
+          }));
+          // A verdict is observable independently of its covering frame. An
+          // implementation that returns at the verdict captures stale text.
+          await Promise.race([fixture.accepted, applying]);
+          fixture.deliver();
+          expect(await applying).toEqual({
+            resolution: fixture.resolution,
+            materialized: "toggle!",
+          });
+        } finally {
+          await fixture.storage.closeNow();
+        }
+      });
+    }
+
+    for (const options of [{ watched: false }, { markers: false }]) {
+      it(`returns the verdict without a marker channel ${JSON.stringify(options)}`, async () => {
+        const fixture = await operationSettlementFixture(options);
+        try {
+          expect(await fixture.apply()).toEqual(fixture.resolution);
+        } finally {
+          await fixture.storage.closeNow();
+        }
+      });
+    }
+
+    it("returns after a covering frame consumed ahead of the verdict continuation", async () => {
+      const fixture = await operationSettlementFixture({
+        deliverAtVerdict: true,
+      });
+      try {
+        expect(await fixture.apply()).toEqual(fixture.resolution);
+        expect(fixture.read()).toBe("toggle!");
+      } finally {
+        await fixture.storage.closeNow();
+      }
+    });
+
+    for (const ending of ["watch", "replica"] as const) {
+      it(`returns the accepted result when its ${ending} closes before delivery`, async () => {
+        const fixture = await operationSettlementFixture();
+        try {
+          const applying = fixture.apply();
+          await Promise.race([fixture.accepted, applying]);
+          if (ending === "watch") fixture.view.close();
+          else await fixture.storage.closeNow();
+          expect(await applying).toEqual(fixture.resolution);
+        } finally {
+          await fixture.storage.closeNow();
+        }
+      });
+    }
+  });
+
   it("replays watches and pre-issue applies across a route replacement", async () => {
     const sync: SessionSync = {
       type: "sync",
@@ -530,6 +691,9 @@ describe("operation storage capability", () => {
       const replica = storage.open(space).replica;
       expect(hasOperationStorageCapability(replica)).toBe(true);
       if (!hasOperationStorageCapability(replica)) return;
+      expect(await storage.open(space).sync("of:operation-storage")).toEqual({
+        ok: {},
+      });
 
       expect(await replica.operationCodecs()).toContain(
         CODEMIRROR_CHANGESET_CODEC,
@@ -540,7 +704,7 @@ describe("operation storage capability", () => {
       });
       expect(initial).toMatchObject({ active: false, materialized: "ac" });
 
-      const resolution = await replica.applyOperation({
+      const operation: ApplyOpOperation = {
         op: "apply-op",
         id: "of:operation-storage",
         path: toValuePath(["body"]),
@@ -554,11 +718,22 @@ describe("operation storage capability", () => {
             changes: [1, [0, "b"], 1],
           }],
         },
-      });
+      };
+      const resolution = await replica.applyOperation(operation);
 
       expect(resolution).toMatchObject({
         from: { epoch: 1, version: 0 },
         to: { epoch: 1, version: 1 },
+      });
+      expect(replica.getDocument("of:operation-storage")?.value).toEqual({
+        body: "abc",
+      });
+      expect(await replica.applyOperation(operation)).toMatchObject({
+        duplicate: true,
+        to: { epoch: 1, version: 1 },
+      });
+      expect(replica.getDocument("of:operation-storage")?.value).toEqual({
+        body: "abc",
       });
       expect(
         await replica.queryOperationField({

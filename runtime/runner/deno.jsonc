@@ -52,6 +52,7 @@
     "./for-testing-only": "./src/for-testing-only.ts",
     "./experimental-posture": "./src/experimental-posture.ts",
     "./deployment-meta": "./src/deployment-meta.ts",
+    "./instance-naming": "./src/builder/instance-naming.ts",
     "./space-host": "./src/space-host.ts",
     "./blob-record": "./src/blob-record.ts",
     "./collected-memory": "./src/collected-memory.ts",

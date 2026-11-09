@@ -18,19 +18,42 @@ import {
 import { normalizeLcovInstancePaths } from "./write-coverage-lcov.ts";
 
 Deno.test("parseLcov accumulates hits per source line", () => {
-  const coverage = parseLcov([
-    "SF:/repo/runtime/example/src/mod.ts",
-    "DA:1,1",
-    "DA:2,0",
-    "DA:2,3",
-    "DA:3,0",
-    "end_of_record",
-  ].join("\n"));
+  const coverage = parseLcov(
+    [
+      "SF:/repo/runtime/example/src/mod.ts",
+      "DA:1,1",
+      "DA:2,0",
+      "DA:2,3",
+      "DA:3,0",
+      "end_of_record",
+    ].join("\n"),
+    "/elsewhere",
+  );
 
   const file = coverage.get("/repo/runtime/example/src/mod.ts");
   assertEquals(file?.lineHits.get(1), 1);
   assertEquals(file?.lineHits.get(2), 3);
   assertEquals(countUncoveredProfileLines(file!), 1);
+});
+
+Deno.test("parseLcov resolves a relative source path against the root it is given", () => {
+  const coverage = parseLcov(
+    "SF:runtime/example/src/mod.ts\nDA:1,1\nend_of_record",
+    "/repo",
+  );
+
+  assertEquals([...coverage.keys()], ["/repo/runtime/example/src/mod.ts"]);
+});
+
+Deno.test("parseLcov keys a relative path the way a relative root's source files are keyed", () => {
+  const coverage = parseLcov(
+    "SF:runtime/example/src/mod.ts\nDA:1,1\nend_of_record",
+    "repo",
+  );
+
+  assertEquals([...coverage.keys()], [
+    path.join("repo", "runtime/example/src/mod.ts"),
+  ]);
 });
 
 Deno.test("instance-suffix normalization merges records of the same physical file", () => {
@@ -56,7 +79,7 @@ Deno.test("instance-suffix normalization merges records of the same physical fil
     "DA:3,0",
     "end_of_record",
   ].join("\n"));
-  const coverage = parseLcov(normalized);
+  const coverage = parseLcov(normalized, "/repo");
 
   assertEquals(coverage.size, 1);
   const file = coverage.get("/repo/runtime/example/src/mod.ts");

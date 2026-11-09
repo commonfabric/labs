@@ -71,7 +71,7 @@ echo ""
 
 # Test 1: The creator of a space has access to it
 echo "Test 1: Space creation and owner access"
-PIECE_ID=$(cf piece new --main-export customPatternExport $SPACE_ARGS_OWNER $PATTERN_SRC)
+PIECE_ID=$(cf piece new --main-export customPatternExport $SPACE_ARGS_OWNER "$PATTERN_SRC")
 echo "Created piece: $PIECE_ID"
 
 if ! cf piece ls $SPACE_ARGS_OWNER | grep -q "$PIECE_ID"; then
@@ -110,7 +110,7 @@ if cf piece ls $SPACE_ARGS_USER1 2>/dev/null | grep -q "$PIECE_ID"; then
 fi
 success "Unlisted user cannot read a new space"
 
-if cf piece new --main-export customPatternExport $SPACE_ARGS_USER1 $PATTERN_SRC 2>/dev/null; then
+if cf piece new --main-export customPatternExport $SPACE_ARGS_USER1 "$PATTERN_SRC" 2>/dev/null; then
   error "USER1 should not be able to write a new space it is not listed in"
 fi
 success "Unlisted user cannot write a new space"
@@ -140,7 +140,7 @@ if ! cf piece ls $SPACE_ARGS_USER1 | grep -q "$PIECE_ID"; then
 fi
 success "Unlisted user can read via the wildcard"
 
-PIECE_ID_WILDCARD=$(cf piece new --main-export customPatternExport $SPACE_ARGS_USER1 $PATTERN_SRC)
+PIECE_ID_WILDCARD=$(cf piece new --main-export customPatternExport $SPACE_ARGS_USER1 "$PATTERN_SRC")
 if [ -z "$PIECE_ID_WILDCARD" ]; then
   error "USER1 should inherit write access from the '*' entry"
 fi
@@ -178,7 +178,7 @@ success "USER1 with READ capability can query/read data"
 # Test 5: READ capability does not allow writes
 echo ""
 echo "Test 5: READ capability restrictions"
-if cf piece new --main-export customPatternExport $SPACE_ARGS_USER1 $PATTERN_SRC 2>/dev/null; then
+if cf piece new --main-export customPatternExport $SPACE_ARGS_USER1 "$PATTERN_SRC" 2>/dev/null; then
   error "USER1 with READ should not be able to create pieces"
 fi
 success "READ capability correctly prevents write operations"
@@ -196,7 +196,7 @@ fi
 success "USER2 with WRITE capability can read data"
 
 # Verify USER2 can write
-PIECE_ID2=$(cf piece new --main-export customPatternExport $SPACE_ARGS_USER2 $PATTERN_SRC)
+PIECE_ID2=$(cf piece new --main-export customPatternExport $SPACE_ARGS_USER2 "$PATTERN_SRC")
 if [ -z "$PIECE_ID2" ]; then
   error "USER2 with WRITE capability should be able to create pieces"
 fi
@@ -216,7 +216,7 @@ fi
 success "USER1 capability correctly upgraded to WRITE"
 
 # Verify USER1 can now write
-PIECE_ID3=$(cf piece new --main-export customPatternExport $SPACE_ARGS_USER1 $PATTERN_SRC)
+PIECE_ID3=$(cf piece new --main-export customPatternExport $SPACE_ARGS_USER1 "$PATTERN_SRC")
 if [ -z "$PIECE_ID3" ]; then
   error "USER1 with upgraded WRITE capability should be able to create pieces"
 fi
@@ -311,7 +311,7 @@ fi
 success "USER2 capability correctly downgraded to READ"
 
 # Verify USER2 can no longer write
-if cf piece new --main-export customPatternExport $SPACE_ARGS_USER2 $PATTERN_SRC 2>/dev/null; then
+if cf piece new --main-export customPatternExport $SPACE_ARGS_USER2 "$PATTERN_SRC" 2>/dev/null; then
   error "USER2 with downgraded READ should not be able to create pieces"
 fi
 success "Downgraded USER2 correctly restricted to READ operations"
@@ -358,7 +358,7 @@ if cf piece ls $SPACE_ARGS_USER1 2>/dev/null | grep -q "$PIECE_ID"; then
 fi
 success "Unlisted user cannot read after lockdown"
 
-if cf piece new --main-export customPatternExport $SPACE_ARGS_USER1 $PATTERN_SRC 2>/dev/null; then
+if cf piece new --main-export customPatternExport $SPACE_ARGS_USER1 "$PATTERN_SRC" 2>/dev/null; then
   error "USER1 should not be able to write a space with no wildcard and no entry"
 fi
 success "Unlisted user cannot write after lockdown"
@@ -379,7 +379,7 @@ echo ""
 echo "=========================================="
 echo "Cleaning up test artifacts..."
 rm -f $IDENTITY_OWNER $IDENTITY_USER1 $IDENTITY_USER2 $IDENTITY_USER3
-rm -rf $WORK_DIR
+rm -rf "$WORK_DIR"
 echo "Cleanup complete"
 
 echo ""

@@ -1350,6 +1350,12 @@ export interface IOperationStorageCapability {
     query: Omit<OperationFieldQuery, "principal" | "sessionId">,
   ): Promise<OperationFieldSnapshot>;
 
+  /**
+   * Applies an operation and waits for its covering frame while a subscription
+   * and the server's verdict catch-up markers are available. Without that
+   * channel, or when it closes, returns the accepted result without waiting
+   * for delivery.
+   */
   applyOperation(operation: ApplyOpOperation): Promise<ApplyOpResolution>;
 
   releaseOperationField(operation: ReleaseOpFieldOperation): Promise<void>;
