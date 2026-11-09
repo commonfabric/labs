@@ -775,9 +775,11 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
         responseCompleteDurationMs: this.#elapsedMsSince(startedAtMs),
       };
       if (error instanceof StreamInterrupted) {
+        // why the stream ended stays on the record, so a retry that succeeds
+        // does not leave the interruption unexplained
         return await failed(
           "transport_error",
-          completed,
+          { ...completed, errorDetail: redact(error.message) },
           providerUnavailable(error.message),
         );
       }

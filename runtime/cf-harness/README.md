@@ -1440,9 +1440,9 @@ each open attempt is watched by `watchMachineSleep`
 (`src/model/machine-sleep.ts`): it reads the wall and monotonic clocks every
 `SLEEP_CHECK_EVERY_MS`, and a wall clock that ran `SLEEP_GAP_MS` or more ahead
 of the monotonic one, which does not advance while the machine sleeps, is a
-sleep. The attempt's record then says so in its `errorDetail` or its error, and
-the schedule issues it again like any other transport error; the watch stops
-when the attempt ends. The gateway provider does not watch yet.
+sleep. The attempt's record then says so in its `errorDetail`, and the schedule
+issues it again like any other transport error; the watch stops when the attempt
+ends. The gateway provider does not watch yet.
 
 The bound is `transportRetries` attempts beyond the first — three unless a
 client is configured otherwise — with a backoff of `transportRetryDelayMs`

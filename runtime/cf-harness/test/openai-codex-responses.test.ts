@@ -1486,12 +1486,17 @@ Deno.test("Codex Responses issues again an attempt whose stream a machine sleep 
     markStreaming = resolve;
   });
   // a stream that never delivers another byte or an error, as a connection the
-  // provider dropped while the machine slept
+  // provider dropped while the machine slept; it says it is streaming once a
+  // read is pending on it, so the sleep lands on that read
   const dead = new ReadableStream<Uint8Array>({
+    pull() {
+      markStreaming();
+      return new Promise<void>(() => {});
+    },
     cancel() {
       canceled = true;
     },
-  });
+  }, { highWaterMark: 0 });
   const client = new OpenAICodexResponsesClient({
     transportRetries: 1,
     transportRetryDelayMs: 0,
@@ -1500,7 +1505,6 @@ Deno.test("Codex Responses issues again an attempt whose stream a machine sleep 
     fetchFn: () => {
       requests += 1;
       if (requests === 1) {
-        markStreaming();
         return Promise.resolve(new Response(dead, { status: 200 }));
       }
       return Promise.resolve(completedMessage("after the wake"));
@@ -1525,6 +1529,11 @@ Deno.test("Codex Responses issues again an attempt whose stream a machine sleep 
   assertEquals(canceled, true, "the dead stream is let go");
   assertEquals(attempts[0].outcome, "http_response");
   assertEquals(attempts[0].retry?.kind, "transport_error");
+  assertStringIncludes(
+    String(attempts[0].errorDetail),
+    "the machine slept for 600 s",
+    "the attempt that was cut off says why, though the retry succeeded",
+  );
   assertEquals(
     [sleep.watch.started, sleep.watch.stops],
     [2, 2],
@@ -1589,12 +1598,19 @@ Deno.test("Codex Responses fails, rather than waits, when a machine sleep cuts o
     transportRetries: 0,
     watchSleep: sleep.watchSleep,
     credentialResolver: { resolve: () => Promise.resolve(credential) },
-    fetchFn: () => {
-      markStreaming();
-      return Promise.resolve(
-        new Response(new ReadableStream<Uint8Array>(), { status: 200 }),
-      );
-    },
+    fetchFn: () =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            // streaming once a read is pending, so the sleep lands on that read
+            pull() {
+              markStreaming();
+              return new Promise<void>(() => {});
+            },
+          }, { highWaterMark: 0 }),
+          { status: 200 },
+        ),
+      ),
   });
   const completion = client.complete({
     model: "gpt-5.4",
