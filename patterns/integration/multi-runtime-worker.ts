@@ -1257,21 +1257,22 @@ const handlers: Record<
       runtime.userIdentityDID,
     );
     await idle();
-    const inbox = "inbox" in found
-      ? found.inbox.getAsNormalizedFullLink()
-      : undefined;
-    const profile = "profile" in found
-      ? found.profile?.getAsNormalizedFullLink()
-      : undefined;
+    const addressOf = (link: Cell<unknown>) => {
+      const { id, space } = link.getAsNormalizedFullLink();
+      return { id, space };
+    };
+    const refused = found.outcome === "replace" ? found.refused : undefined;
     return {
       outcome: found.outcome,
       ...("reason" in found ? { reason: found.reason } : {}),
-      ...(inbox === undefined
-        ? {}
-        : { inbox: { id: inbox.id, space: inbox.space } }),
-      ...(profile === undefined
-        ? {}
-        : { profile: { id: profile.id, space: profile.space } }),
+      ...("inbox" in found ? { inbox: addressOf(found.inbox) } : {}),
+      ...("inboxes" in found ? { inboxes: found.inboxes.map(addressOf) } : {}),
+      ...(refused === undefined ? {} : {
+        refused: { reason: refused.reason, inbox: addressOf(refused.inbox) },
+      }),
+      ...("profile" in found && found.profile !== undefined
+        ? { profile: addressOf(found.profile) }
+        : {}),
     };
   },
 

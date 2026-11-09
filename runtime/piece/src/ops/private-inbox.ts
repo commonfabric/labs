@@ -58,14 +58,16 @@ export const PRIVATE_INBOX_SPACE_NAME = "private-inbox";
  * Home keeps the inbox it holds, the deciding profile advertising it or no
  * profile advertising any; `none-advertised` when Home holds none and no
  * profile advertises one; `adopt` when the deciding profile's inbox passed
- * vetting and is one Home made; `replace` when the inbox Home holds, or the
- * deciding profile's inbox that passed vetting, is one Home did not make,
- * such as a loom daemon's, so Home holds an inbox of its own in its place and
- * goes on reading that one; `refused` when the deciding profile's inbox failed
- * vetting, for `reason`. `profile` is the deciding profile, which `held` and
- * `replace` name only when that profile advertises the inbox they name.
- * `abandoned` is an ensure stopped before its send, which sent nothing, and
- * `unavailable` one over a Home without the stream.
+ * vetting and is one Home made; `replace` when Home holds an inbox it did not
+ * make, such as a loom daemon's, or the deciding profile's inbox passed
+ * vetting and is one Home did not make, so Home holds an inbox of its own in
+ * their place and goes on reading them: `inboxes` names each, the one Home
+ * holds first; `refused` when the deciding profile's inbox failed vetting, for
+ * `reason`, which `replace` names as its `refused` when Home holds an inbox it
+ * did not make too. `profile` is the deciding profile, which `held` names only
+ * when that profile advertises the inbox Home holds. `abandoned` is an ensure
+ * stopped before its send, which sent nothing, and `unavailable` one over a
+ * Home without the stream.
  */
 export type PrivateInboxEnsure =
   | { outcome: "unavailable" }
@@ -73,13 +75,19 @@ export type PrivateInboxEnsure =
   | { outcome: "held"; profile?: Cell<unknown> }
   | { outcome: "none-advertised" }
   | { outcome: "adopt"; inbox: Cell<unknown>; profile: Cell<unknown> }
-  | { outcome: "replace"; inbox: Cell<unknown>; profile?: Cell<unknown> }
   | {
-    outcome: "refused";
-    reason: InboxAdoptionRefusal;
-    inbox: Cell<unknown>;
-    profile: Cell<unknown>;
-  };
+    outcome: "replace";
+    inboxes: Cell<unknown>[];
+    profile?: Cell<unknown>;
+    refused?: InboxRefusal;
+  }
+  | ({ outcome: "refused"; profile: Cell<unknown> } & InboxRefusal);
+
+/** The host's refusal of the inbox the deciding profile advertises. */
+export type InboxRefusal = {
+  reason: InboxAdoptionRefusal;
+  inbox: Cell<unknown>;
+};
 
 /**
  * The link the host reads an inbox pointer through: a link to a piece naming
@@ -110,20 +118,23 @@ const pointerSchema = {
  * The event names the deciding profile's inbox to adopt, and that profile,
  * when the inbox passes every check, is one Home made (it lives in the space
  * Home's space names {@link PRIVATE_INBOX_SPACE_NAME}), and Home holds none,
- * or holds another. An inbox Home did not make is named to replace instead:
+ * or holds another. Inboxes Home did not make are named to replace instead:
  * the inbox Home holds, when Home holds one it did not make, whatever the
- * profiles advertise, and otherwise the deciding profile's inbox when it
- * passes every check, with that profile. Home then holds an inbox of its own
- * and keeps reading the one replaced, so that Home's own program, which keeps
- * everything a sender's offer says, receives what senders deliver from then
- * on. When the inbox fails a check, the event names the refusal instead, with its
- * reason, the refused inbox and the deciding profile, for Home to record, and
- * the refusal is logged as a warning too; Home neither adopts nor replaces
- * that inbox. When the deciding profile advertises the inbox Home holds, the
- * event names that profile and nothing else, which Home takes as the end of a
+ * profiles advertise, and the deciding profile's inbox when it passes every
+ * check, with that profile, both when both are. Home then holds an inbox of
+ * its own and keeps reading each one replaced, so that Home's own program,
+ * which keeps everything a sender's offer says, receives what senders deliver
+ * from then on. When the deciding profile's inbox fails a check, the event
+ * names the refusal, with its reason, the refused inbox and the deciding
+ * profile, for Home to record, beside the inbox Home holds when it names that
+ * one to replace, and the refusal is logged as a warning too; Home neither
+ * adopts nor replaces the refused inbox. When the deciding profile advertises
+ * the inbox Home holds, the event names that profile, and the inbox when it is
+ * one to replace; a profile and nothing else Home takes as the end of a
  * refusal it recorded. When no profile advertises an inbox, the event names
- * nothing, and Home creates an inbox only if it holds none. A Home without the
- * stream is left as it is.
+ * the inbox Home holds when it is one to replace, and nothing otherwise, and
+ * Home creates an inbox only if it holds none. A Home without the stream is
+ * left as it is.
  *
  * Resolves once Home's handler has run on the event and its run has
  * committed, on the server that runs it under server execution, so that a
@@ -147,10 +158,15 @@ export async function ensurePrivateInboxOf(
   if (signal?.aborted || runtime.writeTeardownSignal.aborted) {
     return { outcome: "abandoned" };
   }
-  if (found.outcome === "refused") {
+  const refusal = found.outcome === "refused"
+    ? found
+    : found.outcome === "replace"
+    ? found.refused
+    : undefined;
+  if (refusal !== undefined) {
     logger.warn("adoption-refused", () => [
-      `Not adopting the inbox a profile advertises (${found.reason}):`,
-      found.inbox.getAsNormalizedFullLink(),
+      `Not adopting the inbox a profile advertises (${refusal.reason}):`,
+      refusal.inbox.getAsNormalizedFullLink(),
     ]);
   }
   await new Promise<void>((resolve, reject) =>
@@ -347,9 +363,11 @@ function ensureEventOf(
         refused: { reason: found.reason, inbox: found.inbox },
       };
     case "replace":
-      return found.profile === undefined
-        ? { replace: found.inbox }
-        : { replace: found.inbox, from: found.profile };
+      return {
+        replace: found.inboxes,
+        ...(found.profile === undefined ? {} : { from: found.profile }),
+        ...(found.refused === undefined ? {} : { refused: found.refused }),
+      };
     case "held":
       return found.profile === undefined ? {} : { from: found.profile };
     case "none-advertised":
@@ -358,14 +376,16 @@ function ensureEventOf(
 }
 
 /**
- * Decides which inbox, if any, `home` adopts or replaces. An inbox Home holds
+ * Decides which inboxes, if any, `home` adopts or replaces. An inbox Home holds
  * that it did not make, one outside the space Home's space names
  * {@link PRIVATE_INBOX_SPACE_NAME}, is replaced whatever the profiles
  * advertise. Otherwise Home keeps an inbox it holds while the deciding profile
- * advertises it, or while no profile advertises one, and the inbox to vet is
- * the deciding profile's: adopted if it passes every check and Home made it,
- * and replaced if it passes every check and Home did not. A profile whose
- * stored pointer is not an object holding a link advertises nothing.
+ * advertises it, or while no profile advertises one. When the deciding profile
+ * advertises another inbox, that one is vetted, whether or not Home keeps the
+ * one it holds: adopted if it passes every check and Home made it, replaced
+ * beside any inbox replaced already if it passes every check and Home did not,
+ * and refused beside it otherwise. A profile whose stored pointer is not an
+ * object holding a link advertises nothing.
  */
 async function vetAdvertisedInbox(
   runtime: Runtime,
@@ -382,17 +402,20 @@ async function vetAdvertisedInbox(
     PRIVATE_INBOX_SPACE_NAME,
   );
   const deciding = await decidingProfile(runtime, home, identity);
-  if (held !== undefined && await reachedSpace(held) !== own) {
-    return deciding !== undefined && await isSameDocument(deciding.piece, held)
-      ? { outcome: "replace", inbox: held, profile: deciding.profile }
-      : { outcome: "replace", inbox: held };
-  }
+  // The inbox Home holds when it is one Home did not make, to replace.
+  const replacing = held !== undefined && await reachedSpace(held) !== own
+    ? [held]
+    : [];
   if (deciding === undefined) {
-    return { outcome: held === undefined ? "none-advertised" : "held" };
+    return replacing.length > 0
+      ? { outcome: "replace", inboxes: replacing }
+      : { outcome: held === undefined ? "none-advertised" : "held" };
   }
   const { profile, piece } = deciding;
   if (held !== undefined && await isSameDocument(piece, held)) {
-    return { outcome: "held", profile };
+    return replacing.length > 0
+      ? { outcome: "replace", inboxes: replacing, profile }
+      : { outcome: "held", profile };
   }
   const inbox = piece.resolveAsCell();
   const reason = await refusalOf(runtime, inbox, {
@@ -401,11 +424,18 @@ async function vetAdvertisedInbox(
     identity,
   });
   if (reason !== undefined) {
-    return { outcome: "refused", reason, inbox, profile };
+    return replacing.length > 0
+      ? {
+        outcome: "replace",
+        inboxes: replacing,
+        profile,
+        refused: { reason, inbox },
+      }
+      : { outcome: "refused", reason, inbox, profile };
   }
   return inbox.space === own
     ? { outcome: "adopt", inbox, profile }
-    : { outcome: "replace", inbox, profile };
+    : { outcome: "replace", inboxes: [...replacing, inbox], profile };
 }
 
 /**

@@ -32,18 +32,19 @@ The pattern is `patterns/system/private-inbox/private-inbox.tsx`.
   field, which `profile-home.tsx` describes. A profile space is readable by
   anyone, so the pointer is how a sender finds the inbox.
 
-A profile may point at an inbox other than Home's, set by something else. That
-pointer is left as it is.
+A profile may point at an inbox other than Home's, set by something else. Home
+points it at its own once Home has replaced or given up the inbox it points at,
+as "Creating or adopting it" says; any other such pointer is left as it is.
 
 ## Creating or adopting it
 
 An identity has one inbox, and Home's own program runs it. Home creates it, or
 adopts one of its own that a profile already advertises. An inbox Home did not
 make, such as one a loom daemon created, Home replaces with its own when it
-holds that inbox or when the deciding profile advertises it and it is usable:
-it keeps reading the replaced inbox, and points every profile that advertised
-it at its own. So the inbox senders deliver to keeps everything an offer says,
-whatever program the replaced one ran. A client that would
+holds that inbox, when the deciding profile advertises it and it is usable, or
+both: it keeps reading each replaced inbox, and points every profile that
+advertised one at its own. So the inbox senders deliver to keeps everything an
+offer says, whatever program the replaced one ran. A client that would
 otherwise create an inbox of its own, as a loom daemon does, asks Home for it
 instead through Home's `requestPrivateInbox` stream when Home has that stream,
 and adopts the inbox the profile it names then points at, as "Requesting it"
@@ -110,11 +111,12 @@ as active, so the two decide by the same profile whenever it points at an inbox.
 The host has Home replace the inbox Home holds when Home did not make it: when
 it lies outside the space Home's space records under the name `private-inbox`,
 or Home's space records no such space, which the host reads with
-`Runtime.recordedInSpaceName()`, creating nothing. Otherwise the host keeps the
-inbox Home holds when the deciding profile points at it, whatever the other
-profiles point at, or when no profile points at an inbox. Otherwise the host
-vets the inbox the deciding profile points at, as a loom
-daemon vets an inbox before adopting it. When a profile ordered ahead of the
+`Runtime.recordedInSpaceName()`, creating nothing. An inbox Home made that Home
+holds, the host keeps when the deciding profile points at it, whatever the
+other profiles point at, or when no profile points at an inbox. When the
+deciding profile points at any other inbox, the host vets that one, whether or
+not Home holds an inbox it did not make, as a loom daemon vets an inbox before
+adopting it. When a profile ordered ahead of the
 deciding one cannot be read, which profile decides is unknown, and the ensure
 rejects, sending nothing. The inbox is usable when:
 
@@ -128,16 +130,20 @@ A failure to read the inbox's space that is not a refusal of access, such as a
 lost connection, rejects the ensure, and the next time that worker brings up
 Home it tries again.
 
-The host then sends Home's `ensurePrivateInbox` stream. When the inbox Home
-holds is one Home did not make, the event names it as the inbox to replace,
-with the deciding profile when that profile points at it. Otherwise, when the
-deciding profile's inbox is usable, the event names it as the inbox to adopt
-when Home made it, and as the inbox to replace when Home did not, and names
-the deciding profile. When it is not usable, the event names the refusal
-instead, with its reason and the refused inbox, and the deciding profile. When
-the deciding profile points at the inbox Home holds, the event names that
-profile and nothing else, and when no profile points at an inbox it names
-nothing. A Home pattern without the stream is left alone. Home's handler
+The host then sends Home's `ensurePrivateInbox` stream. The event names, under
+`replace`, each inbox Home is to replace: the inbox Home holds when Home did not
+make it, and the deciding profile's inbox when it is usable and Home did not
+make it, in that order. When the deciding profile's inbox is usable and Home
+made it, the event names it as the inbox to adopt instead, and adopting it
+retains the inbox Home holds, so the event names none to replace. When the
+deciding profile's inbox is not usable, the event names the refusal, with its
+reason and the refused inbox, beside the inbox Home holds when that one is to
+be replaced. Each of these names the deciding profile. When the deciding
+profile points at the inbox Home holds, the event names that profile, and that
+inbox to replace when Home did not make it, and when no profile points at an
+inbox the event names the inbox Home holds to replace when Home did not make it,
+and nothing otherwise. A Home pattern without the stream is left alone. Home's
+handler
 checks the host's decision rather than repeating it, against the profiles'
 pointers as it reads them, so a pointer that moved after the host vetted it
 is decided by where it now points:
@@ -150,13 +156,13 @@ is decided by where it now points:
   end of Home's `retainedPrivateInboxes` list. An event from a host that names
   no profile is checked against the first profile in the list that points at an
   inbox, and adopts only while Home holds none.
-- When the event names an inbox to replace, Home replaces it if Home holds it,
-  or if the profile the event names is in Home's list and still points at it;
-  if not, Home is left as it is. Replacing it, Home creates an inbox of its own,
-  as "Where it lives" says, when it holds the replaced inbox or none, and keeps
-  the one it holds otherwise, and puts the replaced inbox at the end of
+- When the event names inboxes to replace, Home replaces each that it holds, or
+  that the profile the event names, in Home's list, still points at, and leaves
+  any other as it is. Replacing, Home creates an inbox of its own, as "Where it
+  lives" says, when it holds an inbox it replaces or holds none, and keeps the
+  one it holds otherwise, and puts each replaced inbox at the end of
   `retainedPrivateInboxes`, unless the list holds it already. An event that
-  names an inbox to adopt is not also taken as naming one to replace.
+  names an inbox to adopt is not also taken as naming any to replace.
 - Otherwise, when Home holds no inbox and no profile in the list points at an
   inbox, Home creates one, as "Where it lives" says.
 - Otherwise Home keeps the inbox it holds, or holds none. That is the case when
@@ -178,11 +184,10 @@ inbox, as after a refusal, a profile that points at none stays unpointed, until
 a later ensure finds a usable advertisement or none. Sending the stream again
 creates nothing, re-points nothing and retains nothing more. Creation is tested
 by `patterns/integration/private-inbox-multi-runtime.test.ts`, with server
-execution on and off; keeping, adopting, adopting again, refusing and recording
-a refusal are tested there, by
+execution on and off; keeping, adopting, replacing and the pointing it leads
+to, refusing and recording a refusal are tested there, by
 `patterns/system/private-inbox/private-inbox.test.tsx` and, vetting rule by
-rule, by `runtime/piece/test/ops/private-inbox.test.ts`; replacing, and the
-pointing it leads to, by the last two.
+rule, by `runtime/piece/test/ops/private-inbox.test.ts`.
 
 `retainedPrivateInboxes` holds a link to each inbox Home gave up or replaced,
 in the order it did so, and never the one it holds: adopting an inbox the list
@@ -476,12 +481,15 @@ profile advertises, which Home does not read.
 Home's handler records the refusal an event names, in place of a different one
 recorded before, under the check it makes of an adoption: the profile the event
 names is in Home's list and still points at the refused inbox, and that inbox is
-not the one Home holds. So an event that a moved pointer has left behind, one
+not the one Home holds once the event has been handled. A refusal beside a
+replacement is recorded the same way. So an event that a moved pointer has
+left behind, one
 naming no profile, and one refusing the inbox Home holds, as a refusal that lost
 a race to an adoption of the same inbox does, record nothing. A repeat of the
 recorded refusal, of the same inbox for the same reason, keeps its time and
-writes nothing. The record is cleared when Home adopts or creates an inbox, when
-the profile an event names is in Home's list and points at the inbox Home holds,
+writes nothing. Otherwise the record is cleared when Home adopts or creates an
+inbox, when it replaces the inbox the record names, when the profile an event
+names is in Home's list and points at the inbox Home holds,
 and, on any event that records no refusal, when no profile in Home's list points
 at the refused inbox any longer, by the comparison the check uses. So once no
 profile points at the refused inbox, whether its pointers moved to another inbox

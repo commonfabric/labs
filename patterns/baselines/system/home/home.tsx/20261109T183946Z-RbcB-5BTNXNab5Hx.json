@@ -1075,7 +1075,7 @@
             "description": "The deciding profile: the first, in the order `#profile` answers in, that\npoints at an inbox. Absent from a host that names none, which Home takes\nas the first profile in its list that points at an inbox."
           },
           "refused": {
-            "description": "The host's refusal of the inbox the deciding profile advertises, for Home\nto record; absent when the host refused none.",
+            "description": "The host's refusal of the inbox the deciding profile advertises, for Home\nto record, beside an inbox Home holds to replace or alone; absent when the\nhost refused none.",
             "properties": {
               "inbox": {
                 "$ref": "#/$defs/ShareInboxPiece",
@@ -1093,8 +1093,11 @@
             "type": "object"
           },
           "replace": {
-            "$ref": "#/$defs/ShareInboxPiece",
-            "description": "An inbox Home did not make, which the host has Home replace with one of\nits own: the inbox Home holds, or the inbox the deciding profile\nadvertises, which the host has vetted. Absent when there is none."
+            "description": "The inboxes Home did not make, which the host has Home replace with one of\nits own: the inbox Home holds, and the inbox the deciding profile\nadvertises, which the host has vetted, either or both. Absent when there\nis none.",
+            "items": {
+              "$ref": "#/$defs/ShareInboxPiece"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -1997,7 +2000,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/private-inbox/private-inbox.tsx",
-              "moduleIdentity": "_L-gS_-Qz8tOiU1K-fibNXpqz1jmVzbMEzdEo23ArrI",
+              "moduleIdentity": "q84Z5iMv6gU9Ngwb7jDREIR2KwxdYpLEbBvf9I8U1LM",
               "path": [
                 "replaceRefusedPrivateInbox"
               ]

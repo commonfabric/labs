@@ -48,14 +48,14 @@ type Refused = { reason?: string; piece?: Cell<{ name?: string }> };
 const ensurePrivateInbox = handler<
   {
     adopt?: Cell<{ name?: string }>;
-    replace?: Cell<{ name?: string }>;
+    replace?: Cell<{ name?: string }>[];
     from?: Cell<{ inbox?: Pointer }>;
     refused?: { reason: string; inbox: Cell<{ name?: string }> };
   },
   {
     ensured: Writable<number>;
     adopted: Writable<Pointer>;
-    replaced: Writable<Pointer>;
+    replaced: Writable<Cell<{ name?: string }>[]>;
     decidedBy: Writable<Named>;
     refused: Writable<Refused>;
     failEnsure: Writable<boolean>;
@@ -64,7 +64,7 @@ const ensurePrivateInbox = handler<
   if (failEnsure.get()) throw new Error("Home fails the ensure");
   ensured.set(ensured.get() + 1);
   adopted.set(event?.adopt === undefined ? {} : { piece: event.adopt });
-  replaced.set(event?.replace === undefined ? {} : { piece: event.replace });
+  replaced.set(event?.replace ?? []);
   decidedBy.set(event?.from === undefined ? {} : { piece: event.from });
   refused.set(
     event?.refused === undefined
@@ -85,7 +85,9 @@ export default pattern(() => {
   );
   const ensured = new Writable(0).for("ensured");
   const adopted = new Writable<Pointer>({}).for("adopted");
-  const replaced = new Writable<Pointer>({}).for("replaced");
+  const replaced = new Writable<Cell<{ name?: string }>[]>([]).for(
+    "replaced",
+  );
   const decidedBy = new Writable<Named>({}).for("decidedBy");
   const refused = new Writable<Refused>({}).for("refused");
   const failEnsure = new Writable(false).for("failEnsure");
@@ -285,13 +287,10 @@ describe("ensurePrivateInboxOf()", () => {
     return pointer?.piece;
   }
 
-  /** The inbox Home's handler was last sent to replace, if any. */
-  async function replacedSent(): Promise<Cell<unknown> | undefined> {
-    const pointer = await home.key("replaced" as never).asSchema({
-      type: "object",
-      properties: { piece: { type: "unknown", asCell: ["cell"] } },
-    }).pull() as { piece?: Cell<unknown> } | undefined;
-    return pointer?.piece;
+  /** The inboxes Home's handler was last sent to replace. */
+  async function replacedSent(): Promise<Cell<unknown>[]> {
+    return (await home.key("replaced" as never).asSchema(linkListSchema)
+      .pull() as Cell<unknown>[] | undefined) ?? [];
   }
 
   /**
@@ -787,12 +786,11 @@ describe("ensurePrivateInboxOf()", () => {
       );
     }
 
-    /** The address of the inbox Home's handler was last sent to replace. */
-    async function replacedAddress(): Promise<
-      { space: string; id: string } | undefined
+    /** The addresses of the inboxes Home's handler was last sent to replace. */
+    async function replacedAddresses(): Promise<
+      { space: string; id: string }[]
     > {
-      const named = await replacedSent();
-      return named === undefined ? undefined : addressOf(named);
+      return (await replacedSent()).map(addressOf);
     }
 
     /** The address of the profile Home's handler was last sent, if any. */
@@ -812,7 +810,7 @@ describe("ensurePrivateInboxOf()", () => {
 
       expect(result.outcome).toBe("replace");
       expect(result).not.toHaveProperty("profile");
-      expect(await replacedAddress()).toEqual(addressOf(held));
+      expect(await replacedAddresses()).toEqual([addressOf(held)]);
       expect(await deciderAddress()).toBeUndefined();
       expect(await adopted()).toBeUndefined();
     });
@@ -826,20 +824,70 @@ describe("ensurePrivateInboxOf()", () => {
       const result = await ensure();
 
       expect(result.outcome).toBe("replace");
-      expect(await replacedAddress()).toEqual(addressOf(held));
+      expect(await replacedAddresses()).toEqual([addressOf(held)]);
       expect(await deciderAddress()).toEqual(addressOf(deciding));
     });
 
-    it("names the held inbox to replace though the deciding profile advertises one Home made", async () => {
+    it("names a usable inbox Home made that the deciding profile advertises to adopt, in place of a held one Home did not make", async () => {
+      // Home's adoption retains the inbox it held, so nothing is replaced.
+
       const held = await inboxHomeDidNotMake();
       await hold(held);
-      await listProfiles([await profilePointingAt(await usableInbox())]);
+      const inbox = await usableInbox();
+      const deciding = await profilePointingAt(inbox);
+      await listProfiles([deciding]);
+
+      const result = await ensure();
+
+      expect(result.outcome).toBe("adopt");
+      expect(addressOf((await adopted())!)).toEqual(addressOf(inbox));
+      expect(await deciderAddress()).toEqual(addressOf(deciding));
+      expect(await replacedSent()).toEqual([]);
+    });
+
+    it("names the held inbox and the deciding profile's usable one to replace, when Home made neither", async () => {
+      const held = await inboxHomeDidNotMake();
+      await hold(held);
+      const inbox = await inboxHomeDidNotMake();
+      const deciding = await profilePointingAt(inbox);
+      await listProfiles([deciding]);
 
       const result = await ensure();
 
       expect(result.outcome).toBe("replace");
-      expect(await replacedAddress()).toEqual(addressOf(held));
+      expect(await replacedAddresses()).toEqual([
+        addressOf(held),
+        addressOf(inbox),
+      ]);
+      expect(await deciderAddress()).toEqual(addressOf(deciding));
       expect(await adopted()).toBeUndefined();
+      expect(await refusedSent()).toBeUndefined();
+    });
+
+    it("names the held inbox to replace beside the refusal of the deciding profile's inbox", async () => {
+      const held = await inboxHomeDidNotMake();
+      await hold(held);
+      const space = await runtime.createSpace({
+        owner: someoneElse,
+        grants: { "*": "WRITE" },
+      });
+      const refused = await documentIn(space, inboxValue(space));
+      const deciding = await profilePointingAt(refused);
+      await listProfiles([deciding]);
+      const logged = refusalsLogged();
+
+      const result = await ensure();
+
+      expect(result.outcome === "replace" && result.refused?.reason).toBe(
+        "inbox-adoption-acl-mismatch",
+      );
+      expect(await replacedAddresses()).toEqual([addressOf(held)]);
+      expect(await deciderAddress()).toEqual(addressOf(deciding));
+      expect(await refusedSent()).toEqual({
+        reason: "inbox-adoption-acl-mismatch",
+        inbox: addressOf(refused),
+      });
+      expect(refusalsLogged()).toBe(logged + 1);
     });
 
     it("names a usable advertised inbox to replace, with its profile, when Home holds none", async () => {
@@ -850,7 +898,7 @@ describe("ensurePrivateInboxOf()", () => {
       const result = await ensure();
 
       expect(result.outcome).toBe("replace");
-      expect(await replacedAddress()).toEqual(addressOf(inbox));
+      expect(await replacedAddresses()).toEqual([addressOf(inbox)]);
       expect(await deciderAddress()).toEqual(addressOf(deciding));
       expect(await adopted()).toBeUndefined();
       expect(await refusedSent()).toBeUndefined();
@@ -864,7 +912,7 @@ describe("ensurePrivateInboxOf()", () => {
       const result = await ensure();
 
       expect(result.outcome).toBe("replace");
-      expect(await replacedAddress()).toEqual(addressOf(inbox));
+      expect(await replacedAddresses()).toEqual([addressOf(inbox)]);
       expect(await adopted()).toBeUndefined();
     });
 
@@ -888,7 +936,7 @@ describe("ensurePrivateInboxOf()", () => {
       const result = await ensure();
 
       expect(result.outcome).toBe("replace");
-      expect(await replacedAddress()).toEqual(addressOf(inbox));
+      expect(await replacedAddresses()).toEqual([addressOf(inbox)]);
     });
 
     it("names an advertised inbox that fails vetting as refused, not to replace", async () => {
@@ -905,7 +953,7 @@ describe("ensurePrivateInboxOf()", () => {
       expect(result.outcome === "refused" && result.reason).toBe(
         "inbox-adoption-acl-mismatch",
       );
-      expect(await replacedSent()).toBeUndefined();
+      expect(await replacedSent()).toEqual([]);
     });
   });
 

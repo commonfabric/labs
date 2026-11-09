@@ -234,11 +234,12 @@ export type PrivateInboxHolder = {
 };
 
 /**
- * The inboxes Home held before the one it holds now, as links, in the order
- * Home stopped holding them, and none of them the one it holds. Home gives up
- * an inbox when it adopts the deciding profile's inbox in its place, whatever
- * other profiles still point at, and keeps the link so that the offers senders
- * delivered to the earlier inbox stay readable.
+ * The inboxes Home reads besides the one it holds, as links, in the order it
+ * took each on, and none of them the one it holds: each inbox Home gave up,
+ * when it adopted the deciding profile's inbox in its place, whatever other
+ * profiles still point at, and each it replaced with its own, whether Home held
+ * it or only a profile advertised it. Home keeps the links so that the offers
+ * senders delivered to those inboxes stay readable.
  */
 export type RetainedPrivateInboxes = Cell<PrivateInboxPiece>[];
 
@@ -566,11 +567,12 @@ export type EnsurePrivateInboxEvent = {
   adopt?: Cell<PrivateInboxPiece>;
 
   /**
-   * An inbox Home did not make, which the host has Home replace with one of
-   * its own: the inbox Home holds, or the inbox the deciding profile
-   * advertises, which the host has vetted. Absent when there is none.
+   * The inboxes Home did not make, which the host has Home replace with one of
+   * its own: the inbox Home holds, and the inbox the deciding profile
+   * advertises, which the host has vetted, either or both. Absent when there
+   * is none.
    */
-  replace?: Cell<PrivateInboxPiece>;
+  replace?: Cell<PrivateInboxPiece>[];
 
   /**
    * The deciding profile: the first, in the order `#profile` answers in, that
@@ -581,7 +583,8 @@ export type EnsurePrivateInboxEvent = {
 
   /**
    * The host's refusal of the inbox the deciding profile advertises, for Home
-   * to record; absent when the host refused none.
+   * to record, beside an inbox Home holds to replace or alone; absent when the
+   * host refused none.
    */
   refused?: {
     /** Why the host refused it, by its code. */
@@ -605,26 +608,26 @@ export type EnsurePrivateInboxEvent = {
  * host vetted none, or names a profile that has since moved, Home keeps what it
  * holds, or holds none.
  *
- * An event naming an inbox to replace, one Home did not make, gives it way to
+ * An event naming inboxes to replace, ones Home did not make, gives each way to
  * an inbox of Home's own when Home holds it, or when the profile the event
  * names is in Home's list and still points at it: Home creates its own inbox
- * if it holds that one or none, keeps the one it holds otherwise, and puts the
- * replaced inbox in `retainedPrivateInboxes`, so the offers delivered to it
- * stay readable. A profile pointing at an inbox Home retains is then pointed at
- * Home's, by the second step; a profile pointing at any other inbox keeps its
- * pointer. Running it again creates, re-points and retains nothing.
+ * if it holds one of those or none, keeps the one it holds otherwise, and puts
+ * each replaced inbox in `retainedPrivateInboxes`, so the offers delivered to
+ * it stay readable. A profile pointing at an inbox Home retains is then pointed
+ * at Home's, by the second step; a profile pointing at any other inbox keeps
+ * its pointer. Running it again creates, re-points and retains nothing.
  *
  * `privateInboxRefusal` holds the host's refusal of the deciding profile's
  * inbox. A refusal the event names is recorded, in place of a different one
  * recorded before, under the same check as an adoption: the profile the event
  * names is in Home's list and still points at the refused inbox, which is not
- * the inbox Home holds. The record is cleared when Home adopts or creates an
- * inbox, when the profile the event names is in Home's list and points at the
- * inbox Home holds, and, on an event recording no refusal, when no profile in
- * Home's list points at the refused inbox. `replaceRefusedPrivateInbox` clears
- * it too, when the owner replaces the refused inbox. A repeat of the recorded
- * refusal, of the same inbox for the same reason, keeps the time it was first
- * recorded.
+ * the inbox Home holds. Otherwise the record is cleared when Home adopts or
+ * creates an inbox, when it replaces the inbox the record names, when the
+ * profile the event names is in Home's list and points at the inbox Home
+ * holds, and, on an event recording no refusal, when no profile in Home's list
+ * points at the refused inbox. `replaceRefusedPrivateInbox` clears it too,
+ * when the owner replaces the refused inbox. A repeat of the recorded refusal,
+ * of the same inbox for the same reason, keeps the time it was first recorded.
  *
  * The check is list membership and the profile's pointer, not order: which
  * profile decides is the host's alone. So an event the owner's own code sends,
@@ -673,19 +676,24 @@ export const ensurePrivateInbox = handler<
     ? pointerOfListed(profiles, event.from)
     : undefined;
   const adopt = event?.adopt;
-  const replace = event?.replace;
+  // The inbox Home holds once this run commits.
+  let holding = held;
   let replaced = false;
-  if (replace !== undefined && adopt === undefined) {
-    // An inbox Home holds, or one the profile the event names still points
-    // at, gives way to an inbox of Home's own, and Home keeps reading it.
-    const holdsIt = held !== undefined && equals(held, replace);
-    if (holdsIt || (deciding !== undefined && equals(replace, deciding))) {
-      if (held === undefined || holdsIt) {
-        privateInbox.set({ piece: createPrivateInbox() });
-        replaced = true;
-      }
-      retainOnce(retainedPrivateInboxes, replace);
+  // An inbox Home holds, or one the profile the event names still points at,
+  // gives way to an inbox of Home's own, and Home keeps reading it.
+  const replacing = adopt !== undefined ? [] : (event?.replace ?? []).filter(
+    (each) =>
+      each !== undefined &&
+      ((held !== undefined && equals(held, each)) ||
+        (deciding !== undefined && equals(each, deciding))),
+  );
+  if (replacing.length > 0) {
+    if (held === undefined || replacing.some((each) => equals(held, each))) {
+      holding = createPrivateInbox();
+      privateInbox.set({ piece: holding });
+      replaced = true;
     }
+    for (const each of replacing) retainOnce(retainedPrivateInboxes, each);
   } else if (adopt !== undefined) {
     const pointer = event?.from !== undefined
       ? deciding
@@ -697,23 +705,23 @@ export const ensurePrivateInbox = handler<
       (held === undefined || !equals(held, adopt))
     ) {
       if (held !== undefined) retainInbox(retainedPrivateInboxes, held, adopt);
-      privateInbox.set({ piece: adopt });
+      holding = adopt;
+      privateInbox.set({ piece: holding });
       replaced = true;
     }
   } else if (held === undefined && advertised === undefined) {
-    privateInbox.set({ piece: createPrivateInbox() });
+    holding = createPrivateInbox();
+    privateInbox.set({ piece: holding });
     replaced = true;
   }
   const refused = event?.refused;
-  if (replaced) {
-    privateInboxRefusal.set({});
-  } else if (
+  const recorded = privateInboxRefusal.get()?.refusal;
+  if (
     refused !== undefined && deciding !== undefined &&
     equals(refused.inbox, deciding) &&
-    (held === undefined || !equals(held, refused.inbox))
+    (holding === undefined || !equals(holding, refused.inbox))
   ) {
     const reason = trimmedText(refused.reason, REFUSAL_REASON_MAX_LENGTH);
-    const recorded = privateInboxRefusal.get()?.refusal;
     // The same refusal again keeps the time it was first recorded, and
     // writes nothing.
     if (
@@ -725,22 +733,25 @@ export const ensurePrivateInbox = handler<
       });
     }
   } else if (
+    replaced ||
+    (recorded !== undefined &&
+      replacing.some((each) => equals(each, recorded.inbox)))
+  ) {
+    privateInboxRefusal.set({});
+  } else if (
     deciding !== undefined && held !== undefined && equals(held, deciding)
   ) {
     privateInboxRefusal.set({});
-  } else {
+  } else if (
     // A recorded refusal says the deciding profile points at the refused
     // inbox, so it ends once no profile in the list points there.
-    const recorded = privateInboxRefusal.get()?.refusal?.inbox;
-    if (
-      recorded !== undefined &&
-      !(profiles ?? []).some((profile) =>
-        profile?.inbox?.piece !== undefined &&
-        equals(profile.inbox.piece, recorded)
-      )
-    ) {
-      privateInboxRefusal.set({});
-    }
+    recorded !== undefined &&
+    !(profiles ?? []).some((profile) =>
+      profile?.inbox?.piece !== undefined &&
+      equals(profile.inbox.piece, recorded.inbox)
+    )
+  ) {
+    privateInboxRefusal.set({});
   }
   pointProfiles.send();
 });
