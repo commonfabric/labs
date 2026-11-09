@@ -1414,13 +1414,15 @@ provider said. A provider that returns a bare `503` states no reason, and the
 record carries none rather than a guess.
 
 A transient failure is issued again before anything reaches the harness. Three
-kinds qualify, and only these: a transport error, where no response arrived; a
-`429` or `5xx` status; and a provider-stated error whose type or code names
-capacity, rate limiting, or a server-side fault — `server_is_overloaded` and
-`service_unavailable_error` among them. Anything else ends the exchange on its
-first attempt: a `4xx` refuses the request itself, a provider error naming the
-request cannot be cleared by waiting, and a body that is not SSE-framed JSON is
-a protocol failure, not a transient one.
+kinds qualify, and only these: a transport error, where no response arrived or
+its stream was cut off before the terminal event (a read that failed, a body
+that ended early, or a machine sleep); a `429` or `5xx` status; and a
+provider-stated error whose type or code names capacity, rate limiting, or a
+server-side fault — `server_is_overloaded` and `service_unavailable_error` among
+them. Anything else ends the exchange on its first attempt: a `4xx` refuses the
+request itself, a provider error naming the request cannot be cleared by
+waiting, and a body that is not SSE-framed JSON is a protocol failure, not a
+transient one.
 
 Reissuing is safe because the harness dispatches nothing from an attempt that
 did not complete: a model exchange has no side effect until a tool call from its
@@ -1447,10 +1449,12 @@ client is configured otherwise — with a backoff of `transportRetryDelayMs`
 before the second attempt, doubling before each attempt after it. An attempt
 that is followed by another says so: its record carries `retry`, naming the
 `kind` of transient failure (`transport_error`, `http_status`, or
-`provider_error`) and the `delayMs` waited before the next attempt. The last
-attempt of an exchange never carries one, however it ended. The backoff is
-waited out through an injected `transportRetryDelay`, which is how a test drives
-a retry sequence without a timer.
+`provider_error`) and the `delayMs` waited before the next attempt. That kind is
+why the attempt was issued again, not how far it got: a stream cut off after its
+headers arrived is recorded with `outcome` `http_response` and retried as a
+`transport_error`. The last attempt of an exchange never carries one, however it
+ended. The backoff is waited out through an injected `transportRetryDelay`,
+which is how a test drives a retry sequence without a timer.
 
 ### Session-local address handles
 
