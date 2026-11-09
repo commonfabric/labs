@@ -1588,6 +1588,60 @@ Deno.test("Codex Responses issues again an attempt a machine sleep cut off befor
   assertStringIncludes(String(attempts[0].errorDetail), "the machine slept");
 });
 
+Deno.test("Codex Responses records the sleep that cut off reading an error response's body", async () => {
+  const sleep = handSleepWatch();
+  const attempts: HarnessModelAttemptDiagnostic[] = [];
+  let requests = 0;
+  let markReading!: () => void;
+  const reading = new Promise<void>((resolve) => {
+    markReading = resolve;
+  });
+  const client = new OpenAICodexResponsesClient({
+    transportRetries: 1,
+    transportRetryDelayMs: 0,
+    watchSleep: sleep.watchSleep,
+    credentialResolver: { resolve: () => Promise.resolve(credential) },
+    fetchFn: (_input, init) => {
+      requests += 1;
+      if (requests > 1) return Promise.resolve(completedMessage("recovered"));
+      // a 503 whose body stops arriving; as with a real fetch, the request's
+      // signal ends the body's read
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          init?.signal?.addEventListener(
+            "abort",
+            () => controller.error(init.signal?.reason),
+            { once: true },
+          );
+        },
+        pull() {
+          markReading();
+          return new Promise<void>(() => {});
+        },
+      }, { highWaterMark: 0 });
+      return Promise.resolve(new Response(body, { status: 503 }));
+    },
+  });
+  const completion = client.complete({
+    model: "gpt-5.4",
+    transcript: [{ role: "user", content: "hi" }],
+    tools: [],
+    nativeModelToolIds: [],
+    runId: "run-sleep-error-body",
+    onAttempt: (attempt) => {
+      attempts.push(attempt);
+    },
+  });
+  await reading;
+  sleep.slept(600_000);
+
+  const result = await completion;
+  assertEquals(result.assistant.content, "recovered");
+  assertEquals(attempts[0].httpStatus, 503);
+  assertEquals(attempts[0].retry?.kind, "http_status", "the status decides");
+  assertStringIncludes(String(attempts[0].errorDetail), "the machine slept");
+});
+
 Deno.test("Codex Responses fails, rather than waits, when a machine sleep cuts off its last attempt", async () => {
   const sleep = handSleepWatch();
   let markStreaming!: () => void;

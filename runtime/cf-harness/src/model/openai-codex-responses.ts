@@ -745,6 +745,7 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
     if (!response.ok) {
       let responseBodyBytes: number | undefined;
       let providerError: HarnessProviderError | undefined;
+      let errorDetail: string | undefined;
       try {
         const text = await response.text();
         responseBodyBytes = textBytes(text);
@@ -754,6 +755,11 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
           : mapProviderError(stated, redact);
       } catch {
         if (request.signal?.aborted) throw abortReason(request.signal);
+        // The status still decides the retry; an interruption that cut off
+        // reading the body says why the record has no body.
+        if (signal.aborted && signal.reason instanceof StreamInterrupted) {
+          errorDetail = redact(signal.reason.message);
+        }
       }
       return await failed(
         isTransientHttpStatus(response.status) ? "http_status" : undefined,
@@ -762,6 +768,7 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
           responseCompleteDurationMs: this.#elapsedMsSince(startedAtMs),
           ...(responseBodyBytes !== undefined ? { responseBodyBytes } : {}),
           ...(providerError !== undefined ? { providerError } : {}),
+          ...(errorDetail !== undefined ? { errorDetail } : {}),
         },
         httpFailure(response.status, providerError),
       );
