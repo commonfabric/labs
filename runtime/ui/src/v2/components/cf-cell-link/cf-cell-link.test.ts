@@ -54,6 +54,43 @@ describe("CFCellLink", () => {
       globalThis.removeEventListener("cf-navigate", listener);
     }
   });
+  it("warns, naming the link, and navigates nowhere on a click before the link resolves", () => {
+    const element = new CFCellLink() as any;
+    element.label = "Team chat";
+    element.cell = {
+      ref: () => ({
+        space: "did:key:home",
+        id: "of:fid1:row",
+        scope: "user",
+        path: ["element", "room"],
+      }),
+    };
+    const seen: unknown[] = [];
+    const listener = (event: Event) => seen.push((event as CustomEvent).detail);
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args);
+    globalThis.addEventListener("cf-navigate", listener);
+    try {
+      element._handleClick({ stopPropagation() {} });
+    } finally {
+      globalThis.removeEventListener("cf-navigate", listener);
+      console.warn = originalWarn;
+    }
+    expect(seen).toEqual([]);
+    expect(warnings).toEqual([[
+      "cf-cell-link: the click opens nothing: the link names no cell to open.",
+      {
+        label: "Team chat",
+        cell: {
+          space: "did:key:home",
+          id: "of:fid1:row",
+          scope: "user",
+          path: ["element", "room"],
+        },
+      },
+    ]]);
+  });
   it("navigates to a nested view without losing its scoped target", () => {
     const element = new CFCellLink() as any;
     element.spaceName = "current-space";
