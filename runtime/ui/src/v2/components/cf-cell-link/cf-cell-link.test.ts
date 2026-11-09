@@ -107,6 +107,42 @@ describe("CFCellLink", () => {
       { label: undefined, link: "/of:fid1:abc/path" },
     ]]);
   });
+  it("opens the linked view in a new tab on a click with the command key held", () => {
+    const element = new CFCellLink() as any;
+    element._resolvedCell = {
+      ref: () => ({
+        space: "did:key:foreign",
+        id: "of:fid1:same",
+        scope: "space",
+        path: [],
+      }),
+      space: () => "did:key:foreign",
+      id: () => "of:fid1:same",
+    };
+    const opened: unknown[] = [];
+    const navigated: unknown[] = [];
+    // A host that owns new-tab navigation takes the event, so nothing opens a
+    // window here.
+    const onOpen = (event: Event) => {
+      event.preventDefault();
+      opened.push((event as CustomEvent).detail);
+    };
+    const onNavigate = (event: Event) =>
+      navigated.push((event as CustomEvent).detail);
+    globalThis.addEventListener("cf-open-external", onOpen);
+    globalThis.addEventListener("cf-navigate", onNavigate);
+    try {
+      element._handleClick({ stopPropagation() {}, metaKey: true });
+    } finally {
+      globalThis.removeEventListener("cf-open-external", onOpen);
+      globalThis.removeEventListener("cf-navigate", onNavigate);
+    }
+    expect(opened).toEqual([{
+      spaceDid: "did:key:foreign",
+      pieceId: "of:fid1:same",
+    }]);
+    expect(navigated).toEqual([]);
+  });
   it("navigates to a nested view without losing its scoped target", () => {
     const element = new CFCellLink() as any;
     element.spaceName = "current-space";
