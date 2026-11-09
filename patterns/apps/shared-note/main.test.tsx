@@ -483,25 +483,6 @@ export default pattern(() => {
       !hasText(rowOf(note[UI], "Agent note"), AGENT_QUOTE) &&
       highlightsOf(note[UI])?.length === 2;
   });
-  // The pointer over a row marks its comment's text strongly, for the
-  // session it is in, until it leaves that row.
-  const action_hover_row = action(() =>
-    fireEvent(rowOf(note[UI], "Agent note"), "onMouseEnter", {})
-  );
-  const assert_hover_marks_the_comment = assert(() => {
-    const id = listed(comments.get()).find((c) => c.body === "Agent note")?.id;
-    return id !== undefined &&
-      highlightsOf(note[UI])?.find((h) => h.id === id)?.kind === "active" &&
-      highlightsOf(guest[UI])?.find((h) => h.id === id)?.kind === undefined;
-  });
-  const action_leave_row = action(() =>
-    fireEvent(rowOf(note[UI], "Agent note"), "onMouseLeave", {})
-  );
-  const assert_leaving_unmarks_the_comment = assert(() => {
-    const id = listed(comments.get()).find((c) => c.body === "Agent note")?.id;
-    const mark = highlightsOf(note[UI])?.find((h) => h.id === id);
-    return mark !== undefined && mark.kind === undefined;
-  });
   const action_select_row = action(() =>
     fireClick(rowOf(note[UI], "Agent note"))
   );
@@ -973,10 +954,6 @@ export default pattern(() => {
         event: { quote: AGENT_QUOTE, body: "Agent note" },
       },
       { assertion: assert_agent_comment_lands },
-      { action: action_hover_row },
-      { assertion: assert_hover_marks_the_comment },
-      { action: action_leave_row },
-      { assertion: assert_leaving_unmarks_the_comment },
       { action: action_select_row },
       { assertion: assert_row_selected },
       { action: action_click_highlight },

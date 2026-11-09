@@ -1783,8 +1783,6 @@ declare namespace CFDOM {
     // CF extensions
     "onClick"?: EventHandler<unknown>;
     "onChange"?: EventHandler<unknown>;
-    "onMouseEnter"?: EventHandler<unknown>;
-    "onMouseLeave"?: EventHandler<unknown>;
     "children"?: RenderNode | undefined;
     // Allow React-isms
     "key"?: number;

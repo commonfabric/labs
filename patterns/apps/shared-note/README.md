@@ -118,11 +118,9 @@ that author alone, with Continue and Discard, and marks nothing for anyone else.
 A draft keeps its place in the note; the text typed into the composer is kept
 only while the composer is open in that tab. The editor marks each open
 comment's text; clicking a mark selects its comment, and clicking a comment
-selects it and marks its text more strongly. A comment under the pointer marks
-its text more strongly too, for that viewer only, until the pointer leaves its
-row. A selected comment shows a reply field and Resolve or Reopen, and, to its
-author, Delete. Resolved comments are hidden unless "Show resolved" is checked,
-and mark no text.
+selects it and marks its text more strongly. A selected comment shows a reply
+field and Resolve or Reopen, and, to its author, Delete. Resolved comments are
+hidden unless "Show resolved" is checked, and mark no text.
 
 A comment never stores a position. Each comment has two anchors on the body,
 `<id>:from` where its text starts and `<id>:to` where it ends. An anchor is a
