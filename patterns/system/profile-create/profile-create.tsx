@@ -668,8 +668,10 @@ export type ProfileCreateInput = {
    * The profile the user's host suggests, which the `#profile` wish hands
    * over. Its name starts the field in place of `defaultName`; its picture is
    * shown, with a control that removes it, and the profile created takes the
-   * picture still shown. The suggestion stays as it is for the host to
-   * replace; the wish shows this surface only while the user has no profile.
+   * picture still shown. Removing the picture removes it from the stored
+   * suggestion; creating a profile leaves the suggestion stored for the host
+   * to replace, and the wish shows this surface only while the user has no
+   * profile.
    */
   profileSuggestion?: Writable<ProfileSuggestion | undefined>;
 };
@@ -690,7 +692,11 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
     const startingName = computed(() =>
       profileSuggestion?.get()?.name ?? defaultName ?? ""
     );
-    const suggestedPicture = computed(() => profileSuggestion?.get()?.picture);
+    // An empty picture is none: the seed step and `setPicture` take only bytes.
+    const suggestedPicture = computed(() => {
+      const picture = profileSuggestion?.get()?.picture;
+      return picture?.length ? picture : undefined;
+    });
     return {
       [NAME]: "Create Profile",
       createProfile,

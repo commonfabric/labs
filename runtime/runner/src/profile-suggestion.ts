@@ -27,6 +27,7 @@ const profileSuggestionSchema = internSchema({
     name: { type: "string" },
     picture: { type: "FabricBytes" },
   },
+  required: ["name"],
 });
 
 /**

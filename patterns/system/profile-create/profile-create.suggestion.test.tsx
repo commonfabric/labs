@@ -115,6 +115,22 @@ export default pattern(() => {
       undefined
   );
 
+  // An empty picture is no picture: nothing would apply it, so none shows.
+  const emptyPicture = ProfileCreate({
+    profiles: new Writable<ProfileHomeOutput[]>([]),
+    profileSuggestion: new Writable<ProfileSuggestion | undefined>({
+      name: "Sam Lee",
+      picture: new FabricBytes(new Uint8Array()),
+    }),
+  });
+  const assert_empty_picture_is_not_shown = assert(() =>
+    propValue(
+        find(emptyPicture[UI], byTag("cf-submit-input"))?.props.initialValue,
+      ) === "Sam Lee" &&
+    find(emptyPicture[UI], byRegion("profile-create-suggested-picture")) ===
+      undefined
+  );
+
   // The seed step, sent the profile a create would send it.
   const withPicture = new Writable<ProfileSuggestion | undefined>({
     name: "Sam Lee",
@@ -148,6 +164,7 @@ export default pattern(() => {
       { assertion: assert_suggested_name_starts_the_field },
       { assertion: assert_suggested_picture_is_shown },
       { assertion: assert_create_stays_the_trusted_click },
+      { assertion: assert_empty_picture_is_not_shown },
       { action: removePicture },
       { assertion: assert_removal_keeps_the_name_and_drops_the_picture },
       { assertion: assert_removed_picture_is_not_shown },

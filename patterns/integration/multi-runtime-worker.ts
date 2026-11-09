@@ -1012,10 +1012,8 @@ const handlers: Record<
   },
 
   /**
-   * Read the RAW stored value of the cell reached from the piece result by
-   * `path` (links resolved to the target cell, NO result-schema shaping) —
-   * for state the declared schema does not carry, e.g. a query result's
-   * `requestHash`. Nested links in the raw value stay sigils.
+   * The profile stored as suggested for this runtime's user, its picture's
+   * bytes as numbers, or `undefined` when none is stored.
    */
   async profileSuggestion() {
     const cell = profileSuggestionCell(controller().runtime);
@@ -1030,6 +1028,12 @@ const handlers: Record<
     };
   },
 
+  /**
+   * Read the RAW stored value of the cell reached from the piece result by
+   * `path` (links resolved to the target cell, NO result-schema shaping) —
+   * for state the declared schema does not carry, e.g. a query result's
+   * `requestHash`. Nested links in the raw value stay sigils.
+   */
   async readRaw({ path, piece }) {
     const target = await resultAt(piece);
     if (!boundedReads) await target.pull();
