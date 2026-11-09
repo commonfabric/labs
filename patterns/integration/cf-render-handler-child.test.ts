@@ -78,13 +78,14 @@ describe("cf-render-handler-child", () => {
       );
       childId = child.id;
       const doubled = creator.getResult(child.getCell()).key("doubled");
-      await waitForCellValue<number>(
-        creator.runtime,
-        doubled,
-        (value) => value === 2,
-        { stuckLabel: "the child's derived value" },
-      );
-      expect(await child.result.get(["doubled"])).toBe(2);
+      expect(
+        await waitForCellValue<number>(
+          creator.runtime,
+          doubled,
+          (value) => value !== undefined,
+          { stuckLabel: "the child's derived value" },
+        ),
+      ).toBe(2);
     } finally {
       await creator.dispose();
     }

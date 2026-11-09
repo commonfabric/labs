@@ -83,6 +83,7 @@ import {
   type SharedSpaceCatalogStorage,
   type SharedSpaceEntry,
 } from "../shared-space/shared-space-catalog.ts";
+import { sameNameMarks } from "./logic.ts";
 import { entityKeyOf, listsRoomIn } from "./room-records.tsx";
 import FabriChatRoom from "./room.tsx";
 import {
@@ -1923,6 +1924,12 @@ interface ShownPerson {
 
   /** What the control picking them says, which shows whether they are. */
   label: string;
+
+  /**
+   * What tells them apart from another person listed under the same name
+   * (`sameNameMarks()`); empty where no one else shows their name.
+   */
+  mark: string;
 }
 
 /** The opaque revision of a conversation discovered through a catalog entry. */
@@ -2357,21 +2364,29 @@ export const FabriChatManagerCore = pattern<
     const refusalDisplay = computed((): ChatDisplay =>
       startRefusal.get() === "" ? "none" : "block"
     );
-    // Each person once, by the first profile attesting them, and whether the
+    // Each person once, by the first profile attesting them, what tells them
+    // apart from another person under the same name, and whether the
     // session's draft has picked them, by any profile of theirs, per session,
     // as the draft is.
     const shownPeople = computed((): PerSession<ShownPerson[]> => {
       const picked = draft.get()?.picked ?? [];
-      return Object.values(peopleForUser).flatMap((profiles): ShownPerson[] => {
-        const profile = profiles[0];
-        if (profile === undefined) return [];
-        return [{
-          profile,
-          label: picked.some((known) => samePerson(known, profile))
-            ? "Added"
-            : "Add",
-        }];
-      });
+      const listed = Object.entries(peopleForUser).flatMap(
+        ([principal, profiles]) => {
+          const profile = profiles[0];
+          return profile === undefined ? [] : [{ principal, profile }];
+        },
+      );
+      const marks = sameNameMarks(listed.map(({ principal, profile }) => ({
+        principal,
+        name: profile.key("name").get(),
+      })));
+      return listed.map(({ principal, profile }): ShownPerson => ({
+        profile,
+        label: picked.some((known) => samePerson(known, profile))
+          ? "Added"
+          : "Add",
+        mark: marks[principal] ?? "",
+      }));
     });
     const peopleDisplay = computed((): ChatDisplay =>
       shownPeople.length === 0 ? "none" : "block"
@@ -2516,6 +2531,7 @@ export const FabriChatManagerCore = pattern<
                         variant="chip"
                         $profile={person.profile}
                       />
+                      <cf-text variant="caption">{person.mark}</cf-text>
                       <cf-button
                         size="sm"
                         variant="ghost"

@@ -247,6 +247,9 @@ describe("withdrawn-verb", () => {
     expect(isStream(tick)).toBe(true);
     tick.send({ n: 5 });
     await rt.idle();
+    // The handler's commit is still on its way to storage once the scheduler
+    // is idle, and teardown closes storage.
+    await storageManager.synced();
     expect(countOf(producerCell)).toBe(5);
   });
 
