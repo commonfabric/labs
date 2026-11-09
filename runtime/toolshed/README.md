@@ -194,19 +194,21 @@ or more keeps what it has.
 An invitation made for one person may carry a `suggestedProfile`: the name, and
 optionally the picture, its issuer knows that person by, for the person to keep,
 edit, or drop when they make their first profile. `suggestedProfile` in the
-capability response bounds it: `maxNameLength` (128) UTF-16 code units of name,
-which has no leading or trailing whitespace and no control character, and
-`maxPictureBytes` (65,536) bytes of raster image, carried as unpadded base64url
-text. An invitation that carries one admits one identity, so its `maxUses` is 1.
-A response without the field comes from a host that predates suggestions and
-refuses a create carrying one with `invalid-request`, as it refuses every
-unknown field. The suggestion is returned to the identity that redeemed the
-invitation, on its `redeemed` receipt and on each `already-redeemed` receipt
-after it, until the invitation expires or is revoked, or its issuer is found to
-own the space no longer, when the service forgets it. Exhausting the invitation
-keeps it, so a redeemer that lost its first receipt reads it again on retry. No
-other operation returns it, and anyone holding the link before the person it is
-for can redeem it and read the suggestion, as they can redeem the invitation.
+capability response bounds it: `maxNameLength` (128) UTF-16 code units of
+well-formed name, which has no leading or trailing whitespace and no control
+character, and `maxPictureBytes` (65,536) bytes of picture, carried as unpadded
+base64url text, which the service holds without inspecting. An invitation that
+carries one admits one identity, so its `maxUses` is 1. A response without the
+field comes from a host that predates suggestions and refuses a create carrying
+one with `invalid-request`, as it refuses every unknown field. The suggestion is
+returned to the identity that redeemed the invitation, on its `redeemed` receipt
+and on each `already-redeemed` receipt after it, until the invitation expires or
+is revoked, or its issuer is found to own the space no longer, when the service
+forgets it. Exhausting the invitation keeps it, so a redeemer that lost its
+first receipt reads it again on retry, on either transport. No administration
+operation (`create`, `list`, `revoke`, `receipts`) returns it, and anyone
+holding the link before the person it is for can redeem it and read the
+suggestion, as they can redeem the invitation.
 
 Over HTTP, every invitation operation is a signed JSON POST under
 `/api/spaces/:space/invites/`: `create`, `redeem`, `list`, `revoke`, and

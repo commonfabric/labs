@@ -742,6 +742,7 @@ describe("invites", () => {
           { name: " Sam" },
           { name: "Sam " },
           { name: "Sam\nLee" },
+          { name: "Sam \uD800" },
           { name: "S".repeat(maxNameLength + 1) },
           { name: "Sam", picture: "" },
           { name: "Sam", picture: "not base64url!" },

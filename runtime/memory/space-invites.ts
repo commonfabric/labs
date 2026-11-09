@@ -60,10 +60,13 @@ export function isInviteAccess(value: unknown): value is InviteAccess {
  * redeems the invitation is offered it when they make their first profile, and
  * keeps, edits, or drops it; nothing applies it on their behalf.
  *
- * `name` is between 1 and `SPACE_INVITE_CAPABILITY.suggestedProfile
- * .maxNameLength` UTF-16 code units, has no leading or trailing whitespace, and
- * holds no control character. `picture` is the bytes of a raster image, at
- * most `maxPictureBytes` of them, in unpadded base64url.
+ * `name` is a well-formed string of between 1 and
+ * `SPACE_INVITE_CAPABILITY.suggestedProfile.maxNameLength` UTF-16 code units,
+ * with no leading or trailing whitespace and no control character, so that
+ * the service stores exactly the name it was given. `picture` is the bytes the
+ * issuer offers as the person's picture, at most `maxPictureBytes` of them, in
+ * unpadded base64url; the service holds them without inspecting them, as a
+ * profile's own picture is held.
  */
 export type InviteProfileSuggestion = {
   name: string;
@@ -83,7 +86,8 @@ export function isInviteProfileSuggestion(
   if (Object.keys(rest).length !== 0) return false;
   if (
     typeof name !== "string" || name.length === 0 ||
-    name.length > maxNameLength || name.trim() !== name || /\p{Cc}/u.test(name)
+    name.length > maxNameLength || !name.isWellFormed() ||
+    name.trim() !== name || /\p{Cc}/u.test(name)
   ) return false;
   if (picture === undefined) return true;
   if (typeof picture !== "string" || !/^[A-Za-z0-9_-]+$/.test(picture)) {
