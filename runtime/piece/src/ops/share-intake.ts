@@ -21,6 +21,7 @@ import {
 } from "@commonfabric/runner";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { sendVerbEvent } from "../verb-call.ts";
 import { inboxPieceLinkSchema } from "./private-inbox.ts";
 import {
   CHAT_ROOM_SPACE_KIND,
@@ -210,16 +211,17 @@ export function startShareIntakeOf(
  * than a refusal of access, leaves the row undecided, and so does a space
  * whose kind the host cannot tell; such a row waits on its space's state as a
  * refused one does, vetted again as the instance begins following that state
- * and then each time the state changes. A send to Home that throws, or a scan
- * that fails before reaching the row, leaves the row undecided too. When a
+ * and then each time the state changes. A send to Home that fails, whether
+ * the send throws or Home's handling of it fails, leaves the row undecided
+ * too, and so does a scan that fails before reaching the row. When a
  * lost connection to the host comes back (`subscribeConnectionRestored`), the
  * instance reads again which inboxes Home holds and retains and considers
  * every row of each, so each row left undecided while it was down is taken up
  * then, or when its inbox next changes. So a lone offer is taken up once what
  * kept it waiting changes, with no other offer, profile change or restart. A
  * row sent to Home is logged at info (`offer-sent`), so the logger's counts
- * tell a send from a scan that sent nothing. Nothing consumes an offer or
- * deletes it.
+ * tell a send from a scan that sent nothing, and a send that fails is logged
+ * as a warning (`send-failed`). Nothing consumes an offer or deletes it.
  *
  * Registration is Home's handler's, so an offer already registered under
  * another sender or `id` leaves the entry as it is, archived or not, and adds
@@ -230,7 +232,9 @@ export function startShareIntakeOf(
  * registers the offer all the same, records the conflict in its receipt as
  * `profileConflict`, and returns a `conflict`, which the intake logs. When
  * reading whether the profile is the person's fails, the registration fails
- * and writes no receipt, so a later intake sends the offer again.
+ * and writes no receipt, and the intake sends the offer again when its inbox
+ * next changes, Home's profile records change, or a lost connection to the
+ * host comes back.
  *
  * Once Home's handler returns `registered`, a new entry, or a `conflict`
  * over the offer's profile whose `registration` is `registered`, for a
@@ -666,43 +670,64 @@ export class ShareIntake {
       });
       return;
     }
-    // The handling is tracked from before the send, so that `idle()` waits
-    // for it however soon the send settles.
-    const handled = Promise.withResolvers<NormalizedFullLink | undefined>();
-    const room = offer.kind === CHAT_ROOM_SPACE_KIND ? root : undefined;
-    const pending = handled.promise.then((link) =>
-      link === undefined
-        ? undefined
-        : this.#afterRegistration(row, receipt, link, room)
-    );
-    try {
-      sendEvent(
-        this.#home.key("registerSharedSpace"),
-        {
-          space: offer.space,
-          host: offer.host,
-          kind: offer.kind,
-          ...(offer.title === "" ? {} : { title: offer.title }),
-          offer: { from: offer.from, id: offer.id },
-          ...(offer.profile === undefined ? {} : { profile: offer.profile }),
-        },
-        (tx) => handled.resolve(tx.handlingReceiptLink),
-      );
-    } catch (error) {
-      // The row is left undecided, to be vetted again when its inbox next
-      // changes or a lost connection to the host comes back. Its space,
-      // which vetting has just passed, no longer keeps it waiting.
-      this.#stopWaiting(row);
-      logger.warn("send-failed", () => [
-        `Sending Home the offer ${receipt}:`,
-        error,
-      ]);
-      return;
-    }
+    // The row is decided as sent while Home handles it, so that no later
+    // scan sends it again meanwhile, and the handling is tracked from the
+    // send, so that `idle()` waits for it however soon the send settles.
+    const sending = sendVerbEvent(this.#home.key("registerSharedSpace"), {
+      space: offer.space,
+      host: offer.host,
+      kind: offer.kind,
+      ...(offer.title === "" ? {} : { title: offer.title }),
+      offer: { from: offer.from, id: offer.id },
+      ...(offer.profile === undefined ? {} : { profile: offer.profile }),
+    });
     logger.info("offer-sent", () => [`Sent Home the offer ${receipt}`]);
     this.#decide(row, raw, "sent", address);
+    const room = offer.kind === CHAT_ROOM_SPACE_KIND ? root : undefined;
+    const pending = this.#afterSend(row, receipt, sending, room);
     this.#pending.add(pending);
     void pending.finally(() => this.#pending.delete(pending));
+  }
+
+  /**
+   * Waits for Home's handling of the row keyed `row`, which `sending` sent,
+   * and acts on its receipt (`#afterRegistration`). A send that failed, at
+   * once or in Home's handling, registered nothing, so the row is left
+   * undecided again, to be vetted again when its inbox next changes, Home's
+   * profile records change, or a lost connection to the host comes back. Its
+   * space, which vetting passed, keeps it waiting no longer.
+   */
+  async #afterSend(
+    row: string,
+    receipt: string,
+    sending: ReturnType<typeof sendVerbEvent>,
+    room: Cell<unknown> | undefined,
+  ): Promise<void> {
+    let failed: { error: unknown } | undefined;
+    let link: NormalizedFullLink | undefined;
+    try {
+      const sent = await sending;
+      const handled = sent.status === "committed" ? await sent.handled() : sent;
+      if (handled.status === "failed") failed = { error: handled.error };
+      else if (sent.status === "committed") link = sent.receipt;
+    } catch (error) {
+      failed = { error };
+    }
+    if (failed === undefined) {
+      if (link !== undefined) {
+        await this.#afterRegistration(row, receipt, link, room);
+      }
+      return;
+    }
+    if (this.#settled.get(row) === "sent") {
+      this.#settled.delete(row);
+      this.#latest.delete(row);
+    }
+    if (this.#halted) return;
+    logger.warn("send-failed", () => [
+      `Sending Home the offer ${receipt}:`,
+      failed.error,
+    ]);
   }
 
   /**

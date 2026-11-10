@@ -917,11 +917,13 @@ cannot tell, as when it does not report kinds. Such a row waits on its space's
 state as a refused one does: it is vetted again as the intake begins following
 that state, which takes up a failure that has passed, and then each time the
 state changes, with the connection to the host up or not. A send to Home that
-throws, and a failed read of Home or of an inbox before the row is reached,
-leave the row undecided too. When a lost
+fails, whether the send throws or Home's handling of it fails, is logged
+(`send-failed`), and it and a failed read of Home or of an inbox before the row
+is reached leave the row undecided too. When a lost
 connection to the host comes back, the intake reads again which inboxes Home
 holds and retains and considers every row of each, so a row left undecided
-while it was down is taken up then, or when its inbox next changes. A lone offer
+while it was down is taken up then, or when its inbox next changes or Home's
+profile records do. A lone offer
 is so taken up once what kept it waiting changes, with no other offer, profile
 change or restart. A catalog that cannot be read is taken to hold no receipts,
 since Home's handler refuses a duplicate in any case. The intake removes and marks nothing, so every

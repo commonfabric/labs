@@ -69,11 +69,14 @@ type Acceptance = { room?: Cell<unknown>; keepArchived?: boolean };
 // \`existing\` for one titled \`Existing\`, as it does for a space it lists
 // already, and a conflict over the profile that admitted a new entry for one
 // titled \`Profile refused\`, as it does for a profile it does not list.
+// While \`refusing\` is set it throws, as Home's handler does when it cannot
+// read whether the profile an offer names is the person's.
 const registerSharedSpace = handler<
   Registration,
-  { registered: Writable<Registration[]> },
+  { registered: Writable<Registration[]>; refusing: Writable<boolean> },
   Result
->((event, { registered }) => {
+>((event, { registered, refusing }) => {
+  if (refusing.get()) throw new Error("Home cannot register this now");
   registered.push(event);
   return event.title === "Conflicting"
     ? { status: "conflict", reason: "kind" }
@@ -106,6 +109,7 @@ export default pattern(() => {
   const sharedSpaceCatalog = new Writable<Catalog>({ entries: {}, offers: {} })
     .for("sharedSpaceCatalog");
   const registered = new Writable<Registration[]>([]).for("registered");
+  const refusing = new Writable<boolean>(false).for("refusing");
   const accepted = new Writable<{ space?: string | undefined; keepArchived?: boolean | undefined }[]>(
     [],
   ).for("accepted");
@@ -114,7 +118,8 @@ export default pattern(() => {
     retainedPrivateInboxes,
     sharedSpaceCatalog,
     registered,
-    registerSharedSpace: registerSharedSpace({ registered }),
+    refusing,
+    registerSharedSpace: registerSharedSpace({ registered, refusing }),
     accepted,
     chatManager: { accept: accept({ accepted }) },
   };
@@ -455,6 +460,20 @@ describe("share-intake", () => {
   function conflictsLogged(): number {
     return getLoggerCountsBreakdown()["piece.share-intake"]
       ?.["registration-conflict"]?.warn ?? 0;
+  }
+
+  /** How many failed sends to Home's `registerSharedSpace` the intake has logged. */
+  function sendFailuresLogged(): number {
+    return getLoggerCountsBreakdown()["piece.share-intake"]
+      ?.["send-failed"]?.warn ?? 0;
+  }
+
+  /** Has Home's stand-in throw on each registration while `refusing`. */
+  async function refuseRegistrations(refusing: boolean): Promise<void> {
+    await runtime.editWithRetry((tx) =>
+      home.withTx(tx).key("refusing" as never).set(refusing as never)
+    );
+    await runtime.idle();
   }
 
   /** How many offers the intake has logged as sent to Home. */
@@ -1239,6 +1258,36 @@ describe("share-intake", () => {
       expect(registeredIds(await registeredThrough("unsent"))).toContain(
         "unsent",
       );
+    });
+
+    it("is registered when its inbox next changes after Home's handling of it failed", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await refuseRegistrations(true);
+      const failuresBefore = sendFailuresLogged();
+      const intake = start();
+      await deliver([offerOf(space, "unhandled")]);
+      await runtime.idle();
+      await intake.idle();
+
+      expect(sendFailuresLogged() - failuresBefore).toBe(1);
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "unhandled"))
+        .toEqual([]);
+
+      await refuseRegistrations(false);
+      await deliver([offerOf(space, "after the failed handling")]);
+      await registeredThrough("after the failed handling");
+      await intake.idle();
+      const rows = (await home.key("registered" as never).asSchema(
+        registeredSchema,
+      ).pull() ?? []) as Row[];
+
+      // Each is registered once: the offer Home failed to handle, and the
+      // one whose arrival had it sent again.
+      expect(registeredIds(rows).sort()).toEqual([
+        "after the failed handling",
+        "unhandled",
+      ]);
+      expect(sendFailuresLogged() - failuresBefore).toBe(1);
     });
 
     it("is registered when Home's catalog cannot be read", async () => {
