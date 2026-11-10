@@ -33,7 +33,7 @@ import {
 } from "./topics-browser-posture.ts";
 import { waitForPieceView } from "./topics-navigation-helpers.ts";
 
-/** The page globals the client-replacement cases read and write. */
+/** Page globals for runtime-client replacement and worker counter control. */
 type ReplacementGlobal = typeof globalThis & {
   /** The shell's debugging globals. */
   commonfabric?: { rt?: RuntimeClient };
@@ -43,6 +43,9 @@ type ReplacementGlobal = typeof globalThis & {
 
   /** Telemetry markers the replaced client delivered, and how to stop counting. */
   __cfReplacedClientMarkers?: { count: number; stop: () => void };
+
+  /** Function restoring the worker counter reader after a controlled sample. */
+  __cfRestoreLoggerCounts?: () => void;
 };
 
 describe("topics-browser-measurement", () => {
@@ -640,14 +643,34 @@ describe("topics-browser-measurement", () => {
     });
 
     it("throws for an operation that runs nothing in the worker", async () => {
-      await expect(
-        timeTopicsOperation(session.page, {
-          label: "idle",
-          posture,
-          operation: () => Promise.resolve(),
-        }),
-      ).rejects.toThrow("idle: the timed operation ran nothing in the worker");
-      expect(await samplesLeftInPage()).toEqual([]);
+      await session.page.evaluate(async () => {
+        const scope: ReplacementGlobal = globalThis;
+        const rt = scope.commonfabric!.rt!;
+        const counts = await rt.getLoggerCounts();
+        const readCounts = rt.getLoggerCounts;
+        scope.__cfRestoreLoggerCounts = () => {
+          rt.getLoggerCounts = readCounts;
+        };
+        rt.getLoggerCounts = () => Promise.resolve(counts);
+      });
+      try {
+        await expect(
+          timeTopicsOperation(session.page, {
+            label: "idle",
+            posture,
+            operation: () => Promise.resolve(),
+          }),
+        ).rejects.toThrow(
+          "idle: the timed operation ran nothing in the worker",
+        );
+        expect(await samplesLeftInPage()).toEqual([]);
+      } finally {
+        await session.page.evaluate(() => {
+          const scope: ReplacementGlobal = globalThis;
+          scope.__cfRestoreLoggerCounts?.();
+          delete scope.__cfRestoreLoggerCounts;
+        });
+      }
     });
 
     it("throws the operation's own error, ends the interval, and leaves no sample in the page", async () => {

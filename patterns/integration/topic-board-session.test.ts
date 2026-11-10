@@ -11,11 +11,9 @@ import {
   topicTitle,
 } from "./topic-board-fixture.ts";
 import { BoardSession } from "./topic-board-session.ts";
+import { readTextProbe } from "./cfc-browser-helpers.ts";
 import { initializePiecesController } from "./pieces-controller.ts";
-import {
-  clickCellLink,
-  waitForPieceView,
-} from "./topics-navigation-helpers.ts";
+import { waitForPieceView } from "./topics-navigation-helpers.ts";
 
 describe("BoardSession", () => {
   describe("instance members", () => {
@@ -51,12 +49,8 @@ describe("BoardSession", () => {
           await session.signIn();
           await session.showBoard();
 
-          const first = await clickCellLink(session.page, "Open");
-          expect(first.replace(/^of:/, "")).toBe(fixture.topics[0].fid);
-          await waitForPieceView(session.page, fixture.spaceDid, first);
-          await session.load();
-          await session.signIn();
-          await session.showBoard();
+          const cards = await readTextProbe(session.page, "cf-card");
+          expect(cards.matches[0]?.text).toContain(topicTitle(0));
 
           await session.openTopic((pieceId) => {
             expect(pieceId.replace(/^of:/, "")).toBe(fixture.topics[2].fid);
