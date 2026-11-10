@@ -254,7 +254,7 @@ defined in `plan-and-label-templates.md`.
 | Literal | String, number, boolean, `null`, `undefined`, bigint, a template literal without a tag, a regular expression without the `g` or `y` flag | Constant |
 | Identifier | A `const` of the body, a parameter, a module-scope constant, an import | Reference |
 | Property access `a.b`, `a?.b` | Static name | Path projection |
-| Element access `a[k]`, `a?.[k]` | Static when `k` is a literal, a module-scope constant of literal type, or a well-known key (`UI`, `NAME`, `SELF`, and the others the API exports). Dynamic otherwise | Path projection when static; index operation when dynamic |
+| Element access `a[k]`, `a?.[k]` | Static when `k` is a literal, a module-scope constant of literal type, or a well-known key (`UI`, `NAME`, `SELF`, and the others the API exports). Dynamic otherwise | Path projection when static; chosen child when dynamic |
 | Unary, binary, comparison | `+ - * / % **`, `< <= > >= === !== == !=`, `!`, unary `-` and `+`, `typeof`, bitwise operators, `in` | Primitive operation |
 | Conditional | `c ? a : b`, `a && b`, `a \|\| b`, `a ?? b` | Selection |
 | Object literal | Properties, shorthand, computed keys that are static in the sense above, spread | Construction |
@@ -300,9 +300,11 @@ Three rules hold across the rows.
   that can and cannot carry the read goes away. A `.get()` in statement
   position is still refused, as any expression statement that is not a
   recorded call is.
-- **Dynamic keys are allowed.** `scopes[key]` is an index operation at every
-  tier-R site. The transformer's refusal of a bare dynamic key in the pattern
-  body goes away for the same reason.
+- **Dynamic keys are allowed.** `scopes[key]` is a chosen child (`pick` in
+  `plan-and-label-templates.md`, §3.18) at every tier-R site. It observes
+  the key and the one child it selects, not the container's other children. The
+  transformer's refusal of a bare dynamic key in the pattern body goes away for
+  the same reason.
 - **Function arguments are refused** except in the first two rows and the
   builders. `xs.some((x) => x.done)`, `xs.every(...)`, `xs.find(...)`, and
   `xs.toSorted(compare)` are tier-F code: the author wraps the expression in
@@ -323,6 +325,9 @@ expression body, `(accumulator, element) => expression`, optionally with the
 index as a third parameter, and the call has an initial value. A block body
 is refused (`collection:reduce-callback`), and so is a call without an
 initial value (`collection:reduce-initial`), which throws on an empty array.
+The type of the accumulator, which is the type of the initial value and of
+the expression, is a data type (`collection:reduce-accumulator`): the
+fold's state is stored.
 The expression is a pure tier-R expression in the sense of
 [§6.1](#61-criterion), condition 4. The restriction to an expression is
 deliberate. A fold step has to be a function of the accumulator and one
@@ -334,7 +339,7 @@ inside `computed`.
 
 `reduce` and `findIndex` are ordered: their results depend on the order of
 the elements, as `map`'s per-element results do not. Their label rules are
-defined in `plan-and-label-templates.md`.
+defined in `plan-and-label-templates.md` (§3.13).
 
 **Element keys.** Each element of a `map` has a cone, and the cone has a
 key. The key is the element's value when the element is a plain value, and
@@ -383,11 +388,11 @@ kinds of callee, and they differ in what the compiler can do.
   pattern factory type, such as a property of the pattern's input or the
   result of a conditional between patterns. The compiler does not have its
   body, which is only known at run time. The call denotes a child with a
-  plan of its own, resolved at run time. The type checker knows the
-  factory type's declared input type and result type, checks the argument
-  against the first, and gives the call the second. What the plan records
-  for such a child, and the label rule of its result, are defined in
-  `plan-and-label-templates.md`.
+  plan and a result cell of its own, resolved at run time. The type checker
+  knows the factory type's declared input type and result type, checks the
+  argument against the first, and gives the call the second. What the plan
+  records for such a child, and the label rule of its result, are defined in
+  `plan-and-label-templates.md` (§3.15).
 
 A value whose type is a handler factory or a `lift` result cannot be
 received as data and called: those are called only by the names they are
@@ -593,9 +598,10 @@ Either evaluates, at run time, to a stream. These rules apply to the state.
 **The identity of a binding** is derived from the enclosing instance, the
 handler definition, and the bound state: each copied data value, and the
 identity of each cell handle. `builtin-inventory.md` defines it ("A handler
-binding made in a body"). Three consequences are visible to an author. A
-`lift` or a `computed` evaluated again with the same state names the same
-streams. A binding made in a loop is told from its neighbors by its state
+binding made in a body"), and `plan-and-label-templates.md` (§3.14) gives
+the plan record and the label rule. Three consequences are visible to an
+author. A `lift` or a `computed` evaluated again with the same state names the
+same streams. A binding made in a loop is told from its neighbors by its state
 and not by its position, so reordering the loop does not re-point an event
 already on its way. And two bindings of one handler to equal state are one
 stream, which is harmless because they behave alike.
@@ -1388,6 +1394,7 @@ construct found and the replacement given here.
 | `collection:callback-parameters` | error | A reactive collection callback that is not an arrow function written at the call, or that takes the whole array as a parameter | Write the arrow at the call, with the element and at most the index. Capture the array by name if the body needs it | new |
 | `collection:reduce-callback` | error | A `reduce` in tier R whose callback has a block body | Write the step as one expression, `(sum, donut) => sum + donut.price`. A step that needs statements is a loop inside `computed(() => ...)` | new |
 | `collection:reduce-initial` | error | A `reduce` in tier R without an initial value | Pass the initial value as the second argument | new |
+| `collection:reduce-accumulator` | error | A `reduce` in tier R whose accumulator type is a code type, such as a `Map`, a `Set`, or a function | Accumulate into an object, an array, or a primitive. To fold into a `Map`, write the loop inside `computed(() => ...)` and return data | new |
 | `collection:index-keyed` | hint | A `map`, `filter`, or `flatMap` callback uses its index parameter, so its element cones are keyed by position and recompute when elements move (§4.4.1) | Drop the index if the element can supply what it was used for, such as a stable identifier in place of `key={index}` | new |
 | `cell:unsupported-method` | error | A method of the runtime's cell object that the API does not declare (§4.7), such as `asSchema` or `getAsNormalizedFullLink` | The declared method that does the job, or a declared type in place of a re-typing ([§12.4](#124-replace-the-re-typing-overloads-with-declared-types)) | new |
 | `cell:collection-method-in-function` | error | `map`, `filter`, or another collection method called on a cell handle in tier F | Read first: `cell.get().map(...)` | new |
@@ -1848,22 +1855,19 @@ unconditional; `ifElse`, `when`, `unless`, and the `str` tag are removed
 `map` element is keyed by its value or its cell identity (§4.4.1); and
 `reduce` and `findIndex` are reactive constructs (§4.4.1).
 
-None of the remaining questions needs a decision from the project owner
-now. Each names the document it is addressed to.
+Settled by `plan-and-label-templates.md`: a dynamic key is a chosen child
+that does not observe the container's enumeration (its §3.18); `reduce` and
+`findIndex` have label rules (§3.13); a handler binding made in a body has a
+plan record (§3.14); and stored data that does not match its declared type
+reads as `undefined` exactly where the type admits `undefined` or declares
+a default, and otherwise fails the cone that reads it (§5.2). The last is
+what keeps the strict `null` checks of §7 sound: value code never sees a
+value its type excludes.
 
-1. **Data that does not match its declared type** (to
-   `plan-and-label-templates.md`). A tier-R expression has the value
-   semantics of the same JavaScript expression, and strict `null` checks
-   make a read through a possibly-missing value a type error. Those
-   guarantees hold only if a slot's stored value has the declared type.
-   This document recommends that a mismatch is an error state and never
-   `undefined`: when the value at a path a cone reads does not match the
-   schema of that path, the cone fails, with the label its template gives.
-   Only the paths in the cone's footprint are checked, so unrelated
-   malformed data elsewhere in the document fails nothing. An absent
-   optional property is not a mismatch. The plan document's list of what
-   fails a cone (its §5.2) does not include this case and should.
-2. **Whether declared types can replace every re-typing overload** (to the
+Three of the remaining questions are pending with the project owner, and
+say so. Each names the document it is addressed to.
+
+1. **Whether declared types can replace every re-typing overload** (to the
    prototype). §12.4 removes the idiom without a new construct, on the
    argument that a footprint, not the declared type, decides what a function
    body loads. The three such functions in
@@ -1872,51 +1876,41 @@ now. Each names the document it is addressed to.
    handler loads nor the stored schema's compatibility. If it does, the
    fallback is a re-typing operation on cells, whose label rule would need a
    CFC ruling.
-3. **The label rule of a dynamic key** (to `plan-and-label-templates.md`).
-   §4.4 allows `a[k]` in tier R as an index operation. This document assumes
-   its template is the key's slots, the container's enumeration, and the
-   selected element's slots. If the plan defines no such operation, the
-   fallback is to refuse a dynamic key in tier R, which affects 17
-   expressions in 7 modules.
-4. **Effect requests from a `lift` or a `computed`** (to the project owner,
+2. **Effect requests from a `lift` or a `computed`** (to the project owner,
    through `builtin-inventory.md`, its open question 4). §5.2 follows the
    inventory's recommendation and refuses them. If the owner allows them,
    the row of the table and `function-body:effect-in-computation` go.
-5. **`some`, `every`, and `find`** (to the project owner, through
+3. **`some`, `every`, and `find`** (to the project owner, through
    `builtin-inventory.md`, its open question 5). The inventory recommends
    making all three structural. Until the owner rules they are tier-F code
    here. If they become structural they take the callback grammar of
    `findIndex` (§4.4.1), move into the first row of §4.4, and about 22 more
    `computed` calls are promoted (§11.5). `plan-and-label-templates.md` §3.8
    already names `some` and `every` among the aggregates.
-6. **A diagnostic for state shared by equal plain values** (to the project
+4. **A diagnostic for state shared by equal plain values** (to the project
    owner, through `builtin-inventory.md`, its open question 10). The sharing
    itself is the rule (§4.4.1). Whether `collection:shared-element-state`
    is reported, and as a warning or a hint, is pending.
-7. **`reduce` and `findIndex` in the plan** (to
-   `plan-and-label-templates.md`). `builtin-inventory.md` gives both a label
-   rule as a `fold` joined with membership and order. The plan document's
-   §3.8 has to carry an ordered fold for them.
-8. **The spelling of a pattern factory value with bound parameters** (to
+5. **The spelling of a pattern factory value with bound parameters** (to
    `builtin-inventory.md`). `patternTool(pattern, extraParams)` is removed
    in favor of a pattern factory value that closes over the bound
    parameters. This document has no syntax that produces one, so the 31
    corpus calls have no rewrite it can state.
-9. **Instance-to-view assignability** (to the prototype). §7.5 lets a
+6. **Instance-to-view assignability** (to the prototype). §7.5 lets a
    pattern instance stand where a view of its result is declared. The
    prototype has to confirm that this, with labels outside assignability,
    removes the 22 casts of §11.3, and whether a handle needs a further rule.
-10. **Cells as arguments of imported functions.** §5.5 refuses them.
-    Allowing them needs a declared write footprint in the signature.
-11. **External packages.** The corpus's pattern modules import none. The
-    iframe guests import several, and they are not patterns. Whether tier I
-    ever reaches beyond the program's own modules is deferred with the
-    sandbox's dynamic-import question.
-12. **Stored source.** Today some authoring errors are demoted to warnings
-    when stored source is recompiled. Whether the new compiler ever compiles
-    source that an older compiler admitted, and with which severities, is
-    part of the overview's migration question.
-13. **Per-instantiation checking of generic functions** (to the prototype).
+7. **Cells as arguments of imported functions.** §5.5 refuses them.
+   Allowing them needs a declared write footprint in the signature.
+8. **External packages.** The corpus's pattern modules import none. The
+   iframe guests import several, and they are not patterns. Whether tier I
+   ever reaches beyond the program's own modules is deferred with the
+   sandbox's dynamic-import question.
+9. **Stored source.** Today some authoring errors are demoted to warnings
+   when stored source is recompiled. Whether the new compiler ever compiles
+   source that an older compiler admitted, and with which severities, is
+   part of the overview's migration question.
+10. **Per-instantiation checking of generic functions** (to the prototype).
     §7.3 checks a generic function body once per instantiation. That is
     simple and exact, and it reports an error in a generic helper at each
     call that triggers it. The prototype should confirm that the messages
