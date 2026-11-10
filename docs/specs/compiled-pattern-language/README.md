@@ -300,8 +300,8 @@ The keep set of an instance is everything reachable from that result cell.
 Reachable derived values are stored with their labels, because readers
 elsewhere cannot recompute them. The rendered tree under `[UI]` is part of
 the result, so a value bound into it is kept, as a path entry of the result
-document and not as a document of its own. Nothing reaches a value inside an instance
-except through the result cell.
+document and not as a document of its own. Nothing reaches a value inside an
+instance except through the result cell.
 
 A pattern used inside another, such as the body of a `map` or an inline
 sub-pattern, is not instantiated in this sense. It has no result cell and no
