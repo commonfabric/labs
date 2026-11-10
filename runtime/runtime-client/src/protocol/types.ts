@@ -292,6 +292,12 @@ export enum RequestType {
   JoinVisitedRoom = "runtime:joinVisitedRoom",
 
   /**
+   * Stores a profile the host suggests for its user's first profile, which
+   * the `#profile` wish's create surface offers.
+   */
+  OfferProfileSuggestion = "runtime:offerProfileSuggestion",
+
+  /**
    * Waits for reactive quiescence *and* for every issued commit to be durable.
    * The client reads that pair as the point at which navigating or reloading
    * is safe, so quiescence alone is a weaker condition than this reports.
@@ -1983,6 +1989,22 @@ export type EnsureHomePatternRunningRequest = BaseRequest & {
   existingOnly?: boolean;
 };
 
+/**
+ * The {@link RequestType.OfferProfileSuggestion} request: a name and,
+ * optionally, a picture, which the worker's runtime stores as the profile
+ * suggested for its user (`offerProfileSuggestion` in the runner).
+ */
+export type OfferProfileSuggestionRequest = BaseRequest & {
+  type: RequestType.OfferProfileSuggestion;
+  name: string;
+
+  /**
+   * The picture's bytes, which the envelope carries whole and decodes back
+   * into a `FabricBytes`, as for `UploadBlobRequest.body`.
+   */
+  picture?: FabricBytes;
+};
+
 /** The {@link RequestType.JoinVisitedRoom} request. */
 export type JoinVisitedRoomRequest = BaseRequest & {
   type: RequestType.JoinVisitedRoom;
@@ -3552,6 +3574,7 @@ export type IPCClientRequest =
   | GetHomeSpaceCellRequest
   | EnsureHomePatternRunningRequest
   | JoinVisitedRoomRequest
+  | OfferProfileSuggestionRequest
   | ListEventAttentionRequest
   | ResolveEventAttentionRequest
   | GetGraphSnapshotRequest
@@ -4582,6 +4605,10 @@ export type Commands = {
   [RequestType.JoinVisitedRoom]: {
     request: JoinVisitedRoomRequest;
     response: JoinVisitedRoomResponse;
+  };
+  [RequestType.OfferProfileSuggestion]: {
+    request: OfferProfileSuggestionRequest;
+    response: EmptyResponse;
   };
   [RequestType.Idle]: {
     request: IdleRequest;

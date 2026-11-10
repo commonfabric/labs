@@ -166,7 +166,8 @@ export class CFSubmitInput extends BaseElement {
 
   /**
    * Reads the bound draft through the controller, which protects pending local
-   * edits. An unbound field takes `initialValue` once and then follows typing.
+   * edits. An unbound field takes `initialValue` once, unless it has been
+   * typed in first, and then follows typing.
    */
   override willUpdate(changed: PropertyValues) {
     super.willUpdate(changed);
@@ -194,6 +195,9 @@ export class CFSubmitInput extends BaseElement {
   }
 
   private _onInput(event: Event) {
+    // Typing takes the field over: an `initialValue` arriving later must not
+    // replace it.
+    this._seeded = true;
     this.value = (event.target as HTMLInputElement).value;
     if (this.draft !== undefined) {
       const revision = crypto.randomUUID();
