@@ -1036,6 +1036,7 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
         const membershipProvider: SpaceMembershipProvider = {
           readerRole: (space) =>
             granted && space === teamSpace ? "reader" : null,
+          load: () => Promise.resolve(),
           subscribe: (_space, onChange) => {
             listeners.add(onChange);
             return () => listeners.delete(onChange);

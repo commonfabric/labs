@@ -18,6 +18,7 @@ import {
   normalizeRenderDeclassificationPolicy,
   type RenderConfidentialityCeiling,
   type RenderDeclassificationPolicy,
+  rootRenderPolicyFor,
   type SpaceAccessProvider,
   WorkerReconciler,
 } from "@commonfabric/html/worker";
@@ -1117,8 +1118,11 @@ export class RuntimeProcessor {
   #renderModulePolicySource?: CfcModulePolicySource;
 
   /**
-   * What builds every answer to a host's read of a cell. It is built with no
-   * ceiling, so it returns every read as read.
+   * What builds every answer to a host's read of a cell: the root render
+   * policy every mount starts from, with the resolver and the providers every
+   * mount is given, so that a host's read is decided as a render at the root
+   * is (`#buildHostReadGate()`). Until the render policy is configured, and
+   * where no ceiling is, it returns every read as read.
    */
   #hostReadGate = new HostReadGate(undefined, {});
   #cancelSpaceAccessLoss?: Cancel;
@@ -1333,12 +1337,28 @@ export class RuntimeProcessor {
       },
       set renderConfidentialityCeiling(value) {
         outerThis.#renderConfidentialityCeiling = value;
+        outerThis.#hostReadGate = outerThis.#buildHostReadGate();
       },
       get renderDeclassificationPolicy() {
         return outerThis.#renderDeclassificationPolicy;
       },
       getSpaceCtx: (space) => this.#getSpaceCtx(space),
     };
+  }
+
+  /**
+   * A gate deciding a host's reads under the root render policy, with the
+   * resolver and the providers as they stand.
+   */
+  #buildHostReadGate(): HostReadGate {
+    return new HostReadGate(
+      rootRenderPolicyFor(this.#renderConfidentialityCeiling),
+      {
+        resolveConfidentiality: this.#renderConfidentialityResolver,
+        membership: this.#renderMembershipProvider,
+        modulePolicies: this.#renderModulePolicySource,
+      },
+    );
   }
 
   #siteTableCancel: Cancel | undefined;
@@ -1781,9 +1801,9 @@ export class RuntimeProcessor {
     }
   }
 
-  handleCellGet(
+  async handleCellGet(
     request: CellGetRequest,
-  ): CellGetResponse {
+  ): Promise<CellGetResponse> {
     // `MetaField` does not include `cfc`. A request arrives as data, though,
     // and checking its fields is this handler's job. As a result, `meta` can
     // be `cfc`. The branch below passes any `meta` that is not a link field to
@@ -1805,6 +1825,7 @@ export class RuntimeProcessor {
       // describe.
       const { keyedFrom: _keyedFrom, ...address } = request.cell;
       const rootCell = getCell(this.#runtime, { ...address, path: [] });
+      await gate.settleMetadata(rootCell);
       if (request.meta !== "argument" && request.meta !== "result") {
         // A metadata field that is not a link returns the raw data.
         return gate.readMetadata(rootCell, request.meta);
@@ -1829,6 +1850,7 @@ export class RuntimeProcessor {
     // read cell's own ref, when asked for, addresses for a metadata link read
     // the linked cell itself, so the caller can subscribe to it or consult
     // its schema's declarations.
+    await gate.settle(cell);
     return gate.read(cell, {
       includeRef: request.includeRef,
       includeCfcLabel: request.includeCfcLabel,
@@ -1840,7 +1862,7 @@ export class RuntimeProcessor {
   ): Promise<CellGetResponse> {
     const cell = getCell(this.#runtime, request.cell);
     await cell.pull({ awaitDurability: request.awaitDurability });
-    return this.handleCellGet({
+    return await this.handleCellGet({
       type: RequestType.CellGet,
       cell: request.cell,
     });
@@ -1880,6 +1902,9 @@ export class RuntimeProcessor {
       () => undefined,
       (error: unknown) => ({ error }),
     );
+    // A value found already stored is read inside a transaction, which
+    // cannot wait, so what deciding that read consults is loaded first.
+    await this.#hostReadGate.settle(target);
     // Projection can discover reads beyond the initial pull. editWithRetry
     // reconciles documents read as absent and re-runs this probe when those
     // documents turn out to exist.
@@ -2854,7 +2879,7 @@ export class RuntimeProcessor {
     const cell = getCell(this.#runtime, request.cell);
     await cell.sync();
     this.#throwIfUnreadable(request.cell.space);
-    return this.#hostReadGate.fields(cell);
+    return await this.#hostReadGate.fields(cell);
   }
 
   handleCellGetCfcLabel(
@@ -4983,6 +5008,7 @@ export class RuntimeProcessor {
       processor.#renderMembershipProvider,
       processor.#renderModulePolicySource,
     );
+    processor.#hostReadGate = processor.#buildHostReadGate();
     processor.#intentOutcomeCancel = subscribeEventAttentionNotifications(
       runtime,
       undefined,

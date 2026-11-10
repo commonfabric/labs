@@ -21,6 +21,7 @@ import {
   rendererVDOMSchema,
   stringSchema,
 } from "@commonfabric/runner/schemas";
+import type { SpaceMembershipProvider } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
@@ -397,6 +398,68 @@ describe("HostReadGate", () => {
     });
   });
 
+  describe("settle()", () => {
+    /** A space other than the owner's, whose access list grants the owner. */
+    const team = visitor.did();
+    const TEAM_NOTE = "note-for-members-of-the-team";
+
+    /**
+     * The gate a worker builds for the owner, whose membership of `team` its
+     * provider reads only once the team's access list is loaded, as a
+     * replica that has not yet synced it does.
+     */
+    function gateWithAccessListToLoad(runtime: Runtime) {
+      const ceiling = defaultRenderConfidentialityCeiling(owner.did());
+      const loaded = new Set<string>();
+      const membership: SpaceMembershipProvider = {
+        readerRole: (of) => loaded.has(of) ? "reader" : null,
+        subscribe: () => () => {},
+        load: (of) => {
+          loaded.add(of);
+          return Promise.resolve();
+        },
+      };
+      const modulePolicies = renderModulePolicySourceFor(runtime, ceiling);
+      return new HostReadGate(rootRenderPolicyFor(ceiling), {
+        resolveConfidentiality: renderConfidentialityResolverFor(
+          runtime,
+          owner,
+          ceiling,
+          owner.did(),
+          membership,
+          modulePolicies,
+        ),
+        membership,
+        modulePolicies,
+      });
+    }
+
+    it("loads the access list a read's decision consults, so that a read made once returns what the list admits", async () => {
+      await using docs = await shelf();
+      const gate = gateWithAccessListToLoad(docs.runtime);
+      const note = await docs.write("team-note", TEAM_NOTE, [[
+        [],
+        [cfcAtom.space(team)],
+      ]]);
+
+      expect("refused" in gate.read(note)).toBe(true);
+      await gate.settle(note);
+      expect(gate.read(note)).toEqual({ value: TEAM_NOTE });
+    });
+
+    it("leaves refused a read whose labels name no space to load", async () => {
+      await using docs = await shelf();
+      const gate = gateWithAccessListToLoad(docs.runtime);
+      const credential = await docs.write("settled-credential", CREDENTIAL, [[
+        [],
+        [cfcAtom.resource("CredentialSecret")],
+      ]]);
+
+      await gate.settle(credential);
+      expect("refused" in gate.read(credential)).toBe(true);
+    });
+  });
+
   describe("what a piece exports, as the shell asks it", () => {
     // The shell asks a piece whether it exports an `openPath` stream, and
     // for its sidebar, by reading the piece's root for that one field. Each
@@ -501,7 +564,7 @@ describe("HostReadGate", () => {
       const gate = gateFor(docs.runtime, owner);
       expect("refused" in gate.read(docs.importer.asSchema(true))).toBe(true);
 
-      const answer = gate.fields(docs.importer);
+      const answer = await gate.fields(docs.importer);
 
       expect(holds(answer, CREDENTIAL)).toBe(false);
       expect(answer).toEqual({
@@ -524,7 +587,9 @@ describe("HostReadGate", () => {
     it("refuses the owner the list of a piece holding a credential in its own document, under a fit that decides on every label the document stores", async () => {
       await using docs = await shelf();
 
-      const answer = gateFor(docs.runtime, owner).fields(docs.inlineImporter);
+      const answer = await gateFor(docs.runtime, owner).fields(
+        docs.inlineImporter,
+      );
 
       expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
       expect(holds(answer, CREDENTIAL)).toBe(false);
@@ -533,7 +598,9 @@ describe("HostReadGate", () => {
     it("refuses a visitor the list of a piece only its owner may see", async () => {
       await using docs = await shelf();
 
-      const answer = gateFor(docs.runtime, visitor).fields(docs.sealedPiece);
+      const answer = await gateFor(docs.runtime, visitor).fields(
+        docs.sealedPiece,
+      );
 
       expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
       expect(holds(answer, SEALED_NAME)).toBe(false);
@@ -554,11 +621,11 @@ describe("HostReadGate", () => {
       const visitorGate = gateFor(docs.runtime, visitor);
       expect("refused" in visitorGate.read(record)).toBe(true);
 
-      const refused = visitorGate.fields(record);
+      const refused = await visitorGate.fields(record);
 
       expect(refused).toEqual({ refused: { refusedBy: "display-ceiling" } });
       expect(holds(refused, "alice-secret-key")).toBe(false);
-      expect(gateFor(docs.runtime, owner).fields(record)).toEqual({
+      expect(await gateFor(docs.runtime, owner).fields(record)).toEqual({
         fields: Object.fromEntries(
           ["alice-secret-key", "bob-secret-key"].map((name) => [
             name,
@@ -579,14 +646,15 @@ describe("HostReadGate", () => {
         "some-bytes": new FabricBytes(new Uint8Array([1, 2, 3])),
       };
       for (const [id, value] of Object.entries(notRecords)) {
-        expect(gate.fields(await docs.write(id, value))).toEqual({});
+        expect(await gate.fields(await docs.write(id, value))).toEqual({});
       }
-      expect(gate.fields(docs.runtime.getCell(space, "never-written")))
+      expect(await gate.fields(docs.runtime.getCell(space, "never-written")))
         .toEqual({});
 
-      expect(gate.fields(await docs.write("an-empty-record", {}))).toEqual({
-        fields: {},
-      });
+      expect(await gate.fields(await docs.write("an-empty-record", {})))
+        .toEqual({
+          fields: {},
+        });
     });
   });
 

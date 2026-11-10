@@ -42,6 +42,7 @@ import {
 import {
   type CfcLabelView,
   cfcLabelViewForResolvedCell,
+  type CfcModulePolicySource,
   redactCaveatSourcesForDisplay,
   reportCfcDenial,
 } from "@commonfabric/runner/cfc";
@@ -111,6 +112,17 @@ function displayLabel(
 }
 
 /**
+ * What a host read gate's decisions consult beyond the labels, as a render's
+ * do (`DisplayFitSources`), with module policy manifests it can also load,
+ * as a decision made once loads what it consults first.
+ */
+export type HostReadSources =
+  & Omit<DisplayFitSources, "modulePolicies">
+  & {
+    readonly modulePolicies?: Pick<CfcModulePolicySource, "subscribe" | "load">;
+  };
+
+/**
  * Decides a host's reads of cells under one display policy.
  *
  * A gate built with no policy returns every read as read, the plain read
@@ -119,7 +131,7 @@ function displayLabel(
  */
 export class HostReadGate {
   readonly #policy: RenderPolicy | undefined;
-  readonly #sources: DisplayFitSources;
+  readonly #sources: HostReadSources;
 
   /**
    * @param policy The root render policy every mount starts from, or
@@ -128,9 +140,86 @@ export class HostReadGate {
    *   exchange-rule resolver and the providers a subscription watches, the
    *   ones every mount is given.
    */
-  constructor(policy: RenderPolicy | undefined, sources: DisplayFitSources) {
+  constructor(policy: RenderPolicy | undefined, sources: HostReadSources) {
     this.#policy = policy;
     this.#sources = sources;
+  }
+
+  /**
+   * Loads what a decision on a read of `cell` consults, so that {@link read}
+   * decides on the access lists and module policy manifests the space last
+   * sent rather than refusing on one not yet synced: a read made once has no
+   * subscription to decide it again when one arrives. Each round decides the
+   * read as {@link read} does and loads what that decision would watch,
+   * until a round finds nothing new to load, since an access list that
+   * arrives can lead the exchange rules to consult another.
+   */
+  async settle(cell: Cell<unknown>): Promise<void> {
+    await this.#settle((policy, sources, watch) => {
+      readRefusal(
+        cell,
+        [readProjected(cell, hostValueOf).consumed],
+        policy,
+        sources,
+        watch,
+      );
+    });
+  }
+
+  /**
+   * Loads what a decision on a read of `root`'s metadata consults, as
+   * {@link settle} does for a read of its value.
+   */
+  async settleMetadata(root: Cell<unknown>): Promise<void> {
+    await this.#settle((policy, sources, watch) => {
+      cellLabelRefusal(root, cellLabelSources(root), policy, sources, watch);
+    });
+  }
+
+  /**
+   * Runs `decide` with sources whose subscriptions load what they would
+   * watch, and waits for those loads, until a round loads nothing new.
+   */
+  async #settle(
+    decide: (
+      policy: RenderPolicy,
+      sources: DisplayFitSources,
+      watch: FitWatch,
+    ) => void,
+  ): Promise<void> {
+    const policy = this.#policy;
+    if (policy === undefined) return;
+    const { membership, modulePolicies } = this.#sources;
+    const loaded = new Set<string>();
+    while (true) {
+      const loads: Promise<void>[] = [];
+      const loading: DisplayFitSources = {
+        ...this.#sources,
+        membership: membership && {
+          readerRole: (space) => membership.readerRole(space),
+          subscribe: (space) => {
+            loads.push(membership.load(space));
+            return () => {};
+          },
+          load: (space) => membership.load(space),
+        },
+        modulePolicies: modulePolicies && {
+          subscribe: (reference, space) => {
+            loads.push(modulePolicies.load(reference, space));
+            return () => {};
+          },
+        },
+      };
+      const watch: FitWatch = {
+        watched: new Set(loaded),
+        addCancel: () => {},
+        reeval: () => {},
+      };
+      decide(policy, loading, watch);
+      if (loads.length === 0) return;
+      for (const key of watch.watched) loaded.add(key);
+      await Promise.all(loads);
+    }
   }
 
   /**
@@ -376,8 +465,17 @@ export class HostReadGate {
    * record, nothing at all, a list or a single value, is answered with no
    * list, which is not the empty list of a record that holds no fields.
    */
-  fields(cell: Cell<unknown>): CellFieldsResponse {
+  async fields(cell: Cell<unknown>): Promise<CellFieldsResponse> {
     const listed = cell.asSchema(FIELDS_SCHEMA);
+    await this.#settle((policy, sources, watch) => {
+      readRefusal(
+        cell,
+        [readProjected(listed, fieldNamesOf).consumed],
+        policy,
+        sources,
+        watch,
+      );
+    });
     const policy = this.#policy;
     let names: string[] | undefined;
     if (policy === undefined) {
