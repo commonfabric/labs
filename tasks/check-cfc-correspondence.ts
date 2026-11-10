@@ -110,6 +110,7 @@ export const GOVERNED_SOURCE: readonly RegExp[] = [
   /^runtime\/runner\/test\/cfc[^/]*\.test\.tsx?$/,
   /^runtime\/runner\/test\/cfc\/.*\.tsx?$/,
   /^runtime\/html\/src\/worker\/(?:reconciler|display-fit|display-fit-atoms)\.ts$/,
+  /^runtime\/runtime-client\/src\/backends\/host-read-gate\.ts$/,
   /^runtime\/cf-harness\/src\/cfc-[^/]*\.ts$/,
   /^runtime\/cf-harness\/src\/contracts\/cfc-[^/]*\.ts$/,
   /^runtime\/cf-harness\/src\/sandbox\/runsc-cfc-result\.ts$/,

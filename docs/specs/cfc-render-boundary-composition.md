@@ -74,18 +74,19 @@ each slot holding a link the read followed, which a dereference retains
   and picture, which a viewer may see even when the profile's private share
   inbox pointer is refused. `cf-code-editor`'s mention lists are not, since
   the editor reads each mention's destination, a cell its read hands it, for
-  the name it shows. Inside a boundary that lowers the ceiling, or under an
-  authorship boundary, a complete binding is decided on everything the bound
-  cell reaches instead, as a nested render root there is, since the
-  component's reads through its handle are not held to that boundary. A
-  complete entry is checked against its component by
-  `runtime/ui/src/v2/components/complete-read-contracts.browser.test.ts`,
-  which mounts the component over a handle that records every request it
-  sends and fails on a read outside the entry, other than one the test lists
-  with its reason, such as the badge's read of its space's root for the
-  seal. A nested render root is decided on
-  the reads its component makes as well, as the nested-render paragraphs
-  below describe. The worker keeps reading the bound cell and removes the
+  the name it shows. The entry decides whether the component is handed the
+  handle; each read the component makes through it is decided again by the
+  host read gate, as the next item says, so a read beyond the entry is
+  refused where the root ceiling refuses it. Inside a boundary that lowers
+  the ceiling, or under an authorship boundary, a complete binding is
+  decided on everything the bound cell reaches instead, as a nested render
+  root there is, since the host read gate does not hold the component's
+  reads to that boundary. A browser test mounts each complete entry's
+  component over a handle that records what it reads, and fails on a read
+  outside the entry that it does not list with its reason, as it lists the
+  badge's read of its space's root for the seal. A nested render root is
+  decided on the reads its component makes as well, as the nested-render
+  paragraphs below describe. The worker keeps reading the bound cell and removes the
   binding when a write leaves that read consuming a label the ceiling
   refuses, or while the read cannot complete, as when a space it reads is out
   of reach: a read that cannot complete is never taken for an empty one. While
@@ -95,12 +96,23 @@ each slot holding a link the read followed, which a dereference retains
   reach space renders as, and the component shows its children while it holds
   no value for the binding. The placeholder carries nothing read from the
   space, and goes once the read completes and decides the binding again. A
-  binding withheld for any other reason leaves the element empty. The
-  binding hands the host a live
-  handle, and the worker answers the host's reads through it without the
-  ceiling: a read that follows a link the worker's read did not, and the
-  host's own subscription to the cell, which can deliver the write that causes
-  a removal before the removal arrives.
+  binding withheld for any other reason leaves the element empty.
+- The binding hands the host a live handle. Each read the host makes through
+  it, and through any cell it opens by address, is answered by the worker's
+  host read gate (`runtime/runtime-client/src/backends/host-read-gate.ts`),
+  which decides it as a render at the root is decided: on the labels the
+  read consumed, under the root ceiling, with the same exchange-rule resolver
+  and membership and module-policy providers. That covers a get, a pull, an
+  initialization that finds a stored value, a subscription, decided again as
+  a render is, a record's field list, and a metadata read. A refused read
+  reaches the host as a refusal, never as an empty value. A read answered
+  once first loads the access lists and policy manifests its decision
+  consults, since nothing would decide it again when one arrived. The gate
+  holds a read to the root ceiling, not to a boundary around the element,
+  which is why a complete or nested-render binding inside a boundary that
+  lowers the ceiling is decided on everything its cell reaches. Two host
+  reads are answered without the gate: resolving a cell's links to the
+  address they land on, and a cell's label view.
 
 Each decision is made again when what its read consumed changes, labels
 included, and when the membership those labels name changes, and only a
