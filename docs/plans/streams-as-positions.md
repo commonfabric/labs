@@ -13,19 +13,19 @@ paths are from the repository root.
 
 **Summary.** A stream has no value, and its document holds only the `result`
 back-link that setup writes onto it. Everything that carries an event is keyed
-on a link's `(id, path, scope)` — the event sidecar's id, the memory server's
-admission, the scheduler's handler table, the serving drain, and `send()`
-itself — so no part of delivery needs the document. What the document supplies
-is an address: an entity id a party can hold that names the stream — and,
-through the back-link on that document, the owner. This plan stops writing the
-document and puts the owner into the address instead: a stream its pattern
+on a link's `(id, path, scope)` — the id of the stream's entries document, the
+memory server's admission, the scheduler's handler table, the serving drain, and
+`send()` itself — so no part of delivery needs the document. What the document
+supplies is an address: an entity id a party can hold that names the stream —
+and, through the back-link on that document, the owner. This plan stops writing
+the document and puts the owner into the address instead: a stream its pattern
 owns and declares in its result schema is addressed as its result path on the
 owner's result document, and every other stream it owns is addressed by a
-`stream:` id over the owner's own hash, at a path naming its cause. Two
-things the sibling plan builds toward then have nothing to do: the walk from
-a stream's document to its owner, which its stage 3 adds, and the follow-up
-it was written toward, a stream id that carries its owner. Here every stream's
-address carries its owner.
+`stream:` id over the owner's own hash, at a path naming its cause. Two things
+the sibling plan builds toward then have nothing to do: the walk from a stream's
+document to its owner, which its stage 3 adds, and the follow-up it was written
+toward, a stream id that carries its owner. Here every stream's address carries
+its owner.
 
 The contract: **a stream is owned by the pattern whose handler node or
 `stream()` root it is. One the owner's result schema declares is a position
@@ -67,22 +67,22 @@ names it, declares it; and no document exists for either.**
 | Mechanism | Keyed on | Where |
 | --- | --- | --- |
 | `send()` | the resolved link's `(id, path)` | `runtime/runner/src/cell.ts:2390` |
-| The event sidecar's id | `hashStringOf({ id, path, scope })` | `runtime/memory/v2.ts:421` |
-| Admission of an append | the entry's link, and that it derives the sidecar being written | `runtime/memory/v2/engine.ts:3576` through `:3601` |
+| The entries document's id | `hashStringOf({ id, path, scope })` | `runtime/memory/v2.ts:421` |
+| Admission of an append | the entry's link, and that it derives the entries document being written | `runtime/memory/v2/engine.ts:3576` through `:3601` |
 | Delivery from another space | the same binding | `runtime/memory/v2/server.ts:5861` |
 | The scheduler's handler table | `areNormalizedLinksSame`: id, space, scope, path | `runtime/runner/src/scheduler/events.ts:743` |
 | The serving drain | `queueEvent(link, payload)` from the entry's link | `runtime/runner/src/executor/space-server.ts:5106` |
 | The HTML reconciler | `isStream(handle)`, then `send()` | `runtime/html/src/worker/reconciler.ts:3044` |
-| CFC | the sidecar's id class alone | `runtime/runner/src/cfc/prepare.ts:3841` |
+| CFC | the entries document's id class alone | `runtime/runner/src/cfc/prepare.ts:3841` |
 
 Admission never reads the stream's document: it checks the entry's link has an
-id and a path and that `streamEntriesDocId(entry.stream)` is the sidecar the
-commit writes. The memory server's own account of the sidecar
+id and a path and that `streamEntriesDocId(entry.stream)` is the entries
+document the commit writes. The memory server's own account of that document
 (`runtime/memory/v2.ts:394`) already describes a stream as living "at a path
 inside a piece's result doc", with one entries document per stream derived from
-its link. The specification's "stream document" (`docs/specs/server-side-execution/events.md`
-§1) is that sidecar; the runtime's back-link-only document is a second thing
-under the same name.
+its link. The specification's "stream document"
+(`docs/specs/server-side-execution/events.md` §1) is that entries document; the
+runtime's back-link-only document is a second thing under the same name.
 
 ### Who reads the document
 
@@ -234,33 +234,32 @@ about a kinded id and its `of:` sibling as two entities over one hash. Here
 the relationship carries meaning — a `stream:` id's owner is its `of:`
 sibling — so the owner is read off the id with no walk and nothing stored,
 which is what auto-start needs (Risks, first item). The server tells a stream
-from a piece by scheme alone, which a schema-less sidecar entry needs, and the
+from a piece by scheme alone, which a schema-less event entry needs, and the
 serving loop's never-a-piece exclusion (`space-server.ts:726`) names `stream:`
 outright instead of retrying a documentless `of:` id.
 
-The path segment is the hash of the stream's partial cause, `hashStringOf`
-over the same value the manifest is keyed by. It is canonical — records hash
+The path segment is the hash of the stream's partial cause, `hashStringOf` over
+the same value the manifest is keyed by. It is canonical — records hash
 key-order-insensitively — unique within the manifest by the builder's own
 guarantee, and stable exactly when the manifest match is stable, which is
-exactly as stable as a stream's id is today, since the cause has always been
-in the id's preimage. A named cause moves only when its author renames it,
-and a segment naming a cause that no longer exists names nothing, so a stale
-sidecar entry is refused. A `$generated` cause is a position among the
-pattern's anonymous cells: an update that adds one ahead of it renumbers it,
-its address and sidecar move with it, and its old cause can be handed to the
-handler that now holds that number — which is what happens to its id today
-under the same edit. The manifest's array index would be worse in degree, not
-in kind: it is rebuilt in descriptor order on every setup (`runner.ts:4380`)
-and matched by cause and kind, never by position (`runner.ts:4392`), so it
-shifts on any descriptor inserted ahead, value cells included. A reader
-holding the owner finds the entry by hashing each entry's cause; the manifest
-is small.
+exactly as stable as a stream's id is today, since the cause has always been in
+the id's preimage. A named cause moves only when its author renames it, and a
+segment naming a cause that no longer exists names nothing, so a stale event
+entry is refused. A `$generated` cause is a position among the pattern's
+anonymous cells: an update that adds one ahead of it renumbers it, its address
+and entries document move with it, and its old cause can be handed to the
+handler that now holds that number — which is what happens to its id today under
+the same edit. The manifest's array index would be worse in degree, not in kind:
+it is rebuilt in descriptor order on every setup (`runner.ts:4380`) and matched
+by cause and kind, never by position (`runner.ts:4392`), so it shifts on any
+descriptor inserted ahead, value cells included. A reader holding the owner
+finds the entry by hashing each entry's cause; the manifest is small.
 
 Separation from the result namespace is by scheme, so nothing is reserved:
 `(stream:fid1:X, [segment])` cannot equal a position on `of:fid1:X`, whatever
 a pattern names its result fields. Every link that names a view handler
 carries its declaration (`includeSchema: true` at `pattern-binding.ts:861`);
-the sidecar entry's link, `{ id, path, scope }` (`runtime/memory/v2.ts:415`),
+an event entry's link, `{ id, path, scope }` (`runtime/memory/v2.ts:415`),
 does not, and needs nothing beyond the scheme.
 
 ### 4. Nothing is stored at a stream's position, and no document is written
@@ -279,11 +278,11 @@ starts from the owner, without any view handler becoming a verb.
 ### 5. One mint, no flag
 
 The address is minted in one place, `getDerivedInternalCellLink`: from the
-owner's id and the result path for a verb, from the owner's hash and the
-hashed cause for a view handler. Two mints for one kind coexisting behind a
-flag would put one stream at two addresses with two sidecars, which is the
-compatibility problem this repository has been removing. The change is a
-cutover for both kinds; its cost is stated under stage 3.
+owner's id and the result path for a verb, from the owner's hash and the hashed
+cause for a view handler. Two mints for one kind coexisting behind a flag would
+put one stream at two addresses with two entries documents, which is the
+compatibility problem this repository has been removing. The change is a cutover
+for both kinds; its cost is stated under stage 3.
 
 ## Stages
 
@@ -313,15 +312,14 @@ cutover for both kinds; its cost is stated under stage 3.
       schema.
 - [ ] Tests: the two measured cases above, as pinned tests, the second over a
       `stream:` id; a send through the result key with nothing stored reaches
-      the handler and writes nothing into the owner; a send through a
-      `stream:` position with the declaration on the link does the same; a
-      verb's sidecar id derives from its position and a view handler's from
-      its `stream:` id and segment; a redirect-flagged link and a plain link
-      to one position match in the handler table, which
-      `areNormalizedLinksSame` compares by id, space, scope, and path
-      (`runtime/memory/v2.ts:412`); a `stream:` address round-trips through
-      `parseCellReference`; a segment naming no manifest entry resolves to
-      nothing.
+      the handler and writes nothing into the owner; a send through a `stream:`
+      position with the declaration on the link does the same; a verb's
+      entries-document id derives from its position and a view handler's from
+      its `stream:` id and segment; a redirect-flagged link and a plain link to
+      one position match in the handler table, which `areNormalizedLinksSame`
+      compares by id, space, scope, and path (`runtime/memory/v2.ts:412`); a
+      `stream:` address round-trips through `parseCellReference`; a segment
+      naming no manifest entry resolves to nothing.
 - [ ] `when`, `unless`, `ifElse`, and `.map` into a nested pattern forward a
       link that names a position; `stream-declaration.test.ts` passes with its
       addresses updated.
@@ -331,20 +329,19 @@ cutover for both kinds; its cost is stated under stage 3.
 - [ ] `ensurePieceRunning` reaches either kind's owner in zero hops: a verb's
       link id is the result document, and a view handler's `stream:` id names
       its owner as its `of:` sibling. The walk maps a `stream:` id to that
-      sibling before it reads any meta, and `inputSourcesOf` does the same
-      for each link in an argument, so neither ends at a documentless id
-      with `no-pattern-meta`. The back-link chain stays for a nested
-      piece's result document, which is a derived internal cell of its
-      parent, and for a computed forwarder. The serving loop's never-a-piece
-      exclusion, `neverAPieceRootId`
-      (`runtime/runner/src/executor/space-server.ts:726`), names `stream:`
-      and maps it to the owner rather than excluding it. Test: a
-      sidecar whose link is `(result, path)` starts the piece; one naming a
-      `stream:` id starts the piece with no client watching it; one on a
-      nested piece's result still starts the root; a nested piece whose
-      argument holds its parent's view handler starts the parent as an input
-      source; a served event on a `stream:` id spends none of the deferral
-      budget on its way to starting the piece.
+      sibling before it reads any meta, and `inputSourcesOf` does the same for
+      each link in an argument, so neither ends at a documentless id with
+      `no-pattern-meta`. The back-link chain stays for a nested piece's result
+      document, which is a derived internal cell of its parent, and for a
+      computed forwarder. The serving loop's never-a-piece exclusion,
+      `neverAPieceRootId` (`runtime/runner/src/executor/space-server.ts:726`),
+      names `stream:` and maps it to the owner rather than excluding it. Test: a
+      pending entry whose link is `(result, path)` starts the piece; one naming
+      a `stream:` id starts the piece with no client watching it; one on a
+      nested piece's result still starts the root; a nested piece whose argument
+      holds its parent's view handler starts the parent as an input source; a
+      served event on a `stream:` id spends none of the deferral budget on its
+      way to starting the piece.
 - [ ] Delete `ownerStreamSchema`, `streamDeclarationOf`, the inspector detail
       view's manifest reading, and the llm-dialog builtin's third way of
       typing an address; its second way — the result schema at the path —
@@ -360,18 +357,18 @@ cutover for both kinds; its cost is stated under stage 3.
 - [ ] The CLI's ownership tests are pinned over a stream position: a position
       is `path.length > 0` and is reported as a cell inside a piece, which is
       the right answer.
-- [ ] The runtime client needs no change; its sidecar ids derive from the
-      link.
+- [ ] The runtime client needs no change; its entries-document ids derive from
+      the link.
 
 ### Stage 3 — Identity cutover and documents
 
-- [ ] Every stream's sidecar id changes with its address. Before a served
-      space cuts over, its sidecars drain; an entry still in flight afterward
-      names a stream nothing fires at. Pieces set up before the cutover heal
-      by running — setup re-emits every stream's links on a pattern update, a
-      same-pattern restart, and a fresh session — so there is no migration
-      pass. The sibling plan's stage 3 records the same choice for its own
-      cutover.
+- [ ] Every stream's entries-document id changes with its address. Before a
+      served space cuts over, its entries documents drain; an entry still in
+      flight afterward names a stream nothing fires at. Pieces set up before the
+      cutover heal by running — setup re-emits every stream's links on a pattern
+      update, a same-pattern restart, and a fresh session — so there is no
+      migration pass. The sibling plan's stage 3 records the same choice for its
+      own cutover.
 - [ ] Documents: the streams section and the unification note of
       `docs/specs/space-model/2-storage-format.md`; the stream cells section of
       `docs/specs/space-model/4-cells.md`, which locates a stream's identity in
@@ -379,7 +376,7 @@ cutover for both kinds; its cost is stated under stage 3.
       `docs/specs/space-model/6-reactivity.md`; the `$kind: "stream"` preimage
       and the visible-scheme non-goal of `docs/specs/computed-cell-identity.md`;
       the terminology comment at the head of `entity-kind.ts`; the wording of
-      `events.md` §1, so that "stream document" names only the sidecar.
+      `events.md` §1, so that "stream document" names only the entries document.
 - [ ] `$kind: "stream"` and `{ stream: [...] }` causes are still minted, for
       naming and for the manifest key. No stream's id preimage carries its
       cause: a verb's id is its owner's, and a view handler's is its owner's
@@ -392,7 +389,7 @@ cutover for both kinds; its cost is stated under stage 3.
 - A send through a link to a view handler's `stream:` position, with nothing
   ever written for it and the declaration on the link, fires the handler and
   writes nothing.
-- A view handler's sidecar entry carries no schema and still routes: the drain
+- A view handler's event entry carries no schema and still routes: the drain
   rebuilds the link from the entry and the handler registered on that position
   receives the event.
 - A stream a pattern returns from a nested piece's result stays a computed
@@ -405,13 +402,13 @@ cutover for both kinds; its cost is stated under stage 3.
   the parent's position, and a send through it fires the parent's handler.
   Starting the nested piece cold starts the parent as an input source, for a
   verb and for a view handler.
-- `ensurePieceRunning` on a sidecar link naming a position starts the owner;
-  on one naming a nested piece's position, starts the root.
+- `ensurePieceRunning` on an event entry's link naming a position starts the
+  owner; on one naming a nested piece's position, starts the root.
 - The inspector classifies a declared position as a stream with no document
   behind it, and reports no `stream` entity.
 - A view handler's event drained while its piece is parked and no client
   watches it starts the piece from the `stream:` id alone and is delivered.
-- A sidecar entry whose segment names no manifest entry is refused, and never
+- An event entry whose segment names no manifest entry is refused, and never
   delivered to another stream.
 - A stale stored link that declares nothing refuses loudly at dispatch (the
   sibling plan's assertion) rather than writing into the result document.
@@ -419,10 +416,10 @@ cutover for both kinds; its cost is stated under stage 3.
 ## Risks
 
 - **Authorization keyed on the stream's document.** None was found: admission
-  binds link to sidecar, CFC special-cases the sidecar's id class, and
-  `send()`'s read marks its crossings on the resolved link, which becomes the
-  result document's. A survey is not a proof; a CFC owner confirms before
-  stage 1 lands.
+  binds an entry's link to its entries document, CFC special-cases that
+  document's id class, and `send()`'s read marks its crossings on the resolved
+  link, which becomes the result document's. A survey is not a proof; a CFC
+  owner confirms before stage 1 lands.
 - **A value write through a stale link.** A stored link that names a position
   and declares nothing turns a `send()` into a write, and that write now
   lands in the result document rather than in a stream's own document. The
@@ -430,13 +427,13 @@ cutover for both kinds; its cost is stated under stage 3.
   and the write; the sibling plan's Risks section names the same failure.
 - **Renaming a result field re-identifies its stream.** For a handler written
   inline in the `return`, whose cause is its result path, that is today's
-  behavior. A handler bound to a variable is caused by the variable's name,
-  so today a renamed field keeps its id and sidecar; under this plan its
-  position, and its sidecar with it, moves with the field. An entry pending
-  under the old position names a stream nothing registers, and is dropped by
-  the no-handler predicate as one under a renumbered cause is.
-- **Entries in flight at the cutover.** A sidecar keyed on the old address is
-  orphaned; the drain condition in stage 3 is what prevents it.
+  behavior. A handler bound to a variable is caused by the variable's name, so
+  today a renamed field keeps its id and entries document; under this plan its
+  position, and its entries document with it, moves with the field. An entry
+  pending under the old position names a stream nothing registers, and is
+  dropped by the no-handler predicate as one under a renumbered cause is.
+- **Entries in flight at the cutover.** An entries document keyed on the old
+  address is orphaned; the drain condition in stage 3 is what prevents it.
 - **Auto-start needs the owner in the address.** When an event finds no
   handler registered, `queueEvent` reserves the event's queue slot and calls
   `ensurePieceRunningVerdict` on the event link to start the piece
@@ -467,26 +464,26 @@ cutover for both kinds; its cost is stated under stage 3.
   needs no change, since its link's id is the result document the walk
   already starts from. This item is the reason decision 3 takes the form it
   does.
-- **A renumbered generated cause reassigns a view handler's address.** A
-  pattern update that inserts an anonymous cell ahead of a view handler
-  renumbers its `$generated` cause; the handler that now holds the old number
-  inherits the old address, and a sidecar entry still pending under it would
-  be delivered there. This is today's behavior for the same edit, since the
-  cause is in the id's preimage now, and this plan neither adds to it nor
-  removes it. A pattern update does not drain a piece's sidecars first:
-  `setsrc`, client or served (`runtime/piece/src/ops/served-lifecycle.ts:827`
-  through `piece-controller.ts:5109`), writes the transition and the pattern
-  pointer, and the running piece's pointer watcher swaps the graph —
-  `swapToPattern` (`runner.ts:6884`) runs setup, then retires the old nodes
-  and instantiates the new ones — reading no sidecar and waiting on no queue.
-  An entry pending across that swap is handled when next drained: one whose
-  address a renumbered handler now holds is delivered to that handler, and
-  one whose address nothing holds is dropped by the no-handler predicate for
-  a piece that is running with its graph installed (`events.ts:1153` through
-  `:1171`). The durable repair is a generated cause derived from the
-  handler's content rather than its position, which is a follow-up outside
-  this plan. The manifest's array index would widen the trigger to any
-  inserted descriptor; decision 3 states the difference.
+- **A renumbered generated cause reassigns a view handler's address.** A pattern
+  update that inserts an anonymous cell ahead of a view handler renumbers its
+  `$generated` cause; the handler that now holds the old number inherits the old
+  address, and an event entry still pending under it would be delivered there.
+  This is today's behavior for the same edit, since the cause is in the id's
+  preimage now, and this plan neither adds to it nor removes it. A pattern
+  update does not drain a piece's entries documents first: `setsrc`, client or
+  served (`runtime/piece/src/ops/served-lifecycle.ts:827` through
+  `piece-controller.ts:5109`), writes the transition and the pattern pointer,
+  and the running piece's pointer watcher swaps the graph — `swapToPattern`
+  (`runner.ts:6884`) runs setup, then retires the old nodes and instantiates the
+  new ones — reading no entries document and waiting on no queue. An entry
+  pending across that swap is handled when next drained: one whose address a
+  renumbered handler now holds is delivered to that handler, and one whose
+  address nothing holds is dropped by the no-handler predicate for a piece that
+  is running with its graph installed (`events.ts:1153` through `:1171`). The
+  durable repair is a generated cause derived from the handler's content rather
+  than its position, which is a follow-up outside this plan. The manifest's
+  array index would widen the trigger to any inserted descriptor; decision 3
+  states the difference.
 - **The stage-1 exemptions this rests on.** Absence at a declared position is
   a handle only because the sibling plan's stage 1 made every read path treat
   it so, `required` included. Those exemptions are load-bearing here.
@@ -503,11 +500,12 @@ stage built the reading for.
 
 - Unifying streams with value cells, which
   `docs/specs/space-model/2-storage-format.md` floats.
-- The sidecar's format, the watermark, or any part of the events protocol.
+- The entries document's format, the watermark, or any part of the events
+  protocol.
 - The stored sentinel; the sibling plan retires it.
 - Putting verbs under the `stream:` scheme: a verb's position on the result
   document is what `key(name)` reaches with the result schema's declaration,
   and the scheme is for the streams the result schema does not declare.
-- An `owner` field on the sidecar entry. The `stream:` id carries the owner,
+- An `owner` field on an event entry. The `stream:` id carries the owner,
   so the entry shape of `events.md` §1 and its one derivation stay as they
   are.

@@ -198,7 +198,7 @@ rejected, exactly as today. Rule 3 keeps that restriction on purpose.
 Without the sentinel the derived document holds the `result` back-link meta and
 nothing else. It is still listed (the memory server's entity page selects
 current ids with no value condition, `runtime/memory/v2/engine.ts:2188`), still
-the id a served event's sidecar entry names (`of:stream-events:` docs,
+the id a served event's entry names (`of:stream-events:` docs,
 `runtime/memory/v2/engine.ts:2577`), and still found by event auto-start. What
 it no longer does is describe itself: a reader that has only the document cannot
 tell it is a stream.
