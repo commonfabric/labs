@@ -345,14 +345,17 @@ label rule.
 
 `streamData` and `llm` are removed.
 
-Inside a function body, four kinds of runtime call remain:
+Inside a function body, five kinds of runtime call remain:
 
 - instantiating a pattern;
 - creating a cell, which receives a causal identifier;
 - requesting an effectful built-in, which behaves like instantiating a
   built-in pattern;
 - reading context that is not a cell: the event's key and acting principal,
-  a space's identity and access list, and the principals a label attests.
+  a space's identity and access list, and the principals a label attests;
+- binding a handler to the values it captures, which yields a stream. An
+  inline event handler in JSX built by a function body is such a binding
+  ([language subset](language-subset.md), §5.2).
 
 A function body that needs reactivity instantiates a pattern. A handler that
 wants a reactive mapped list, for example, wraps the list in a pattern.
