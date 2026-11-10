@@ -17,7 +17,7 @@ import {
   processInstanceId,
 } from "@commonfabric/memory/v2/execution-lease";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
-import { idStringForEntityAddress } from "@commonfabric/runner";
+import { idStringForEntityAddress, parseLink } from "@commonfabric/runner";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
 import { servingRuntimeFactory } from "@commonfabric/runner/executor/serving-runtime";
 import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
@@ -302,6 +302,34 @@ describe("FabriChat metadata served upgrade", () => {
             expected: "Stored title",
           }),
         );
+        const heldMetadataLink = {
+          "/": {
+            "link@1": {
+              ...room,
+              schema: {
+                type: "object",
+                properties: {
+                  metadata: {
+                    type: "object",
+                    asCell: ["cell"],
+                    properties: { title: { type: "string" } },
+                  },
+                },
+              },
+            },
+          },
+        };
+        if (update) {
+          // Follow the nested Cell before serializing it as a transport link.
+          const held = record(
+            await reader.client().call("waitForAddressValue", {
+              link: heldMetadataLink,
+              path: ["metadata", "title"],
+              expected: "Stored title",
+            }),
+          );
+          expect(parseLink(held.metadata)).toBeDefined();
+        }
         const coldSource = record(
           await reader.client().call("pieceSource", {
             piece: room,
@@ -386,6 +414,16 @@ describe("FabriChat metadata served upgrade", () => {
             piece: room,
           }),
         ).toBe("Edited original");
+        const nestedTitleDelivery = update
+          ? reader.client().call("waitForAddressValue", {
+            link: heldMetadataLink,
+            path: ["metadata", "title"],
+            expected: "Updated title",
+          })
+          : undefined;
+        // The worker dispatches the wait before this later command, so its
+        // subscription is installed while the old title is still stored.
+        await assertPassiveReader(reader);
         await owner.send(
           "setTitle",
           { requestId: "new-title", title: "Updated title" },
@@ -420,6 +458,10 @@ describe("FabriChat metadata served upgrade", () => {
             throw error;
           }),
         );
+        if (nestedTitleDelivery !== undefined) {
+          const held = record(await nestedTitleDelivery);
+          expect(parseLink(held.metadata)).toBeDefined();
+        }
         if (update) expect(updated.metadata).toMatchObject({ kind: "group" });
         expect(await owner.read(["messages", "count"], { piece: room })).toBe(
           3,

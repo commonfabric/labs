@@ -1620,11 +1620,11 @@ const handlers: Record<
       : controller().runtime.getCellFromLink(parsed);
     if (cell === undefined) throw new Error("No address is being watched.");
     const keyPath = (path ?? []) as (string | number)[];
-    const value = await waitForCellValue<unknown>(
+    await waitForCellValue<unknown>(
       controller().runtime,
-      cell,
+      cell.key(...keyPath),
       (value) => {
-        const actual = valueAt(hostValueOf(value), keyPath);
+        const actual = hostValueOf(valueAt(value, []));
         return isValidFabricValue(actual) && valueEqual(actual, expected);
       },
       {
@@ -1633,7 +1633,7 @@ const handlers: Record<
         }`,
       },
     );
-    return hostValueOf(value);
+    return hostValueOf(cell.get());
   },
 
   /** Reports retained structures without adding a cell read or subscription. */
