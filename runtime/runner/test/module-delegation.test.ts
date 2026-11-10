@@ -14,7 +14,10 @@ import type { JSONSchema, Pattern } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import type { CacheableModule, RuntimeProgram } from "../src/harness/types.ts";
 import { computeModuleHashes } from "../src/harness/module-identity.ts";
-import { ensureCompilerStack } from "../src/harness/deferred-compiler-stack.ts";
+import {
+  ensureCompilerStack,
+  observeCompilerStackDemandsForTestingOnly,
+} from "../src/harness/deferred-compiler-stack.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import {
   compiledDocKey,
@@ -1368,6 +1371,43 @@ describe("module identity delegation", () => {
       await read;
     });
 
+    const storeSuccessorCompiled = async (): Promise<void> => {
+      const runtimeVersion = await runtime.patternManager
+        .compileCacheRuntimeVersion({ patternCoverage: false });
+      expect(runtimeVersion).toBeDefined();
+      expect(
+        (await runtime.editWithRetry((tx) => {
+          writeCompiledDocs(
+            runtime,
+            space,
+            [successor],
+            successor.identity,
+            {
+              runtimeVersion: runtimeVersion!,
+              moduleDelegations: new Map([
+                [successor.identity, new Set([oldIdentity])],
+              ]),
+            },
+            tx,
+          );
+        })).error,
+      ).toBeUndefined();
+    };
+
+    /** Runs `read` and returns how many times it asked for the compiler. */
+    const compilerDemandsOf = async (
+      read: () => Promise<void> | undefined,
+    ): Promise<number> => {
+      let demands = 0;
+      const stop = observeCompilerStackDemandsForTestingOnly(() => demands++);
+      try {
+        await read();
+      } finally {
+        stop();
+      }
+      return demands;
+    };
+
     it("registers the delegation the successor's stored source closure carries", async () => {
       await storeSuccessorSource();
       expect(
@@ -1385,6 +1425,40 @@ describe("module identity delegation", () => {
       expect(
         runtime.grantsModuleDelegation(space, successor.identity, oldIdentity),
       ).toBe(true);
+    });
+
+    it("registers the delegation the successor's compiled closure carries without asking for the compiler", async () => {
+      await storeSuccessorCompiled();
+
+      const demands = await compilerDemandsOf(() =>
+        runtime.patternManager.readInheritedAuthority(
+          space,
+          successor.identity,
+          [oldIdentity],
+        )
+      );
+
+      expect(
+        runtime.grantsModuleDelegation(space, successor.identity, oldIdentity),
+      ).toBe(true);
+      expect(demands).toBe(0);
+    });
+
+    it("asks for the compiler to read the source closure when the space holds no compiled closure for the successor", async () => {
+      await storeSuccessorSource();
+
+      const demands = await compilerDemandsOf(() =>
+        runtime.patternManager.readInheritedAuthority(
+          space,
+          successor.identity,
+          [oldIdentity],
+        )
+      );
+
+      expect(
+        runtime.grantsModuleDelegation(space, successor.identity, oldIdentity),
+      ).toBe(true);
+      expect(demands).toBeGreaterThan(0);
     });
 
     it("grants nothing when the space holds no source closure for the successor", async () => {

@@ -29,10 +29,29 @@ export class CompilerStackLoadError extends Error {
   }
 }
 
+const demandObservers = new Set<() => void>();
+
+/**
+ * Calls `observer` on every later {@link ensureCompilerStack} call, until the
+ * returned function is called. The load is memoized for the life of the
+ * process, so once any test has compiled, whether the stack is loaded says
+ * nothing about a later flow; observing the calls is how a test pins a flow
+ * as one that never asks for the compiler.
+ */
+export function observeCompilerStackDemandsForTestingOnly(
+  observer: () => void,
+): () => void {
+  demandObservers.add(observer);
+  return () => {
+    demandObservers.delete(observer);
+  };
+}
+
 /** Load (once) the compiler stack; idempotent and cheap when already loaded. */
 export function ensureCompilerStack(
   load: CompilerStackLoader = loadCompilerStack,
 ): Promise<CompilerStack> {
+  for (const observer of demandObservers) observer();
   return loading ??= load()
     .then((module) => (loaded = module))
     .catch((error) => {

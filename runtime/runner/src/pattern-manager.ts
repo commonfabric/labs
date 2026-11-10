@@ -2297,11 +2297,13 @@ export class PatternManager {
    * Returns `undefined` when no read is owed: `identity` is keyless and so
    * has no stored closure, or the runtime already grants it every
    * predecessor other than itself. Otherwise returns a promise that settles
-   * once the successor's verified source closure has been read in a
-   * transaction without writes, which registers every delegation that
-   * closure durably carries. A predecessor the successor inherits nothing
-   * from stays ungranted, and a failed read is logged rather than rejected,
-   * leaving the runtime's grants as they were.
+   * once the successor's stored closures have been read in a transaction
+   * without writes, which registers every delegation they durably carry: the
+   * compiled closure for this runtime version first, and the verified source
+   * closure only when a predecessor is still ungranted after it. A
+   * predecessor the successor inherits nothing from stays ungranted, and a
+   * failed read is logged rather than rejected, leaving the runtime's grants
+   * as they were.
    */
   readInheritedAuthority(
     space: MemorySpace,
@@ -2309,31 +2311,63 @@ export class PatternManager {
     predecessorIdentities: Iterable<string>,
   ): Promise<void> | undefined {
     if (PatternManager.isKeylessPatternIdentity(identity)) return undefined;
-    let owed = false;
-    for (const predecessor of predecessorIdentities) {
-      if (
-        predecessor !== identity &&
-        !this.#runtime.grantsModuleDelegation(space, identity, predecessor)
-      ) {
-        owed = true;
-        break;
-      }
+    const predecessors = [...predecessorIdentities];
+    if (!this.#owesInheritedAuthority(space, identity, predecessors)) {
+      return undefined;
     }
-    if (!owed) return undefined;
-    return this.#readSourceDelegations(space, identity);
+    return this.#readStoredDelegations(space, identity, predecessors);
   }
 
   /**
-   * Helper for `readInheritedAuthority()`, which loads `identity`'s verified
-   * source closure in a transaction without writes, so the load registers
-   * the delegations it carries.
+   * Helper for `readInheritedAuthority()`, which returns whether some
+   * predecessor in `predecessors` other than `identity` itself is one the
+   * runtime does not yet grant `identity` in `space`.
    */
-  async #readSourceDelegations(
+  #owesInheritedAuthority(
     space: MemorySpace,
     identity: string,
+    predecessors: readonly string[],
+  ): boolean {
+    return predecessors.some((predecessor) =>
+      predecessor !== identity &&
+      !this.#runtime.grantsModuleDelegation(space, identity, predecessor)
+    );
+  }
+
+  /**
+   * Helper for `readInheritedAuthority()`, which loads `identity`'s closures
+   * in a transaction without writes, so each load registers the delegations
+   * it carries. The compiled closure is read first: its documents carry the
+   * compiler's stamp at the root, a source update stages its delegations on
+   * them as well as on the source documents, and reading them parses
+   * nothing, so a runtime that evaluates only compiled patterns never loads
+   * the compiler for this. The source closure, whose verification parses
+   * every module, is read only for a grant the compiled closure did not
+   * supply, as when this runtime version has compiled nothing for `identity`
+   * in `space` yet.
+   */
+  async #readStoredDelegations(
+    space: MemorySpace,
+    identity: string,
+    predecessors: readonly string[],
   ): Promise<void> {
     const tx = this.#runtime.edit();
     try {
+      const runtimeVersion = await this.compileCacheRuntimeVersion({
+        patternCoverage: this.#patternCoverageFor() !== undefined,
+      });
+      if (runtimeVersion !== undefined) {
+        await loadCompiledClosure(
+          this.#runtime,
+          space,
+          identity,
+          { runtimeVersion },
+          tx,
+        );
+        if (!this.#owesInheritedAuthority(space, identity, predecessors)) {
+          return;
+        }
+      }
       await loadVerifiedSourceClosure(this.#runtime, space, identity, tx);
     } catch (error) {
       logger.warn("inherited-authority-read-failed", () => [
