@@ -421,22 +421,50 @@ export class CFCellLink extends BaseElement {
 
   private _handleClick(e: MouseEvent) {
     e.stopPropagation();
-    if (this._resolvedCell) {
-      const { scope, path } = this._resolvedCell.ref();
-      const view = {
-        spaceDid: this._resolvedCell.space(),
-        pieceId: this._resolvedCell.id(),
-        ...(scope === "space" ? {} : { pieceScope: scope }),
-        ...(path.length === 0 ? {} : { piecePath: [...path] }),
-      };
-
-      // Cmd (Mac) or Ctrl (Windows/Linux) opens in new tab
-      if (e.metaKey || e.ctrlKey) {
-        openInNewTab(view);
-      } else {
-        navigate(view);
-      }
+    const target = this._resolvedCell;
+    if (!target) {
+      // The pill shows its label whether or not the link resolved, so a click
+      // that opens nothing says which link it could not follow.
+      console.warn(
+        "cf-cell-link: the click opens nothing: the link names no cell to open.",
+        this._unfollowedLinkSummary(),
+      );
+      return;
     }
+    const { scope, path } = target.ref();
+    const view = {
+      spaceDid: target.space(),
+      pieceId: target.id(),
+      ...(scope === "space" ? {} : { pieceScope: scope }),
+      ...(path.length === 0 ? {} : { piecePath: [...path] }),
+    };
+
+    // Cmd (Mac) or Ctrl (Windows/Linux) opens in new tab
+    if (e.metaKey || e.ctrlKey) {
+      openInNewTab(view);
+    } else {
+      navigate(view);
+    }
+  }
+
+  /**
+   * Helper for `_handleClick()`, which describes the link a click could not
+   * follow: the label it shows, and the cell or link it was given.
+   */
+  private _unfollowedLinkSummary(): Record<string, unknown> {
+    const ref = this.cell?.ref();
+    return {
+      label: this.label ?? this._name,
+      ...(ref === undefined ? {} : {
+        cell: {
+          space: ref.space,
+          id: ref.id,
+          scope: ref.scope ?? "space",
+          path: [...ref.path],
+        },
+      }),
+      ...(this.link === undefined ? {} : { link: this.link }),
+    };
   }
 
   override render() {

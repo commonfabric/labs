@@ -5,6 +5,7 @@ import {
   authorPrincipalCandidates,
   exactPrincipalAttestations,
   isWrittenProfileName,
+  soleRepresentedPrincipal,
 } from "../../src/cfc/represents-principal.ts";
 
 const DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
@@ -357,6 +358,67 @@ describe("represents-principal", () => {
         ]);
         expect(exactPrincipalAttestations(label, "authored-by", false))
           .toBeUndefined();
+      }
+    });
+  });
+
+  describe("soleRepresentedPrincipal", () => {
+    it("returns the principal a value's root names alone", () => {
+      expect(soleRepresentedPrincipal(view([representsAt([], DID)]))).toBe(DID);
+    });
+
+    it("returns `undefined` for a principal named only on a field", () => {
+      expect(soleRepresentedPrincipal(view([representsAt(["field"], DID)])))
+        .toBeUndefined();
+    });
+
+    it("returns `undefined` for two principals or no label", () => {
+      expect(
+        soleRepresentedPrincipal(
+          view([representsAt([], DID), representsAt([], OTHER_DID)]),
+        ),
+      ).toBeUndefined();
+      expect(soleRepresentedPrincipal(undefined)).toBeUndefined();
+    });
+
+    it("returns `undefined` for a value whose own claim names a principal beside a deeper or link-carried claim naming someone else", () => {
+      expect(
+        soleRepresentedPrincipal(
+          view([representsAt([], DID), representsAt(["a", "b"], OTHER_DID)]),
+        ),
+      ).toBeUndefined();
+      expect(
+        soleRepresentedPrincipal(
+          view([
+            representsAt([], DID),
+            { ...representsAt([], OTHER_DID), observes: "followRef" },
+          ]),
+        ),
+      ).toBeUndefined();
+    });
+
+    it("returns `undefined` for a claim a link carries or one deeper down", () => {
+      expect(
+        soleRepresentedPrincipal(
+          view([{ ...representsAt([], DID), observes: "followRef" }]),
+        ),
+      ).toBeUndefined();
+      expect(soleRepresentedPrincipal(view([representsAt(["a", "b"], DID)])))
+        .toBeUndefined();
+    });
+
+    it("returns `undefined` for a claim in a form a runtime does not mint", () => {
+      for (
+        const atom of [
+          `represents-principal:${DID}`,
+          { kind: "represents-principal", subject: DID, scope: "x" },
+        ]
+      ) {
+        expect(
+          soleRepresentedPrincipal(
+            view([{ path: [], label: { integrity: [atom] } }]),
+          ),
+        ).toBeUndefined();
       }
     });
   });

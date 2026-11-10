@@ -17,13 +17,14 @@ import {
   assert,
   type Cell,
   equals,
+  handler,
   pattern,
   spaceOf,
   TESTS,
   Writable,
 } from "commonfabric";
 import { type SharedSpaceCatalogStorage } from "../shared-space/shared-space-catalog.ts";
-import { FabriChatManagerCore } from "./manager.tsx";
+import { FabriChatManagerCore, type RoomMembership } from "./manager.tsx";
 import {
   CHAT_START_ACTION,
   CHAT_START_SURFACE,
@@ -46,6 +47,19 @@ const startGesture = { surface: CHAT_START_SURFACE, action: CHAT_START_ACTION };
 
 /** A stand-in for a principal, a base58btc key as a principal's is. */
 const BOB = "did:key:z6MkBob";
+
+/**
+ * Gives every membership the same `since`, as the handler clock, which counts
+ * whole seconds, gives two rooms created within one second.
+ */
+const sameSecond = handler<void, { memberships: Writable<RoomMembership[]> }>(
+  (_, { memberships }) => {
+    const all = memberships.get() ?? [];
+    const since = all[0]?.since;
+    if (since === undefined) return;
+    memberships.set(all.map((membership) => ({ ...membership, since })));
+  },
+);
 
 /** The room a request's outcome names, as a cell. */
 const roomOf = (
@@ -89,6 +103,11 @@ export default pattern(() => {
   const assert_both_listed = assert(() =>
     manager.rooms.length === 2 && manager.deletedRooms.length === 0
   );
+  // Created within one second, the group, created after the direct room, is
+  // still the newer.
+  const assert_newest_listed_first = assert(() =>
+    manager.rooms[0]?.kind === "group" && manager.rooms[1]?.kind === "direct"
+  );
   // The direct room's counterpart has been told nothing, so a notice waits.
   const assert_notice_listed = assert(() =>
     manager.outgoingNotices.length === 1 &&
@@ -100,7 +119,8 @@ export default pattern(() => {
     manager.deletedRooms.length === 1 &&
     manager.deletedRooms[0]?.kind === "group"
   );
-  // Newest first: the group was created after the direct room.
+  // Newest first: the group was created after the direct room, in the same
+  // second.
   const assert_both_deleted = assert(() =>
     manager.rooms.length === 0 && manager.deletedRooms.length === 2 &&
     manager.deletedRooms[0]?.kind === "group" &&
@@ -125,7 +145,9 @@ export default pattern(() => {
         event: { requestId: "g-1", title: "Team", members: [] },
         trustedUi: startGesture,
       },
+      { action: sameSecond({ memberships: manager.roomMembership }) },
       { assertion: assert_both_listed },
+      { assertion: assert_newest_listed_first },
       { assertion: assert_notice_listed },
       { action: action_catalog_deletes_group },
       { assertion: assert_group_deleted },

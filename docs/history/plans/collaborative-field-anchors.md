@@ -1,3 +1,11 @@
+---
+status: historical
+created: 2026-11-03
+archived: 2026-11-04
+reason: "Superseded plan; Memory's part landed, and the rest was replaced by point anchors held only in the anchors document, which a pattern writes as an ordinary cell."
+superseded-by: docs/features/collaborative-fields.md
+---
+
 # Anchors on collaborative fields
 
 Comments, highlights and bookmarks on a collaborative text need to say which
@@ -9,10 +17,10 @@ no client keeps a position current; every writer of the field, an editor or a
 handler's `applyChanges()`, moves the anchors because Memory does.
 
 The design is specified in
-[`../specs/memory-v2/07-op-views-and-annotations.md`](../specs/memory-v2/07-op-views-and-annotations.md)
+[`../specs/memory-v2/07-op-views-and-annotations.md`](../../specs/memory-v2/07-op-views-and-annotations.md)
 (§7.7.4 anchors on an operation, §7.8 storage and the anchors document, §7.15
 annotations) and described for readers in
-[`../features/collaborative-fields.md`](../features/collaborative-fields.md).
+[`../features/collaborative-fields.md`](../../features/collaborative-fields.md).
 This plan carries what is left to build on top of Memory's part.
 
 ## Shape

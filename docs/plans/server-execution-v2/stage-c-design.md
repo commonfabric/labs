@@ -524,7 +524,9 @@ runs K's writer for P's instance. Precisely:
    instances of its declared surface). No writer ⇒ nothing to run: an
    authored doc (the client's own data), or a doc whose owning piece is
    not running on the server (§2.8 flag 4 — the structure load stays
-   root-scoped, as today).
+   root-scoped, as today). *(Flag 4 is since BUILT: a demanded row whose
+   delivered document is one of a piece's values is structure-loaded as a
+   root — `verification-coverage.md`'s flag 4 row.)*
 2. **Every writer of a demanded instance is a DEMAND ROOT** while any
    demanded row names one of its outputs (§2.4 — the liveness bracket).
 3. **Current(W, K, P):**
@@ -875,7 +877,9 @@ decision):**
    effects are load kicks), but (d′) makes it VISIBLE: a demanded row
    whose doc carries `patternIdentity` meta and has no writer. An
    id-class-filtered extension (`#attemptStructureLoad` per such row)
-   is an OPTION; W0 counts the rows.
+   is an OPTION; W0 counts the rows. *(Flag 4 is since BUILT, keyed on a
+   row whose document is one of a piece's values rather than on
+   `patternIdentity` — `verification-coverage.md`'s flag 4 row.)*
 5. **Demander resolution for linked pieces' writers.** `#demandersFor`
    matches keys by ROOT id; a session whose closure reaches piece P2's
    computed doc D but not P2's root doc supplies no demander to D's
@@ -2236,7 +2240,8 @@ sentence is the one binding edit landed so far): fine-grained demand
 release (R-D's future item; seat: the memory server's tracker); the
 no-grace push-growth wake and/or the pre-seal closure refresh if W0's
 (c) needs them (flag 1); the structure load for demanded non-root docs
-with pattern meta if W0's count says so (flag 4); the output-doc
+with pattern meta if W0's count says so (flag 4; since BUILT, for the
+docs that are one of a piece's values); the output-doc
 demanders union if `undemandedNarrowingRuns` shows the linked-piece
 shape (flag 5); the (b′) incremental walk ONLY on the fallback branch;
 the effects-channel follow-on if not in scope (item 13 — RULED as (e)'s
@@ -2279,6 +2284,11 @@ tuning-class if measured, not a row.)*
 - **(d′) — a linked piece is not running on the server** (flag 4):
   parity with today, but visible now; the id-class-filtered structure
   load for demanded rows with pattern meta is the option; W0 counts.
+  *(BUILT, with the test read from each session's delivered entries
+  rather than the engine: a row is structure-loaded when its document is
+  one of a piece's values, a document whose `result` link names a piece,
+  other than the piece's argument — `verification-coverage.md`'s flag 4
+  row.)*
 - **(d′) — the term is elsewhere.** With the walk gone (zero walk runs
   by construction), if the settle stays ~2.6 s the 96 % attribution was
   wrong — re-attribute (wave commit / frames / `server.idle()` /

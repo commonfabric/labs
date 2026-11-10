@@ -17,6 +17,7 @@ import {
   codeMirrorTextChangesPayload,
   type CommitPrecondition,
   getCommitPreconditionsConfig,
+  operationAnchorsDocId,
   operationBaselineHash,
   type PatchOp,
   resolveScopeKey,
@@ -255,6 +256,12 @@ type TextChangeIntent = {
 
   /** The id the `apply-op` is submitted under. */
   submissionId: string;
+
+  /**
+   * The transaction's activity clock when the first batch was recorded: a
+   * write stamped at or after it came after the edit.
+   */
+  recordedAt: number;
 };
 
 type SpaceBranch = {
@@ -1653,6 +1660,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       batches: [recorded],
       expected: next,
       submissionId: crypto.randomUUID(),
+      recordedAt: this.#activityClock,
     });
     return next;
   }
@@ -1851,6 +1859,9 @@ export class V2StorageTransaction implements IStorageTransaction {
     const applyOps = this.#textChangesAsWholeDocuments
       ? []
       : this.#textChangeOperations(space);
+    if (applyOps.length > 0) {
+      this.#refuseAnchorsWrittenAfterTheirEdits(space, operations);
+    }
     return {
       operations,
       ...(nativePreconditions.length
@@ -1859,6 +1870,57 @@ export class V2StorageTransaction implements IStorageTransaction {
       ...(sqliteOps?.length ? { sqliteOps: [...sqliteOps] } : {}),
       ...(applyOps.length ? { applyOps } : {}),
     };
+  }
+
+  /**
+   * Helper for `getNativeCommit()`, which throws when `operations` write the
+   * anchors document of a field this transaction edits in `space`, and the
+   * transaction wrote the document's value after recording the edit. The
+   * runtime's own writes beside the value, such as the confidentiality
+   * `prepareCfc()` records at `["cfc"]`, state no offsets. The store maps
+   * a field's anchors through each edit that follows their write in the
+   * commit, and a commit hands it every document write ahead of every edit,
+   * so anchors written against the edited text would be moved through the
+   * same edit again. Anchors written before the edit are stated against the
+   * text it applies to, and moving them through it is right; deleting the
+   * document maps nothing.
+   */
+  #refuseAnchorsWrittenAfterTheirEdits(
+    space: MemorySpace,
+    operations: readonly NativeStorageCommitOperation[],
+  ): void {
+    // TODO(ubik2): Honor the order instead, sending such a write after the
+    // edit, once a transaction's reads of a field's anchors move them through
+    // the edits it has recorded on the field.
+    const anchorsWritten = new Set(
+      operations
+        .filter((operation) => operation.op !== "delete")
+        .map(({ id, scope }) => `${normalizeCellScope(scope)} ${id}`),
+    );
+    for (const docKey of this.#textChanges.get(space)?.keys() ?? []) {
+      const { id, scope } = this.#parseDocKey(docKey);
+      for (const intent of this.#pendingTextChanges(space, docKey) ?? []) {
+        const path = toValuePath(intent.path.slice(1));
+        const anchors = operationAnchorsDocId({ id, scope, path });
+        if (!anchorsWritten.has(`${normalizeCellScope(scope)} ${anchors}`)) {
+          continue;
+        }
+        const writtenAfter = this.#writeAttemptLog.some((write) =>
+          write.space === space && write.id === anchors &&
+          write.scope === normalizeCellScope(scope) &&
+          (write.path.length === 0 || write.path[0] === "value") &&
+          write.journalIndex >= intent.recordedAt
+        );
+        if (writtenAfter) {
+          throw new Error(
+            debugStr`the transaction wrote the anchors of the field at ` +
+              debugStr`$quote${path} of $quote${id} after editing it; write ` +
+              "them before the edit, against the text it applies to, or in " +
+              "a commit of their own",
+          );
+        }
+      }
+    }
   }
 
   /**

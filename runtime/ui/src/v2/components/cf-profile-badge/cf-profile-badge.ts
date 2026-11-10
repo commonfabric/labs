@@ -17,7 +17,9 @@ import {
   type CellHandle,
   type CfcLabelView,
   NAME,
+  observeWrittenPrincipal,
   type RuntimeClient,
+  type WrittenValue,
 } from "@commonfabric/runtime-client";
 
 import { ownerPrincipalFromLabel } from "../../core/cfc-label.ts";
@@ -35,10 +37,6 @@ export type ProfileBadgeState = "presented" | "verified" | "unverified";
 
 export type ProfileBadgeDisplay = {
   name: string | undefined;
-  /** The profile's picture: the bytes of a raster image. */
-  picture: FabricBytes | undefined;
-  /** The profile's legacy avatar text, shown when it has no picture. */
-  avatar: string | undefined;
 };
 
 /** Extra profile details surfaced in the badge hover/focus tooltip (CT-1648). */
@@ -70,8 +68,9 @@ export const profileTooltipFromValue = (val: unknown): ProfileBadgeTooltip => {
 };
 
 /**
- * Extracts the display name, picture and avatar from a subscribed
- * profile-cell value.
+ * Extracts the display name from a subscribed profile-cell value. The face
+ * is not read from it: it is read from the cells holding the picture and the
+ * avatar, whose labels say whose they are.
  * Prefers the profile's own editable `name` field, falling back to the cell's
  * `[NAME]`. This ordering matters: on `main`, profile-home sets `[NAME]` to the
  * static placeholder `"Profile"` (profile-home.tsx:303), so trusting `[NAME]`
@@ -82,27 +81,69 @@ export const profileTooltipFromValue = (val: unknown): ProfileBadgeTooltip => {
  */
 export const profileDisplayFromValue = (val: unknown): ProfileBadgeDisplay => {
   if (!val || typeof val !== "object") {
-    return { name: undefined, picture: undefined, avatar: undefined };
+    return { name: undefined };
   }
   const record = val as Record<PropertyKey, unknown>;
   const named = record[NAME as unknown as PropertyKey];
   const plain = record["name"];
-  const picture = record["picture"];
-  const avatar = record["avatar"];
   const name = typeof plain === "string" && plain.trim().length > 0
     ? plain
     : typeof named === "string" && named.trim().length > 0
     ? named
     : undefined;
-  return {
-    name,
-    picture: picture instanceof FabricBytes && picture.length > 0
-      ? picture
-      : undefined,
-    avatar: typeof avatar === "string" && avatar.trim().length > 0
-      ? avatar
-      : undefined,
+  return { name };
+};
+
+/**
+ * The reads of a space's root that are under way, by the runtime that makes
+ * them and the space they read.
+ */
+const spaceRootReads = new WeakMap<
+  RuntimeClient,
+  Map<DID, Promise<CellHandle>>
+>();
+
+/**
+ * Helper for {@link spaceRootOf}, which reads the piece `space`'s root links.
+ * The space cell is loaded before its root is read.
+ */
+const readSpaceRoot = async (
+  runtime: RuntimeClient,
+  space: DID,
+): Promise<CellHandle> => {
+  const spaceCell = await runtime.getCell<{ defaultPattern: unknown }>(
+    space,
+    space,
+  );
+  // Loaded first: a space cell this runtime has not received resolves to
+  // itself, which would answer "not a profile" for a profile that is one.
+  await spaceCell.sync();
+  return await spaceCell.key("defaultPattern").resolveAsCell();
+};
+
+/**
+ * The piece `space`'s root links, as `runtime` reads it. A call made while a
+ * read of the same space through the same runtime is under way shares that
+ * read, and one made after it has finished reads again.
+ */
+const spaceRootOf = (
+  runtime: RuntimeClient,
+  space: DID,
+): Promise<CellHandle> => {
+  let reads = spaceRootReads.get(runtime);
+  if (reads === undefined) {
+    reads = new Map();
+    spaceRootReads.set(runtime, reads);
+  }
+  const underWay = reads.get(space);
+  if (underWay !== undefined) return underWay;
+  const read = readSpaceRoot(runtime, space);
+  reads.set(space, read);
+  const finished = () => {
+    reads.delete(space);
   };
+  read.then(finished, finished);
+  return read;
 };
 
 /**
@@ -111,7 +152,8 @@ export const profileDisplayFromValue = (val: unknown): ProfileBadgeDisplay => {
  * `cf profile repair-root` does for an older one. So a document is taken for
  * a profile when it is the piece its space's root links, and anything else
  * carrying a principal's claim, a room's or a roster's record of the person
- * among them, is not. The space cell is loaded before its root is read.
+ * among them, is not. Calls about cells of one space that overlap share one
+ * read of its root, so a list of badges asks the worker once.
  *
  * @throws Error when the space's root cannot be read, which says nothing
  * about whether the cell is a profile.
@@ -121,14 +163,7 @@ export const profileSpaceOf = async (
 ): Promise<DID | undefined> => {
   if (cell.ref().path.length > 0) return undefined;
   const space = cell.space();
-  const spaceCell = await cell.runtime().getCell<{ defaultPattern: unknown }>(
-    space,
-    space,
-  );
-  // Loaded first: a space cell this runtime has not received resolves to
-  // itself, which would answer "not a profile" for a profile that is one.
-  await spaceCell.sync();
-  const root = await spaceCell.key("defaultPattern").resolveAsCell();
+  const root = await spaceRootOf(cell.runtime(), space);
   return root.space() === space && root.id() === cell.id() &&
       root.ref().path.length === 0
     ? space
@@ -156,6 +191,13 @@ export const profileSpaceOf = async (
  * (which user-space cannot mint), a pattern can mimic the CSS but not earn
  * the verified seal for a DID it doesn't control. Without that label the
  * badge stays in the plain "presented" state.
+ *
+ * The badge draws the face of the principal its seal names: the picture, or
+ * else the avatar text, only when the label of the cell holding it names that
+ * principal alone (`observeWrittenPrincipal()`). Anyone can write a profile's
+ * picture, so a picture a visitor set, or one stored without a label, is not
+ * drawn, and a badge whose cell's label names no single principal draws no
+ * face.
  *
  * @element cf-profile-badge
  * @attr {string} size - avatar size: xs | sm | md | lg | xl (default md)
@@ -574,6 +616,21 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
   /** The resolved profile cell. */
   private _resolvedCell: CellHandle | undefined = undefined;
 
+  /** Ends the observation of the resolved cell's face. */
+  #cancelFace: (() => void) | undefined = undefined;
+
+  /**
+   * The principal the resolved cell's label names, the one its seal shows,
+   * whose face alone the badge draws.
+   */
+  #owner: string | undefined = undefined;
+
+  /** What the face fields last reported, with whom each one's own cell represents. */
+  #written: {
+    picture?: WrittenValue<FabricBytes | undefined>;
+    avatar?: WrittenValue<string | undefined>;
+  } = {};
+
   /**
    * The resolved cell's space when the cell is a profile
    * ({@link profileSpaceOf}), which seeds the seal with it.
@@ -603,6 +660,13 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
   private _resolveGeneration = 0;
 
   /**
+   * The profile the latest resolve was started for, since the element was
+   * last connected; unset when none has started since then.
+   */
+  #resolveStartedFor: { profile: CellHandle | undefined } | undefined =
+    undefined;
+
+  /**
    * Whether this seal is currently registered with the shared cursor
    * controller.
    */
@@ -616,15 +680,20 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
 
   /**
    * The verification state, the seal, whether the profile question has been
-   * answered, whether the badge presents as verified, and the resolve step,
-   * which a test drives directly.
+   * answered, whether the badge presents as verified, the face it draws, and
+   * the resolve and update steps, which a test drives directly.
    */
   get accessForTestingOnly(): {
     state: ProfileBadgeState;
     seal: IdentitySeal | undefined;
     profileKnown: boolean;
     readonly verified: boolean;
+    readonly face: {
+      picture: FabricBytes | undefined;
+      avatar: string | undefined;
+    };
     resolve(): Promise<void>;
+    willUpdate(changed: PropertyValues): void;
   } {
     // deno-lint-ignore no-this-alias
     const outerThis = this;
@@ -650,7 +719,11 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
       get verified() {
         return outerThis._verified;
       },
+      get face() {
+        return { picture: outerThis._picture, avatar: outerThis._avatar };
+      },
       resolve: () => this._resolve(),
+      willUpdate: (changed) => this.willUpdate(changed),
     };
   }
 
@@ -668,13 +741,21 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
     // resume, pass the (unchanged) generation check, and leak a live
     // subscription that updates a detached element.
     this._resolveGeneration++;
+    this.#resolveStartedFor = undefined;
     this._cleanup();
     this._setLiveness(false);
   }
 
   protected override willUpdate(changed: PropertyValues): void {
     super.willUpdate(changed);
-    if (changed.has("profile")) {
+    // A profile bound before the element connects is both resolved on
+    // connecting and reported as changed by the first update after it, and
+    // the resolve under way is already for that profile.
+    if (
+      changed.has("profile") &&
+      !(this.#resolveStartedFor !== undefined &&
+        this.#resolveStartedFor.profile === this.profile)
+    ) {
       void this._resolve();
     }
   }
@@ -773,6 +854,12 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
   private _cleanup(): void {
     this._unsubscribe?.();
     this._unsubscribe = undefined;
+    this.#cancelFace?.();
+    this.#cancelFace = undefined;
+    this.#owner = undefined;
+    this.#written = {};
+    this._picture = undefined;
+    this._avatar = undefined;
   }
 
   private async _resolve(): Promise<void> {
@@ -792,6 +879,7 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
     this._navigable = false;
 
     const cell = this.profile;
+    this.#resolveStartedFor = { profile: cell };
     if (!cell) {
       this._applyValue(undefined);
       return;
@@ -833,17 +921,38 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
       // doc first loading), not just on name/avatar edits, with no separate
       // getCfcLabel round-trip. The `generation` guard drops a callback that
       // fires after a re-bind/detach.
-      this._unsubscribe = named.subscribe((val, cfcLabel) => {
+      this._unsubscribe = named.subscribe((val, cfcLabel, delivery) => {
         this._applyValue(val);
         this._deriveVerification(
           cfcLabel,
           generation,
           isWrittenProfileName(isObjectNotArray(val) ? val.name : undefined),
+          delivery?.cfcLabelCurrent === true,
         );
       }, {
         includeCfcLabel: true,
         onRefused: () => this._applyRefusal(generation),
       });
+      // Only a face field whose own cell represents the principal the label
+      // names is drawn.
+      const cancelPicture = observeWrittenPrincipal(
+        named.key("picture"),
+        (picture) => {
+          this.#written = { ...this.#written, picture };
+          this.#applyFace();
+        },
+      );
+      const cancelAvatar = observeWrittenPrincipal(
+        named.key("avatar"),
+        (avatar) => {
+          this.#written = { ...this.#written, avatar };
+          this.#applyFace();
+        },
+      );
+      this.#cancelFace = () => {
+        cancelPicture();
+        cancelAvatar();
+      };
       // Whether the cell is a profile is read after the subscription, so
       // the name shows without waiting on it; the seal follows when it
       // arrives. When it cannot be decided, the name stays and no seal is
@@ -909,7 +1018,7 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
   }
 
   private _applyValue(val: unknown): void {
-    const { name, picture, avatar } = profileDisplayFromValue(val);
+    const { name } = profileDisplayFromValue(val);
     // A VALUE arrived, not merely an attempt that finished. The no-cell and
     // failed-resolve paths both land here with `undefined`, and treating
     // those as resolved would suppress the fallback in exactly the case it
@@ -917,8 +1026,6 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
     this._resolved = val !== undefined;
     const { bio, pinnedCount } = profileTooltipFromValue(val);
     this._name = name;
-    this._picture = picture;
-    this._avatar = avatar;
     this._bio = bio;
     this._pinnedCount = pinnedCount;
     this.requestUpdate();
@@ -934,6 +1041,7 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
     if (generation !== this._resolveGeneration || !this.isConnected) return;
     this._resolved = true;
     this._name = CFC_POLICY_PLACEHOLDER_TEXT;
+    this.#owner = undefined;
     this._picture = undefined;
     this._avatar = undefined;
     this._bio = undefined;
@@ -967,6 +1075,8 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
    *
    * `nameWritten` says whether the profile's value holds a name its owner
    * wrote, which narrows the fields whose atoms count to the root and `name`.
+   * `current` says whether the label is the one the worker read with the
+   * value; only such a label decides whose face is drawn.
    *
    * `generation` is captured by the subscription callback in `_resolve`; a
    * callback that fires after a re-bind/detach (which bumps the generation)
@@ -977,12 +1087,17 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
     cfcLabel: CfcLabelView | undefined,
     generation: number,
     nameWritten: boolean,
+    current = true,
   ): void {
     if (generation !== this._resolveGeneration || !this.isConnected) return;
     // The label is the runtime-attested, display-redacted view delivered over
     // the subscription; redaction strips Caveat.source but keeps the
     // `represents-principal` integrity atom that unlocks the seal.
     const owner = ownerPrincipalFromLabel(cfcLabel, nameWritten);
+    // The face is drawn only for the owner a label the worker read with the
+    // value names.
+    this.#owner = current ? owner : undefined;
+    this.#applyFace();
     if (owner) {
       this._seal = identitySeal(owner, this.#profileSpace);
       this._state = "verified";
@@ -990,6 +1105,27 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
       this._seal = undefined;
       this._state = "presented";
     }
+  }
+
+  /**
+   * Draws the face of the badge's owner: the picture, when it holds bytes and
+   * its own cell represents the owner, or else the avatar text, trimmed, when
+   * it is not blank and its own cell represents the owner, or else neither.
+   */
+  #applyFace(): void {
+    const owner = this.#owner;
+    const { picture, avatar } = this.#written;
+    const bytes = owner !== undefined && picture?.principal === owner
+      ? picture.value
+      : undefined;
+    const text = owner !== undefined && avatar?.principal === owner
+      ? (avatar.value ?? "").trim()
+      : "";
+    this._picture = bytes !== undefined && bytes.length > 0 ? bytes : undefined;
+    this._avatar = this._picture === undefined && text !== ""
+      ? text
+      : undefined;
+    this.requestUpdate();
   }
 
   override render() {

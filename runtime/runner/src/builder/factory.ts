@@ -47,6 +47,7 @@ import {
 import { nameBlob } from "./blob-name.ts";
 import {
   agent,
+  anchorsOf,
   cellFromUrl,
   compileAndRun,
   fetchBinary,
@@ -89,7 +90,11 @@ import {
 } from "./module.ts";
 import { isTrustedPattern, setPatternProgram } from "./pattern-metadata.ts";
 import { pattern } from "./pattern.ts";
-import { principalOf, principalsOf } from "./principal-of.ts";
+import {
+  principalOf,
+  principalsOf,
+  writtenPrincipalOf,
+} from "./principal-of.ts";
 import { profileOwnerOf } from "./profile-owner-of.ts";
 import { linksOf } from "./links-of.ts";
 import { resultOwnerOf } from "./result-owner-of.ts";
@@ -289,11 +294,13 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
       constant: rowLabelConstant,
     },
     navigateTo,
+    anchorsOf,
     // inv-12 Stage 2: bounded first-layer label introspection (§4.6.4.1).
     inspectConfLabel,
     currentPrincipal,
     principalOf,
     principalsOf,
+    writtenPrincipalOf,
     profileOwnerOf,
     resultOwnerOf,
     linksOf,

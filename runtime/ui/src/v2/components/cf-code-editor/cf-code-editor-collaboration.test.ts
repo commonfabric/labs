@@ -1,8 +1,10 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import {
+  ChangeSet,
   Compartment,
   EditorState,
+  StateEffect,
   Transaction,
   type TransactionSpec,
 } from "@codemirror/state";
@@ -19,10 +21,15 @@ import {
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
 import { CFCodeEditor } from "./cf-code-editor.ts";
+import {
+  highlightAnchors,
+  highlightField,
+  setHighlightAnchorsEffect,
+} from "./features/highlights.ts";
 import { CodeMirrorCollaborationController } from "./codemirror-collaboration.ts";
 import { codeMirrorPresenceState } from "./codemirror-presence.ts";
 import { backlinkField } from "./features/backlinks.ts";
-import { mentionRefField } from "./features/mention-refs.ts";
+import { mentionRefField, refShortNameField } from "./features/mention-refs.ts";
 
 const operationPath = [] as unknown as OperationFieldSnapshot["path"];
 
@@ -39,6 +46,7 @@ function inactiveSnapshot(materialized = "abc") {
     cursor: null,
     baselineHash: "baseline",
     materialized,
+    anchors: {},
     operations: [],
   } as const;
 }
@@ -175,6 +183,19 @@ function operationCell(
   return source;
 }
 
+/** The ranges `state` draws highlight marks over, in document order. */
+function drawnRanges(state: EditorState): Array<[number, number]> {
+  const drawn: Array<[number, number]> = [];
+  state.field(highlightField).decorations.between(
+    0,
+    state.doc.length,
+    (from, to) => {
+      drawn.push([from, to]);
+    },
+  );
+  return drawn;
+}
+
 const synchronizedField = {
   space: "did:key:editor-space",
   branch: "main",
@@ -184,6 +205,464 @@ const synchronizedField = {
 } as const;
 
 describe("CFCodeEditor collaboration", () => {
+  it("restates highlight anchors only when the anchors or their version change", () => {
+    const element = new CFCodeEditor();
+    const view = statefulView([highlightField]);
+    // Counts the dispatches that restate the anchors.
+    let dispatches = 0;
+    const dispatch = view.dispatch.bind(view);
+    view.dispatch = (spec: never) => {
+      const effects = (spec as { effects?: unknown }).effects;
+      if (
+        effects instanceof StateEffect && effects.is(setHighlightAnchorsEffect)
+      ) {
+        dispatches++;
+      }
+      dispatch(spec);
+    };
+    (element as any)._editorView = view;
+    (element as any).emit = () => {};
+    const anchors = { from: 0, to: 2 };
+    const snapshot = (version: number, map = anchors, pending = []) => ({
+      confirmedCursor: { epoch: 1, version },
+      pendingChanges: pending,
+      field: synchronizedField,
+      anchors: map,
+    });
+
+    (element as any)._handleCollaborationSynchronization(snapshot(4));
+    expect(highlightAnchors(view.state)).toEqual({ from: 0, to: 2 });
+    expect(dispatches).toBe(1);
+
+    // Equal anchors in another object at the same version: nothing to
+    // restate.
+    (element as any)._handleCollaborationSynchronization(
+      snapshot(4, { from: 0, to: 2 }),
+    );
+    expect(dispatches).toBe(1);
+
+    // Pending edits that do not end at the editor's text: the anchors stay.
+    (element as any)._handleCollaborationSynchronization(
+      snapshot(5, { from: 1, to: 2 }, [
+        ChangeSet.of({ from: 0, insert: "XYZ" }, 9).desc,
+      ] as never),
+    );
+    expect(highlightAnchors(view.state)).toEqual({ from: 0, to: 2 });
+    expect(dispatches).toBe(1);
+
+    // A newer version restates them.
+    (element as any)._handleCollaborationSynchronization(
+      snapshot(6, { from: 1, to: 3 }),
+    );
+    expect(highlightAnchors(view.state)).toEqual({ from: 1, to: 3 });
+    expect(dispatches).toBe(2);
+
+    // A newer version that states what the editor already holds dispatches
+    // nothing.
+    (element as any)._handleCollaborationSynchronization(
+      snapshot(7, { from: 1, to: 3 }),
+    );
+    expect(dispatches).toBe(2);
+  });
+
+  it("draws each highlight between its anchors, moved over the edits Memory has not confirmed", () => {
+    // Memory has confirmed "abc" with "bc" marked; the editor holds "Xabc",
+    // its insertion at the start still pending.
+
+    const element = new CFCodeEditor();
+    const view = statefulView([highlightField]);
+    view.dispatch({ changes: { from: 0, insert: "X" } } as never);
+    (element as any)._editorView = view;
+    (element as any).emit = () => {};
+    element.highlights = [{ id: "h", fromAnchor: "from", toAnchor: "to" }];
+    (element as any).updated(new Map([["highlights", []]]));
+
+    (element as any)._handleCollaborationSynchronization({
+      confirmedCursor: { epoch: 1, version: 4 },
+      pendingChanges: [ChangeSet.of({ from: 0, insert: "X" }, 3).desc],
+      field: synchronizedField,
+      anchors: { from: 1, to: 3 },
+    });
+
+    expect(highlightAnchors(view.state)).toEqual({ from: 2, to: 4 });
+    expect(drawnRanges(view.state)).toEqual([[2, 4]]);
+  });
+
+  it("forgets the anchors when collaboration ends", () => {
+    const element = new CFCodeEditor();
+    const view = statefulView([highlightField]);
+    (element as any)._editorView = view;
+    (element as any).emit = () => {};
+    (element as any)._handleCollaborationSynchronization({
+      confirmedCursor: { epoch: 1, version: 4 },
+      pendingChanges: [],
+      field: synchronizedField,
+      anchors: { from: 0, to: 2 },
+    });
+
+    (element as any)._handleCollaborationSynchronization(null);
+
+    expect(highlightAnchors(view.state)).toEqual({});
+  });
+
+  it("draws the highlights of a field with no collaborative edit", () => {
+    const element = new CFCodeEditor();
+    const view = statefulView([highlightField]);
+    (element as any)._editorView = view;
+    (element as any).emit = () => {};
+    element.highlights = [{ id: "h", fromAnchor: "from", toAnchor: "to" }];
+    (element as any).updated(new Map([["highlights", []]]));
+
+    (element as any)._handleCollaborationSynchronization({
+      confirmedCursor: null,
+      pendingChanges: [],
+      field: synchronizedField,
+      anchors: { from: 1, to: 3 },
+    });
+
+    expect(highlightAnchors(view.state)).toEqual({ from: 1, to: 3 });
+    expect(drawnRanges(view.state)).toEqual([[1, 3]]);
+  });
+
+  it("keeps a highlight drawn, moved over the pending edit, while the first edit activates the field", () => {
+    // The field holds "abc" with "bc" marked and has no version. The person
+    // types "X" at the start; Memory then confirms it as version 1.
+
+    const element = new CFCodeEditor();
+    const view = statefulView([highlightField]);
+    // What the editor draws after each dispatch.
+    const drawn: Array<Array<[number, number]>> = [];
+    const dispatch = view.dispatch.bind(view);
+    view.dispatch = (spec: never) => {
+      dispatch(spec);
+      drawn.push(drawnRanges(view.state));
+    };
+    (element as any)._editorView = view;
+    (element as any).emit = () => {};
+    element.highlights = [{ id: "h", fromAnchor: "from", toAnchor: "to" }];
+    (element as any).updated(new Map([["highlights", []]]));
+    const stored = { from: 1, to: 3 };
+    const synchronize = (
+      confirmedCursor: { epoch: number; version: number } | null,
+      pendingChanges: unknown[],
+      anchors: Record<string, number>,
+    ) =>
+      (element as any)._handleCollaborationSynchronization({
+        confirmedCursor,
+        pendingChanges,
+        field: synchronizedField,
+        anchors,
+      });
+
+    synchronize(null, [], stored);
+    drawn.length = 0;
+    view.dispatch({ changes: { from: 0, insert: "X" } } as never);
+    synchronize(null, [ChangeSet.of({ from: 0, insert: "X" }, 3).desc], stored);
+    synchronize({ epoch: 1, version: 1 }, [], { from: 2, to: 4 });
+
+    expect(highlightAnchors(view.state)).toEqual({ from: 2, to: 4 });
+    expect(drawn.length).toBeGreaterThan(0);
+    expect(drawn.every((ranges) => ranges.length === 1)).toBe(true);
+    expect(drawn.map((ranges) => ranges[0])).toEqual(
+      drawn.map(() => [2, 4]),
+    );
+  });
+
+  it("joins no presence room until the field has a confirmed cursor", async () => {
+    const runtime = presenceRuntime();
+    const element = new CFCodeEditor();
+    try {
+      const presence = (element as any)._presenceComp as Compartment;
+      (element as any)._editorView = statefulView([presence.of([])]);
+      const collaboration: {
+        active: boolean;
+        cell: CellHandle<string>;
+        synchronizationSnapshot: {
+          confirmedCursor: { epoch: number; version: number } | null;
+          pendingChanges: never[];
+          field: typeof synchronizedField;
+          anchors: Record<string, number>;
+        };
+      } = {
+        active: true,
+        cell: operationCell(runtime),
+        synchronizationSnapshot: {
+          confirmedCursor: null,
+          pendingChanges: [],
+          field: synchronizedField,
+          anchors: {},
+        },
+      };
+      (element as any)._collaboration = collaboration;
+      element.collaborative = true;
+      element.participantName = "Ada";
+
+      (element as any)._handleCollaborationSynchronization(
+        collaboration.synchronizationSnapshot,
+      );
+      (element as any)._setupPresence();
+      (element as any)._handlePresenceFocus();
+      await settle();
+      expect(runtime.joins).toEqual([]);
+
+      collaboration.synchronizationSnapshot = {
+        ...collaboration.synchronizationSnapshot,
+        confirmedCursor: { epoch: 1, version: 1 },
+      };
+      (element as any)._handleCollaborationSynchronization(
+        collaboration.synchronizationSnapshot,
+      );
+      await settle();
+      expect(runtime.joins).toEqual([{}]);
+      expect(runtime.handles[0].facets).toEqual([["caret", {
+        focused: false,
+        cursor: { epoch: 1, version: 1 },
+        selection: null,
+        basis: "confirmed",
+      }]]);
+
+      // A release takes the field's version away, and presence with it.
+      collaboration.synchronizationSnapshot = {
+        ...collaboration.synchronizationSnapshot,
+        confirmedCursor: null,
+      };
+      (element as any)._handleCollaborationSynchronization(
+        collaboration.synchronizationSnapshot,
+      );
+      await settle();
+      expect(runtime.handles[0].leaves).toBe(1);
+      expect(runtime.joins).toHaveLength(1);
+    } finally {
+      (element as any)._cleanupPresence();
+    }
+  });
+
+  it("reports no selection and draws nothing before the editor has a view", () => {
+    const events: unknown[] = [];
+    const element = new CFCodeEditor();
+    (element as any).emit = (_name: string, detail: unknown) =>
+      events.push(detail);
+
+    (element as any)._reportSelection();
+    (element as any)._handleCollaborationSynchronization({
+      confirmedCursor: { epoch: 1, version: 1 },
+      pendingChanges: [],
+      field: synchronizedField,
+      anchors: { from: 0, to: 1 },
+    });
+
+    expect(events).toEqual([]);
+  });
+
+  it("emits `cf-error` once for a highlight it cannot draw as asked, while the fault lasts", () => {
+    const errors: string[] = [];
+    const element = new CFCodeEditor();
+    (element as any)._editorView = statefulView([highlightField]);
+    (element as any).emit = (name: string, detail: { message: string }) => {
+      if (name === "cf-error") errors.push(detail.message);
+    };
+    element.highlights = [
+      { id: "h", fromAnchor: "from", toAnchor: "to", kind: "Not A Class" },
+    ];
+
+    (element as any).updated(new Map([["highlights", []]]));
+    (element as any).updated(new Map([["highlights", []]]));
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("has the kind");
+  });
+
+  it("emits `cf-error` again for an inverted pair stated again after its anchors were cleared", () => {
+    const errors: string[] = [];
+    const element = new CFCodeEditor();
+    (element as any)._editorView = statefulView([highlightField]);
+    (element as any).emit = (name: string, detail: { message: string }) => {
+      if (name === "cf-error") errors.push(detail.message);
+    };
+    element.highlights = [{ id: "h", fromAnchor: "from", toAnchor: "to" }];
+    (element as any).updated(new Map([["highlights", []]]));
+    const inverted = () => ({
+      confirmedCursor: { epoch: 1, version: 1 },
+      pendingChanges: [],
+      field: synchronizedField,
+      anchors: { from: 2, to: 1 },
+    });
+
+    (element as any)._handleCollaborationSynchronization(inverted());
+    (element as any)._handleCollaborationSynchronization(null);
+    (element as any)._handleCollaborationSynchronization(inverted());
+
+    expect(errors).toHaveLength(2);
+    expect(errors[0]).toContain("ends at the anchor");
+    expect(errors[1]).toBe(errors[0]);
+  });
+
+  it("hands a changed highlights property to the editor", () => {
+    const element = new CFCodeEditor();
+    const view = statefulView([highlightField]);
+    (element as any)._editorView = view;
+    element.highlights = [
+      { id: "h", fromAnchor: "from", toAnchor: "to", kind: "active" },
+    ];
+
+    (element as any).updated(new Map([["highlights", []]]));
+
+    expect(view.state.field(highlightField).highlights).toEqual([
+      { id: "h", fromAnchor: "from", toAnchor: "to", kind: "active" },
+    ]);
+  });
+
+  describe("cf-selection-change", () => {
+    // Each case holds a selection in an editor, over "abc", that has
+    // reported nothing yet. `report()` stands in for the editor seeing its
+    // selection change, `change()` for a transaction that changes the
+    // document and names no selection, and `confirm()` for the collaboration
+    // controller publishing a synchronization snapshot: at a version, for a
+    // field with no version, or as collaboration ends. `events` collects the
+    // details of the `cf-selection-change` events the editor emits.
+
+    const NOTHING = { from: 0, to: 0, text: "", value: "" };
+
+    const snapshotAt = (
+      version: number | "unversioned",
+      pending: unknown[] = [],
+    ) => ({
+      confirmedCursor: version === "unversioned" ? null : { epoch: 1, version },
+      pendingChanges: pending,
+      field: synchronizedField,
+      anchors: {},
+    });
+
+    const selectionHarness = (anchor: number, head: number) => {
+      const events: unknown[] = [];
+      const element = new CFCodeEditor();
+      // The state carries the fields the editor reads on every change to the
+      // document, and a read-only editor writes nothing back for one.
+      const view = statefulView([
+        backlinkField,
+        mentionRefField,
+        refShortNameField,
+      ]);
+      view.dispatch({ selection: { anchor, head } } as never);
+      (element as any)._editorView = view;
+      (element as any).readonly = true;
+      (element as any).emit = (name: string, detail: unknown) => {
+        if (name === "cf-selection-change") events.push(detail);
+      };
+      const confirm = (
+        version: number | "unversioned" | "ended",
+        pending: unknown[] = [],
+      ) =>
+        (element as any)._handleCollaborationSynchronization(
+          version === "ended" ? null : snapshotAt(version, pending),
+        );
+      const report = () => (element as any)._reportSelection();
+      const change = (changes: unknown) => {
+        const startState = view.state;
+        const transaction = startState.update({ changes } as never);
+        view.state = transaction.state;
+        (element as any)._handleEditorUpdate({
+          transactions: [transaction],
+          docChanged: true,
+          selectionSet: false,
+          state: transaction.state,
+          startState,
+        });
+      };
+      return { events, view, confirm, report, change };
+    };
+
+    it("reports the range, its text and the editor's document", () => {
+      const { events, report } = selectionHarness(0, 2);
+
+      report();
+
+      expect(events).toEqual([{ from: 0, to: 2, text: "ab", value: "abc" }]);
+    });
+
+    it("reports that nothing is selected in an editor that has reported nothing yet", () => {
+      const { events, report } = selectionHarness(0, 0);
+
+      report();
+
+      expect(events).toEqual([NOTHING]);
+    });
+
+    it("reports nothing more as the caret moves, as the person types, or as collaborators' edits arrive", () => {
+      const { events, view, confirm, report, change } = selectionHarness(0, 0);
+      report();
+
+      view.dispatch({ selection: { anchor: 2 } } as never);
+      report();
+      view.dispatch({
+        changes: { from: 2, insert: "X" },
+        selection: { anchor: 3 },
+      } as never);
+      report();
+      confirm(4, [ChangeSet.of({ from: 2, insert: "X" }, 3).desc]);
+      confirm(5);
+      change({ from: 0, insert: "remote " });
+      confirm(6);
+
+      expect(events).toEqual([NOTHING]);
+    });
+
+    it("reports a held selection again where a change to the document moved it, with collaboration off", () => {
+      // A change that names no selection still moves the one held, as a
+      // rename of a reference ahead of it does.
+
+      const { events, report, change } = selectionHarness(1, 3);
+      report();
+
+      change({ from: 0, insert: "longer " });
+
+      expect(events).toEqual([
+        { from: 1, to: 3, text: "bc", value: "abc" },
+        { from: 8, to: 10, text: "bc", value: "longer abc" },
+      ]);
+    });
+
+    it("reports a held selection again against the new document when a change after it leaves its range in place", () => {
+      const { events, report, change } = selectionHarness(0, 2);
+      report();
+
+      change({ from: 3, insert: "!" });
+
+      expect(events).toEqual([
+        { from: 0, to: 2, text: "ab", value: "abc" },
+        { from: 0, to: 2, text: "ab", value: "abc!" },
+      ]);
+    });
+
+    it("states a selection against the editor's document while the editor's own edit is unconfirmed", () => {
+      // Memory has confirmed "abc"; the editor holds ">abc", its insertion
+      // still pending, and the person selects "ab".
+
+      const { events, view, confirm, report } = selectionHarness(0, 0);
+      view.dispatch({
+        changes: { from: 0, insert: ">" },
+        selection: { anchor: 1, head: 3 },
+      } as never);
+      confirm(4, [ChangeSet.of({ from: 0, insert: ">" }, 3).desc]);
+
+      report();
+
+      expect(events).toEqual([{ from: 1, to: 3, text: "ab", value: ">abc" }]);
+    });
+
+    it("reports nothing for a synchronization snapshot, at a version, without one, or as collaboration ends", () => {
+      const { events, confirm, report } = selectionHarness(0, 2);
+      report();
+
+      confirm(5);
+      confirm("unversioned");
+      confirm(6, [ChangeSet.of({ from: 0, insert: ">" }, 3).desc]);
+      confirm("ended");
+
+      expect(events).toEqual([{ from: 0, to: 2, text: "ab", value: "abc" }]);
+    });
+  });
+
   it("routes local, remote, and cell-originated editor updates correctly", () => {
     const calls: string[] = [];
     const collaboration = {
@@ -195,6 +674,7 @@ describe("CFCodeEditor collaboration", () => {
       language: "text/markdown",
       _collaboration: collaboration,
       _publishPresence: () => calls.push("presence"),
+      _reportSelection: () => calls.push("selection"),
       emit: () => calls.push("change"),
       setValue: () => calls.push("value"),
       _updateMentionedFromContent: () => calls.push("mentioned"),
@@ -217,8 +697,11 @@ describe("CFCodeEditor collaboration", () => {
         }],
       });
 
+    // Every change to the document restates the selection, which it may
+    // have moved, whoever made it.
     invoke(undefined);
     expect(calls).toEqual([
+      "selection",
       "operation",
       "presence",
       "change",
@@ -230,16 +713,19 @@ describe("CFCodeEditor collaboration", () => {
 
     calls.length = 0;
     invoke(Transaction.remote);
-    expect(calls).toEqual(["mentioned", "subscriptions"]);
+    expect(calls).toEqual(["selection", "mentioned", "subscriptions"]);
 
     calls.length = 0;
     const cellSync = (CFCodeEditor as any)._cellSyncAnnotation;
     invoke(cellSync);
+    expect(calls).toEqual(["selection"]);
+
+    calls.length = 0;
     invoke(undefined, false);
     expect(calls).toEqual([]);
 
     invoke(undefined, false, true);
-    expect(calls).toEqual(["presence"]);
+    expect(calls).toEqual(["presence", "selection"]);
 
     calls.length = 0;
     self._collaboration = undefined as never;
@@ -265,7 +751,10 @@ describe("CFCodeEditor collaboration", () => {
     const events: unknown[] = [];
     const previous = { stop: () => Promise.reject("pending edit") };
     const element = new CFCodeEditor();
-    (element as any)._editorView = { dispatch: () => events.push("dispatch") };
+    (element as any)._editorView = {
+      state: EditorState.create(),
+      dispatch: () => events.push("dispatch"),
+    };
     (element as any)._collaboration = previous;
     (element as any).emit = (_name: string, detail: unknown) =>
       events.push(detail);
@@ -280,7 +769,10 @@ describe("CFCodeEditor collaboration", () => {
   it("requires a CellHandle and restores ordinary editing when disabled", async () => {
     const errors: unknown[] = [];
     const element = new CFCodeEditor();
-    (element as any)._editorView = { dispatch: () => {} };
+    (element as any)._editorView = {
+      state: EditorState.create(),
+      dispatch: () => {},
+    };
     (element as any).emit = (_name: string, detail: unknown) =>
       errors.push(detail);
     element.collaborative = true;
@@ -517,6 +1009,7 @@ describe("CFCodeEditor collaboration", () => {
           confirmedCursor: { epoch: 2, version: 4 },
           pendingChanges: [],
           field: synchronizedField,
+          anchors: {},
         },
       };
       (element as any)._collaboration = collaboration;
@@ -544,6 +1037,7 @@ describe("CFCodeEditor collaboration", () => {
         confirmedCursor: { epoch: 3, version: 0 },
         pendingChanges: [],
         field: synchronizedField,
+        anchors: {},
       };
       (element as any)._handleCollaborationSynchronization(
         collaboration.synchronizationSnapshot,
@@ -581,6 +1075,7 @@ describe("CFCodeEditor collaboration", () => {
           confirmedCursor: { epoch: 2, version: 4 },
           pendingChanges: [],
           field: synchronizedField,
+          anchors: {},
         },
       };
       element.collaborative = true;
@@ -650,6 +1145,7 @@ describe("CFCodeEditor collaboration", () => {
           confirmedCursor: { epoch: 2, version: 4 },
           pendingChanges: [],
           field: synchronizedField,
+          anchors: {},
         },
       };
       element.collaborative = true;
@@ -715,6 +1211,7 @@ describe("CFCodeEditor collaboration", () => {
           confirmedCursor: { epoch: 2, version: 4 },
           pendingChanges: [],
           field: synchronizedField,
+          anchors: {},
         },
       };
       (element as any)._collaboration = collaboration;
@@ -732,6 +1229,7 @@ describe("CFCodeEditor collaboration", () => {
         confirmedCursor: { epoch: 2, version: 7 },
         pendingChanges: [],
         field: synchronizedField,
+        anchors: {},
       };
       (element as any)._handleCollaborationSynchronization(
         collaboration.synchronizationSnapshot,
@@ -798,6 +1296,7 @@ describe("CFCodeEditor collaboration", () => {
           confirmedCursor: { epoch: 1, version: 0 },
           pendingChanges: [],
           field: synchronizedField,
+          anchors: {},
         },
       };
       (element as any).emit = (name: string, detail: unknown) =>
@@ -839,6 +1338,7 @@ describe("CFCodeEditor collaboration", () => {
         confirmedCursor: { epoch: 2, version: 4 },
         pendingChanges: [],
         field: synchronizedField,
+        anchors: {},
       };
       (element as any)._collaboration = {
         active: true,
@@ -900,7 +1400,85 @@ describe("CFCodeEditor collaboration", () => {
       expect(
         [...codeMirrorPresenceState(view.state)!.participants.keys()],
       ).toEqual(["peer:3"]);
-      expect(events).toHaveLength(3);
+      // The editor also reports its selection on the synchronization, which
+      // is no part of what presence emits.
+      expect(
+        events.map(([name]) => name).filter((name) =>
+          name.startsWith("cf-presence-")
+        ),
+      ).toEqual([
+        "cf-presence-join",
+        "cf-presence-error",
+        "cf-presence-join",
+      ]);
+    } finally {
+      (element as any)._cleanupPresence();
+    }
+  });
+
+  it("renders no remote caret from presence that arrives while the field has no confirmed cursor", async () => {
+    // The room is joined at a version. The collaboration then holds a
+    // snapshot with no version, as it does once the field is released, and
+    // the room delivers before the editor has left it.
+
+    const runtime = presenceRuntime();
+    const element = new CFCodeEditor();
+    try {
+      const presence = (element as any)._presenceComp as Compartment;
+      const view = statefulView([presence.of([])]);
+      (element as any)._editorView = view;
+      const versioned = {
+        confirmedCursor: { epoch: 2, version: 4 },
+        pendingChanges: [],
+        field: synchronizedField,
+        anchors: {},
+      };
+      const collaboration: {
+        active: boolean;
+        cell: CellHandle<string>;
+        synchronizationSnapshot: {
+          confirmedCursor: { epoch: number; version: number } | null;
+          pendingChanges: never[];
+          field: typeof synchronizedField;
+          anchors: Record<string, number>;
+        };
+      } = {
+        active: true,
+        cell: operationCell(runtime),
+        synchronizationSnapshot: versioned,
+      };
+      (element as any)._collaboration = collaboration;
+      (element as any).emit = () => {};
+      element.collaborative = true;
+      element.participantName = "Ada";
+      (element as any)._setupPresence();
+      await settle();
+      const handle = runtime.handles[0];
+      const participants = () => [
+        ...codeMirrorPresenceState(view.state)!.participants.keys(),
+      ];
+
+      collaboration.synchronizationSnapshot = {
+        ...versioned,
+        confirmedCursor: null,
+      };
+      const unchanged = view.state;
+      handle.emit({ kind: "upsert", participant: caretRecord("peer:1") });
+      handle.emit({
+        kind: "snapshot",
+        participantId: "participant:self",
+        participants: [caretRecord("peer:2")],
+      });
+      (element as any)._applyPresenceSnapshot([caretRecord("peer:3")]);
+      expect(view.state).toBe(unchanged);
+      expect(participants()).toEqual([]);
+
+      // The same deliveries at a version render their carets.
+      collaboration.synchronizationSnapshot = versioned;
+      handle.emit({ kind: "upsert", participant: caretRecord("peer:1") });
+      expect(participants()).toEqual(["peer:1"]);
+      (element as any)._applyPresenceSnapshot([caretRecord("peer:3")]);
+      expect(participants()).toEqual(["peer:3"]);
     } finally {
       (element as any)._cleanupPresence();
     }
@@ -1152,6 +1730,7 @@ describe("CFCodeEditor collaboration", () => {
         confirmedCursor: { epoch: 1, version: 3 },
         pendingChanges: [],
         field: synchronizedField,
+        anchors: {},
       };
       let observerRegistrations = 0;
       const collaboration = {
@@ -1207,7 +1786,7 @@ describe("CFCodeEditor collaboration", () => {
       cursor: { epoch: 1, version: 0 },
       baselineHash: "baseline:1",
       materialized: "abc",
-      anchors: [],
+      anchors: {},
       operations: [],
     };
     let subscriber:
@@ -1343,6 +1922,7 @@ describe("CFCodeEditor collaboration", () => {
 
     const dispatches: unknown[] = [];
     (element as any)._editorView = {
+      state: EditorState.create(),
       dispatch: (value: unknown) => dispatches.push(value),
     };
     const previous = {

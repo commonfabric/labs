@@ -122,5 +122,6 @@ const sameDemandRow = (
     left.scope === right.scope &&
     left.scopeKey === right.scopeKey &&
     left.root === right.root &&
+    left.piece === right.piece &&
     left.identity?.principal === right.identity?.principal &&
     left.identity?.sessionId === right.identity?.sessionId);

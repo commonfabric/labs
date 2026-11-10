@@ -1177,6 +1177,23 @@ export interface TextChange {
   readonly insert?: string;
 }
 
+/**
+ * The anchors of a collaborative field: the value of its anchors document,
+ * which `anchorsOf()` names. Each anchor is a point in the field's text,
+ * held as its offset under an id its writer chooses. An offset counts UTF-16
+ * code units, as a string index does, from 0 to the text's length.
+ *
+ * Memory carries every anchor through every collaborative edit of the field
+ * as it would a cursor: text inserted at an anchor lands after it, and an anchor inside
+ * deleted text lands where the deletion began. So a highlight from one anchor
+ * to another takes in text inserted at its start and leaves out text inserted
+ * at its end, and a highlight whose text is deleted is empty.
+ *
+ * A type alias, not an interface, because Memory stores and sends the map as
+ * a fabric value, and only an alias of an object type is assignable to one.
+ */
+export type FieldAnchors = { readonly [id: string]: number };
+
 /*
  * IAnyCell is an interface that is used by all calls and to which the runner
  * attaches the internal methods..
@@ -3786,6 +3803,7 @@ export type AssertRenderPartsFunction = (
 type TestStepKey =
   | "assertion"
   | "action"
+  | "press"
   | "render"
   | "settle"
   | "label"
@@ -3816,6 +3834,13 @@ type OnlyTestStep<Own extends TestStepKey, Fields> =
  * - `{ action }` sends an event into a stream. `event` is the payload;
  *   `trustedUi` names a trusted UI surface and the control inside it when the
  *   action must originate from rendered UI under enforcement.
+ * - `{ press, control }` clicks a control rendered in the `press` view, as a
+ *   person clicks it in a browser: the runner renders the view through the
+ *   browser's reconciler and DOM applicator, finds the one element whose text,
+ *   trimmed, is `control`, and dispatches a click on it, so the handler bound
+ *   there receives the event with the provenance its rendered markers give.
+ *   `within` names text an element around the control shows, for a view that
+ *   shows `control` more than once, such as a row of a list.
  * - `{ render }` materializes a VDOM subtree.
  * - `{ settle: true }` waits for full settlement (scheduler, storage, and
  *   in-flight async builtin I/O) before the next step.
@@ -3835,6 +3860,7 @@ export type TestStep =
     event?: unknown;
     trustedUi?: { surface: string; action: string };
   }>
+  | OnlyTestStep<"press", { press: unknown; control: string; within?: string }>
   | OnlyTestStep<"render", { render: unknown }>
   | OnlyTestStep<"settle", { settle: true }>
   | OnlyTestStep<"label", { label: string }>
@@ -4495,6 +4521,33 @@ export declare function principalsOf(
 ): DID[] | undefined;
 
 /**
+ * Returns the principal `target`'s value's own cell represents: the one
+ * principal that the label of the cell a write to `target` lands in names as
+ * the one the value represents, in the form the runtime writes, at that
+ * label's root, and only when no claim anywhere in the label names anyone
+ * else. The value's own cell is that cell when the value is the whole of it
+ * and the cell holds no link to a value elsewhere: a value at a path within a
+ * document reads with that document's label, and a link stored in the cell
+ * leads to a value it does not hold. `undefined` in every other case, for a
+ * value stored without a label, and for a `target` of `undefined`.
+ *
+ * The label says whom the cell's value represents, not who pointed `target`
+ * at that cell: the links on the way, write redirects among them, are
+ * followed. A write declared `RepresentsCurrentUser`, as a profile's
+ * `setPicture` is, labels the value with the principal it acts for, and a
+ * profile's owner-protected fields keep their write redirects from being
+ * repointed. So comparing this with `profileOwnerOf()` says whether a
+ * profile's `picture` is one its owner set. It can be called where
+ * `principalOf()` can: in a reactive computation the result updates when the
+ * label or the links change, and in a handler a document still loading has
+ * the handler run again once it arrives. Calling it in a pattern body throws,
+ * and so does a label stored in a form the runtime cannot interpret.
+ */
+export declare function writtenPrincipalOf<T>(
+  target: AnyCell<T> | undefined,
+): DID | undefined;
+
+/**
  * Returns the person whose own profile `target` is, or `undefined` when it is
  * no one's. A profile is a person's own when its `name`, followed through the
  * links it holds, stays within the profile's own documents, and its label,
@@ -4614,6 +4667,28 @@ export type WishState<T> = {
 };
 
 export type NavigateToFunction = (cell: Reactive<any>) => Reactive<boolean>;
+
+/**
+ * `anchorsOf(field)` — the anchors document of a string field, as a cell: a
+ * read returns the field's anchors, or `undefined` until something writes
+ * them, and a write replaces them. Memory moves every anchor through every
+ * collaborative edit of the field. A `set()` of the field moves none, so a
+ * handler that replaces the text that way writes the anchors too. `field` is
+ * a field stored in a document; a constant, which has no edits, is refused.
+ *
+ * A handler that changes the anchors reads the field and the anchors, then
+ * writes the anchors it wants the field to hold. Its commit lands only while
+ * the field and the anchors are still what it read; where either moved, the
+ * handler runs again against what they hold now. A handler that also edits
+ * the field with `.applyChanges()` writes the anchors before the edit,
+ * against the text it read, and Memory moves them through the edit; a commit
+ * that writes them after the edit is refused. Give a handler the result as a
+ * `Writable<FieldAnchors | undefined>`.
+ */
+export type AnchorsOfFunction = (
+  field: FactoryInput<string>,
+) => Reactive<FieldAnchors | undefined>;
+
 export interface WishFunction {
   <T = unknown>(
     target: FactoryInput<WishParams>,
@@ -5037,6 +5112,7 @@ export declare const table: SqliteTableFunction;
 export declare const cfLink: SqliteCfLinkFunction;
 export declare const cfSqlite: CfSqliteHelpers;
 export declare const navigateTo: NavigateToFunction;
+export declare const anchorsOf: AnchorsOfFunction;
 export declare const inspectConfLabel: InspectConfLabelFunction;
 export declare const wish: WishFunction;
 

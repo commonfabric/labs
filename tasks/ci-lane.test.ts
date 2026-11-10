@@ -63,6 +63,7 @@ import {
   parseLaneArgs,
   PATTERN_COVERAGE_DIR,
   planOver,
+  relativizePatternCoverage,
   repeatSettled,
   reportLane,
   requestedRun,
@@ -7005,6 +7006,24 @@ describe("converting what a lane collected", () => {
     const at = `${root}/coverage/${COVERAGE_REPORT_DIR}/workspace-unit/` +
       `runtime__bakery/${COVERAGE_REPORT_FILE}`;
     expect((await Deno.stat(at)).isFile).toBe(true);
+  });
+
+  it("names each file of the checkout in a pattern report relative to it", async () => {
+    // The jobs that read the reports run from the workspace, which is not
+    // the directory the lane ran from, so a report naming a file by its
+    // absolute path names a file they do not have.
+
+    const root = await collected([]);
+    const at = `${root}/coverage/lcov/pattern-runtime/patterns/coverage.lcov`;
+    await Deno.mkdir(dirname(at), { recursive: true });
+    await Deno.writeTextFile(
+      at,
+      `SF:${root}/patterns/a.tsx\nend_of_record\nSF:/elsewhere/b.ts\n`,
+    );
+    await relativizePatternCoverage({ ...options(root) });
+    expect(await Deno.readTextFile(at)).toBe(
+      "SF:patterns/a.tsx\nend_of_record\nSF:/elsewhere/b.ts\n",
+    );
   });
 
   it("converts a directory no measured set names", async () => {

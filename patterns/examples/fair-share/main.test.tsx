@@ -80,7 +80,7 @@ export default pattern(() => {
   // ==========================================================================
 
   // Ann is added by hand first (no picture) — the backfill target. A profile
-  // with no picture binds no `picture` at all.
+  // with no face binds no `face` at all.
   const action_join_ann_no_picture = joinWithProfile({
     people: peopleCell,
     myName: myNameCell,
@@ -97,7 +97,7 @@ export default pattern(() => {
     people: peopleCell,
     myName: myNameCell,
     name: "Ann",
-    picture: new FabricBytes(new Uint8Array(SMILE)),
+    face: { picture: new FabricBytes(new Uint8Array(SMILE)) },
   });
 
   // A later join must NOT clobber an existing picture snapshot.
@@ -105,17 +105,15 @@ export default pattern(() => {
     people: peopleCell,
     myName: myNameCell,
     name: "Ann",
-    picture: new FabricBytes(new Uint8Array(FOX)),
+    face: { picture: new FabricBytes(new Uint8Array(FOX)) },
   });
 
-  // New person with a picture — the push branch. Their avatar text is not
-  // copied beside a picture.
+  // New person with a picture — the push branch.
   const action_join_bob = joinWithProfile({
     people: peopleCell,
     myName: myNameCell,
     name: "Bob",
-    picture: new FabricBytes(new Uint8Array(CAT)),
-    avatar: "🐱",
+    face: { picture: new FabricBytes(new Uint8Array(CAT)) },
   });
 
   // New person with avatar text and no picture — the text is copied instead.
@@ -123,7 +121,7 @@ export default pattern(() => {
     people: peopleCell,
     myName: myNameCell,
     name: "Cy",
-    avatar: " 🦊 ",
+    face: { avatar: "🦊" },
   });
 
   // Dee is added by hand, then joins with avatar text (backfilled), then with
@@ -137,19 +135,19 @@ export default pattern(() => {
     people: peopleCell,
     myName: myNameCell,
     name: "Dee",
-    avatar: "🐙",
+    face: { avatar: "🐙" },
   });
   const action_join_dee_with_other_text = joinWithProfile({
     people: peopleCell,
     myName: myNameCell,
     name: "Dee",
-    avatar: "🦑",
+    face: { avatar: "🦑" },
   });
   const action_join_dee_with_picture = joinWithProfile({
     people: peopleCell,
     myName: myNameCell,
     name: "Dee",
-    picture: new FabricBytes(new Uint8Array(FOX)),
+    face: { picture: new FabricBytes(new Uint8Array(FOX)) },
   });
 
   const action_remove_via_held = removeHeldPerson({

@@ -1,10 +1,13 @@
 import { assertEquals, assertExists } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 import { debugStr, taggedHashStringOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { FabricValue } from "@commonfabric/api";
 import { parseClientMessage, Server, SessionRegistry } from "../v2/server.ts";
 import {
+  CODEMIRROR_CHANGESET_CODEC,
   decodeMemoryBoundary,
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
@@ -12,6 +15,8 @@ import {
   type HelloOkMessage,
   MAX_ENTITY_ID_PAGE_SIZE,
   MEMORY_PROTOCOL,
+  operationAnchorsDocId,
+  operationBaselineHash,
   resetOwnWriteEchoConfig,
   type ResponseMessage,
   type ServerMessage,
@@ -19,6 +24,7 @@ import {
   type SessionOpenAuthMetadata,
   type SessionSync,
   setOwnWriteEchoConfig,
+  toValuePath,
 } from "../v2.ts";
 import { createGraphFixture } from "./v2-graph.fixture.ts";
 import { authorizeLoopbackSessionOpen } from "../v2/session-open-auth.ts";
@@ -2928,6 +2934,207 @@ Deno.test("memory v2 server classifies own-write echo by the head-producing op",
   } finally {
     await server.close();
   }
+});
+
+describe("v2-server", () => {
+  describe("a field's anchors document", () => {
+    const body = toValuePath(["body"]);
+    const anchorsId = operationAnchorsDocId({ id: "of:doc:a", path: ["body"] });
+
+    /** Commits `operations` from the session and returns the commit's seq. */
+    const transact = async (
+      connection: TestConnection,
+      messages: ServerMessage[],
+      session: { space: string; sessionId: string },
+      localSeq: number,
+      operations: FabricValue[],
+    ): Promise<number> => {
+      await connection.receive(encodeMemoryBoundary({
+        type: "transact",
+        requestId: `commit-${localSeq}`,
+        ...session,
+        commit: {
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations,
+        },
+      }));
+      return nextResponse<{ seq: number }>(messages).ok!.seq;
+    };
+
+    /** An `apply-op` on `of:doc:a`'s `body` inserting `>` ahead of `hello`. */
+    const insertAhead = {
+      op: "apply-op",
+      id: "of:doc:a",
+      path: body,
+      codec: CODEMIRROR_CHANGESET_CODEC,
+      submissionId: "writer:1",
+      base: null,
+      baselineHash: operationBaselineHash("hello"),
+      payload: { updates: [{ clientId: "writer", changes: [[0, ">"], 5] }] },
+    };
+
+    /**
+     * Opens a session on `space` that watches the anchors document, and
+     * returns what a commit from it needs.
+     */
+    const openAnchorsWatcher = async (server: Server, space: string) => {
+      const messages: ServerMessage[] = [];
+      const connection = server.connect((message) => messages.push(message));
+      const session = {
+        space,
+        sessionId: await openTestSession(connection, messages, space, "writer"),
+      };
+      await connection.receive(encodeMemoryBoundary({
+        type: "session.watch.set",
+        requestId: "watch",
+        ...session,
+        watches: [{
+          id: "root",
+          kind: "graph",
+          query: {
+            roots: [{ id: anchorsId, selector: { path: [], schema: false } }],
+          },
+        }],
+      }));
+      shiftMessage(messages);
+      return { connection, messages, session };
+    };
+
+    it("sends the committing session the document the engine rewrote for its edit", async () => {
+      // With own-write echo off, the session is sent neither its own `set`
+      // of the document nor its own `patch` of it. What it is sent after its
+      // edit is the engine's rewrite, of which it holds nothing.
+
+      setOwnWriteEchoConfig(false);
+      const server = createServer("memory://memory-v2-server-echo-anchors");
+      const space = "did:key:z6Mk-memory-v2-echo-anchors";
+
+      try {
+        const { connection, messages, session } = await openAnchorsWatcher(
+          server,
+          space,
+        );
+        const upsertsAfter = async (
+          localSeq: number,
+          operations: FabricValue[],
+        ) => {
+          const seq = await transact(
+            connection,
+            messages,
+            session,
+            localSeq,
+            operations,
+          );
+          await server.flushSessions([space]);
+          return {
+            seq,
+            upserts: assertEffect(shiftMessage(messages)).effect.upserts,
+          };
+        };
+
+        const written = await upsertsAfter(1, [
+          { op: "set", id: "of:doc:a", value: { value: { body: "hello" } } },
+          { op: "set", id: anchorsId, value: { value: { from: 1, to: 3 } } },
+        ]);
+        expect(written.upserts).toEqual([]);
+        const patched = await upsertsAfter(2, [{
+          op: "patch",
+          id: anchorsId,
+          patches: [{ op: "add", path: "/value/end", value: 5 }],
+        }]);
+        expect(patched.upserts).toEqual([]);
+
+        const edited = await upsertsAfter(3, [insertAhead]);
+        expect(edited.upserts).toEqual([{
+          branch: "",
+          id: anchorsId,
+          scope: "space",
+          seq: edited.seq,
+          doc: { value: { from: 2, to: 4, end: 6 } },
+        }]);
+        expect(messages).toEqual([]);
+      } finally {
+        resetOwnWriteEchoConfig();
+        await server.close();
+      }
+    });
+
+    it("sends a session watching the field's operations the anchors another session wrote to the document", async () => {
+      const server = createServer("memory://memory-v2-server-watch-anchors");
+      const writerMessages: ServerMessage[] = [];
+      const writer = server.connect((message) => writerMessages.push(message));
+      const watcherMessages: ServerMessage[] = [];
+      const watcher = server.connect((message) =>
+        watcherMessages.push(message)
+      );
+      const space = "did:key:z6Mk-memory-v2-watch-anchors";
+
+      try {
+        const writing = {
+          space,
+          sessionId: await openTestSession(
+            writer,
+            writerMessages,
+            space,
+            "writer",
+          ),
+        };
+        const watching = {
+          space,
+          sessionId: await openTestSession(
+            watcher,
+            watcherMessages,
+            space,
+            "watcher",
+          ),
+        };
+        await transact(writer, writerMessages, writing, 1, [
+          { op: "set", id: "of:doc:a", value: { value: { body: "hello" } } },
+          insertAhead,
+        ]);
+        await watcher.receive(encodeMemoryBoundary({
+          type: "session.watch.set",
+          requestId: "watch",
+          ...watching,
+          watches: [{
+            id: "body-operations",
+            kind: "operation",
+            query: { id: "of:doc:a", path: body },
+          }],
+        }));
+        const watched = assertResponse<{ sync: SessionSync }>(
+          shiftMessage(watcherMessages),
+        ).ok!.sync.operationFields;
+        expect(watched?.map(({ field }) => [field.cursor, field.anchors]))
+          .toEqual([[{ epoch: 1, version: 1 }, {}]]);
+
+        await transact(writer, writerMessages, writing, 2, [
+          { op: "set", id: anchorsId, value: { value: { from: 2, to: 4 } } },
+        ]);
+        await server.flushSessions([space]);
+
+        const delivered = assertEffect(shiftMessage(watcherMessages)).effect
+          .operationFields;
+        expect(
+          delivered?.map(({ watchId, field }) => [
+            watchId,
+            field.cursor,
+            field.operations,
+            field.anchors,
+          ]),
+        ).toEqual([[
+          "body-operations",
+          { epoch: 1, version: 1 },
+          [],
+          { from: 2, to: 4 },
+        ]]);
+        expect(watcherMessages).toEqual([]);
+      } finally {
+        await server.close();
+      }
+    });
+  });
 });
 
 Deno.test("memory v2 server suppresses own patch heads when the own-write echo config is off", async () => {

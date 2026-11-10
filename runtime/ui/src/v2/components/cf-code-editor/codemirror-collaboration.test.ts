@@ -16,6 +16,7 @@ import type { EditorView } from "@codemirror/view";
 import type {
   ApplyOpResolution,
   CellHandle,
+  FieldAnchors,
   OperationFieldSnapshot,
   RuntimeClient,
 } from "@commonfabric/runtime-client";
@@ -63,7 +64,7 @@ describe("CodeMirror operation collaboration", () => {
       cursor: { epoch: 1, version: 1 },
       baselineHash: "baseline",
       materialized: "aYbc",
-      anchors: [],
+      anchors: {},
       operations: [{
         opId: "op:bob-1",
         cursor: { epoch: 1, version: 1 },
@@ -92,7 +93,7 @@ describe("CodeMirror operation collaboration", () => {
       ...remote,
       cursor: { epoch: 1, version: 2 },
       materialized,
-      anchors: [],
+      anchors: {},
       operations: [{
         opId: "op:alice-1",
         cursor: { epoch: 1, version: 2 },
@@ -107,6 +108,20 @@ describe("CodeMirror operation collaboration", () => {
     );
     expect(final.doc.toString()).toBe(materialized);
     expect(sendableUpdates(final)).toHaveLength(0);
+  });
+
+  it("returns no submission for a state with no unconfirmed edit", () => {
+    const state = EditorState.create({
+      doc: "abc",
+      extensions: [codeMirrorCollaboration(3, "alice")],
+    });
+
+    expect(codeMirrorSubmission(state)).toBeUndefined();
+    expect(
+      codeMirrorSubmission(
+        state.update({ selection: { anchor: 2 } }).state,
+      ),
+    ).toBeUndefined();
   });
 
   it("serializes deterministic rewrite dedupe metadata", () => {
@@ -145,7 +160,7 @@ describe("CodeMirror operation collaboration", () => {
       cursor: { epoch: 1, version: 1 },
       baselineHash: "baseline:old",
       materialized: "new",
-      anchors: [],
+      anchors: {},
       operations: [{
         opId: "op:alice:1",
         cursor: { epoch: 1, version: 1 },
@@ -209,12 +224,36 @@ describe("CodeMirror operation collaboration", () => {
       cursor: { epoch: 1, version: 2 },
       baselineHash: "baseline",
       materialized: "abc",
-      anchors: [],
+      anchors: {},
       operations: [],
     };
     expect(() =>
       codeMirrorIntegratedUpdates(snapshot, { epoch: 1, version: 0 })
     ).toThrow("history ends at 0");
+  });
+
+  it("throws for an integrated update whose dedupe id is not a string", () => {
+    const accepted = acceptedResolution("abc", 1, "X");
+    const snapshot: OperationFieldSnapshot = {
+      ...activeSnapshot("aXbc", accepted),
+      operations: [{
+        opId: "op:bob-1",
+        cursor: { epoch: 1, version: 1 },
+        submissionId: "bob-1",
+        payload: {
+          updates: [{
+            clientId: "bob",
+            changes: ChangeSet.of({ from: 1, insert: "X" }, 3).toJSON(),
+            dedupeId: 7,
+          }],
+        },
+      }],
+    };
+
+    expect(() =>
+      codeMirrorIntegratedUpdates(snapshot, { epoch: 1, version: 0 })
+    )
+      .toThrow("requires a string dedupeId");
   });
 
   it("requires canonical reinstallation for a retention reset", () => {
@@ -230,7 +269,7 @@ describe("CodeMirror operation collaboration", () => {
       reset: true,
       baselineHash: "baseline",
       materialized: "canonical",
-      anchors: [],
+      anchors: {},
       operations: [],
     };
 
@@ -250,7 +289,7 @@ describe("CodeMirror operation collaboration", () => {
       cursor: { epoch: 1, version: 1 },
       baselineHash: "baseline",
       materialized: "abc",
-      anchors: [],
+      anchors: {},
       operations: [{
         opId: "op:already-integrated",
         cursor: { epoch: 1, version: 1 },
@@ -351,6 +390,39 @@ describe("CodeMirror operation collaboration", () => {
     expect(controller.active).toBe(false);
     expect(subscriptions).toBe(0);
     expect(closes).toBeGreaterThanOrEqual(1);
+  });
+
+  it("installs nothing, and closes its operation session, when disposed while its first query is in flight", async () => {
+    const querying = Promise.withResolvers<void>();
+    const queried = Promise.withResolvers<void>();
+    let subscriptions = 0;
+    let closes = 0;
+    const { controller, view, errors } = controllerHarness({
+      initial: { ...inactiveSnapshot("abc"), anchors: { from: 1, to: 3 } },
+      apply: resolutionFor,
+      subscribe: () => subscriptions++,
+      close: () => closes++,
+      holdQuery: () => {
+        querying.resolve();
+        return queried.promise;
+      },
+    });
+    const untouched = view.state;
+
+    const starting = controller.start();
+    await querying.promise;
+    controller.dispose();
+    const closedByDisposal = closes;
+    queried.resolve();
+    await starting;
+
+    expect(errors).toEqual([]);
+    expect(view.state).toBe(untouched);
+    expect(controller.active).toBe(false);
+    expect(controller.synchronizationSnapshot).toBeNull();
+    expect(subscriptions).toBe(0);
+    expect(closedByDisposal).toBe(1);
+    expect(closes).toBe(2);
   });
 
   it("unsubscribes when a remote snapshot fails", async () => {
@@ -585,18 +657,20 @@ describe("CodeMirror operation collaboration", () => {
 
     expect(errors).toEqual([]);
     expect(controller.active).toBe(true);
+    const field = {
+      space: "did:key:test-space",
+      branch: "",
+      id: "of:editor",
+      scopeKey: "space",
+      path: [],
+    };
     expect(observed).toEqual([
-      null,
+      { confirmedCursor: null, pendingChanges: [], field, anchors: {} },
       {
         confirmedCursor: { epoch: 1, version: 0 },
         pendingChanges: [],
-        field: {
-          space: "did:key:test-space",
-          branch: "",
-          id: "of:editor",
-          scopeKey: "space",
-          path: [],
-        },
+        field,
+        anchors: {},
       },
     ]);
   });
@@ -816,6 +890,66 @@ describe("CodeMirror operation collaboration", () => {
     await expect(controller.release()).rejects.toThrow("is not active");
   });
 
+  it("stays active, and can be released later, when the runtime refuses a release", async () => {
+    let releases = 0;
+    const applies: ApplyRequest[] = [];
+    const { controller, view, errors } = controllerHarness({
+      initial: activeSnapshotAt("abc", 1),
+      followup: activeSnapshotAt("abcX", 2),
+      apply: (request) => {
+        applies.push(request);
+        return resolutionFor(request);
+      },
+      release: () => {
+        releases++;
+        return releases === 1
+          ? Promise.reject(new Error("release refused"))
+          : undefined;
+      },
+    });
+    await controller.start();
+
+    await expect(controller.release()).rejects.toThrow("release refused");
+
+    expect(controller.active).toBe(true);
+    expect(controller.synchronizationSnapshot?.confirmedCursor).toEqual({
+      epoch: 1,
+      version: 1,
+    });
+    // An edit made after the refusal is still submitted and confirmed.
+    view.dispatch({ changes: { from: 3, insert: "X" } });
+    await controller.localDocChanged();
+    expect(applies).toHaveLength(1);
+    expect(sendableUpdates(view.state)).toHaveLength(0);
+    expect(errors).toEqual([]);
+
+    await controller.release();
+    expect(releases).toBe(2);
+    expect(controller.active).toBe(false);
+  });
+
+  it("refuses to release a field while an edit Memory would not confirm is pending", async () => {
+    let releases = 0;
+    const { controller, view, errors } = controllerHarness({
+      initial: activeSnapshotAt("abc", 1),
+      apply: () => Promise.reject(new Error("apply failed")),
+      release: () => {
+        releases++;
+      },
+    });
+    await controller.start();
+    view.dispatch({ changes: { from: 3, insert: "X" } });
+
+    await expect(controller.release()).rejects.toThrow(
+      "cannot be released with local edits pending",
+    );
+
+    expect(errors.map((error) => error.message)).toEqual(["apply failed"]);
+    expect(releases).toBe(0);
+    expect(sendableUpdates(view.state)).toHaveLength(1);
+    expect(view.state.doc.toString()).toBe("abcX");
+  });
+
   it("stops accepting local edits before an active field release settles", async () => {
     const releasing = Promise.withResolvers<void>();
     const releaseStarted = Promise.withResolvers<void>();
@@ -864,6 +998,265 @@ describe("CodeMirror operation collaboration", () => {
     expect(controller.active).toBe(true);
   });
 
+  it("states the installed snapshot's anchors at the confirmed cursor", async () => {
+    const initial = {
+      ...activeSnapshotAt("abc", 1),
+      anchors: { "c1:from": 1, "c1:to": 3 },
+    };
+    const { controller, errors } = controllerHarness({
+      initial,
+      apply: resolutionFor,
+    });
+
+    await controller.start();
+
+    expect(errors).toEqual([]);
+    expect(controller.synchronizationSnapshot?.confirmedCursor).toEqual({
+      epoch: 1,
+      version: 1,
+    });
+    expect(controller.synchronizationSnapshot?.anchors).toEqual({
+      "c1:from": 1,
+      "c1:to": 3,
+    });
+  });
+
+  it("notifies observers of anchors a snapshot at the unchanged cursor restates", async () => {
+    let subscriber: ((snapshot: OperationFieldSnapshot) => void) | undefined;
+    const initial = activeSnapshotAt("abc", 1);
+    const { controller, errors } = controllerHarness({
+      initial,
+      apply: resolutionFor,
+      subscribe: (callback) => subscriber = callback,
+    });
+    await controller.start();
+    const observed: Array<FieldAnchors | undefined> = [];
+    controller.observeSynchronization((snapshot) =>
+      observed.push(snapshot?.anchors)
+    );
+
+    subscriber?.({ ...initial, anchors: { "c1:from": 0, "c1:to": 2 } });
+    subscriber?.({ ...initial, anchors: { "c1:from": 0, "c1:to": 2 } });
+    subscriber?.({ ...initial, anchors: { "c1:from": 0, "c1:to": 1 } });
+    subscriber?.({ ...initial, anchors: { "c1:from": 0 } });
+
+    expect(errors).toEqual([]);
+    expect(observed).toEqual([
+      {},
+      { "c1:from": 0, "c1:to": 2 },
+      { "c1:from": 0, "c1:to": 1 },
+      { "c1:from": 0 },
+    ]);
+  });
+
+  it("keeps the anchors object it holds while snapshots and apply responses leave the anchors as they are", async () => {
+    // The edit is typed after both anchors, so it moves neither, and every
+    // snapshot states the anchors again in an object of its own.
+
+    let subscriber: ((snapshot: OperationFieldSnapshot) => void) | undefined;
+    const initial = {
+      ...activeSnapshotAt("abc", 1),
+      anchors: { from: 0, to: 1 },
+    };
+    const { controller, view, errors } = controllerHarness({
+      initial,
+      followup: { ...activeSnapshotAt("abcX", 2), anchors: { from: 0, to: 1 } },
+      apply: resolutionFor,
+      subscribe: (callback) => subscriber = callback,
+    });
+    await controller.start();
+    const held = controller.synchronizationSnapshot?.anchors;
+    const observed: Array<FieldAnchors | undefined> = [];
+    controller.observeSynchronization((snapshot) =>
+      observed.push(snapshot?.anchors)
+    );
+
+    subscriber?.({ ...initial, anchors: { from: 0, to: 1 } });
+    view.dispatch({ changes: { from: 3, insert: "X" } });
+    await controller.localDocChanged();
+    subscriber?.({
+      ...activeSnapshotAt("abcX", 2),
+      anchors: { from: 0, to: 1 },
+    });
+
+    expect(errors).toEqual([]);
+    expect(controller.synchronizationSnapshot?.confirmedCursor?.version).toBe(
+      2,
+    );
+    expect(held).toBe(initial.anchors);
+    expect(controller.synchronizationSnapshot?.anchors).toBe(held);
+    expect(observed.every((anchors) => anchors === held)).toBe(true);
+  });
+
+  it("maps anchors through the operations an apply response integrates", async () => {
+    const initial = {
+      ...activeSnapshotAt("abc", 1),
+      anchors: { start: 0, at: 1, after: 3, beyond: 40 },
+    };
+    // The follow-up query returns the older cursor, which the controller
+    // ignores, so only the response moves the anchors.
+    const { controller, view, errors } = controllerHarness({
+      initial,
+      followup: initial,
+      apply: resolutionFor,
+    });
+    await controller.start();
+
+    view.dispatch({ changes: { from: 1, insert: "X" } });
+    await controller.localDocChanged();
+
+    // The anchor at the insertion stays before the inserted text, and the
+    // one past the end of the text moves as one at its end.
+    expect(errors).toEqual([]);
+    expect(view.state.doc.toString()).toBe("aXbc");
+    expect(controller.synchronizationSnapshot?.confirmedCursor?.version).toBe(
+      2,
+    );
+    expect(controller.synchronizationSnapshot?.anchors).toEqual({
+      start: 0,
+      at: 1,
+      after: 4,
+      beyond: 4,
+    });
+  });
+
+  it("takes the anchors of a snapshot that integrates operations", async () => {
+    let subscriber: ((snapshot: OperationFieldSnapshot) => void) | undefined;
+    const initial = {
+      ...activeSnapshotAt("abc", 1),
+      anchors: { "c1:from": 0, "c1:to": 1 },
+    };
+    const { controller, errors } = controllerHarness({
+      initial,
+      apply: resolutionFor,
+      subscribe: (callback) => subscriber = callback,
+    });
+    await controller.start();
+    const next = acceptedResolutionAt("abc", 1, 3, "!", "bob:2");
+
+    subscriber?.({
+      ...activeSnapshot("abc!", next),
+      operations: next.operations,
+      anchors: { "c2:from": 3, "c2:to": 4 },
+    });
+
+    expect(errors).toEqual([]);
+    expect(controller.synchronizationSnapshot?.anchors).toEqual({
+      "c2:from": 3,
+      "c2:to": 4,
+    });
+  });
+
+  it("publishes the anchors of a field with no collaborative edit, with no confirmed cursor", async () => {
+    const { controller, errors } = controllerHarness({
+      initial: { ...inactiveSnapshot("abc"), anchors: { from: 1, to: 3 } },
+      apply: resolutionFor,
+    });
+
+    await controller.start();
+
+    expect(errors).toEqual([]);
+    expect(controller.synchronizationSnapshot).toEqual({
+      confirmedCursor: null,
+      pendingChanges: [],
+      field: {
+        space: "did:key:test-space",
+        branch: "",
+        id: "of:editor",
+        scopeKey: "space",
+        path: [],
+      },
+      anchors: { from: 1, to: 3 },
+    });
+  });
+
+  it("notifies observers of anchors a snapshot of a field with no collaborative edit changes", async () => {
+    let subscriber: ((snapshot: OperationFieldSnapshot) => void) | undefined;
+    const initial = inactiveSnapshot("abc");
+    const { controller, errors } = controllerHarness({
+      initial,
+      apply: resolutionFor,
+      subscribe: (callback) => subscriber = callback,
+    });
+    await controller.start();
+    const observed: Array<CodeMirrorSynchronizationSnapshot | null> = [];
+    controller.observeSynchronization((snapshot) => observed.push(snapshot));
+
+    subscriber?.({ ...initial, anchors: { from: 1, to: 3 } });
+    subscriber?.({ ...initial, anchors: { from: 1, to: 3 } });
+    subscriber?.({ ...initial, anchors: {} });
+
+    expect(errors).toEqual([]);
+    expect(observed.map((snapshot) => snapshot?.confirmedCursor)).toEqual([
+      null,
+      null,
+      null,
+    ]);
+    expect(observed.map((snapshot) => snapshot?.anchors)).toEqual([
+      {},
+      { from: 1, to: 3 },
+      {},
+    ]);
+  });
+
+  it("keeps publishing a field's anchors, with the pending edit, while the apply that activates the field is in flight", async () => {
+    let subscriber: ((snapshot: OperationFieldSnapshot) => void) | undefined;
+    const applied = Promise.withResolvers<ApplyOpResolution>();
+    const initial = {
+      ...inactiveSnapshot("abc"),
+      anchors: { from: 1, to: 3 },
+    };
+    const { controller, view, errors } = controllerHarness({
+      initial,
+      followup: { ...activeSnapshotAt("Xabc", 1), anchors: { from: 2, to: 3 } },
+      apply: () => applied.promise,
+      subscribe: (callback) => subscriber = callback,
+    });
+    await controller.start();
+    const observed: Array<CodeMirrorSynchronizationSnapshot | null> = [];
+    controller.observeSynchronization((snapshot) => observed.push(snapshot));
+
+    view.dispatch({ changes: { from: 0, insert: "X" } });
+    const flushed = controller.localDocChanged();
+    // A write to the anchors that Memory delivers before it activates the
+    // field, stated against the value the pending edit is made over.
+    subscriber?.({ ...initial, anchors: { from: 1, to: 2 } });
+    applied.resolve(acceptedResolution("abc", 0, "X"));
+    await flushed;
+
+    expect(errors).toEqual([]);
+    expect(
+      observed.map((snapshot) =>
+        snapshot === null ? null : [
+          snapshot.confirmedCursor,
+          snapshot.pendingChanges.length,
+          snapshot.anchors,
+        ]
+      ),
+    ).toEqual([
+      [null, 0, { from: 1, to: 3 }],
+      [null, 1, { from: 1, to: 3 }],
+      [null, 1, { from: 1, to: 2 }],
+      [{ epoch: 1, version: 1 }, 0, { from: 2, to: 3 }],
+    ]);
+  });
+
+  it("publishes no confirmed cursor, and the snapshot's anchors, once another client releases the field", async () => {
+    let subscriber: ((snapshot: OperationFieldSnapshot) => void) | undefined;
+    const { controller, errors } = controllerHarness({
+      initial: { ...activeSnapshotAt("abc", 1), anchors: { from: 1, to: 3 } },
+      apply: resolutionFor,
+      subscribe: (callback) => subscriber = callback,
+    });
+    await controller.start();
+
+    subscriber?.({ ...inactiveSnapshot("abc"), anchors: { kept: 2 } });
+
+    expect(errors).toEqual([]);
+    expect(controller.synchronizationSnapshot?.confirmedCursor).toBeNull();
+    expect(controller.synchronizationSnapshot?.anchors).toEqual({ kept: 2 });
+  });
+
   it("rejects a divergent snapshot at the current cursor", async () => {
     let subscriber: ((snapshot: OperationFieldSnapshot) => void) | undefined;
     const accepted = acceptedResolution("abc", 1, "X");
@@ -880,6 +1273,40 @@ describe("CodeMirror operation collaboration", () => {
 
     expect(errors[0]?.message).toContain("disagrees at the current");
     expect(controller.active).toBe(false);
+  });
+
+  it("returns `false` from `prepareExternalChange()` while it is not active, and submits nothing", async () => {
+    const applies: ApplyRequest[] = [];
+    const { controller, view } = controllerHarness({
+      initial: activeSnapshotAt("abc", 1),
+      apply: (request) => {
+        applies.push(request);
+        return resolutionFor(request);
+      },
+    });
+
+    // Not started yet.
+    expect(await controller.prepareExternalChange()).toBe(false);
+
+    await controller.start();
+    view.dispatch({ changes: { from: 3, insert: "X" } });
+    controller.dispose();
+    expect(await controller.prepareExternalChange()).toBe(false);
+    expect(applies).toEqual([]);
+    expect(sendableUpdates(view.state)).toHaveLength(1);
+  });
+
+  it("returns `false` from `prepareExternalChange()` once an apply has failed", async () => {
+    const { controller, view, errors } = controllerHarness({
+      initial: activeSnapshotAt("abc", 1),
+      apply: () => Promise.reject(new Error("apply failed")),
+    });
+    await controller.start();
+    view.dispatch({ changes: { from: 3, insert: "X" } });
+    await controller.localDocChanged();
+
+    expect(errors.map((error) => error.message)).toEqual(["apply failed"]);
+    expect(await controller.prepareExternalChange()).toBe(false);
   });
 
   it("prepares an external rewrite by flushing every pending edit", async () => {
@@ -1152,7 +1579,7 @@ describe("CodeMirror operation collaboration", () => {
       await controller.start();
       let late: Promise<void> | undefined;
       controller.observeSynchronization((snapshot) => {
-        if (late !== undefined || snapshot?.confirmedCursor.version !== 1) {
+        if (late !== undefined || snapshot?.confirmedCursor?.version !== 1) {
           return;
         }
         late = Promise.resolve().then(async () => {
@@ -1194,7 +1621,7 @@ describe("CodeMirror operation collaboration", () => {
       await controller.start();
       let late: Promise<void> | undefined;
       controller.observeSynchronization((snapshot) => {
-        if (late !== undefined || snapshot?.confirmedCursor.version !== 1) {
+        if (late !== undefined || snapshot?.confirmedCursor?.version !== 1) {
           return;
         }
         late = Promise.resolve().then(async () => {
@@ -1301,6 +1728,65 @@ describe("CodeMirror operation collaboration", () => {
     expect(view.state).toBe(untouched);
   });
 
+  it("leaves the editor alone once disposed during the query that follows an apply", async () => {
+    // The follow-up snapshot carries another client's operation, which a
+    // controller still in use would bring into the editor.
+
+    const following = Promise.withResolvers<void>();
+    const followed = Promise.withResolvers<void>();
+    const other = acceptedResolutionAt("abcX", 2, 4, "!", "bob:3");
+    const { controller, view, errors } = controllerHarness({
+      initial: activeSnapshotAt("abc", 1),
+      followup: {
+        ...activeSnapshot("abcX!", other),
+        operations: other.operations,
+      },
+      apply: resolutionFor,
+      holdQuery: (index) => {
+        if (index === 0) return undefined;
+        following.resolve();
+        return followed.promise;
+      },
+    });
+    await controller.start();
+    view.dispatch({ changes: { from: 3, insert: "X" } });
+    const sending = controller.localDocChanged();
+    await following.promise;
+    expect(sendableUpdates(view.state)).toHaveLength(0);
+
+    controller.dispose();
+    const untouched = view.state;
+    followed.resolve();
+    await sending;
+
+    expect(errors).toEqual([]);
+    expect(view.state).toBe(untouched);
+    expect(view.state.doc.toString()).toBe("abcX");
+  });
+
+  it("reports no error for an apply that fails after the controller is disposed", async () => {
+    const applying = Promise.withResolvers<void>();
+    const applied = Promise.withResolvers<ApplyOpResolution>();
+    const { controller, view, errors } = controllerHarness({
+      initial: activeSnapshotAt("abc", 1),
+      apply: () => {
+        applying.resolve();
+        return applied.promise;
+      },
+    });
+    await controller.start();
+    view.dispatch({ changes: { from: 3, insert: "X" } });
+    const sending = controller.localDocChanged();
+    await applying.promise;
+
+    controller.dispose();
+    applied.reject(new Error("the connection closed"));
+    await sending;
+
+    expect(errors).toEqual([]);
+    expect(controller.active).toBe(false);
+  });
+
   it("isolates synchronization observers from the Memory operation path", async () => {
     const accepted = acceptedResolution("abc", 1, "X");
     const { controller, view, errors } = controllerHarness({
@@ -1333,7 +1819,7 @@ function inactiveSnapshot(materialized: string): OperationFieldSnapshot {
     cursor: null,
     baselineHash: `baseline:${materialized}`,
     materialized,
-    anchors: [],
+    anchors: {},
     operations: [],
   };
 }
@@ -1404,7 +1890,7 @@ function activeSnapshot(
     cursor: resolution.to,
     baselineHash: "baseline:abc",
     materialized,
-    anchors: [],
+    anchors: {},
     operations: [],
   };
 }
@@ -1425,7 +1911,7 @@ function activeSnapshotAt(
     cursor: { epoch: 1, version },
     baselineHash: "baseline:abc",
     materialized,
-    anchors: [],
+    anchors: {},
     operations: [],
   };
 }
@@ -1471,6 +1957,13 @@ function controllerHarness(options: {
   cancel?: () => void;
   release?: () => void | Promise<void>;
   close?: () => void;
+
+  /**
+   * Called as each query of the field starts, with the query's position in
+   * the order they are made. A promise it returns holds that query's snapshot
+   * back until the promise resolves.
+   */
+  holdQuery?: (index: number) => Promise<void> | undefined;
 }) {
   const compartment = new Compartment();
   let state = EditorState.create({
@@ -1492,12 +1985,16 @@ function controllerHarness(options: {
   const runtime = {
     operationCodecs: () =>
       Promise.resolve(options.codecs ?? ["codemirror-changeset@1"]),
-    queryOperationField: () =>
-      Promise.resolve(
-        queryCount++ === 0
-          ? options.initial
-          : followups[Math.min(queryCount - 2, followups.length - 1)],
-      ),
+    queryOperationField: () => {
+      const index = queryCount++;
+      const snapshot = index === 0
+        ? options.initial
+        : followups[Math.min(index - 1, followups.length - 1)];
+      const held = options.holdQuery?.(index);
+      return held === undefined
+        ? Promise.resolve(snapshot)
+        : held.then(() => snapshot);
+    },
     subscribeOperationField: (
       _cell: CellHandle<string>,
       callback: (snapshot: OperationFieldSnapshot) => void,

@@ -91,6 +91,7 @@ type TestStep =
     event?: unknown; // the payload, sent to the stream as authored
     trustedUi?: { surface: string; action: string };
   }
+  | { press: VNode; control: string; within?: string } // click a rendered control
   | { render: VNode } // one headless VDOM demand window
   | { settle: true } // wait for full async settlement
   | { label: string } // announce a marker to other participants
@@ -101,6 +102,19 @@ An action step's `event` is the payload the stream receives, sent as authored:
 an object arrives as an object. `trustedUi` names a trusted UI surface and the
 control inside it, for an action that must originate from rendered UI under
 enforcement.
+
+A press step clicks a control the `press` view renders, as a person clicks it
+in a browser. The runner renders the view through the browser's reconciler and
+DOM applicator into a mock document, finds the one element whose text, trimmed,
+is `control` (holding no element of its own with that text), and dispatches a
+trusted click on it, which bubbles to the nodes above it. The applicator
+reports the click, and the reconciler hands it to the handler bound there, so
+the handler receives it from the test's own runtime with the UI provenance the
+control's rendered markers give, as it would from a page. Where the view shows
+`control` more than once, `within` names text an element around the one meant
+shows: the control pressed is the one whose nearest enclosing element showing
+that text holds no other. A press step that finds no such control, or more than
+one, fails. It counts as an action in the results, and settles as one.
 
 `{ label }` and `{ await }` synchronize a multi-user test — a participant
 announces reaching `label`, and another blocks on `await` until it is
