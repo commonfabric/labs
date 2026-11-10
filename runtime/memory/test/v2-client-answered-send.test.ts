@@ -305,4 +305,39 @@ describe("client", () => {
       await server.close();
     }
   });
+  it("restores a mount answered on a connection that dropped only once when its send fails before the reconnect finishes", async () => {
+    let opens = 0;
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      authorizeSessionOpen: () => {
+        opens++;
+        return testSessionOpenServerOptions.authorizeSessionOpen();
+      },
+      store: new URL("memory://client-answered-send-once"),
+    });
+    const client = await connect({
+      transport: answeredThenFailingOpen(server, (drop) => {
+        drop(connectionError("connection lost after the open's answer"));
+        return Promise.resolve();
+      }),
+    });
+    try {
+      const session = await client.mount(
+        "did:key:z6Mk-client-answered-send-once",
+        {},
+        testSessionOpenAuthFactory,
+      );
+      const applied = await session.transact({
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: "of:doc", value: { value: "A" } }],
+      });
+      expect(applied.seq).toBeGreaterThan(0);
+      // The open the server answered, and one restore.
+      expect(opens).toBe(2);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });
