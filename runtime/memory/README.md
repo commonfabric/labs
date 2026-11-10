@@ -173,9 +173,9 @@ metadata fit the same frame and parser bounds.
 
 `commitLabelTableV1` independently negotiates CFC metadata tables under
 `transact.commit` and transaction acknowledgments' `response.ok`. The client
-compacts only the outgoing copy before transport validation; retained commits
-stay inline and replay is encoded using the replacement connection's
-capabilities. The server expands labels and paths after bounded wire decoding
+compacts only the outgoing copy before transport validation; a commit its
+caller sends again after a lost connection stays inline and is encoded using
+the replacement connection's capabilities. The server expands labels and paths after bounded wire decoding
 and before commit-shape, CFC and store validation. Malformed or unnegotiated
 metadata tables and references are refused before application. Routed structural
 checks see the compact payload and forward it unchanged to the endpoint. The

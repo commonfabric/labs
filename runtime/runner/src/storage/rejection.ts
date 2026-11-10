@@ -264,11 +264,12 @@ export function isStorageTransactionInconsistent(
  * the memory server was down. The committed data was never evaluated, so
  * nothing about it is refused — a fresh attempt over a re-established
  * connection can land the identical write, and the memory client re-establishes
- * one WITHOUT being asked: a transport close schedules `reconnect()`, and a
- * `transact` issued while disconnected queues in `#outstandingCommits` and calls
- * `client.restoreConnection()` (memory/v2/client.ts). `ConnectionError` is the
- * runner's normalization of a transport failure (storage/v2.ts
- * `toConnectionError`).
+ * one WITHOUT being asked: a transport close schedules `reconnect()`. A replica
+ * sends a commit its connection lost again itself, unchanged, once the
+ * client's `readyToRetry()` says the session can take it (storage/until-answered.ts
+ * `untilAnswered()`), so a `ConnectionError` reaches a caller only from a
+ * request no replica makes again. `ConnectionError` is the runner's
+ * normalization of a transport failure (storage/v2.ts `toConnectionError`).
  *
  * `InvalidMessageError` is the other liveness class, and the less obvious one.
  * The client raises it when a frame off the wire will not decode
@@ -308,14 +309,14 @@ export function isStorageTransactionInconsistent(
  *  - `SpaceSession.#reopen()` (memory/v2/client.ts) runs only from `restore()`,
  *    which only the client's `reconnect()` calls — i.e. only after a TRANSPORT
  *    close;
- *  - `sendOutstandingCommit`'s catch (memory/v2/client.ts) keeps a commit
- *    outstanding for replay on `isConnectionError`/`isSessionRevokedError` only;
- *    a `SessionError` falls through and rejects the commit with `#sessionId`
- *    untouched.
+ *  - a replica sends a commit again only after a lost connection
+ *    (`untilAnswered()`, storage/until-answered.ts); a `SessionError` rejects
+ *    the commit with the client's `#sessionId` untouched.
  * Those three also say which case actually reaches here. A transport drop never
- * surfaces as a `SessionError` at all — the commit queues and replays after the
- * reconnect's `reopen()`, and the server re-creates even a TTL-expired session
- * from the id the client resends (memory/v2/session-registry.ts `open`). What
+ * surfaces as a `SessionError` at all — the commit fails as unacknowledged or
+ * never sent, the replica sends it again after the reconnect's `reopen()`, and
+ * the server re-creates even a TTL-expired session from the id the client
+ * resends (memory/v2/session-registry.ts `open`). What
  * reaches `editWithRetry` is the other case: a LIVE connection whose session the
  * SERVER dropped — an ACL de-authorization sweep (`#revokeDeauthorizedSessions`,
  * memory/v2/server.ts, whose own comment is "its next message fails closed

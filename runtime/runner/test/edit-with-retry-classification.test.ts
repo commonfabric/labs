@@ -195,10 +195,10 @@ describe("editWithRetry rejection classification", () => {
       message: "read invalidated before commit",
     }],
     // Liveness the client heals by itself: a transport close schedules
-    // `reconnect()`, and a `transact` issued while disconnected queues in
-    // `#outstandingCommits` and calls `restoreConnection()` (memory/v2/client.ts),
-    // so the retry runs over a re-established link. `SessionError` looks like
-    // this one but is in the terminal list above — nothing remounts a session.
+    // `reconnect()` (memory/v2/client.ts), so a retry runs over a
+    // re-established link; a replica sends a commit its connection lost again
+    // itself (storage/until-answered.ts). `SessionError` looks like this one
+    // but is in the terminal list above — nothing remounts a session.
     ["ConnectionError", { name: "ConnectionError", message: "socket closed" }],
     // Liveness by collateral damage: an undecodable frame makes the client's
     // `rejectPending` sweep (memory/v2/client.ts `onMessage`) reject EVERY

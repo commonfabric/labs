@@ -129,8 +129,8 @@ const RESTORE_WATCH_SET: unique symbol = Symbol("restore watch set");
 
 /**
  * Returned by `Client.#authenticate()` and a signed open's turn when the
- * connection they signed for is gone: the caller waits for the reconnect and
- * signs again.
+ * connection they signed for is gone. A reopen then fails, for its reconnect
+ * to retry; a mount fails with its connection's signal.
  */
 const STALE: unique symbol = Symbol("stale connection");
 
@@ -525,11 +525,11 @@ type PresenceRoomState = {
 };
 
 /**
- * A commit a session has issued and not yet seen answered, kept for replay on
- * the next connection while its outcome is unknown.
+ * A commit a session has issued and not yet seen answered. It settles with the
+ * answer, or fails with the connection that carried it; it is sent once.
  */
 type OutstandingCommit = {
-  /** The commit, sent unchanged on every attempt. */
+  /** The commit as it was sent. */
   commit: ClientCommit;
 
   /** Settles with the server's verdict on the commit. */
@@ -1445,11 +1445,10 @@ export class Client {
       ...(this.#instanceNames ? { instanceNames: true as const } : {}),
     };
     const whileConnected = options.restoring === true;
-    // A mount made while the connection is down waits for the reconnect to
-    // finish, restores included, before it joins the key's authentication
-    // or the signed-open chain: joined earlier, the restores would wait for
-    // it while it waited for them. A reopen is part of that reconnect and
-    // fails instead when the connection drops under it.
+    // A mount made while the client is connecting fails at once, so none
+    // joins the key's authentication or the signed-open chain ahead of the
+    // reconnect's restores. A reopen is part of that reconnect and fails
+    // instead when the connection drops under it.
     if (!whileConnected) {
       this.#requireConnected();
     }
