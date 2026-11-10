@@ -552,6 +552,12 @@ type WatchRequest<R> = {
   response: Promise<R>;
 
   /**
+   * Resolves once the mutation has applied the response, or failed; `restore()`
+   * waits for it before reading the watch set it sends.
+   */
+  settled: PromiseWithResolvers<void>;
+
+  /**
    * The server's answer: `undefined` while there is none, which includes a
    * send lost with its connection.
    */
@@ -4186,6 +4192,13 @@ export class SpaceSession {
       ) {
         this.#watchSetOwed = true;
       }
+      // A watch change in flight on a live connection is answered on it, and
+      // the set this restore may send holds what that answer applies.
+      await Promise.all(
+        [...this.#unappliedWatchRequests].map((request) =>
+          request.settled.promise
+        ),
+      );
       if (this.#viewsDirty || this.#watchSetOwed) {
         // The server forgot this session (or never had it): re-establish
         // the watch set, declaring what the replica still holds so the
@@ -4789,12 +4802,14 @@ export class SpaceSession {
       const previous = this.#watchApply;
       const current: Promise<T> = previous.catch(() => undefined).then(
         async () => {
-          onTurn?.();
           while (this.#watchMutationWaitsForRestore()) {
             await this.#ensureSessionRestored(signal);
           }
           this.#assertOpen();
           this.#requireAvailable(signal);
+          // The turn's own change to the watch set applies only to a change
+          // that is sent: one that fails first leaves the set as it was.
+          onTurn?.();
           return await this.#applyWatchResponse(
             this.#sendWatchRequest(send),
             apply,
@@ -4822,12 +4837,12 @@ export class SpaceSession {
       : this.#watchIssue;
     let request!: WatchRequest<R>;
     const issued = readyToIssue.catch(() => undefined).then(async () => {
-      onTurn?.();
       while (this.#watchMutationWaitsForRestore()) {
         await this.#ensureSessionRestored(signal);
       }
       this.#assertOpen();
       this.#requireAvailable(signal);
+      onTurn?.();
       request = this.#sendWatchRequest(send);
     });
     this.#watchIssue = issued.then(() => undefined, () => undefined);
@@ -4860,7 +4875,11 @@ export class SpaceSession {
    * tracks it until the mutation has applied the response or failed.
    */
   #sendWatchRequest<R>(send: () => Promise<R>): WatchRequest<R> {
-    const request: WatchRequest<R> = { response: send(), verdict: undefined };
+    const request: WatchRequest<R> = {
+      response: send(),
+      settled: Promise.withResolvers<void>(),
+      verdict: undefined,
+    };
     this.#noteWatchVerdict(request);
     this.#unappliedWatchRequests.add(request);
     return request;
@@ -4897,6 +4916,7 @@ export class SpaceSession {
       return apply(await request.response);
     } finally {
       this.#unappliedWatchRequests.delete(request);
+      request.settled.resolve();
     }
   }
 
