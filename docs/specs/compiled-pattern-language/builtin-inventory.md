@@ -1140,7 +1140,8 @@ throws outside the frames named.
 | `getPatternEnvironment()` | anywhere | A frozen `{ apiUrl }` (`builder/env.ts`). |
 
 - **New design:** context reads are a fourth kind of call that is legal
-  inside a function body, beside the three the overview names. Each has an
+  inside a function body, beside instantiation, cell creation, and effect
+  requests. Each has an
   entry in the body's footprint so that its label is accounted for.
   `principalOf` and its siblings observe label metadata, the same
   observation class as `inspectConfLabel`. The space functions read
@@ -1217,10 +1218,10 @@ extra inputs that the runtime implementation never reads.
 
 ## Calls inside function bodies
 
-The overview keeps three kinds of runtime call inside the body of a `lift`,
+The overview keeps four kinds of runtime call inside the body of a `lift`,
 `handler`, `computed`, or `action`: instantiating a pattern, creating a cell
-with a causal identifier, and requesting an effectful built-in. This section
-measures the pattern corpus against that rule.
+with a causal identifier, requesting an effectful built-in, and reading
+context. This section measures the pattern corpus against that rule.
 
 ### Method
 
@@ -1265,7 +1266,7 @@ Two conclusions follow.
 - The rule fits the corpus. Removing the reactive constructs from function
   bodies requires rewriting 18 sites (16 handler bindings and 2 cell maps)
   and the three computeds that instantiate patterns.
-- The third legal kind, requesting an effectful built-in from a body, has no
+- The third kind, requesting an effectful built-in from a body, has no
   precedent in the corpus except `navigateTo` and the staged changes. Its
   semantics can therefore be designed without a compatibility constraint, but
   also without evidence of demand.
@@ -1620,9 +1621,6 @@ Each question states the assumption this document made.
    identifier of the variable it is assigned to.
 8. **Document inconsistencies found.** They do not affect the design and
    are recorded for correction where the documents are owned:
-   - the overview lists `wish` among the effectful operations and names
-     three kinds of call in function bodies, and this document governs on
-     both;
    - the server-execution documents call the fetch family `fetchData`,
      which is not an exported name;
    - [built-in contracts](../server-side-execution/builtins.md) §2 says

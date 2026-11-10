@@ -324,30 +324,43 @@ cache one is a runtime decision and not a language feature.
 
 ## Built-ins and factories
 
-Built-ins divide into two groups.
+Built-ins divide into two groups. The
+[built-in inventory](builtin-inventory.md) places each one and states its
+label rule.
 
 - **Structural operations** become compiler operations with label rules:
   `ifElse`, `when`, `unless`, `map`, `filter`, `flatMap`, the aggregates, the
-  collection-index family, and `str`. They stop being callable factories.
-  Authors write the reactive constructs of the language, and
-  `mapWithPattern`, which the transformer generates today, has no counterpart.
+  collection-index family, `str`, `anchorsOf`, `inspectConfLabel`, and
+  `wish`. They stop being callable factories. Authors write the reactive
+  constructs of the language, and `mapWithPattern`, which the transformer
+  generates today, has no counterpart. `wish` is structural because what it
+  creates, it creates idempotently: its result reads as if the data had
+  already existed.
 - **Effectful operations** stay durable boundaries with declared label rules
-  and their own transactions: the fetch family, `streamData`, the language
-  model built-ins, the SQLite built-ins, `wish`, `navigateTo`,
-  `compileAndRun`, and `cellFromUrl`.
+  and their own transactions: the fetch family, `generateText`,
+  `generateObject`, `llmDialog`, `agent`, `sqliteQuery`, `navigateTo`,
+  `compileAndRun`, and the staged changes to a space's access list.
+  `cellFromUrl` splits: parsing an address is structural, and resolving a
+  space name or host is effectful.
 
-Each built-in needs to be placed in one of the two groups by reading its
-semantics, which this document has not done one by one.
+`streamData` and `llm` are removed.
 
-Inside a function body, three kinds of runtime call remain:
+Inside a function body, four kinds of runtime call remain:
 
 - instantiating a pattern;
 - creating a cell, which receives a causal identifier;
 - requesting an effectful built-in, which behaves like instantiating a
-  built-in pattern.
+  built-in pattern;
+- reading context that is not a cell: the event's key and acting principal,
+  a space's identity and access list, and the principals a label attests.
 
 A function body that needs reactivity instantiates a pattern. A handler that
 wants a reactive mapped list, for example, wraps the list in a pattern.
+
+Each handler invocation is a new frame, so the cells and instances it creates
+are new on every call and are identified by the event and their order within
+the invocation. Pattern bodies and lifts are re-evaluated, so their cells
+need identifiers that are the same on every evaluation.
 
 ### Instantiating a pattern from a function body
 
@@ -360,12 +373,20 @@ stays a call, `DonutCard({ donut })`, and the callee must be one of:
 - a pattern received as a factory value
   ([first-class serializable factories](../pattern-construction/node-factory-shipping.md)).
 
+A callee may carry the modifiers `asScope(scope)` and
+`inSpace(space, options)`. Pattern factories are the only kind of factory
+value a function body may call.
+
 In a handler, the call records an instantiation request with a causal
 identifier and returns a link. The runtime performs the instantiation when the
 handler's transaction commits. Writing the link into state is what gives the
-new instance a result cell and makes it an instantiated pattern. In the
-reactive tier the same call denotes an anonymous sub-pattern, compiled into
-the surrounding instance like the body of a `map`.
+new instance a result cell and makes it an instantiated pattern. Passing the
+link to `navigateTo` does the same, because navigation requires a result
+cell. In the reactive tier the same call denotes an anonymous sub-pattern,
+compiled into the surrounding instance like the body of a `map`.
+
+The body of a `computed` or a `lift` does not instantiate a pattern.
+Selecting among patterns is done in the reactive tier.
 
 ## The scheduler
 
@@ -515,12 +536,12 @@ disagree, the detailed document governs and this one is corrected.
   something reads that state. The label rule for it, and how far the design
   is termination-sensitive, follow the specification's treatment of
   termination.
-- **Built-in classification.** Which group each built-in belongs to, and the
-  label rule of each structural operation.
+- **Commits that span spaces.** A transaction covers one space. A staged
+  access change and an `inSpace` instantiation both reach another space, and
+  a two-step commit across spaces could serve both
+  ([built-in inventory](builtin-inventory.md), open question 3).
 - **Cycles through side-writes.** How much the compiler can reject statically,
   and what the iteration bound inside a cause's transaction is.
-- **Factory values.** Which kinds of factory value a function body may call
-  beyond patterns.
 - **Cache promotion.** The cost model for promoting a cone to a durable cache,
   and where that cache lives.
 - **Migration.** Whether anything besides state cells in existing stored
