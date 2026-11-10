@@ -13240,7 +13240,10 @@ export class Runner {
       const asCell = schema.asCell;
       if (
         Array.isArray(asCell) &&
-        (asCell.includes("cell") || asCell.includes("writeonly"))
+        asCell.some((entry) => {
+          const kind = ContextualFlowControl.getAsCellKind(entry);
+          return kind === "cell" || kind === "writeonly";
+        })
       ) {
         if (shouldCollectPath(path)) {
           const redirectLinks = findAllWriteRedirectCells(
