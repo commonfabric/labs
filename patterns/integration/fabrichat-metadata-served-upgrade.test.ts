@@ -10,13 +10,18 @@ import { describe, it } from "@std/testing/bdd";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { isPlainObject } from "@commonfabric/js-values/types";
+import type { MemorySpace } from "@commonfabric/memory/interface";
+import { read } from "@commonfabric/memory/v2/engine";
+import {
+  adoptProcessInstanceId,
+  processInstanceId,
+} from "@commonfabric/memory/v2/execution-lease";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import { idStringForEntityAddress } from "@commonfabric/runner";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
 import { servingRuntimeFactory } from "@commonfabric/runner/executor/serving-runtime";
 import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
-import { awaitAdmitted } from "../../runtime/runner/test/support/serving-waits.ts";
 import {
   claimPatternEnvironment,
   MultiRuntimeHarness,
@@ -73,6 +78,7 @@ describe("FabriChat metadata served upgrade", () => {
         : "keeps an unchanged old room usable after server restart",
       async () => {
         await using cleanup = new AsyncDisposableStack();
+        cleanup.defer(() => adoptProcessInstanceId(processInstanceId));
         const temporary = await Deno.makeTempDir({
           prefix: "chat-served-upgrade-",
         });
@@ -127,6 +133,8 @@ describe("FabriChat metadata served upgrade", () => {
           `served metadata owner ${update}`,
         );
         const startServer = () => {
+          // The predecessor is fully closed before simulating a new process.
+          adoptProcessInstanceId(crypto.randomUUID());
           const server = StandaloneMemoryServer.start({
             store: toFileUrl(`${temporary}/store/`),
             acl: { mode: "enforce", delegatingDids: [service.did()] },
@@ -194,9 +202,10 @@ describe("FabriChat metadata served upgrade", () => {
           title: "Stored title",
           members: [],
         }, gesture("ChatStart"));
-        await awaitAdmitted(served.server.server, async () => {
-          await harness.settle();
-          return await owner.read(["requests", "old", "status"]) === "done";
+        await owner.client().call("waitForAddressValue", {
+          link: { "/": { "link@1": await owner.link([]) } },
+          path: ["requests", "old", "status"],
+          expected: "done",
         });
         const room = await owner.link(["requests", "old", "entry", "room"]);
         expect(await owner.read(["metadata"], { piece: room })).toBeUndefined();
@@ -287,6 +296,12 @@ describe("FabriChat metadata served upgrade", () => {
         await harness.settle();
         await served.host.whenQuiescent();
         await harness.settle();
+        const observed = record(
+          await reader.client().call("waitForAddressValue", {
+            path: update ? ["metadata", "title"] : ["$NAME"],
+            expected: "Stored title",
+          }),
+        );
         const coldSource = record(
           await reader.client().call("pieceSource", {
             piece: room,
@@ -303,18 +318,6 @@ describe("FabriChat metadata served upgrade", () => {
         expect(coldSource.pattern).toMatchObject({
           identity: await route.identity("system/fabrichat/room.tsx"),
         });
-        await awaitAdmitted(served.server.server, async () => {
-          await harness.settle();
-          const value = await reader.client().call("watchedAddress", {});
-          if (!isPlainObject(value)) return false;
-          return update
-            ? isPlainObject(value.metadata) &&
-              value.metadata.title === "Stored title"
-            : value.$NAME === "Stored title";
-        });
-        const observed = record(
-          await reader.client().call("watchedAddress", {}),
-        );
         if (update) {
           expect(observed.metadata).toMatchObject({
             kind: "group",
@@ -359,6 +362,12 @@ describe("FabriChat metadata served upgrade", () => {
           roster,
         );
         expect(await owner.readRaw(["about"], { piece: room })).toEqual(about);
+        const titleAddress = await owner.link(["about", "title"], {
+          piece: room,
+        });
+        const metadataAddress = update
+          ? await owner.link(["metadata"], { piece: room })
+          : undefined;
         const eventsBefore = served.host.stats().events.processed;
         const derivedBefore =
           served.host.stats().derivedCommitsBySpace[room.space] ?? 0;
@@ -391,16 +400,27 @@ describe("FabriChat metadata served upgrade", () => {
           { piece: room },
         );
         await harness.settle();
-        await awaitAdmitted(served.server.server, async () => {
-          await harness.settle();
-          const value = await reader.client().call("watchedAddress", {});
-          if (!isPlainObject(value)) return false;
-          return update
-            ? isPlainObject(value.metadata) &&
-              value.metadata.kind === "group" &&
-              value.metadata.title === "Updated title"
-            : value.$NAME === "Updated title";
-        });
+        const updated = record(
+          await reader.client().call("waitForAddressValue", {
+            path: update ? ["metadata", "title"] : ["$NAME"],
+            expected: "Updated title",
+          }).catch(async (error) => {
+            const engine = await served.server.server.engineForSpace(
+              room.space as MemorySpace,
+            );
+            console.error("Post-update title delivery failed", {
+              update,
+              titleAddress,
+              storedTitle: read(engine, { id: titleAddress.id })?.value,
+              storedMetadata: metadataAddress === undefined
+                ? undefined
+                : read(engine, { id: metadataAddress.id })?.value,
+              events: served.host.stats().events,
+            });
+            throw error;
+          }),
+        );
+        if (update) expect(updated.metadata).toMatchObject({ kind: "group" });
         expect(await owner.read(["messages", "count"], { piece: room })).toBe(
           3,
         );
@@ -424,10 +444,9 @@ describe("FabriChat metadata served upgrade", () => {
             },
           },
         });
-        await awaitAdmitted(served.server.server, async () => {
-          await harness.settle();
-          const value = await reader.client().call("watchedAddress", {});
-          return isPlainObject(value) && value.body === "Edited original";
+        await reader.client().call("waitForAddressValue", {
+          path: ["body"],
+          expected: "Edited original",
         });
         expect((await reader.rawRead(messages[0].link)).value).toMatchObject({
           value: { body: "Edited original" },

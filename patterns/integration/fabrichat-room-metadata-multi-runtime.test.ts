@@ -90,9 +90,11 @@ describe("fabrichat room metadata across runtimes", () => {
         title: "Small summary",
         members: [],
       }, START);
-      await harness.settleUntil(async () =>
-        (await owner.read(["requests", "room", "status"])) === "done"
-      );
+      await owner.client().call("waitForAddressValue", {
+        link: { "/": { "link@1": await owner.link([]) } },
+        path: ["requests", "room", "status"],
+        expected: "done",
+      });
       const room = await owner.link(["requests", "room", "entry", "room"]);
       for (let index = 0; index < 20; index++) {
         await owner.send("sendMessage", { body: `Message ${index}` }, SEND, {
@@ -127,12 +129,11 @@ describe("fabrichat room metadata across runtimes", () => {
       await reader.client().call("watchAddress", {
         link: { "/": { "link@1": { ...metadata, schema: METADATA_SCHEMA } } },
       });
-      await harness.settleUntil(async () => {
-        const value = await reader.client().call("watchedAddress", {});
-        return isPlainObject(value) && value.title === "Small summary";
-      });
       const first = metadataRecord(
-        await reader.client().call("watchedAddress", {}),
+        await reader.client().call("waitForAddressValue", {
+          path: ["title"],
+          expected: "Small summary",
+        }),
       );
       expect(first.title).toBe("Small summary");
       expect(first.kind).toBe("group");
@@ -185,12 +186,11 @@ describe("fabrichat room metadata across runtimes", () => {
         RETITLE,
         { piece: room },
       );
-      await harness.settleUntil(async () => {
-        const value = await reader.client().call("watchedAddress", {});
-        return isPlainObject(value) && value.title === "Changed summary";
-      });
       const renamed = metadataRecord(
-        await reader.client().call("watchedAddress", {}),
+        await reader.client().call("waitForAddressValue", {
+          path: ["title"],
+          expected: "Changed summary",
+        }),
       );
       expect(renamed.title).toBe("Changed summary");
       expect(await reader.rawRead(room)).toMatchObject({

@@ -5,13 +5,16 @@ import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { isPlainObject } from "@commonfabric/js-values/types";
 import { getTimingStatsBreakdown } from "@commonfabric/logger";
+import {
+  adoptProcessInstanceId,
+  processInstanceId,
+} from "@commonfabric/memory/v2/execution-lease";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import type { Runtime } from "@commonfabric/runner";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
 import { servingRuntimeFactory } from "@commonfabric/runner/executor/serving-runtime";
 import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
-import { awaitAdmitted } from "../../runtime/runner/test/support/serving-waits.ts";
 import {
   claimPatternEnvironment,
   MultiRuntimeHarness,
@@ -79,6 +82,7 @@ async function measure(
   messageCount: number,
 ) {
   await using cleanup = new AsyncDisposableStack();
+  cleanup.defer(() => adoptProcessInstanceId(processInstanceId));
   const temporary = await Deno.makeTempDir({ prefix: "chat-cold-demand-" });
   cleanup.defer(() => Deno.remove(temporary, { recursive: true }));
   const vintage = await baselineTree(temporary);
@@ -91,6 +95,8 @@ async function measure(
   const service = await Identity.fromPassphrase("chat demand service");
   const identity = await Identity.fromPassphrase("chat demand owner");
   const start = () => {
+    // Each fully stopped host is followed by a simulated fresh process.
+    adoptProcessInstanceId(crypto.randomUUID());
     const server = StandaloneMemoryServer.start({
       store: toFileUrl(`${temporary}/store/`),
       acl: { mode: "enforce", delegatingDids: [service.did()] },
@@ -174,9 +180,10 @@ async function measure(
       title: requestId,
       members: [],
     }, { surface: "ChatStartSurface", action: "ChatStart" });
-    await awaitAdmitted(serving.server.server, async () => {
-      await harness.settle();
-      return await owner.read(["requests", requestId, "status"]) === "done";
+    await owner.client().call("waitForAddressValue", {
+      link: { "/": { "link@1": await owner.link([]) } },
+      path: ["requests", requestId, "status"],
+      expected: "done",
     });
     rooms.push(await owner.link(["requests", requestId, "entry", "room"]));
   }
@@ -229,11 +236,9 @@ async function measure(
   await reader.client().call("watchAddress", {
     link: { "/": { "link@1": { ...manager, schema: listSchema } } },
   });
-  await awaitAdmitted(serving.server.server, async () => {
-    await harness.settle();
-    const value = await reader.client().call("watchedAddress", {});
-    return isPlainObject(value) && Array.isArray(value.rooms) &&
-      value.rooms.length === roomCount;
+  await reader.client().call("waitForAddressValue", {
+    path: ["rooms", "length"],
+    expected: roomCount,
   });
   await serving.host.whenQuiescent();
   await harness.settle();

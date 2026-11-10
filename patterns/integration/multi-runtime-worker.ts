@@ -30,6 +30,7 @@ import {
   type FabricValue,
   isValidFabricValue,
   toShortQuotedDebugString,
+  valueEqual,
 } from "@commonfabric/data-model";
 import {
   fabricFromRealmValue,
@@ -111,6 +112,7 @@ let piece: PieceController | undefined;
 let resultSchema: unknown;
 let resultSinkCancel: (() => void) | undefined;
 let addressSinkCancel: (() => void) | undefined;
+let addressCell: Cell<unknown> | undefined;
 let addressValue: FabricValue;
 let boundedReads = false;
 let watchPaths: readonly (readonly (string | number)[])[] = [[]];
@@ -1587,6 +1589,7 @@ const handlers: Record<
     }
     const cell = controller().runtime.getCellFromLink(parsed);
     addressSinkCancel?.();
+    addressCell = cell;
     addressValue = undefined;
     addressSinkCancel = cell.sink((value) => {
       addressValue = hostValueOf(value);
@@ -1599,6 +1602,38 @@ const handlers: Record<
   async watchedAddress() {
     await idle();
     return addressValue;
+  },
+
+  /** Waits on cell deliveries at an explicit address or the active raw watch. */
+  async waitForAddressValue({ link, path, expected }) {
+    if (!isValidFabricValue(expected)) {
+      throw new TypeError("The expected value must be a FabricValue.");
+    }
+    const parsed = link === undefined ? undefined : parseLink(link);
+    if (
+      link !== undefined && (
+        parsed?.id === undefined || parsed.space === undefined
+      )
+    ) throw new TypeError("The value wait needs an absolute cell link.");
+    const cell = parsed === undefined
+      ? addressCell
+      : controller().runtime.getCellFromLink(parsed);
+    if (cell === undefined) throw new Error("No address is being watched.");
+    const keyPath = (path ?? []) as (string | number)[];
+    const value = await waitForCellValue<unknown>(
+      controller().runtime,
+      cell,
+      (value) => {
+        const actual = valueAt(hostValueOf(value), keyPath);
+        return isValidFabricValue(actual) && valueEqual(actual, expected);
+      },
+      {
+        stuckLabel: `address ${JSON.stringify(keyPath)} equals ${
+          toShortQuotedDebugString(expected)
+        }`,
+      },
+    );
+    return hostValueOf(value);
   },
 
   /** Reports retained structures without adding a cell read or subscription. */
@@ -1740,6 +1775,7 @@ const handlers: Record<
   async dispose() {
     addressSinkCancel?.();
     addressSinkCancel = undefined;
+    addressCell = undefined;
     for (const intake of shareIntakes.splice(0)) intake.stop();
     viewMountCancel?.();
     viewMountCancel = undefined;
