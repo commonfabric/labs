@@ -353,39 +353,68 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
     );
 
     await t.step(
-      "decides a complete binding inside a boundary that lowers the ceiling on everything its cell reaches",
+      "decides a complete binding inside a boundary that lowers the ceiling, or verifies authorship, on everything its cell reaches",
       async () => {
-        // The root ceiling admits the secret, and the boundary drops it. A
-        // host read is held to the root ceiling, not the boundary, so inside
-        // the boundary the badge's declared read cannot stand for what the
-        // badge shows, and a field it never reads decides the binding. At
-        // the root, the same badge is decided on its declared read.
+        // A host read is held to the root ceiling, not to a boundary, so
+        // inside one that lowers the ceiling or verifies authorship the
+        // badge's declared read cannot stand for what the badge shows, and a
+        // field it never reads, here a link to the secret, decides the
+        // binding. At the root, the same badge is decided on its declared
+        // read. The lowering boundary drops the secret from a root ceiling
+        // that admits it; the authorship boundary keeps a root ceiling that
+        // refuses it, so only a decision on everything the cell reaches
+        // withholds the badge there.
+        const admitsSecret = { atoms: [secretAtom] };
         const profile = await write("prop-ceiling-profile-lowered", {
           name: PUBLIC,
           inbox: { piece: link(secret) },
         });
-        const badge = (): WorkerVNode => ({
+        const badge: WorkerVNode = {
           type: "vnode",
           name: "cf-profile-badge",
           props: { $profile: profile.asSchema(true) as never },
           children: [],
-        });
-        const page = await mount({
-          type: "vnode",
-          name: "div",
-          props: {},
-          children: [badge(), {
+        };
+        const placements: readonly [string, unknown, WorkerVNode][] = [
+          ["at the root", admitsSecret, badge],
+          [
+            "at the root of a ceiling refusing the secret",
+            { atoms: [] },
+            badge,
+          ],
+          ["inside a lowering boundary", admitsSecret, {
             type: "vnode",
             name: "cf-cfc-render-boundary",
             props: { maxConfidentiality: [] },
-            children: [badge()],
+            children: [badge],
           }],
-        }, { renderConfidentialityCeiling: { atoms: [secretAtom] } });
-        try {
-          expect(page.bindings("profile")).toBe(1);
-        } finally {
-          page.cancel();
+          ["inside an authorship boundary", { atoms: [] }, {
+            type: "vnode",
+            name: "cf-cfc-authorship",
+            props: {
+              verifyTextIntegrity: true,
+              requiredTextIntegrity: [secretAtom],
+            },
+            children: [badge],
+          }],
+        ];
+        const bound: Record<string, number> = {};
+        for (const [where, ceiling, tree] of placements) {
+          const page = await mount(tree, {
+            renderConfidentialityCeiling: ceiling as never,
+          });
+          try {
+            bound[where] = page.bindings("profile");
+          } finally {
+            page.cancel();
+          }
         }
+        expect(bound).toEqual({
+          "at the root": 1,
+          "at the root of a ceiling refusing the secret": 1,
+          "inside a lowering boundary": 0,
+          "inside an authorship boundary": 0,
+        });
       },
     );
 

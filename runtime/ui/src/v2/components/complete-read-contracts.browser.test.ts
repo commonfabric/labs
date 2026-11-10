@@ -17,9 +17,14 @@ import {
   $onCellUpdate,
   CellHandle,
   type CellRef,
+  type CfcLabelView,
   RequestType,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
+import {
+  CFC_SCHEMA_ANNOTATION_KEYWORDS,
+  cfcSchemaGivesNoShape,
+} from "@commonfabric/runner/cfc/schema-primitives";
 import {
   componentReadContracts,
   componentReadSchema,
@@ -29,6 +34,37 @@ import "../index.ts";
 
 /** A request a handle sent, with the cell it reads. */
 type Read = { readonly type: string; readonly ref: CellRef };
+
+/**
+ * What the recording runtime's answers carry: the label every read
+ * delivers, and whether a space's root, read by address, links the bound
+ * cell, so that a component's labeled and root-only branches run.
+ */
+type Variant = {
+  readonly name: string;
+  readonly label: CfcLabelView | undefined;
+  readonly spaceRoot: boolean;
+};
+
+/** The principal the attested variant's label says the bound cell represents. */
+const OWNER = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+const VARIANTS: readonly Variant[] = [
+  { name: "carries no label", label: undefined, spaceRoot: false },
+  {
+    name: "represents its owner and is its space's root",
+    label: {
+      version: 1,
+      entries: [{
+        path: [],
+        label: {
+          integrity: [{ kind: "represents-principal", subject: OWNER }],
+        },
+      }],
+    } as unknown as CfcLabelView,
+    spaceRoot: true,
+  },
+];
 
 /** Where a cell a component read came from. */
 type Origin =
@@ -42,11 +78,11 @@ type Origin =
 /**
  * A read a complete component makes outside its contract, with why the
  * component makes it. `admits` says whether `read`, of a cell from `origin`,
- * is that read.
+ * is that read, for a component bound to `bound`.
  */
 type ReadOutsideContract = {
   readonly reason: string;
-  readonly admits: (read: Read, origin: Origin) => boolean;
+  readonly admits: (read: Read, origin: Origin, bound: CellRef) => boolean;
 };
 
 /**
@@ -60,8 +96,9 @@ const READS_OUTSIDE_CONTRACT: Readonly<
     reason: "The seal shows whether the profile is its space's root, which " +
       "`profileSpaceOf()` reads by opening the space's own cell by address, " +
       "loading it, and resolving its `defaultPattern` link.",
-    admits: (read, origin) =>
-      origin.kind === "address" && origin.cause === origin.space &&
+    admits: (read, origin, bound) =>
+      origin.kind === "address" && origin.space === bound.space &&
+      origin.cause === origin.space &&
       ((read.type === RequestType.CellGet && read.ref.path.length === 0) ||
         (read.type === RequestType.CellResolveAsCell &&
           read.ref.path.length === 1 &&
@@ -80,6 +117,15 @@ const READ_TYPES: ReadonlySet<string> = new Set([
   RequestType.SqliteQuery,
 ]);
 
+/**
+ * The read types that read all of what a position holds, whatever schema
+ * the ref carries: a record's field names, or a database's rows.
+ */
+const WHOLE_READ_TYPES: ReadonlySet<string> = new Set([
+  RequestType.CellFields,
+  RequestType.SqliteQuery,
+]);
+
 /** The read types that read a position rather than what it holds. */
 const POSITION_READ_TYPES: ReadonlySet<string> = new Set([
   RequestType.CellResolveAsCell,
@@ -94,53 +140,110 @@ const NON_READ_TYPES: ReadonlySet<string> = new Set([
   RequestType.CellUnsubscribe,
 ]);
 
-/** The schema at `path` within `schema`, as a read under `schema` reaches it. */
+/**
+ * The schema a read under `schema` reads `path` under, or `unplaced` where
+ * this check cannot follow the schema there: a composition, a reference, or
+ * a key it does not name. The runner's own narrowing runs only in the
+ * worker, so this one answers conservatively, the caller choosing what an
+ * unplaced position counts as.
+ */
 function schemaAt(
   schema: JSONSchema,
   path: readonly PropertyKey[],
+  unplaced: JSONSchema,
 ): JSONSchema {
-  let at: JSONSchema | undefined = schema;
+  let at: JSONSchema = schema;
   for (const step of path) {
-    if (at === undefined || at === false) return false;
-    if (at === true || isOpen(at)) return true;
+    if (at === false) return false;
+    if (readsEverything(at)) return true;
+    if (
+      typeof at !== "object" || holdsUnknownKeyword(at) ||
+      at.anyOf !== undefined || at.asCell !== undefined
+    ) {
+      return unplaced;
+    }
     const key = String(step);
-    at = at.properties?.[key] ??
+    const next = at.properties?.[key] ??
       (/^\d+$/.test(key) && at.items !== undefined && !Array.isArray(at.items)
         ? at.items as JSONSchema
-        : at.additionalProperties as JSONSchema | undefined);
+        : at.additionalProperties);
+    if (next === undefined) return unplaced;
+    at = next;
   }
-  return at ?? false;
+  return at;
+}
+
+/**
+ * The schema the declared read reads `path` under, or `false` where it does
+ * not reach `path` or this check cannot tell that it does.
+ */
+function declaredAt(
+  declared: JSONSchema,
+  path: readonly PropertyKey[],
+): JSONSchema {
+  return schemaAt(declared, path, false);
 }
 
 /**
  * The schema the worker reads `ref` under: its own, or else the one the
  * nearest ancestor it was keyed from carries, narrowed to its path, and
- * everything where neither has one.
+ * everything where neither has one or this check cannot follow the
+ * narrowing.
  */
 function readSchemaOf(ref: CellRef): JSONSchema {
   if (ref.schema !== undefined) return ref.schema;
   if (ref.keyedFrom === undefined) return true;
-  return schemaAt(ref.keyedFrom.schema, ref.path.slice(ref.keyedFrom.depth));
+  return schemaAt(
+    ref.keyedFrom.schema,
+    ref.path.slice(ref.keyedFrom.depth),
+    true,
+  );
 }
 
-/** Whether `schema` reads everything at its position. */
-function isOpen(schema: JSONSchema): boolean {
-  return schema === true ||
-    (typeof schema === "object" && Object.keys(schema).length === 0);
+/** The keywords that name the positions a read reaches. */
+const POSITION_KEYWORDS = ["properties", "additionalProperties", "items"];
+
+/** The keywords that narrow what a read admits and reach no position. */
+const NARROWING_KEYWORDS: ReadonlySet<string> = new Set([
+  "type",
+  "required",
+  "enum",
+  "const",
+  "default",
+  "format",
+  "pattern",
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "multipleOf",
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "uniqueItems",
+  "minProperties",
+  "maxProperties",
+  "ifc",
+]);
+
+/** Whether `schema` holds a keyword this check cannot place. */
+function holdsUnknownKeyword(schema: JSONSchema): boolean {
+  return typeof schema === "object" &&
+    Object.keys(schema).some((keyword) =>
+      !CFC_SCHEMA_ANNOTATION_KEYWORDS.has(keyword) &&
+      !NARROWING_KEYWORDS.has(keyword) &&
+      !POSITION_KEYWORDS.includes(keyword) &&
+      keyword !== "anyOf" && keyword !== "asCell"
+    );
 }
 
-/** The keywords that say which positions a read reaches. */
-const REACH_KEYWORDS = [
-  "properties",
-  "additionalProperties",
-  "items",
-  "anyOf",
-  "oneOf",
-  "allOf",
-  "$ref",
-  "$defs",
-  "asCell",
-];
+/** Whether a read under `schema` reads all of what its position holds. */
+function readsEverything(schema: JSONSchema): boolean {
+  return schema !== false &&
+    !(typeof schema === "object" && schema.asCell !== undefined) &&
+    cfcSchemaGivesNoShape(schema);
+}
 
 /**
  * Whether a read under `read` reaches no position a read under `declared`
@@ -148,8 +251,8 @@ const REACH_KEYWORDS = [
  * beyond.
  */
 function readWithin(read: JSONSchema, declared: JSONSchema): boolean {
-  if (isOpen(declared) || read === false) return true;
-  if (declared === false || isOpen(read)) return false;
+  if (readsEverything(declared) || read === false) return true;
+  if (declared === false || readsEverything(read)) return false;
   if (typeof read !== "object" || typeof declared !== "object") return false;
   // A position read as a cell reads nothing of it; what is read through the
   // cell it hands over is a read of that cell, checked as one.
@@ -160,14 +263,13 @@ function readWithin(read: JSONSchema, declared: JSONSchema): boolean {
   if (declared.anyOf !== undefined) {
     return declared.anyOf.some((branch) => readWithin(read, branch));
   }
-  for (const keyword of ["oneOf", "allOf", "$ref", "$defs"] as const) {
-    if (keyword in read || keyword in declared) return false;
-  }
-  const reaches = REACH_KEYWORDS.some((keyword) => keyword in read);
-  if (!reaches) {
-    // A read that names no position reaches all of an object or list.
-    return !REACH_KEYWORDS.some((keyword) => keyword in declared) ||
-      (read.type !== "object" && read.type !== "array");
+  if (holdsUnknownKeyword(read) || holdsUnknownKeyword(declared)) return false;
+  if (!POSITION_KEYWORDS.some((keyword) => keyword in read)) {
+    // A read that names no position reads all of an object or a list, which
+    // is within only a declared read that names none either.
+    const types = [read.type ?? ["object", "array"]].flat();
+    return !POSITION_KEYWORDS.some((keyword) => keyword in declared) ||
+      !types.some((type) => type === "object" || type === "array");
   }
   for (const [key, schema] of Object.entries(read.properties ?? {})) {
     const at = declared.properties?.[key] ?? declared.additionalProperties;
@@ -266,7 +368,11 @@ function drained(): Promise<void> {
  * among `unsupported`, so that a component that uses one makes the test say
  * so rather than pass over it.
  */
-function recordingRuntime(bound: CellRef, declared: JSONSchema) {
+function recordingRuntime(
+  bound: CellRef,
+  declared: JSONSchema,
+  variant: Variant,
+) {
   const reads: { read: Read; origin: Origin }[] = [];
   const unsupported: string[] = [];
   const origins = new Map<string, Origin>([
@@ -289,9 +395,16 @@ function recordingRuntime(bound: CellRef, declared: JSONSchema) {
       : undefined;
     switch (request.type) {
       case RequestType.CellResolveAsCell:
-        return { cell: ref };
+        // A space's root, read by address, links the bound cell where the
+        // variant makes it the space's root.
+        return {
+          cell: variant.spaceRoot && origin.kind === "address" &&
+              origin.cause === origin.space && ref.path.length > 0
+            ? { ...bound, schema: undefined }
+            : ref,
+        };
       case RequestType.CellGetCfcLabel:
-        return { cfcLabel: undefined };
+        return { cfcLabel: variant.label };
       case RequestType.CellFields:
         return {};
       default:
@@ -334,7 +447,7 @@ function recordingRuntime(bound: CellRef, declared: JSONSchema) {
       queueMicrotask(() =>
         cell[$onCellUpdate](
           origin.kind === "binding" ? valueAt(sample, ref.path) : undefined,
-          { cfcLabel: undefined, current: true },
+          { cfcLabel: variant.label, current: true },
         )
       );
       return Promise.resolve();
@@ -390,59 +503,78 @@ Deno.test("complete read contracts name components that are registered and read 
 });
 
 for (const { tag, prop, contract } of completeEntries) {
-  Deno.test(`${tag} ${prop} reads nothing outside its complete read contract`, async () => {
-    // A projected entry reads its schema whatever the handle carries, so the
-    // handle carries the widest; another reads the handle's own schema, so
-    // the handle carries the one its entry declares.
-    const supplied: JSONSchema = contract.projected ? true : contract.schema;
-    const bound: CellRef = {
-      id: "of:bound-by-the-reconciler" as CellRef["id"],
-      space: "did:key:read-contract-drift" as CellRef["space"],
-      scope: "space",
-      path: [],
-      schema: supplied,
-    };
-    const declared = componentReadSchema(tag, prop, supplied) ?? true;
-    const { runtime, reads, unsupported } = recordingRuntime(bound, declared);
-    const element = document.createElement(tag) as HTMLElement & {
-      updateComplete?: Promise<unknown>;
-    };
-    (element as unknown as Record<string, unknown>)[prop] = new CellHandle(
-      runtime,
-      bound,
-    );
-    document.body.append(element);
-    try {
-      await element.updateComplete;
-      await drained();
-      expect(unsupported).toEqual([]);
-      const outside = reads.filter(({ read, origin }) => {
-        if (!READ_TYPES.has(read.type) && read.type !== "subscribe") {
-          return false;
-        }
-        if (origin.kind === "binding") {
-          const at = schemaAt(declared, read.ref.path);
-          // Resolving a position's links, or reading its label, reads the
-          // position and not what it holds, whatever schema the ref carries.
-          const within = POSITION_READ_TYPES.has(read.type)
-            ? at !== false
-            : readWithin(readSchemaOf(read.ref), at);
-          if (within) return false;
-        }
-        return !(READS_OUTSIDE_CONTRACT[tag] ?? []).some((listed) =>
-          listed.admits(read, origin)
+  for (const variant of VARIANTS) {
+    Deno.test(`${tag} ${prop} reads nothing outside its complete read contract when what it reads ${variant.name}`, async () => {
+      // A projected entry reads its schema whatever the handle carries, so
+      // the handle carries the widest; another reads the handle's own schema,
+      // so the handle carries the one its entry declares.
+      const supplied: JSONSchema = contract.projected ? true : contract.schema;
+      const bound: CellRef = {
+        id: "of:bound-by-the-reconciler" as CellRef["id"],
+        space: "did:key:read-contract-drift" as CellRef["space"],
+        scope: "space",
+        path: [],
+        schema: supplied,
+      };
+      const declared = componentReadSchema(tag, prop, supplied) ?? true;
+      const { runtime, reads, unsupported } = recordingRuntime(
+        bound,
+        declared,
+        variant,
+      );
+      const element = document.createElement(tag) as HTMLElement & {
+        updateComplete?: Promise<unknown>;
+      };
+      (element as unknown as Record<string, unknown>)[prop] = new CellHandle(
+        runtime,
+        bound,
+      );
+      document.body.append(element);
+      try {
+        await element.updateComplete;
+        await drained();
+        // A component that is still reading once its reads have been
+        // answered reads on a timer or a frame, which this check would see
+        // only in part.
+        const settled = reads.length;
+        await element.updateComplete;
+        await drained();
+        expect(reads.length).toBe(settled);
+        expect(unsupported).toEqual([]);
+        const outside = reads.filter(({ read, origin }) => {
+          if (!READ_TYPES.has(read.type) && read.type !== "subscribe") {
+            return false;
+          }
+          if (origin.kind === "binding") {
+            const at = declaredAt(declared, read.ref.path);
+            // Resolving a position's links, or reading its label, reads the
+            // position and not what it holds, whatever schema the ref
+            // carries.
+            const within = POSITION_READ_TYPES.has(read.type)
+              ? at !== false
+              : readWithin(
+                WHOLE_READ_TYPES.has(read.type) ? true : readSchemaOf(read.ref),
+                at,
+              );
+            if (within) return false;
+          }
+          return !(READS_OUTSIDE_CONTRACT[tag] ?? []).some((listed) =>
+            listed.admits(read, origin, bound)
+          );
+        }).map(({ read, origin }) => ({
+          type: read.type,
+          origin: origin.kind,
+          path: read.ref.path,
+          schema: read.ref.schema,
+        }));
+        expect(outside).toEqual([]);
+        // The component read the binding at all, so the check above saw it.
+        expect(reads.some(({ origin }) => origin.kind === "binding")).toBe(
+          true,
         );
-      }).map(({ read, origin }) => ({
-        type: read.type,
-        origin: origin.kind,
-        path: read.ref.path,
-        schema: read.ref.schema,
-      }));
-      expect(outside).toEqual([]);
-      // The component read the binding at all, so the check above saw it.
-      expect(reads.some(({ origin }) => origin.kind === "binding")).toBe(true);
-    } finally {
-      element.remove();
-    }
-  });
+      } finally {
+        element.remove();
+      }
+    });
+  }
 }
