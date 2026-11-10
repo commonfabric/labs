@@ -4,7 +4,7 @@
 decisions the design still depends on are listed under
 [Open questions](#open-questions), and the parts that change what Contextual
 Flow Control (CFC) decides go through the specification first, as
-[`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
+[`../development/cfc-spec-correspondence.md`](../../development/cfc-spec-correspondence.md)
 requires.
 
 This document proposes a pattern language that is a defined subset of
@@ -16,9 +16,9 @@ storage stop scaling with the number of reactive nodes a pattern lowers to.
 ## The problem
 
 A pattern lowers to a graph of nodes, and each node run is one storage
-transaction ([Scheduler v2](scheduler-v2/README.md), D6). CFC derives the label
+transaction ([Scheduler v2](../scheduler-v2/README.md), D6). CFC derives the label
 of everything a transaction writes from everything the transaction read
-([CFC commit preparation](cfc-commit-preparation.md)), so the way to keep one
+([CFC commit preparation](../cfc-commit-preparation.md)), so the way to keep one
 value's label off an unrelated value is to compute them in separate
 transactions. Cost and label precision therefore come from the same mechanism,
 and three costs follow from it.
@@ -26,22 +26,22 @@ and three costs follow from it.
 - **Label work dominates commits.** One measured load of a chat room made
   1,157 scheduler runs, 190 commits, and 615 CFC preparations, and CFC
   preparation was 86% of commit finalization
-  ([row-instance investigation](../history/development/performance/2026-10-16-fabrichat-row-instances.md)).
+  ([row-instance investigation](../../history/development/performance/2026-10-16-fabrichat-row-instances.md)).
 - **Interim state dominates storage.** Every node output is a document with
   its own label envelope, and a `map` instantiates a full sub-pattern per
   element. Label envelopes were measured at about 93% of live stored JSON
-  ([content-addressed CFC labels](content-addressed-cfc-labels.md)).
+  ([content-addressed CFC labels](../content-addressed-cfc-labels.md)).
 - **Labels are carried by TypeScript types the checker was not built for.**
   The label carrier is a phantom brand intersected with the payload type, which
   needs special handling wherever TypeScript simplifies the intersection, for
   example with `null`
-  ([CFC authoring contract](ts-transformer/cfc_authoring_contract.md)). Many
+  ([CFC authoring contract](../ts-transformer/cfc_authoring_contract.md)). Many
   programs that cannot satisfy their label constraints are refused only at run
   time.
 
 Patterns themselves use a small part of TypeScript. The complex types are in
 the API, not in pattern code, and the transformer already refuses many idioms
-([target pattern language](ts-transformer/ts_transformers_target_pattern_language_spec.md)).
+([target pattern language](../ts-transformer/ts_transformers_target_pattern_language_spec.md)).
 That makes a defined subset practical, on the condition that every refusal
 comes with a diagnostic that says what to write instead.
 
@@ -106,14 +106,14 @@ Functions in all three tiers are stateless: module scope holds no mutable
 state, and module-scope data is frozen. A function that closes over nothing
 mutable can be called repeatedly without a fresh sandbox per call, which is
 the property the loader relies on today
-([SES sandboxing](sandboxing/SES_SANDBOXING_SPEC.md)). In this design the
+([SES sandboxing](../sandboxing/SES_SANDBOXING_SPEC.md)). In this design the
 property is a language rule the compiler checks and reports on, and the
 compiler emits the freezing wrappers.
 
 ### Labels in the type system
 
 The authored spelling of labels stays the alias set of the
-[CFC authoring contract](ts-transformer/cfc_authoring_contract.md), such as
+[CFC authoring contract](../ts-transformer/cfc_authoring_contract.md), such as
 `Confidential<T, L>`. The compiler reads these as label annotations in its own
 type system instead of evaluating them as TypeScript intersection types. A
 label on `string | null` is then a label on that union, with no dependence on
@@ -215,7 +215,7 @@ Instantiating a template means substituting actual labels for slots and
 combining them. The runtime does this only for outputs it stores, and only
 when a slot's label or a selected branch changed. A change of value alone does
 no label work. With labels held by content address
-([content-addressed CFC labels](content-addressed-cfc-labels.md)), an
+([content-addressed CFC labels](../content-addressed-cfc-labels.md)), an
 instantiation is a union of identifiers and can be memoized by template and
 input label identifiers.
 
@@ -253,7 +253,7 @@ and for function bodies where footprint analysis gave up.
 ### Computations that write
 
 A computation may write through a cell passed to it, and the write tiers of
-[Scheduler v2](scheduler-v2/README.md) (§4.3) carry over.
+[Scheduler v2](../scheduler-v2/README.md) (§4.3) carry over.
 
 - **Primary output and static side-write targets** are part of the compiled
   instance. A static side-write target is one more output edge of the cone
@@ -358,7 +358,7 @@ stays a call, `DonutCard({ donut })`, and the callee must be one of:
 - an inline `pattern(...)` expression, which the compiler hoists, turning its
   captures into parameters;
 - a pattern received as a factory value
-  ([first-class serializable factories](pattern-construction/node-factory-shipping.md)).
+  ([first-class serializable factories](../pattern-construction/node-factory-shipping.md)).
 
 In a handler, the call records an instantiation request with a causal
 identifier and returns a link. The runtime performs the instantiation when the
@@ -400,13 +400,13 @@ handler reads can be evaluated inside the handler's own transaction.
 ## Server execution and client speculation
 
 Execution is authoritative on the server
-([server-primary execution](server-side-execution/README.md)), and the
+([server-primary execution](../server-side-execution/README.md)), and the
 compiler runs there. The remaining scheduler is a natural part of the serving
-loop ([serving loop](server-side-execution/serving-loop.md)).
+loop ([serving loop](../server-side-execution/serving-loop.md)).
 
 Clients run the same compiled artifact speculatively to render with low
 latency, and send events to the server
-([speculation](server-side-execution/speculation.md)). A client fetches the
+([speculation](../server-side-execution/speculation.md)). A client fetches the
 value code and the plan and does not compile. Effectful operations are not
 speculated.
 
@@ -492,11 +492,23 @@ Each stage can be checked before the next begins.
 5. Move the remaining scheduler into the serving loop.
 6. Retire the builder form the transformer emits.
 
+## Detailed specifications
+
+The documents beside this one specify the parts of the design in detail. This
+document stays the overview, and where a detailed document and this one
+disagree, the detailed document governs and this one is corrected.
+
+- [Language subset](language-subset.md): grammar, type rules, and diagnostics
+- [Plan format and label templates](plan-and-label-templates.md): slots,
+  observation classes, and the label rule of each operation
+- [Built-in inventory](builtin-inventory.md): each built-in's group, label
+  rule, and durable state
+
 ## Open questions
 
 - **Gates under speculation.** Which of the server's gates a client can
   evaluate from the plan alone, and how a client presents a refusal it
-  predicts ([render-boundary composition](cfc-render-boundary-composition.md)).
+  predicts ([render-boundary composition](../cfc-render-boundary-composition.md)).
 - **Error states and termination.** A function body that throws, or does not
   terminate, reveals something about its inputs. An error is a state with a
   label of its own, and a cone in an error state stops propagating unless
