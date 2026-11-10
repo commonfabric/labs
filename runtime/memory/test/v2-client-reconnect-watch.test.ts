@@ -552,7 +552,7 @@ describe("v2-client-reconnect-watch", () => {
         }
       });
 
-      it("waits, as a restore on a live connection, for the answer to a watch change in flight before building the watch set it sends", async () => {
+      it("re-establishes, as a restore on a live connection, a watch whose answer arrives right behind the reopen's", async () => {
         // `restore()` runs on a live connection, as a held session's retry
         // does, while an acquisition's request is on the wire and its answer
         // is held back. The answer is let through right behind the reopen's
@@ -560,8 +560,8 @@ describe("v2-client-reconnect-watch", () => {
         // applies.
         // The server handled the acquisition before the set the restore
         // re-establishes, which replaces its whole set, so the server keeps
-        // the acquisition the client holds only if the restore waits for that
-        // answer before reading the set it sends.
+        // the acquisition the client holds only if the answer applies before
+        // the restore reads the set it sends, as it does here.
 
         const server = new Server({
           ...testSessionOpenServerOptions,
