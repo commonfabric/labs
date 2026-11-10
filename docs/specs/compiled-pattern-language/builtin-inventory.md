@@ -706,8 +706,8 @@ it to causes through `perElementOf`. Both need the rule above in place of
   false and `every` is true. Holes are skipped.
 - **Corpus:** with a callback, in source files, `some` appears 31 times in
   a `computed` (18 files) and twice directly in a pattern body; `every`
-  appears twice in a `computed`. In handlers and actions `some` appears 63 times, where it
-  stays an ordinary method.
+  appears twice in a `computed`. In handlers and actions `some` appears 63
+  times, where it stays an ordinary method.
 - **Execution:** as part of the enclosing body: a computation.
 - **New design:** class A. Both are reactive constructs with a predicate
   callback in the form `filter` takes.
@@ -803,12 +803,12 @@ it to causes through `perElementOf`. Both need the rule above in place of
     (`tx.recordCfcLabelMetadataObservation` in `inspectStoredConfLabel`),
     and those observations join the flow of the transaction that wrote the
     result. Metadata classified as public contributes nothing.
-  - `plan-and-label-templates.md` has four observation classes and no slot
-    for this. Its open question on label metadata observations assumes
-    such reads are dynamic and journaled. That assumption fits the implementation: the metadata path
-    consulted depends on the query and on the stored clauses, so it is not
-    a static slot. The plan needs a `dynamic` read kind for label metadata
-    beside the two it has for links and handles.
+  - `plan-and-label-templates.md` §2.4 gives this read a fifth observation
+    class, `labelMetadata`: a slot that does not read the value at its
+    path and whose label is the label of the metadata observation. Which
+    metadata paths are consulted depends on the query and on the stored
+    clauses, so the slot stands for the label metadata at the payload path
+    as a whole.
   - A target that is not kept has no stored label: the plan document says
     an interim value is never labeled. The operation therefore takes a
     target with an address: a state cell, an argument, a kept output, or
@@ -1891,8 +1891,7 @@ Three kinds of record follow from the table.
   `resultOwnerOf`, the access-list reads, the pointer reads of `spaceOf`):
   a `dynamic` read, journaled like a read through a handle.
 - A read of *label metadata* (`principalOf`, `principalsOf`,
-  `profileOwnerOf`): the dynamic label-metadata read that `inspectConfLabel`
-  needs.
+  `profileOwnerOf`): a `labelMetadata` slot, as for `inspectConfLabel`.
 - A read of the *cause or the runtime* (`eventKey`, `currentPrincipal`,
   `spaceDeleted`, `getPatternEnvironment`): unlabeled today, and a slot root
   of its own if any of them is to carry a label.
@@ -2152,14 +2151,13 @@ reflect them.
 
 Each question states the assumption this document made.
 
-1. **Label metadata has no observation class.** Truthiness is settled:
-   `plan-and-label-templates.md` uses `value` for a scalar condition and
-   `shape` for a record or array, which matches `readsTruthyAtRoot`. The
-   pointer label of a followed link is that document's `identity` class.
-   Label metadata (`inspectConfLabel`, `principalOf` and its siblings)
-   remains without a class. *Assumed:* it is a dynamic, journaled read with
-   a kind of its own, as the `inspectConfLabel` entry describes, and an
-   interim value that is not kept reads as `notAvailable`.
+1. **`inspectConfLabel` on a value that is not kept.** The three reads
+   this inventory found outside the four observation classes are placed by
+   `plan-and-label-templates.md` §2.4: truthiness as `value` or `shape`,
+   a followed pointer as `identity`, and label metadata as a fifth class.
+   An interim value has no stored label. *Assumed:* inspecting one reads as
+   `notAvailable`, the compiler reports it where it can see it, and
+   inspecting a value does not make it kept.
 2. **How `wish` is spelled.** `wish` stays one structural operation.
    Whether the compiler requires a constant query, so that it can tell a
    path from a search from a clock at compile time and give each its label
