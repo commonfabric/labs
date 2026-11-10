@@ -65,8 +65,8 @@ Five rules decide the cases the rest of this document does not list.
    checker accepts is also accepted by the TypeScript compiler against the
    published `commonfabric` typings, so an editor shows no error the compiler
    does not also report. The reverse does not hold: the subset refuses
-   programs TypeScript accepts. One deliberate exception is listed in
-   [§8.6](#86-assignability).
+   programs TypeScript accepts. [§8.6.1](#861-the-published-typings) says
+   how the typings keep this true for labels.
 3. **A refusal names the replacement.** No construct is refused without a
    catalog entry in [§10](#10-diagnostics-catalog) whose message contains the
    rewrite. Most authors of patterns are language models, and a message that
@@ -894,19 +894,27 @@ those of the type of `e` have no effect, and writing them draws a warning
 (`cfc-label:cast-ignored`) that says to declare the label on the cell, the
 pattern input, or the pattern result instead.
 
-This is the one place rule 2 of §2 can fail. The compiler does not read the
-declarations in `base/api/cfc.ts` (§7.2), but an editor does: it runs the
-TypeScript compiler over the same source against those declarations. A
-generic function that returns its unconstrained parameter as
-`Confidential<T, L>` is accepted by the subset and reported by the editor,
-because the brand type is not assignable from an unconstrained `T`. The
-author can write `T extends {}` to satisfy both.
+#### 8.6.1 The published typings
 
-Once nothing but editors reads the published typings, they can be reduced to
-what an editor needs: each label alias an identity alias of its payload
-(`type Confidential<T, L> = T`), and each scope wrapper likewise. The
-exception then disappears, and so does every editor error that comes from
-the brand encoding ([§13](#13-open-questions)).
+The compiler does not read the declarations in `base/api/cfc.ts` (§7.2), but
+an editor does: it runs the TypeScript compiler over the same source against
+them. So that an editor reports nothing the pattern compiler accepts, the
+published typings are identity aliases: each label alias is its payload
+(`type Confidential<T, L> = T`), each scope wrapper likewise, and `AnyOf`
+and `PolicyOf` keep a declaration only so that a label argument has a type
+to name. The brand declarations `Cfc`, `CfcTag`, and `CfcStamp` are not
+part of the published surface.
+
+The typings change when the transformer, which reads the brands, is retired
+(the overview's last stage). Until then one difference remains: a generic
+function that returns its unconstrained parameter as `Confidential<T, L>`
+is accepted by the subset and reported by the editor, and `T extends {}`
+satisfies both.
+
+The compiler's own diagnostics, such as read-only module data, a refused
+type feature, or a tier-R statement rule, are reported when the source is
+compiled. An editor does not show them while typing. A language-service
+plugin that would is not part of this design.
 
 ### 8.7 The TypeScript corner cases
 
@@ -931,7 +939,7 @@ The right column says what the annotation model does with it.
 | `Confidential<any, L>` is `any` to the checker, so the alias is read from its declaration, and a recursive such alias is refused (`cfc-schema:recursive-alias-of-any`) | Disappears. `any` is refused (§7.8), and `unknown` carries annotations |
 | A label list read only in part leaves `null` atoms and a warning (`cfc-label:unread`) | Replaced by an error. A label argument is in the constant language or is refused (`cfc-label:not-static`) |
 | Aliases are detected by canonical name, with no check of the declaring package, so a local type named like one is lowered as one | Disappears. An alias is recognized by resolving its import to `commonfabric` (§7.2) |
-| A function `<T>(v: T): Confidential<T, L>` does not type-check for unconstrained `T`, because the stamp is not assignable from `null` | Disappears in the subset. It remains in an editor until the typings change (§8.6) |
+| A function `<T>(v: T): Confidential<T, L>` does not type-check for unconstrained `T`, because the stamp is not assignable from `null` | Disappears in the subset, and in an editor once the typings are identity aliases (§8.6.1) |
 | An optional property adds `undefined`, which readings from a type have to subtract before matching the payload | Disappears. `?` is a property modifier (§8.4) |
 | A value typed with the brand needs a cast at a write: `cell.set(text as Confidential<string, L>)` | Disappears. Annotations are not part of assignability, and the cast is reported as redundant (`cfc-label:cast-ignored`) |
 | A scope wrapper may not be a union member, so the shrink moves nullish members inside it (`moveNullishIntoScopeWrapper`) | Replaced by the scope rule of §8.8 |
@@ -1576,29 +1584,14 @@ pattern<{ glaze: Default<string, "plain"> }>(({ glaze }) => ({ glaze }));
 Settled since the first draft, and written into the sections above: tier I
 is marked by `"use typescript";` (§5.5); the load-time verifier is retired
 for subset modules and kept for tier-I modules (§3.4); `any` is refused and
-each use gets an explicit form (§7.8); and an inline event handler in a
-function body is a handler binding (§5.2).
+each use gets an explicit form (§7.8); an inline event handler in a function
+body is a handler binding (§5.2); and the published typings become identity
+aliases, with no editor plugin (§8.6.1).
 
-The first question needs a decision from the project owner. The rest are
-for the sibling documents or for the prototype.
+None of the remaining questions needs a decision from the project owner
+now. They are for the sibling documents or for the prototype.
 
-1. **What editors show.** An editor type-checks pattern source with the
-   TypeScript compiler against the published `commonfabric` typings. The
-   pattern compiler reads neither. So an editor can report an error the
-   compiler does not (the brand encoding, §8.6), and cannot report the errors
-   only the compiler knows: read-only module data, a refused type feature, a
-   tier-R statement rule. There are two steps, and they are independent.
-   - Simplify the published typings to identity aliases once the transformer
-     no longer reads them (§8.6). This removes the false errors and needs no
-     new tooling.
-   - Show the compiler's own diagnostics while editing. The usual mechanism
-     is a language-service plugin: a small extension the TypeScript service
-     inside the editor loads, which runs the pattern compiler on the open
-     file and adds its diagnostics to the list the editor displays. Without
-     one, authors see the compiler's diagnostics only when they compile.
-     Since most authors are language models that compile on every change,
-     this step can wait.
-2. **Whether declared types can replace every re-typing overload.** §12.4
+1. **Whether declared types can replace every re-typing overload.** §12.4
    removes the idiom without a new construct, on the argument that a
    footprint, not the declared type, decides what a function body loads. The
    three such functions in `patterns/system/fabrichat/manager.tsx` are the
@@ -1606,42 +1599,42 @@ for the sibling documents or for the prototype.
    there changes neither what a handler loads nor the stored schema's
    compatibility. If it does, the fallback is a re-typing operation on
    cells, whose label rule would need a CFC ruling.
-3. **Value semantics of tier R on missing data.** This document assumes a
+2. **Value semantics of tier R on missing data.** This document assumes a
    tier-R expression has the value semantics of the same JavaScript
    expression, so that promotion preserves values exactly, and that strict
    `null` checks make a read through a possibly-missing value a type error.
    Stored data can still fail to match its declared type. What a path
    projection does then (yield `undefined`, or put the cone in an error
    state) belongs with the overview's open question on error states.
-4. **The label rule of a dynamic key.** §4.4 allows `a[k]` in tier R as an
+3. **The label rule of a dynamic key.** §4.4 allows `a[k]` in tier R as an
    index operation. This document assumes its template is the key's slots,
    the container's enumeration, and the selected element's slots, and that
    `plan-and-label-templates.md` defines the operation. If it does not, the
    fallback is to refuse a dynamic key in tier R, as the transformer does in
    the pattern body today, which affects 17 expressions in 7 modules.
-5. **The label rule of a handler binding.** §5.2 adds a fourth runtime call
+4. **The label rule of a handler binding.** §5.2 adds a fourth runtime call
    to the three the overview lists. `plan-and-label-templates.md` has to say
    what the plan records for a stream bound inside a function body, and
    `builtin-inventory.md` whether a `lift` or a `computed` may make one.
-6. **More structural collection methods.** `some`, `find`, and `findIndex`
+5. **More structural collection methods.** `some`, `find`, and `findIndex`
    with a callback account for most `computed` calls that fail promotion on
    a single construct. Whether they become structural operations is for
    `builtin-inventory.md`.
-7. **Instance-to-view assignability.** §7.5 lets a pattern instance stand
+6. **Instance-to-view assignability.** §7.5 lets a pattern instance stand
    where a view of its result is declared. The prototype has to confirm that
    this, with labels outside assignability, removes the 22 casts of §11.3,
    and whether a handle needs a further rule.
-8. **Cells as arguments of imported functions.** §5.5 refuses them. Allowing
+7. **Cells as arguments of imported functions.** §5.5 refuses them. Allowing
    them needs a declared write footprint in the signature.
-9. **External packages.** The corpus's pattern modules import none. The
+8. **External packages.** The corpus's pattern modules import none. The
    iframe guests import several, and they are not patterns. Whether tier I
    ever reaches beyond the program's own modules is deferred with the
    sandbox's dynamic-import question.
-10. **Stored source.** Today some authoring errors are demoted to warnings
-    when stored source is recompiled. Whether the new compiler ever compiles
-    source that an older compiler admitted, and with which severities, is
-    part of the overview's migration question.
-11. **Per-instantiation checking of generic functions.** §7.3 checks a
+9. **Stored source.** Today some authoring errors are demoted to warnings
+   when stored source is recompiled. Whether the new compiler ever compiles
+   source that an older compiler admitted, and with which severities, is
+   part of the overview's migration question.
+10. **Per-instantiation checking of generic functions.** §7.3 checks a
     generic function body once per instantiation. That is simple and exact,
     and it reports an error in a generic helper at each call that triggers
     it. The prototype should confirm that the messages stay usable.
