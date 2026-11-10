@@ -353,6 +353,43 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
     );
 
     await t.step(
+      "decides a complete binding inside a boundary that lowers the ceiling on everything its cell reaches",
+      async () => {
+        // The root ceiling admits the secret, and the boundary drops it. A
+        // host read is held to the root ceiling, not the boundary, so inside
+        // the boundary the badge's declared read cannot stand for what the
+        // badge shows, and a field it never reads decides the binding. At
+        // the root, the same badge is decided on its declared read.
+        const profile = await write("prop-ceiling-profile-lowered", {
+          name: PUBLIC,
+          inbox: { piece: link(secret) },
+        });
+        const badge = (): WorkerVNode => ({
+          type: "vnode",
+          name: "cf-profile-badge",
+          props: { $profile: profile.asSchema(true) as never },
+          children: [],
+        });
+        const page = await mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [badge(), {
+            type: "vnode",
+            name: "cf-cfc-render-boundary",
+            props: { maxConfidentiality: [] },
+            children: [badge()],
+          }],
+        }, { renderConfidentialityCeiling: { atoms: [secretAtom] } });
+        try {
+          expect(page.bindings("profile")).toBe(1);
+        } finally {
+          page.cancel();
+        }
+      },
+    );
+
+    await t.step(
       "binds a cell the ceiling admits and withholds one it does not",
       async () => {
         const page = await mount({
