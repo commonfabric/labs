@@ -1443,6 +1443,7 @@ let pullProjectedOf: <R>(
   project: (value: unknown) => R,
   options: { awaitDurability?: boolean },
 ) => Promise<R>;
+let writeTargetOf: (cell: CellImpl<FabricValue>) => Cell<FabricValue>;
 let sinkProjectedOf: <R>(
   cell: CellImpl<FabricValue>,
   project: (value: unknown) => R,
@@ -4220,13 +4221,22 @@ export class CellImpl<T extends FabricValue>
   }
 
   resolveAsCell(): Cell<T> {
+    return this.#resolveAsCell("value");
+  }
+
+  /**
+   * The cell this one's links lead to, for `"value"`, or the cell a write to
+   * this one lands in, for `"writeRedirect"`: write redirects are followed,
+   * and a link stored there as the value is not.
+   */
+  #resolveAsCell(lastNode: "value" | "writeRedirect"): Cell<T> {
     const readTx = this.#runtime.readTx(this.#tx);
     const tracesBefore = readTx.getCfcState().dereferenceTraces.length;
     let link: NormalizedFullLink = resolveLink(
       this.#runtime,
       readTx,
       this.#link,
-      "value",
+      lastNode,
       { markIfcCrossings: true },
     );
     // The handle carries how it was obtained, the restrictions of the slots
@@ -5187,6 +5197,7 @@ export class CellImpl<T extends FabricValue>
       cell.#pullProjected(project, options, false);
     sinkProjectedOf = (cell, project, callback, options) =>
       cell.#sinkProjected(project, callback, options);
+    writeTargetOf = (cell) => cell.#resolveAsCell("writeRedirect");
   }
 }
 
@@ -6002,6 +6013,16 @@ export function pullProjected<R>(
   options: { awaitDurability?: boolean } = {},
 ): Promise<R> {
   return pullProjectedOf(requireCellImpl(cell), project, options);
+}
+
+/**
+ * The cell a write to `cell` lands in, as `resolveAsCell()` resolves one: its
+ * write redirects are followed, and a link stored there as the value is not.
+ * A host that must tell a value written into a cell from one reached through
+ * a link stored there compares this with `cell.resolveAsCell()`.
+ */
+export function resolveWriteTarget(cell: Cell<unknown>): Cell<unknown> {
+  return writeTargetOf(requireCellImpl(cell));
 }
 
 /**

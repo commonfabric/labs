@@ -115,7 +115,7 @@ export default pattern<ProfileGroupChatInput, ProfileGroupChatOutput>(
     // result under PR #3830). `#profile` is the live cell — the identity key
     // stored on each message and rendered via cf-profile-badge; the field
     // target gives the snapshot name (fallback label + participant dedup).
-    const profileWish = wish<{ name?: string; avatar?: string }>({
+    const profileWish = wish<{ name?: string }>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
