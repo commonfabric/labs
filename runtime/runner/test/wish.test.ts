@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { hashOf } from "@commonfabric/data-model";
-import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { fromFileUrl } from "@std/path";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
@@ -2846,7 +2845,6 @@ describe("wish built-in", () => {
         name: "Ada Lovelace",
         initialNameApplied: "Ada Lovelace",
         avatar: "ada.png",
-        picture: new FabricBytes(new Uint8Array([0x89, 0x50, 0x4e, 0x47])),
         bio: "Mathematician & first programmer.",
         elements: [],
       });
@@ -2879,8 +2877,6 @@ describe("wish built-in", () => {
         return {
           profile: wish({ query: "#profile" }),
           profileName: wish({ query: "#profileName" }),
-          profileAvatar: wish({ query: "#profileAvatar" }),
-          profilePicture: wish({ query: "#profilePicture" }),
           profileBio: wish({ query: "#profileBio" }),
           profileSpace: wish({ query: "#profileSpace" }),
         };
@@ -2900,10 +2896,6 @@ describe("wish built-in", () => {
 
       expect(result.key("profile").get()?.result?.name).toBe("Ada Lovelace");
       expect(result.key("profileName").get()?.result).toBe("Ada Lovelace");
-      expect(result.key("profileAvatar").get()?.result).toBe("ada.png");
-      expect(result.key("profilePicture").get()?.result?.slice()).toEqual(
-        new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
-      );
       expect(result.key("profileBio").get()?.result).toBe(
         "Mathematician & first programmer.",
       );
@@ -3474,7 +3466,6 @@ describe("wish built-in", () => {
       const wishPattern = pattern(() => ({
         profile: wish({ query: "#profile", headless: true }),
         profileName: wish({ query: "#profileName" }),
-        profileAvatar: wish({ query: "#profileAvatar" }),
       }));
       const resultCell = runtime.getCell<Record<string, any>>(
         patternSpace.did(),
@@ -3489,7 +3480,6 @@ describe("wish built-in", () => {
 
       expect(result.key("profile").get()?.result?.name).toBe("Grace");
       expect(result.key("profileName").get()?.result).toBe("Grace");
-      expect(result.key("profileAvatar").get()?.result).toBe("grace.png");
     });
 
     /**
@@ -4176,7 +4166,6 @@ describe("wish built-in", () => {
         const wishPattern = pattern(() => ({
           profile: wish({ query: "#profile" }),
           profileName: wish({ query: "#profileName" }),
-          profileAvatar: wish({ query: "#profileAvatar" }),
           profileBio: wish({ query: "#profileBio" }),
           profileSpace: wish({ query: "#profileSpace" }),
         }));
@@ -4193,7 +4182,6 @@ describe("wish built-in", () => {
 
         expect(result.key("profile").get()?.result?.name).toBe("Ada Lovelace");
         expect(result.key("profileName").get()?.result).toBe("Ada Lovelace");
-        expect(result.key("profileAvatar").get()?.result).toBe("ada.png");
         expect(result.key("profileBio").get()?.result).toBe(
           "Mathematician & first programmer.",
         );
@@ -4919,6 +4907,32 @@ describe("parseWishTarget", () => {
 
   it("throws on whitespace-only string", () => {
     expect(() => parseWishTarget("   ")).toThrow("is empty");
+  });
+
+  it("throws for a target that answered with a profile's face field", () => {
+    for (const target of ["#profilePicture", "#profileAvatar/0"]) {
+      expect(() => parseWishTarget(target)).toThrow("does not exist");
+    }
+  });
+
+  it("throws for a profile's face field named below `#profile`, in the target or its path", () => {
+    for (const target of ["#profile/picture", "#profile/avatar/0"]) {
+      expect(() => parseWishTarget(target)).toThrow("does not exist");
+    }
+    expect(() => parseWishTarget("#profile", ["picture"])).toThrow(
+      "does not exist",
+    );
+  });
+
+  it("returns the path a wish's `path` adds after the target's own", () => {
+    expect(parseWishTarget("#profile/name", ["0"])).toEqual({
+      key: "#profile",
+      path: ["name", "0"],
+    });
+    expect(parseWishTarget("/a", ["b"])).toEqual({
+      key: "/",
+      path: ["a", "b"],
+    });
   });
 
   it("throws on unrecognized path format", () => {

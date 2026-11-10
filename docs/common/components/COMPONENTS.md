@@ -1162,7 +1162,9 @@ Trusted presentation of **a participant's profile** — the viewer's own, or any
 whose profile cell you stored on join. Bind a profile **cell** (not strings) via
 `$profile`; it renders name + picture (or, without one, the profile's avatar
 text) + a verified seal derived from the owner's
-identity that user-space cannot mint.
+identity that user-space cannot mint. It draws the picture or the avatar text
+only when the label of the cell holding it names the owner the seal shows,
+alone, so a picture a visitor set is not drawn as the owner's face.
 
 ```tsx
 // Shown for illustration only.

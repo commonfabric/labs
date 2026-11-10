@@ -1399,6 +1399,22 @@ export type CellResolveAsCellRequest = BaseRequest & {
    * The cell whose aliases to follow.
    */
   cell: CellRef;
+
+  /**
+   * Whether to answer also with where a write to the cell lands, read
+   * together with the cell its links lead to: write redirects are followed,
+   * and a link stored as the value there is not.
+   */
+  withWriteTarget?: true;
+};
+
+/** The {@link RequestType.CellResolveAsCell} response. */
+export type CellResolveAsCellResponse = CellResponse & {
+  /**
+   * Where a write to the cell lands, when the request asked for it, read
+   * with {@link CellResponse.cell}.
+   */
+  writeTarget?: CellRef;
 };
 
 /** The {@link RequestType.CellGetCfcLabel} request. */
@@ -4733,7 +4749,7 @@ export type Commands = {
   };
   [RequestType.CellResolveAsCell]: {
     request: CellResolveAsCellRequest;
-    response: CellResponse;
+    response: CellResolveAsCellResponse;
   };
   [RequestType.CellGetCfcLabel]: {
     request: CellGetCfcLabelRequest;

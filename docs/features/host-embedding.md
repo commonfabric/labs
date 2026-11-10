@@ -47,8 +47,8 @@ weeks later.
 ## 1. Wish targets and result semantics
 
 **Contract.** The runtime resolves the well-known profile targets
-`#profile`, `#profileName`, `#profileAvatar`, `#profilePicture`,
-`#profileBio`, `#profileSpace`, and hashtag search over profile elements with
+`#profile`, `#profileName`, `#profileBio`, `#profileSpace`, and hashtag
+search over profile elements with
 `scope: ["profile"]`. Reads are read-only; writes go only through the
 profile pattern's own owner-protected handlers (seam 7). At zero
 profiles, `#profile` renders the trusted create surface inline

@@ -242,8 +242,6 @@ function getResolutionKind(parsed: ParsedWishTarget): string {
     case "#chatManager":
     case "#profile":
     case "#profileName":
-    case "#profileAvatar":
-    case "#profilePicture":
     case "#profileBio":
     case "#profileSpace":
       return "home-target";
@@ -252,7 +250,26 @@ function getResolutionKind(parsed: ParsedWishTarget): string {
   }
 }
 
-export function parseWishTarget(target: string): ParsedWishTarget {
+/**
+ * Targets that once answered with a profile's face field as stored, which
+ * anyone may have written. A wish for one, or for the same field below
+ * `#profile`, fails, rather than searching for the tag or reading the field,
+ * so that a pattern asking for one hears why.
+ */
+const FACE_FIELD_TARGETS: ReadonlySet<string> = new Set([
+  "#profilePicture",
+  "#profileAvatar",
+]);
+const FACE_FIELDS: ReadonlySet<string> = new Set(["picture", "avatar"]);
+
+/**
+ * Parses the wish target `target`, with `extraPath` (a wish's `path`)
+ * appended to the path it names.
+ */
+export function parseWishTarget(
+  target: string,
+  extraPath: readonly string[] = [],
+): ParsedWishTarget {
   const trimmed = target.trim();
   if (trimmed === "") {
     throw new WishError(`Wish target "${target}" is empty.`);
@@ -266,12 +283,23 @@ export function parseWishTarget(target: string): ParsedWishTarget {
       throw new WishError(`Wish tag target "${target}" is not recognized.`);
     }
     const key = `#${segments[0]}` as WishTag;
-    return { key, path: segments.slice(1) };
+    const path = [...segments.slice(1), ...extraPath];
+    if (
+      FACE_FIELD_TARGETS.has(key) ||
+      (key === "#profile" && FACE_FIELDS.has(path[0]))
+    ) {
+      throw new WishError(
+        `Wish target "${target}" does not exist: a profile's picture or ` +
+          "avatar is its owner's only when its label says so, so read the " +
+          "face from the profile `#profile` resolves to.",
+      );
+    }
+    return { key, path };
   }
 
   if (trimmed.startsWith("/")) {
     const segments = trimmed.split("/").filter((segment) => segment.length > 0);
-    return { key: "/", path: segments };
+    return { key: "/", path: [...segments, ...extraPath] };
   }
 
   throw new WishError(`Wish path target "${target}" is not recognized.`);
@@ -1161,21 +1189,6 @@ function resolveHomeSpaceTarget(
       // edits made via the profile's setName handler.
       const profileDefault = getDefaultProfileCell(ctx);
       return [{ cell: profileDefault, pathPrefix: ["initialNameApplied"] }];
-    }
-
-    case "#profileAvatar": {
-      return [{
-        cell: getDefaultProfileCell(ctx),
-        pathPrefix: ["avatar"],
-      }];
-    }
-
-    case "#profilePicture": {
-      // The default profile's picture: the bytes of a raster image.
-      return [{
-        cell: getDefaultProfileCell(ctx),
-        pathPrefix: ["picture"],
-      }];
     }
 
     case "#profileBio": {
@@ -3372,11 +3385,7 @@ export function wish(
             const activeParsed = parsed = measureWishPhase(
               "parse-target",
               queryKey,
-              () => {
-                const nextParsed = parseWishTarget(query);
-                nextParsed.path = [...nextParsed.path, ...(path ?? [])];
-                return nextParsed;
-              },
+              () => parseWishTarget(query, path ?? []),
             );
 
             // Interval #now is not a resolution — it's a timer subscription.

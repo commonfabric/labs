@@ -4521,6 +4521,33 @@ export declare function principalsOf(
 ): DID[] | undefined;
 
 /**
+ * Returns the principal `target`'s value's own cell represents: the one
+ * principal that the label of the cell a write to `target` lands in names as
+ * the one the value represents, in the form the runtime writes, at that
+ * label's root, and only when no claim anywhere in the label names anyone
+ * else. The value's own cell is that cell when the value is the whole of it
+ * and the cell holds no link to a value elsewhere: a value at a path within a
+ * document reads with that document's label, and a link stored in the cell
+ * leads to a value it does not hold. `undefined` in every other case, for a
+ * value stored without a label, and for a `target` of `undefined`.
+ *
+ * The label says whom the cell's value represents, not who pointed `target`
+ * at that cell: the links on the way, write redirects among them, are
+ * followed. A write declared `RepresentsCurrentUser`, as a profile's
+ * `setPicture` is, labels the value with the principal it acts for, and a
+ * profile's owner-protected fields keep their write redirects from being
+ * repointed. So comparing this with `profileOwnerOf()` says whether a
+ * profile's `picture` is one its owner set. It can be called where
+ * `principalOf()` can: in a reactive computation the result updates when the
+ * label or the links change, and in a handler a document still loading has
+ * the handler run again once it arrives. Calling it in a pattern body throws,
+ * and so does a label stored in a form the runtime cannot interpret.
+ */
+export declare function writtenPrincipalOf<T>(
+  target: AnyCell<T> | undefined,
+): DID | undefined;
+
+/**
  * Returns the person whose own profile `target` is, or `undefined` when it is
  * no one's. A profile is a person's own when its `name`, followed through the
  * links it holds, stays within the profile's own documents, and its label,

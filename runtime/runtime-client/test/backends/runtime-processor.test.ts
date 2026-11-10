@@ -5607,6 +5607,45 @@ describe("runtime-processor", () => {
     });
   });
 
+  describe("`RuntimeProcessor` cell resolution IPC", () => {
+    it("returns, when asked, where a write to the cell lands beside the cell its links lead to", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const space = cfcSigner.did();
+        const value = runtime.getCell<number>(space, "resolve-value");
+        const holder = runtime.getCell<unknown>(space, "resolve-holder");
+        const field = runtime.getCell<unknown>(space, "resolve-field");
+        await Promise.all([value.sync(), holder.sync(), field.sync()]);
+        const tx = runtime.edit();
+        value.withTx(tx).set(1);
+        holder.withTx(tx).setRawUntyped(value.getAsLink());
+        field.withTx(tx).setRawUntyped(holder.getAsWriteRedirectLink());
+        expect((await tx.commit().settled).error).toBeUndefined();
+        const processor = buildProcessor({ runtime });
+        const request = {
+          type: RequestType.CellResolveAsCell,
+          cell: field.getAsNormalizedFullLink(),
+        } as const;
+
+        const plain = processor.handleCellResolveAsCell(request);
+        const both = processor.handleCellResolveAsCell({
+          ...request,
+          withWriteTarget: true,
+        });
+
+        expect(plain.writeTarget).toBeUndefined();
+        expect([plain.cell.id, both.cell.id, both.writeTarget?.id]).toEqual([
+          value.getAsNormalizedFullLink().id,
+          value.getAsNormalizedFullLink().id,
+          holder.getAsNormalizedFullLink().id,
+        ]);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+  });
+
   describe("`RuntimeProcessor` cell fields IPC", () => {
     it("lists the fields of a record it has not loaded yet, once it has synced it", async () => {
       const server = newLoopbackServer();
