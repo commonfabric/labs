@@ -4899,7 +4899,8 @@ export class SpaceSession {
    * on this never spins.
    */
   #watchMutationWaitsForRestore(): boolean {
-    return !this.#client.isConnected() || !this.#readyOnConnection;
+    return !this.#client.isConnected() || !this.#readyOnConnection ||
+      this.#restoreComplete !== undefined;
   }
 
   /**
@@ -5198,9 +5199,19 @@ export class SpaceSession {
     madeOn: { epoch: number; sessionId: string | undefined },
   ): Error {
     const failure = error instanceof Error ? error : new Error(String(error));
-    if (connectionDeliveryOf(failure) === undefined) return failure;
-    const laterThan = isUnacknowledgedError(failure) ? madeOn.epoch : -1;
-    return Object.assign(failure, {
+    const delivery = connectionDeliveryOf(failure);
+    if (delivery === undefined) return failure;
+    // A drop fails every request it carried with one error; each request's
+    // failure gets one of its own, so that the readiness attached here is
+    // this request's.
+    const own = delivery === "notSent"
+      ? notSentError(failure.message)
+      : unacknowledgedError(failure.message, failure.cause);
+    if (isOwnWriteFailure(failure)) {
+      Object.assign(own, { ownWriteFailed: true });
+    }
+    const laterThan = delivery === "unacknowledged" ? madeOn.epoch : -1;
+    return Object.assign(own, {
       readyToRetry: () => this.#reopenedSince(laterThan, madeOn.sessionId),
     });
   }

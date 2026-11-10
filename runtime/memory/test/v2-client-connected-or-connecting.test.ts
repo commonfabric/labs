@@ -752,6 +752,37 @@ describe("client", () => {
       }
     });
 
+    it("gives each commit a drop failed a readiness of its own, which another session closing does not end", async () => {
+      const t = await connected("ready-own");
+      try {
+        const other = await t.client.mount(
+          "did:key:z6Mk-ready-own-other",
+          {},
+          testSessionOpenAuthFactory,
+        );
+        t.host.loseAnswers();
+        const handledA = t.host.whenHandled("transact");
+        const a = t.session.transact(set(1, "A")).catch((e) => e);
+        await handledA;
+        const handledB = t.host.whenHandled("transact");
+        const b = other.transact(set(1, "B")).catch((e) => e);
+        await handledB;
+        const back = t.reconnected();
+        t.host.drop();
+        const [failedA, failedB] = await Promise.all([a, b]);
+        expect(isUnacknowledgedError(failedA)).toBe(true);
+        expect(isUnacknowledgedError(failedB)).toBe(true);
+        expect(failedA).not.toBe(failedB);
+        await back;
+
+        await other.close();
+        await failedA.readyToRetry();
+        expect((await t.session.transact(set(1, "A"))).seq).toBeGreaterThan(0);
+      } finally {
+        await t.close();
+      }
+    });
+
     it("rejects a read whose send fails with its connection with an unacknowledged `ConnectionError`", async () => {
       const t = await connected("fail-send-throws");
       try {

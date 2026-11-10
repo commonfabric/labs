@@ -2352,19 +2352,21 @@ export class StorageManager implements IStorageManager {
             "owns itself could not be opened",
         );
       }
-      const commit = session.transact({
-        ...declarations,
-        localSeq: 1,
-        reads: {
-          confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
-          pending: [],
-        },
-        operations: [{
-          op: "set",
-          id: aclId,
-          value: { value: { ...acl(space) } },
-        }],
-      });
+      const commit = untilAnswered(() =>
+        session.transact({
+          ...declarations,
+          localSeq: 1,
+          reads: {
+            confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
+            pending: [],
+          },
+          operations: [{
+            op: "set",
+            id: aclId,
+            value: { value: { ...acl(space) } },
+          }],
+        })
+      );
       this.trackPendingCommit(commit);
       await commit;
       if (afterGenesis !== undefined) delegation = await afterGenesis();
@@ -2971,21 +2973,23 @@ export class StorageManager implements IStorageManager {
         // first inspection; the resume below then opens what it wrote.
         if (isFresh(current)) {
           try {
-            const commit = bootstrap.session.transact({
-              localSeq: 1,
-              reads: {
-                confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
-                pending: [],
-              },
-              operations: [{
-                op: "set",
-                id: aclId,
-                value: { value: { [space]: "OWNER" } },
-              }],
-            }, () => {
-              assertCurrentRoute();
-              routeState.writeIssuedGeneration = routeGeneration;
-            });
+            const commit = untilAnswered(() =>
+              bootstrap.session.transact({
+                localSeq: 1,
+                reads: {
+                  confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
+                  pending: [],
+                },
+                operations: [{
+                  op: "set",
+                  id: aclId,
+                  value: { value: { [space]: "OWNER" } },
+                }],
+              }, () => {
+                assertCurrentRoute();
+                routeState.writeIssuedGeneration = routeGeneration;
+              })
+            );
             this.trackPendingCommit(commit);
             await commit;
           } catch (error) {
