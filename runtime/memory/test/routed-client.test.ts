@@ -7,6 +7,7 @@ import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { getMemoryProtocolFlags, type SessionSync } from "../v2.ts";
 import {
   connect,
+  isNotSentError,
   type SessionPrincipal,
   type Transport,
   WatchView,
@@ -1400,7 +1401,7 @@ Deno.test("two mounts as one key both resolve after a refusal for now of the sta
   }
 });
 
-Deno.test("mounts waiting to send one refused statement all resolve when the connection drops first", async () => {
+Deno.test("mounts waiting to send one refused statement all fail as never sent when the connection drops first, and sign nothing for the next", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   const { p, log, auths } = routedPeer((n) => n === 1);
@@ -1417,28 +1418,24 @@ Deno.test("mounts waiting to send one refused statement all resolve when the con
       settling(client.mount(elsewhereToo, {}, principal())),
     );
     // Half way through that second the connection drops and the client
-    // connects again. The refused statement answered a challenge of the
-    // connection that is gone, so it is not sent: each mount waits for the
-    // new connection, and one statement is signed for it.
+    // connects again. Each mount was made on the connection that is gone,
+    // so each fails, and none signs for the new one.
     await time.tickAsync(500);
     p.drop();
     await tickUntil(time, () => mounts.every((mount) => mount.settled));
-    assertEquals(mounts, [
-      { settled: true },
-      { settled: true },
-      { settled: true },
-    ]);
-    assertEquals(log.filter((e) => e.type === "open").length, 3);
-    assertEquals(auths().length, 2);
-    assert(auths()[1].statement !== auths()[0].statement);
-    assertEquals(client.isConnected(), true);
+    for (const mount of mounts) {
+      assertEquals(isNotSentError(mount.failure), true);
+    }
+    await tickUntil(time, () => client.isConnected());
+    assertEquals(log.filter((e) => e.type === "open").length, 0);
+    assertEquals(auths().length, 1);
   } finally {
     await client.close();
     time.restore();
   }
 });
 
-Deno.test("a refused statement whose wait outlasts its connection asks the next connection for no challenge", async () => {
+Deno.test("a mount waiting to send a refused statement fails as its connection drops, and asks the next connection for no challenge", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   // Seven seconds: the refused statement may be sent again a second later,
@@ -1458,9 +1455,11 @@ Deno.test("a refused statement whose wait outlasts its connection asks the next 
     p.drop();
     time.tick(3000);
     await tickUntil(time, () => mounts.every((mount) => mount.settled));
-    assertEquals(mounts, [{ settled: true }, { settled: true }]);
+    for (const mount of mounts) {
+      assertEquals(isNotSentError(mount.failure), true);
+    }
     assertEquals(log.filter((e) => e.type === "challenge").length, 0);
-    assertEquals(auths().length, 2);
+    assertEquals(auths().length, 1);
   } finally {
     await client.close();
     time.restore();
@@ -1692,92 +1691,55 @@ function namedSigner(did: string): SessionPrincipal {
   };
 }
 
-Deno.test("a held mount that wakes between a drop and the next hello signs for the next connection", async (t) => {
+Deno.test("a held mount fails as never sent when its connection drops, and nothing of it reaches the next connection", async () => {
   setModernCellRepConfig(true);
-  for (
-    const [name, laterFlags, mounted] of [
-      // The mount's key is authenticated on the next connection before its
-      // open goes there; the space is still down, so the mount stays held.
-      ["as a key the next connection has not authenticated", flags(), {
-        settled: false,
-      }],
-      // The next connection's server does not seal a space's kind, which
-      // the mount declares.
-      ["against the next connection's capabilities", {
-        ...flags(),
-        spaceKind: false,
-      }, undefined],
-    ] as const
-  ) {
-    await t.step(name, async () => {
-      const random = Math.random;
-      // No jitter: a held mount waits 1,025 ms, and a reconnect while a
-      // session is held waits 25 ms before its hello.
-      Math.random = () => 0;
-      const time = new FakeTime(Date.UTC(2026, 9, 1));
-      const { p, down, log } = principalRouter((hello) =>
-        hello < 3 ? flags() : laterFlags
-      );
-      const client = await connect({ transport: p.transport });
-      try {
-        // A session whose toolshed goes down and whose connection drops is
-        // held by the reconnect, so the next reconnect waits before its
-        // hello.
-        const session = await client.mount(
-          identity.did(),
-          {},
-          namedSigner(identity.did()),
-        );
-        down.add(identity.did());
-        down.add(elsewhere);
-        p.drop();
-        await tickUntil(time, () => session.held, 0, 40);
-        assertEquals(p.hellos(), 2);
-        // A mount as another key, of a space whose toolshed is down too.
-        const held = Date.now();
-        const mount = settling(
-          client.mount(
-            elsewhere,
-            { spaceKind: "notes" },
-            namedSigner(elsewhere),
-          ),
-        );
-        await tickUntil(
-          time,
-          () => log.some((e) => e.principal === elsewhere && e.type === "open"),
-          0,
-          40,
-        );
-        assertEquals(mount, { settled: false });
-        // The connection drops 10 ms before the mount's wait ends, and the
-        // next hello goes 25 ms after the drop: the mount wakes in between.
-        await time.tickAsync(1015 - (Date.now() - held));
-        p.drop();
-        await time.tickAsync(10);
-        assertEquals(p.hellos(), 2);
-        await time.tickAsync(100);
-        await tickUntil(time, () => false, 0, 20);
-        assertEquals(p.hellos(), 3);
-        const onThird = log.filter((e) =>
-          e.connection === 3 && e.principal === elsewhere
-        ).map((e) => [e.type, e.answer]);
-        if (mounted !== undefined) {
-          assertEquals(onThird, [["auth", undefined], [
-            "open",
-            "denied for now",
-          ]]);
-          assertEquals(mount, mounted);
-        } else {
-          // No open that declares a kind reaches that server.
-          assertEquals(onThird.filter(([type]) => type === "open"), []);
-          assertEquals((mount.failure as Error)?.name, "ProtocolError");
-        }
-      } finally {
-        await client.close();
-        time.restore();
-        Math.random = random;
-      }
-    });
+  const random = Math.random;
+  // No jitter: a held mount waits 1,025 ms, and a reconnect while a session
+  // is held waits 25 ms before its hello.
+  Math.random = () => 0;
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  const { p, down, log } = principalRouter(() => flags());
+  const client = await connect({ transport: p.transport });
+  try {
+    // A session whose toolshed goes down and whose connection drops is held
+    // by the reconnect, so the next reconnect waits before its hello.
+    const session = await client.mount(
+      identity.did(),
+      {},
+      namedSigner(identity.did()),
+    );
+    down.add(identity.did());
+    down.add(elsewhere);
+    p.drop();
+    await tickUntil(time, () => session.held, 0, 40);
+    assertEquals(p.hellos(), 2);
+    // A mount as another key, of a space whose toolshed is down too: it is
+    // held after a refusal for now.
+    const mount = settling(
+      client.mount(elsewhere, { spaceKind: "notes" }, namedSigner(elsewhere)),
+    );
+    await tickUntil(
+      time,
+      () => log.some((e) => e.principal === elsewhere && e.type === "open"),
+      0,
+      40,
+    );
+    assertEquals(mount, { settled: false });
+    // The connection drops while the mount waits: the mount fails with it.
+    p.drop();
+    await time.tickAsync(0);
+    assertEquals(isNotSentError(mount.failure), true);
+    await time.tickAsync(100);
+    await tickUntil(time, () => false, 0, 20);
+    assertEquals(p.hellos(), 3);
+    assertEquals(
+      log.filter((e) => e.connection === 3 && e.principal === elsewhere),
+      [],
+    );
+  } finally {
+    await client.close();
+    time.restore();
+    Math.random = random;
   }
 });
 
@@ -1904,7 +1866,7 @@ Deno.test("a challenge a renewal asked for is signed by the next new key", async
   }
 });
 
-Deno.test("a mount held after a refusal for now starts over on the next connection when this one drops", async () => {
+Deno.test("a mount held after a refusal for now fails as never sent when its connection drops, and nothing of it reaches the next", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   const { p, log, auths } = routedPeer(() => false, {
@@ -1916,15 +1878,15 @@ Deno.test("a mount held after a refusal for now starts over on the next connecti
     const opens = () => log.filter((e) => e.type === "open").length;
     await tickUntil(time, () => opens() >= 1, 0, 40);
     assertEquals(mount, { settled: false });
-    // The connection drops while the mount waits. A new connection has
-    // authenticated nobody, so the mount signs for it before it opens.
+    // The connection drops while the mount waits, and the mount fails with
+    // it rather than starting over on the next.
     await time.tickAsync(500);
     p.drop();
     await tickUntil(time, () => mount.settled);
-    assertEquals(mount, { settled: true });
-    assertEquals(p.hellos(), 2);
-    assertEquals(auths().length, 2);
-    assertEquals(opens(), 2);
+    assertEquals(isNotSentError(mount.failure), true);
+    await tickUntil(time, () => p.hellos() === 2);
+    assertEquals(auths().length, 1);
+    assertEquals(opens(), 1);
   } finally {
     await client.close();
     time.restore();
@@ -2053,7 +2015,7 @@ Deno.test("a mount cancelled while its key is being authenticated sends no open"
   }
 });
 
-Deno.test("a mount cancelled while it waits for the reconnect sends nothing on the next connection", async () => {
+Deno.test("a mount made while the client reconnects fails at once as never sent, and sends nothing on the next connection", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   // The reconnect's hello is answered only when the test says.
@@ -2065,16 +2027,12 @@ Deno.test("a mount cancelled while it waits for the reconnect sends nothing on t
     p.drop();
     await time.tickAsync(0);
     assertEquals(p.hellos(), 2);
-    const caller = new AbortController();
-    const mount = settling(
-      client.mount(identity.did(), {}, principal(), caller.signal),
-    );
+    const mount = settling(client.mount(identity.did(), {}, principal()));
     await time.tickAsync(0);
-    caller.abort(new Error("the space was closed"));
+    assertEquals(isNotSentError(mount.failure), true);
     greet();
     await tickUntil(time, () => false, 1000, 3);
     assertEquals(client.isConnected(), true);
-    assertEquals((mount.failure as Error)?.message, "the space was closed");
     assertEquals(auths().length, 0);
     assertEquals(log.filter((e) => e.type === "open").length, 0);
   } finally {
@@ -2083,7 +2041,7 @@ Deno.test("a mount cancelled while it waits for the reconnect sends nothing on t
   }
 });
 
-Deno.test("a signed open's round after a reconnect is checked as its first round is", async (t) => {
+Deno.test("a signed open made on a connection is sent on no other", async (t) => {
   setModernCellRepConfig(true);
   // A direct server without connection authentication: each open is signed.
   const signedFlags = (spaceKind: boolean) => ({
@@ -2118,7 +2076,7 @@ Deno.test("a signed open's round after a reconnect is checked as its first round
     return { p, opens: () => opens };
   };
   await t.step(
-    "a mount cancelled while it waits for the reconnect signs nothing",
+    "a mount made while the client reconnects fails at once and signs nothing",
     async () => {
       const time = new FakeTime(Date.UTC(2026, 9, 1));
       // The reconnect's hello is answered only when the test says.
@@ -2129,19 +2087,17 @@ Deno.test("a signed open's round after a reconnect is checked as its first round
         p.drop();
         await time.tickAsync(0);
         assertEquals(p.hellos(), 2);
-        const caller = new AbortController();
         const mount = settling(
           client.mount(identity.did(), {}, () => {
             signs++;
             return undefined;
-          }, caller.signal),
+          }),
         );
         await time.tickAsync(0);
-        caller.abort(new Error("the space was closed"));
+        assertEquals(isNotSentError(mount.failure), true);
         p.raw(frame(hello(direct(), signedFlags(true))));
         await tickUntil(time, () => false, 1000, 3);
         assertEquals(client.isConnected(), true);
-        assertEquals((mount.failure as Error)?.message, "the space was closed");
         assertEquals(signs, 0);
         assertEquals(opens(), 0);
       } finally {
@@ -2151,7 +2107,7 @@ Deno.test("a signed open's round after a reconnect is checked as its first round
     },
   );
   await t.step(
-    "a mount that declares a kind fails against a next server that seals none",
+    "a mount whose connection drops while it is signed fails as never sent, and nothing reaches the next server",
     async () => {
       const time = new FakeTime(Date.UTC(2026, 9, 1));
       const { p, opens } = signedPeer(() =>
@@ -2174,8 +2130,8 @@ Deno.test("a signed open's round after a reconnect is checked as its first round
         assertEquals(p.hellos(), 2);
         signing.resolve(undefined);
         await tickUntil(time, () => mount.settled, 0, 40);
-        assertEquals((mount.failure as Error)?.name, "ProtocolError");
-        // The open that declares a kind is neither signed again nor sent.
+        assertEquals(isNotSentError(mount.failure), true);
+        // The open is neither signed again nor sent.
         assertEquals(signs, 1);
         assertEquals(opens(), 0);
       } finally {
@@ -2186,7 +2142,7 @@ Deno.test("a signed open's round after a reconnect is checked as its first round
   );
 });
 
-Deno.test("a mount held through a reconnect is held to the next connection's capabilities", async () => {
+Deno.test("a mount held when its connection drops fails as never sent, before the next connection's capabilities are known", async () => {
   setModernCellRepConfig(true);
   const time = new FakeTime(Date.UTC(2026, 9, 1));
   // The server the client reconnects to does not seal a space's kind.
@@ -2205,7 +2161,7 @@ Deno.test("a mount held through a reconnect is held to the next connection's cap
     await time.tickAsync(500);
     p.drop();
     await tickUntil(time, () => mount.settled);
-    assertEquals((mount.failure as Error)?.name, "ProtocolError");
+    assertEquals(isNotSentError(mount.failure), true);
     // The open that declares a kind is not sent to that server.
     assertEquals(opens(), 1);
   } finally {
@@ -2234,10 +2190,10 @@ Deno.test("a mount held after a refusal for now fails when the connection fails 
     assertEquals(mount, { settled: false });
     p.drop();
     await tickUntil(time, () => mount.settled, 0, 40);
-    // The mount fails with the connection, not when its wait would end,
-    // and no timer is left.
-    assertEquals((mount.failure as Error)?.name, "ProtocolError");
-    assertEquals(client.connectionState, "failed");
+    // The mount fails with its connection, not when its wait would end, and
+    // once the connection fails for good no timer is left.
+    assertEquals(isNotSentError(mount.failure), true);
+    await tickUntil(time, () => client.connectionState === "failed", 0, 40);
     assertEquals(time.next(), false);
   } finally {
     await client.close();

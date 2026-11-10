@@ -1550,7 +1550,11 @@ export class Client {
             ? undefined
             : this.#renewing.get(auth.did);
           const principal = await (renewal === undefined
-            ? this.#authenticate(auth, whileConnected)
+            ? runWithAbortSignal(
+              signal,
+              "memory session mount cancelled",
+              () => this.#authenticate(auth, whileConnected),
+            )
             : this.#waitForRenewal(renewal, signal));
           if (principal !== STALE) {
             requireUncancelled();
@@ -1564,9 +1568,7 @@ export class Client {
               session,
               ...(proofs === undefined ? {} : {
                 authorization: {
-                  proofs: proofs.map((proof) =>
-                    new FabricBytes(proof)
-                  ),
+                  proofs: proofs.map((proof) => new FabricBytes(proof)),
                 },
               }),
               ...(holdings !== undefined
