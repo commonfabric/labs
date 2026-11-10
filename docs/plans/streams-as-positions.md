@@ -19,8 +19,8 @@ itself — so no part of delivery needs the document. What the document supplies
 is an address: an entity id a party can hold that names the stream — and,
 through the back-link on that document, the owner. This plan stops writing the
 document and puts the owner into the address instead: a stream its pattern
-owns and exposes in its result is addressed as its result path on the owner's
-result document, and one it owns but does not expose is addressed by a
+owns and declares in its result schema is addressed as its result path on the
+owner's result document, and every other stream it owns is addressed by a
 `stream:` id over the owner's own hash, at a path naming its cause. Two
 things the sibling plan builds toward then have nothing to do: the walk from
 a stream's document to its owner, which its stage 3 adds, and the follow-up
@@ -28,9 +28,9 @@ it was written toward, a stream id that carries its owner. Here every stream's
 address carries its owner.
 
 The contract: **a stream is owned by the pattern whose handler node or
-`stream()` root it is. One the owner exposes in its result is a position on
-the owner's result document, addressed by the owner's id and its result path.
-One the owner does not expose is addressed by `stream:` over the owner's
+`stream()` root it is. One the owner's result schema declares is a position
+on the owner's result document, addressed by the owner's id and its result
+path. Every other one it owns is addressed by `stream:` over the owner's
 hash, at the path holding the hash of its cause. The owner's manifest lists
 either under that cause; the schema at the position, or on the link that
 names it, declares it; and no document exists for either.**
@@ -171,15 +171,24 @@ position, it keeps its document and its `computed:` id, and a send through it
 resolves to the owner. `ensurePieceRunning` on such a link lands on the
 owner, which is the piece whose graph registers the handler.
 
-Among the streams a pattern owns, two kinds. A **verb** is one the owner
-exposes in its result: in the result schema, enumerable there, reached by
-`key(name)`, declared with an event type. A **view handler** is one it does
-not — a handler written inline in a view that is an input to `ifElse`, `map`,
-`when`, or `unless`, under any event prop and not only `onClick`; a stream
-handed only to a nested pattern — reachable only through the link the view or
-the argument holds. What makes one is that no result path of its owner
-reaches it, whatever holds it. All twenty streams of the topics board and
-topic patterns are verbs; lunch-poll's six inline `onClick` handlers are view
+Among the streams a pattern owns, two kinds, and the owner's result schema
+divides them. A **verb** is a stream the result schema declares: a field of the
+result, at any depth of its object structure, whose schema carries the stream
+declaration, enumerable there, reached by `key()` along that path, and declared
+with an event type. A **view handler** is every other stream the pattern owns: a
+handler written inline in a view that is an input to `ifElse`, `map`, `when`, or
+`unless`, under any event prop and not only `onClick`; a stream handed only to a
+nested pattern; and a stream some result path reaches only through data the
+schema does not declare as a stream. The last includes a handler written inline
+at the top of a view, whose path from the result, if it has one, runs through
+the `[UI]` vnode tree, as in `[UI, "children", 3, "props", "onClick"]`. Such a
+path is not an address: it moves with any edit to the markup above it, and
+nothing in the result schema says a stream lives there. Where a view and the
+result hold the same stream, it is a verb: a handler bound to a variable, used
+in the view, and returned from the result, as all ten of lunch-poll's `bound*`
+handlers are, is named by the view's link and the result field alike, and its
+position is the result field. All twenty streams of the topics board and topic
+patterns are verbs; lunch-poll's six inline `onClick` handlers are view
 handlers, and they are exactly the ones a caller should not find listed as
 verbs. Readers treat the two differently on purpose: a verb is found from the
 result schema, and a view handler from the owner's manifest and nowhere else.
@@ -193,9 +202,17 @@ already accepts a path. So a verb's address is the owner's `of:` id and its
 result path — the owner is the id, and nothing has to be recovered from it.
 
 The position is the stream's result path: `["bump"]` for a top-level field,
-`["nested", "cancel"]` for one inside a result object, which is the path the
-transformer already records in its `{ stream: [...] }` cause and the builder's
-name assignment already picks as the stream's name (`builder/pattern.ts:356`).
+`["nested", "cancel"]` for one inside a result object. The builder takes it
+from the result's structure when it emits the descriptor; the stream's cause
+does not supply it. The transformer records a result path in a
+`{ stream: [...] }` cause only for a handler written inline in the pattern's
+`return`, as `["__patternResult", key, ...]`
+(`base/ts-transformers/src/transformers/reactive-variable-for.ts:280`). A
+handler bound to a variable is caused by the variable's name (`:116`), so
+lunch-poll's verb at `addOption` carries `{ stream: "boundAddOption" }`, and
+the builder's name assignment from result keys leaves a cause already set
+(`builder/pattern.ts:366`). The cause stays what keys the manifest entry; the
+position is the result path.
 A verb exposed at two result paths has the first as its position and the
 second holds a link to it — the same shape as today, where both hold a link
 to one document.
@@ -411,9 +428,13 @@ cutover for both kinds; its cost is stated under stage 3.
   lands in the result document rather than in a stream's own document. The
   dispatch assertion and `isStream` gating are what stand between such a link
   and the write; the sibling plan's Risks section names the same failure.
-- **Renaming a result field re-identifies its stream.** Transformer-authored
-  streams already carry their result path in the cause, so nothing is lost
-  there; a hand-named stream moved between fields gets a new sidecar.
+- **Renaming a result field re-identifies its stream.** For a handler written
+  inline in the `return`, whose cause is its result path, that is today's
+  behavior. A handler bound to a variable is caused by the variable's name,
+  so today a renamed field keeps its id and sidecar; under this plan its
+  position, and its sidecar with it, moves with the field. An entry pending
+  under the old position names a stream nothing registers, and is dropped by
+  the no-handler predicate as one under a renumbered cause is.
 - **Entries in flight at the cutover.** A sidecar keyed on the old address is
   orphaned; the drain condition in stage 3 is what prevents it.
 - **Auto-start needs the owner in the address.** When an event finds no
@@ -486,7 +507,7 @@ stage built the reading for.
 - The stored sentinel; the sibling plan retires it.
 - Putting verbs under the `stream:` scheme: a verb's position on the result
   document is what `key(name)` reaches with the result schema's declaration,
-  and the scheme is for the streams no result path reaches.
+  and the scheme is for the streams the result schema does not declare.
 - An `owner` field on the sidecar entry. The `stream:` id carries the owner,
   so the entry shape of `events.md` §1 and its one derivation stay as they
   are.
