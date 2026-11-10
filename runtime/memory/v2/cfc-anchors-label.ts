@@ -7,22 +7,25 @@
  * joins it onto the anchors document's envelope as a label of each offset
  * it moved.
  *
- * The functions here read and build envelopes as plain stored values. What
- * an envelope is, and what a reader makes of one, is the runner's
- * `cfc/metadata.ts`, whose `isCfcMetadata()` decides which stored envelopes
- * the runner reads; this module admits the same ones and no others, rule
- * for rule, and refuses whatever it cannot read, since a label it misread
- * would leave the anchors less confidential than the field. The runner's
- * reader is not imported: it is written over the runner's storage layer,
- * which the store does not depend on.
+ * The functions here read and build envelopes as plain stored values. Which
+ * stored envelopes they read is decided by the checks of
+ * `cfc-stored-envelope.ts`, which the runner's reader holds to as well, so
+ * the engine reads the envelopes the runner reads and no others, and
+ * refuses whatever it cannot read, since a label it misread would leave the
+ * anchors less confidential than the field.
  */
 
 import type { FabricValue } from "@commonfabric/api";
+import { taggedHashStringOf, valueEqual } from "@commonfabric/data-model";
 import {
-  isFabricPlainObject,
-  taggedHashStringOf,
-  valueEqual,
-} from "@commonfabric/data-model";
+  isCfcLabelReference,
+  isInlineCfcLabelShape,
+  type StoredCfcEnvelope,
+  type StoredCfcEnvelopeDefect,
+  storedCfcEnvelopeDefect,
+  type StoredCfcLabelEntry,
+  type StoredInlineCfcLabel,
+} from "./cfc-stored-envelope.ts";
 
 /**
  * A stored CFC envelope the engine cannot read a confidentiality out of, or
@@ -52,137 +55,84 @@ export const anchorsSchemaDocument = (): { value: FabricValue } => ({
 
 const CID_PREFIX = "cid:";
 
-/**
- * The origin of a label-metadata population template entry, which the
- * runner keys under the `["cfc", "labels"]` metadata subtree and classes as
- * `labelMetadata`, and reads nowhere else.
- */
-const TEMPLATE_ORIGIN = "label-metadata";
-
 /** A stored document member, or `undefined` where the document has none. */
 type Stored = FabricValue | undefined;
 
+/** A label as an envelope entry or a label document holds it, inline. */
+type InlineLabel = StoredInlineCfcLabel<FabricValue>;
+
 /**
- * A label as an envelope entry or a label document holds it, inline. A type
- * rather than an interface, so that it is a stored value: an interface
- * carries no index signature, and a stored record does.
+ * Whether the stored value `value` has the shape of an inline label
+ * (`isInlineCfcLabelShape()`), whose clauses and atoms are then stored
+ * values too.
  */
-type InlineLabel = {
-  confidentiality?: FabricValue[];
-  integrity?: FabricValue[];
-};
+const isInlineLabel = (value: FabricValue): value is InlineLabel =>
+  isInlineCfcLabelShape(value);
 
 /** A label-map entry as the engine reads it: a path, and a label. */
-interface ReadEntry {
-  readonly path: readonly string[];
-  readonly label: InlineLabel | { readonly $ref: string };
+type ReadEntry = StoredCfcLabelEntry<FabricValue>;
+
+/** A stored envelope the engine reads. */
+type ReadEnvelope = StoredCfcEnvelope<FabricValue>;
+
+/**
+ * What the engine says of an envelope that breaks each rule of
+ * `cfc-stored-envelope.ts`, of the document `holder` names. An envelope that
+ * is not a record has no version, and is said to be of none the engine
+ * reads.
+ */
+const DEFECT_MESSAGES: {
+  readonly [Defect in StoredCfcEnvelopeDefect]: (holder: string) => string;
+} = {
+  "record": (holder) =>
+    `the CFC envelope of ${holder} is not of a version the engine reads`,
+  "version": (holder) =>
+    `the CFC envelope of ${holder} is not of a version the engine reads`,
+  "schema": (holder) => `the CFC envelope of ${holder} names no schema`,
+  "label-map": (holder) =>
+    `the CFC envelope of ${holder} holds no label map the engine reads`,
+  "entry-path": (holder) =>
+    `a label entry in the CFC envelope of ${holder} has no path`,
+  "entry-label": (holder) =>
+    `a label in the CFC envelope of ${holder} is not one the engine reads`,
+  "version-1-reference": (holder) =>
+    `the CFC envelope of ${holder}, of version 1, holds a label by reference`,
+  "template-keying": (holder) =>
+    `a label-metadata template entry in the CFC envelope of ${holder} is keyed as a label`,
+};
+
+/**
+ * Helper for {@link readableEnvelopeOf}, which establishes that the stored
+ * envelope `envelope` is one the engine reads.
+ *
+ * @throws AnchorsLabelError naming the first rule of
+ *   `cfc-stored-envelope.ts` the envelope breaks.
+ */
+function assertReadable(
+  envelope: FabricValue,
+  holder: string,
+): asserts envelope is ReadEnvelope {
+  const defect = storedCfcEnvelopeDefect(envelope);
+  if (defect !== undefined) {
+    throw new AnchorsLabelError(DEFECT_MESSAGES[defect](holder));
+  }
 }
 
 /**
- * Whether `label` is a label held by reference, `{ $ref: "<document>" }`
- * and nothing else.
- */
-const isReference = (label: Stored): label is { readonly $ref: string } =>
-  label !== undefined && isFabricPlainObject(label) &&
-  Object.keys(label).length === 1 && typeof label.$ref === "string";
-
-/**
- * Whether `label` has the shape of a label as an envelope or a label
- * document holds one: a record of `confidentiality` and `integrity` alone,
- * each an array where present.
- */
-const isInlineLabel = (label: Stored): label is InlineLabel => {
-  if (label === undefined || !isFabricPlainObject(label)) return false;
-  const { confidentiality, integrity, ...unknown } = label;
-  return Object.keys(unknown).length === 0 &&
-    (confidentiality === undefined || Array.isArray(confidentiality)) &&
-    (integrity === undefined || Array.isArray(integrity));
-};
-
-/**
- * The label map of the stored envelope `envelope`, with its entries both as
- * stored and as the engine reads them, or `undefined` for a document that
- * stores no envelope: `undefined`, `null` and the scalars, which are what a
- * reader of the reserved member takes as nothing stored.
+ * The stored envelope `envelope` as the engine reads it, or `undefined` for
+ * a document that stores no envelope: `undefined`, `null` and the scalars,
+ * which are what a reader of the reserved member takes as nothing stored.
  *
- * @throws AnchorsLabelError for an envelope the runner would not read: one
- *   of a version other than 1 and 2, one naming no schema, one with no label
- *   map of entries, an entry with no path of strings or no label, a label
- *   held by reference in a version-1 envelope, which does not define that
- *   spelling, and a label-metadata template entry keyed or classed as the
- *   runner never writes one.
+ * @throws AnchorsLabelError for an envelope the runner would not read,
+ *   naming the rule of `cfc-stored-envelope.ts` it breaks.
  */
-const labelMapOf = (
+const readableEnvelopeOf = (
   envelope: Stored,
   holder: string,
-):
-  | {
-    labelMap: { [key: string]: FabricValue };
-    held: FabricValue[];
-    entries: ReadEntry[];
-  }
-  | undefined => {
+): ReadEnvelope | undefined => {
   if (envelope === null || typeof envelope !== "object") return undefined;
-  if (
-    !isFabricPlainObject(envelope) ||
-    (envelope.version !== 1 && envelope.version !== 2)
-  ) {
-    throw new AnchorsLabelError(
-      `the CFC envelope of ${holder} is not of a version the engine reads`,
-    );
-  }
-  if (typeof envelope.schemaHash !== "string") {
-    throw new AnchorsLabelError(
-      `the CFC envelope of ${holder} names no schema`,
-    );
-  }
-  const { labelMap } = envelope;
-  if (
-    labelMap === undefined || !isFabricPlainObject(labelMap) ||
-    labelMap.version !== 1 || !Array.isArray(labelMap.entries)
-  ) {
-    throw new AnchorsLabelError(
-      `the CFC envelope of ${holder} holds no label map the engine reads`,
-    );
-  }
-  const held: FabricValue[] = labelMap.entries;
-  const entries = held.map((entry): ReadEntry => {
-    const path = entry !== undefined && isFabricPlainObject(entry)
-      ? entry.path
-      : undefined;
-    if (
-      entry === undefined || !isFabricPlainObject(entry) ||
-      !Array.isArray(path) ||
-      !path.every((part): part is string => typeof part === "string")
-    ) {
-      throw new AnchorsLabelError(
-        `a label entry in the CFC envelope of ${holder} has no path`,
-      );
-    }
-    const { label } = entry;
-    if (isReference(label)) {
-      if (envelope.version === 1) {
-        throw new AnchorsLabelError(
-          `the CFC envelope of ${holder}, of version 1, holds a label by reference`,
-        );
-      }
-    } else if (!isInlineLabel(label)) {
-      throw new AnchorsLabelError(
-        `a label in the CFC envelope of ${holder} is not one the engine reads`,
-      );
-    }
-    if (
-      entry.origin === TEMPLATE_ORIGIN &&
-      (path[0] !== "cfc" || path[1] !== "labels" ||
-        entry.observes !== "labelMetadata")
-    ) {
-      throw new AnchorsLabelError(
-        `a label-metadata template entry in the CFC envelope of ${holder} is keyed as a label`,
-      );
-    }
-    return { path, label };
-  });
-  return { labelMap, held, entries };
+  assertReadable(envelope, holder);
+  return envelope;
 };
 
 /**
@@ -218,7 +168,7 @@ const bearsOn = (
  * hash, or `undefined` where the store holds none.
  *
  * @throws AnchorsLabelError for an envelope the engine cannot read
- *   ({@link labelMapOf}), for a label reference nothing stored backs, and
+ *   ({@link readableEnvelopeOf}), for a label reference nothing stored backs, and
  *   for a label document that does not hold a label.
  */
 export const confidentialityOver = (
@@ -229,7 +179,9 @@ export const confidentialityOver = (
 ): FabricValue[] => {
   const clauses: FabricValue[] = [];
   for (const envelope of envelopes) {
-    for (const entry of labelMapOf(envelope, holder)?.entries ?? []) {
+    const entries: readonly ReadEntry[] =
+      readableEnvelopeOf(envelope, holder)?.labelMap.entries ?? [];
+    for (const entry of entries) {
       if (!bearsOn(entry.path, path)) continue;
       const label = resolvedLabel(entry.label, holder, labelDocument);
       for (const clause of label.confidentiality ?? []) {
@@ -255,7 +207,7 @@ const resolvedLabel = (
   holder: string,
   labelDocument: (hash: string) => Stored,
 ): InlineLabel => {
-  if (!isReference(label)) return label;
+  if (!isCfcLabelReference(label)) return label;
   const resolved = label.$ref.length > CID_PREFIX.length &&
       label.$ref.startsWith(CID_PREFIX)
     ? labelDocument(label.$ref.slice(CID_PREFIX.length))
@@ -298,8 +250,8 @@ export const anchorsEnvelopeWith = (
   holder: string,
 ): FabricValue | undefined => {
   if (confidentiality.length === 0) return undefined;
-  const stored = labelMapOf(envelope, holder);
-  const held = stored?.held ?? [];
+  const stored = readableEnvelopeOf(envelope, holder);
+  const held: readonly FabricValue[] = stored?.labelMap.entries ?? [];
   const added = anchorIds
     .map((id): FabricValue => ({
       path: [id],
@@ -309,7 +261,7 @@ export const anchorsEnvelopeWith = (
     }))
     .filter((entry) => !held.some((other) => valueEqual(other, entry)));
   if (added.length === 0) return undefined;
-  if (stored === undefined || !isFabricPlainObject(envelope)) {
+  if (stored === undefined) {
     return {
       version: 1,
       schemaHash: anchorsSchemaHash(),
@@ -317,7 +269,7 @@ export const anchorsEnvelopeWith = (
     };
   }
   return {
-    ...envelope,
+    ...stored,
     labelMap: { ...stored.labelMap, entries: [...held, ...added] },
   };
 };

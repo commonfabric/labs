@@ -16,6 +16,10 @@ import { isDeepFrozen } from "@commonfabric/data-model";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import type { URI } from "@commonfabric/memory/interface";
 import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import {
+  isKnownCfcEnvelopeVersion,
+  isReadableStoredCfcEnvelope,
+} from "@commonfabric/memory/v2/cfc-stored-envelope";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
@@ -35,15 +39,11 @@ import {
   cfcLabelDocumentHash,
   isCfcLabelDocumentContent,
   isCfcLabelReference,
-  isStoredLabelMapEntry,
   lookupCfcLabelDocument,
   parseCfcLabelReference,
   registerCfcLabelDocument,
 } from "./label-documents.ts";
-import {
-  isLabelMetadataTemplateEntry,
-  isWellFormedLabelMetadataTemplateEntry,
-} from "./label-metadata-population.ts";
+import { isLabelMetadataTemplateEntry } from "./label-metadata-population.ts";
 import { confidentialityOnly, type IFCLabel } from "./label-view-core.ts";
 import { readConsumesEntry } from "./observation-classes.ts";
 import type {
@@ -116,20 +116,18 @@ export class UnknownCfcMetadataVersionError extends StoredCfcMetadataError {
   }
 }
 
-// Typed against the metadata's own version union, so growing the list
-// without growing `CfcMetadataVersion` (or the reverse) is a compile error —
-// the predicate below narrows to `StoredCfcMetadata` on the strength of this
-// list.
-const KNOWN_CFC_METADATA_VERSIONS: readonly StoredCfcMetadata["version"][] = [
-  1,
-  2,
-];
-
-/** Whether `value` is an envelope `version` this build interprets. */
-export const isKnownCfcMetadataVersion = (
+/**
+ * Whether `value` is an envelope `version` this build interprets. The
+ * versions are the ones every reader of a stored envelope interprets,
+ * Memory's `v2/cfc-stored-envelope`; typing the check against the
+ * metadata's own version union makes a version Memory reads and
+ * `StoredCfcMetadata` does not declare a compile error, since
+ * {@link isCfcMetadata} narrows on the strength of it. A version
+ * `StoredCfcMetadata` declares and Memory does not read is never read.
+ */
+export const isKnownCfcMetadataVersion: (
   value: unknown,
-): value is StoredCfcMetadata["version"] =>
-  KNOWN_CFC_METADATA_VERSIONS.some((version) => version === value);
+) => value is StoredCfcMetadata["version"] = isKnownCfcEnvelopeVersion;
 
 /**
  * A stored envelope at the reserved position that carries no label map this
@@ -177,58 +175,22 @@ export const cfcMetadataPresent = (value: unknown): boolean =>
   isObjectOrArray(value);
 
 /**
- * What reading a label needs of a stored entry beyond the envelope's being
- * one: a path a resolution matches against, and a label a consumer reads
- * clauses out of. The envelope's version decides whether a reference is a
- * label — version 1 does not define that spelling, and one read as a label
- * would drop the policy it names.
- *
- * A label carrying a member this build does not know is not readable
- * either. Every label this build writes carries `confidentiality` and
- * `integrity` alone, so a third member is a format this build postdates,
- * and reading the two it knows would silently drop whatever the third
- * carries.
- *
- * An entry of the label-metadata template origin that is not keyed and
- * classed as a template is not readable either. Decoding takes every entry
- * of that origin out of the payload entries (spec §4.6.4), so reading one
- * keyed at a payload path would drop the label it carries from every
- * payload lookup.
- */
-const isReadableStoredEntry = (
-  version: StoredCfcMetadata["version"],
-  entry: unknown,
-): boolean =>
-  isStoredLabelMapEntry(entry) &&
-  (version === 2 || !isCfcLabelReference(entry.label)) &&
-  (!isLabelMetadataTemplateEntry(entry) ||
-    isWellFormedLabelMetadataTemplateEntry(entry));
-
-/**
- * Whether `value` is a stored envelope this build can produce labels from:
- * a version it interprets, a `schemaHash` naming the schema its labels were
+ * Whether `value` is a stored envelope this build can produce labels from.
+ * The rules are the ones every reader of a stored envelope holds to,
+ * Memory's `v2/cfc-stored-envelope`, so the engine labeling the anchors an
+ * edit moves reads the envelopes this does and no others: a version this
+ * build interprets, a `schemaHash` naming the schema its labels were
  * derived against (spec §4.6.4), a label map of the one map version there
- * is, and every entry one {@link isReadableStoredEntry} admits at the
- * envelope's version. The narrowing is to `StoredCfcMetadata`, which
- * declares every one of those, so checking every one is what keeps the
- * narrowing honest.
+ * is, and entries that each have a path of strings and a label, inline or,
+ * in a version-2 envelope alone, by reference, with any label-metadata
+ * template among them keyed and classed as one.
  *
- * A member beyond those does not make an envelope unreadable. The version
- * is how the format announces that it carries something this build does not
- * read, and the spec leaves a migrating writer free to keep a legacy field
- * beside the ones it defines (spec §4.6.4, operational guidance).
+ * The narrowing is to `StoredCfcMetadata`, whose labels' clauses and atoms
+ * the check finds to be arrays and no more, and whose entries' `origin` and
+ * `observes` it reads only to find a template.
  */
-const isCfcMetadata = (value: unknown): value is StoredCfcMetadata => {
-  if (!isObjectNotArray(value)) return false;
-  const version = value.version;
-  if (!isKnownCfcMetadataVersion(version)) return false;
-  if (typeof value.schemaHash !== "string") return false;
-  const labelMap = value.labelMap;
-  if (!isObjectNotArray(labelMap) || labelMap.version !== 1) return false;
-  const entries = labelMap.entries;
-  return Array.isArray(entries) &&
-    entries.every((entry) => isReadableStoredEntry(version, entry));
-};
+const isCfcMetadata = (value: unknown): value is StoredCfcMetadata =>
+  isReadableStoredCfcEnvelope(value);
 
 /**
  * The envelopes `interpretStoredEnvelope()` has found interpretable, by

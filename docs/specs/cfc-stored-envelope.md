@@ -39,9 +39,16 @@ of the classification below.
 ## Reading the reserved position
 
 [metadata.ts](../../runtime/runner/src/cfc/metadata.ts) is the only module
-that produces labels from what stands at `["cfc"]`. Its
+in the runner that produces labels from what stands at `["cfc"]`. Its
 `interpretStoredEnvelope` is the one place that decides which of three
-outcomes a stored value gets:
+outcomes a stored value gets. Which envelopes it reads is decided by the
+checks of
+[cfc-stored-envelope.ts](../../runtime/memory/v2/cfc-stored-envelope.ts) in
+Memory, the one definition of a readable envelope. The store's labeling of
+the anchors an edit moves
+([cfc-anchors-label.ts](../../runtime/memory/v2/cfc-anchors-label.ts)) reads
+a field's envelope through the same checks, so it reads the envelopes the
+runner reads and refuses the edit for every other one.
 
 - **Nothing stored.** The position holds `null`, a scalar, or nothing at
   all. The reader returns `undefined` and the document carries no labels.
