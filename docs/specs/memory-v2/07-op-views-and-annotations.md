@@ -397,18 +397,18 @@ Within the apply steps of §7.7.1:
 3. Where an anchor moved, the engine replaces the document's value with the
    mapped anchors, under the same ids, as a `patch`. Where no anchor moved,
    the document is not written.
-4. The same `patch` labels each anchor that moved with the confidentiality of
-   the field, since a moved offset is computed from the field's edits
-   whoever wrote the anchor. That a moved offset takes the field's
-   confidentiality is a rule of Contextual Flow Control; what follows is how
-   the engine arranges it. The engine reads the stored CFC envelope of the
-   field's document, in the field's scope instance and in each broader
-   instance, and takes the confidentiality of every label entry whose path
-   is the field's path, a prefix of it, or beneath it, a `*` segment standing
-   for any key. A label an entry names by document is read from that
-   document. Integrity is not taken. Where that confidentiality is not
-   empty, the engine adds to the anchors document's envelope, for each moved
-   anchor, an entry at the anchor's path, of origin `derived` and class
+4. The same `patch` labels each anchor that moved with the field's
+   confidentiality. A moved offset is computed from the field's edits, so it
+   is as confidential as the field, regardless of who wrote the anchor. That a
+   moved offset takes the field's confidentiality is a rule of Contextual Flow
+   Control; what follows is how the engine arranges it. The engine reads the
+   stored CFC envelope of the field's document, in the field's scope instance
+   and in each broader instance, and takes the confidentiality of every label
+   entry whose path is the field's path, a prefix of it, or beneath it, a `*`
+   segment standing for any key. A label an entry names by document is read
+   from that document. Integrity is not taken. Where that confidentiality is
+   not empty, the engine adds to the anchors document's envelope, for each
+   moved anchor, an entry at the anchor's path, of origin `derived` and class
    `value`, holding it, unless the envelope already holds that entry. An
    anchors document with no envelope gets one, naming the schema document of
    the schema that declares nothing, which the engine stores in the same
