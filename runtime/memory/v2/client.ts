@@ -637,11 +637,21 @@ const reconnectDelayMs = (attempt: number): number => {
   );
 };
 
-/** The error a mount fails with when its caller's `signal` has aborted. */
+/**
+ * The error a wait that `signal` ended fails with: its reason, or, for a
+ * connection's signal, a `notSentError()` of its own, so that what a caller
+ * attaches to one failure reaches no other.
+ */
+const abortErrorOf = (signal: AbortSignal, fallbackMessage: string): Error =>
+  !(signal.reason instanceof Error)
+    ? new Error(fallbackMessage)
+    : isNotSentError(signal.reason)
+    ? notSentError(signal.reason.message)
+    : signal.reason;
+
+/** The error a mount fails with when its `signal` has aborted. */
 const mountCancelled = (signal: AbortSignal): Error =>
-  signal.reason instanceof Error
-    ? signal.reason
-    : new Error("memory session mount cancelled");
+  abortErrorOf(signal, "memory session mount cancelled");
 
 /**
  * A statement a router refused for now: the challenge it answers, when that
@@ -693,9 +703,9 @@ const runWithAbortSignal = async <T>(
   start: () => T | PromiseLike<T>,
 ): Promise<T> => {
   const abortError = (): Error =>
-    signal?.reason instanceof Error
-      ? signal.reason
-      : new Error(fallbackMessage);
+    signal === undefined
+      ? new Error(fallbackMessage)
+      : abortErrorOf(signal, fallbackMessage);
   if (signal?.aborted) {
     throw abortError();
   }
@@ -847,6 +857,14 @@ export class Client {
    * that is gone.
    */
   #connectionEpoch = 0;
+  /**
+   * The connection that is up, or was last: aborted with a `notSentError()`
+   * reason as it drops, or with the close error as the client closes, and
+   * replaced as the next handshake begins. Every wait that begins on a
+   * connection ends as that connection does, so that nothing made on one
+   * connection waits for the next (`connectionSignal`).
+   */
+  #connection = new AbortController();
 
   #reconnecting: Promise<void> | null = null;
   #cancelReconnectDelay: (() => void) | null = null;
@@ -1024,6 +1042,7 @@ export class Client {
   async close(): Promise<void> {
     this.#closed = true;
     this.#connected = false;
+    this.#connection.abort(new Error("memory client closed"));
     this.#noteStateChange();
     this.#cancelReconnectDelay?.();
     this.#cancelRenewals();
@@ -1422,19 +1441,26 @@ export class Client {
    * principal the connection has authenticated where the server advertises
    * `connectionAuth`, and otherwise signed for this one session. A reopen
    * that a session's restore makes sets `options.restoring`, and is then
-   * rejected with a `ConnectionError` if the connection drops under it. A
-   * direct mount joining a renewal waits through that renewal's retries. A
-   * mount that a router refuses for now is tried again on the same
-   * connection until it is admitted or refused for good, the client closes
-   * or fails for good, or `options.signal` aborts. A connection that drops
-   * under a request the mount has sent still fails the mount.
+   * rejected with a `ConnectionError` if the connection drops under it.
    *
-   * Nothing else ends that wait. Some refusals for now clear only when
-   * this client gives something up: a connection at its session limit, or
-   * at its limit of authenticated keys, stays there while the client keeps
-   * its sessions open and its keys renewed. A mount made without a signal
-   * then waits until the client closes, as the runner's `createSpace` and
-   * `spaceKind` do.
+   * A mount is made on the connection it began on. Made while the client is
+   * connecting, it fails at once with `notSentError()`; when that connection
+   * drops, it fails whatever it is waiting on then (its signer, its key's
+   * authentication, a mount ahead of it, a refusal for now): with
+   * `unacknowledgedError()` once its `session.open` was handed over and not
+   * answered, with `notSentError()` before, and with the answer once one
+   * arrived. Its `session.open` is sent on no later connection. A direct
+   * mount joining a renewal waits through that renewal's retries. A mount
+   * that a router refuses for now is tried again on the same connection until
+   * it is admitted or refused for good, the connection drops, the client
+   * closes or fails for good, or `options.signal` aborts.
+   *
+   * Nothing else ends that wait. Some refusals for now clear only when this
+   * client gives something up: a connection at its session limit, or at its
+   * limit of authenticated keys, stays there while the client keeps its
+   * sessions open and its keys renewed. A mount made without a signal then
+   * waits until one of those, as the runner's `createSpace` and `spaceKind`
+   * do.
    */
   async openSession(
     space: string,
@@ -1458,6 +1484,17 @@ export class Client {
     if (!whileConnected) {
       await this.#ensureConnected();
     }
+    // A mount is made on the connection it began on: it fails as that
+    // connection drops, whatever it is waiting on then, and its `session.open`
+    // is sent on no other (`mountEpoch`). A reopen is part of a reconnect and
+    // fails on its own when the connection drops under it.
+    const mountEpoch = this.#connectionEpoch;
+    const signal = whileConnected ? options.signal : AbortSignal.any(
+      options.signal === undefined
+        ? [this.#connection.signal]
+        : [options.signal, this.#connection.signal],
+    );
+    const onMountConnection = whileConnected ? {} : { epoch: mountEpoch };
     // Every open passes through here — a first mount and each reopen after
     // a dropped connection alike — so this is where a declared ceiling is
     // held to the server it is declared to. A server that does not
@@ -1513,15 +1550,16 @@ export class Client {
         );
       }
     };
-    // A mount whose caller has cancelled it sends nothing more.
+    // A mount whose caller has cancelled it, or whose connection has
+    // dropped, sends nothing more.
     const requireUncancelled = (): void => {
-      if (options.signal?.aborted) throw mountCancelled(options.signal);
+      if (signal?.aborted) throw mountCancelled(signal);
     };
     // The refusals for now a mount has waited after; see `#holdMount`.
     let refusals = 0;
     // A drop while an open is being signed leaves it with a challenge of
     // the connection that is gone. A reopen fails then, for its reconnect
-    // to retry; a mount waits for the reconnect and signs again.
+    // to retry, and so does a mount, as its connection's signal aborts.
     for (;;) {
       // Checked each round: a round after the first follows a reconnect or
       // a held mount's wait. The caller may have cancelled the mount
@@ -1545,7 +1583,7 @@ export class Client {
             : this.#renewing.get(auth.did);
           const principal = await (renewal === undefined
             ? this.#authenticate(auth, whileConnected)
-            : this.#waitForRenewal(renewal, options.signal));
+            : this.#waitForRenewal(renewal, signal));
           if (principal !== STALE) {
             requireUncancelled();
             // The chain rides outside any signature here: the connection
@@ -1566,7 +1604,7 @@ export class Client {
               ...(holdings !== undefined
                 ? { holdings: this.declarableHoldings(holdings) }
                 : {}),
-            }, { whileConnected });
+            }, { whileConnected, ...onMountConnection });
           }
         } catch (error) {
           // A router's refusal for now passes without a new connection,
@@ -1579,32 +1617,47 @@ export class Client {
           // on this connection, as often as it takes, since a held session
           // has no limit either. `#authenticate` then sends the statement
           // it kept, or signs a new challenge once that statement may not
-          // be sent again. If the connection drops while the mount waits,
-          // the next round waits for the reconnect and starts over; a drop
-          // under a request the mount has sent fails it, as it does any
-          // mount. A direct server's denial goes to the caller.
+          // be sent again. A drop while the mount waits ends the wait and
+          // fails the mount, as a drop under any of its requests does. A
+          // direct server's denial goes to the caller.
           if (
             whileConnected || !isRetriableAuthorizationError(error) ||
             this.#sessionOpenAuthContext?.deployment === undefined
           ) throw error;
-          await this.#holdMount(refusals++, options.signal);
+          await this.#holdMount(refusals++, signal);
           continue;
         }
-        await this.#ensureConnected();
+        requireUncancelled();
         continue;
       }
       const sign = typeof auth === "object" ? auth.authorizeSessionOpen : auth;
-      const opened = this.#signedOpens.then(
+      // A mount's turn in the chain ends with its connection; the request
+      // it then sends is answered, or lost with that connection, on its own.
+      const previous = this.#signedOpens;
+      const opened = runWithAbortSignal(
+        signal,
+        "memory session mount cancelled",
+        () => previous,
+      ).then(
         async (): Promise<SessionOpenResult | typeof STALE> => {
           if (!this.#connected) {
             if (whileConnected) throw connectionLostWhileRestoring();
             return STALE;
           }
+          // A mount queued behind another's signing may get its turn after
+          // its connection dropped.
+          requireUncancelled();
           const epoch = this.#connectionEpoch;
-          const signed = await sign?.(space, session, {
-            ...this.sessionOpenAuthContext(),
-            ...(proofs === undefined ? {} : { proofs }),
-          });
+          const context = this.sessionOpenAuthContext();
+          const signed = await runWithAbortSignal(
+            signal,
+            "memory session mount cancelled",
+            () =>
+              sign?.(space, session, {
+                ...context,
+                ...(proofs === undefined ? {} : { proofs }),
+              }),
+          );
           if (this.#staleSince(epoch)) {
             if (whileConnected) throw connectionLostWhileRestoring();
             return STALE;
@@ -1616,7 +1669,7 @@ export class Client {
             session,
             ...(signed ? signed : {}),
             ...(holdings !== undefined ? { holdings } : {}),
-          }, { whileConnected });
+          }, { whileConnected, ...onMountConnection });
           this.#updateSessionOpenAuthContext(result.sessionOpen);
           return result;
         },
@@ -1624,7 +1677,7 @@ export class Client {
       this.#signedOpens = opened.catch(() => undefined);
       const result = await opened;
       if (result === STALE) {
-        await this.#ensureConnected();
+        requireUncancelled();
         continue;
       }
       return result;
@@ -1677,6 +1730,14 @@ export class Client {
 
   isConnected(): boolean {
     return this.#connected;
+  }
+
+  /**
+   * @internal The signal of the connection that is up, or was last (see
+   * `#connection`): a session's waits end with the connection they began on.
+   */
+  get connectionSignal(): AbortSignal {
+    return this.#connection.signal;
   }
 
   /**
@@ -2224,7 +2285,15 @@ export class Client {
    * except those a retriable denial holds: each restores on its own.
    */
   async restoreConnection(): Promise<void> {
-    await this.#ensureConnected();
+    if (this.#closed) throw new Error("memory client is closed");
+    if (this.#fatalError) throw this.#fatalError;
+    if (!this.#connected) {
+      await this.#reconnect();
+      // #reconnect() resolves without connecting when it gives up on a
+      // permanent handshake failure; surface it rather than returning as if
+      // connected.
+      if (this.#fatalError) throw this.#fatalError;
+    }
     await this.#reconnecting;
   }
 
@@ -2237,6 +2306,7 @@ export class Client {
     this.#requestLimits = undefined;
     this.#transport.setMessageCompressionEnabled?.(false);
     this.#connectionEpoch += 1;
+    this.#connection = new AbortController();
     this.#authenticated.clear();
     this.#routedSigners.clear();
     this.#transport.setRoutedMessagesEnabled?.(false);
@@ -2667,13 +2737,10 @@ export class Client {
     if (this.#connected) {
       return this.#connectionEpoch;
     }
-    await this.#reconnect();
-    // #reconnect() resolves without connecting when it gives up on a permanent
-    // handshake failure; surface it here rather than returning as if connected.
-    if (this.#fatalError) {
-      throw this.#fatalError;
-    }
-    return this.#connectionEpoch;
+    // The client is connecting: what is asked of it now fails at once, rather
+    // than waiting for a connection it was not made on.
+    void this.#reconnect().catch(() => undefined);
+    throw notSentError("memory client is connecting; the request was not sent");
   }
 
   #onClose(error?: Error): void {
@@ -2685,6 +2752,7 @@ export class Client {
       `reconnecting: ${describeError(error)}`,
     ]);
     this.#connected = false;
+    this.#connection.abort(notSentError("memory connection dropped"));
     this.#endRenewals(toConnectionError(error));
     this.#noteStateChange();
     // A drop while a session is held counts as a restart: a peer that denies
@@ -2806,6 +2874,7 @@ export class Client {
       `open: ${describeError(err)}`,
     ]);
     this.#connected = false;
+    this.#connection.abort(notSentError("memory connection dropped"));
     this.#endRenewals(toConnectionError(err));
     this.#noteStateChange();
     if (
@@ -3129,18 +3198,52 @@ export class SpaceSession {
   }
 
   /**
-   * Waits for restored session identity before constructing an ordinary
-   * request: for this session's own restore where one is pending, whatever
-   * the client's other sessions are doing, and otherwise for the connection.
+   * Waits until this session is open on the connection `signal` belongs to
+   * (by default the one that is up) before a request is made: for its restore,
+   * where one is under way there. What is asked while the client is
+   * connecting, or while this session is held (its reopen refused for now),
+   * fails at once with `notSentError()`, and so does a wait whose connection
+   * drops: nothing made on one connection waits for the next.
    */
-  async #ensureSessionRestored(): Promise<void> {
+  async #ensureSessionRestored(
+    signal: AbortSignal = this.#client.connectionSignal,
+  ): Promise<void> {
     this.#assertOpen();
-    if (this.#restoreComplete !== undefined) {
-      await this.#restoreComplete.promise;
-    } else if (!this.#client.isConnected()) {
-      await this.#client.restoreConnection();
+    this.#requireAvailable(signal);
+    const restore = this.#restoreComplete;
+    if (restore !== undefined) {
+      await runWithAbortSignal(
+        signal,
+        "memory connection dropped before the request was sent",
+        () => restore.promise,
+      );
+      this.#requireAvailable(signal);
     }
     this.#assertOpen();
+  }
+
+  /**
+   * Throws `notSentError()` unless this session can take a request on the
+   * connection `signal` belongs to: that connection is up, and this session
+   * is not held.
+   */
+  #requireAvailable(signal: AbortSignal): void {
+    if (signal.aborted) {
+      throw abortErrorOf(
+        signal,
+        "memory connection dropped before the request was sent",
+      );
+    }
+    if (!this.#client.isConnected()) {
+      throw notSentError(
+        "memory client is connecting; the request was not sent",
+      );
+    }
+    if (this.#held) {
+      throw notSentError(
+        "memory session is held, its reopen refused for now; the request was not sent",
+      );
+    }
   }
 
   /**
@@ -4633,6 +4736,12 @@ export class SpaceSession {
       return await this.#sendRestoreWatchMutation(send, apply);
     }
     const { onTurn } = options;
+    // A watch change is made on the connection that is up: made while the
+    // client is connecting or the session is held, it fails at once, and one
+    // whose turn comes after that connection dropped fails, whatever it was
+    // queued behind, rather than waiting for the next connection.
+    const signal = this.#client.connectionSignal;
+    this.#requireAvailable(signal);
     if (!this.#concurrentWatchRefresh) {
       // Single-flight (default): send + apply run together, chained on the
       // prior mutation's completion. Nothing is issued until the previous
@@ -4646,9 +4755,10 @@ export class SpaceSession {
         async () => {
           onTurn?.();
           while (this.#watchMutationWaitsForRestore()) {
-            await this.#waitForSessionRestore();
+            await this.#ensureSessionRestored(signal);
           }
           this.#assertOpen();
+          this.#requireAvailable(signal);
           return await this.#applyWatchResponse(
             this.#sendWatchRequest(send),
             apply,
@@ -4678,9 +4788,10 @@ export class SpaceSession {
     const issued = readyToIssue.catch(() => undefined).then(async () => {
       onTurn?.();
       while (this.#watchMutationWaitsForRestore()) {
-        await this.#waitForSessionRestore();
+        await this.#ensureSessionRestored(signal);
       }
       this.#assertOpen();
+      this.#requireAvailable(signal);
       request = this.#sendWatchRequest(send);
     });
     this.#watchIssue = issued.then(() => undefined, () => undefined);
@@ -4700,29 +4811,12 @@ export class SpaceSession {
    * restore takes as long as its own reopening takes, so a session can sit
    * connected with its restore unfinished. `#readyOnConnection` is false
    * only while a reconnect is running, while this session's restore is
-   * pending, or once the session has closed, and `#waitForSessionRestore()`
-   * waits on the first two and throws on the third, so a turn waiting on this
-   * never spins.
+   * pending, or once the session has closed, and `#ensureSessionRestored()`
+   * waits on the second and throws on the first and third, so a turn waiting
+   * on this never spins.
    */
   #watchMutationWaitsForRestore(): boolean {
     return !this.#client.isConnected() || !this.#readyOnConnection;
-  }
-
-  /**
-   * Helper for `#runWatchMutation()`, which waits for this session's restore,
-   * if one is pending, and otherwise for the reconnect in progress, if any.
-   * The caller checks `#watchMutationWaitsForRestore()` again afterwards, in
-   * the same synchronous step as its send, since the connection can drop in
-   * between. Throws the session's close error when the session closes, and the
-   * client's error when it gives up reconnecting.
-   */
-  async #waitForSessionRestore(): Promise<void> {
-    this.#assertOpen();
-    if (this.#restoreComplete !== undefined) {
-      await this.#restoreComplete.promise;
-    } else if (!this.#client.isConnected()) {
-      await this.#client.restoreConnection();
-    }
   }
 
   /**
