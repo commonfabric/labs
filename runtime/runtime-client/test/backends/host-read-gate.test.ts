@@ -335,6 +335,18 @@ describe("HostReadGate", () => {
       expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
     });
 
+    it("returns the owner the `[NAME]` of a piece read at its root, beside a credential stored inline that the read does not reach", async () => {
+      await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
+
+      expect(gate.read(docs.inlineImporter.asSchema(nameSchema))).toEqual({
+        value: expect.objectContaining({ [NAME]: expect.any(String) }),
+      });
+      expect("refused" in gate.read(docs.inlineImporter.asSchema(true))).toBe(
+        true,
+      );
+    });
+
     it("returns a visitor the whole of a piece anyone may see", async () => {
       await using docs = await shelf();
       const answer = gateFor(docs.runtime, visitor).read(
@@ -584,15 +596,27 @@ describe("HostReadGate", () => {
       });
     });
 
-    it("refuses the owner the list of a piece holding a credential in its own document, under a fit that decides on every label the document stores", async () => {
+    it("lists the owner every field of a piece holding a credential inline, and refuses the credential's own read", async () => {
+      // The list reads the record's node, not its fields, so a field labeled
+      // below it does not decide the list; reading the field does decide
+      // that read.
       await using docs = await shelf();
+      const gate = gateFor(docs.runtime, owner);
 
-      const answer = await gateFor(docs.runtime, owner).fields(
-        docs.inlineImporter,
-      );
+      const answer = await gate.fields(docs.inlineImporter);
 
-      expect(answer).toEqual({ refused: { refusedBy: "display-ceiling" } });
       expect(holds(answer, CREDENTIAL)).toBe(false);
+      expect(answer).toEqual({
+        fields: Object.fromEntries(
+          ["$NAME", "openPath", "sidebarUI", "auth"].map((name) => [
+            name,
+            { ...address(docs.inlineImporter), path: [name] },
+          ]),
+        ),
+      });
+      expect(
+        "refused" in gate.read(docs.inlineImporter.key("auth").asSchema(true)),
+      ).toBe(true);
     });
 
     it("refuses a visitor the list of a piece only its owner may see", async () => {

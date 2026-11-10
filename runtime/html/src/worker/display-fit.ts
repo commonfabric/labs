@@ -109,11 +109,16 @@ export function admitsEverything(policy: RenderPolicy): boolean {
 /**
  * The label that keeps `policy` from admitting what `reads` of `cell` show,
  * or undefined when the policy admits it. The policy has to admit both the
- * cell's labels, as {@link cellLabelRefusal} fits them, and the labels the
- * reads consumed, which reach every document a read passed through,
- * including one behind a link crossed part way along the path. A read that
- * reports no consumed labels counts as consuming the marker no policy admits,
- * and reads that consumed none are fitted by the cell's schema.
+ * labels the reads consumed, which reach every document a read passed
+ * through, including one behind a link crossed part way along the path, and
+ * the labels at `cell`'s own node, as {@link cellLabelRefusal} fits them,
+ * which include those its ancestors' labels cover (see {@link nodeLabelSources}). What
+ * lies below `cell` is fitted as the reads consumed it, so a read that stops
+ * short of a labeled field is not refused for that field, and one that
+ * reaches it is (spec §8.10.6: a display boundary evaluates the consumed
+ * labels). A read that reports no consumed labels counts as consuming the
+ * marker no policy admits, and reads that consumed none are fitted by the
+ * cell's schema.
  */
 export function readRefusal(
   cell: Cell<unknown>,
@@ -134,7 +139,7 @@ export function readRefusal(
     return confidentialityLabelsFromCellSchema(cell).every((atom) =>
         atomRenderableUnderPolicy(atom, policy)
       )
-      ? cellLabelRefusal(cell, cellLabelSources(cell), policy, sources, watch)
+      ? cellLabelRefusal(cell, nodeLabelSources(cell), policy, sources, watch)
       : { labelSource: "consumed", confidentiality, integrity };
   }
   // The reads behind one rendered value are one access. Its clauses are
@@ -160,8 +165,33 @@ export function readRefusal(
       watch,
       "not-value-intrinsic",
     )
-    ? cellLabelRefusal(cell, cellLabelSources(cell), policy, sources, watch)
+    ? cellLabelRefusal(cell, nodeLabelSources(cell), policy, sources, watch)
     : { labelSource: "consumed", confidentiality, integrity: access.integrity };
+}
+
+/**
+ * `cell`'s labels as {@link cellLabelSources} reads them, each view narrowed
+ * to the entries at the node it was read at. A cell's label view holds an
+ * entry for each labeled path at or below the cell, and folds what its
+ * ancestors' labels cover into the entries at the node itself, so these are
+ * the labels of the node and of every ancestor, and none of what lies below
+ * it. A view whose entries all lie below the node narrows to an empty one,
+ * not to none: the cell is labeled, at its fields, and what a read takes in
+ * of those is fitted as the read consumed it, not by the schema a cell with
+ * no label falls back to.
+ */
+function nodeLabelSources(
+  cell: Cell<unknown>,
+): CfcLabelViewSource[] | undefined {
+  return cellLabelSources(cell)?.map((source) =>
+    source.view === undefined ? source : {
+      ...source,
+      view: {
+        ...source.view,
+        entries: source.view.entries.filter((entry) => entry.path.length === 0),
+      },
+    }
+  );
 }
 
 /**
