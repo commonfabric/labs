@@ -722,7 +722,7 @@ A pattern's result type that is `unknown` at the top level stays an error
 | Mapped types | `subset-type:mapped` | `Record<K, T>`, `Partial`, `Required`, `Readonly`, `Pick`, or `Omit` |
 | Template literal types | `subset-type:template-literal` | `string`, or a union of string literals |
 | `symbol`, `unique symbol` | `schema-type:symbol` | A string literal key, or a well-known key exported by the API |
-| Function overloads | `subset-type:overload` | One signature with a union parameter, or two functions with different names. To read a cell under another type, `cell.asSchema<T>()` ([§12.4](#124-a-named-form-for-re-typing-a-cell)) |
+| Function overloads | `subset-type:overload` | One signature with a union parameter, or two functions with different names. For the re-typing idiom, the rewrites of [§12.4](#124-replace-the-re-typing-overloads-with-declared-types) |
 | `enum`, `namespace` | `subset-syntax:enum`, `subset-syntax:namespace` | A union of string literals with an `as const` object; a module |
 | Class types, constructor types, abstract members, `this` types | `subset-type:class` | Object types and authored functions |
 | Declaration merging, `declare global`, module augmentation | `subset-syntax:ambient-declaration` | One declaration per name |
@@ -1279,7 +1279,7 @@ and 2 local type declarations, and nothing else.
 
 | Construct | Occurrences (files) | Where | Resolution |
 | --- | --- | --- | --- |
-| Function overloads | 5 (2) | `patterns/system/fabrichat/manager.tsx` (4), `patterns/system/private-inbox/private-inbox.tsx` (1); 34 more in 29 pattern test files | Rewrite. Every occurrence is one idiom: a one-line function whose overload signature re-types a cell (`function inboxOf(pointer: Cell<A>): Cell<B>`) over an implementation that returns its argument as `unknown`. It exists because the double cast is refused. [§12.4](#124-a-named-form-for-re-typing-a-cell) proposes `asSchema<T>()` |
+| Function overloads | 5 (2) | `patterns/system/fabrichat/manager.tsx` (4), `patterns/system/private-inbox/private-inbox.tsx` (1); 34 more in 29 pattern test files | Rewrite. Every occurrence is one idiom: a one-line function whose overload signature re-types a cell (`function inboxOf(pointer: Cell<A>): Cell<B>`) over an implementation that returns its argument as `unknown`. It exists because the double cast is refused. [§12.4](#124-replace-the-re-typing-overloads-with-declared-types) gives the two rewrites, which need no new construct |
 | Mapped type | 1 (1) | `patterns/apps/topics/topic.tsx` | Rewrite as `Readonly<Record<K, number \| undefined>>` |
 | `any` in a type | 126 (see below) | for example `patterns/system/link-tool/link-tool.tsx`, `patterns/system/knowledge-graph/knowledge-graph.tsx` | Rewrite with the explicit forms of §7.8 |
 | `as any` | 52 (21) | for example `patterns/system/notes/daily-journal.tsx`, `patterns/system/agent-queue/agent-queue.tsx` | Remove: the rules of §7.5, §7.6, and §8.6 make most of them unnecessary |
@@ -1472,42 +1472,61 @@ const titles = computed(() => rows.map((row) => row.title.get()));
 const titles = rows.map((row) => row.title.get());
 ```
 
-### 12.4 A named form for re-typing a cell
+### 12.4 Replace the re-typing overloads with declared types
 
-The overload idiom of §11.3 states "this cell, read under another type"
-through a hole in overload compatibility. The runtime's cells already have
-the operation the idiom stands for: `asSchema`, which returns the same cell
-read under another schema. This document proposes its type-argument form as
-the language construct, with the compiler supplying the schema from the
-type, as it does for `toSchema<T>()`.
+Every overload in the corpus (§11.3) is one idiom: a one-line function whose
+overload signature gives its argument another type, over an implementation
+that returns the argument as `unknown`. No new construct replaces it. The
+runtime's `asSchema` is not part of the language: no pattern module calls
+it, apart from one personal variant under `patterns/system/home/`. The
+idiom has two uses, and each has a rewrite in the language as specified.
+
+**A pattern instance typed as a cell of a view of it** (35 of the 39
+signatures take `unknown`). The assignability rule of §7.5 covers it, so the
+function is deleted.
 
 ```ts
 // Shown for illustration only.
 // Before
-function boxOf(pointer: Cell<DonutBoxPointer>): Cell<Pick<DonutBox, "add">>;
-function boxOf(pointer: Cell<DonutBoxPointer>): unknown {
-  return pointer;
+function boxLinkOf(box: unknown): Cell<DonutBoxLink>;
+function boxLinkOf(box: unknown): unknown {
+  return box;
 }
+const link = boxLinkOf(DonutBox({ flavor }));
 
 // After
-const boxOf = (pointer: Cell<DonutBoxPointer>) =>
-  pointer.asSchema<Pick<DonutBox, "add">>();
+const link: Cell<DonutBoxLink> = DonutBox({ flavor });
 ```
 
-The proposed rules are these.
+**A link read beyond the type it is declared with** (the remaining 4). The
+link's type is kept small on purpose, because today the declared type
+decides what every reader of the link loads. In this language a function
+body loads what its footprint reads, whatever the declared type's width. So
+the position is declared with the type that is read, and the function is
+deleted.
 
-- It is a method of cell handles only, valid in tier R and tier F.
-- It changes how the cell is read, never what is stored. A read through the
-  result is validated against the schema of `T`, as any read is.
-- It cannot remove a label. The labels of what is read come from the stored
-  document and from the template of the read. Annotations in `T` add
-  constraints and never replace the stored ones.
-- The plan records the call as a path projection with a schema, so a
-  footprint through it is as precise as one through a declared type.
+```ts
+// Shown for illustration only.
+// Before
+interface JoinEvent {
+  box: Cell<DonutBoxLink>; // names the box and nothing else
+}
+function addStreamOf(box: Cell<DonutBoxLink>): Cell<{ add: Stream<Donut> }>;
+function addStreamOf(box: Cell<DonutBoxLink>): unknown {
+  return box;
+}
+const join = handler<JoinEvent, State>((event) => {
+  addStreamOf(event.box).key("add").send(GLAZED);
+});
 
-Because it changes the schema a value is read under, the second and third
-rules are CFC decisions and go through the specification
-([§13](#13-open-questions)).
+// After
+interface JoinEvent {
+  box: Cell<DonutBoxLink & { add: Stream<Donut> }>;
+}
+const join = handler<JoinEvent, State>((event) => {
+  event.box.key("add").send(GLAZED); // the footprint is `add` alone
+});
+```
 
 ### 12.5 Remove casts to labeled types
 
@@ -1560,7 +1579,7 @@ for subset modules and kept for tier-I modules (§3.4); `any` is refused and
 each use gets an explicit form (§7.8); and an inline event handler in a
 function body is a handler binding (§5.2).
 
-The first two questions need a decision from the project owner. The rest are
+The first question needs a decision from the project owner. The rest are
 for the sibling documents or for the prototype.
 
 1. **What editors show.** An editor type-checks pattern source with the
@@ -1579,11 +1598,14 @@ for the sibling documents or for the prototype.
      one, authors see the compiler's diagnostics only when they compile.
      Since most authors are language models that compile on every change,
      this step can wait.
-2. **The rules of `asSchema<T>()`.** §12.4 proposes it to replace the
-   overload idiom found in FabriChat, the private inbox, and 29 pattern test
-   files, and proposes that it validates reads and can never remove a label.
-   Those two rules change what CFC decides about a re-typed read, so they
-   need a ruling in the specification before the construct is relied on.
+2. **Whether declared types can replace every re-typing overload.** §12.4
+   removes the idiom without a new construct, on the argument that a
+   footprint, not the declared type, decides what a function body loads. The
+   three such functions in `patterns/system/fabrichat/manager.tsx` are the
+   test: the prototype has to show that widening the declared link type
+   there changes neither what a handler loads nor the stored schema's
+   compatibility. If it does, the fallback is a re-typing operation on
+   cells, whose label rule would need a CFC ruling.
 3. **Value semantics of tier R on missing data.** This document assumes a
    tier-R expression has the value semantics of the same JavaScript
    expression, so that promotion preserves values exactly, and that strict
