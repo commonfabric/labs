@@ -82,6 +82,7 @@ import {
   type IPCRemotePost,
   type LoggerErrorMessagesResponse,
   NotificationType,
+  type OfferProfileSuggestionRequest,
   RequestType,
   RuntimeErrorCode,
 } from "@/protocol/mod.ts";
@@ -235,6 +236,24 @@ describe("runtime-processor", () => {
           1,
           2,
         ]);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("throws for a missing name, and stores nothing", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const processor = buildProcessor({ runtime });
+        await expect(
+          processor.handleOfferProfileSuggestion({
+            type: RequestType.OfferProfileSuggestion,
+          } as unknown as OfferProfileSuggestionRequest),
+        ).rejects.toThrow("requires a name");
+        const stored = profileSuggestionCell(runtime);
+        await stored.sync();
+        expect(stored.get()).toBeUndefined();
       } finally {
         await runtime.dispose();
         await storageManager.close();
