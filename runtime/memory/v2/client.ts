@@ -1192,7 +1192,7 @@ export class Client {
     // A request that belongs with others on one connection, as a staged
     // watch set's parts do, is not sent on another.
     if (options.epoch !== undefined && epoch !== options.epoch) {
-      throw connectionError("Memory connection changed between request parts");
+      throw notSentError("Memory connection changed between request parts");
     }
     // Readiness can change across the await even for an already-live transport.
     // Reject before encoding or registration so this request uses neither stale
@@ -1202,7 +1202,7 @@ export class Client {
     }
     if (this.#fatalError !== null) throw this.#fatalError;
     if (this.#staleSince(epoch)) {
-      throw connectionError(
+      throw notSentError(
         "Memory connection changed before request encoding",
       );
     }
@@ -2703,7 +2703,7 @@ export class Client {
     for (const session of this.#spaces) {
       session.handleDisconnect();
     }
-    this.#rejectPending(toConnectionError(error));
+    this.#rejectPending(lostWithConnection(error));
     void this.#reconnect().catch(() => undefined);
   }
 
@@ -2832,7 +2832,7 @@ export class Client {
     // Requests lost with this connection have no server verdict. Keep their
     // commits outstanding for replay, regardless of which error caused a
     // session's restore to fail.
-    this.#rejectPending(toConnectionError(err));
+    this.#rejectPending(lostWithConnection(err));
     for (const session of this.#spaces) {
       session.handleDisconnect();
     }
@@ -5706,6 +5706,62 @@ const ownWriteError = (error: Error): Error =>
 
 const toConnectionError = (error?: Error): Error =>
   connectionError(error?.message ?? "memory transport closed", error);
+
+/**
+ * How far a request a lost connection failed got: never handed to the
+ * connection (`notSent`), so sending it again is safe, or handed over and not
+ * answered (`unacknowledged`), so it may have landed.
+ */
+export type ConnectionDelivery = "notSent" | "unacknowledged";
+
+/**
+ * Returns a `ConnectionError` for a request the client failed without handing
+ * it to the connection: it was made while the client was connecting, or was
+ * still waiting when the connection it began on dropped. Sending it again is
+ * safe.
+ */
+export const notSentError = (message: string): Error =>
+  Object.assign(connectionError(message), {
+    delivery: "notSent" satisfies ConnectionDelivery,
+  });
+
+/**
+ * Returns a `ConnectionError` for a request handed to a connection that
+ * dropped before answering it. It may have landed, so sending it again is safe
+ * only when a repeat is harmless, as a commit sent again under its own
+ * `localSeq` is. It keeps the mark of a `cause` whose own write failed
+ * (`writeFailedError()`), so that a caller can tell a payload that fails every
+ * time from a lost connection.
+ */
+export const unacknowledgedError = (message: string, cause?: unknown): Error =>
+  Object.assign(connectionError(message, cause), {
+    delivery: "unacknowledged" satisfies ConnectionDelivery,
+    ...(isOwnWriteFailure(cause) ? { ownWriteFailed: true } : {}),
+  });
+
+/** Returns how far the request `error` failed got, if it says. */
+export const connectionDeliveryOf = (
+  error: unknown,
+): ConnectionDelivery | undefined =>
+  error instanceof Error && "delivery" in error &&
+    (error.delivery === "notSent" || error.delivery === "unacknowledged")
+    ? error.delivery
+    : undefined;
+
+/** Returns whether `error` is one `notSentError()` made. */
+export const isNotSentError = (error: unknown): boolean =>
+  connectionDeliveryOf(error) === "notSent";
+
+/** Returns whether `error` is one `unacknowledgedError()` made. */
+export const isUnacknowledgedError = (error: unknown): boolean =>
+  connectionDeliveryOf(error) === "unacknowledged";
+
+/**
+ * The error each request a dropped connection carried fails with: it was
+ * handed over, and may have landed.
+ */
+const lostWithConnection = (error?: Error): Error =>
+  unacknowledgedError(error?.message ?? "memory transport closed", error);
 
 /**
  * The errors `Client.request()` built from a server response. Each is the
