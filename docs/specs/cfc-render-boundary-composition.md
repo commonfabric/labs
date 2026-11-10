@@ -74,7 +74,16 @@ each slot holding a link the read followed, which a dereference retains
   and picture, which a viewer may see even when the profile's private share
   inbox pointer is refused. `cf-code-editor`'s mention lists are not, since
   the editor reads each mention's destination, a cell its read hands it, for
-  the name it shows. A nested render root is decided on
+  the name it shows. Inside a boundary that lowers the ceiling, or under an
+  authorship boundary, a complete binding is decided on everything the bound
+  cell reaches instead, as a nested render root there is, since the
+  component's reads through its handle are not held to that boundary. A
+  complete entry is checked against its component by
+  `runtime/ui/src/v2/components/complete-read-contracts.browser.test.ts`,
+  which mounts the component over a handle that records every request it
+  sends and fails on a read outside the entry, other than one the test lists
+  with its reason, such as the badge's read of its space's root for the
+  seal. A nested render root is decided on
   the reads its component makes as well, as the nested-render paragraphs
   below describe. The worker keeps reading the bound cell and removes the
   binding when a write leaves that read consuming a label the ceiling
