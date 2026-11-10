@@ -385,13 +385,14 @@ and its schema closure. A list that needs only profile references declares
 those references explicitly in its read schema; reading their values also
 reads the profiles.
 
-A reader must tolerate absent metadata: an older room implementation need
-not offer it, and the document may not yet be initialized. Opening an updated
-room initializes its projection from the existing records without a backfill
-or a rewrite of those records. A runtime executing an older generation alone
-does not maintain the projection. Consumers that require current facts must
-use the room's existing fields when metadata is unavailable or its producer
-is not known to be current.
+A reader must tolerate absent metadata: an older room implementation need not
+offer it, and the document may not yet be initialized. Running an updated room
+with write access initializes its projection from the existing records without a
+backfill or a rewrite of those records. A read-only client can read an existing
+projection but cannot maintain it. A runtime executing an older generation alone
+does not maintain the projection. Consumers that require current facts must use
+the room's existing fields when metadata is unavailable or its producer is not
+known to be current.
 
 The manager's [`ChatIndexEntry`](ChatIndexEntry.md) still locates the room
 through its `room` reference. A retained metadata address does not establish

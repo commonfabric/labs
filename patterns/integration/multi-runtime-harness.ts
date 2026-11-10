@@ -1082,11 +1082,10 @@ export class MultiRuntimeHarness {
       };
       for (const spec of specs) sessions.push(await startSession(spec));
 
-      // A throwaway bootstrap worker creates the piece, then every test
-      // session opens it BY ID from storage. This mirrors production: each
-      // client loads the pattern through a verified load (required for
-      // trusted-action CFC writes), and no session holds special in-memory
-      // compile state.
+      // Without a supplied pieceId, a throwaway bootstrap worker creates the
+      // piece. Attached test sessions open that persisted piece by ID through
+      // a verified load (required for trusted-action CFC writes), with no
+      // special in-memory compile state. Unattached sessions leave it unopened.
       let pieceId = options.pieceId;
       if (pieceId === undefined) {
         bootstrap = new WorkerClient("bootstrap");

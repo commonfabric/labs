@@ -124,12 +124,16 @@ describe("fabrichat room metadata across runtimes", () => {
         unattached: true,
       });
       expect(await roomDocuments(reader, room.space)).toBe(0);
+      await reader.client().call("watchAddress", {
+        link: { "/": { "link@1": { ...metadata, schema: METADATA_SCHEMA } } },
+      });
+      await harness.settleUntil(async () => {
+        const value = await reader.client().call("watchedAddress", {});
+        return isPlainObject(value) && value.title === "Small summary";
+      });
       const first = metadataRecord(
-        await reader.client().call("watchAddress", {
-          link: { "/": { "link@1": { ...metadata, schema: METADATA_SCHEMA } } },
-        }),
+        await reader.client().call("watchedAddress", {}),
       );
-      await harness.settle();
       expect(first.title).toBe("Small summary");
       expect(first.kind).toBe("group");
       expect(Array.isArray(first.roster)).toBe(true);
@@ -181,7 +185,10 @@ describe("fabrichat room metadata across runtimes", () => {
         RETITLE,
         { piece: room },
       );
-      await harness.settle();
+      await harness.settleUntil(async () => {
+        const value = await reader.client().call("watchedAddress", {});
+        return isPlainObject(value) && value.title === "Changed summary";
+      });
       const renamed = metadataRecord(
         await reader.client().call("watchedAddress", {}),
       );

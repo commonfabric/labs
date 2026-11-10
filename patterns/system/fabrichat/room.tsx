@@ -1144,7 +1144,11 @@ export interface ChatRoomView {
   /** What the room says about itself. */
   about: ChatRoomAbout;
 
-  /** A separately addressable descriptor, when the room provides one. */
+  /**
+   * An advisory, separately addressable descriptor that may be absent or
+   * stale. Consumers must verify provenance and permissions through the
+   * authoritative room records and space access checks.
+   */
   metadata?: ChatRoomMetadata;
 
   /**
