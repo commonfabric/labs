@@ -1352,6 +1352,12 @@ export interface IOperationStorageCapability {
     query: Omit<OperationFieldQuery, "principal" | "sessionId">,
   ): Promise<OperationFieldSnapshot>;
 
+  /**
+   * Applies an operation and waits for its covering frame while a subscription
+   * and the server's verdict catch-up markers are available. Without that
+   * channel, or when it closes, returns the accepted result without waiting
+   * for delivery.
+   */
   applyOperation(operation: ApplyOpOperation): Promise<ApplyOpResolution>;
 
   releaseOperationField(operation: ReleaseOpFieldOperation): Promise<void>;
@@ -1779,7 +1785,9 @@ export interface IStorageTransaction {
   /**
    * Check scheduling dependencies before accepting an empty commit or seal.
    * Set by reactive computations, whose subscriptions must cover changes since
-   * their reads. Event handlers retain ordinary empty-commit behavior.
+   * their reads, and direct bookkeeping commits, whose verdict validates the
+   * guarded snapshot even when every write is elided. Event handlers retain
+   * ordinary empty-commit behavior.
    */
   validateReactiveReads?: boolean;
 

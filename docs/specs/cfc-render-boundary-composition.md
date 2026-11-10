@@ -65,8 +65,17 @@ each slot holding a link the read followed, which a dereference retains
   An object written inline in a view built outside a cell sends a cell it
   holds as a link, not as the cell's value.
 - A `$` binding is made only while the ceiling admits the worker's read of
-  the bound cell, under the cell's schema; a nested render root is decided on
-  the reads its component makes instead, as the nested-render paragraphs
+  the bound cell, under the cell's schema. A binding whose component read
+  contract entry (`runtime/runner/src/component-read-contract.ts`) is
+  `complete`, its `schema` reading everything the component shows from it, is
+  decided on that read instead, so a field the component does not read does
+  not withhold it and a field it reads decides it however the handle is
+  typed. `cf-profile-badge` `profile` is one: the badge shows a profile's name
+  and picture, which a viewer may see even when the profile's private share
+  inbox pointer is refused. `cf-code-editor`'s mention lists are not, since
+  the editor reads each mention's destination, a cell its read hands it, for
+  the name it shows. A nested render root is decided on
+  the reads its component makes as well, as the nested-render paragraphs
   below describe. The worker keeps reading the bound cell and removes the
   binding when a write leaves that read consuming a label the ceiling
   refuses, or while the read cannot complete, as when a space it reads is out
@@ -115,6 +124,7 @@ for every element of an array, and the empty path names the binding itself:
 | Component and property | `renders` |
 | --- | --- |
 | `cf-render` `cell` | `[[]]` |
+| `cf-cell-link` `cell` | `[[]]` |
 | `cf-picker` `items` | `[["*"]]` |
 | `cf-map` `value` | `[["markers", "*", "popup"], ["circles", "*", "popup"]]` |
 
@@ -130,7 +140,13 @@ change it. `cf-render` reads its own cell that way. `cf-picker` reads its list
 with `pieceListSchema`, each item a reference. `cf-map` reads its value under
 the schema its binding stores, so a value whose schema reads each popup as a
 reference is decided popup by popup, and a value read under `any` is decided on
-everything its popups reach.
+everything its popups reach. `cf-cell-link` reads its cell as `cf-render`
+does: it follows the reference to the cell it lands on, shows that cell's
+`[NAME]` through a host read of its own, and mounts a drag preview's render
+from it. A FabriChat room's row is the case this decides: the link to the room
+stores the room's schema, which reads every profile on its roster, and decided
+on that schema, the binding would be withheld from a viewer for any room whose
+roster holds a profile someone else owns.
 
 Each reference is read at the slot holding it in the document the links on the
 way resolve to, so a schema stored on one of those links, which can declare the
@@ -148,9 +164,12 @@ one.
 A component qualifies for `renders` when its own reads of the binding go no
 further than its `schema` and the documents its references land on, and
 everything it shows from beyond them comes through a render mounted from a
-reference. The entry is reviewed like the component itself. The replication
-walk reads a property by its `schema` and does not read the empty path, which
-is the nested render's to read.
+reference, or through a host read of a cell a reference lands on, which the
+worker's host read gate decides under the same display fit as a render
+(`runtime/runtime-client/src/backends/host-read-gate.ts`). The entry is
+reviewed like the component itself. The replication walk reads a property by
+its `schema` and does not read the empty path, which is the nested render's to
+read.
 
 The exceptions hold for every reference a nested render root decides:
 
@@ -183,9 +202,10 @@ The exceptions hold for every reference a nested render root decides:
   caveated view inside the piece would load from loading, as opening the piece
   does.
 - The component's own reads through the bound handle, such as the piece menu's
-  Data panel, are answered without the ceiling, as for every binding.
+  Data panel, are each decided by the host read gate, as for every binding.
 
-Regression guards: `test/worker-reconciler-cfc-nested-render.test.ts`.
+Regression guards: `test/worker-reconciler-cfc-nested-render.test.ts` and
+`test/worker-reconciler-cfc-cell-link.test.ts`.
 
 ## Text integrity (`requiredTextIntegrity` / `allowLiteralText`)
 

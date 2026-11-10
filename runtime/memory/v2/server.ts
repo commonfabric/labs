@@ -207,12 +207,14 @@ import {
   holdingsToCacheEntries,
   isEmptySync,
   mergeWatchesById,
+  pieceMarkInputsOf,
   sameSnapshot,
   sameWatchSpec,
   type SessionCacheEntry,
   toCacheEntry,
   toWireRemove,
   toWireUpsert,
+  trackedAndPieceKeysFromEntries,
   trackedIdsFromEntries,
   unionQuery,
 } from "./server-sync.ts";
@@ -1117,8 +1119,9 @@ type SessionHandle = {
 /** Kind of the LAST operation an origin commit applied to a doc — decides the
  * own-write echo shape at flush (CT-1965): `set`/`delete` heads are elided
  * (the writer provably holds their outcome), `patch` heads ride the frame as
- * full post-apply documents. */
-type DirtyOp = "set" | "patch" | "delete";
+ * full post-apply documents, and `derived` heads, which the engine wrote from
+ * the commit rather than the writer supplying them, always ride it. */
+type DirtyOp = "set" | "patch" | "delete" | "derived";
 
 type DirtyOrigin = {
   sessionId: string;
@@ -1279,8 +1282,16 @@ export type DemandedInstanceRow = {
   identity?: { readonly principal?: string; readonly sessionId?: string };
 
   /** True when the row is a watch ROOT of its session (the structure
-   * load's input, unchanged in scope — design §2.8 flag 4). */
+   * load's input). */
   root: boolean;
+
+  /**
+   * True when the document the session was sent for the row is one of a
+   * piece's values (`trackedAndPieceKeysFromEntries()`), so that a serving
+   * loop can start the piece it belongs to though no watch names it as a
+   * root: a piece reached only through a data link (design §2.8 flag 4).
+   */
+  piece?: true;
 };
 
 /**
@@ -7877,9 +7888,15 @@ export class Server {
           for (const revision of commit.revisions) {
             const scopeKey = revision.scopeKey as ScopeKey;
             committedWrites.push({ id: revision.id, scopeKey });
+            // A revision the engine derived, a field's anchors document
+            // rewritten for an edit, is no write of the committing session's,
+            // which holds nothing of it to promote. With own-write echo on, a
+            // `patch` head reaches its writer anyway; with it off, a `patch`
+            // head is withheld from its writer, so only the `derived` kind
+            // gets the rewrite to the session whose edit moved the anchors.
             dirtyOps.set(
               toDirtyKey(revision.id, scopeKey),
-              revision.op,
+              revision.derived === true ? "derived" : revision.op,
             );
           }
           if (dirtyOps.size > 0) {
@@ -10036,11 +10053,12 @@ export class Server {
     // wake the push loop, but they are not graph execution demand. Rebuild
     // the graph-only provenance from delivered entries plus traversal misses
     // before producing demand rows.
-    const graphTrackedIds = trackedIdsFromEntries(
-      (session.views.length === 0
-        ? session.entities
-        : session.viewDemandEntities).values(),
-    );
+    const { tracked: graphTrackedIds, pieces: pieceKeys } =
+      trackedAndPieceKeysFromEntries(
+        (session.views.length === 0
+          ? session.entities
+          : session.viewDemandEntities).values(),
+      );
     this.#addMissedToTrackedIds(
       graphTrackedIds,
       (session.views.length === 0 ? session.graphs : session.viewDemandGraphs)
@@ -10058,13 +10076,15 @@ export class Server {
       } catch {
         return;
       }
-      rows.set(dirtyKey, {
+      const row: DemandedInstanceRow = {
         id: parsed.id,
         scope: parsed.scope,
         scopeKey: parsed.scopeKey,
         identity,
         root,
-      });
+      };
+      if (pieceKeys.has(dirtyKey)) row.piece = true;
+      rows.set(dirtyKey, row);
     };
     for (const dirtyKey of session.trackedIds) {
       if (graphTrackedIds.has(dirtyKey)) {
@@ -10749,6 +10769,7 @@ export class Server {
                     const held = origin !== undefined &&
                       origin.sessionId === sessionId &&
                       origin.seq === entry.seq &&
+                      origin.op !== "derived" &&
                       (origin.op !== "patch" || !getOwnWriteEchoConfig());
                     if (!held) {
                       upserts.push(entry);
@@ -10784,10 +10805,19 @@ export class Server {
                     session.viewSupportGrown = false;
                   }
                   // A new delivered entity adds a key to the session's
-                  // demand; a changed snapshot of a held one does not.
+                  // demand, and a changed snapshot of a held one changes it
+                  // only when it changes a row's mark: when it becomes or
+                  // stops being one of a piece's values, or, as a piece's
+                  // result, names another argument.
                   let enteredEntity = false;
                   for (const [key, entry] of updates) {
-                    if (!session.entities.has(key)) enteredEntity = true;
+                    const held = session.entities.get(key);
+                    if (
+                      held === undefined ||
+                      pieceMarkInputsOf(held) !== pieceMarkInputsOf(entry)
+                    ) {
+                      enteredEntity = true;
+                    }
                     session.entities.set(key, entry);
                   }
                   for (const key of removed.keys()) {

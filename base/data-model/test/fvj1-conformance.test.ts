@@ -370,6 +370,21 @@ describe("fvj1-conformance", () => {
       expect(entry.requires).toEqual({ propertyCount: count });
     });
 
+    it("returns an entry requiring the size of a bigint past the floor", () => {
+      const count = SIZE_FLOORS_FOR_TESTING_ONLY.bigintBytes + 1;
+      const entry = JSON.parse(
+        fvj1ConformanceFixtureTextForTestingOnly([
+          {
+            name: "big",
+            section: "s",
+            make: () => 1n << BigInt((count - 1) * 8),
+          },
+        ]),
+      ).cases[0];
+
+      expect(entry.requires).toEqual({ bigintBytes: count });
+    });
+
     it("returns entries requiring the length of a string, a byte sequence and a symbol's key past their floors, and a depth past its floor", () => {
       const floors = SIZE_FLOORS_FOR_TESTING_ONLY;
       const string = "x".repeat(floors.stringLength + 1);

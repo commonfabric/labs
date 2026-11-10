@@ -88,6 +88,7 @@ import {
   settleServed,
 } from "./served-settle.ts";
 import { pullActionEvent } from "./test-action-event.ts";
+import { pressRenderedControl, pressTargetOf } from "./test-press.ts";
 
 export interface WorkerRequest {
   id: number;
@@ -313,6 +314,9 @@ const stepPeekSchema = {
     action: { type: "unknown" },
     assertion: { type: "unknown" },
     render: { type: "unknown" },
+    press: { type: "unknown" },
+    control: { type: "string" },
+    within: { type: "string" },
     settle: { type: "boolean" },
     label: { type: "string" },
     await: { type: "string" },
@@ -354,13 +358,16 @@ function classifyStep(stepCell: Cell<unknown>, index: number): StepMeta {
   if (peek?.settle === true) return { kind: "settle", ...skip };
   // Streams/computeds peek as present-but-opaque; key presence is the signal.
   if (Object.hasOwn(peek ?? {}, "render")) return { kind: "render", ...skip };
-  if (Object.hasOwn(peek ?? {}, "action")) return { kind: "action", ...skip };
+  // A press is an action whose event a rendered control sends.
+  if (
+    Object.hasOwn(peek ?? {}, "action") || Object.hasOwn(peek ?? {}, "press")
+  ) return { kind: "action", ...skip };
   if (Object.hasOwn(peek ?? {}, "assertion")) {
     return { kind: "assertion", ...skip };
   }
   throw new Error(
     `Test step ${index} has none of ` +
-      `action/assertion/render/settle/label/await ` +
+      `action/press/assertion/render/settle/label/await ` +
       // The step's own keys, not the peek's: the peek schema has already
       // dropped every key it does not declare, which is exactly the set an
       // author needs named here.
@@ -661,9 +668,22 @@ const handlers: Record<
     return result;
   },
 
-  /** Invoke an action step's stream and settle. */
+  /** Invoke an action step's stream, or press its control, and settle. */
   async action({ index }) {
     const stepCell = stepCells[index as number];
+    const peek = stepCell.asSchema(stepPeekSchema).get() as {
+      control?: unknown;
+      within?: unknown;
+    };
+    if (Object.hasOwn(peek ?? {}, "press")) {
+      await pressRenderedControl(
+        stepCell.key("press" as never) as Cell<unknown>,
+        pressTargetOf(peek, index as number),
+        () => settle(),
+      );
+      await settle();
+      return {};
+    }
     const stream = stepCell.key("action" as never) as unknown as {
       send?: (value: unknown) => void;
     };

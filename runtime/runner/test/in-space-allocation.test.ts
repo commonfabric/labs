@@ -413,6 +413,34 @@ describe("in-space allocation", () => {
     expect(await recorded(runtime, home, "kept")).toBe(existing);
   });
 
+  describe("recordedInSpaceName()", () => {
+    it("returns `undefined` for a name the calling space records nothing for, and creates nothing", async () => {
+      const create = runtime.createSpace.bind(runtime);
+      let created = 0;
+      runtime.createSpace = (options) => {
+        created++;
+        return create(options);
+      };
+
+      expect(await runtime.recordedInSpaceName(home, "unasked"))
+        .toBeUndefined();
+      expect(created).toBe(0);
+      expect(await recorded(runtime, home, "unasked")).toBeUndefined();
+    });
+
+    it("returns the space a run recorded for the name, to another process too", async () => {
+      const root = await spawnRoot((Child, value) => [
+        Child.inSpace("notebook")({ value }),
+      ]);
+      await root.send("first");
+
+      const [space] = await root.spaces();
+      expect(await runtime.recordedInSpaceName(home, "notebook")).toBe(space);
+      expect(await openRuntime().recordedInSpaceName(home, "notebook"))
+        .toBe(space);
+    });
+  });
+
   describe("under server execution", () => {
     /** Counts the spaces `reader`'s storage manager creates. */
     const countCreatedSpaces = (reader: Runtime): () => number => {

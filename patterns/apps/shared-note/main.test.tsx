@@ -1,32 +1,191 @@
 /**
  * Tests imported text, editor bindings, recovery, the live-cursor notice, the
- * profile-name sanitizer's co-presence bounds, and the verbs that edit the
- * body, without a notebook.
+ * profile-name sanitizer's co-presence bounds, the verbs that edit the body,
+ * and comments on its text, which Memory's anchors keep on their text through
+ * every edit, without a notebook.
  */
 
 import {
   action,
   assert,
+  equals,
+  type FieldAnchors,
   FS,
+  handler,
   NAME,
   pattern,
+  type RepresentsCurrentUser,
   TESTS,
   TILE_UI,
+  type TrustedActionWrite,
   UI,
+  Writable,
 } from "commonfabric";
 import {
+  clickButton,
   findElement,
+  findElementByText,
+  findNode,
   findNodeById,
+  findNodeByProp,
+  fireClick,
   fireEvent,
   hasText,
+  innermostNode,
+  isButton,
   propsOf,
+  propValue,
   readValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import SharedNote from "./main.tsx";
+import SharedNote, {
+  type NoteProfile,
+  SharedNoteCore,
+  type StoredComment,
+} from "./main.tsx";
 import { normalizePresenceParticipantName } from "./participant-name.ts";
 
 const MARKDOWN =
   "---\ntitle: Preserve this\n---\n# Team 😀\n\n- [ ] task\n\n```ts\nconst x = `${literal}`;\n```\n";
+
+/** The reviewed surface and action a person writes their own profile from. */
+const PROFILE_SURFACE = "SharedNoteTestProfileSurface";
+const PROFILE_ACTION = "SharedNoteTestWriteProfile";
+
+/** The gesture writing a profile takes. */
+const profileGesture = { surface: PROFILE_SURFACE, action: PROFILE_ACTION };
+
+/**
+ * A stand-in for a viewer's `#profile`, which a pattern test cannot resolve:
+ * a profile of the person who wrote it, as a Fabric profile is, and which
+ * only `writeOwnProfile` writes, from its reviewed surface.
+ */
+type TestProfile = RepresentsCurrentUser<
+  TrustedActionWrite<
+    NoteProfile,
+    typeof writeOwnProfile,
+    typeof PROFILE_ACTION,
+    typeof PROFILE_SURFACE
+  >
+>;
+
+/** What `writeOwnProfile` is bound to. */
+interface ProfileWriteState {
+  /** The profile to write. */
+  profile: Writable<TestProfile>;
+
+  /** The name to write into it. */
+  name: string;
+}
+
+/** Writes `name` into `profile`, as its owner does. */
+const writeOwnProfile = handler<unknown, ProfileWriteState>((
+  _event,
+  { profile, name },
+) => {
+  profile.set({ name } as TestProfile);
+});
+
+/**
+ * A `cf-selection-change` event for `quote` at `from`, from an editor whose
+ * text is `value`.
+ */
+const selectionAt = (value: string, from: number, quote: string) => ({
+  type: "cf-selection-change",
+  detail: { from, to: from + quote.length, text: quote, value },
+});
+
+/**
+ * A `cf-selection-change` event for the first occurrence of `quote` in
+ * `body`, from an editor whose text is `body`.
+ */
+const selectionIn = (body: string, quote: string) =>
+  selectionAt(body, body.indexOf(quote), quote);
+
+/** The `display` an element shown or hidden through its style takes. */
+const displayOf = (node: unknown): unknown =>
+  readValue((propValue(node, "style") as { display?: unknown })?.display);
+
+/** The place among its siblings an element takes through its style. */
+const orderOf = (node: unknown): unknown =>
+  readValue((propValue(node, "style") as { order?: unknown })?.order);
+
+/** The row of the comment whose body is `text`. */
+const rowOf = (root: unknown, text: string): unknown =>
+  innermostNode(
+    root,
+    (node) =>
+      hasText(node, text) && propValue(node, "data-comment-id") !== undefined,
+  );
+
+/** The panel's one set of actions, which work on the selected comment. */
+const actionsOf = (root: unknown): unknown =>
+  findNodeById(root, "shared-note-comment-actions");
+
+/** A mark the editor is asked to draw, from one anchor to another. */
+type Highlight = {
+  id: string;
+  fromAnchor: string;
+  toAnchor: string;
+  kind?: string;
+};
+
+/** The marks the editor under `root` is asked to draw. */
+const highlightsOf = (root: unknown): Highlight[] | undefined =>
+  propValue(findElement(root, "cf-code-editor"), "highlights") as
+    | Highlight[]
+    | undefined;
+
+/** Whether the Comment button under `root` is disabled. */
+const commentDisabled = (root: unknown): unknown =>
+  propValue(findElementByText(root, "cf-button", "Comment"), "disabled");
+
+/** The editor under `root`. */
+const editorOf = (root: unknown): unknown =>
+  findElement(root, "cf-code-editor");
+
+/** The comments a list holds, leaving out deleted records. */
+const listed = (
+  comments: readonly (StoredComment | undefined)[],
+): StoredComment[] =>
+  comments.filter((comment): comment is StoredComment => comment !== undefined);
+
+/** The id of the one draft among `comments`, or empty for none. */
+const draftIdIn = (
+  comments: readonly (StoredComment | undefined)[],
+): string =>
+  listed(comments).find((comment) => comment.status === "draft")?.id ?? "";
+
+/** The range between the two anchors of the comment `id` among `anchors`. */
+const rangeIn = (
+  anchors: FieldAnchors | undefined,
+  id: string | undefined,
+): { from: number; to: number } | undefined => {
+  const from = anchors?.[`${id}:from`];
+  const to = anchors?.[`${id}:to`];
+  return from === undefined || to === undefined ? undefined : { from, to };
+};
+
+/** How many comments `anchors` holds both anchors of. */
+const anchoredCount = (anchors: FieldAnchors | undefined): number =>
+  Object.keys(anchors ?? {}).filter((id) => id.endsWith(":from")).length;
+
+/** The cell a control binds under `prop`, as a `$value` or `$checked`. */
+function boundCell<T>(control: unknown, prop: string): Writable<T>;
+function boundCell(control: unknown, prop: string): unknown {
+  const cell = propsOf(control)?.[prop];
+  if (cell === undefined) throw new Error(`the control binds no ${prop}`);
+  return cell;
+}
+
+/** Writes `value` into the cell a field binds as its `$value`. */
+const typeInto = (field: unknown, value: string): void => {
+  boundCell<string>(field, "$value").set(value);
+};
+
+/** Checks the box a `cf-checkbox` binds as its `$checked`. */
+const check = (box: unknown): void => {
+  boundCell<boolean>(box, "$checked").set(true);
+};
 
 export default pattern(() => {
   const subject = SharedNote({ title: "Team notes", content: MARKDOWN });
@@ -151,7 +310,608 @@ export default pattern(() => {
     blank.appendLine.send({ text: "- one" })
   );
   const assert_blank_lines = assert(() => blank.content === "# Agenda\n- one");
+
+  // Comments are driven on the core, whose viewer is a profile the test
+  // holds. The default export resolves the viewer's `#profile`, which a
+  // pattern test cannot.
+  const adaProfile = Writable.of<TestProfile>();
+  const action_write_adas_profile = writeOwnProfile({
+    profile: adaProfile,
+    name: "Ada",
+  });
+  const content = Writable.of<string>(MARKDOWN);
+  const comments = Writable.of<StoredComment[]>([]);
+  const note = SharedNoteCore({
+    content,
+    comments,
+    myProfile: adaProfile,
+    participantName: "Ada",
+  });
+  // The same note as a viewer with no profile sees it.
+  const guest = SharedNoteCore({ content, comments, participantName: "" });
+  // The same note in another of Ada's tabs.
+  const otherTab = SharedNoteCore({
+    content,
+    comments,
+    myProfile: adaProfile,
+    participantName: "Ada",
+  });
+  // The same note as Ada sees it holding a profile that is not hers, as a
+  // pattern embedding the core could hand it: one whose label names no one.
+  const borrowed = SharedNoteCore({
+    content,
+    comments,
+    myProfile: Writable.of<NoteProfile>({ name: "Grace" }),
+    participantName: "Ada",
+  });
+  const QUOTE = "- [ ] task";
+  const quoteFrom = MARKDOWN.indexOf(QUOTE);
+  // What the verbs do to the body: a line before everything, and a longer
+  // word before the quote.
+  const INTRO = "# Intro\n";
+  const movedFrom = quoteFrom + INTRO.length + "Everyone".length -
+    "Team".length;
+
+  const assert_comment_needs_a_selection = assert(() =>
+    commentDisabled(note[UI]) === true &&
+    highlightsOf(note[UI])?.length === 0 &&
+    note.commentAnchors === undefined
+  );
+  const action_select_quote = action(() =>
+    fireEvent(
+      editorOf(note[UI]),
+      "oncf-selection-change",
+      selectionAt(content.get(), quoteFrom, QUOTE),
+    )
+  );
+  const assert_selection_enables_comment = assert(() =>
+    commentDisabled(note[UI]) === false &&
+    commentDisabled(guest[UI]) === true &&
+    displayOf(findNodeById(note[UI], "shared-note-composer")) === "none"
+  );
+  // Each write lands in its own step: a click in the same step as the write
+  // of the draft it reads would read the draft as it was.
+  const action_open_composer = action(() => clickButton(note[UI], "Comment"));
+  const assert_composer_open = assert(() =>
+    displayOf(findNodeById(note[UI], "shared-note-composer")) === "flex" &&
+    !hasText(findNodeById(note[UI], "shared-note-composer"), QUOTE)
+  );
+  const action_type_comment = action(() =>
+    typeInto(
+      findNodeById(note[UI], "shared-note-comment-draft"),
+      "Needs a date",
+    )
+  );
+  const action_post_comment = action(() => clickButton(note[UI], "Post"));
+  const assert_comment_posted = assert(() => {
+    const [comment] = listed(comments.get());
+    const range = rangeIn(note.commentAnchors, comment?.id);
+    return listed(comments.get()).length === 1 &&
+      comment.body === "Needs a date" &&
+      comment.quote === QUOTE &&
+      comment.resolved.get() === false &&
+      comment.replies.get().length === 0 &&
+      equals(comment.authorProfile, adaProfile) &&
+      range?.from === quoteFrom && range?.to === quoteFrom + QUOTE.length &&
+      displayOf(findNodeById(note[UI], "shared-note-composer")) === "none";
+  });
+  const assert_editor_marks_the_comment = assert(() => {
+    const highlights = highlightsOf(note[UI]);
+    return highlights?.length === 1 &&
+      highlights[0].id === listed(comments.get())[0].id &&
+      highlights[0].kind === "active" &&
+      highlightsOf(guest[UI])?.[0]?.kind === undefined &&
+      !hasText(rowOf(note[UI], "Needs a date"), QUOTE);
+  });
+  const assert_reply_needs_a_profile = assert(() =>
+    propValue(
+        findNodeByProp(actionsOf(note[UI]), "aria-label", "Reply"),
+        "disabled",
+      ) === false &&
+    propValue(
+        findNodeByProp(actionsOf(guest[UI]), "aria-label", "Reply"),
+        "disabled",
+      ) === true
+  );
+  // Memory moves the anchor through each verb's edit as it stores it, so
+  // the comment stays on its text with no editor open.
+  const action_verb_prepends_a_line = action(() =>
+    note.prependLine.send({ text: INTRO })
+  );
+  const action_verb_replaces_text_before_the_quote = action(() =>
+    note.replaceText.send({ old: "Team", new: "Everyone" })
+  );
+  const action_verb_appends_a_line = action(() =>
+    note.appendLine.send({ text: "- [ ] follow up" })
+  );
+  const assert_verbs_moved_the_anchor_with_the_text = assert(() => {
+    const range = rangeIn(note.commentAnchors, listed(comments.get())[0]?.id);
+    return content.get().slice(movedFrom, movedFrom + QUOTE.length) ===
+        QUOTE &&
+      range?.from === movedFrom && range?.to === movedFrom + QUOTE.length &&
+      !hasText(rowOf(note[UI], "Needs a date"), QUOTE) &&
+      !hasText(rowOf(note[UI], "Needs a date"), "text no longer in note");
+  });
+  // A selection reported against text the body does not hold is not kept,
+  // so there is nothing to comment on.
+  const action_select_stale_text = action(() =>
+    fireEvent(
+      editorOf(note[UI]),
+      "oncf-selection-change",
+      selectionIn("Not in the note", "Not in the note"),
+    )
+  );
+  // A comment written under a profile that is not the writer's own is
+  // refused, so its row cannot show someone else as its author.
+  const action_select_quote_under_a_borrowed_profile = action(() =>
+    fireEvent(
+      editorOf(borrowed[UI]),
+      "oncf-selection-change",
+      selectionIn(content.get(), QUOTE),
+    )
+  );
+  const action_comment_under_a_borrowed_profile = action(() =>
+    clickButton(borrowed[UI], "Comment")
+  );
+  const assert_borrowed_profile_refused = assert(() =>
+    listed(comments.get()).length === 1 &&
+    hasText(
+      findNodeById(borrowed[UI], "shared-note-comment-notice"),
+      "Choose a Fabric profile of your own",
+    ) &&
+    displayOf(findNodeById(borrowed[UI], "shared-note-composer")) === "none"
+  );
+  const assert_stale_selection_refused = assert(() =>
+    listed(comments.get()).length === 1 &&
+    anchoredCount(note.commentAnchors) === 1 &&
+    commentDisabled(note[UI]) === true &&
+    displayOf(findNodeById(note[UI], "shared-note-composer")) === "none"
+  );
+  // An agent comments on text it names, which the body holds once.
+  const AGENT_QUOTE = "Preserve this";
+  const assert_absent_quote_refused = assert(() =>
+    listed(comments.get()).length === 1
+  );
+  const assert_agent_comment_lands = assert(() => {
+    const agent = listed(comments.get()).find((c) => c.body === "Agent note");
+    const range = rangeIn(note.commentAnchors, agent?.id);
+    return listed(comments.get()).length === 2 &&
+      agent !== undefined &&
+      equals(agent.authorProfile, adaProfile) &&
+      range !== undefined &&
+      content.get().slice(range.from, range.to) === AGENT_QUOTE &&
+      !hasText(rowOf(note[UI], "Agent note"), AGENT_QUOTE) &&
+      highlightsOf(note[UI])?.length === 2;
+  });
+  const action_select_row = action(() =>
+    fireClick(rowOf(note[UI], "Agent note"))
+  );
+  // The actions are one set for the panel, shown under the selected row to
+  // the session that selected it.
+  const assert_row_selected = assert(() =>
+    highlightsOf(note[UI])?.find((h) => h.kind === "active")?.id ===
+      listed(comments.get()).find((c) => c.body === "Agent note")?.id &&
+    displayOf(actionsOf(note[UI])) === "flex" &&
+    orderOf(actionsOf(note[UI])) ===
+      (orderOf(rowOf(note[UI], "Agent note")) as number) + 1 &&
+    displayOf(actionsOf(guest[UI])) === "none"
+  );
+  const action_click_highlight = action(() =>
+    fireEvent(editorOf(note[UI]), "oncf-highlight-click", {
+      type: "cf-highlight-click",
+      detail: { id: listed(comments.get())[0].id },
+    })
+  );
+  const assert_highlight_selects_its_comment = assert(() =>
+    highlightsOf(note[UI])?.find((h) => h.kind === "active")?.id ===
+      listed(comments.get())[0].id &&
+    orderOf(actionsOf(note[UI])) ===
+      (orderOf(rowOf(note[UI], "Needs a date")) as number) + 1
+  );
+  const action_type_reply = action(() =>
+    typeInto(
+      findNodeByProp(actionsOf(note[UI]), "aria-label", "Reply"),
+      "Dated it",
+    )
+  );
+  const action_post_reply = action(() =>
+    clickButton(actionsOf(note[UI]), "Reply")
+  );
+  const action_reply_by_verb = action(() =>
+    note.replyToComment.send({
+      id: listed(comments.get())[0].id,
+      body: "Thanks",
+    })
+  );
+  const assert_replies_carry_their_author = assert(() => {
+    const replies = listed(comments.get())[0]?.replies.get() ?? [];
+    return replies.length === 2 &&
+      replies[0].body === "Dated it" && replies[1].body === "Thanks" &&
+      equals(replies[0].authorProfile, adaProfile) &&
+      hasText(rowOf(note[UI], "Needs a date"), "Dated it") &&
+      hasText(rowOf(note[UI], "Needs a date"), "Thanks");
+  });
+  // A reply under a profile that is not the writer's own is refused in the
+  // notice, and the reply typed stays in its field.
+  const action_select_comment_under_a_borrowed_profile = action(() =>
+    fireEvent(editorOf(borrowed[UI]), "oncf-highlight-click", {
+      type: "cf-highlight-click",
+      detail: { id: listed(comments.get())[0].id },
+    })
+  );
+  const action_type_reply_under_a_borrowed_profile = action(() =>
+    typeInto(
+      findNodeByProp(actionsOf(borrowed[UI]), "aria-label", "Reply"),
+      "Not mine",
+    )
+  );
+  const action_reply_under_a_borrowed_profile = action(() =>
+    clickButton(actionsOf(borrowed[UI]), "Reply")
+  );
+  const assert_borrowed_reply_refused = assert(() =>
+    listed(comments.get())[0]?.replies.get().length === 2 &&
+    hasText(
+      findNodeById(borrowed[UI], "shared-note-comment-notice"),
+      "Choose a Fabric profile of your own",
+    ) &&
+    boundCell<string>(
+        findNodeByProp(actionsOf(borrowed[UI]), "aria-label", "Reply"),
+        "$value",
+      ).get() === "Not mine"
+  );
+  // A verb rewrites the commented text: the anchor covers the replacement,
+  // and the row names neither the author's quote nor the text now.
+  const EDITED = "- [x] task";
+  const action_verb_rewrites_the_commented_text = action(() =>
+    note.replaceText.send({ old: QUOTE, new: EDITED })
+  );
+  const assert_row_names_no_text_after_an_edit = assert(() => {
+    const range = rangeIn(note.commentAnchors, listed(comments.get())[0]?.id);
+    return range !== undefined &&
+      content.get().slice(range.from, range.to) === EDITED &&
+      !hasText(rowOf(note[UI], "Needs a date"), QUOTE) &&
+      !hasText(rowOf(note[UI], "Needs a date"), EDITED);
+  });
+  // A verb deletes the commented text: Memory empties the anchor, and the
+  // comment stays listed, marks nothing, and quotes what it was about.
+  const action_verb_deletes_the_commented_text = action(() =>
+    note.replaceText.send({ old: `${EDITED}\n`, new: "" })
+  );
+  const assert_comment_text_gone = assert(() => {
+    const range = rangeIn(note.commentAnchors, listed(comments.get())[0]?.id);
+    return range !== undefined && range.from === range.to &&
+      hasText(rowOf(note[UI], "Needs a date"), "text no longer in note") &&
+      hasText(rowOf(note[UI], "Needs a date"), QUOTE);
+  });
+  const action_resolve_comment = action(() =>
+    clickButton(actionsOf(note[UI]), "Resolve")
+  );
+  const assert_resolved_comment_hidden = assert(() =>
+    listed(comments.get())[0]?.resolved.get() === true &&
+    displayOf(rowOf(note[UI], "Needs a date")) === "none" &&
+    displayOf(actionsOf(note[UI])) === "none" &&
+    highlightsOf(note[UI])?.length === 1
+  );
+  const action_show_resolved = action(() =>
+    check(findElement(note[UI], "cf-checkbox"))
+  );
+  const assert_resolved_comment_shown = assert(() =>
+    displayOf(rowOf(note[UI], "Needs a date")) === "flex" &&
+    displayOf(actionsOf(note[UI])) === "flex" &&
+    displayOf(findNode(actionsOf(note[UI]), isButton("Reopen"))) === "flex" &&
+    displayOf(findNode(actionsOf(note[UI]), isButton("Resolve"))) === "none"
+  );
+  const action_reopen_by_verb = action(() =>
+    note.reopenComment.send({ id: listed(comments.get())[0].id })
+  );
+  const assert_reopened = assert(() =>
+    listed(comments.get())[0]?.resolved.get() === false &&
+    highlightsOf(note[UI])?.length === 2
+  );
+  // A comment resolved while its text is still in the note marks nothing,
+  // so its row, listed under "Show resolved", names the text it is about.
+  const action_resolve_agent_comment_by_verb = action(() =>
+    note.resolveComment.send({
+      id: listed(comments.get()).find((c) => c.body === "Agent note")?.id ?? "",
+    })
+  );
+  const assert_resolved_row_names_its_text = assert(() => {
+    const agent = listed(comments.get()).find((c) => c.body === "Agent note");
+    const range = rangeIn(note.commentAnchors, agent?.id);
+    return agent?.resolved.get() === true && range !== undefined &&
+      content.get().slice(range.from, range.to) === AGENT_QUOTE &&
+      !highlightsOf(note[UI])?.some((h) => h.id === agent.id) &&
+      displayOf(rowOf(note[UI], "Agent note")) === "flex" &&
+      hasText(rowOf(note[UI], "Agent note"), AGENT_QUOTE) &&
+      !hasText(rowOf(note[UI], "Agent note"), "text no longer in note");
+  });
+  const action_delete_by_verb = action(() =>
+    note.deleteComment.send({
+      id: listed(comments.get()).find((c) => c.body === "Agent note")?.id ?? "",
+    })
+  );
+  const assert_deleted_with_its_anchor = assert(() =>
+    !comments.get().some((c) => c?.status === "deleted") &&
+    listed(comments.get()).length === 1 &&
+    listed(comments.get())[0].body === "Needs a date" &&
+    anchoredCount(note.commentAnchors) === 1 &&
+    rowOf(note[UI], "Agent note") === undefined
+  );
+  // The composer anchors its selection when it opens: a verb edits ahead of
+  // it while the composer is open, and Memory moves the anchors to where the
+  // text is when the comment is posted.
+  const HEADING = "Everyone";
+  const action_select_heading = action(() =>
+    fireEvent(
+      editorOf(note[UI]),
+      "oncf-selection-change",
+      selectionIn(content.get(), HEADING),
+    )
+  );
+  const action_open_composer_on_heading = action(() =>
+    clickButton(note[UI], "Comment")
+  );
+  const action_verb_edits_ahead_of_the_selection = action(() =>
+    note.prependLine.send({ text: "> Pinned" })
+  );
+  const action_type_heading_comment = action(() =>
+    typeInto(findNodeById(note[UI], "shared-note-comment-draft"), "Title?")
+  );
+  const action_post_heading_comment = action(() =>
+    clickButton(note[UI], "Post")
+  );
+  const assert_comment_lands_where_the_text_moved = assert(() => {
+    const titled = listed(comments.get()).find((c) => c.body === "Title?");
+    const range = rangeIn(note.commentAnchors, titled?.id);
+    return note.commentAnchors !== undefined &&
+      content.get().startsWith("> Pinned\n") &&
+      range !== undefined &&
+      content.get().slice(range.from, range.to) === HEADING;
+  });
+  // A selection the body has changed under is not kept; the editor's next
+  // report is against the body as it is, and the comment lands. Here the
+  // editor reported against text that held a second `> Pinned` line at the
+  // start, since deleted, and the selection is on the deleted copy. The body
+  // holds `Pinned` at the same offsets, on the copy that is left, so only the
+  // whole text tells the two apart.
+  const PINNED = "Pinned";
+  const action_select_pinned_in_older_text = action(() =>
+    fireEvent(
+      editorOf(note[UI]),
+      "oncf-selection-change",
+      selectionIn(`> ${PINNED}\n${content.get()}`, PINNED),
+    )
+  );
+  const action_open_composer_on_pinned = action(() =>
+    clickButton(note[UI], "Comment")
+  );
+  const assert_moved_selection_refused = assert(() =>
+    commentDisabled(note[UI]) === true &&
+    displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
+    !listed(comments.get()).some((c) => c.status === "draft")
+  );
+  const action_editor_restates_the_selection = action(() =>
+    fireEvent(
+      editorOf(note[UI]),
+      "oncf-selection-change",
+      selectionIn(content.get(), PINNED),
+    )
+  );
+  const action_type_pinned_comment = action(() =>
+    typeInto(findNodeById(note[UI], "shared-note-comment-draft"), "Why pin?")
+  );
+  const action_post_pinned_comment = action(() =>
+    clickButton(note[UI], "Post")
+  );
+  // A selection kept against the body as it was, then an edit ahead of it
+  // that the editor has not reported the selection against yet: the range
+  // no longer holds the selected text, and the composer refuses it.
+  const action_select_pinned_before_an_edit = action(() =>
+    fireEvent(
+      editorOf(note[UI]),
+      "oncf-selection-change",
+      selectionIn(content.get(), PINNED),
+    )
+  );
+  const action_verb_edits_before_the_editor_reports = action(() =>
+    note.prependLine.send({ text: "> Later" })
+  );
+  const action_open_composer_after_the_edit = action(() =>
+    clickButton(note[UI], "Comment")
+  );
+  const assert_range_from_before_the_edit_refused = assert(() =>
+    displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
+    hasText(
+      findNodeById(note[UI], "shared-note-comment-notice"),
+      "The note changed under your selection",
+    ) &&
+    !listed(comments.get()).some((c) => c.status === "draft")
+  );
+  const assert_restated_selection_posts = assert(() => {
+    const pinned = listed(comments.get()).find((c) => c.body === "Why pin?");
+    const range = rangeIn(note.commentAnchors, pinned?.id);
+    return range !== undefined &&
+      content.get().slice(range.from, range.to) === PINNED &&
+      displayOf(findNodeById(note[UI], "shared-note-composer")) === "none";
+  });
+  // The person selects other text while the composer is open: the composer
+  // stays on the text it was opened on, which its anchors hold, and the post
+  // lands there. Cancelling a composer removes its anchors.
+  const action_select_everyone_again = action(() =>
+    fireEvent(
+      editorOf(note[UI]),
+      "oncf-selection-change",
+      selectionIn(content.get(), HEADING),
+    )
+  );
+  const action_open_composer_on_everyone = action(() =>
+    clickButton(note[UI], "Comment")
+  );
+  const action_select_pinned_while_composing = action(() =>
+    fireEvent(
+      editorOf(note[UI]),
+      "oncf-selection-change",
+      selectionIn(content.get(), PINNED),
+    )
+  );
+  const assert_composer_keeps_its_selection = assert(() => {
+    const composer = findNodeById(note[UI], "shared-note-composer");
+    return displayOf(composer) === "flex" &&
+      highlightsOf(note[UI])?.some((h) =>
+          h.kind === "active" &&
+          listed(comments.get()).some((c) =>
+            c.id === h.id && c.status === "draft" && c.quote === HEADING
+          )
+        ) === true;
+  });
+  // The draft is a record of its own, which nobody else sees, and the button
+  // that would start another is disabled while it is open.
+  const assert_draft_is_hidden_from_others = assert(() => {
+    const drafted = listed(comments.get()).find((c) => c.status === "draft");
+    return drafted !== undefined && drafted.body === "" &&
+      drafted.quote === HEADING &&
+      displayOf(findNodeByProp(guest[UI], "data-comment-id", drafted.id)) ===
+        "none" &&
+      !highlightsOf(guest[UI])?.some((h) => h.id === drafted.id) &&
+      commentDisabled(note[UI]) === true;
+  });
+  const action_type_second_look = action(() =>
+    typeInto(findNodeById(note[UI], "shared-note-comment-draft"), "Again?")
+  );
+  const action_post_second_look = action(() => clickButton(note[UI], "Post"));
+  const assert_post_lands_on_the_composer_text = assert(() => {
+    const again = listed(comments.get()).find((c) => c.body === "Again?");
+    const range = rangeIn(note.commentAnchors, again?.id);
+    return range !== undefined && again?.status === "posted" &&
+      content.get().slice(range.from, range.to) === HEADING &&
+      !listed(comments.get()).some((c) => c.status === "draft");
+  });
+  const action_open_composer_on_pinned_again = action(() =>
+    clickButton(note[UI], "Comment")
+  );
+  const action_cancel_composer = action(() => clickButton(note[UI], "Cancel"));
+  const assert_cancel_removes_the_anchor = assert(() =>
+    displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
+    anchoredCount(note.commentAnchors) === listed(comments.get()).length &&
+    !listed(comments.get()).some((c) => c.status === "draft")
+  );
+  // A draft continued and posted in another tab: the first tab's Post is
+  // refused, and the comment keeps the other tab's text.
+  const action_open_composer_for_another_tab = action(() =>
+    clickButton(note[UI], "Comment")
+  );
+  // A draft listed to its author, in a tab not writing it, marks nothing,
+  // so its row names the text it is on.
+  const assert_listed_draft_names_its_text = assert(() => {
+    const drafted = listed(comments.get()).find((c) => c.status === "draft");
+    const row = findNodeByProp(otherTab[UI], "data-comment-id", drafted?.id);
+    return drafted !== undefined && drafted.quote !== "" &&
+      displayOf(row) === "flex" && hasText(row, drafted.quote) &&
+      !hasText(row, "text no longer in note");
+  });
+  const action_continue_in_another_tab = action(() =>
+    fireClick(
+      findElementByText(
+        findNodeByProp(
+          otherTab[UI],
+          "data-comment-id",
+          draftIdIn(comments.get()),
+        ),
+        "cf-button",
+        "Continue",
+      ),
+    )
+  );
+  const action_type_in_another_tab = action(() =>
+    typeInto(
+      findNodeById(otherTab[UI], "shared-note-comment-draft"),
+      "From tab two",
+    )
+  );
+  const action_post_in_another_tab = action(() =>
+    clickButton(otherTab[UI], "Post")
+  );
+  const action_type_in_first_tab = action(() =>
+    typeInto(findNodeById(note[UI], "shared-note-comment-draft"), "Tab one")
+  );
+  const action_post_in_first_tab = action(() => clickButton(note[UI], "Post"));
+  const assert_first_tab_post_refused = assert(() => {
+    const posted = listed(comments.get()).find((c) =>
+      c.body === "From tab two"
+    );
+    return posted !== undefined && posted.status === "posted" &&
+      !listed(comments.get()).some((c) => c.body === "Tab one") &&
+      displayOf(findNodeById(note[UI], "shared-note-composer")) === "flex" &&
+      hasText(
+        findNodeById(note[UI], "shared-note-comment-notice"),
+        "posted or discarded in another tab",
+      );
+  });
+  // Cancelling the refused composer leaves the comment the other tab posted.
+  const action_cancel_in_first_tab = action(() =>
+    clickButton(note[UI], "Cancel")
+  );
+  const assert_cancel_leaves_the_posted_comment = assert(() =>
+    listed(comments.get()).some((c) =>
+      c.body === "From tab two" && c.status === "posted"
+    ) &&
+    displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
+    anchoredCount(note.commentAnchors) === listed(comments.get()).length
+  );
+  // A draft discarded in another tab takes its anchor with it, and the first
+  // tab's Cancel then has nothing left to discard.
+  const action_open_composer_to_discard = action(() =>
+    clickButton(note[UI], "Comment")
+  );
+  // A draft names no comment to the verbs, so nothing can reply to it.
+  const action_reply_to_the_draft = action(() =>
+    note.replyToComment.send({
+      id: draftIdIn(comments.get()),
+      body: "Too early",
+    })
+  );
+  const assert_draft_takes_no_reply = assert(() =>
+    listed(comments.get()).some((c) =>
+      c.status === "draft" && c.replies.get().length === 0
+    )
+  );
+  const action_discard_in_another_tab = action(() =>
+    fireClick(
+      findElementByText(
+        findNodeByProp(
+          otherTab[UI],
+          "data-comment-id",
+          draftIdIn(comments.get()),
+        ),
+        "cf-button",
+        "Discard",
+      ),
+    )
+  );
+  const assert_discarded_draft_is_gone = assert(() =>
+    !comments.get().some((c) => c?.status === "deleted") &&
+    !listed(comments.get()).some((c) => c.status === "draft") &&
+    anchoredCount(note.commentAnchors) === listed(comments.get()).length
+  );
+  const action_cancel_after_discard = action(() =>
+    clickButton(note[UI], "Cancel")
+  );
+  const assert_composer_closed_after_discard = assert(() =>
+    displayOf(findNodeById(note[UI], "shared-note-composer")) === "none" &&
+    listed(comments.get()).some((c) => c.body === "From tab two")
+  );
+
   return {
+    // The refused verbs throw inside their handlers, which the runner reports
+    // as runtime errors; they are expected.
+    expectRuntimeErrors: [
+      "addComment found no occurrence of `quote`",
+      "addComment found `quote` more than once",
+      "replaceText needs a non-empty `old` to anchor on",
+      "replaceText found no occurrence of `old`",
+      "replaceText found `old` more than once",
+      "No comment has the id",
+    ],
     [TESTS]: [
       { assertion: assert_imported_content },
       { assertion: assert_filesystem_projection },
@@ -174,10 +934,125 @@ export default pattern(() => {
       { assertion: assert_projection_follows_body },
       { action: action_replace_text },
       { assertion: assert_text_replaced },
+      // Each refusal leaves the body as it was.
+      { action: subject.replaceText, event: { old: "", new: "x" } },
+      { action: subject.replaceText, event: { old: "absent", new: "x" } },
+      { action: subject.replaceText, event: { old: "- [", new: "x" } },
+      { assertion: assert_text_replaced },
       { action: action_prepend_line_to_blank },
       { action: action_append_line_to_blank },
       { assertion: assert_blank_lines },
+      {
+        action: action_write_adas_profile,
+        event: {},
+        trustedUi: profileGesture,
+      },
+      { assertion: assert_comment_needs_a_selection },
+      { action: action_select_quote },
+      { assertion: assert_selection_enables_comment },
+      { action: action_open_composer },
+      { assertion: assert_composer_open },
+      { action: action_type_comment },
+      { action: action_post_comment },
+      { assertion: assert_comment_posted },
+      { assertion: assert_editor_marks_the_comment },
+      { assertion: assert_reply_needs_a_profile },
+      { action: action_verb_prepends_a_line },
+      { action: action_verb_replaces_text_before_the_quote },
+      { action: action_verb_appends_a_line },
+      { assertion: assert_verbs_moved_the_anchor_with_the_text },
+      { action: action_select_stale_text },
+      { assertion: assert_stale_selection_refused },
+      { action: action_select_quote_under_a_borrowed_profile },
+      { action: action_comment_under_a_borrowed_profile },
+      { assertion: assert_borrowed_profile_refused },
+      {
+        action: note.addComment,
+        event: { quote: "Not in the note", body: "Lost" },
+      },
+      {
+        action: note.addComment,
+        event: { quote: "- [ ]", body: "Ambiguous" },
+      },
+      { assertion: assert_absent_quote_refused },
+      {
+        action: note.addComment,
+        event: { quote: AGENT_QUOTE, body: "Agent note" },
+      },
+      { assertion: assert_agent_comment_lands },
+      { action: action_select_row },
+      { assertion: assert_row_selected },
+      { action: action_click_highlight },
+      { assertion: assert_highlight_selects_its_comment },
+      { action: action_type_reply },
+      { action: action_post_reply },
+      { action: action_reply_by_verb },
+      { assertion: assert_replies_carry_their_author },
+      { action: action_select_comment_under_a_borrowed_profile },
+      { action: action_type_reply_under_a_borrowed_profile },
+      { action: action_reply_under_a_borrowed_profile },
+      { assertion: assert_borrowed_reply_refused },
+      { action: action_verb_rewrites_the_commented_text },
+      { assertion: assert_row_names_no_text_after_an_edit },
+      { action: action_verb_deletes_the_commented_text },
+      { assertion: assert_comment_text_gone },
+      { action: action_resolve_comment },
+      { assertion: assert_resolved_comment_hidden },
+      { action: action_show_resolved },
+      { assertion: assert_resolved_comment_shown },
+      { action: action_reopen_by_verb },
+      { assertion: assert_reopened },
+      { action: action_resolve_agent_comment_by_verb },
+      { assertion: assert_resolved_row_names_its_text },
+      { action: action_delete_by_verb },
+      { assertion: assert_deleted_with_its_anchor },
+      { action: action_select_heading },
+      { action: action_open_composer_on_heading },
+      { action: action_verb_edits_ahead_of_the_selection },
+      { action: action_type_heading_comment },
+      { action: action_post_heading_comment },
+      { assertion: assert_comment_lands_where_the_text_moved },
+      { action: action_select_pinned_in_older_text },
+      { assertion: assert_moved_selection_refused },
+      { action: action_editor_restates_the_selection },
+      { action: action_open_composer_on_pinned },
+      { action: action_type_pinned_comment },
+      { action: action_post_pinned_comment },
+      { assertion: assert_restated_selection_posts },
+      { action: action_select_everyone_again },
+      { action: action_open_composer_on_everyone },
+      { action: action_select_pinned_while_composing },
+      { assertion: assert_composer_keeps_its_selection },
+      { assertion: assert_draft_is_hidden_from_others },
+      { action: action_type_second_look },
+      { action: action_post_second_look },
+      { assertion: assert_post_lands_on_the_composer_text },
+      { action: action_open_composer_on_pinned_again },
+      { action: action_cancel_composer },
+      { assertion: assert_cancel_removes_the_anchor },
+      { action: action_open_composer_for_another_tab },
+      { assertion: assert_listed_draft_names_its_text },
+      { action: action_continue_in_another_tab },
+      { action: action_type_in_another_tab },
+      { action: action_post_in_another_tab },
+      { action: action_type_in_first_tab },
+      { action: action_post_in_first_tab },
+      { assertion: assert_first_tab_post_refused },
+      { action: action_cancel_in_first_tab },
+      { assertion: assert_cancel_leaves_the_posted_comment },
+      { action: action_open_composer_to_discard },
+      { action: action_reply_to_the_draft },
+      { assertion: assert_draft_takes_no_reply },
+      { action: action_discard_in_another_tab },
+      { assertion: assert_discarded_draft_is_gone },
+      { action: action_cancel_after_discard },
+      { assertion: assert_composer_closed_after_discard },
+      { action: action_select_pinned_before_an_edit },
+      { action: action_verb_edits_before_the_editor_reports },
+      { action: action_open_composer_after_the_edit },
+      { assertion: assert_range_from_before_the_edit_refused },
     ],
     subject,
+    note,
   };
 });

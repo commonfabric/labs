@@ -292,6 +292,12 @@ export enum RequestType {
   JoinVisitedRoom = "runtime:joinVisitedRoom",
 
   /**
+   * Stores a profile the host suggests for its user's first profile, which
+   * the `#profile` wish's create surface offers.
+   */
+  OfferProfileSuggestion = "runtime:offerProfileSuggestion",
+
+  /**
    * Waits for reactive quiescence *and* for every issued commit to be durable.
    * The client reads that pair as the point at which navigating or reloading
    * is safe, so quiescence alone is a weaker condition than this reports.
@@ -1405,6 +1411,22 @@ export type CellResolveAsCellRequest = BaseRequest & {
    * The cell whose aliases to follow.
    */
   cell: CellRef;
+
+  /**
+   * Whether to answer also with where a write to the cell lands, read
+   * together with the cell its links lead to: write redirects are followed,
+   * and a link stored as the value there is not.
+   */
+  withWriteTarget?: true;
+};
+
+/** The {@link RequestType.CellResolveAsCell} response. */
+export type CellResolveAsCellResponse = CellResponse & {
+  /**
+   * Where a write to the cell lands, when the request asked for it, read
+   * with {@link CellResponse.cell}.
+   */
+  writeTarget?: CellRef;
 };
 
 /** The {@link RequestType.CellGetCfcLabel} request. */
@@ -1977,6 +1999,22 @@ export type EnsureHomePatternRunningRequest = BaseRequest & {
    * it has no root.
    */
   existingOnly?: boolean;
+};
+
+/**
+ * The {@link RequestType.OfferProfileSuggestion} request: a name and,
+ * optionally, a picture, which the worker's runtime stores as the profile
+ * suggested for its user (`offerProfileSuggestion` in the runner).
+ */
+export type OfferProfileSuggestionRequest = BaseRequest & {
+  type: RequestType.OfferProfileSuggestion;
+  name: string;
+
+  /**
+   * The picture's bytes, which the envelope carries whole and decodes back
+   * into a `FabricBytes`, as for `UploadBlobRequest.body`.
+   */
+  picture?: FabricBytes;
 };
 
 /** The {@link RequestType.JoinVisitedRoom} request. */
@@ -3548,6 +3586,7 @@ export type IPCClientRequest =
   | GetHomeSpaceCellRequest
   | EnsureHomePatternRunningRequest
   | JoinVisitedRoomRequest
+  | OfferProfileSuggestionRequest
   | ListEventAttentionRequest
   | ResolveEventAttentionRequest
   | GetGraphSnapshotRequest
@@ -4581,6 +4620,10 @@ export type Commands = {
     request: JoinVisitedRoomRequest;
     response: JoinVisitedRoomResponse;
   };
+  [RequestType.OfferProfileSuggestion]: {
+    request: OfferProfileSuggestionRequest;
+    response: EmptyResponse;
+  };
   [RequestType.Idle]: {
     request: IdleRequest;
     response: EmptyResponse;
@@ -4720,7 +4763,7 @@ export type Commands = {
   };
   [RequestType.CellResolveAsCell]: {
     request: CellResolveAsCellRequest;
-    response: CellResponse;
+    response: CellResolveAsCellResponse;
   };
   [RequestType.CellGetCfcLabel]: {
     request: CellGetCfcLabelRequest;

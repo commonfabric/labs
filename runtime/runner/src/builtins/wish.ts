@@ -77,6 +77,7 @@ import {
 } from "../document-readiness.ts";
 import { wishStateSchemaForResult } from "./wish-schema.ts";
 import { setResultCell } from "../result-utils.ts";
+import { profileSuggestionCell } from "../profile-suggestion.ts";
 
 const wishFlowLogger = getLogger("runner.wish-flow", {
   enabled: true,
@@ -241,8 +242,6 @@ function getResolutionKind(parsed: ParsedWishTarget): string {
     case "#chatManager":
     case "#profile":
     case "#profileName":
-    case "#profileAvatar":
-    case "#profilePicture":
     case "#profileBio":
     case "#profileSpace":
       return "home-target";
@@ -251,7 +250,26 @@ function getResolutionKind(parsed: ParsedWishTarget): string {
   }
 }
 
-export function parseWishTarget(target: string): ParsedWishTarget {
+/**
+ * Targets that once answered with a profile's face field as stored, which
+ * anyone may have written. A wish for one, or for the same field below
+ * `#profile`, fails, rather than searching for the tag or reading the field,
+ * so that a pattern asking for one hears why.
+ */
+const FACE_FIELD_TARGETS: ReadonlySet<string> = new Set([
+  "#profilePicture",
+  "#profileAvatar",
+]);
+const FACE_FIELDS: ReadonlySet<string> = new Set(["picture", "avatar"]);
+
+/**
+ * Parses the wish target `target`, with `extraPath` (a wish's `path`)
+ * appended to the path it names.
+ */
+export function parseWishTarget(
+  target: string,
+  extraPath: readonly string[] = [],
+): ParsedWishTarget {
   const trimmed = target.trim();
   if (trimmed === "") {
     throw new WishError(`Wish target "${target}" is empty.`);
@@ -265,12 +283,23 @@ export function parseWishTarget(target: string): ParsedWishTarget {
       throw new WishError(`Wish tag target "${target}" is not recognized.`);
     }
     const key = `#${segments[0]}` as WishTag;
-    return { key, path: segments.slice(1) };
+    const path = [...segments.slice(1), ...extraPath];
+    if (
+      FACE_FIELD_TARGETS.has(key) ||
+      (key === "#profile" && FACE_FIELDS.has(path[0]))
+    ) {
+      throw new WishError(
+        `Wish target "${target}" does not exist: a profile's picture or ` +
+          "avatar is its owner's only when its label says so, so read the " +
+          "face from the profile `#profile` resolves to.",
+      );
+    }
+    return { key, path };
   }
 
   if (trimmed.startsWith("/")) {
     const segments = trimmed.split("/").filter((segment) => segment.length > 0);
-    return { key: "/", path: segments };
+    return { key: "/", path: [...segments, ...extraPath] };
   }
 
   throw new WishError(`Wish path target "${target}" is not recognized.`);
@@ -1160,21 +1189,6 @@ function resolveHomeSpaceTarget(
       // edits made via the profile's setName handler.
       const profileDefault = getDefaultProfileCell(ctx);
       return [{ cell: profileDefault, pathPrefix: ["initialNameApplied"] }];
-    }
-
-    case "#profileAvatar": {
-      return [{
-        cell: getDefaultProfileCell(ctx),
-        pathPrefix: ["avatar"],
-      }];
-    }
-
-    case "#profilePicture": {
-      // The default profile's picture: the bytes of a raster image.
-      return [{
-        cell: getDefaultProfileCell(ctx),
-        pathPrefix: ["picture"],
-      }];
     }
 
     case "#profileBio": {
@@ -2383,6 +2397,7 @@ export function wish(
     input?: {
       profiles: unknown;
       privateInbox: unknown;
+      profileSuggestion: unknown;
       inputId: string;
       buttonId: string;
     };
@@ -3002,6 +3017,12 @@ export function wish(
       privateInbox: createSigilLinkFromParsedLink(
         homeDefaultPattern.key("privateInbox").getAsNormalizedFullLink(),
       ),
+      // The profile the user's host suggests, which the surface offers;
+      // nothing is stored there when the host suggests none. The link is derived from the user's home space here,
+      // so a serving runtime hands its demander's suggestion to its surface.
+      profileSuggestion: createSigilLinkFromParsedLink(
+        profileSuggestionCell(runtime, ctx.tx).getAsNormalizedFullLink(),
+      ),
       inputId: "wish-profile-name-input",
       buttonId: "wish-profile-create-button",
     };
@@ -3038,6 +3059,7 @@ export function wish(
         ...slot.input,
         profiles: bindInputCell(slot.input.profiles),
         privateInbox: bindInputCell(slot.input.privateInbox),
+        profileSuggestion: bindInputCell(slot.input.profileSuggestion),
       };
     };
 
@@ -3363,11 +3385,7 @@ export function wish(
             const activeParsed = parsed = measureWishPhase(
               "parse-target",
               queryKey,
-              () => {
-                const nextParsed = parseWishTarget(query);
-                nextParsed.path = [...nextParsed.path, ...(path ?? [])];
-                return nextParsed;
-              },
+              () => parseWishTarget(query, path ?? []),
             );
 
             // Interval #now is not a resolution — it's a timer subscription.

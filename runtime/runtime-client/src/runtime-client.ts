@@ -1005,6 +1005,26 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   }
 
   /**
+   * Stores `suggestion` as the profile suggested for this runtime's user, to
+   * be offered by the create surface the `#profile` wish shows while the user
+   * has no profile, and resolves once it is stored. It replaces any
+   * suggestion stored before, so a host offers one once, when it learns it,
+   * as Web Weaver does from the receipt of an invitation that carries one.
+   * `picture` is copied into the value that crosses.
+   */
+  async offerProfileSuggestion(
+    suggestion: { name: string; picture?: Uint8Array },
+  ): Promise<void> {
+    await this.#conn.request<RequestType.OfferProfileSuggestion>({
+      type: RequestType.OfferProfileSuggestion,
+      name: suggestion.name,
+      ...(suggestion.picture === undefined
+        ? {}
+        : { picture: new FabricBytes(suggestion.picture) }),
+    });
+  }
+
+  /**
    * Tells the user's chat manager that the user has joined the FabriChat room
    * declared by `space`: the writable standalone root or the writable
    * container root's explicit `chatRoom`. The manager makes the room

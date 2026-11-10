@@ -32,6 +32,7 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { profileSuggestionCell } from "@commonfabric/runner/profile-suggestion";
 import { siteTableCause, siteTableSchema } from "@commonfabric/home-schemas";
 import {
   PieceController,
@@ -81,6 +82,7 @@ import {
   type IPCRemotePost,
   type LoggerErrorMessagesResponse,
   NotificationType,
+  type OfferProfileSuggestionRequest,
   RequestType,
   RuntimeErrorCode,
 } from "@/protocol/mod.ts";
@@ -213,6 +215,70 @@ describe("runtime-processor", () => {
       await runtime.dispose();
       await storageManager.close();
     }
+  });
+
+  describe("offering a profile suggestion", () => {
+    it("stores the suggested name and picture where the `#profile` wish reads them", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const processor = buildProcessor({ runtime });
+        await processor.handleRequest({
+          type: RequestType.OfferProfileSuggestion,
+          name: "Sam Lee",
+          picture: new FabricBytes(new Uint8Array([0x89, 0x50, 1, 2])),
+        });
+        const stored = profileSuggestionCell(runtime);
+        await stored.sync();
+        expect(stored.get()?.name).toBe("Sam Lee");
+        expect([...stored.get()?.picture?.slice() ?? []]).toEqual([
+          0x89,
+          0x50,
+          1,
+          2,
+        ]);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("throws for a missing name, and stores nothing", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const processor = buildProcessor({ runtime });
+        await expect(
+          processor.handleOfferProfileSuggestion({
+            type: RequestType.OfferProfileSuggestion,
+          } as unknown as OfferProfileSuggestionRequest),
+        ).rejects.toThrow("requires a name");
+        const stored = profileSuggestionCell(runtime);
+        await stored.sync();
+        expect(stored.get()).toBeUndefined();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("throws for a picture that is not bytes, and stores nothing", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const processor = buildProcessor({ runtime });
+        await expect(
+          processor.handleOfferProfileSuggestion({
+            type: RequestType.OfferProfileSuggestion,
+            name: "Sam Lee",
+            picture: "iVBORw" as unknown as FabricBytes,
+          }),
+        ).rejects.toThrow("requires a picture as bytes");
+        const stored = profileSuggestionCell(runtime);
+        await stored.sync();
+        expect(stored.get()).toBeUndefined();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
   });
 
   it("returns `null` diagnostics for a storage manager without them", async () => {
@@ -4297,6 +4363,9 @@ describe("runtime-processor", () => {
         ensurePrivateInbox.getAsNormalizedFullLink(),
       );
       const home = {
+        // Home's space, whose allocation record the inbox ensure reads for
+        // the space Home's own inboxes live in: none is recorded.
+        space: homeRef.space,
         getAsLink: () => cellRefToSigilLink(homeRef),
         // The document Home's root is, which the inbox ensure loads before
         // reading Home's lists: none is stored, so it is absent.
@@ -5572,6 +5641,45 @@ describe("runtime-processor", () => {
         expect(posted.length).toBeGreaterThanOrEqual(2);
         expect(diagnostics).toHaveLength(1);
         expect(diagnostics[0]).toContain("schema: true");
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+  });
+
+  describe("`RuntimeProcessor` cell resolution IPC", () => {
+    it("returns, when asked, where a write to the cell lands beside the cell its links lead to", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const space = cfcSigner.did();
+        const value = runtime.getCell<number>(space, "resolve-value");
+        const holder = runtime.getCell<unknown>(space, "resolve-holder");
+        const field = runtime.getCell<unknown>(space, "resolve-field");
+        await Promise.all([value.sync(), holder.sync(), field.sync()]);
+        const tx = runtime.edit();
+        value.withTx(tx).set(1);
+        holder.withTx(tx).setRawUntyped(value.getAsLink());
+        field.withTx(tx).setRawUntyped(holder.getAsWriteRedirectLink());
+        expect((await tx.commit().settled).error).toBeUndefined();
+        const processor = buildProcessor({ runtime });
+        const request = {
+          type: RequestType.CellResolveAsCell,
+          cell: field.getAsNormalizedFullLink(),
+        } as const;
+
+        const plain = processor.handleCellResolveAsCell(request);
+        const both = processor.handleCellResolveAsCell({
+          ...request,
+          withWriteTarget: true,
+        });
+
+        expect(plain.writeTarget).toBeUndefined();
+        expect([plain.cell.id, both.cell.id, both.writeTarget?.id]).toEqual([
+          value.getAsNormalizedFullLink().id,
+          value.getAsNormalizedFullLink().id,
+          holder.getAsNormalizedFullLink().id,
+        ]);
       } finally {
         await runtime.dispose();
         await storageManager.close();

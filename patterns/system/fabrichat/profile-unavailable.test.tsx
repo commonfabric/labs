@@ -43,7 +43,7 @@ export default pattern(() => {
         trustedUi: { surface: "ChatSendSurface", action: "ChatSend" },
       },
       {
-        assertion: assert(() => message.get().body === "Private text"),
+        assertion: assert(() => message.get()?.body === "Private text"),
       },
       { action: clearProfile },
       {
@@ -55,7 +55,7 @@ export default pattern(() => {
         trustedUi: { surface: "ChatDeleteSurface", action: "ChatDelete" },
       },
       {
-        assertion: assert(() => message.get().body === "Private text"),
+        assertion: assert(() => message.get()?.body === "Private text"),
       },
       {
         action: room.obliterateMessage,
@@ -67,7 +67,7 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          message.get().authorProfile === undefined &&
+          message.get()?.authorProfile === undefined &&
           bodyText(message.get()) === "This message was removed."
         ),
       },

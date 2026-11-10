@@ -4,70 +4,28 @@ import * as path from "@std/path";
 import { type LcovFileCoverage, parseLcovReports } from "./lcov.ts";
 
 /**
- * Rewrite an LCOV `SF:` source path to a repository-relative POSIX path.
- *
- * `deno coverage --lcov` records each source file by its absolute path on the
- * machine that ran the tests. Those roots differ between runners: a
- * GitHub-hosted runner checks the repository out under `/home/runner/work`,
- * while a self-hosted runner uses its own work directory. The actions runner
- * always checks out into `<work-dir>/<repo>/<repo>`, so the path that follows
- * the doubled repository directory is the repository-relative path. Stripping
- * everything up to and including that doubled directory collapses the differing
- * absolute roots onto a single relative path an IDE can map back to the
- * checkout.
- *
- * The last occurrence of the doubled directory is used so that a work directory
- * whose own ancestors happen to repeat the repository name does not anchor too
- * early. Paths that do not contain the doubled repository directory are
- * returned unchanged; pattern-runtime coverage uses synthetic paths (for
- * example `cf-mount/...`) that have no repository file to map to.
- */
-export function normalizeSourcePath(
-  sourcePath: string,
-  repoName: string,
-): string {
-  const posix = sourcePath.replaceAll("\\", "/");
-  const anchor = `/${repoName}/${repoName}/`;
-  const index = posix.lastIndexOf(anchor);
-  if (index >= 0) return posix.slice(index + anchor.length);
-  return posix;
-}
-
-/**
- * Merge one or more LCOV reports into a single report whose source paths are
- * repository-relative. Records that refer to the same source file collapse into
- * one, with per-line execution counts summed, so a file exercised by several
- * test jobs is reported once with its combined coverage rather than as repeated
- * records that some LCOV consumers keep only the last of.
+ * Merge one or more LCOV reports into a single report. A lane's reports name
+ * each file of the repository by its repository-relative path, so the merged
+ * report maps onto any checkout. Records that refer to the same source file
+ * collapse into one, with per-line execution counts summed, so a file
+ * exercised by several test jobs is reported once with its combined coverage
+ * rather than as repeated records that some LCOV consumers keep only the last
+ * of.
  *
  * Only line coverage (`DA`/`LF`/`LH`) is carried through; `parseLcovReports`
  * explains what the other record kinds cost to merge.
  */
 export function mergeLcovReports(
   reports: string[],
-  repoName: string,
-): { lcov: string; fileCount: number; rewritten: number; unchanged: number } {
-  const files = parseLcovReports(reports, {
-    mapPath: (sourcePath) => normalizeSourcePath(sourcePath, repoName),
-  });
+): { lcov: string; fileCount: number } {
+  const files = parseLcovReports(reports);
 
   const paths = [...files.keys()].sort();
   const blocks = paths.map((sourcePath) =>
     serializeFileCoverage(sourcePath, files.get(sourcePath)!)
   );
   const lcov = blocks.length === 0 ? "" : `${blocks.join("\n")}\n`;
-
-  let rewritten = 0;
-  for (const [normalized, file] of files) {
-    if (normalized !== file.sourcePath) rewritten++;
-  }
-
-  return {
-    lcov,
-    fileCount: files.size,
-    rewritten,
-    unchanged: files.size - rewritten,
-  };
+  return { lcov, fileCount: files.size };
 }
 
 function serializeFileCoverage(
@@ -114,16 +72,10 @@ async function collectLcovFiles(dir: string): Promise<string[]> {
   return files;
 }
 
-/**
- * Read every LCOV report under `inputDir` and merge them into a single report
- * with repository-relative source paths.
- */
+/** Read every LCOV report under `inputDir` and merge them into one. */
 export async function combineCoverageLcov(
   inputDir: string,
-  repoName: string,
-): Promise<
-  { lcov: string; fileCount: number; rewritten: number; unchanged: number }
-> {
+): Promise<{ lcov: string; fileCount: number }> {
   const files = (await collectLcovFiles(inputDir)).sort();
 
   const reports: string[] = [];
@@ -132,7 +84,7 @@ export async function combineCoverageLcov(
     if (text.trim().length > 0) reports.push(text);
   }
 
-  return mergeLcovReports(reports, repoName);
+  return mergeLcovReports(reports);
 }
 
 export function parseArgs(args: string[]): Map<string, string> {
@@ -149,26 +101,21 @@ export async function main(args: string[]): Promise<number> {
   const parsed = parseArgs(args);
   const inputDir = parsed.get("input-dir");
   const outputPath = parsed.get("output");
-  const repoName = parsed.get("repo-name");
-  if (!inputDir || !outputPath || !repoName) {
+  if (!inputDir || !outputPath) {
     console.error(
       "Usage: deno run --allow-read --allow-write tasks/combine-coverage-lcov.ts " +
-        "--input-dir=<dir> --output=<combined.lcov> --repo-name=<repository name>",
+        "--input-dir=<dir> --output=<combined.lcov>",
     );
     return 2;
   }
 
-  const { lcov, fileCount, rewritten, unchanged } = await combineCoverageLcov(
-    inputDir,
-    repoName,
-  );
+  const { lcov, fileCount } = await combineCoverageLcov(inputDir);
 
   await Deno.mkdir(path.dirname(outputPath), { recursive: true });
   await Deno.writeTextFile(outputPath, lcov);
 
   console.log(
-    `Merged line coverage for ${fileCount} source file(s) into ${outputPath} ` +
-      `(${rewritten} normalized to repository-relative paths, ${unchanged} left as-is).`,
+    `Merged line coverage for ${fileCount} source file(s) into ${outputPath}.`,
   );
   return 0;
 }

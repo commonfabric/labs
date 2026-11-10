@@ -888,8 +888,6 @@ export function wishTargetCandidates(): ProviderResult {
   return values([
     { value: "#profile", description: "the viewer's active profile object" },
     { value: "#profileName", description: "its live display name" },
-    { value: "#profileAvatar", description: "its avatar text" },
-    { value: "#profilePicture", description: "its picture, as image bytes" },
     { value: "#profileBio", description: "its owner-authored bio" },
     { value: "#profileSpace", description: "its own space cell" },
     { value: "#favorites", description: "space-relative" },

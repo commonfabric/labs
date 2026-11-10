@@ -90,6 +90,7 @@ import {
   resolveExternalRootRefForStructure,
   resolveSlugReference,
   resolveSlugTargetInPiece,
+  resolveWriteTarget,
   Runtime,
   runtimePresets,
   RuntimeTelemetry,
@@ -131,6 +132,7 @@ import {
 } from "@commonfabric/runner/cfc/custody-seal";
 import { cfcSchemaGivesNoShape } from "@commonfabric/runner/cfc/schema-primitives";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
+import { offerProfileSuggestion } from "@commonfabric/runner/profile-suggestion";
 import { bindNativeUiControl } from "@commonfabric/runner/native-ui";
 import {
   NameSchema,
@@ -190,6 +192,7 @@ import {
   type CellPushRequest,
   type CellRef,
   type CellResolveAsCellRequest,
+  type CellResolveAsCellResponse,
   CellResponse,
   type CellSendRequest,
   type CellSendReviewedRequest,
@@ -242,6 +245,7 @@ import {
   type LoggerMetadata,
   type LogLevel,
   NotificationType,
+  type OfferProfileSuggestionRequest,
   type OperationApplyRequest,
   type OperationApplyResponse,
   type OperationCapabilitiesRequest,
@@ -2535,28 +2539,16 @@ export class RuntimeProcessor {
     return { value: false };
   }
 
-  handleCellResolveAsCell(request: CellResolveAsCellRequest): CellResponse {
+  handleCellResolveAsCell(
+    request: CellResolveAsCellRequest,
+  ): CellResolveAsCellResponse {
     const cell = getCell(this.#runtime, request.cell);
-    const resolved = cell.resolveAsCell();
-    const ref = createCellRef(resolved);
-    if (
-      ref.schema && typeof ref.schema === "object" &&
-      !Array.isArray(ref.schema)
-    ) {
-      ref.schema = resolveExternalRootRefForStructure(ref.schema);
-    }
-    const raw = (resolved as Cell<unknown> & {
-      getRaw?: (options: { lastNode: "value" }) => unknown;
-    }).getRaw?.({ lastNode: "value" });
-    if (isSqliteDbRefValue(raw)) {
-      const schema = ref.schema && typeof ref.schema === "object" &&
-          !Array.isArray(ref.schema)
-        ? ref.schema
-        : { type: "object" as const };
-      ref.schema = { ...schema, asCell: ["sqlite"] as const };
-    }
+    // Both are resolved in this one turn, so they describe the same links.
     return {
-      cell: ref,
+      cell: resolvedCellRef(cell.resolveAsCell()),
+      ...(request.withWriteTarget
+        ? { writeTarget: resolvedCellRef(resolveWriteTarget(cell)) }
+        : {}),
     };
   }
 
@@ -2978,6 +2970,30 @@ export class RuntimeProcessor {
     // controller.
     const homePattern = await this.#ensureHomePattern();
     return { cell: createCellRef(homePattern) };
+  }
+
+  /**
+   * Stores the profile `request` suggests for this runtime's user, as
+   * `offerProfileSuggestion()` in the runner does.
+   *
+   * @throws When the name is not a string, or a picture is given that is not
+   *   bytes.
+   */
+  async handleOfferProfileSuggestion(
+    request: OfferProfileSuggestionRequest,
+  ): Promise<void> {
+    if (typeof request.name !== "string") {
+      throw new Error("offerProfileSuggestion requires a name");
+    }
+    if (
+      request.picture !== undefined && !(request.picture instanceof FabricBytes)
+    ) {
+      throw new Error("offerProfileSuggestion requires a picture as bytes");
+    }
+    await offerProfileSuggestion(this.#runtime, {
+      name: request.name,
+      ...(request.picture === undefined ? {} : { picture: request.picture }),
+    });
   }
 
   /**
@@ -4329,6 +4345,8 @@ export class RuntimeProcessor {
         return await this.handleEnsureHomePatternRunning(request);
       case RequestType.JoinVisitedRoom:
         return await this.handleJoinVisitedRoom(request);
+      case RequestType.OfferProfileSuggestion:
+        return await this.handleOfferProfileSuggestion(request);
       case RequestType.Idle:
         return await this.handleIdle();
       case RequestType.ListEventAttention:
@@ -4892,4 +4910,29 @@ export class RuntimeProcessor {
     }
     return processor;
   }
+}
+
+/**
+ * The ref a client receives for `resolved`, a cell resolved for it, with the
+ * schema it reads the cell through.
+ */
+function resolvedCellRef(resolved: Cell<unknown>): CellRef {
+  const ref = createCellRef(resolved);
+  if (
+    ref.schema && typeof ref.schema === "object" &&
+    !Array.isArray(ref.schema)
+  ) {
+    ref.schema = resolveExternalRootRefForStructure(ref.schema);
+  }
+  const raw = (resolved as Cell<unknown> & {
+    getRaw?: (options: { lastNode: "value" }) => unknown;
+  }).getRaw?.({ lastNode: "value" });
+  if (isSqliteDbRefValue(raw)) {
+    const schema = ref.schema && typeof ref.schema === "object" &&
+        !Array.isArray(ref.schema)
+      ? ref.schema
+      : { type: "object" as const };
+    ref.schema = { ...schema, asCell: ["sqlite"] as const };
+  }
+  return ref;
 }

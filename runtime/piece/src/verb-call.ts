@@ -128,7 +128,10 @@ const isReceiptCollision = (error: VerbHandlingError): boolean =>
 
 /**
  * Sends `event` to the verb stream `stream` and returns once the caller's act
- * is durable, or the handling's failure where its commit was refused.
+ * is durable, or the handling's failure where its commit was refused. Under
+ * server execution the act is the event append, and a failure of the local
+ * echo of the handler is not the handling's: the served handling's outcome is
+ * what `handled()` returns.
  * `event` is dispatched as given, so a caller judges it first —
  * `verbEventForDispatch` is that gate.
  *
@@ -151,6 +154,11 @@ export async function sendVerbEvent(
   // The dispatch span runs to the first, and a readback waits for the second
   // before it reads the receipt.
   const handled = Promise.withResolvers<IExtendedStorageTransaction>();
+  // Whether the append was reported delivered. Under server execution the
+  // transaction that report carries is the local echo's, whose failure says
+  // nothing of the served handling; otherwise a delivered report carries an
+  // error only for a collision on the receipt.
+  let delivered = false;
   const tx = await time(
     "dispatch",
     () =>
@@ -163,7 +171,10 @@ export async function sendVerbEvent(
           // threw or whose commit was rejected — is reported below off
           // the transaction's status; only an append refused on an
           // otherwise clean transaction is reported here.
-          if (delivery.delivered || appendedTx.status().status === "error") {
+          if (delivery.delivered) {
+            delivered = true;
+            resolve(appendedTx);
+          } else if (appendedTx.status().status === "error") {
             resolve(appendedTx);
           } else {
             reject(new Error(`event append refused: ${delivery.refused}`));
@@ -208,7 +219,9 @@ export async function sendVerbEvent(
   const txStatus = tx.status();
   const deduplicated = txStatus.status === "error" &&
     isReceiptCollision(txStatus.error);
-  if (txStatus.status === "error" && !deduplicated) {
+  // A delivered append's echo that failed leaves the outcome to the served
+  // handling, which `handled()` reports.
+  if (txStatus.status === "error" && !deduplicated && !delivered) {
     return { status: "failed", error: txStatus.error };
   }
 
@@ -231,7 +244,7 @@ export async function sendVerbEvent(
       const handledTx = await time("handled", () => handled.promise);
       const handledStatus = handledTx.status();
       if (
-        handledStatus.status === "error" && handledTx !== tx &&
+        handledStatus.status === "error" &&
         !isReceiptCollision(handledStatus.error)
       ) {
         return { status: "failed", error: handledStatus.error };

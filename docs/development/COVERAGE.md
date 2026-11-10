@@ -986,12 +986,13 @@ that file to the build-artifacts bucket next to the release tarball. The point
 is to give someone working in an IDE a single file that shows coverage for the
 whole repository, instead of one fragment per lane.
 
-Two things happen during the merge. The source paths in each fragment are
-absolute paths rooted at whichever runner produced them, so they are rewritten
-to repository-relative paths that an IDE can map onto a local checkout. Records
-for the same source file are then combined into one, with the per-line hit
-counts added together, so a file exercised by several lanes is reported once
-with its combined coverage.
+Each lane writes its fragments with repository-relative source paths, rewriting
+the absolute paths `deno coverage` and the pattern instrumentation record once
+it has finished converting. The fragments therefore map onto any checkout: the
+`Status` job, which reads them from a different directory than the one the lane
+ran from, and an IDE with a local checkout. The merge combines the records for
+the same source file into one, with the per-line hit counts added together, so a
+file exercised by several lanes is reported once with its combined coverage.
 
 The merged file carries line coverage only. LCOV identifies a function by its
 name, and `deno coverage --lcov` can emit several functions with the same name

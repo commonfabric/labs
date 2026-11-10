@@ -223,7 +223,11 @@ registers its nodes there. Nothing demands those nodes, so once the handler's
 transaction commits the result is released (`#releaseServedHandlerResult` in
 `runner.ts`), and what remains is what the store holds, with the basis rows of
 any of its actions that ran. A demand for one of its values, or an event to one
-of its streams, starts the piece as either starts a piece on a fresh runtime. A
+of its streams, starts the piece as either starts a piece on a fresh runtime.
+A session demands one of its values when it is sent a document the piece's
+setup wrote, other than its argument, which holds inputs current without it. A
+read that stops at a link to the piece is sent only its result document, and
+starts nothing (`carriesPieceMeta` in `runtime/memory/v2/server-sync.ts`). A
 piece whose document a client session tracks at that commit keeps running,
 because that session's demand has already made its attempt to load it. The result
 pattern's index entry goes with the release, and so do the watches of the
