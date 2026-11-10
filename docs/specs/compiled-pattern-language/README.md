@@ -147,8 +147,9 @@ that records, among other things:
 - `total` depends on `basePrice` and `glaze` of every element and on
   `taxRate`.
 
-No per-element document exists for `glazed` or `prices` unless something
-outside the instance reads them, and `d.name` never taints `total`.
+`prices` and `total` are returned, so they are kept outputs: path entries of
+the result document. `glazed` is interim and is not stored, no element of
+either list has a document of its own, and `d.name` never taints `total`.
 
 ## What the compiler emits
 
@@ -177,9 +178,14 @@ compiler defect can do:
 - Precision finer than a function boundary, such as per-path labels on a
   promoted expression, does rest on compiler correctness.
 
-Because the compiler is trusted, a runtime either compiles from source itself
-or accepts a compiled artifact from a party it already trusts to execute the
-pattern.
+Trust in the compiler is a property of the deployment and not a decision a
+user makes per pattern or per build: the design does not work without it, and
+there is no mode in which a runtime executes a compiled pattern while
+distrusting the compiler that produced it. A runtime therefore either compiles
+from source itself or accepts a compiled artifact from a party it already
+trusts to execute the pattern. For a module in the language subset the
+compiler's statelessness check is the enforcement, and no load-time verifier
+runs on it.
 
 ### Why not an interpreted intermediate representation
 
@@ -232,6 +238,10 @@ A cause is an event delivered to a handler, a change arriving from storage, or
 the completion of an effect. The runtime opens one transaction per cause,
 evaluates what the cause invalidated and something demands, and commits the
 state the handler wrote and the kept outputs that changed, with their labels.
+A label constraint that fails rejects the cause's whole transaction. A cone
+that fails, for example because a function body throws, does not: its outputs
+take an error state with a label, and the rest of the transaction commits
+([plan format and label templates](plan-and-label-templates.md), §5).
 
 ### Pull and dependency cones
 
@@ -242,13 +252,20 @@ evaluates its cone and nothing else, for the value and for the label.
 - An output passed to another pattern is a link. When the consumer is pulled,
   the pull extends through the link into the producing instance's cone for
   that path.
-- A `map` element is a cone keyed by element identity. A change to one element
-  dirties that element's cone. A membership change dirties the container.
+- A `map` element is a cone with a key. The key is the element's value when
+  the element is a plain value, and the identity of the element's cell when
+  it is not. Elements that move keep their cones, so reordering a list does
+  not recompute it. The element's index is part of the key only when the
+  callback uses the index, since such a cone cannot move.
+- A change to one element dirties that element's cone. A membership change
+  dirties the container.
 
 Within an instance the order of evaluation is static, so the runtime does not
 discover read sets or sort nodes for it at run time. Dynamic read tracking
 remains for link hops through data, whose targets are not known statically,
-and for function bodies where footprint analysis gave up.
+and for reads a function body makes through a cell handle it was given. Where
+footprint analysis gives up it widens a static slot, and no dynamic tracking
+is involved.
 
 ### Computations that write
 
@@ -281,8 +298,10 @@ that writes.
 An **instantiated** pattern is one whose result cell was explicitly assigned.
 The keep set of an instance is everything reachable from that result cell.
 Reachable derived values are stored with their labels, because readers
-elsewhere cannot recompute them. Nothing reaches a value inside an instance
-except through the result cell.
+elsewhere cannot recompute them. The rendered tree under `[UI]` is part of
+the result, so a value bound into it is kept, as a path entry of the result
+document and not as a document of its own. Nothing reaches a value inside an
+instance except through the result cell.
 
 A pattern used inside another, such as the body of a `map` or an inline
 sub-pattern, is not instantiated in this sense. It has no result cell and no
@@ -331,9 +350,15 @@ label rule.
 - **Structural operations** become compiler operations with label rules:
   `ifElse`, `when`, `unless`, `map`, `filter`, `flatMap`, the aggregates, the
   collection-index family, `str`, `anchorsOf`, `inspectConfLabel`, and
-  `wish`. They stop being callable factories. Authors write the reactive
-  constructs of the language, and `mapWithPattern`, which the transformer
-  generates today, has no counterpart. `wish` is structural because what it
+  `wish`. Authors write the reactive constructs of the language, and
+  `mapWithPattern`, which the transformer generates today, has no
+  counterpart. The callable forms `ifElse`, `when`, `unless`, and the `str`
+  tag are removed, so that no new pattern is written in the old way. The
+  compiler accepts them for an interim period, with a warning that names the
+  replacement, only as long as doing so costs it nothing beyond mapping each
+  to the same operation as `?:`, `&&`, `||`, and a template literal. `reduce`
+  and `findIndex` are reactive constructs too, and the callback of `reduce`
+  is restricted to an expression. `wish` is structural because what it
   creates, it creates idempotently: its result reads as if the data had
   already existed.
 - **Effectful operations** stay durable boundaries with declared label rules
@@ -345,14 +370,17 @@ label rule.
 
 `streamData` and `llm` are removed.
 
-Inside a function body, four kinds of runtime call remain:
+Inside a function body, five kinds of runtime call remain:
 
 - instantiating a pattern;
 - creating a cell, which receives a causal identifier;
 - requesting an effectful built-in, which behaves like instantiating a
   built-in pattern;
 - reading context that is not a cell: the event's key and acting principal,
-  a space's identity and access list, and the principals a label attests.
+  a space's identity and access list, and the principals a label attests;
+- binding a handler to the values it captures, which yields a stream. An
+  inline event handler in JSX built by a function body is such a binding
+  ([language subset](language-subset.md), §5.2).
 
 A function body that needs reactivity instantiates a pattern. A handler that
 wants a reactive mapped list, for example, wraps the list in a pattern.
@@ -488,8 +516,11 @@ and scheduler stay in TypeScript.
   and auditable, and the pipeline no longer depends on the transformer
   interface of the TypeScript compiler.
 - **Against:** the transformer and schema generator hold a large body of
-  lowering logic and fixtures in TypeScript, and editor diagnostics need a
-  path of their own, such as a language-server plugin that runs the compiler.
+  lowering logic and fixtures in TypeScript, and the compiler's own
+  diagnostics appear when the source is compiled and not while typing. The
+  published typings are plain TypeScript that an editor checks as usual, and
+  a language-server plugin is not part of the design
+  ([language subset](language-subset.md), §8.6.1).
 
 The largest cost in any implementation language is the type checker for the
 subset, including typings for the standard-library methods patterns use. That
@@ -530,12 +561,10 @@ disagree, the detailed document governs and this one is corrected.
 - **Gates under speculation.** Which of the server's gates a client can
   evaluate from the plan alone, and how a client presents a refusal it
   predicts ([render-boundary composition](../cfc-render-boundary-composition.md)).
-- **Error states and termination.** A function body that throws, or does not
-  terminate, reveals something about its inputs. An error is a state with a
-  label of its own, and a cone in an error state stops propagating unless
-  something reads that state. The label rule for it, and how far the design
-  is termination-sensitive, follow the specification's treatment of
-  termination.
+- **Residual termination channels.** Error states are specified
+  ([plan format and label templates](plan-and-label-templates.md), §5). What
+  stays termination-insensitive is listed there: divergence inside a body's
+  budget, demand, and the rejection of a cause's transaction.
 - **Commits that span spaces.** A transaction covers one space. A staged
   access change and an `inSpace` instantiation both reach another space, and
   a two-step commit across spaces could serve both
