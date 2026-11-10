@@ -278,6 +278,8 @@ export interface WriteEdge {
     | { readonly kind: "state"; readonly cell: Index; readonly path: Path }
     /** The argument document of a child instance. */
     | { readonly kind: "argument"; readonly child: Index; readonly path: Path }
+    /** A cell the body creates at a `createCell` site (`Body.calls`). */
+    | { readonly kind: "created"; readonly call: Index; readonly path: Path }
     /** The anchors document of the field at an `identity` slot. */
     | { readonly kind: "anchors"; readonly of: Index };
   /** The label of the value written. */
@@ -507,6 +509,17 @@ runtime computes from the element itself:
   plain value;
 - the **identity of the cell** the slot links to, when it holds a link.
 
+A link to a plain value is keyed by the cell it links to, so two cells that
+hold equal values are two elements. A hole has no key, gets no cone, and
+stays a hole. An explicit `undefined` is a plain value. A plain value edited
+in place is a new element.
+
+A key derived from a value is salted with a secret of the space before it
+enters a document identifier, as the row identifiers of `sqliteQuery` are
+(`builtin-inventory.md`, "Element keys"). Without the salt an identifier
+would reveal a low-entropy value to anyone who can see a link (open question
+8).
+
 The position is part of the key only when the body uses it:
 `Collection.bodyUses.index`, or `bodyUses.array`, since a body that reads the
 whole array depends on where it stands in it. A key then is the pair of the
@@ -543,6 +556,11 @@ Consequences, which later sections rely on:
 - **An index-using body does not have this property.** Its key holds the
   index, so a move recomputes the moved elements, and its element template
   includes the collection's `enumeration` (section 3.6).
+- **Keying is the runtime's observation, not the body's.** Deciding which
+  cone an element belongs to compares element values. The comparison flows
+  into no element's output, since each output is a function of its own
+  element. It decides which positions share state, which is why the key is
+  salted.
 - **Derived collections carry their elements' keys.** The elements of a
   `filter` result are the source's elements, with their keys. The elements
   of a `map` or `flatMap` result are new values or references and are keyed
@@ -557,9 +575,9 @@ follows.
 
 | Created in | Identified by |
 | --- | --- |
-| A handler, no explicit cause | The event's key and the occurrence's ordinal among the handler's requests in that invocation. A retry of the same event with the same control flow names the same things |
+| A handler, no explicit cause | The event's key and the occurrence's ordinal among the handler's requests in that invocation. A retry of the same event with the same control flow names the same things. A handler binding is the exception: it is identified as in the last row everywhere |
 | A handler, `.for(tag)` | The handler's instance and the tag, so that different events name the same thing |
-| A `lift` or `computed` | An explicit cause (`createCell`), the request's content (`effect`), or the handler body and the captured values and cells (`bind`). Never an ordinal, because such a body is re-evaluated |
+| A `lift` or `computed` | An explicit cause (`createCell`), the request's content (`effect`), or the enclosing instance, the handler body, and the captured values and cells (`bind`). Never an ordinal, because such a body is re-evaluated. Captured values are salted like element keys |
 
 ## 2. Slots and observation classes
 
@@ -893,10 +911,11 @@ paths is **tighter** as in section 3.4.
 evaluates the per-element cone (the predicate, or the body) and then performs
 the structural step itself: it drops the elements whose predicate is falsy,
 or concatenates the segments. The value code never builds the result
-collection. The runtime records, with a derived collection, the **origin** of
-each position: the key of the source element and, for `flatMap`, the offset
-within its segment. It binds the element slots of later templates through
-that record. Nothing is reported by emitted code and nothing needs
+collection. The runtime records, with a derived collection, one fact per
+source element: whether it was included, or the length of its segment. The
+**origin** of each output position follows by prefix sum, and the runtime
+binds the element slots of later templates through it. Nothing is reported by
+emitted code and nothing needs
 verifying, and element locality of these operations is a structural fact
 (section 7.3).
 
@@ -920,7 +939,7 @@ positions depend on lengths alone.
 
 The aggregates are `count`, `countTruthy`, `sum`, `min`, `max`, `minBy` and
 `maxBy`, as `builtin-inventory.md` lists them. `some`, `every` and `find` are
-not among them (open question 5).
+not among them (open question 3).
 
 | Aggregate | Template |
 | --- | --- |
@@ -945,6 +964,7 @@ computed.
   the canonical order of keys, so the result does not depend on the order of
   the collection.
 - An element with an equal key counts once per position it occupies.
+- A hole contributes nothing.
 
 **Durable state.** An aggregate is an `Operation` of kind `aggregate`. Its
 state holds one contribution per element key with the number of positions
@@ -1132,10 +1152,14 @@ expression.
   `TransformedBy`.
 - **State.** An arbitrary expression is not associative, so the fold cannot
   be a tree and a step cannot be keyed by its element. `reduce` is an
-  `Operation` of kind `reduce`. Its state holds the result and, at the
-  runtime's discretion, accumulators at checkpoint positions. A change at
-  position `k` recomputes the steps from the nearest checkpoint before `k`
-  to the end, and a reorder recomputes from the first moved position. The
+  `Operation` of kind `reduce`. The baseline state is the result alone, and
+  the value is recomputed in order when anything it read changed. The
+  runtime may keep accumulators at checkpoint positions, each labeled with
+  the join of its prefix; a change at position `k` then recomputes from the
+  nearest checkpoint before `k`. The *label* is cheaper than the value: it
+  is a join over the steps, so the multiset of step label identifiers is
+  maintained as for an aggregate, and only the steps whose instantiation
+  key changed are re-instantiated. The
   accumulator has to be a data type for that state to be storable, which is
   a rule for `language-subset.md`.
 
@@ -1166,7 +1190,7 @@ the child instance (section 3.15) when the transaction commits.
 | A link to an instance requested earlier in the same invocation, passed as an argument | A reference like any other: it carries its own identity label, `T_b`. It is legal before either instance exists, because both are created by the same commit |
 | `.for(tag)` | The tag's value is part of the footprint. The instance's existence label is frozen when it is first created (§8.12.8, `08-12-store-label-monotonicity.md`); a later event that names the same instance creates nothing |
 | `asScope(scope)` | A constant of the site. It sets the scope of the state the child declares |
-| `inSpace(space, options)` | The target space is a slot. The request is written to another space, so it is recorded as an `Operation` of kind `effect` whose `input` is the argument's templates joined with `T_b`, and the write-side checks of the target space apply to it. *Assumed*, with `builtin-inventory.md` (open question 3): the new instance's and space's identifiers derive from the request's identifier and are known before the commit |
+| `inSpace(space, options)` | The target is a slot or a constant of the site: a space identifier, the space of a given cell, a name, or anonymous. The argument is written into another space, so the write-side checks of that space apply to the argument's templates joined with `T_b`. *Assumed*, with `builtin-inventory.md` (open question 3): the new instance's and space's identifiers derive from the request and are known before the commit, which spans both spaces as it does today |
 
 The instance becomes an instantiated pattern, with a result cell, when its
 link is written into state or passed to `navigateTo`. A link the body drops
@@ -1186,6 +1210,8 @@ creates nothing.
   identifier reveals the data, so its existence label is the body's
   template.
 
+The initial value of a created cell is a `WriteEdge` with target `created`.
+
 **Requesting an effect** (`effect`). The request's arguments carry `T_b` and
 form the `input` of an `Operation` of kind `effect`, on which the egress
 ceiling is checked (section 4.4). The call returns a link to the operation's
@@ -1193,8 +1219,9 @@ result, which is pending in the requesting transaction. In a handler the
 occurrence is identified by the event and its ordinal. In a `lift` or
 `computed` it is identified by the content of the request, which is also the
 memo, so a re-evaluation that makes the same request finds the same result.
-*Assumed*, with `builtin-inventory.md` (open question 4): every effectful
-built-in may be requested from a body.
+`builtin-inventory.md` recommends refusing an effect request in a `lift` or
+`computed` (its open question 4); if that is adopted, only the handler case
+remains.
 
 **Binding a handler** (`bind`): an `action(...)`, or an inline event handler
 in JSX the body builds. The compiler hoists the arrow to a handler `Body`
@@ -1210,9 +1237,10 @@ whose state is its captures.
 Because the identity is derived from content, two bindings of the same
 handler to equal captures are one stream, and a re-evaluation of a
 `computed` that builds the same JSX names the same streams. This is the
-element-key rule of section 1.3 applied to bindings, and it is what makes a
-binding legal in a body that is re-evaluated. *Assumed:* a `computed` may
-bind a handler; `builtin-inventory.md` decides.
+element-key rule of section 1.3 applied to bindings, salt included, and it
+is what makes a binding legal in a body that is re-evaluated. A handler that
+has to act on one occurrence among equal ones needs the index or a cell in
+its captures.
 
 **Today.** A factory called in a running body creates a node in the run's
 frame, and the runner turns the frame into a synthesized pattern after the
@@ -1260,10 +1288,12 @@ of the factory: which pattern produced the result is part of what the result
 depends on. A parent output that passes a child's result path on unchanged
 is a `slot` template and keeps the child's integrity.
 
-**A changed factory.** When the factory at the slot changes, the child under
-the same cause is set up again with the new pattern. *Assumed:* its state
-cells are those of the new plan under the same cause, so state survives the
-change only where the names agree.
+**A changed factory.** The child's result cell is named from the enclosing
+instance and the call site, not from the factory. When the factory at the
+slot changes, the old child is torn down and a new one is started under the
+same name, so the replacement takes the old one's place. *Assumed:* the new
+child's state cells are those of its own plan under that name, so stored
+state is found again only where cell names agree.
 
 **One transaction.** A child in the same space is evaluated in the cause's
 transaction, by the pull that extends through its result. A child created
@@ -1288,10 +1318,12 @@ slot or a dynamic read, so that a body's template accounts for it.
 | --- | --- | --- |
 | `eventKey()` | Slot, root `cause`, path `eventKey`, class `value` | None. The key names the event and carries nothing of its payload |
 | `currentPrincipal()` | Slot, root `cause`, path `principal`, class `value` | No confidentiality. It is the authenticated actor of the event, which the runtime attests |
-| `principalOf`, `principalsOf`, `profileOwnerOf`, `resultOwnerOf` | A `labelMetadata` slot on the target (section 2.4) | The label of the metadata observation. The target's value is not read |
+| `principalOf`, `principalsOf`, `profileOwnerOf` | The `identity` slot of the target and a `labelMetadata` slot on it (section 2.4) | The pointer labels of the links followed to the target, joined with the label of the metadata observation. A claim's kind and subject are classified public today, so the second part is empty. The target's value is not read |
+| `resultOwnerOf` | `dynamic`, of kind `link`, through the `identity` slot of the operand | What the journaled read of the document's back-link consumes |
 | `spaceOf(x)` | The `identity` slot of `x` | The reference's label. Which space a cell lives in is part of its address |
-| `spaceAccess`, `spaceAccessOf`, `spaceMembers`, `spaceDeleted` | `dynamic`, of kind `space`, through the `identity` slot of the operand | What the journaled reads of that space's access state consume |
-| `linksOf(value)` | `shape`, `enumeration` and `identity` slots over the operand's subtree | The join of those. Scalar values are not read |
+| `spaceAccess`, `spaceAccessOf`, `spaceMembers` | `dynamic`, of kind `space`, through the `identity` slot of the operand | What the journaled reads of that space's access list consume. `spaceAccess` and `spaceMembers` answer for the acting principal, so a computation that calls them is scoped to the user |
+| `spaceDeleted` | `const` | None. It is runtime state from the server's answer, not a document |
+| `linksOf(list)` | The `enumeration` slot of the list and the `identity` slot of each element | The join of those. No target is read |
 | `equals(a, b)` | The `identity` slots of both operands | The join of both |
 | `getPatternEnvironment()` | `const` | None. It is a constant of the deployment |
 
@@ -1318,11 +1350,14 @@ This answers the question `builtin-inventory.md` puts under
 `inspectConfLabel`. In both cases the result fails closed to "not available"
 as section 2.4 says.
 
-**Today.** `eventKey` and `currentPrincipal` read the frame and are not
-journaled. The principal functions and `inspectConfLabel` record
-label-metadata observations, and the space functions read documents
-(`runtime/runner/src/builder/principal-of.ts`,
-`runtime/runner/src/builder/space-access.ts`). **Equal.**
+`principalOf` on a claim that represents a principal also checks whether the
+target's `name` holds a written name. That is a verifier read today and
+stays outside the template.
+
+**Today.** `builtin-inventory.md` ("What the plan records for calls in
+bodies") lists what each of these reads and where its label comes from, from
+`runtime/runner/src/builder/`. The rows above record the same observations.
+**Equal.**
 
 ### 3.17 Collection indexes
 
@@ -1336,7 +1371,7 @@ known target, so no materializer is involved.
 
 | Part | Template |
 | --- | --- |
-| Membership of bucket `k` | The source's membership joined with a `fold` of the selector's template over every element: `value` for a primitive key, `identity` for a cell key |
+| Membership of bucket `k` | The source's membership, order included, joined with a `fold` of the selector's template over every element: `value` for a primitive key, `identity` for a cell key. A `group` bucket lists its elements in source order |
 | The elements of a bucket | The source elements, passed through (`slot` templates), with their root `shape` replaced by the bucket's membership |
 | `lookup(k)` in `group` mode | A collection whose membership is the bucket's membership joined with the template of `k` |
 | `lookup(k)` in `key` mode | `pick` (section 3.18): the winning element, with the choice labeled by the bucket's membership and the template of `k` |
@@ -2260,56 +2295,60 @@ specification change, or the prototype.
    rejection. Refusing a single derived write is the alternative, and it
    needs an argument that a partly committed cause is still a consistent
    state.
-6. **A factory that changes under a child.** Section 3.15 assumes the child
-   is set up again with the new pattern under the same cause, and that state
-   survives only where cell names agree.
+6. **A factory that changes under a child.** Section 3.15 has the old child
+   torn down and a new one started under the same name, and assumes stored
+   state is found again only where cell names agree.
 7. **Requests that reach another space.** Section 3.14 assumes, with
    `builtin-inventory.md`, that the identifiers of an `inSpace` instance and
    its space are known before the commit that creates them. What a handler
    can read from such a request in the same invocation depends on the
    commit across spaces the overview leaves open.
 
+8. **Values in document identifiers.** Element keys and binding identities
+   derive from values. *Assumed:* they are salted with a secret of the space
+   (section 1.3), as `builtin-inventory.md` recommends. The alternative is
+   to accept that an identifier reveals equality of confidential values.
+
 **For the sibling documents, the specification change, and the prototype.**
 
-8. **How fine footprint analysis should be for computed values.** Section
+9. **How fine footprint analysis should be for computed values.** Section
    3.9 gives a body's computed result paths one template and refines only
    references and required paths. *Assumed:* one template for computed
    values, which equals today's label. A template per computed path would be
    a further claim under section 7.4, and unlike the reference rules the
    runtime could not verify it. `footprint-analysis.md` decides.
-9. **References reached through data.** Section 3.9 covers a reference at a
+10. **References reached through data.** Section 3.9 covers a reference at a
    result path that equals an input reference. A reference the body found by
    reading through a handle is not an input slot. *Assumed:* it gets the
    `derive` template.
-10. **Which bodies may bind a handler or request an effect.** Section 3.14
-    assumes a `computed` may bind a handler and that any body may request
-    any effectful built-in, and gives both an identifier that survives
-    re-evaluation. `builtin-inventory.md` decides which are legal.
-11. **The accumulator of `reduce` is a data type.** Section 3.13 needs this
+11. **Effect requests from a `lift` or `computed`.** Section 3.14 gives such
+    a request an identifier that survives re-evaluation.
+    `builtin-inventory.md` recommends refusing the request instead.
+12. **The accumulator of `reduce` is a data type.** Section 3.13 needs this
     for the durable state. It is a rule for `language-subset.md`.
-12. **Demand as a channel.** Section 5.5 lists it as accepted. Whether a
+13. **Demand as a channel.** Section 5.5 lists it as accepted. Whether a
     kept output that nothing demands should be marked stale, so that a later
     reader can tell, is undecided.
-13. **`shape` versus `enumeration` in storage.** The plan separates them and
+14. **`shape` versus `enumeration` in storage.** The plan separates them and
     the runtime's entry classes do not (section 2.2). *Assumed:* both resolve
     as a `shape` read until a count entry exists.
-14. **Literals and integrity in the proof.** The existing Lean expression
+15. **Literals and integrity in the proof.** The existing Lean expression
     language gives a literal an empty integrity, which empties the meet of
     anything combined with it. Section 3.2 makes `const` neutral, as the
     runtime does. The Lean development of the specification change keeps the
     existing convention, which under-claims integrity.
-15. **`count` over a raw list.** Section 3.8 marks `count` "equal or
+16. **`count` over a raw list.** Section 3.8 marks `count` "equal or
     tighter" pending the stage 3 comparison.
-16. **Nondeterministic inputs.** A handler reads the clock (`sendInto` stamps
+17. **Nondeterministic inputs.** A handler reads the clock (`sendInto` stamps
     `sentAt`). *Assumed:* the coarse clock a handler may read, and entropy,
     are unlabeled inputs with no slot. The clock a pattern reads through
     `wish` is a cell (section 3.19).
-17. **Where provenance and origins are stored.** A kept output carries its
+18. **Where provenance and origins are stored.** A kept output carries its
     template, the identities bound to its slots, and the compiled pattern's
     identity; a kept derived collection carries the origin of each position
     (section 3.7). *Assumed:* beside the envelope's label map, keyed by
     output path. The stored format is a host arrangement.
-18. **A record in a template literal.** Section 3.19 gives a record
+19. **A record in a template literal.** Section 3.19 gives a record
     substitution a `value` slot over its subtree. If the language renders a
     record as JavaScript does, only its `shape` is observed, and the slot
     can be narrower.
