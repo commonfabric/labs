@@ -356,6 +356,47 @@ function dataUriMemoWeight(id: string): number {
 // scheduler retry path re-gate on readiness.
 const CONFLICT_READ_REPAIR_TIMEOUT_MS = 30_000;
 
+/**
+ * How many times a commit is sent again after its own payload failed the
+ * write (a `ConnectionError` marked `ownWriteFailed`) before it fails with
+ * that error: a payload that fails every time would otherwise take each new
+ * connection down with it.
+ */
+const MAX_OWN_WRITE_FAILURES = 5;
+
+/**
+ * Calls `attempt`, a request to the memory client, until it settles with
+ * something other than a lost connection. The client keeps nothing for a later
+ * connection: a request its connection lost, before it was handed over or
+ * after, fails with a `ConnectionError` saying which, and its `readyToRetry()`
+ * says when the session can take it again; this makes it again then. A caller
+ * whose request must apply once makes it again unchanged, as a commit under
+ * its own `localSeq` is, which the server answers from its record if it
+ * landed. A request whose own payload failed the write `MAX_OWN_WRITE_FAILURES`
+ * times fails with that error; one whose session closed, or was replaced,
+ * fails as `readyToRetry()` does.
+ */
+async function untilAnswered<T>(attempt: () => Promise<T>): Promise<T> {
+  let ownWriteFailures = 0;
+  for (;;) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (MemoryV2Client.connectionDeliveryOf(error) === undefined) throw error;
+      if (
+        error instanceof Error && "ownWriteFailed" in error &&
+        error.ownWriteFailed === true &&
+        ++ownWriteFailures >= MAX_OWN_WRITE_FAILURES
+      ) throw error;
+      if (
+        !(error instanceof Error) || !("readyToRetry" in error) ||
+        typeof error.readyToRetry !== "function"
+      ) throw error;
+      await error.readyToRetry();
+    }
+  }
+}
+
 // Strategy 1 — client-side conflict admission control (EXPERIMENT, default off).
 // Once a commit conflicts, the client knows its read set is behind on the
 // touched ids until the server catches it up. "preempt" (coarse) gates what we
@@ -7085,7 +7126,7 @@ export class SpaceReplica
       throw new Error("memory server does not support apply-op");
     }
     const localSeq = this.#nextLocalSeq++;
-    const request = session.transact({
+    const request = this.#transactUntilAnswered(session, {
       localSeq,
       reads: { confirmed: [], pending: [] },
       operations: [operation],
@@ -7116,7 +7157,7 @@ export class SpaceReplica
       throw new Error("memory server does not support release-op-field");
     }
     const localSeq = this.#nextLocalSeq++;
-    const request = session.transact({
+    const request = this.#transactUntilAnswered(session, {
       localSeq,
       reads: { confirmed: [], pending: [] },
       operations: [operation],
@@ -7144,11 +7185,13 @@ export class SpaceReplica
     try {
       await this.#operationWatchRemovals.get(watchId);
       const { session } = await this.#activeSessionHandle();
-      const { view, precedingSyncs, sync } = await session.watchAddSync([{
-        id: watchId,
-        kind: "operation",
-        query,
-      }]);
+      const { view, precedingSyncs, sync } = await untilAnswered(() =>
+        session.watchAddSync([{
+          id: watchId,
+          kind: "operation",
+          query,
+        }])
+      );
       if (this.#closed) {
         view.close();
         throw new Error("memory replica closed");
@@ -7195,9 +7238,11 @@ export class SpaceReplica
   async #removeOperationWatch(watchId: string): Promise<void> {
     try {
       const { session } = await this.#activeSessionHandle();
-      const { view, precedingSyncs, sync } = await session.watchRemoveSync([
-        watchId,
-      ]);
+      const { view, precedingSyncs, sync } = await untilAnswered(() =>
+        session.watchRemoveSync([
+          watchId,
+        ])
+      );
       if (this.#closed) {
         view.close();
         return;
@@ -8476,8 +8521,10 @@ export class SpaceReplica
     const roots = released.map((root) => root.address);
     this.#onWatchesReleased?.(roots);
     try {
-      const { view, precedingSyncs, sync } = await session.watchRemoveSync(
-        watchIds,
+      const { view, precedingSyncs, sync } = await untilAnswered(() =>
+        session.watchRemoveSync(
+          watchIds,
+        )
       );
       if (this.#closed) {
         view.close();
@@ -9233,7 +9280,7 @@ export class SpaceReplica
       const watchAddStart = performance.now();
       let mutation: MemoryV2Client.WatchMutationResult;
       try {
-        mutation = await session.watchAddSync(watches);
+        mutation = await untilAnswered(() => session.watchAddSync(watches));
       } catch (error) {
         // An ACL verdict can terminate the session while this request is in
         // flight, and the request may be the only load the space sees, so its
@@ -9245,7 +9292,7 @@ export class SpaceReplica
         session.setConcurrentWatchRefresh?.(
           this.#settings.experimentalConcurrentWatchRefresh === true,
         );
-        mutation = await session.watchAddSync(watches);
+        mutation = await untilAnswered(() => session.watchAddSync(watches));
       } finally {
         logger.time(watchAddStart, "watchRefresh", "watchAddSync");
       }
@@ -10088,7 +10135,8 @@ export class SpaceReplica
         if (inFlight === undefined) {
           // No pending reads → no dependency that can be dropped from under
           // this commit; keep the direct await.
-          const applied = await session.transact(
+          const applied = await this.#transactUntilAnswered(
+            session,
             coarsenCommitForWire(wireCommit),
             () => this.#markRouteWriteIssued(routeSources),
           );
@@ -10121,7 +10169,8 @@ export class SpaceReplica
         // Race the server verdict against a locally-fabricated rejection (a
         // dependency dropped mid-flight, or a replica reset). A server
         // rejection wins the race by REJECTING it, landing in the catch below.
-        const verdict = session.transact(
+        const verdict = this.#transactUntilAnswered(
+          session,
           coarsenCommitForWire(wireCommit),
           () => this.#markRouteWriteIssued(routeSources),
         );
@@ -10246,6 +10295,27 @@ export class SpaceReplica
     } finally {
       this.#settleInFlightCommit(localSeq);
     }
+  }
+
+  /**
+   * Helper for `#pushCommit()`, which sends `commit` on `session` until the
+   * server answers it. The memory client keeps nothing for a later
+   * connection: a commit its connection lost, before it was handed over or
+   * after, fails, and this sends the same commit again, under the same
+   * `localSeq` and with the same bytes, once its `readyToRetry()` says the
+   * session can take it. The server answers one that landed from its record
+   * and judges one that did not afresh, so a commit is applied once, and the
+   * optimistic write stays up until the answer. A commit whose own payload
+   * failed the write `MAX_OWN_WRITE_FAILURES` times fails with that error; one
+   * whose session closed, or was replaced by one the server cannot answer it
+   * on, fails as `readyToRetry()` does.
+   */
+  async #transactUntilAnswered(
+    session: MemoryV2Client.SpaceSession,
+    commit: ClientCommit,
+    beforeIssue: () => void,
+  ): Promise<AppliedCommit> {
+    return await untilAnswered(() => session.transact(commit, beforeIssue));
   }
 
   #markRouteWriteIssued(
@@ -11408,9 +11478,11 @@ export class SpaceReplica
           }
           // Read when the request goes out, since an earlier mutation can hold
           // it back while a frame changes what this replica holds.
-          const { view, precedingSyncs, sync } = await session.watchSetSync(
-            undefined,
-            () => this.holdings(),
+          const { view, precedingSyncs, sync } = await untilAnswered(() =>
+            session.watchSetSync(
+              undefined,
+              () => this.holdings(),
+            )
           );
           if (this.#closed) {
             view.close();

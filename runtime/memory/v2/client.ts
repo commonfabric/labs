@@ -4742,6 +4742,29 @@ export class SpaceSession {
     sendAfter: "issue" | "apply" = "issue",
     options: { restoring?: boolean; onTurn?: () => void } = {},
   ): Promise<T> {
+    if (options.restoring === true) {
+      return await this.#issueWatchMutation(send, apply, sendAfter, options);
+    }
+    // A watch change its connection lost fails ready to be made again once
+    // this session can take it, as a commit does (`#withReadyToRetry()`).
+    const madeOn = {
+      epoch: this.#client.connectionEpoch,
+      sessionId: this.#sessionId,
+    };
+    try {
+      return await this.#issueWatchMutation(send, apply, sendAfter, options);
+    } catch (error) {
+      throw this.#withReadyToRetry(error, madeOn);
+    }
+  }
+
+  /** Helper for `#runWatchMutation()`, which makes the watch change once. */
+  async #issueWatchMutation<R, T>(
+    send: () => Promise<R>,
+    apply: (result: R) => T,
+    sendAfter: "issue" | "apply",
+    options: { restoring?: boolean; onTurn?: () => void },
+  ): Promise<T> {
     this.#assertOpen();
     if (options.restoring === true) {
       return await this.#sendRestoreWatchMutation(send, apply);
