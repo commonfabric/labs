@@ -622,8 +622,9 @@ export class RuntimeInternals extends EventTarget {
    * A space with no root is asked again on the next request, since its owner
    * can create the root at any time. A lookup that fails is kept, as a
    * failed {@link RuntimeInternals.getPattern} is, and dropped when the
-   * space recovers: a lost connection comes back, or the space admits the
-   * runtime's principal again.
+   * space recovers: a lost connection comes back, the space admits the
+   * runtime's principal again, or a retry reaches the space after its first
+   * connection never did.
    */
   getSpaceRootPattern(
     space: DID,
@@ -1043,8 +1044,9 @@ export class RuntimeInternals extends EventTarget {
 
   /**
    * How many recoveries the runtime has seen that reach `space`: every
-   * restored connection, and every time the space admitted the runtime's
-   * principal again.
+   * restored connection, every time the space admitted the runtime's
+   * principal again, and every retry that reached the space after its first
+   * connection never did.
    */
   #recoveriesOf(space: DID): number {
     return this.#connectionsRestored + (this.#accessRestored.get(space) ?? 0);
