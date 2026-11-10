@@ -101,4 +101,89 @@ describe("client", () => {
       }
     });
   }
+  it("restores a mount whose `session.open` was answered on a connection that dropped and was replaced before its send failed, with a session that works", async () => {
+    // The answer arrives, the connection closes and the client reconnects,
+    // restoring its sessions, and only then does the open's send fail: the
+    // session the server opened is open only on the connection that is gone.
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://client-answered-send-replaced"),
+    });
+    let inner: Transport | undefined;
+    let receiver = (_payload: string) => {};
+    let closeReceiver = (_error?: Error) => {};
+    let failOpen = true;
+    let openRequestId: unknown;
+    const answered = Promise.withResolvers<void>();
+    const reconnected = Promise.withResolvers<void>();
+    const transport: Transport = {
+      setReceiver(next) {
+        receiver = next;
+      },
+      setCloseReceiver(next) {
+        closeReceiver = next;
+      },
+      async close() {
+        await inner?.close();
+        inner = undefined;
+      },
+      reset() {
+        void inner?.close();
+        inner = undefined;
+      },
+      async send(payload) {
+        if (inner === undefined) {
+          inner = loopback(server);
+          inner.setReceiver((frame) => {
+            receiver(frame);
+            const message = decodeMemoryBoundary(frame) as {
+              requestId?: unknown;
+            };
+            if (
+              openRequestId !== undefined &&
+              message.requestId === openRequestId
+            ) answered.resolve();
+          });
+        }
+        const message = decodeMemoryBoundary(payload) as {
+          type?: string;
+          requestId?: unknown;
+        };
+        if (message.type !== "session.open" || !failOpen) {
+          return await inner.send(payload);
+        }
+        failOpen = false;
+        openRequestId = message.requestId;
+        await inner.send(payload);
+        await answered.promise;
+        await inner.close();
+        inner = undefined;
+        const error = connectionError(
+          "connection lost after the open's answer",
+        );
+        closeReceiver(error);
+        await reconnected.promise;
+        throw error;
+      },
+    };
+    const client = await connect({ transport });
+    client.subscribeReconnected(() => reconnected.resolve());
+    try {
+      const session = await client.mount(
+        "did:key:z6Mk-client-answered-send-replaced",
+        {},
+        testSessionOpenAuthFactory,
+      );
+      expect(client.isConnected()).toBe(true);
+      const applied = await session.transact({
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: "of:doc", value: { value: "A" } }],
+      });
+      expect(applied.seq).toBeGreaterThan(0);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });

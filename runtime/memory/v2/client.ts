@@ -1085,12 +1085,14 @@ export class Client {
     };
     let opening: Promise<SessionOpenResult> | undefined;
     let result: SessionOpenResult;
+    const answeredOn: { epoch?: number } = {};
     try {
       result = await runWithAbortSignal(
         signal,
         "memory session mount cancelled",
         () => (opening = this.openSession(space, options, auth, undefined, {
           signal,
+          answeredOn,
         })),
       );
       if (signal?.aborted) {
@@ -1129,6 +1131,23 @@ export class Client {
       result.serverBuild,
     );
     this.#spaces.add(session);
+    // The server answered the open on a connection the client has since
+    // replaced: the reconnect restored the client's sessions without this
+    // one, which is open only on the connection that is gone. It is restored
+    // on the connection that is up before it is handed out.
+    if (
+      answeredOn.epoch !== undefined &&
+      answeredOn.epoch !== this.#connectionEpoch
+    ) {
+      try {
+        session.handleDisconnect();
+        await this.restoreConnection();
+        await session.restore();
+      } catch (error) {
+        await session.close().catch(() => undefined);
+        throw error;
+      }
+    }
     return { session, result };
   }
 
@@ -1242,7 +1261,12 @@ export class Client {
     } catch (error) {
       // A response that arrived before the send settled answers the request,
       // whatever the send then reports: the server has acted on it.
-      if (!answered) {
+      if (answered) {
+        logger.debug("send-failed-after-answer", () => [
+          `request ${requestId} was answered before its send failed:`,
+          describeError(error),
+        ]);
+      } else {
         // A send the transport refused outright gets no response, so its
         // entry would otherwise stay until the connection closes. A send lost
         // with its connection is settled by the close that reports the loss.
@@ -1436,9 +1460,24 @@ export class Client {
     mount: MountOptions,
     auth?: SessionAuth,
     holdings?: SessionHolding[],
-    options: { restoring?: boolean; signal?: AbortSignal } = {},
+    options: {
+      restoring?: boolean;
+      signal?: AbortSignal;
+      /**
+       * Set to the epoch of the connection that answered the
+       * `session.open`, as its answer arrives.
+       */
+      answeredOn?: { epoch?: number };
+    } = {},
   ): Promise<SessionOpenResult> {
     if (this.#clientUpdateError !== undefined) throw this.#clientUpdateError;
+    const noteAnswer = {
+      onResponse: () => {
+        if (options.answeredOn !== undefined) {
+          options.answeredOn.epoch = this.#connectionEpoch;
+        }
+      },
+    };
     const session: SessionDescriptor = {
       ...mount,
       client: this.#clientInfo,
@@ -1574,7 +1613,7 @@ export class Client {
               ...(holdings !== undefined
                 ? { holdings: this.declarableHoldings(holdings) }
                 : {}),
-            }, { whileConnected, ...onMountConnection });
+            }, { whileConnected, ...onMountConnection, ...noteAnswer });
           }
         } catch (error) {
           // A router's refusal for now passes without a new connection,
@@ -1639,8 +1678,12 @@ export class Client {
             session,
             ...(signed ? signed : {}),
             ...(holdings !== undefined ? { holdings } : {}),
-          }, { whileConnected, ...onMountConnection });
-          this.#updateSessionOpenAuthContext(result.sessionOpen);
+          }, { whileConnected, ...onMountConnection, ...noteAnswer });
+          // The next challenge an answer carries is its connection's: one
+          // answered on a connection since replaced has none for this one.
+          if (!this.#staleSince(epoch)) {
+            this.#updateSessionOpenAuthContext(result.sessionOpen);
+          }
           return result;
         },
       );
