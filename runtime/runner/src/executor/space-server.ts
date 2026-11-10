@@ -161,6 +161,12 @@ import type {
   Unit,
   URI,
 } from "../storage/interface.ts";
+import { internalVerifierRead } from "../storage/reactivity-log.ts";
+import {
+  getDirectTransactionReactivityLog,
+  getTransactionReadActivities,
+  getTransactionWriteAttempts,
+} from "../storage/transaction-inspection.ts";
 import {
   ensurePieceRunningVerdict,
   type EnsurePieceVerdict,
@@ -2817,10 +2823,10 @@ export class SpaceServer implements TransactionSealDestination {
         basisSeq: Engine.serverSeq(this.#options.engine),
         actionId: info.actionId,
       });
-      // Authoritative, as an effect completion's writes are: the no-op
-      // elision diffs against the replica's optimistic view, which can
-      // hold a sealed layer the wave later drops.
-      tx.markAuthoritativeWrites?.();
+      // An unchanged direct commit still owes the same snapshot check as
+      // one carrying writes. The commit boundary adds document-root guards
+      // and validates their durable origins before returning its verdict.
+      tx.tx.validateReactiveReads = true;
     }
     const principal = info.scopeKeyIdentity?.principal;
     const attributionFromScope = info.kind === "derivation" &&
@@ -3374,6 +3380,47 @@ export class SpaceServer implements TransactionSealDestination {
     }
     this.#recordLifecycleVerbWrites(tx);
     const identity = runtime.scopeKeyIdentity;
+    // Ordinary patches and elisions are sound only over a committed base.
+    // Guard every commit dependency or attempted document, including a net-zero
+    // write and untouched siblings carried by a whole-document replacement.
+    // These verifier reads consume no flow labels. They remain in the
+    // scheduling log so an empty seal validates the original snapshot too.
+    const emptyNative: NativeStorageCommit = { operations: [] };
+    const initialReads = replica.storeCommitOf(emptyNative, inner).reads;
+    const dependencies = new Set(
+      [...initialReads.confirmed, ...initialReads.pending].map((read) =>
+        toDirtyKey(read.id, resolveScopeKey(read.scope, identity))
+      ),
+    );
+    const guarded = new Set<string>();
+    const targets = [
+      ...Array.from(getTransactionReadActivities(inner)).filter((read) =>
+        read.space === this.#options.space && dependencies.has(
+          toDirtyKey(read.id, resolveScopeKey(read.scope, identity)),
+        )
+      ),
+      ...getTransactionWriteAttempts(inner) ?? [],
+      ...getDirectTransactionReactivityLog(inner)?.attemptedWrites ?? [],
+    ];
+    for (const target of targets) {
+      const scope: CellScope = target.scope ?? "space";
+      const root = { ...target, scope, path: [] };
+      const key = addressKey(root);
+      if (guarded.has(key)) continue;
+      guarded.add(key);
+      const guard = inner.read(root, {
+        trackReadWithoutLoad: true,
+        meta: internalVerifierRead,
+      });
+      if (guard.error !== undefined) {
+        return refuse(
+          `direct commit could not guard ${key}: ${guard.error.message}`,
+        );
+      }
+    }
+    // An empty seal clears its activity without calling the collector.
+    // Preserve its read set so even that verdict is checked by the store.
+    const emptyStore = replica.storeCommitOf(emptyNative, inner);
     // Every space the transaction wrote is collected before anything
     // commits, so a refusal leaves nothing behind. The store's shape of the
     // serving space's commit is taken during the handoff, while the
@@ -3408,8 +3455,16 @@ export class SpaceServer implements TransactionSealDestination {
     const result = await inner.sealInto(collector);
     if (result.error !== undefined) return result;
     if (handed.length === 0) {
-      // An all-no-op transaction handed over nothing.
-      return result;
+      if (
+        emptyStore.reads.confirmed.length === 0 &&
+        emptyStore.reads.pending.length === 0
+      ) return result;
+      handed.push({
+        space: this.#options.space,
+        native: emptyNative,
+        source: inner,
+        store: emptyStore,
+      });
     }
     if (handed.length > 1 || handed[0].store === undefined) {
       return refuse(
@@ -3459,6 +3514,7 @@ export class SpaceServer implements TransactionSealDestination {
       operations,
       preconditions: [...preconditions],
       confirmedReads,
+      dependencyScopeIdentity: identity,
       annotations,
       consequenceOf: [],
       basisInstances: [],

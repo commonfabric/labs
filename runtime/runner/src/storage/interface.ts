@@ -1783,7 +1783,9 @@ export interface IStorageTransaction {
   /**
    * Check scheduling dependencies before accepting an empty commit or seal.
    * Set by reactive computations, whose subscriptions must cover changes since
-   * their reads. Event handlers retain ordinary empty-commit behavior.
+   * their reads, and direct bookkeeping commits, whose verdict validates the
+   * guarded snapshot even when every write is elided. Event handlers retain
+   * ordinary empty-commit behavior.
    */
   validateReactiveReads?: boolean;
 

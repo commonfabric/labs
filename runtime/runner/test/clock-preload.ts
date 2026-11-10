@@ -80,6 +80,9 @@ installFakeClock({
     // The lifecycle-verb suite drives a live ExecutorHost through verbs
     // and reads what they left through a client under the same policies.
     "executor-lifecycle-verbs",
+    // A cold origin update drives the same serving host across a disk-store
+    // reopen, under its real-time flush and park policies.
+    "served-source-reconciler-protected-argument",
     // The Phase-2 speculation-overlay journeys run a live ExecutorHost
     // (the serving side of the client-loses-derivation-commit journey)
     // under the same wall-clock policies.

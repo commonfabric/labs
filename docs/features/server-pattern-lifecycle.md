@@ -275,6 +275,22 @@ committed, before the adopting write, a direct commit in that case, reads the
 closure. The replica takes the writes only once the store has accepted them, so
 no run reads them as pending state a refusal could roll back.
 
+Direct commits use ordinary patches and unchanged-value elision. Each document
+in the transaction's effective commit dependencies or attempted writes receives
+a document-root read guard, so an unchanged protected argument can retain its
+stored value and attribution only against a committed, unchanged basis. Internal
+CFC probes keep the storage layer's existing dependency filtering. The guards
+include untouched fields that a whole-document replacement would carry. A
+transaction with no effective writes still validates its local snapshot and,
+when it has read dependencies, submits a zero-operation store commit to validate
+them before reporting success. Effect-completion writebacks retain their
+authoritative whole-document writes.
+
+The serving runtime's scope identity resolves a direct commit's scoped read
+dependencies and entity preconditions, as it resolves the commit's write
+annotations. This is an addressing context for the store's strict validators;
+it adds no acting principal or user attribution to the bookkeeping operation.
+
 A wave open when the direct commit lands learns of it once the replica has
 applied it. Its commit step treats a document the direct commit wrote, sitting
 at exactly that commit's seq, as observed rather than conflicting for a
