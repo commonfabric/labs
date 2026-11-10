@@ -166,8 +166,28 @@ export interface Body {
   readonly handles: readonly Index[];
   /** Paths the body writes, with the constraint set of each. */
   readonly writes: readonly WriteEdge[];
+  /**
+   * Result paths that are not plainly computed from the whole footprint
+   * (section 3.9). A path with no entry is computed.
+   */
+  readonly outputs: readonly BodyOutput[];
   /** Where analysis gave up, for diagnostics. Each widened a `reads` slot. */
   readonly widenings: readonly Widening[];
+}
+
+/** How one path of a body's result relates to the body's inputs. */
+export interface BodyOutput {
+  readonly path: Path;
+  /**
+   * `passes`: the reference at this path is always the reference at one
+   * `identity` slot. `oneOf`: it is always the reference at one of several.
+   * The runtime verifies either by reference identity.
+   */
+  readonly reference?:
+    | { readonly passes: Index }
+    | { readonly oneOf: readonly Index[] };
+  /** The result schema requires the path, so its existence is constant. */
+  readonly required?: true;
 }
 
 export interface Widening {
@@ -236,6 +256,8 @@ export interface Output {
 export interface Cone {
   /** Name of the emitted value function for this cone. */
   readonly entry: string;
+  /** Content address of that function's emitted source. */
+  readonly code: Hash;
   /**
    * Every slot the value function receives, over all selections. The runtime
    * passes these and nothing else (section 7).
@@ -301,14 +323,21 @@ export interface Plan {
 export interface CompiledPattern {
   readonly plan: Hash;
   readonly valueCode: Hash;
-  /** Identity of the compiler build that produced both. */
+  /**
+   * Content address of the compiler build that produced both. It is the
+   * implementation identity tested for flow-precision trust (section 7.4).
+   */
   readonly compiler: Hash;
 }
 ```
 
-The **keep set** is the outputs with `kept: true`. It is a property of the
-pattern and not of a run: the compiler knows which output paths the result
-cell's schema reaches.
+The **keep set** is the outputs with `kept: true`. The rendered tree under
+`[UI]` is part of the result and is kept, so a value bound into it is a kept
+output. The saving for such a value is that it is a path entry of the result
+document with a memoized label, not a document and a transaction of its own.
+
+The keep set is a property of the pattern and not of a run: the compiler
+knows which output paths the result cell's schema reaches.
 
 A pattern compiled into another, such as a `map` body or an inline
 sub-pattern, has no plan of its own. Its slots, bodies and cones are entries
@@ -334,7 +363,14 @@ of the enclosing plan, with `element` roots where it reads the element.
   envelope is resolved by (section 2.2). The schema hash is not part of the
   key, because a label is resolved by address and class.
 - **Body identity** is `Body.code`. It is the identity a write policy names
-  (`WriterPolicy.body`) and the identity a `TransformedBy` atom carries.
+  (`WriterPolicy.body`) and the identity a `TransformedBy` atom carries for a
+  value the body computed.
+- **Cone identity** is `Cone.code`, the hash of the cone's emitted value
+  function. It is the identity a `TransformedBy` atom carries for a value
+  computed by expression code, so the atom names the code that ran, as it
+  does for a body.
+- **Compiler identity** is `CompiledPattern.compiler`, a `CodeHash` atom over
+  the compiler build.
 
 ### 1.3 Causal identities
 
@@ -502,8 +538,7 @@ Notes on the integrity column:
 - **`derive` drops value-bound atoms and mints.** This is the default
   transition of §8.9.3 applied to the template's inputs instead of to a
   transaction's reads. The minted atom names `Body.code` for a sandboxed
-  body. For emitted expression code it names the compiled pattern, because
-  the expression has no separate identity.
+  body, and `Cone.code` for emitted expression code (section 1.2).
 - **`const` is neutral.** A literal is not an observation, so it does not
   empty the meet. This matches the runtime, where a literal in a function
   body is not a read.
@@ -682,6 +717,38 @@ handle, and joins what they consumed.
 
 An imported function outside the subset is the same node with every argument
 as a `value` slot at the argument's root.
+
+**References and required paths.** The `derive` template is right for a value
+the body computed. Two kinds of result path are not computed in that sense,
+and `Body.outputs` records them:
+
+- **A reference passed through.** When the reference at a result path is
+  always the reference the body received at one `identity` slot, the path's
+  template is that `slot` and nothing else. The reference acquires no label
+  from the body: it is the same reference, and what it refers to was never
+  read. This is the pass-through of §8.2.1
+  (`08-02-pass-through-via-references.md`), and the content it refers to keeps
+  its own label at the target.
+- **A reference chosen among inputs.** When the reference at a result path is
+  always one of several input references, its template is the `slot` of the
+  one actually returned, joined with the body's `derive` template as the
+  label of the *choice*. The chosen reference's own label and its target's
+  label are untouched; what the body's inputs taint is which one sits at the
+  path. §8.5.6.1 draws the same line for a selected collection: target content
+  stays at its label while "Selected reference identity" is tainted by the
+  selector.
+- **A required path.** When the result schema requires a path, the path's
+  `shape` template is `const`: it exists whatever the inputs were. Only its
+  `value` carries the `derive` template. A body that fails to produce a
+  required path is a failed body (section 5), and its error state occupies
+  the path, so existence stays constant.
+
+The first two are verified by the runtime, not trusted: it compares the
+returned reference with the references it passed in, by identity, as
+`exactCopyOf` is verified (§8.4, `08-04-exact-copy-verification.md`). A
+returned reference that is none of the declared ones falls back to the
+`derive` template. The third is enforced by validating the result against its
+schema.
 
 **Today.** A `lift` or `computed` node reads what its argument schema
 materializes plus what it reads through cells, and the whole join lands on
@@ -940,7 +1007,8 @@ either prefix direction, which is the overlap the runtime uses today
   compile time for a static write edge, because both the body and the policy
   are in the source.
 - **At instantiation** otherwise, with the labels the template was
-  instantiated from. A failure refuses the write it guards.
+  instantiated from. A failure rejects the cause's transaction, as a failed
+  check rejects a transaction today (section 5.5 says what that reveals).
 - **Per event** for a UI contract. Whether an event came from the named
   surface is a fact about that event (`trustedEventProvenanceMatchesUiContract`
   in `runtime/runner/src/cfc/ui-contract.ts`). The compiler can still report
@@ -1050,9 +1118,14 @@ deployment documents:
   §9.3.2 (`09-threat-model.md`) puts physical timing out of scope.
 - **Demand.** Whether a cone is evaluated at all depends on whether something
   demands it. An output nothing demands keeps its last value and label.
-- **Refusal.** A constraint that fails at instantiation refuses one write.
-  The target keeps its previous value, and that it did not change is visible
-  to its readers.
+- **Rejection.** A constraint that fails at instantiation rejects the whole
+  transaction of its cause, so that no part of a cause commits when any part
+  of it is not allowed. Every output of that cause then keeps its previous
+  value, which is visible to their readers. Whether a constraint fails is a
+  function of slot labels and selections, not of other values, so what the
+  rejection reveals is bounded by those. An error state (section 5.2) is
+  different: it is a value that passed its checks, and it does not reject
+  anything.
 
 The two target theorems of the specification change are stated
 termination-insensitively for this reason: bodies are total functions there,
@@ -1197,6 +1270,14 @@ k0  writer  anyOf [ { body: hash(commitSend),
 k1  writerFit
 ```
 
+`B0` also has `outputs` entries for the message it pushes: `authorProfile`
+passes `s2`, the sender's profile reference, and each entry of `attachments`
+is one of `e3`. So the stored `authorProfile` link carries the label of the
+reference the handler was given and nothing from the event, and an attachment
+link carries its own label plus the handler's template as the label of having
+been chosen. `body`, `sentAt` and `reactions` are required by the message
+schema, so their existence is constant.
+
 Kept outputs in the slice: the room's `messages` output (from `facts.list`),
 and the rendered tree under `[UI]`, which holds the empty-state branch and
 each row's text, edited mark and thread label. `facts.entries`, `replies` and
@@ -1238,7 +1319,7 @@ journaled reads through handle `h` consumed.
 
 | Output | Instantiated confidentiality | Instantiated integrity |
 | --- | --- | --- |
-| New message (every field) | `C(e0..e5) ⊔ C(s2) ⊔ C(D(myProfile)) ⊔ C(D(messages)) ⊔ C(D(threadInfo))` | Declared authorship atom; `⊓` over the same inputs; `TransformedBy(commitSend)` when the join is not empty |
+| New message (computed fields) | `C(e0..e5) ⊔ C(s2) ⊔ C(D(myProfile)) ⊔ C(D(messages)) ⊔ C(D(threadInfo))` | Declared authorship atom; `⊓` over the same inputs; `TransformedBy(commitSend)` when the join is not empty |
 | `facts`, every path | `C(s0) ⊔ C(s1) ⊔ C(s3) ⊔ C(D(messages)) ⊔ C(D(threadInfo))` | `⊓` over the same; `TransformedBy(messageFacts)` |
 | `isEmpty` | Same as `facts` | `⊓` over the same; `TransformedBy(pattern)` |
 | Row `text` | `C(facts) ⊔ C(m1) ⊔ C(m2) ⊔ C(m4)` | `⊓` over the same; `TransformedBy(bodyText)` |
@@ -1314,12 +1395,20 @@ runtime records itself. The rest of this section separates the two.
 
 These hold whatever the compiler emitted, because the runtime enforces them.
 
+Cone narrowing and body narrowing are this design's form of the obligations
+§8.9.1.2 places on a runtime-owned executor: "explicit inputs, no hidden
+lexical capture, bracketed dereferences, fail-closed on unresolved
+references". The specification change states them as a profile in chapter
+18.
+
 - **Cone narrowing.** The runtime passes a cone's value function exactly the
   slots in `Cone.slots`. A cone cannot compute from data it was not given. So
   for any output of a cone, the join over *all* of the cone's slots, every
   branch included, is a sound label, and it is a structural fact of the
   decomposition class of §8.9.1, like a per-element journal. This is the
   design's `L_default`.
+- **References a body passes on.** That a returned reference is one the body
+  was given is checked by identity (section 3.9).
 - **Body narrowing.** The runtime builds a sandboxed body's argument from
   `Body.reads` and hands it only the listed handles. A footprint that omits a
   slot starves the body. Data outside a body's footprint stays confidential
@@ -1361,9 +1450,13 @@ them. They hold only if the value code computes what the plan says.
 
 ### 7.4 The `flow-taint-precision` claim
 
-The asserting component is the compiler. Its identity is
-`CompiledPattern.compiler`, the build that produced the plan and the value
-code together.
+The asserting component is the compiler. Its identity is a `CodeHash` atom
+over `CompiledPattern.compiler`, the build that produced the plan and the
+value code together. §8.9.1 names `CodeHash` as the identity of executing
+code, and the compiler is the code whose correctness the claim rests on. A
+user, or a verifier the user delegates to (§4.8), states trust in a compiler
+build for the concept once, and it then covers every pattern that build
+compiled.
 
 - When that identity is trusted for `flow-taint-precision` for the acting
   user, the runtime applies templates as emitted.
@@ -1400,66 +1493,50 @@ removes a clause any of its slots carries.
 
 Each entry states the assumption this document made.
 
-1. **Is the rendered tree kept?** The overview defines the keep set as
-   everything reachable from the result cell, and `[UI]` is part of the
-   result. *Assumed:* yes, so a row's rendered values are kept outputs, and
-   the storage saving is that they are path entries of one document instead
-   of a document per node. If the rendered tree were recomputed by each
-   client and not stored, the keep set of a UI-heavy pattern would be much
-   smaller, and the render boundary would take its labels from local
-   instantiation alone.
-2. **Per-write templates for sandboxed bodies.** The overview gives a body's
-   outputs one template, the union of its footprint. A handler that writes
-   two cells from disjoint inputs then gives both the join. *Assumed:* one
-   template per body, which equals today's label. Footprint analysis could
-   emit a template per written path; that would be a further claim under
-   section 7.3.
-3. **The identity a `TransformedBy` atom names for expression code.**
-   *Assumed:* the compiled pattern. Today the atom names the node's
-   implementation. Whether consumers of the atom
-   ([`TransformedBy` input witnesses](../cfc-transformed-by-input-witnesses.md))
-   need a finer identity, such as pattern and output path, is not settled.
-4. **Which atom identifies the compiler.** §8.9.1 names `CodeHash` and
-   `Builtin` as implementation identities. *Assumed:* the compiler build's
-   content address, as a `CodeHash`. A runtime that compiles from source
-   itself could instead treat the compiler as part of its own identity, in
-   the manner of the runtime-owned interpreter of §8.9.1.2.
-5. **The interpreter-profile obligations.** §8.9.1.2 refers to "the
-   obligations of a conforming interpreter profile" in chapter 18, and
-   chapter 18 has no such section. The cone-narrowing and body-narrowing
-   rules of section 7.2 are this design's candidates for those obligations.
-   *Assumed:* the specification change states them as a new profile.
-6. **Refusal granularity.** When a constraint fails at instantiation, this
-   document refuses the one write it guards and commits the rest of the
-   cause's transaction. Today prepare rejects the whole transaction. For a
-   handler the two coincide. For derived outputs, rejecting the whole
-   transaction would reopen the channel of section 5.1. *Assumed:* per
-   write.
-7. **Demand as a channel.** Section 5.5 lists it as accepted. Whether a
+1. **How fine footprint analysis should be for computed values.** Section
+   3.9 gives a body's computed result paths one template, the union of its
+   footprint, and refines only references and required paths. A handler that
+   computes two values from disjoint inputs gives both the join. *Assumed:*
+   one template for computed values, which equals today's label. A template
+   per computed path would be a further claim under section 7.3, and unlike
+   the reference rules the runtime could not verify it.
+2. **References reached through data.** Section 3.9 covers a reference at a
+   result path that equals an input reference. A reference the body found by
+   reading through a handle is not an input slot. *Assumed:* it gets the
+   `derive` template. It could instead be treated as chosen among the
+   references the journaled reads returned.
+3. **Rejection granularity.** Section 4.4 rejects the whole transaction of a
+   cause when any constraint fails, which is the safe default and what the
+   runtime does today. One transaction per cause makes a transaction wider
+   than a node, so one output's labels can now withhold unrelated outputs of
+   the same cause. *Assumed:* whole-transaction rejection. Refusing a single
+   derived write is the alternative, and it needs an argument that a partly
+   committed cause is still a consistent state.
+4. **Demand as a channel.** Section 5.5 lists it as accepted. Whether a
    kept output that nothing demands should be marked stale, so that a later
    reader can tell, is undecided.
-8. **`shape` versus `enumeration` in storage.** The plan separates them and
+5. **`shape` versus `enumeration` in storage.** The plan separates them and
    the runtime's entry classes do not (section 2.2). *Assumed:* both resolve
    as a `shape` read until a count entry exists.
-9. **Literals and integrity in the proof.** The existing Lean expression
+6. **Literals and integrity in the proof.** The existing Lean expression
    language gives a literal an empty integrity, which empties the meet of
    anything combined with it. Section 3.2 makes `const` neutral, as the
    runtime does. The Lean development of the specification change keeps the
    existing convention, which under-claims integrity. *Assumed:* acceptable
    for the confidentiality theorems; an integrity theorem needs the neutral
    element.
-10. **`count` over a raw list.** Section 3.8 marks `count` "equal or
-    tighter" pending the stage 3 comparison.
-11. **Nondeterministic inputs.** A handler reads the clock (`sendInto` stamps
-    `sentAt`). *Assumed:* the clock and random sources are unlabeled inputs
-    with no slot. If any of them should carry a label, it needs a slot root
-    of its own.
-12. **Where provenance is stored.** The overview says a kept output carries
-    its template, the identities bound to its slots, and the compiled
-    pattern's identity. *Assumed:* beside the envelope's label map, keyed by
-    output path, with the instantiation key of section 4.1 derived from it.
-    The stored format is a host arrangement and is not specified here.
-13. **Label metadata observations.** Today the flow join includes label
+7. **`count` over a raw list.** Section 3.8 marks `count` "equal or
+   tighter" pending the stage 3 comparison.
+8. **Nondeterministic inputs.** A handler reads the clock (`sendInto` stamps
+   `sentAt`). *Assumed:* the clock and random sources are unlabeled inputs
+   with no slot. If any of them should carry a label, it needs a slot root
+   of its own.
+9. **Where provenance is stored.** The overview says a kept output carries
+   its template, the identities bound to its slots, and the compiled
+   pattern's identity. *Assumed:* beside the envelope's label map, keyed by
+   output path, with the instantiation key of section 4.1 derived from it.
+   The stored format is a host arrangement and is not specified here.
+10. **Label metadata observations.** Today the flow join includes label
     metadata a transaction observed
     ([label metadata confidentiality](../cfc-label-metadata-confidentiality.md)).
     A body that inspects labels needs a slot for it. *Assumed:* such reads
